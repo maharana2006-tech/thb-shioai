@@ -1,0 +1,14 @@
+{
+  "error": {
+    "code": "401",
+    "message": "Unauthorized: The Addresses API License Agreement has not been signed for this API consumer.",
+    "errors": [
+      {
+        "status": "401",
+        "code": "LICENSE_AGREEMENT_REQUIRED",
+        "title": "License Agreement Required",
+        "detail": "The Addresses API requires a signed License Agreement in production as of 2026-08-01. Sign it at developers.usps.com."
+      }
+    ]
+  }
+}

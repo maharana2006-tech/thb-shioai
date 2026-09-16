@@ -1,0 +1,14 @@
+{
+  "error": {
+    "code": "400",
+    "message": "Address Not Found. Please verify the street, city, state and ZIP code.",
+    "errors": [
+      {
+        "status": "400",
+        "code": "ADDRESS_NOT_FOUND",
+        "title": "Address Not Found",
+        "detail": "USPS could not find a match for the supplied address."
+      }
+    ]
+  }
+}

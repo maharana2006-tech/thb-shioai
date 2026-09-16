@@ -1,0 +1,37 @@
+{
+  "firm": "",
+  "address": {
+    "streetAddress": "350 5TH AVE",
+    "secondaryAddress": "STE 6100",
+    "city": "NEW YORK",
+    "state": "NY",
+    "ZIPCode": "10118",
+    "ZIPPlus4": "0110",
+    "countryCode": "US"
+  },
+  "additionalInfo": {
+    "deliveryPoint": "61",
+    "carrierRoute": "C012",
+    "DPVConfirmation": "Y",
+    "DPVCMRA": "N",
+    "business": "Y",
+    "centralDeliveryPoint": "N",
+    "vacant": "N"
+  },
+  "corrections": [
+    {
+      "code": "A",
+      "text": "The street name was standardized (AVENUE -> AVE)."
+    },
+    {
+      "code": "C",
+      "text": "The city name was corrected."
+    }
+  ],
+  "matches": [
+    {
+      "code": "31",
+      "text": "Match after standardization"
+    }
+  ]
+}

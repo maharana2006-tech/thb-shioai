@@ -24,6 +24,8 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.LocalDate;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
@@ -71,6 +73,13 @@ import java.util.concurrent.ThreadLocalRandom;
  * Void, close-out, international labels, address validation and pickup
  * all inherit the {@code CarrierConnector} default NOT_SUPPORTED — they
  * land in follow-up PRs (C-E) on this same integration track.
+ *
+ * <p>PR-C adds live address validation via
+ * {@code GET /addresses/v3/address}. No CRID / MID required for that
+ * endpoint — the platform-owned OAuth token alone is sufficient. Since
+ * 2026-08-01 the endpoint requires a signed Addresses API License
+ * Agreement in PROD; when USPS returns 401/403 the connector surfaces the
+ * remediation link so the operator knows to sign or switch to SANDBOX.
  *
  * <p>Boundary guards mirror the F7 / FDX-I2 shape established by every
  * other connector: blank OAuth token or {@code -local-} placeholder →
@@ -598,6 +607,22 @@ public class UspsDirectConnector implements CarrierConnector {
         }
     }
 
+    /**
+     * Token-only guard — the address-validation surface reuses the same
+     * "not configured" copy but doesn't have a {@link ShipmentRequestDTO}
+     * to name in the error (no order context yet at address-check time).
+     * Message text is otherwise identical so the FE can pattern-match a
+     * single string across all USPS Direct surfaces.
+     */
+    private static void assertRealTokenForAddress(String accessToken) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            throw new IllegalStateException(
+                    "USPS Direct is not configured platform-wide — no OAuth token available. "
+                            + "Set USPS_PLATFORM_CLIENT_ID / USPS_PLATFORM_CLIENT_SECRET in "
+                            + "/settings/system.");
+        }
+    }
+
     private static void assertRecipientCountry(ShipmentRequestDTO request, String context) {
         if (!StringUtils.hasText(request.getRecipientCountryCode())) {
             throw new IllegalArgumentException(
@@ -752,6 +777,413 @@ public class UspsDirectConnector implements CarrierConnector {
 
     // ================================================================
     // Tracking (PR-B) — GET /tracking/v3.2/tracking/{trackingNumber}
+    // Address validation — GET /addresses/v3/address (PR-C)
+    //
+    // USPS's Addresses API only needs the platform OAuth token; unlike
+    // label creation there's no CRID / MID / EPS account requirement,
+    // so tenants that haven't finished populating their identifiers can
+    // still cleanse addresses. That's important for the operator UX —
+    // address validation is a pre-flight, not a billable action.
+    //
+    // Since 2026-08-01 USPS requires a signed Addresses API License
+    // Agreement in production. Unsigned platforms get 401/403 back —
+    // surfaced as an actionable ISE so ops knows exactly what to sign.
+    // ================================================================
+
+    /**
+     * Validate a US address via USPS Direct v3 Addresses API. Never
+     * throws for genuine "address invalid" 400 responses — those become
+     * a NOT_FOUND / ERROR {@link AddressValidationResult} so the FE can
+     * render an operator-friendly banner instead of a stack trace.
+     *
+     * <p>Boundary guards:
+     * <ul>
+     *   <li>Blank / null / {@code -local-} token → {@link IllegalStateException}
+     *       pointing at {@code /settings/system}. (Reuses the same copy
+     *       as the other USPS Direct surfaces so the FE can pattern-match
+     *       a single string.)</li>
+     *   <li>Blank {@code streetAddress} → {@link IllegalArgumentException}.
+     *       USPS accepts city+state OR ZIP as the locality hint, but the
+     *       street is always required.</li>
+     *   <li>Blank city AND state AND ZIP → {@link IllegalArgumentException}.
+     *       USPS needs at least one locality hint (city+state OR ZIP).</li>
+     * </ul>
+     *
+     * <p>HTTP surface: {@code GET /addresses/v3/address?streetAddress=...&city=...
+     * &state=...&ZIPCode=...&ZIPPlus4=...&secondaryAddress=...} with
+     * {@code Authorization: Bearer <accessToken>}. Base URL routes by
+     * environment via {@link UspsOAuthTokenCache#baseUrl}.
+     *
+     * <p>Response mapping:
+     * <ul>
+     *   <li>200 with {@code additionalInfo.DPVConfirmation="Y"} → EXACT.</li>
+     *   <li>200 with corrections[] → CORRECTED, corrections in warnings.</li>
+     *   <li>200 with multiple matches[] → CORRECTED with the first match
+     *       as suggestion, plus a warning noting the ambiguity.</li>
+     *   <li>200 with DPV="D" (missing secondary) → CORRECTED.</li>
+     *   <li>200 with DPV="S" (secondary present but not found) or
+     *       DPV="N" (not deliverable) → NOT_FOUND.</li>
+     *   <li>400 → NOT_FOUND soft result with the USPS error message. Not
+     *       a thrown exception — 400 is USPS's contract for "address
+     *       invalid" which is expected input, not a system error.</li>
+     *   <li>401 / 403 → {@link IllegalStateException} with the License
+     *       Agreement remediation link.</li>
+     *   <li>429 → exponential back-off (2s / 4s / 8s + jitter, 3
+     *       retries) via {@link #sleepBeforeAddressRetry(long)}.</li>
+     *   <li>5xx → ERROR result with the HTTP status.</li>
+     * </ul>
+     */
+    @Override
+    public AddressValidationResult validateAddress(AddressToValidate address, String accessToken, String environment) {
+        assertRealTokenForAddress(accessToken);
+        if (address == null || !StringUtils.hasText(address.addressLine1())) {
+            throw new IllegalArgumentException(
+                    "USPS Direct address validation requires a street address.");
+        }
+        boolean hasCityState = StringUtils.hasText(address.city())
+                && StringUtils.hasText(address.state());
+        boolean hasZip = StringUtils.hasText(address.postalCode());
+        if (!hasCityState && !hasZip) {
+            throw new IllegalArgumentException(
+                    "USPS Direct address validation requires city+state or ZIP.");
+        }
+
+        String url = buildAddressValidationUrl(address, environment);
+        String response;
+        try {
+            response = executeAddressValidationWithRetry(url, accessToken);
+        } catch (LicenseAgreementRequiredException licEx) {
+            throw new IllegalStateException(
+                    "USPS Direct address validation requires a signed Addresses API License "
+                            + "Agreement in PRODUCTION. Sign it at developers.usps.com (or use "
+                            + "SANDBOX for now).");
+        } catch (AddressValidationSoftFailure soft) {
+            return new AddressValidationResult(false, "NOT_FOUND", "UNKNOWN", null,
+                    List.of(),
+                    soft.friendlyMessage,
+                    soft.rawBody);
+        } catch (AddressValidationHttpFailure httpEx) {
+            log.warn("USPS Direct address validation rejected (HTTP {}): {}",
+                    httpEx.status, safeBody(httpEx.rawBody));
+            return new AddressValidationResult(false, "ERROR", "UNKNOWN", null,
+                    List.of(),
+                    "USPS Direct address validation rejected: HTTP " + httpEx.status
+                            + " — retry once USPS is responsive, or verify the address manually.",
+                    httpEx.rawBody);
+        } catch (Exception ex) {
+            log.warn("USPS Direct address validation call failed: {}", ex.getMessage());
+            return new AddressValidationResult(false, "ERROR", "UNKNOWN", null,
+                    List.of(),
+                    "USPS Direct address validation call failed: " + ex.getMessage(),
+                    null);
+        }
+        if (!StringUtils.hasText(response)) {
+            return new AddressValidationResult(false, "ERROR", "UNKNOWN", null,
+                    List.of(),
+                    "USPS Direct returned an empty address-validation response.",
+                    null);
+        }
+        return parseAddressValidationResponse(address, response);
+    }
+
+    /**
+     * Build the USPS /addresses/v3/address query URL. Only non-blank
+     * fields are appended so USPS doesn't reject empty string params —
+     * "streetAddress=" (empty) trips a 400 even though the field carries
+     * a value elsewhere. Package-visible so payload-shape tests can pin
+     * the wire format.
+     */
+    String buildAddressValidationUrl(AddressToValidate address, String environment) {
+        StringBuilder qs = new StringBuilder();
+        appendParam(qs, "streetAddress", address.addressLine1());
+        appendParam(qs, "secondaryAddress", address.addressLine2());
+        appendParam(qs, "city", address.city());
+        appendParam(qs, "state", address.state());
+        String zip = address.postalCode();
+        String zipPlus4 = null;
+        // Split ZIP+4 into ZIPCode + ZIPPlus4 — USPS expects them
+        // separated. "12345-6789" and "123456789" (9-digit) both parse.
+        if (StringUtils.hasText(zip)) {
+            String trimmed = zip.trim();
+            if (trimmed.contains("-")) {
+                int dash = trimmed.indexOf('-');
+                appendParam(qs, "ZIPCode", trimmed.substring(0, dash));
+                String plus = trimmed.substring(dash + 1);
+                if (StringUtils.hasText(plus)) zipPlus4 = plus;
+            } else if (trimmed.length() == 9 && trimmed.chars().allMatch(Character::isDigit)) {
+                appendParam(qs, "ZIPCode", trimmed.substring(0, 5));
+                zipPlus4 = trimmed.substring(5);
+            } else {
+                appendParam(qs, "ZIPCode", trimmed);
+            }
+            if (StringUtils.hasText(zipPlus4)) appendParam(qs, "ZIPPlus4", zipPlus4);
+        }
+        return UspsOAuthTokenCache.baseUrl(environment) + "/addresses/v3/address" + qs;
+    }
+
+    private static void appendParam(StringBuilder qs, String name, String value) {
+        if (!StringUtils.hasText(value)) return;
+        qs.append(qs.length() == 0 ? "?" : "&");
+        qs.append(name).append('=').append(URLEncoder.encode(value.trim(), StandardCharsets.UTF_8));
+    }
+
+    /**
+     * Retry loop for {@link #executeAddressValidationGet}. 429 triggers
+     * back-off + retry (2s / 4s / 8s + jitter, 3 attempts). Non-429
+     * client / server errors escape as typed exceptions so the caller
+     * can decide EXCEPTION vs SOFT-FAILURE (400 = soft; 401/403 = ISE
+     * for the License Agreement guard; 5xx = ERROR result).
+     */
+    private String executeAddressValidationWithRetry(String url, String accessToken)
+            throws AddressValidationHttpFailure, AddressValidationSoftFailure,
+                   LicenseAgreementRequiredException {
+        int attempt = 0;
+        while (true) {
+            try {
+                return executeAddressValidationGet(url, accessToken);
+            } catch (RestClientResponseException ex) {
+                int status = ex.getStatusCode().value();
+                String body = ex.getResponseBodyAsString();
+                if (status == 401 || status == 403) {
+                    throw new LicenseAgreementRequiredException();
+                }
+                if (status == 400) {
+                    // USPS "address invalid" — surface as a soft failure
+                    // rather than a thrown ISE. Operators see the reason
+                    // in the result panel and can correct the address
+                    // manually.
+                    throw new AddressValidationSoftFailure(
+                            extractUspsErrorMessage(body,
+                                    "USPS Direct could not validate this address."),
+                            body);
+                }
+                if (status == 429 && attempt < MAX_RATE_LIMIT_RETRIES) {
+                    long delay = backoffDelayMillis(attempt);
+                    log.warn("USPS Direct address-validation 429 (attempt {}/{}); backing off {}ms.",
+                            attempt + 1, MAX_RATE_LIMIT_RETRIES, delay);
+                    sleepBeforeAddressRetry(delay);
+                    attempt++;
+                    continue;
+                }
+                throw new AddressValidationHttpFailure(status, body);
+            }
+        }
+    }
+
+    /**
+     * Package-visible seam so tests can inject canned USPS responses
+     * without spinning up a MockWebServer. Default impl issues a real
+     * HTTP GET with the shared USPS Bearer token; test subclasses
+     * override to return fixture JSON.
+     */
+    String executeAddressValidationGet(String url, String accessToken) {
+        RestClient client = HttpClients.newBuilder().baseUrl(url).build();
+        return client.get()
+                .accept(MediaType.APPLICATION_JSON)
+                .header("Authorization", "Bearer " + accessToken)
+                .retrieve()
+                .body(String.class);
+    }
+
+    /**
+     * Package-visible seam so tests can skip real back-off. Default
+     * behaviour is {@link #sleepQuietly}; the address-validation test
+     * subclass overrides to a no-op so the 429-retry test stays fast.
+     */
+    void sleepBeforeAddressRetry(long millis) {
+        sleepQuietly(millis);
+    }
+
+    /**
+     * Parse the USPS v3 addresses response into an
+     * {@link AddressValidationResult}. Package-visible for the parser
+     * tests — pin the DPV / corrections / matches mapping without
+     * needing to run the full HTTP path.
+     */
+    AddressValidationResult parseAddressValidationResponse(AddressToValidate input, String responseJson) {
+        try {
+            JsonNode root = objectMapper.readTree(
+                    responseJson == null || responseJson.isBlank() ? "{}" : responseJson);
+            JsonNode addressNode = root.path("address");
+            JsonNode additional = root.path("additionalInfo");
+            String dpv = additional.path("DPVConfirmation").asText("");
+            JsonNode corrections = root.path("corrections");
+            JsonNode matches = root.path("matches");
+
+            AddressToValidate suggested = readSuggestedAddress(addressNode, input);
+            List<String> warnings = new ArrayList<>();
+            appendCorrectionsWarnings(warnings, corrections);
+            appendMatchesWarning(warnings, matches);
+
+            switch (dpv == null ? "" : dpv.trim().toUpperCase(Locale.ROOT)) {
+                case "Y":
+                    // Delivery-point verified — but only mark EXACT if
+                    // USPS didn't also send corrections. Corrections mean
+                    // USPS re-wrote a field before matching, so the
+                    // operator should still eyeball the suggestion.
+                    if (corrections.isArray() && corrections.size() > 0) {
+                        return new AddressValidationResult(true, "CORRECTED",
+                                "UNKNOWN", suggested, warnings,
+                                "USPS confirmed the address but corrected one or more fields.",
+                                responseJson);
+                    }
+                    return new AddressValidationResult(true, "EXACT", "UNKNOWN",
+                            null, warnings,
+                            "USPS confirmed this address is deliverable.", responseJson);
+                case "D":
+                    // Deliverable but missing secondary (apt/suite) —
+                    // still deliverable per USPS, but flag so the
+                    // operator can decide whether to add the unit.
+                    warnings.add(0,
+                            "USPS accepted the address but couldn't confirm the secondary unit; verify the apt / suite number.");
+                    return new AddressValidationResult(true, "CORRECTED", "UNKNOWN",
+                            suggested, warnings,
+                            "USPS confirmed the primary address but couldn't confirm the secondary unit.",
+                            responseJson);
+                case "S":
+                    return new AddressValidationResult(false, "NOT_FOUND", "UNKNOWN",
+                            suggested, warnings,
+                            "USPS found the primary address but the secondary unit is invalid.",
+                            responseJson);
+                case "N":
+                    return new AddressValidationResult(false, "NOT_FOUND", "UNKNOWN",
+                            null, warnings,
+                            "USPS couldn't find this address.", responseJson);
+                default:
+                    // No DPV — fall back on matches/corrections presence.
+                    // A resolved suggestion that differs from input =
+                    // CORRECTED; same-as-input or no data = ERROR (we
+                    // can't tell either way).
+                    if (matches.isArray() && matches.size() > 0) {
+                        return new AddressValidationResult(true, "CORRECTED", "UNKNOWN",
+                                suggested, warnings,
+                                "USPS returned a resolved address; DPV confirmation absent.",
+                                responseJson);
+                    }
+                    if (corrections.isArray() && corrections.size() > 0) {
+                        return new AddressValidationResult(true, "CORRECTED", "UNKNOWN",
+                                suggested, warnings,
+                                "USPS corrected the address; review before shipping.",
+                                responseJson);
+                    }
+                    if (addressNode.isMissingNode() || addressNode.isNull()) {
+                        return new AddressValidationResult(false, "NOT_FOUND", "UNKNOWN",
+                                null, warnings,
+                                "USPS returned no resolved address.", responseJson);
+                    }
+                    log.warn("USPS Direct address-validation response has no DPV/matches/corrections: {}",
+                            safeBody(responseJson));
+                    return new AddressValidationResult(false, "ERROR", "UNKNOWN",
+                            null, warnings,
+                            "USPS couldn't confirm this address (no DPV verdict returned).",
+                            responseJson);
+            }
+        } catch (Exception ex) {
+            return new AddressValidationResult(false, "ERROR", "UNKNOWN", null,
+                    List.of(),
+                    "USPS Direct address-validation response parse failed: " + ex.getMessage(),
+                    responseJson);
+        }
+    }
+
+    private static AddressToValidate readSuggestedAddress(JsonNode addressNode, AddressToValidate input) {
+        if (addressNode == null || addressNode.isMissingNode() || addressNode.isNull()) {
+            return null;
+        }
+        String zip = addressNode.path("ZIPCode").asText(null);
+        String plus = addressNode.path("ZIPPlus4").asText(null);
+        String combinedZip = StringUtils.hasText(plus)
+                ? (StringUtils.hasText(zip) ? zip + "-" + plus : plus)
+                : zip;
+        return new AddressToValidate(
+                input == null ? null : input.name(),
+                input == null ? null : input.company(),
+                addressNode.path("streetAddress").asText(null),
+                addressNode.path("secondaryAddress").asText(null),
+                null,
+                addressNode.path("city").asText(null),
+                addressNode.path("state").asText(null),
+                combinedZip,
+                addressNode.path("countryCode").asText(
+                        input == null ? "US" : (input.countryCode() == null ? "US" : input.countryCode())));
+    }
+
+    private static void appendCorrectionsWarnings(List<String> warnings, JsonNode corrections) {
+        if (corrections == null || !corrections.isArray() || corrections.size() == 0) return;
+        for (JsonNode c : corrections) {
+            String code = c.path("code").asText(null);
+            String text = c.path("text").asText(null);
+            if (StringUtils.hasText(text) && StringUtils.hasText(code)) {
+                warnings.add("USPS correction " + code + ": " + text);
+            } else if (StringUtils.hasText(text)) {
+                warnings.add("USPS correction: " + text);
+            } else if (StringUtils.hasText(code)) {
+                warnings.add("USPS correction " + code);
+            }
+        }
+    }
+
+    private static void appendMatchesWarning(List<String> warnings, JsonNode matches) {
+        if (matches == null || !matches.isArray() || matches.size() <= 1) return;
+        warnings.add("USPS returned " + matches.size()
+                + " possible matches; the first match was used as the suggestion.");
+    }
+
+    /**
+     * Extract a human-readable error message from USPS's 400 response
+     * body. USPS wraps errors as {@code {"error":{"code":"...",
+     * "message":"..."}}} in v3 but occasionally emits a bare
+     * {@code {"message":"..."}}. Fall back to a generic string when
+     * neither shape matches.
+     */
+    String extractUspsErrorMessage(String body, String fallback) {
+        if (!StringUtils.hasText(body)) return fallback;
+        try {
+            JsonNode root = objectMapper.readTree(body);
+            String msg = root.path("error").path("message").asText(null);
+            if (StringUtils.hasText(msg)) return "USPS Direct: " + msg;
+            msg = root.path("message").asText(null);
+            if (StringUtils.hasText(msg)) return "USPS Direct: " + msg;
+        } catch (Exception ignore) {
+            // fall through
+        }
+        return fallback;
+    }
+
+    /** Sentinel for 401 / 403 responses signalling the missing License
+     *  Agreement. Static + private so it stays a compile-time control
+     *  flow marker rather than something callers can catch. */
+    private static final class LicenseAgreementRequiredException extends RuntimeException {
+    }
+
+    /** Sentinel for 400 responses — USPS "address invalid" outcome that
+     *  should be surfaced as a soft-failure {@link AddressValidationResult}
+     *  rather than a thrown exception. */
+    private static final class AddressValidationSoftFailure extends RuntimeException {
+        final String friendlyMessage;
+        final String rawBody;
+
+        AddressValidationSoftFailure(String friendlyMessage, String rawBody) {
+            super(friendlyMessage);
+            this.friendlyMessage = friendlyMessage;
+            this.rawBody = rawBody;
+        }
+    }
+
+    /** Sentinel for other HTTP failures (5xx or 429 exhaustion). */
+    private static final class AddressValidationHttpFailure extends RuntimeException {
+        final int status;
+        final String rawBody;
+
+        AddressValidationHttpFailure(int status, String rawBody) {
+            super("USPS HTTP " + status);
+            this.status = status;
+            this.rawBody = rawBody;
+        }
+    }
+
+    // ================================================================
+    // Tracking — URL-only stub. PR-D will wire the live v3 endpoint.
     // ================================================================
 
     /**
