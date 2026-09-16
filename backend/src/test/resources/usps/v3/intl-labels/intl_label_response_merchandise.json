@@ -1,0 +1,39 @@
+{
+  "labelMetadata": {
+    "trackingNumber": "CP123456789US",
+    "constructCode": "C01",
+    "SKU": "IPMI00001",
+    "postage": 42.15,
+    "labelType": "4X6LABEL",
+    "labelBrokerID": "eVS-INTL-9876543",
+    "bannerText": "PRIORITY MAIL INTERNATIONAL",
+    "serviceTypeCode": "PRIORITY_MAIL_INTERNATIONAL",
+    "mailClass": "PRIORITY_MAIL_INTERNATIONAL",
+    "zone": "3",
+    "commitment": {
+      "name": "6-10 Business Days",
+      "scheduledDeliveryDate": "2026-09-25"
+    },
+    "weightUOM": "LB",
+    "weight": 2.00,
+    "dimensionalWeight": 0.0,
+    "fees": [],
+    "extraServices": [],
+    "trackingURL": "https://tools.usps.com/go/TrackConfirmAction?tLabels=CP123456789US"
+  },
+  "labelImage": "JVBERi0xLjQKJfbk/N8KMSAwIG9iago8PC9UeXBlL0NhdGFsb2c+PgplbmRvYmoKMiAwIG9iago8PC9UeXBlL1BhZ2VzL0NvdW50IDEvS2lkc1s0IDAgUl0+PgplbmRvYmo=",
+  "customsFormImage": "JVBERi0xLjQKJfbk/N8KMSAwIG9iago8PC9UeXBlL0NhdGFsb2cvUGFnZXMgMiAwIFI+PgplbmRvYmoK",
+  "customsForm": {
+    "contentType": "MERCHANDISE",
+    "commodities": [
+      {
+        "description": "Cotton t-shirt",
+        "quantity": 2,
+        "weight": 0.5,
+        "value": 15.00,
+        "hsTariffNumber": "610910",
+        "countryOfOrigin": "US"
+      }
+    ]
+  }
+}

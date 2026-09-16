@@ -1,0 +1,37 @@
+{
+  "labelMetadata": {
+    "trackingNumber": "CJ987654321US",
+    "constructCode": "C01",
+    "SKU": "IPMI00002",
+    "postage": 28.75,
+    "labelType": "4X6LABEL",
+    "labelBrokerID": "eVS-INTL-1234567",
+    "bannerText": "PRIORITY MAIL INTERNATIONAL",
+    "serviceTypeCode": "PRIORITY_MAIL_INTERNATIONAL",
+    "mailClass": "PRIORITY_MAIL_INTERNATIONAL",
+    "zone": "1",
+    "commitment": {
+      "name": "6-10 Business Days"
+    },
+    "weightUOM": "LB",
+    "weight": 1.00,
+    "fees": [],
+    "extraServices": [],
+    "trackingURL": "https://tools.usps.com/go/TrackConfirmAction?tLabels=CJ987654321US"
+  },
+  "labelImage": "JVBERi0xLjQKJfbk/N8KMSAwIG9iago8PC9UeXBlL0NhdGFsb2c+PmVuZG9iagoyIDAgb2JqCg==",
+  "customsFormImage": "JVBERi0xLjQKJfbk/N8KGZpZnQtY24yMi1jb250ZW50IHBsYWNlaG9sZGVyKQ==",
+  "customsForm": {
+    "contentType": "GIFT",
+    "commodities": [
+      {
+        "description": "Wooden picture frame",
+        "quantity": 1,
+        "weight": 1.0,
+        "value": 20.00,
+        "hsTariffNumber": "441400",
+        "countryOfOrigin": "US"
+      }
+    ]
+  }
+}

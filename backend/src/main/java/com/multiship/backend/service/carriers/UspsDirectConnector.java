@@ -3,11 +3,16 @@ package com.multiship.backend.service.carriers;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.multiship.backend.config.CarrierProperties;
+import com.multiship.backend.dto.CustomsCommodityDTO;
+import com.multiship.backend.dto.IntlShipmentBlockDTO;
 import com.multiship.backend.dto.PackageDetailDTO;
 import com.multiship.backend.dto.ShipmentRequestDTO;
 import com.multiship.backend.service.SystemSettingService;
+import com.multiship.backend.service.carriers.usps.UspsCustomsFormBuilder;
 import com.multiship.backend.service.carriers.usps.UspsOAuthTokenCache;
 import com.multiship.backend.service.carriers.usps.UspsPaymentAuthCache;
+import com.multiship.backend.service.carriers.usps.dto.UspsCommodity;
+import com.multiship.backend.service.carriers.usps.dto.UspsCustomsForm;
 import com.multiship.backend.util.UnitConverter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -70,9 +75,6 @@ import java.util.concurrent.ThreadLocalRandom;
  *       notifications. Signature is {@code X-HMAC} =
  *       {@code base64(HMAC-SHA256(timestamp + rawBody, secret))}.</li>
  * </ul>
- * Void, close-out, international labels, address validation and pickup
- * all inherit the {@code CarrierConnector} default NOT_SUPPORTED — they
- * land in follow-up PRs (C-E) on this same integration track.
  *
  * <p>PR-C adds live address validation via
  * {@code GET /addresses/v3/address}. No CRID / MID required for that
@@ -80,6 +82,27 @@ import java.util.concurrent.ThreadLocalRandom;
  * 2026-08-01 the endpoint requires a signed Addresses API License
  * Agreement in PROD; when USPS returns 401/403 the connector surfaces the
  * remediation link so the operator knows to sign or switch to SANDBOX.
+ *
+ * <p>PR-D adds the optimistic void model — USPS APIs v3 have no
+ * synchronous void endpoint, so {@code voidShipment} returns immediately
+ * with {@code VOID_PENDING_RECONCILIATION} and the nightly
+ * {@code UspsDirectVoidReconciliationService} settles state from the
+ * eVS Refund report (PS 3533 batch flow).
+ *
+ * <p>PR-E adds international variants for rate + label:
+ * <ul>
+ *   <li>{@code getRates} branches on {@code recipientCountry != "US"} and
+ *       dispatches to {@code POST /international-prices/v3/base-rates/search}.</li>
+ *   <li>{@code createShipment} same branch, dispatches to
+ *       {@code POST /international-labels/v3/label} with a customs-form
+ *       block built by {@link UspsCustomsFormBuilder}.</li>
+ *   <li>Enforces the 2025-09-01 USPS HS-6 tariff mandate at
+ *       connector-boundary — every commodity's HS code must normalise to
+ *       6+ digits before we hit the wire (USPS rejects with 400 otherwise
+ *       and the operator gets an opaque error).</li>
+ * </ul>
+ * Close-out and pickup inherit the {@code CarrierConnector} default
+ * NOT_SUPPORTED — future work.
  *
  * <p>Boundary guards mirror the F7 / FDX-I2 shape established by every
  * other connector: blank OAuth token or {@code -local-} placeholder →
@@ -103,6 +126,22 @@ public class UspsDirectConnector implements CarrierConnector {
      *  in CarrierServiceImpl (Agent C). */
     static final String CARRIER_CODE = "USPS";
 
+    /**
+     * Minimum HS tariff-number length required by USPS on international
+     * shipments since 2025-09-01. Kept as a named constant so the boundary
+     * guard + the customs-form builder + the tests all reference the same
+     * source of truth.
+     *
+     * <p><b>REGULATORY_REFERENCE.</b> USPS International HS-6 Tariff
+     * Mandate, effective 2025-09-01. See
+     * <a href="https://about.usps.com/newsroom/national-releases/2025/hs6-mandate.htm">
+     * USPS 2025 HS-6 mandate release</a> and WCO Harmonized System §1.1.
+     * Shipments without a 6-digit minimum HS on every commodity are
+     * rejected with HTTP 400 at
+     * {@code /international-labels/v3/label}.
+     */
+    static final int HS_MIN_DIGITS = 6;
+
     private final CarrierProperties carrierProperties;
     private final ObjectMapper objectMapper;
     private final UspsOAuthTokenCache tokenCache;
@@ -113,6 +152,17 @@ public class UspsDirectConnector implements CarrierConnector {
      *  primary constructor and don't exercise the system-setting fallback. */
     @Autowired(required = false)
     private SystemSettingService systemSettingService;
+
+    /**
+     * PR-E — field-injected (not constructor-arg) so the pre-PR-E 5-arg
+     * constructor stays intact for legacy tests. Spring populates this
+     * in production; unit tests that exercise the intl branches inject
+     * their own via {@link #setCustomsFormBuilder(UspsCustomsFormBuilder)}
+     * or by using the {@code @Autowired} field default (a fresh
+     * instance is built via {@link #customsFormBuilder()} when null).
+     */
+    @Autowired(required = false)
+    private UspsCustomsFormBuilder customsFormBuilder;
 
     /** System-setting keys for the platform OAuth credentials. Owned by
      *  Agent A's {@code /settings/system} controller; consumed here to
@@ -136,6 +186,13 @@ public class UspsDirectConnector implements CarrierConnector {
      *  in {@code src/test/resources/usps/v3/webhooks/} verify both paths). */
     static final String WEBHOOK_HEADER_TIMESTAMP = "X-USPS-Timestamp";
 
+    /** Soft cap on customs-form commodities (PR-E). USPS's
+     *  international-labels endpoint accepts more, but printing >30 lines
+     *  onto a single CN23 physically overflows. PR-F3 (shipment splitter)
+     *  will enforce the ceiling upstream; here we log a WARN so ops sees
+     *  the outliers. */
+    static final int CUSTOMS_FORM_SOFT_MAX_LINES = 30;
+
     /** Primary constructor — Spring picks this up. Explicit rather than
      *  Lombok so tests can build without SystemSettingService. */
     public UspsDirectConnector(CarrierProperties carrierProperties,
@@ -148,6 +205,25 @@ public class UspsDirectConnector implements CarrierConnector {
         this.tokenCache = tokenCache;
         this.paymentAuthCache = paymentAuthCache;
         this.jdbcTemplate = jdbcTemplate;
+    }
+
+    /**
+     * Test-only setter for the customs-form builder. Field injection is
+     * fine for prod (Spring populates it), but pure-Mockito unit tests
+     * that don't spin up a container need a way to seed the collaborator.
+     */
+    void setCustomsFormBuilder(UspsCustomsFormBuilder builder) {
+        this.customsFormBuilder = builder;
+    }
+
+    /** Lazy-default the customs-form builder so intl paths never NPE even
+     *  when the field wasn't populated (legacy test, misconfigured
+     *  container). Idempotent — repeated calls return the same instance. */
+    private UspsCustomsFormBuilder customsFormBuilder() {
+        if (customsFormBuilder == null) {
+            customsFormBuilder = new UspsCustomsFormBuilder();
+        }
+        return customsFormBuilder;
     }
 
     @Override
@@ -284,7 +360,13 @@ public class UspsDirectConnector implements CarrierConnector {
     }
 
     // ================================================================
-    // Rate shop — POST /prices/v3/total-rates/search (domestic only)
+    // Rate shop — POST /prices/v3/total-rates/search (domestic)
+    //             POST /international-prices/v3/base-rates/search (intl)
+    //
+    // The interface hands us ONE getRates method for both — we branch on
+    // recipient country here. Blank / non-ISO country codes are caught
+    // upstream by assertRecipientCountry (domestic) or
+    // assertIsoAlpha2RecipientCountry (intl).
     // ================================================================
 
     @Override
@@ -300,6 +382,10 @@ public class UspsDirectConnector implements CarrierConnector {
         if (pkgs.isEmpty()) {
             log.warn("USPS Direct rate-shop skipped: request has no packages.");
             return List.of();
+        }
+
+        if (isInternational(request)) {
+            return getIntlRatesInternal(request, tenant, accessToken, environment, pkgs);
         }
 
         // v3 total-rates/search is single-piece — loop N calls, then let
@@ -318,6 +404,33 @@ public class UspsDirectConnector implements CarrierConnector {
                 allRates.addAll(parseRateResponse(response));
             } catch (Exception ex) {
                 log.warn("USPS Direct rate-shop response unparseable: {}", ex.getMessage());
+            }
+        }
+        return allRates;
+    }
+
+    /**
+     * Intl rate branch — POST {@code /international-prices/v3/base-rates/search}.
+     * Extra boundary guard: the recipient country must be an ISO alpha-2
+     * value ("GB", not "United Kingdom"). USPS rejects free-form country
+     * names with 400.
+     */
+    private List<RateOption> getIntlRatesInternal(ShipmentRequestDTO request, TenantIdentifiers tenant,
+                                                    String accessToken, String environment,
+                                                    List<PackageDetailDTO> pkgs) {
+        assertIsoAlpha2RecipientCountry(request);
+        List<RateOption> allRates = new ArrayList<>();
+        for (PackageDetailDTO pkg : pkgs) {
+            Map<String, Object> body = buildIntlRateRequestBody(request, pkg, tenant);
+            String response = executeIntlRatePost(
+                    UspsOAuthTokenCache.baseUrl(environment)
+                            + "/international-prices/v3/base-rates/search",
+                    body, accessToken);
+            if (response == null) continue;
+            try {
+                allRates.addAll(parseIntlRateResponse(response));
+            } catch (Exception ex) {
+                log.warn("USPS Direct intl rate-shop response unparseable: {}", ex.getMessage());
             }
         }
         return allRates;
@@ -351,6 +464,39 @@ public class UspsDirectConnector implements CarrierConnector {
         // Tenant CRID/MID/account attach the rate quote to the correct
         // account for pricing tiers (USPS returns commercial rates for
         // negotiated accounts based on these).
+        body.put("accountNumber", tenant.accountNumber());
+        body.put("CRID", tenant.crid());
+        body.put("MID", tenant.mid());
+        return body;
+    }
+
+    /**
+     * Build the USPS v3 international rate-search body. Same broad shape
+     * as domestic, but the destination is a country (not a ZIP) and we
+     * leave the mailClass broad so USPS returns the full international
+     * ladder (PRIORITY_MAIL_INTERNATIONAL, PMEI, GXG, First-Class Package
+     * International Service — whichever the origin qualifies for).
+     *
+     * <p>Package-visible for the payload-shape test.
+     */
+    Map<String, Object> buildIntlRateRequestBody(ShipmentRequestDTO request, PackageDetailDTO pkg,
+                                                  TenantIdentifiers tenant) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("originZIPCode", nullSafe(request.getShipperPostalCode()));
+        body.put("destinationCountryCode",
+                request.getRecipientCountryCode().trim().toUpperCase(Locale.ROOT));
+        body.put("weight", toPoundsScalar(pkg));
+        BigDecimal length = firstNonNull(pkg.getLength(), request.getLength());
+        BigDecimal width = firstNonNull(pkg.getWidth(), request.getWidth());
+        BigDecimal height = firstNonNull(pkg.getHeight(), request.getHeight());
+        String dimUnit = firstNonBlank(pkg.getDimUnit(), request.getDimUnit());
+        if (length != null) body.put("length", UnitConverter.toInches(length, dimUnit));
+        if (width != null) body.put("width", UnitConverter.toInches(width, dimUnit));
+        if (height != null) body.put("height", UnitConverter.toInches(height, dimUnit));
+        body.put("mailClass", "ALL");
+        body.put("processingCategory", "MACHINABLE");
+        body.put("rateIndicator", "SP");
+        body.put("priceType", "COMMERCIAL");
         body.put("accountNumber", tenant.accountNumber());
         body.put("CRID", tenant.crid());
         body.put("MID", tenant.mid());
@@ -406,6 +552,48 @@ public class UspsDirectConnector implements CarrierConnector {
         return out;
     }
 
+    /**
+     * Parse a USPS v3 international base-rates response into RateOptions.
+     * Shape mirrors the domestic response — {@code rateOptions[]} with
+     * inline {@code rates[]} — plus per-option {@code zone} +
+     * {@code commitment} the intl endpoint emits. Package-visible for
+     * the parser tests.
+     */
+    List<RateOption> parseIntlRateResponse(String responseJson) throws Exception {
+        List<RateOption> out = new ArrayList<>();
+        JsonNode root = objectMapper.readTree(responseJson == null ? "{}" : responseJson);
+        JsonNode rateOptions = root.path("rateOptions");
+        if (rateOptions.isMissingNode() || rateOptions.isNull()) {
+            rateOptions = root.path("rates");
+        }
+        if (!rateOptions.isArray()) return out;
+        for (JsonNode opt : rateOptions) {
+            BigDecimal totalPrice = readDecimal(opt, "totalPrice");
+            JsonNode rates = opt.path("rates");
+            String mailClass = null;
+            String description = null;
+            if (rates.isArray() && rates.size() > 0) {
+                mailClass = rates.get(0).path("mailClass").asText(null);
+                description = rates.get(0).path("description").asText(null);
+                if (totalPrice == null) totalPrice = readDecimal(rates.get(0), "price");
+            }
+            if (!StringUtils.hasText(mailClass)) {
+                mailClass = opt.path("mailClass").asText(null);
+            }
+            if (!StringUtils.hasText(mailClass) || totalPrice == null) continue;
+            out.add(new RateOption(
+                    CARRIER_CODE,
+                    mailClass,
+                    StringUtils.hasText(description) ? description : mailClass,
+                    totalPrice,
+                    "USD",
+                    null,
+                    null
+            ));
+        }
+        return out;
+    }
+
     private static BigDecimal readDecimal(JsonNode node, String field) {
         JsonNode n = node.path(field);
         if (n.isNumber()) return n.decimalValue();
@@ -417,7 +605,8 @@ public class UspsDirectConnector implements CarrierConnector {
     }
 
     // ================================================================
-    // Create shipment — POST /labels/v3/label
+    // Create shipment — POST /labels/v3/label (domestic)
+    //                   POST /international-labels/v3/label (intl)
     // ================================================================
 
     @Override
@@ -442,11 +631,15 @@ public class UspsDirectConnector implements CarrierConnector {
                                 + "that CRID / MID / account match the values registered on "
                                 + "USPS's Enterprise Payment System."));
 
-        Map<String, Object> body = buildLabelRequestBody(request, tenant);
         Map<String, String> extraHeaders = Map.of(
                 "X-Payment-Authorization-Token", paymentAuthToken,
                 "X-USPS-CRID", tenant.crid());
 
+        if (isInternational(request)) {
+            return createIntlShipmentInternal(request, tenant, accessToken, environment, extraHeaders);
+        }
+
+        Map<String, Object> body = buildLabelRequestBody(request, tenant);
         String url = UspsOAuthTokenCache.baseUrl(environment) + "/labels/v3/label";
         String response = callWithRetry(url, body, accessToken, extraHeaders, "createShipment");
         if (response == null) {
@@ -458,6 +651,39 @@ public class UspsDirectConnector implements CarrierConnector {
         } catch (Exception ex) {
             throw new IllegalStateException(
                     "USPS Direct label response unparseable for order "
+                            + request.getReferenceNumber() + ": " + ex.getMessage(), ex);
+        }
+    }
+
+    /**
+     * Intl label branch — POST {@code /international-labels/v3/label}.
+     * Runs the intl-specific boundary checks (ISO country, customs block
+     * present, HS-6 mandate, country-of-origin per commodity) BEFORE any
+     * wire call. Response is parsed into the same {@link ShipmentResult}
+     * shape as the domestic path; {@code customsFormImage} rides on the
+     * {@code rawResponse} field (accessible via JSON path) so the shared
+     * cross-carrier record doesn't need a per-carrier field addition.
+     */
+    private ShipmentResult createIntlShipmentInternal(ShipmentRequestDTO request, TenantIdentifiers tenant,
+                                                       String accessToken, String environment,
+                                                       Map<String, String> extraHeaders) {
+        assertIsoAlpha2RecipientCountry(request);
+        assertIntlCustomsBlock(request);
+        assertHsAndOriginPerCommodity(request);
+        warnIfCommoditiesExceedSoftMax(request);
+
+        Map<String, Object> body = buildIntlLabelRequestBody(request, tenant);
+        String url = UspsOAuthTokenCache.baseUrl(environment) + "/international-labels/v3/label";
+        String response = executeIntlLabelPost(url, body, accessToken, extraHeaders);
+        if (response == null) {
+            throw new IllegalStateException("USPS Direct intl label call returned no response for order "
+                    + request.getReferenceNumber() + ".");
+        }
+        try {
+            return parseIntlLabelResponse(response, request);
+        } catch (Exception ex) {
+            throw new IllegalStateException(
+                    "USPS Direct intl label response unparseable for order "
                             + request.getReferenceNumber() + ": " + ex.getMessage(), ex);
         }
     }
@@ -541,6 +767,139 @@ public class UspsDirectConnector implements CarrierConnector {
         return body;
     }
 
+    /**
+     * Build the USPS v3 international label body. Same top-level shape
+     * as the domestic body (imageInfo, addresses, senderInfo,
+     * packageDescription, paymentInfo) plus a {@code customsForm} block
+     * built by {@link UspsCustomsFormBuilder} and a top-level
+     * {@code destinationCountryCode} echo USPS's intl endpoint expects.
+     *
+     * <p>Package-visible for the payload-shape test.
+     */
+    Map<String, Object> buildIntlLabelRequestBody(ShipmentRequestDTO request, TenantIdentifiers tenant) {
+        Map<String, Object> body = new LinkedHashMap<>();
+
+        Map<String, Object> imageInfo = new LinkedHashMap<>();
+        String imageType = firstNonBlank(request.getLabelImageFormat(), "PDF").toUpperCase(Locale.ROOT);
+        imageInfo.put("imageType", imageType);
+        imageInfo.put("labelType", "4X6");
+        imageInfo.put("receiptOption", "NONE");
+        body.put("imageInfo", imageInfo);
+
+        body.put("toAddress", buildAddress(
+                request.getRecipientAddressLine1(),
+                request.getRecipientAddressLine2(),
+                request.getRecipientCity(),
+                request.getRecipientState(),
+                request.getRecipientPostalCode(),
+                request.getRecipientCountryCode(),
+                request.getRecipientName(),
+                request.getRecipientCompany(),
+                request.getRecipientPhone()));
+
+        body.put("fromAddress", buildAddress(
+                request.getShipperAddressLine1(),
+                request.getShipperAddressLine2(),
+                request.getShipperCity(),
+                request.getShipperState(),
+                request.getShipperPostalCode(),
+                request.getShipperCountryCode(),
+                request.getShipperName(),
+                request.getShipperCompany(),
+                request.getShipperPhone()));
+
+        Map<String, Object> senderInfo = new LinkedHashMap<>();
+        senderInfo.put("CRID", tenant.crid());
+        senderInfo.put("MID", tenant.mid());
+        body.put("senderInfo", senderInfo);
+
+        PackageDetailDTO firstPkg = request.effectivePackages().get(0);
+        Map<String, Object> packageDescription = new LinkedHashMap<>();
+        // Intl default — USPS Priority Mail International when the caller
+        // hasn't picked a specific service. Operators pick the specific
+        // service (PMI vs PMEI vs GXG) from the rate-shop response.
+        String mailClass = firstNonBlank(request.getServiceType(), "PRIORITY_MAIL_INTERNATIONAL");
+        packageDescription.put("mailClass", mailClass);
+        packageDescription.put("processingCategory", "MACHINABLE");
+        packageDescription.put("rateIndicator", "SP");
+        packageDescription.put("weight", toPoundsScalar(firstPkg));
+        BigDecimal length = firstNonNull(firstPkg.getLength(), request.getLength());
+        BigDecimal width = firstNonNull(firstPkg.getWidth(), request.getWidth());
+        BigDecimal height = firstNonNull(firstPkg.getHeight(), request.getHeight());
+        String dimUnit = firstNonBlank(firstPkg.getDimUnit(), request.getDimUnit());
+        if (length != null) packageDescription.put("length", UnitConverter.toInches(length, dimUnit));
+        if (width != null) packageDescription.put("width", UnitConverter.toInches(width, dimUnit));
+        if (height != null) packageDescription.put("height", UnitConverter.toInches(height, dimUnit));
+        packageDescription.put("extraServices", List.of());
+        body.put("packageDescription", packageDescription);
+
+        if (StringUtils.hasText(request.getReferenceNumber())) {
+            body.put("customerReference", request.getReferenceNumber());
+        }
+
+        Map<String, Object> paymentInfo = new LinkedHashMap<>();
+        paymentInfo.put("paymentMethod", "USPS_ACCOUNT");
+        paymentInfo.put("accountType", "EPS");
+        paymentInfo.put("accountNumber", tenant.accountNumber());
+        body.put("paymentInfo", paymentInfo);
+
+        // Top-level destinationCountryCode is a USPS intl-endpoint
+        // requirement; the toAddress country is per-address, this is
+        // the shipment-level echo the endpoint uses for rate-lookup.
+        body.put("destinationCountryCode",
+                request.getRecipientCountryCode().trim().toUpperCase(Locale.ROOT));
+
+        // customsForm — the differentiator between the intl and domestic
+        // envelopes. UspsCustomsFormBuilder handles enum mapping + HS
+        // normalisation; the boundary guards ran above so we trust the
+        // block is well-formed here.
+        UspsCustomsForm form = customsFormBuilder().build(request);
+        body.put("customsForm", customsFormToMap(form));
+
+        return body;
+    }
+
+    /**
+     * Serialize a {@link UspsCustomsForm} to a {@link LinkedHashMap} for
+     * the wire body. Omits null / blank optional fields (USPS rejects
+     * empty strings on many customs slots but accepts absent keys).
+     * Package-visible so payload-shape tests can pin the exact wire
+     * output.
+     */
+    Map<String, Object> customsFormToMap(UspsCustomsForm form) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        if (form == null) return out;
+        if (StringUtils.hasText(form.getContentType())) out.put("contentType", form.getContentType());
+        if (StringUtils.hasText(form.getContentComments())) out.put("contentComments", form.getContentComments());
+        if (StringUtils.hasText(form.getRestriction())) out.put("restriction", form.getRestriction());
+        if (StringUtils.hasText(form.getNonDeliveryOption())) out.put("nonDeliveryOption", form.getNonDeliveryOption());
+        if (StringUtils.hasText(form.getCertificateNumber())) out.put("certificateNumber", form.getCertificateNumber());
+        if (StringUtils.hasText(form.getLicenseNumber())) out.put("licenseNumber", form.getLicenseNumber());
+        if (StringUtils.hasText(form.getInvoiceNumber())) out.put("invoiceNumber", form.getInvoiceNumber());
+
+        List<Map<String, Object>> commodities = new ArrayList<>();
+        if (form.getCommodities() != null) {
+            for (UspsCommodity c : form.getCommodities()) {
+                commodities.add(commodityToMap(c));
+            }
+        }
+        out.put("commodities", commodities);
+        return out;
+    }
+
+    private static Map<String, Object> commodityToMap(UspsCommodity c) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        if (c == null) return row;
+        if (StringUtils.hasText(c.getDescription())) row.put("description", c.getDescription());
+        if (c.getQuantity() != null) row.put("quantity", c.getQuantity());
+        if (c.getWeight() != null) row.put("weight", c.getWeight());
+        if (c.getValue() != null) row.put("value", c.getValue());
+        if (StringUtils.hasText(c.getHsTariffNumber())) row.put("hsTariffNumber", c.getHsTariffNumber());
+        if (StringUtils.hasText(c.getCountryOfOrigin())) row.put("countryOfOrigin", c.getCountryOfOrigin());
+        if (StringUtils.hasText(c.getUnitOfMeasure())) row.put("unitOfMeasure", c.getUnitOfMeasure());
+        return row;
+    }
+
     private static Map<String, Object> buildAddress(String line1, String line2, String city,
                                                      String state, String zip, String country,
                                                      String name, String company, String phone) {
@@ -580,6 +939,54 @@ public class UspsDirectConnector implements CarrierConnector {
                 postage,
                 null,
                 responseJson);
+    }
+
+    /**
+     * Parse a USPS v3 international label response into a
+     * {@link ShipmentResult}. Shape mirrors the domestic response with
+     * one addition — {@code customsFormImage} (CN22 / CN23 / PS-2976-A
+     * composite base64). That extra bytes-blob rides on the returned
+     * {@code rawResponse} JSON so downstream callers can pull it via
+     * {@code JsonNode} (or {@link #extractCustomsFormImage}) without a
+     * cross-carrier record change.
+     *
+     * <p>Package-visible for the parser tests.
+     */
+    ShipmentResult parseIntlLabelResponse(String responseJson, ShipmentRequestDTO request) throws Exception {
+        JsonNode root = objectMapper.readTree(responseJson == null ? "{}" : responseJson);
+        JsonNode metadata = root.path("labelMetadata");
+        String tracking = metadata.path("trackingNumber").asText(null);
+        BigDecimal postage = readDecimal(metadata, "postage");
+        String labelBase64 = root.path("labelImage").asText(null);
+        String trackingUrl = StringUtils.hasText(tracking)
+                ? "https://tools.usps.com/go/TrackConfirmAction?tLabels=" + tracking
+                : null;
+        return new ShipmentResult(
+                tracking,
+                trackingUrl,
+                null,
+                labelBase64,
+                postage,
+                null,
+                responseJson);
+    }
+
+    /**
+     * Extract the {@code customsFormImage} base64 field from a raw intl
+     * label response. Callers that need the CN22/CN23 image (label
+     * printing surface, customs-form download endpoint) call this to
+     * avoid re-parsing the full JSON tree.
+     */
+    public String extractCustomsFormImage(String responseJson) {
+        if (!StringUtils.hasText(responseJson)) return null;
+        try {
+            JsonNode root = objectMapper.readTree(responseJson);
+            String image = root.path("customsFormImage").asText(null);
+            return StringUtils.hasText(image) ? image : null;
+        } catch (Exception ex) {
+            log.warn("USPS Direct intl label: customsFormImage extract failed: {}", ex.getMessage());
+            return null;
+        }
     }
 
     // ================================================================
@@ -630,6 +1037,102 @@ public class UspsDirectConnector implements CarrierConnector {
                             + request.getReferenceNumber() + "). Set the recipient's country on "
                             + "the Order before " + context
                             + " — quotes without a destination silently fall to US-domestic.");
+        }
+    }
+
+    /**
+     * True when the recipient country isn't US. Assumes recipient country
+     * is already non-blank (see {@link #assertRecipientCountry}).
+     */
+    static boolean isInternational(ShipmentRequestDTO request) {
+        String country = request.getRecipientCountryCode();
+        return !"US".equalsIgnoreCase(country == null ? "" : country.trim());
+    }
+
+    /**
+     * Intl-only: assert the recipient country code is a 2-letter uppercase
+     * ISO alpha-2 value. USPS rejects free-form country names with 400.
+     */
+    static void assertIsoAlpha2RecipientCountry(ShipmentRequestDTO request) {
+        String country = request.getRecipientCountryCode();
+        if (country == null) country = "";
+        String trimmed = country.trim();
+        if (trimmed.length() != 2 || !isAsciiAlpha(trimmed)
+                || !trimmed.equals(trimmed.toUpperCase(Locale.ROOT))) {
+            throw new IllegalArgumentException(
+                    "USPS Direct international rates/labels require an ISO alpha-2 country code "
+                            + "(got '" + country + "'). Convert 'United Kingdom' → 'GB' etc. "
+                            + "before submitting. Order " + request.getReferenceNumber() + ".");
+        }
+    }
+
+    private static boolean isAsciiAlpha(String s) {
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'))) return false;
+        }
+        return true;
+    }
+
+    /**
+     * Intl-only: assert the request carries a customs block. Domestic
+     * shipments never need one; international ones without one can't
+     * clear customs at the border.
+     */
+    static void assertIntlCustomsBlock(ShipmentRequestDTO request) {
+        IntlShipmentBlockDTO intl = request.getIntl();
+        if (intl == null) {
+            throw new IllegalArgumentException(
+                    "USPS Direct international shipment requires a customs block (order "
+                            + request.getReferenceNumber() + "). Populate reason-for-export, "
+                            + "commodities, currency + incoterms on the Order before generating "
+                            + "the label.");
+        }
+        if (intl.getCommodities() == null || intl.getCommodities().isEmpty()) {
+            throw new IllegalArgumentException(
+                    "USPS Direct international shipment requires at least one commodity line "
+                            + "on the customs block (order " + request.getReferenceNumber() + ").");
+        }
+    }
+
+    /**
+     * Intl-only: assert every commodity carries a valid 6-digit HS
+     * tariff number AND an ISO alpha-2 country of origin. Enforces the
+     * 2025-09-01 USPS International HS-6 Tariff Mandate at connector
+     * boundary — see {@link #HS_MIN_DIGITS} javadoc for the regulatory
+     * reference.
+     */
+    static void assertHsAndOriginPerCommodity(ShipmentRequestDTO request) {
+        List<CustomsCommodityDTO> commodities = request.getIntl().getCommodities();
+        for (int i = 0; i < commodities.size(); i++) {
+            CustomsCommodityDTO c = commodities.get(i);
+            String desc = c == null ? "" : nullSafe(c.getDescription());
+            String hs = c == null ? null : UspsCustomsFormBuilder.normaliseHs(c.getHsCode());
+            if (!StringUtils.hasText(hs) || hs.length() < HS_MIN_DIGITS) {
+                throw new IllegalArgumentException(
+                        "USPS Direct international shipments require a " + HS_MIN_DIGITS
+                                + "-digit HS tariff number per commodity (2025-09-01 USPS mandate). "
+                                + "Commodity " + (i + 1) + " '" + desc + "' is missing. "
+                                + "Order " + request.getReferenceNumber() + ".");
+            }
+            String coo = c.getCountryOfOrigin();
+            String coonorm = coo == null ? "" : coo.trim();
+            if (coonorm.length() != 2 || !isAsciiAlpha(coonorm)) {
+                throw new IllegalArgumentException(
+                        "USPS Direct international shipments require an ISO alpha-2 country of "
+                                + "origin per commodity (got '" + coo + "'). Commodity "
+                                + (i + 1) + " '" + desc + "' is invalid. "
+                                + "Order " + request.getReferenceNumber() + ".");
+            }
+        }
+    }
+
+    private static void warnIfCommoditiesExceedSoftMax(ShipmentRequestDTO request) {
+        int n = request.getIntl().getCommodities().size();
+        if (n > CUSTOMS_FORM_SOFT_MAX_LINES) {
+            log.warn("USPS Direct intl label: order {} has {} commodity lines (>{}); "
+                            + "CN23 print may overflow. PR-F3 splitter will chunk into batches.",
+                    request.getReferenceNumber(), n, CUSTOMS_FORM_SOFT_MAX_LINES);
         }
     }
 
@@ -754,6 +1257,74 @@ public class UspsDirectConnector implements CarrierConnector {
                 return null;
             }
         }
+    }
+
+    /**
+     * Intl rate wire call — package-visible seam so tests can subclass
+     * the connector without spinning up MockWebServer. Default delegates
+     * to the same retry loop the domestic path uses.
+     */
+    String executeIntlRatePost(String url, Map<String, Object> body, String accessToken) {
+        return callWithRetryIntl(url, body, accessToken, null, "intl-rate-shop");
+    }
+
+    /**
+     * Intl label wire call — package-visible seam so tests can subclass
+     * the connector without spinning up MockWebServer.
+     */
+    String executeIntlLabelPost(String url, Map<String, Object> body, String accessToken,
+                                 Map<String, String> extraHeaders) {
+        return callWithRetryIntl(url, body, accessToken, extraHeaders, "intl-createShipment");
+    }
+
+    /**
+     * Intl-aware wire loop. Same shape as {@link #callWithRetry} but
+     * uses {@link #sleepBeforeIntlRetry} so the sleep step is a
+     * package-visible seam tests can override to spin-free.
+     */
+    private String callWithRetryIntl(String url, Map<String, Object> body, String accessToken,
+                                      Map<String, String> extraHeaders, String context) {
+        int attempt = 0;
+        while (true) {
+            try {
+                RestClient client = HttpClients.newBuilder().baseUrl(url).build();
+                RestClient.RequestBodySpec req = client.post()
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .accept(MediaType.APPLICATION_JSON)
+                        .header("Authorization", "Bearer " + accessToken);
+                if (extraHeaders != null) {
+                    for (Map.Entry<String, String> h : extraHeaders.entrySet()) {
+                        req = req.header(h.getKey(), h.getValue());
+                    }
+                }
+                return req.body(body).retrieve().body(String.class);
+            } catch (RestClientResponseException ex) {
+                int status = ex.getStatusCode().value();
+                if (status == 429 && attempt < MAX_RATE_LIMIT_RETRIES) {
+                    long delay = backoffDelayMillis(attempt);
+                    log.warn("USPS Direct {} 429 (attempt {}/{}); backing off {}ms.",
+                            context, attempt + 1, MAX_RATE_LIMIT_RETRIES, delay);
+                    sleepBeforeIntlRetry(delay);
+                    attempt++;
+                    continue;
+                }
+                log.warn("USPS Direct {} rejected (HTTP {}): {}",
+                        context, status, safeBody(ex.getResponseBodyAsString()));
+                return null;
+            } catch (Exception ex) {
+                log.warn("USPS Direct {} failed: {}", context, ex.getMessage());
+                return null;
+            }
+        }
+    }
+
+    /**
+     * Sleep between intl retry attempts. Package-visible seam so unit
+     * tests can override to a no-op — the wire test can then exercise
+     * the retry counter without burning real seconds.
+     */
+    void sleepBeforeIntlRetry(long millis) {
+        sleepQuietly(millis);
     }
 
     static long backoffDelayMillis(int attempt) {
