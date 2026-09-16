@@ -34,6 +34,14 @@ import {
 import { useAppSession } from '../hooks/useAppSession'
 import { useEventStream } from '../hooks/useEventStream'
 import { normalizeRole } from '../utils/roles'
+// PR-G4 — USPS_DIRECT UX (audit U2 + U3). Badge surfaces queue depth
+// at the top of Data History so ops see rate-limit pressure without
+// hopping to the admin dashboard; MpsProgressCard renders inside
+// each expanded USPS row so MPS-parent orders show per-piece
+// progress instead of a stalled "Generating…" spinner.
+import BulkLabelQueueBadge from './orders/BulkLabelQueueBadge'
+import MpsProgressCard from './orders/MpsProgressCard'
+import { normalizeCarrierCode } from '../utils/carrierUtils'
 
 /**
  * Compact "X ago" for a completion timestamp — mirrors the pattern
@@ -1293,6 +1301,34 @@ export default function DataHistoryPage() {
           <p className="py-4 text-center text-[12px] text-[#6b5c42]">No rows stored for this import.</p>
         ) : (
           <>
+            {/* PR-G4 — MPS progress cards for USPS rows in this batch
+                (audit U3). Row-schema doesn't carry packageCount, so we
+                render for every USPS row that generated an order and
+                let MpsProgressCard's own 404-fallback hide non-MPS
+                orders (per PR-F2's design). Deduped by orderNo so a
+                7-line MPS parent doesn't fire 7 identical cards. */}
+            {(() => {
+              const seen = new Set<number>()
+              const parents: number[] = []
+              for (const r of list) {
+                if (r.generatedOrderNo == null) continue
+                if (normalizeCarrierCode(r.carrierCode) !== 'usps') continue
+                if (seen.has(r.generatedOrderNo)) continue
+                seen.add(r.generatedOrderNo)
+                parents.push(r.generatedOrderNo)
+              }
+              if (parents.length === 0) return null
+              return (
+                <div
+                  className="mb-3 flex flex-col gap-2"
+                  data-testid="usps-mps-progress-section"
+                >
+                  {parents.map((orderNo) => (
+                    <MpsProgressCard key={orderNo} orderNo={orderNo} />
+                  ))}
+                </div>
+              )
+            })()}
             <div className="mb-1.5 flex flex-wrap items-center gap-2">
               <div className="inline-flex overflow-hidden rounded-lg border border-[#e3d9c4]" role="group" aria-label="Show rows">
                 {([
@@ -1603,6 +1639,14 @@ export default function DataHistoryPage() {
           </div>
         }
       />
+
+      {/* PR-G4 — always-visible USPS queue depth pill (audit U2). Self-
+          hides when the queue is empty (i.e. USPS_PROVIDER != USPS_DIRECT
+          on this platform, or USPS_DIRECT with no backlog). Non-admin
+          users see nothing because the admin metrics endpoint 403s. */}
+      <div data-testid="usps-queue-badge-slot">
+        <BulkLabelQueueBadge />
+      </div>
 
       {/* View tabs — Imports (bulk batches) vs All orders (every source) */}
       <div className="flex flex-wrap items-center gap-1.5">
