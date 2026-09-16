@@ -1,0 +1,44 @@
+{
+  "trackingNumber": "9400111899223197428491",
+  "carrier": "USPS",
+  "eventType": "IN_TRANSIT",
+  "expectedDeliveryDate": "2026-09-17",
+  "expectedDeliveryTime": "17:00:00",
+  "mailClass": "PRIORITY_MAIL",
+  "originCity": "SEATTLE",
+  "originCountry": "US",
+  "originState": "WA",
+  "originZIP": "98101",
+  "statusCategory": "In Transit",
+  "statusSummary": "Your item is being processed at the USPS Regional Facility.",
+  "destinationCity": "AUSTIN",
+  "destinationCountryCode": "US",
+  "destinationState": "TX",
+  "destinationZIP": "78701",
+  "trackingEvents": [
+    {
+      "eventType": "GX",
+      "eventTimestamp": "2026-09-14T14:20:00-07:00",
+      "eventDate": "2026-09-14",
+      "eventTime": "14:20:00",
+      "eventCountry": "US",
+      "eventState": "WA",
+      "eventCity": "SEATTLE",
+      "eventZIP": "98101",
+      "name": "USPS in possession of item",
+      "eventDescription": "USPS in possession of item"
+    },
+    {
+      "eventType": "AR",
+      "eventTimestamp": "2026-09-15T05:00:00-05:00",
+      "eventDate": "2026-09-15",
+      "eventTime": "05:00:00",
+      "eventCountry": "US",
+      "eventState": "TX",
+      "eventCity": "AUSTIN",
+      "eventZIP": "78701",
+      "name": "Arrived at USPS Regional Destination Facility",
+      "eventDescription": "Arrived at USPS Regional Destination Facility"
+    }
+  ]
+}

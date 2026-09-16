@@ -1,0 +1,9 @@
+{
+  "subscriptionId": "sub-abc-123-xyz",
+  "listenerURL": "https://webhook.example.com/api/v1/webhooks/carrier",
+  "filterProperties": {
+    "MID": "901234567"
+  },
+  "format": "JSON",
+  "createdAt": "2026-09-15T10:00:00Z"
+}

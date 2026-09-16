@@ -1,0 +1,10 @@
+{
+  "subscriptionId": "sub-tn-777",
+  "listenerURL": "https://webhook.example.com/api/v1/webhooks/carrier",
+  "filterProperties": {
+    "trackingNumbers": ["9400111899223197428490", "9400111899223197428491"]
+  },
+  "format": "JSON",
+  "eventTypes": ["DELIVERED", "OUT_FOR_DELIVERY"],
+  "createdAt": "2026-09-15T10:00:00Z"
+}

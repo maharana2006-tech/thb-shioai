@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "INVALID_FILTER",
+    "message": "filterProperties.MID is required for MID subscriptions"
+  }
+}

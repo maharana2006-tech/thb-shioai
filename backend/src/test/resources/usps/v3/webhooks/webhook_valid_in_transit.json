@@ -1,0 +1,14 @@
+{
+  "trackingNumber": "9400111899223197428491",
+  "mailClass": "PRIORITY_MAIL",
+  "eventType": "IN_TRANSIT",
+  "eventTimestamp": "2026-09-15T10:00:00Z",
+  "eventLocation": {
+    "city": "AUSTIN",
+    "state": "TX",
+    "zip": "78701",
+    "country": "US"
+  },
+  "eventDescription": "Arrived at USPS Regional Destination Facility",
+  "MID": "901234567"
+}

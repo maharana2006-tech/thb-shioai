@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "ITEM_NOT_FOUND",
+    "message": "The tracking number entered was not found in our system. Please verify the number and try again."
+  }
+}
