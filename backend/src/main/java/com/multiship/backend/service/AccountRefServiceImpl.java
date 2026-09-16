@@ -459,6 +459,20 @@ public class AccountRefServiceImpl implements AccountRefService {
         applyTrimmable(request.getThirdPartyPostcode(),account::setThirdPartyPostcode,false);
         applyTrimmable(request.getThirdPartyCountry(), account::setThirdPartyCountry, true);
 
+        // USPS Direct — per-account tenant identifiers. Same null-vs-empty-
+        // string semantics as the other optional identifier fields on this
+        // DTO: null (field omitted) = keep persisted; empty string = clear
+        // (revert to not-provisioned). Not upper-cased — USPS returns
+        // mixed-case identifiers verbatim from provisioning. Only consumed
+        // by the UspsDirectConnector when USPS_PROVIDER=USPS_DIRECT; the
+        // existing Stamps connector ignores them.
+        applyTrimmable(request.getUspsDirectAccountNumber(),
+                account::setUspsDirectAccountNumber, false);
+        applyTrimmable(request.getUspsDirectCrid(),
+                account::setUspsDirectCrid, false);
+        applyTrimmable(request.getUspsDirectMid(),
+                account::setUspsDirectMid, false);
+
         account.setActive(true);
 
         if (Boolean.TRUE.equals(request.getClientDefault()) && StringUtils.hasText(account.getCustomerNo())) {
@@ -601,6 +615,9 @@ public class AccountRefServiceImpl implements AccountRefService {
                 .thirdPartyState(account.getThirdPartyState())
                 .thirdPartyPostcode(account.getThirdPartyPostcode())
                 .thirdPartyCountry(account.getThirdPartyCountry())
+                .uspsDirectAccountNumber(account.getUspsDirectAccountNumber())
+                .uspsDirectCrid(account.getUspsDirectCrid())
+                .uspsDirectMid(account.getUspsDirectMid())
                 .createdAt(account.getCreatedAt())
                 .updatedAt(account.getUpdatedAt())
                 .build();

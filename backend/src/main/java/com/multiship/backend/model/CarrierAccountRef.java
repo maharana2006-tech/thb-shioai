@@ -252,6 +252,40 @@ public class CarrierAccountRef {
     @jakarta.persistence.Convert(converter = com.multiship.backend.config.EncryptedStringConverter.class)
     private String stampsRefreshToken;
 
+    /**
+     * USPS Direct integration — per-account USPS payment/account identifier
+     * captured after the operator completes the USPS payment-account
+     * provisioning flow. Plaintext (identifier, not a secret) — see
+     * {@code docs/usps-direct-integration.md} §4.2 for the tenant-identifier
+     * shape. Populated only for accounts that ship via {@code USPS_DIRECT}
+     * (the {@code system_setting.USPS_PROVIDER} platform toggle branches
+     * between Stamps.com and USPS Direct at connector-dispatch time).
+     *
+     * <p>NULL means "not yet provisioned" — the FE surfaces a "Complete
+     * USPS Direct provisioning" CTA and the connector fails fast until
+     * the operator finishes the flow. Nullable so the existing Stamps
+     * accounts continue to work without a backfill.
+     */
+    @Column(name = "usps_direct_account_number", length = 50)
+    private String uspsDirectAccountNumber;
+
+    /**
+     * USPS Direct — Customer Registration ID. Identifier the USPS
+     * Payment / Customer APIs return after provisioning; sent on every
+     * outbound USPS Direct request. Same nullable-until-provisioned
+     * semantics as {@link #uspsDirectAccountNumber}.
+     */
+    @Column(name = "usps_direct_crid", length = 50)
+    private String uspsDirectCrid;
+
+    /**
+     * USPS Direct — Mailer ID. Identifier the USPS Payment / Customer APIs
+     * return after provisioning. Same nullable-until-provisioned semantics
+     * as {@link #uspsDirectAccountNumber}.
+     */
+    @Column(name = "usps_direct_mid", length = 50)
+    private String uspsDirectMid;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;

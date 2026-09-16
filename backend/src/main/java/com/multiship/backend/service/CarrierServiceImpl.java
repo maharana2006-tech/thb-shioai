@@ -157,6 +157,24 @@ public class CarrierServiceImpl implements CarrierService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private RoutingRuleService routingRuleService;
 
+    /**
+     * USPS Direct integration - reads the {@code USPS_PROVIDER} platform
+     * toggle at connector-dispatch time so {@link #getCarrierConnector}
+     * can pick between {@code StampsConnector} (legacy) and
+     * {@code UspsDirectConnector} (new). Optional so pure-Mockito unit
+     * tests that do not drive the USPS branch keep compiling; null means
+     * assume STAMPS_COM (safe default matching pre-USPS_DIRECT
+     * behaviour). See {@code docs/usps-direct-integration.md} sections 3 and 6.5.
+     *
+     * <p>Not a constructor arg for the same reason as
+     * {@code labelBytesPersister} - adding a final field shifts the
+     * Lombok all-args ctor and breaks pure-Mockito tests that positionally
+     * construct this service. See
+     * {@code feedback_lombok_constructor_arg_order.md}.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private SystemSettingService systemSettingService;
+
     @Override
     @Transactional(readOnly = true)
     public ApiResponse<List<CarrierListResponse>> getAvailableCarriers() {
@@ -2713,10 +2731,70 @@ public class CarrierServiceImpl implements CarrierService {
         }
 
         String canonicalCarrierCode = resolveCanonicalCarrierCode(carrierCode);
+
+        // USPS Direct - two connectors share carrierCode="USPS" (the legacy
+        // StampsConnector and the new UspsDirectConnector). Branch on the
+        // platform-wide provider setting so both connectors can coexist in
+        // the ApplicationContext without an ambiguous filter. STAMPS_COM
+        // (default) and PROVISIONING_USPS_DIRECT (transitional - operator
+        // is mid-provisioning; new labels still route to Stamps until every
+        // account carries USPS Direct identifiers) both dispatch to Stamps;
+        // only USPS_DIRECT flips the runtime path. See
+        // docs/usps-direct-integration.md sections 3 (state machine) and 6.5
+        // (dispatch).
+        if ("USPS".equalsIgnoreCase(canonicalCarrierCode)) {
+            String provider = resolveUspsProvider();
+            boolean useDirect = "USPS_DIRECT".equalsIgnoreCase(provider);
+            String targetSimpleName = useDirect ? "UspsDirectConnector" : "StampsConnector";
+            java.util.List<CarrierConnector> uspsCandidates = carrierConnectors.stream()
+                    .filter(c -> c.getCarrierCode().equalsIgnoreCase(canonicalCarrierCode))
+                    .toList();
+            // First choice: the connector whose class simple-name matches
+            // the target for the current provider setting. This lets both
+            // StampsConnector and UspsDirectConnector live in the same
+            // ApplicationContext without an ambiguous filter.
+            java.util.Optional<CarrierConnector> exact = uspsCandidates.stream()
+                    .filter(c -> targetSimpleName.equals(c.getClass().getSimpleName()))
+                    .findFirst();
+            if (exact.isPresent()) return exact.get();
+            // USPS_DIRECT chose the new connector but it isn't registered —
+            // surface a clean error naming the provider so ops can flip the
+            // toggle back rather than silently falling back to Stamps.
+            if (useDirect) {
+                throw new CarrierConnectionException(
+                        "USPS connector not available for provider " + provider);
+            }
+            // STAMPS_COM / PROVISIONING_USPS_DIRECT default: fall back to
+            // any USPS connector present. Preserves the pre-USPS-Direct
+            // behaviour for tests that mock the interface directly (whose
+            // class simple-name is a Mockito proxy, not "StampsConnector").
+            return uspsCandidates.stream()
+                    .findFirst()
+                    .orElseThrow(() -> new CarrierConnectionException(
+                            "Unsupported carrier: " + carrierCode));
+        }
+
         return carrierConnectors.stream()
                 .filter(connector -> connector.getCarrierCode().equalsIgnoreCase(canonicalCarrierCode))
                 .findFirst()
                 .orElseThrow(() -> new CarrierConnectionException("Unsupported carrier: " + carrierCode));
+    }
+
+    /**
+     * Reads the {@code USPS_PROVIDER} platform toggle. Falls back to
+     * {@code STAMPS_COM} when the setting service is not wired (pure-Mockito
+     * tests) or the setting is absent (fresh install pre-migration). The
+     * enum lives in {@code docs/usps-direct-integration.md} section 3:
+     * {@code STAMPS_COM} | {@code PROVISIONING_USPS_DIRECT} | {@code USPS_DIRECT}.
+     */
+    private String resolveUspsProvider() {
+        if (systemSettingService == null) return "STAMPS_COM";
+        try {
+            return systemSettingService.getDecrypted("USPS_PROVIDER").orElse("STAMPS_COM");
+        } catch (Exception ex) {
+            log.warn("USPS_PROVIDER lookup failed; defaulting to STAMPS_COM: {}", ex.getMessage());
+            return "STAMPS_COM";
+        }
     }
 
     /**

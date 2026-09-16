@@ -178,4 +178,40 @@ public class AccountRefUpsertRequest {
     private String thirdPartyState;
     private String thirdPartyPostcode;
     private String thirdPartyCountry;
+
+    /**
+     * USPS Direct — per-account tenant identifiers captured on the account
+     * after the operator completes USPS payment-account provisioning. All
+     * three nullable and validated as opaque identifiers (alphanumeric +
+     * separators). Same null-vs-empty-string semantics as
+     * {@link #shippingPurpose}: null = keep persisted value, empty string
+     * = clear (revert to "not provisioned"). See
+     * {@code docs/usps-direct-integration.md} §4.2 / §6.6.
+     *
+     * <p>Not secrets — they are identifiers USPS returns after
+     * provisioning; the accountNumber cascade resolves the credentials
+     * separately via {@link #clientId} / {@link #clientSecret}. Only
+     * consumed by the {@code UspsDirectConnector} when the
+     * {@code USPS_PROVIDER} platform toggle is {@code USPS_DIRECT}.
+     */
+    @jakarta.validation.constraints.Size(max = 50,
+            message = "uspsDirectAccountNumber must be at most 50 characters")
+    @jakarta.validation.constraints.Pattern(
+            regexp = "[A-Za-z0-9\\-_]{1,50}|",
+            message = "uspsDirectAccountNumber must be alphanumeric (with '-' or '_')")
+    private String uspsDirectAccountNumber;
+
+    @jakarta.validation.constraints.Size(max = 50,
+            message = "uspsDirectCrid must be at most 50 characters")
+    @jakarta.validation.constraints.Pattern(
+            regexp = "[A-Za-z0-9\\-_]{1,50}|",
+            message = "uspsDirectCrid must be alphanumeric (with '-' or '_')")
+    private String uspsDirectCrid;
+
+    @jakarta.validation.constraints.Size(max = 50,
+            message = "uspsDirectMid must be at most 50 characters")
+    @jakarta.validation.constraints.Pattern(
+            regexp = "[A-Za-z0-9\\-_]{1,50}|",
+            message = "uspsDirectMid must be alphanumeric (with '-' or '_')")
+    private String uspsDirectMid;
 }
