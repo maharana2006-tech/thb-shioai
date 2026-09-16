@@ -6,8 +6,10 @@ import com.multiship.backend.dto.BulkLabelRequestDTO;
 import com.multiship.backend.dto.ErrorCode;
 import com.multiship.backend.dto.LabelGenerationResponse;
 import com.multiship.backend.model.BulkLabelJob;
+import com.multiship.backend.model.Order;
 import com.multiship.backend.repository.BulkLabelJobRepository;
 import com.multiship.backend.repository.OrderRepository;
+import com.multiship.backend.service.carriers.usps.queue.UspsLabelQueueService;
 import com.multiship.backend.service.output.DispatchContext;
 import com.multiship.backend.service.output.DispatchResult;
 import com.multiship.backend.service.output.DocType;
@@ -34,6 +36,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.Base64;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -48,6 +51,14 @@ import java.util.zip.ZipOutputStream;
  * existing single-label pipeline ({@link CarrierService#generateLabel})
  * so bulk shares the same idempotency + credential resolution as a
  * one-off click.
+ *
+ * <p>PR-F1 (USPS_DIRECT scale-hardening) — when the platform-wide
+ * {@code USPS_PROVIDER} setting is {@code USPS_DIRECT} AND an order's
+ * carrier resolves to USPS, the worker enqueues the label into
+ * {@code UspsLabelQueueService} (persistent per-tenant fair queue,
+ * paced at 55/hr for USPS' 60/hr platform cap) instead of calling the
+ * connector synchronously. Non-USPS carriers and Stamps.com stay on the
+ * sync path — Stamps has no 60/hr cap, so pacing there wastes capacity.
  */
 @Slf4j
 @Service
@@ -125,6 +136,26 @@ public class BulkLabelServiceImpl implements BulkLabelService {
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private OutputDestinationService outputDestinationService;
+    /**
+     * PR-F1 — USPS_DIRECT persistent label queue. Optional so the 4-arg
+     * pure-Mockito constructor keeps compiling for the legacy tests that
+     * don't drive the queue path. When both this and
+     * {@link #systemSettingService} are wired AND the platform toggle is
+     * {@code USPS_DIRECT}, USPS orders enqueue here instead of hitting
+     * the connector synchronously. See {@code processOneOrder} for the
+     * dispatch decision.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private UspsLabelQueueService uspsLabelQueueService;
+
+    /**
+     * PR-F1 — {@code USPS_PROVIDER} platform-toggle reader. Optional
+     * because pure-Mockito tests that construct this service via
+     * {@code new} pass 4 args; null here means "assume STAMPS_COM" so
+     * the queue path is off by default and the sync path is preserved.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private SystemSettingService systemSettingService;
     /**
      * Sprint 50 Tier 0.5 PR E - guard so a scoped USER cannot enqueue a
      * bulk job containing an order from a foreign tenant. We check every
@@ -457,18 +488,28 @@ public class BulkLabelServiceImpl implements BulkLabelService {
      *       {@code successful_count} but adds a note to
      *       {@code failure_message} so operators can see which orders
      *       were skipped vs freshly labeled.</li>
+     *   <li>Queued (PR-F1 — routed to USPS_DIRECT persistent queue):
+     *       {@code queuedItemId} set, {@code pdf} null. Counts as success
+     *       (label WILL be printed once the queue drains); a note in the
+     *       failure summary explains the deferral. No ZIP entry; the
+     *       queue processor persists the label + tracking number on the
+     *       order row when it eventually runs.</li>
      * </ul>
      */
     private record OrderOutcome(long orderNo, byte[] pdf, String trackingNumber,
-                                 String failureReason, boolean alreadyLabeled) {
+                                 String failureReason, boolean alreadyLabeled,
+                                 Long queuedItemId) {
         static OrderOutcome success(long orderNo, byte[] pdf, String trackingNumber) {
-            return new OrderOutcome(orderNo, pdf, trackingNumber, null, false);
+            return new OrderOutcome(orderNo, pdf, trackingNumber, null, false, null);
         }
         static OrderOutcome failure(long orderNo, String reason) {
-            return new OrderOutcome(orderNo, null, null, reason, false);
+            return new OrderOutcome(orderNo, null, null, reason, false, null);
         }
         static OrderOutcome skipped(long orderNo, String existingTrackingNumber) {
-            return new OrderOutcome(orderNo, null, existingTrackingNumber, null, true);
+            return new OrderOutcome(orderNo, null, existingTrackingNumber, null, true, null);
+        }
+        static OrderOutcome queued(long orderNo, Long queuedItemId) {
+            return new OrderOutcome(orderNo, null, null, null, false, queuedItemId);
         }
     }
 
@@ -573,6 +614,21 @@ public class BulkLabelServiceImpl implements BulkLabelService {
                     structuredFailures.add(buildFailureDetail(
                             out.orderNo, "ALREADY_LABELED",
                             "Already had a label (tracking " + tn + ") — skipped."));
+                } else if (out.queuedItemId != null) {
+                    // PR-F1 — routed to the USPS_DIRECT persistent queue.
+                    // Count as success (the label WILL be generated once the
+                    // queue drains) with a note so operators know why it's
+                    // not in the ZIP. No ZIP entry; the processor persists
+                    // the label bytes to order_tracking when the row runs.
+                    job.setSuccessfulCount(job.getSuccessfulCount() + 1);
+                    failures.append("order ").append(out.orderNo)
+                            .append(": queued to USPS Direct queue (item id ")
+                            .append(out.queuedItemId)
+                            .append(") — label will be generated when the queue drains.\n");
+                    structuredFailures.add(buildFailureDetail(
+                            out.orderNo, "USPS_QUEUED",
+                            "Queued to USPS Direct queue (item id " + out.queuedItemId
+                                    + "). Poll /admin/usps-direct/queue for progress."));
                 } else if (out.pdf != null && out.trackingNumber != null) {
                     String entryName = "label-" + out.orderNo + "-" + out.trackingNumber + ".pdf";
                     zip.putNextEntry(new ZipEntry(entryName));
@@ -699,6 +755,15 @@ public class BulkLabelServiceImpl implements BulkLabelService {
      * already been generated and paid for; we just log and continue. The
      * DB copy driver persists the bytes so ops can re-drive delivery
      * from the admin page.
+     *
+     * <p>PR-F1 — before the sync connector call, check whether the order
+     * should be routed through the {@link UspsLabelQueueService} instead.
+     * Rule: {@code USPS_PROVIDER=USPS_DIRECT} AND the order's carrier
+     * resolves to USPS. When both true, {@link #maybeEnqueueUspsDirect}
+     * returns the queue item id and we short-circuit with a
+     * {@link OrderOutcome#queued} marker. Any other carrier, or the
+     * STAMPS_COM / PROVISIONING_USPS_DIRECT provider states, stays on
+     * the sync path.
      */
     private OrderOutcome processOneOrder(long jobId, long orderNo, UserDetails jobUser) {
         // Cancellation gate — checked BEFORE calling the carrier so a
@@ -726,6 +791,14 @@ public class BulkLabelServiceImpl implements BulkLabelService {
                 return OrderOutcome.skipped(orderNo, existing.getTrackingNumber());
             }
         }
+        // PR-F1 — USPS_DIRECT queue routing. Off by default (returns
+        // empty) unless the queue service + system-setting service are
+        // both wired AND the platform toggle is USPS_DIRECT AND the
+        // order's ship-via canonicalises to USPS.
+        Optional<Long> queued = maybeEnqueueUspsDirect(orderNo);
+        if (queued.isPresent()) {
+            return OrderOutcome.queued(orderNo, queued.get());
+        }
         try {
             LabelGenerationResponse label = generateSingle(jobId, orderNo, jobUser);
             if (label == null) {
@@ -745,6 +818,76 @@ public class BulkLabelServiceImpl implements BulkLabelService {
             log.warn("Bulk-label worker: order {} failed: {}", orderNo, ex.getMessage());
             return OrderOutcome.failure(orderNo,
                     ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage());
+        }
+    }
+
+    /**
+     * PR-F1 — route USPS labels through the persistent queue when the
+     * platform toggle is set. Returns {@link Optional#empty()} on ANY of:
+     *
+     * <ul>
+     *   <li>{@link #uspsLabelQueueService} is unwired (4-arg constructor
+     *       for pure-Mockito tests).</li>
+     *   <li>{@link #systemSettingService} is unwired.</li>
+     *   <li>{@code USPS_PROVIDER} is not {@code USPS_DIRECT} — i.e.
+     *       STAMPS_COM (legacy default) or PROVISIONING_USPS_DIRECT
+     *       (transitional). Stamps.com has no 60/hr platform cap so the
+     *       queue is off there by design.</li>
+     *   <li>The order row can't be found (unusual — the fan-out worker
+     *       would blow up shortly anyway).</li>
+     *   <li>The order's ship-via doesn't canonicalise to USPS (FedEx /
+     *       UPS / DHL / etc. — all sync).</li>
+     * </ul>
+     *
+     * On a positive route, calls
+     * {@link UspsLabelQueueService#enqueue(UspsLabelQueueService.EnqueueRequest)}
+     * with a fixed priority=0 (equal-priority for bulk; per-tenant
+     * fair-share is Agent 1's territory) and returns the queue item id.
+     * Never throws — any enqueue failure surfaces via {@link Optional#empty()}
+     * so the sync fallback picks up. The rate-limited FAILED path in
+     * the queue itself is not our problem here.
+     */
+    Optional<Long> maybeEnqueueUspsDirect(long orderNo) {
+        if (uspsLabelQueueService == null || systemSettingService == null) return Optional.empty();
+        String provider;
+        try {
+            provider = systemSettingService.getDecrypted("USPS_PROVIDER").orElse("STAMPS_COM");
+        } catch (Exception ex) {
+            log.debug("PR-F1: USPS_PROVIDER lookup failed; sync fallback. {}", ex.getMessage());
+            return Optional.empty();
+        }
+        if (!"USPS_DIRECT".equalsIgnoreCase(provider)) return Optional.empty();
+        Optional<Order> orderOpt = orderRepository.findByOrderNo((int) orderNo);
+        if (orderOpt.isEmpty()) return Optional.empty();
+        Order order = orderOpt.get();
+        String canonical = ShippingConfigService.canonicalCarrierFor(order.getShipviaCd());
+        if (canonical == null || !"USPS".equalsIgnoreCase(canonical)) {
+            // Non-USPS carrier in a mixed batch — stays on the sync path
+            // (FedEx / UPS / DHL don't have USPS' 60/hr cap).
+            return Optional.empty();
+        }
+        String tenantCode = StringUtils.hasText(order.getTenantId())
+                ? order.getTenantId()
+                : (StringUtils.hasText(order.getCustNo()) ? order.getCustNo() : "unknown");
+        try {
+            UspsLabelQueueService.EnqueueResult result = uspsLabelQueueService.enqueue(
+                    new UspsLabelQueueService.EnqueueRequest(tenantCode, orderNo, 0));
+            if (result == null || result.queueItemId() == null) {
+                log.warn("PR-F1: USPS Direct enqueue returned null for order {} — falling back to sync", orderNo);
+                return Optional.empty();
+            }
+            log.info("PR-F1: order {} routed to USPS Direct queue (item {}, tenant {}, est start {})",
+                    orderNo, result.queueItemId(), tenantCode, result.estimatedStartAt());
+            return Optional.of(result.queueItemId());
+        } catch (Exception ex) {
+            // Enqueue failure must not tank the whole batch — fall through
+            // to sync so at least the current order goes out (which will
+            // then hit the connector directly; if the setting is truly
+            // USPS_DIRECT the connector call succeeds too, just without
+            // rate pacing for this one order).
+            log.warn("PR-F1: USPS Direct enqueue failed for order {}: {} — sync fallback",
+                    orderNo, ex.getMessage());
+            return Optional.empty();
         }
     }
 
@@ -839,7 +982,7 @@ public class BulkLabelServiceImpl implements BulkLabelService {
      */
     static String classifyFailureCode(String reason) {
         if (reason == null) return "UNKNOWN";
-        String lc = reason.toLowerCase(java.util.Locale.ROOT);
+        String lc = reason.toLowerCase(Locale.ROOT);
         if (lc.contains("cancelled by operator")) return "CANCELLED";
         if (lc.contains("rate limited") || lc.contains("429")) return "RATE_LIMITED";
         // NO_CREDENTIALS matches BEFORE AUTH_REJECTED because "no
@@ -1098,5 +1241,23 @@ public class BulkLabelServiceImpl implements BulkLabelService {
         } catch (InterruptedException ignored) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    /**
+     * PR-F1 test hook — allow pure-Mockito tests to inject the queue
+     * service without going through Spring field injection. Package-
+     * private for test access only; production wiring uses
+     * {@code @Autowired(required=false)}.
+     */
+    void setUspsLabelQueueService(UspsLabelQueueService svc) {
+        this.uspsLabelQueueService = svc;
+    }
+
+    /**
+     * PR-F1 test hook — allow pure-Mockito tests to inject the setting
+     * service. Package-private for test access only.
+     */
+    void setSystemSettingService(SystemSettingService svc) {
+        this.systemSettingService = svc;
     }
 }
