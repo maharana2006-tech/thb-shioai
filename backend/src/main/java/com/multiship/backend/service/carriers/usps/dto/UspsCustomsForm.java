@@ -70,6 +70,27 @@ public class UspsCustomsForm {
     private String invoiceNumber;
 
     /**
+     * PR-F3 — external invoice reference used by the {@link
+     * com.multiship.backend.dto.IntlShipmentBlockDTO.CustomsSplitStrategy#INVOICE_REFERENCE}
+     * strategy. When the shipment has more commodities than physically fit
+     * on the customs form (USPS' ~30-line CN23/PS-2976-A ceiling), the
+     * form's {@link #commodities} list is collapsed to a single summary
+     * line that points at this invoice number, and the operator
+     * physically attaches the full itemized commercial invoice to the
+     * parcel. Null under the {@link
+     * com.multiship.backend.dto.IntlShipmentBlockDTO.CustomsSplitStrategy#SPLIT}
+     * strategy (default) — every commodity is accounted for on separate
+     * customs forms.
+     *
+     * <p><b>REGULATORY_REFERENCE.</b> The "see attached invoice"
+     * convention is documented in USPS Publication 52 §12.4 (Hazardous,
+     * Restricted, and Perishable Mail) and the eVS integrator guide.
+     * Also see WCO Kyoto Convention Specific Annex J, Chapter 2 on
+     * simplified customs declarations backed by a commercial invoice.
+     */
+    private String invoiceReference;
+
+    /**
      * Per-commodity lines. Never null — an empty shipment is still a
      * legal customs form (USPS returns 400 for empty, but the builder
      * itself doesn't guard against that; the boundary check in the
