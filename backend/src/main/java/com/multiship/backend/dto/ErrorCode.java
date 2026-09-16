@@ -105,6 +105,18 @@ public enum ErrorCode {
     NO_DEFAULT_ACCOUNT,
     CARRIER_FAILURE,
     CUSTOMS_REQUIRED,
+    /**
+     * PR-G1 (USPS_DIRECT routing) — a multi-piece shipment was submitted
+     * for a non-US recipient while {@code USPS_PROVIDER=USPS_DIRECT}. USPS
+     * APIs v3 have no batch endpoint for international shipments, so the
+     * routing layer refuses the enqueue before any queue rows land. The
+     * message names the remediation path (split into single-package intl
+     * shipments manually, or flip USPS_PROVIDER back to STAMPS_COM). Peer
+     * to the enqueue-time guard on {@code UspsMpsSplitterService}; this
+     * one fires at decision time so the manual/list/bulk paths never
+     * reach the splitter for an intl MPS order.
+     */
+    INTL_MPS_UNSUPPORTED,
 
     // ===== Carrier accounts =====
     ACCOUNT_NOT_FOUND,
