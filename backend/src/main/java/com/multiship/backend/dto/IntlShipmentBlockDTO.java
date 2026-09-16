@@ -165,6 +165,67 @@ public class IntlShipmentBlockDTO {
     @Builder.Default
     private List<CustomsCommodityDTO> commodities = new ArrayList<>();
 
+    /**
+     * PR-F3 — operator-selected strategy for handling customs forms whose
+     * commodity count exceeds a carrier's physical form line limit
+     * (currently USPS's CN23/PS-2976-A ~30-line ceiling). Null → carrier
+     * applies its own default (USPS_DIRECT defaults to
+     * {@link CustomsSplitStrategy#SPLIT}).
+     *
+     * <p>Not persisted — this is a per-request operator choice made on the
+     * /orders/new customs section. The connector reads it, dispatches
+     * accordingly, and never writes it back.
+     *
+     * <p><b>REGULATORY_REFERENCE.</b> USPS customs-form line limits are
+     * physical print constraints on CN22 (3-5), CN23 (~15-20), and
+     * PS-2976-A (~30). Beyond ~30 lines, USPS Publication 52 §12.4 and
+     * the eVS integrator guide document the "see attached invoice"
+     * convention — the customs form carries a summary + invoice
+     * reference and the operator physically attaches the full itemized
+     * commercial invoice. See PR-F3 design notes in
+     * {@code docs/usps-direct-integration.md} §PR-F3.
+     */
+    private CustomsSplitStrategy customsSplitStrategy;
+
+    /**
+     * PR-F3 — optional external commercial-invoice reference used when
+     * {@link #customsSplitStrategy} is {@link CustomsSplitStrategy#INVOICE_REFERENCE}.
+     * When null, the connector generates one on the fly (format:
+     * {@code USPS-<orderRef>-<epochMillis>}). When set, the caller-supplied
+     * value is used verbatim on both the customs form's summary line + the
+     * {@link com.multiship.backend.service.carriers.usps.dto.UspsCustomsForm#getInvoiceReference()}
+     * slot USPS surfaces on the printed form.
+     */
+    private String customsInvoiceReference;
+
+    /**
+     * Operator's chosen strategy for handling customs forms that would
+     * physically overflow the carrier's printed form (USPS' ~30-line
+     * CN23/PS-2976-A ceiling being the primary trigger).
+     *
+     * <p>See {@link IntlShipmentBlockDTO#getCustomsSplitStrategy()} for
+     * regulatory context.
+     */
+    public enum CustomsSplitStrategy {
+        /**
+         * Chunk the shipment into ceil(N/cap) sub-parcels, each with
+         * ≤cap commodities. Each sub-parcel gets its own label + customs
+         * form. Every commodity is accounted for on paper. Costs more
+         * (multiple labels, multiple postage charges) but paperwork
+         * matches physical reality. Default under USPS_DIRECT.
+         */
+        SPLIT,
+
+        /**
+         * Keep as ONE shipment + ONE label + ONE customs form. The form's
+         * commodity list is collapsed to a single summary line that points
+         * at an external commercial invoice; the operator physically
+         * attaches the full itemization to the parcel. Saves postage but
+         * requires operator to hand-attach paperwork.
+         */
+        INVOICE_REFERENCE
+    }
+
     /** True when the block has enough data to build a valid customs declaration. */
     public boolean isReadyForCarrier() {
         return Boolean.TRUE.equals(international)

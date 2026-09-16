@@ -8,7 +8,10 @@ import com.multiship.backend.dto.IntlShipmentBlockDTO;
 import com.multiship.backend.dto.PackageDetailDTO;
 import com.multiship.backend.dto.ShipmentRequestDTO;
 import com.multiship.backend.service.SystemSettingService;
+import com.multiship.backend.dto.IntlShipmentBlockDTO.CustomsSplitStrategy;
+import com.multiship.backend.service.carriers.CarrierConnector.PackageTracking;
 import com.multiship.backend.service.carriers.usps.UspsCustomsFormBuilder;
+import com.multiship.backend.service.carriers.usps.UspsCustomsLineItemSplitter;
 import com.multiship.backend.service.carriers.usps.UspsOAuthTokenCache;
 import com.multiship.backend.service.carriers.usps.UspsPaymentAuthCache;
 import com.multiship.backend.service.carriers.usps.dto.UspsCommodity;
@@ -224,6 +227,39 @@ public class UspsDirectConnector implements CarrierConnector {
             customsFormBuilder = new UspsCustomsFormBuilder();
         }
         return customsFormBuilder;
+    }
+
+    /**
+     * PR-F3 — field-injected customs line-item splitter. Handles the case
+     * where an intl shipment has more commodities than physically fit on
+     * a USPS printed customs form (soft cap 30 lines; see
+     * {@link #CUSTOMS_FORM_SOFT_MAX_LINES}). Null in pre-PR-F3 unit tests;
+     * the lazy default builds a fresh instance wrapping a plain
+     * {@link com.multiship.backend.service.ShipmentSplitter}.
+     */
+    @Autowired(required = false)
+    private UspsCustomsLineItemSplitter customsLineItemSplitter;
+
+    /**
+     * Test-only setter — pure-Mockito tests that pre-date Spring injection
+     * seed the collaborator directly. Production wires via
+     * {@link Autowired}.
+     */
+    void setCustomsLineItemSplitter(UspsCustomsLineItemSplitter splitter) {
+        this.customsLineItemSplitter = splitter;
+    }
+
+    /** Lazy-default so pre-PR-F3 unit tests that build the connector with
+     *  the 5-arg constructor still get a working splitter. Wraps a fresh
+     *  {@link com.multiship.backend.service.ShipmentSplitter} + our
+     *  {@link #customsFormBuilder()}. Idempotent. */
+    private UspsCustomsLineItemSplitter customsLineItemSplitter() {
+        if (customsLineItemSplitter == null) {
+            customsLineItemSplitter = new UspsCustomsLineItemSplitter(
+                    new com.multiship.backend.service.ShipmentSplitter(),
+                    customsFormBuilder());
+        }
+        return customsLineItemSplitter;
     }
 
     @Override
@@ -670,9 +706,35 @@ public class UspsDirectConnector implements CarrierConnector {
         assertIsoAlpha2RecipientCountry(request);
         assertIntlCustomsBlock(request);
         assertHsAndOriginPerCommodity(request);
-        warnIfCommoditiesExceedSoftMax(request);
 
-        Map<String, Object> body = buildIntlLabelRequestBody(request, tenant);
+        // PR-F3 — commodity-count dispatch on the operator's chosen strategy.
+        //   - null strategy + over-cap → actionable IAE with both remediation options.
+        //   - SPLIT → chunk into ceil(N/30) sub-requests, execute each, aggregate.
+        //   - INVOICE_REFERENCE → single label; customs form transformed at
+        //     build time with a summary line + invoice reference.
+        //   - under-cap → any strategy is a no-op; execute a single label.
+        CustomsSplitStrategy strategy = request.getIntl().getCustomsSplitStrategy();
+        int lineCount = request.getIntl().getCommodities().size();
+        boolean overCap = lineCount > CUSTOMS_FORM_SOFT_MAX_LINES;
+        if (overCap && strategy == null) {
+            int splitCount = (lineCount + CUSTOMS_FORM_SOFT_MAX_LINES - 1) / CUSTOMS_FORM_SOFT_MAX_LINES;
+            throw new IllegalArgumentException(
+                    "USPS Direct intl shipment has " + lineCount + " commodities but customs form fits "
+                            + "only " + CUSTOMS_FORM_SOFT_MAX_LINES + ". Set intl.customsSplitStrategy to "
+                            + "SPLIT (creates " + splitCount + " sub-parcels) or INVOICE_REFERENCE "
+                            + "(attach invoice; single label with summary). Order "
+                            + request.getReferenceNumber() + ".");
+        }
+        if (overCap && strategy == CustomsSplitStrategy.SPLIT) {
+            return executeSplitStrategy(request, tenant, accessToken, environment, extraHeaders);
+        }
+
+        // Under-cap OR strategy=INVOICE_REFERENCE → single label call. The
+        // strategy hint is passed through to buildIntlLabelRequestBody so
+        // the customs-form builder can collapse commodities under
+        // INVOICE_REFERENCE. Under-cap requests: the builder's default
+        // path (SPLIT semantics) emits one commodity per line as before.
+        Map<String, Object> body = buildIntlLabelRequestBody(request, tenant, strategy);
         String url = UspsOAuthTokenCache.baseUrl(environment) + "/international-labels/v3/label";
         String response = executeIntlLabelPost(url, body, accessToken, extraHeaders);
         if (response == null) {
@@ -686,6 +748,102 @@ public class UspsDirectConnector implements CarrierConnector {
                     "USPS Direct intl label response unparseable for order "
                             + request.getReferenceNumber() + ": " + ex.getMessage(), ex);
         }
+    }
+
+    /**
+     * SPLIT strategy — chunk the intl request into ceil(N/30) sub-requests
+     * via {@link UspsCustomsLineItemSplitter}, call
+     * {@code /international-labels/v3/label} once per sub-request, and
+     * aggregate the results into a single {@link ShipmentResult} whose
+     * {@code packages[]} list carries one {@link PackageTracking} per
+     * sub-parcel.
+     *
+     * <p>The MASTER {@link ShipmentResult#trackingNumber()} is the first
+     * sub-parcel's tracking number, matching the multi-piece convention
+     * every other connector uses. Downstream callers that pre-date
+     * multi-piece results can still index off the master; the per-piece
+     * list is populated for the ones that need it (label printing,
+     * customer-support surfaces).
+     *
+     * <p>Package-visible so the commodity-cap test can exercise the split
+     * path without a full HTTP round-trip via a subclass that overrides
+     * {@link #executeIntlLabelPost}.
+     */
+    ShipmentResult executeSplitStrategy(ShipmentRequestDTO request, TenantIdentifiers tenant,
+                                         String accessToken, String environment,
+                                         Map<String, String> extraHeaders) {
+        List<ShipmentRequestDTO> subRequests = customsLineItemSplitter()
+                .applyStrategy(request, CustomsSplitStrategy.SPLIT);
+        List<ShipmentResult> subResults = new ArrayList<>(subRequests.size());
+        for (ShipmentRequestDTO sub : subRequests) {
+            Map<String, Object> body = buildIntlLabelRequestBody(sub, tenant, CustomsSplitStrategy.SPLIT);
+            String url = UspsOAuthTokenCache.baseUrl(environment) + "/international-labels/v3/label";
+            String response = executeIntlLabelPost(url, body, accessToken, extraHeaders);
+            if (response == null) {
+                throw new IllegalStateException(
+                        "USPS Direct intl SPLIT sub-shipment returned no response for order "
+                                + request.getReferenceNumber() + " (piece "
+                                + (subResults.size() + 1) + "/" + subRequests.size() + ").");
+            }
+            try {
+                subResults.add(parseIntlLabelResponse(response, sub));
+            } catch (Exception ex) {
+                throw new IllegalStateException(
+                        "USPS Direct intl SPLIT sub-shipment unparseable for order "
+                                + request.getReferenceNumber() + " (piece "
+                                + (subResults.size() + 1) + "/" + subRequests.size() + "): "
+                                + ex.getMessage(), ex);
+            }
+        }
+        return aggregateSplitResults(subResults, request);
+    }
+
+    /**
+     * Fold a list of per-sub-shipment {@link ShipmentResult}s into one
+     * aggregate. Master {@code trackingNumber} + {@code trackingUrl} +
+     * {@code labelPdf} + {@code shippingCost} come from the first
+     * sub-result (same convention peer connectors use for the "master"
+     * identity). The {@code packages[]} list carries one
+     * {@link PackageTracking} per sub-parcel; {@code shippingCost} is
+     * summed. Raw responses concatenated for downstream inspection.
+     *
+     * <p>Package-visible so the aggregation test can assert on shape
+     * without spinning up the full label path.
+     */
+    ShipmentResult aggregateSplitResults(List<ShipmentResult> subResults, ShipmentRequestDTO request) {
+        if (subResults == null || subResults.isEmpty()) {
+            throw new IllegalStateException(
+                    "USPS Direct intl SPLIT produced zero sub-results for order "
+                            + request.getReferenceNumber() + ".");
+        }
+        ShipmentResult first = subResults.get(0);
+        BigDecimal totalCost = BigDecimal.ZERO;
+        List<PackageTracking> pieces = new ArrayList<>(subResults.size());
+        StringBuilder combinedRaw = new StringBuilder();
+        combinedRaw.append("[");
+        for (int i = 0; i < subResults.size(); i++) {
+            ShipmentResult r = subResults.get(i);
+            if (r.shippingCost() != null) totalCost = totalCost.add(r.shippingCost());
+            pieces.add(new PackageTracking(
+                    i + 1,
+                    r.trackingNumber(),
+                    r.trackingUrl(),
+                    r.labelUrl(),
+                    r.labelPdf(),
+                    r.shippingCost()));
+            if (i > 0) combinedRaw.append(",");
+            combinedRaw.append(r.rawResponse() == null ? "null" : r.rawResponse());
+        }
+        combinedRaw.append("]");
+        return new ShipmentResult(
+                first.trackingNumber(),
+                first.trackingUrl(),
+                first.labelUrl(),
+                first.labelPdf(),
+                totalCost.signum() > 0 ? totalCost : first.shippingCost(),
+                first.estimatedDelivery(),
+                combinedRaw.toString(),
+                pieces);
     }
 
     /**
@@ -777,6 +935,24 @@ public class UspsDirectConnector implements CarrierConnector {
      * <p>Package-visible for the payload-shape test.
      */
     Map<String, Object> buildIntlLabelRequestBody(ShipmentRequestDTO request, TenantIdentifiers tenant) {
+        // Delegate to the strategy-aware overload with the strategy read
+        // off the request DTO (or null → default SPLIT-shape behaviour).
+        CustomsSplitStrategy strategy = request.getIntl() == null
+                ? null : request.getIntl().getCustomsSplitStrategy();
+        return buildIntlLabelRequestBody(request, tenant, strategy);
+    }
+
+    /**
+     * PR-F3 — strategy-aware overload. When {@code strategy} is
+     * {@link CustomsSplitStrategy#INVOICE_REFERENCE}, the customs-form
+     * builder collapses the commodities list to a single summary line +
+     * an invoice reference. Otherwise identical to the base overload.
+     *
+     * <p>Package-visible so the commodity-cap test can pin the wire body
+     * for both strategy paths.
+     */
+    Map<String, Object> buildIntlLabelRequestBody(ShipmentRequestDTO request, TenantIdentifiers tenant,
+                                                    CustomsSplitStrategy strategy) {
         Map<String, Object> body = new LinkedHashMap<>();
 
         Map<String, Object> imageInfo = new LinkedHashMap<>();
@@ -853,7 +1029,7 @@ public class UspsDirectConnector implements CarrierConnector {
         // envelopes. UspsCustomsFormBuilder handles enum mapping + HS
         // normalisation; the boundary guards ran above so we trust the
         // block is well-formed here.
-        UspsCustomsForm form = customsFormBuilder().build(request);
+        UspsCustomsForm form = customsFormBuilder().build(request, strategy);
         body.put("customsForm", customsFormToMap(form));
 
         return body;
@@ -876,6 +1052,7 @@ public class UspsDirectConnector implements CarrierConnector {
         if (StringUtils.hasText(form.getCertificateNumber())) out.put("certificateNumber", form.getCertificateNumber());
         if (StringUtils.hasText(form.getLicenseNumber())) out.put("licenseNumber", form.getLicenseNumber());
         if (StringUtils.hasText(form.getInvoiceNumber())) out.put("invoiceNumber", form.getInvoiceNumber());
+        if (StringUtils.hasText(form.getInvoiceReference())) out.put("invoiceReference", form.getInvoiceReference());
 
         List<Map<String, Object>> commodities = new ArrayList<>();
         if (form.getCommodities() != null) {
@@ -1127,11 +1304,25 @@ public class UspsDirectConnector implements CarrierConnector {
         }
     }
 
-    private static void warnIfCommoditiesExceedSoftMax(ShipmentRequestDTO request) {
+    /**
+     * PR-F3 predecessor — retained for backwards compatibility with any
+     * external caller that used to invoke the WARN-only guard. The
+     * enforcement path now lives in {@link #createIntlShipmentInternal}:
+     * it throws {@link IllegalArgumentException} when the operator hasn't
+     * chosen a {@link CustomsSplitStrategy}, delegates to
+     * {@link UspsCustomsLineItemSplitter} on SPLIT, and passes a strategy
+     * hint to the customs-form builder on INVOICE_REFERENCE.
+     *
+     * @deprecated Kept only so pre-PR-F3 test helpers still link. Do not
+     *     call from production code — use the createIntlShipmentInternal
+     *     dispatch instead.
+     */
+    @Deprecated
+    static void warnIfCommoditiesExceedSoftMax(ShipmentRequestDTO request) {
         int n = request.getIntl().getCommodities().size();
         if (n > CUSTOMS_FORM_SOFT_MAX_LINES) {
             log.warn("USPS Direct intl label: order {} has {} commodity lines (>{}); "
-                            + "CN23 print may overflow. PR-F3 splitter will chunk into batches.",
+                            + "printed customs form may overflow. Set customsSplitStrategy on the intl block.",
                     request.getReferenceNumber(), n, CUSTOMS_FORM_SOFT_MAX_LINES);
         }
     }
