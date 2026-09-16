@@ -1919,6 +1919,13 @@
             "maxItems" : 999,
             "minItems" : 0
           },
+          "customsSplitStrategy" : {
+            "type" : "string",
+            "enum" : [ "SPLIT", "INVOICE_REFERENCE" ]
+          },
+          "customsInvoiceReference" : {
+            "type" : "string"
+          },
           "readyForCarrier" : {
             "type" : "boolean"
           }
