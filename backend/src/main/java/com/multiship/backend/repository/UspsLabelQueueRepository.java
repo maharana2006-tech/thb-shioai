@@ -26,6 +26,16 @@ import java.util.Optional;
  *   <li>{@link #countByStatusAndTenantCode(Status, String)} - the
  *       per-tenant depth metric for backpressure UX.</li>
  * </ul>
+ *
+ * <p>PR-F2 adds MPS aggregation:
+ * <ul>
+ *   <li>{@link #findByParentOrderNoOrderBySequenceNumberAsc(Long)} -
+ *       list every piece for a parent order (bounded by the max MPS
+ *       size, ~1000).</li>
+ *   <li>{@link #findStatusCountsByParentOrderNo(Long)} - the GROUP BY
+ *       projection the {@code /mps-progress} endpoint aggregates in
+ *       a single round-trip instead of iterating rows.</li>
+ * </ul>
  */
 @Repository
 public interface UspsLabelQueueRepository
@@ -78,6 +88,39 @@ public interface UspsLabelQueueRepository
      */
     Page<UspsLabelQueueItem> findAllByOrderByEnqueuedAtDesc(Pageable pageable);
 
+    // ================================================================
+    // PR-F2 - MPS aggregation
+    // ================================================================
+
+    /**
+     * PR-F2 - list every piece for an MPS parent order, ordered by
+     * {@code sequence_number} ASC. Used by the {@code /mps-progress}
+     * endpoint to emit the first N completed tracking numbers in
+     * piece order. Bounded by the max MPS size (~1000 pieces per
+     * order); no pagination needed.
+     */
+    List<UspsLabelQueueItem> findByParentOrderNoOrderBySequenceNumberAsc(Long parentOrderNo);
+
+    /**
+     * PR-F2 - GROUP BY projection over an MPS parent's rows. Returns
+     * one entry per status the parent's pieces sit in (e.g. QUEUED=750,
+     * PROCESSING=5, DONE=240, FAILED=3, CANCELLED=2). One round-trip
+     * beats scanning 1000 rows per progress poll.
+     *
+     * <p>Uses JPQL (not native) so Hibernate maps the enum column back
+     * to {@link Status} automatically - the constructor expression
+     * bakes the projection type into the query so no manual mapper is
+     * needed.
+     */
+    @Query("""
+            SELECT new com.multiship.backend.repository.UspsLabelQueueRepository$StatusCount(
+                       i.status, count(i))
+              FROM UspsLabelQueueItem i
+             WHERE i.parentOrderNo = :parentOrderNo
+          GROUP BY i.status
+            """)
+    List<StatusCount> findStatusCountsByParentOrderNo(@Param("parentOrderNo") Long parentOrderNo);
+
     /**
      * Native GROUP BY row shape - Spring Data will project a native
      * result into this interface automatically. Kept intentionally
@@ -87,4 +130,12 @@ public interface UspsLabelQueueRepository
         String getTenantCode();
         Long getDepth();
     }
+
+    /**
+     * PR-F2 - GROUP BY projection for {@link #findStatusCountsByParentOrderNo(Long)}.
+     * Constructor-expression target so JPQL can build instances directly.
+     * Record because the row is immutable + trivially value-typed - no
+     * setters required.
+     */
+    record StatusCount(Status status, long count) {}
 }

@@ -12,8 +12,11 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Default {@link UspsLabelQueueService} implementation. See
@@ -110,6 +113,112 @@ public class UspsLabelQueueServiceImpl implements UspsLabelQueueService {
         }
         if (request.tenantCode() == null || request.tenantCode().isBlank()) {
             throw new IllegalArgumentException("tenantCode must not be blank");
+        }
+    }
+
+    // ============================================================
+    // PR-F2 - MPS batch enqueue
+    // ============================================================
+
+    /**
+     * PR-F2 implementation. Wrapped in a single {@code @Transactional}
+     * so a mid-batch duplicate (either against a pre-existing row or a
+     * dup inside the batch itself) rolls back every piece - operators
+     * see either 1000 rows or 0, never 400 stragglers to clean up.
+     *
+     * <p>Estimated completion:
+     * <ul>
+     *   <li>{@code estimatedFirstStartAt} = current backpressure quote
+     *       for this tenant (mirrors {@link #enqueue}'s per-piece quote
+     *       for parity with the single-label caller experience).</li>
+     *   <li>{@code estimatedLastCompleteAt} = firstStart + N/hourlyCap
+     *       hours (the batch's own drain time - avg per-call processing
+     *       is ~seconds, negligible vs the hourly ceiling).</li>
+     * </ul>
+     */
+    @Override
+    @Transactional
+    public EnqueueMpsResult enqueueMps(EnqueueMpsRequest request) {
+        validateEnqueueMps(request);
+        String tenant = request.tenantCode().trim();
+        int priority = request.priority() <= 0 ? DEFAULT_PRIORITY : request.priority();
+
+        // Fail-fast on intra-batch dup shipmentIds so the caller sees a
+        // clean IAE rather than a partial insert + DB unique violation
+        // wrapped in a Spring integrity exception.
+        Set<Long> seen = new HashSet<>(request.pieces().size() * 2);
+        for (EnqueueMpsRequest.PieceRequest piece : request.pieces()) {
+            if (!seen.add(piece.shipmentId())) {
+                throw new IllegalArgumentException(
+                        "duplicate shipmentId " + piece.shipmentId()
+                                + " inside MPS batch for parentOrderNo=" + request.parentOrderNo());
+            }
+        }
+
+        List<UspsLabelQueueItem> toPersist = new ArrayList<>(request.pieces().size());
+        for (EnqueueMpsRequest.PieceRequest piece : request.pieces()) {
+            toPersist.add(UspsLabelQueueItem.builder()
+                    .tenantCode(tenant)
+                    .shipmentId(piece.shipmentId())
+                    .priority(priority)
+                    .status(Status.QUEUED)
+                    .retryCount(0)
+                    .parentOrderNo(request.parentOrderNo())
+                    .sequenceNumber(piece.sequenceNumber())
+                    .build());
+        }
+
+        List<UspsLabelQueueItem> saved;
+        try {
+            saved = repo.saveAll(toPersist);
+        } catch (DataIntegrityViolationException dup) {
+            // Cross-batch dup: some shipmentId in this batch already
+            // exists in the queue (either a stale row we didn't clean
+            // up or a concurrent MPS writer for the same order). Surface
+            // as IllegalStateException so callers have ONE exception
+            // type to catch across single + MPS enqueue.
+            throw new IllegalStateException(
+                    "MPS batch for parentOrderNo=" + request.parentOrderNo()
+                            + " conflicts with an existing queue row: " + dup.getMostSpecificCause().getMessage(),
+                    dup);
+        }
+
+        LocalDateTime firstStart = computeEstimatedStartAt(tenant);
+        // The batch's own drain time: N pieces / cap per hour, in seconds.
+        long batchDrainSec = (long) Math.ceil((double) saved.size() / (double) hourlyCap * 3600.0);
+        LocalDateTime lastComplete = firstStart.plusSeconds(batchDrainSec);
+
+        log.info("USPS label queue MPS: enqueued {} pieces for parentOrderNo={} tenant={} priority={} "
+                        + "firstStart={} lastComplete={}",
+                saved.size(), request.parentOrderNo(), tenant, priority, firstStart, lastComplete);
+        return new EnqueueMpsResult(request.parentOrderNo(), saved.size(), firstStart, lastComplete);
+    }
+
+    private static void validateEnqueueMps(EnqueueMpsRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("request must not be null");
+        }
+        if (request.tenantCode() == null || request.tenantCode().isBlank()) {
+            throw new IllegalArgumentException("tenantCode must not be blank");
+        }
+        if (request.parentOrderNo() == null) {
+            throw new IllegalArgumentException("parentOrderNo must not be null");
+        }
+        if (request.pieces() == null || request.pieces().isEmpty()) {
+            throw new IllegalArgumentException("pieces must not be empty");
+        }
+        for (int i = 0; i < request.pieces().size(); i++) {
+            EnqueueMpsRequest.PieceRequest piece = request.pieces().get(i);
+            if (piece == null) {
+                throw new IllegalArgumentException("pieces[" + i + "] must not be null");
+            }
+            if (piece.shipmentId() == null) {
+                throw new IllegalArgumentException("pieces[" + i + "].shipmentId must not be null");
+            }
+            if (piece.sequenceNumber() <= 0) {
+                throw new IllegalArgumentException(
+                        "pieces[" + i + "].sequenceNumber must be > 0 (got " + piece.sequenceNumber() + ")");
+            }
         }
     }
 

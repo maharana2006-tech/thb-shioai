@@ -36,13 +36,22 @@ import java.time.LocalDateTime;
  * retry loop) is rejected at persist time - the caller sees a
  * DB-integrity exception surfaced as {@link IllegalStateException} in
  * the service layer.
+ *
+ * <p>PR-F2 - {@link #parentOrderNo} + {@link #sequenceNumber} are the
+ * MPS ("one order = N label calls") aggregation keys. Non-MPS rows
+ * leave both NULL; the admin surface aggregates progress via
+ * {@code GROUP BY parent_order_no}.
  */
 @Entity
 @Table(name = "usps_label_queue",
         uniqueConstraints = @UniqueConstraint(name = "uk_usps_label_queue_shipment",
                 columnNames = "shipment_id"),
-        indexes = @Index(name = "idx_usps_queue_status_tenant",
-                columnList = "status, tenant_code, priority, enqueued_at"))
+        indexes = {
+                @Index(name = "idx_usps_queue_status_tenant",
+                        columnList = "status, tenant_code, priority, enqueued_at"),
+                @Index(name = "idx_usps_queue_parent",
+                        columnList = "parent_order_no")
+        })
 @Data
 @Builder
 @NoArgsConstructor
@@ -109,4 +118,24 @@ public class UspsLabelQueueItem {
     /** Populated on DONE - USPS-assigned tracking number. */
     @Column(name = "tracking_number", length = 64)
     private String trackingNumber;
+
+    /**
+     * PR-F2 - MPS parent order number. {@code NULL} on single-label
+     * enqueue rows (the PR-F1 shape); populated when this row is one
+     * piece of an N-piece MPS shipment fanned out by
+     * {@code UspsMpsSplitterService}. The admin surface aggregates
+     * progress across the N pieces via {@code GROUP BY parent_order_no}
+     * so operators can see "order 12345: 240/1000 pieces done".
+     */
+    @Column(name = "parent_order_no")
+    private Long parentOrderNo;
+
+    /**
+     * PR-F2 - 1-based position within the parent MPS order. {@code NULL}
+     * on non-MPS rows. Preserves piece ordering when the processor
+     * picks items (rows with the same priority + enqueued_at tie-break
+     * on this so piece 1 lands before piece 2 in the FIFO drain).
+     */
+    @Column(name = "sequence_number")
+    private Integer sequenceNumber;
 }

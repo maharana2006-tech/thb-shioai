@@ -10,6 +10,7 @@ import com.multiship.backend.model.Order;
 import com.multiship.backend.repository.BulkLabelJobRepository;
 import com.multiship.backend.repository.OrderRepository;
 import com.multiship.backend.service.carriers.usps.queue.UspsLabelQueueService;
+import com.multiship.backend.service.carriers.usps.queue.UspsMpsSplitterService;
 import com.multiship.backend.service.output.DispatchContext;
 import com.multiship.backend.service.output.DispatchResult;
 import com.multiship.backend.service.output.DocType;
@@ -59,6 +60,13 @@ import java.util.zip.ZipOutputStream;
  * paced at 55/hr for USPS' 60/hr platform cap) instead of calling the
  * connector synchronously. Non-USPS carriers and Stamps.com stay on the
  * sync path — Stamps has no 60/hr cap, so pacing there wastes capacity.
+ *
+ * <p>PR-F2 — MPS orders (order.packageCount >= 2) route through
+ * {@link UspsMpsSplitterService} instead of the single-label enqueue.
+ * The splitter fans the parent order into N queue rows sharing a
+ * {@code parent_order_no}; each row's synthetic negative shipmentId
+ * cannot collide with a real orderNo. Aggregate progress is served via
+ * {@code /api/v1/admin/usps-direct/queue/mps-progress/{orderNo}}.
  */
 @Slf4j
 @Service
@@ -156,6 +164,18 @@ public class BulkLabelServiceImpl implements BulkLabelService {
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private SystemSettingService systemSettingService;
+
+    /**
+     * PR-F2 — MPS splitter. Optional for the same reason as
+     * {@link #uspsLabelQueueService}. When wired AND the order has
+     * {@code packageCount >= 2}, {@code maybeEnqueueUspsDirect} routes
+     * to {@link UspsMpsSplitterService#splitAndEnqueueForOrder} so the
+     * N pieces land on the queue with a shared parentOrderNo. Non-MPS
+     * orders (single package or unknown count) keep the PR-F1
+     * single-label enqueue path.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private UspsMpsSplitterService uspsMpsSplitterService;
     /**
      * Sprint 50 Tier 0.5 PR E - guard so a scoped USER cannot enqueue a
      * bulk job containing an order from a foreign tenant. We check every
@@ -494,22 +514,36 @@ public class BulkLabelServiceImpl implements BulkLabelService {
      *       failure summary explains the deferral. No ZIP entry; the
      *       queue processor persists the label + tracking number on the
      *       order row when it eventually runs.</li>
+     *   <li>Queued MPS (PR-F2 — routed to USPS_DIRECT MPS splitter):
+     *       {@code queuedItemId} = -1 (sentinel; no single queue-item id
+     *       for N pieces), {@code mpsPieceCount} > 0. Counts as success;
+     *       admin surface exposes aggregate progress via
+     *       {@code /mps-progress/{orderNo}}.</li>
      * </ul>
      */
     private record OrderOutcome(long orderNo, byte[] pdf, String trackingNumber,
                                  String failureReason, boolean alreadyLabeled,
-                                 Long queuedItemId) {
+                                 Long queuedItemId, int mpsPieceCount) {
         static OrderOutcome success(long orderNo, byte[] pdf, String trackingNumber) {
-            return new OrderOutcome(orderNo, pdf, trackingNumber, null, false, null);
+            return new OrderOutcome(orderNo, pdf, trackingNumber, null, false, null, 0);
         }
         static OrderOutcome failure(long orderNo, String reason) {
-            return new OrderOutcome(orderNo, null, null, reason, false, null);
+            return new OrderOutcome(orderNo, null, null, reason, false, null, 0);
         }
         static OrderOutcome skipped(long orderNo, String existingTrackingNumber) {
-            return new OrderOutcome(orderNo, null, existingTrackingNumber, null, true, null);
+            return new OrderOutcome(orderNo, null, existingTrackingNumber, null, true, null, 0);
         }
         static OrderOutcome queued(long orderNo, Long queuedItemId) {
-            return new OrderOutcome(orderNo, null, null, null, false, queuedItemId);
+            return new OrderOutcome(orderNo, null, null, null, false, queuedItemId, 0);
+        }
+        /**
+         * PR-F2 — MPS batch routed to the queue via UspsMpsSplitterService.
+         * No single queue-item id (N were persisted); the sentinel keeps
+         * the {@code queuedItemId != null} branch behaviour intact so the
+         * ZIP aggregation still skips this outcome.
+         */
+        static OrderOutcome queuedMps(long orderNo, int mpsPieceCount) {
+            return new OrderOutcome(orderNo, null, null, null, false, -1L, mpsPieceCount);
         }
     }
 
@@ -614,6 +648,24 @@ public class BulkLabelServiceImpl implements BulkLabelService {
                     structuredFailures.add(buildFailureDetail(
                             out.orderNo, "ALREADY_LABELED",
                             "Already had a label (tracking " + tn + ") — skipped."));
+                } else if (out.mpsPieceCount > 0) {
+                    // PR-F2 — MPS batch routed to the USPS_DIRECT queue.
+                    // N pieces persisted; poll /mps-progress/{orderNo} for
+                    // aggregate status. No ZIP entry; each piece's label
+                    // bytes land later when the queue drains.
+                    job.setSuccessfulCount(job.getSuccessfulCount() + 1);
+                    failures.append("order ").append(out.orderNo)
+                            .append(": MPS split into ")
+                            .append(out.mpsPieceCount)
+                            .append(" pieces queued to USPS Direct — poll /admin/usps-direct/queue/mps-progress/")
+                            .append(out.orderNo)
+                            .append(" for aggregate status.\n");
+                    structuredFailures.add(buildFailureDetail(
+                            out.orderNo, "USPS_QUEUED_MPS",
+                            "MPS split into " + out.mpsPieceCount
+                                    + " pieces queued to USPS Direct. Poll "
+                                    + "/admin/usps-direct/queue/mps-progress/" + out.orderNo
+                                    + " for aggregate progress."));
                 } else if (out.queuedItemId != null) {
                     // PR-F1 — routed to the USPS_DIRECT persistent queue.
                     // Count as success (the label WILL be generated once the
@@ -764,6 +816,13 @@ public class BulkLabelServiceImpl implements BulkLabelService {
      * {@link OrderOutcome#queued} marker. Any other carrier, or the
      * STAMPS_COM / PROVISIONING_USPS_DIRECT provider states, stays on
      * the sync path.
+     *
+     * <p>PR-F2 — same rule with an MPS branch. When the order has
+     * {@code packageCount >= 2} AND {@link #uspsMpsSplitterService} is
+     * wired, the worker routes through the splitter (N queue rows) and
+     * returns {@link OrderOutcome#queuedMps}. Callers see one aggregate
+     * "queued MPS" outcome per order; per-piece progress lives on
+     * {@code /mps-progress/{orderNo}}.
      */
     private OrderOutcome processOneOrder(long jobId, long orderNo, UserDetails jobUser) {
         // Cancellation gate — checked BEFORE calling the carrier so a
@@ -791,13 +850,18 @@ public class BulkLabelServiceImpl implements BulkLabelService {
                 return OrderOutcome.skipped(orderNo, existing.getTrackingNumber());
             }
         }
-        // PR-F1 — USPS_DIRECT queue routing. Off by default (returns
-        // empty) unless the queue service + system-setting service are
-        // both wired AND the platform toggle is USPS_DIRECT AND the
-        // order's ship-via canonicalises to USPS.
-        Optional<Long> queued = maybeEnqueueUspsDirect(orderNo);
-        if (queued.isPresent()) {
-            return OrderOutcome.queued(orderNo, queued.get());
+        // PR-F1 / PR-F2 — USPS_DIRECT queue routing. Returns three shapes:
+        //   Optional.empty()                 -> sync path (non-USPS,
+        //                                       STAMPS_COM provider, etc.).
+        //   MpsQueueDecision.singleLabel(id) -> queued 1 row (PR-F1 shape).
+        //   MpsQueueDecision.mpsBatch(n)     -> queued N rows (PR-F2 shape).
+        Optional<MpsQueueDecision> decision = maybeEnqueueUspsDirect(orderNo);
+        if (decision.isPresent()) {
+            MpsQueueDecision d = decision.get();
+            if (d.mpsPieceCount() > 0) {
+                return OrderOutcome.queuedMps(orderNo, d.mpsPieceCount());
+            }
+            return OrderOutcome.queued(orderNo, d.singleQueueItemId());
         }
         try {
             LabelGenerationResponse label = generateSingle(jobId, orderNo, jobUser);
@@ -822,8 +886,9 @@ public class BulkLabelServiceImpl implements BulkLabelService {
     }
 
     /**
-     * PR-F1 — route USPS labels through the persistent queue when the
-     * platform toggle is set. Returns {@link Optional#empty()} on ANY of:
+     * PR-F1 / PR-F2 — route USPS labels through the persistent queue
+     * when the platform toggle is set. Returns {@link Optional#empty()}
+     * on ANY of:
      *
      * <ul>
      *   <li>{@link #uspsLabelQueueService} is unwired (4-arg constructor
@@ -839,15 +904,25 @@ public class BulkLabelServiceImpl implements BulkLabelService {
      *       UPS / DHL / etc. — all sync).</li>
      * </ul>
      *
-     * On a positive route, calls
-     * {@link UspsLabelQueueService#enqueue(UspsLabelQueueService.EnqueueRequest)}
-     * with a fixed priority=0 (equal-priority for bulk; per-tenant
-     * fair-share is Agent 1's territory) and returns the queue item id.
-     * Never throws — any enqueue failure surfaces via {@link Optional#empty()}
-     * so the sync fallback picks up. The rate-limited FAILED path in
-     * the queue itself is not our problem here.
+     * <p>On a positive route:
+     * <ul>
+     *   <li>MPS (packageCount &gt;= 2) with {@link #uspsMpsSplitterService}
+     *       wired → delegate to
+     *       {@link UspsMpsSplitterService#splitAndEnqueueForOrder} and
+     *       return {@link MpsQueueDecision#mpsBatch}. N queue rows share
+     *       {@code parent_order_no = orderNo}; aggregate progress via
+     *       {@code /mps-progress/{orderNo}}.</li>
+     *   <li>Otherwise (single-package or splitter unwired) → fixed
+     *       priority=0 single enqueue via
+     *       {@link UspsLabelQueueService#enqueue}. PR-F1 shape.</li>
+     * </ul>
+     *
+     * <p>Never throws — any enqueue failure surfaces via
+     * {@link Optional#empty()} so the sync fallback picks up. The
+     * rate-limited FAILED path in the queue itself is not our problem
+     * here.
      */
-    Optional<Long> maybeEnqueueUspsDirect(long orderNo) {
+    Optional<MpsQueueDecision> maybeEnqueueUspsDirect(long orderNo) {
         if (uspsLabelQueueService == null || systemSettingService == null) return Optional.empty();
         String provider;
         try {
@@ -869,6 +944,35 @@ public class BulkLabelServiceImpl implements BulkLabelService {
         String tenantCode = StringUtils.hasText(order.getTenantId())
                 ? order.getTenantId()
                 : (StringUtils.hasText(order.getCustNo()) ? order.getCustNo() : "unknown");
+
+        // PR-F2 — MPS branch. Fan into N queue rows sharing parent_order_no
+        // so the admin surface can render aggregate progress. Only
+        // activated when the splitter is wired AND the order has a
+        // multi-package count on the row; without either, the single-
+        // label enqueue path takes over (PR-F1 shape).
+        Integer packageCount = order.getPackageCount();
+        boolean isMps = packageCount != null && packageCount >= 2;
+        if (isMps && uspsMpsSplitterService != null) {
+            try {
+                UspsLabelQueueService.EnqueueMpsResult mpsResult = uspsMpsSplitterService
+                        .splitAndEnqueueForOrder(orderNo, packageCount, tenantCode);
+                if (mpsResult == null || mpsResult.enqueuedCount() <= 0) {
+                    log.warn("PR-F2: USPS Direct MPS enqueue returned no rows for order {} — sync fallback",
+                            orderNo);
+                    return Optional.empty();
+                }
+                log.info("PR-F2: order {} routed to USPS Direct MPS queue (pieces={}, tenant={}, "
+                                + "firstStart={}, lastComplete={})",
+                        orderNo, mpsResult.enqueuedCount(), tenantCode,
+                        mpsResult.estimatedFirstStartAt(), mpsResult.estimatedLastCompleteAt());
+                return Optional.of(MpsQueueDecision.mpsBatch(mpsResult.enqueuedCount()));
+            } catch (Exception ex) {
+                log.warn("PR-F2: USPS Direct MPS enqueue failed for order {}: {} — sync fallback",
+                        orderNo, ex.getMessage());
+                return Optional.empty();
+            }
+        }
+
         try {
             UspsLabelQueueService.EnqueueResult result = uspsLabelQueueService.enqueue(
                     new UspsLabelQueueService.EnqueueRequest(tenantCode, orderNo, 0));
@@ -878,7 +982,7 @@ public class BulkLabelServiceImpl implements BulkLabelService {
             }
             log.info("PR-F1: order {} routed to USPS Direct queue (item {}, tenant {}, est start {})",
                     orderNo, result.queueItemId(), tenantCode, result.estimatedStartAt());
-            return Optional.of(result.queueItemId());
+            return Optional.of(MpsQueueDecision.singleLabel(result.queueItemId()));
         } catch (Exception ex) {
             // Enqueue failure must not tank the whole batch — fall through
             // to sync so at least the current order goes out (which will
@@ -888,6 +992,26 @@ public class BulkLabelServiceImpl implements BulkLabelService {
             log.warn("PR-F1: USPS Direct enqueue failed for order {}: {} — sync fallback",
                     orderNo, ex.getMessage());
             return Optional.empty();
+        }
+    }
+
+    /**
+     * PR-F2 — dispatch result from {@link #maybeEnqueueUspsDirect}. One
+     * of two shapes:
+     * <ul>
+     *   <li>{@link #singleLabel(Long)} — one queue row, PR-F1 shape.
+     *       {@code singleQueueItemId} is the row id; {@code mpsPieceCount}
+     *       is 0.</li>
+     *   <li>{@link #mpsBatch(int)} — N queue rows, PR-F2 shape.
+     *       {@code singleQueueItemId} is null; {@code mpsPieceCount} is N.</li>
+     * </ul>
+     */
+    record MpsQueueDecision(Long singleQueueItemId, int mpsPieceCount) {
+        static MpsQueueDecision singleLabel(Long id) {
+            return new MpsQueueDecision(id, 0);
+        }
+        static MpsQueueDecision mpsBatch(int pieces) {
+            return new MpsQueueDecision(null, pieces);
         }
     }
 
@@ -1259,5 +1383,14 @@ public class BulkLabelServiceImpl implements BulkLabelService {
      */
     void setSystemSettingService(SystemSettingService svc) {
         this.systemSettingService = svc;
+    }
+
+    /**
+     * PR-F2 test hook — allow pure-Mockito tests to inject the MPS
+     * splitter. Package-private for test access only; production wiring
+     * uses {@code @Autowired(required=false)}.
+     */
+    void setUspsMpsSplitterService(UspsMpsSplitterService svc) {
+        this.uspsMpsSplitterService = svc;
     }
 }

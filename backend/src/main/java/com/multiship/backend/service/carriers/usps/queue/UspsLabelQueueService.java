@@ -3,6 +3,7 @@ package com.multiship.backend.service.carriers.usps.queue;
 import com.multiship.backend.dto.UspsLabelQueueMetricsDTO;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * Public API for the USPS_DIRECT PR-F persistent label queue.
@@ -15,6 +16,11 @@ import java.time.LocalDateTime;
  * this queue serialises label writes at 55/hour (safety margin) with
  * per-tenant fair-sharing so a burst from one tenant cannot starve
  * others.
+ *
+ * <p>PR-F2 adds {@link #enqueueMps(EnqueueMpsRequest)} for the
+ * "scenario A" MPS explosion: ONE order with N packages becomes N
+ * queue rows sharing a {@code parent_order_no} so the admin surface
+ * can aggregate progress across the pieces.
  */
 public interface UspsLabelQueueService {
 
@@ -29,6 +35,27 @@ public interface UspsLabelQueueService {
      *         enqueue by catching this exception.
      */
     EnqueueResult enqueue(EnqueueRequest request);
+
+    /**
+     * PR-F2 - Enqueue N pieces of ONE MPS order in a single transaction.
+     * Every persisted row shares {@code parentOrderNo} so
+     * {@code /mps-progress/{orderNo}} can GROUP BY to render aggregate
+     * status; each row carries its {@code sequenceNumber} so the
+     * processor + admin list preserve the operator's 1..N piece order.
+     *
+     * <p>Rejects individual pieces with duplicate shipmentIds inside the
+     * batch (fail-fast: bad caller-supplied ids); a duplicate against a
+     * pre-existing queue row rolls back the whole batch via the DB
+     * UNIQUE(shipment_id) constraint - callers see
+     * {@link IllegalStateException} identically to
+     * {@link #enqueue(EnqueueRequest)}.
+     *
+     * <p>Estimated completion assumes the platform hourly cap (55/hr
+     * default) and the batch's own size: "last piece" starts
+     * {@code (N / cap)} hours from now on a fresh queue and finishes
+     * shortly after (avg processing time is ~seconds per label).
+     */
+    EnqueueMpsResult enqueueMps(EnqueueMpsRequest request);
 
     /**
      * Platform-wide metrics for the backpressure UX: total depth,
@@ -73,4 +100,62 @@ public interface UspsLabelQueueService {
      *                          expected to claim this row.
      */
     record EnqueueResult(Long queueItemId, LocalDateTime estimatedStartAt) {}
+
+    // ================================================================
+    // PR-F2 - MPS batch enqueue
+    // ================================================================
+
+    /**
+     * PR-F2 - MPS batch enqueue request.
+     *
+     * @param tenantCode      Non-blank tenant / client code (applied to
+     *                        every persisted row).
+     * @param parentOrderNo   Non-null MPS parent order number. Stored on
+     *                        every row so aggregation queries can GROUP BY.
+     * @param pieces          Non-empty list of one entry per package.
+     *                        Each entry supplies a distinct
+     *                        {@code shipmentId} + 1-based
+     *                        {@code sequenceNumber}. Duplicate shipmentIds
+     *                        inside the batch throw IAE at validation time.
+     * @param priority        Lower = more urgent. Applied uniformly across
+     *                        every piece (bulk-triggered MPS runs at equal
+     *                        priority so the processor's FIFO tie-break
+     *                        preserves piece ordering).
+     */
+    record EnqueueMpsRequest(String tenantCode, Long parentOrderNo,
+                              List<PieceRequest> pieces, int priority) {
+        /**
+         * One piece in an MPS enqueue.
+         *
+         * @param shipmentId       Non-null unique shipmentId for this
+         *                         piece. Callers building this from an
+         *                         {@code Order} + package sequence should
+         *                         use a synthetic key that cannot collide
+         *                         with real orderNos (the bulk-label wire-in
+         *                         uses {@code -(parentOrderNo * 100_000 + seq)}
+         *                         to guarantee distinct-from-orderNo).
+         * @param sequenceNumber   1-based position within the MPS parent.
+         *                         Must be strictly positive.
+         */
+        public record PieceRequest(Long shipmentId, int sequenceNumber) {}
+    }
+
+    /**
+     * PR-F2 - MPS batch enqueue result.
+     *
+     * @param parentOrderNo                Echo of the parent order number
+     *                                     the caller submitted.
+     * @param enqueuedCount                Number of rows persisted (equal
+     *                                     to {@code pieces.size()} on
+     *                                     success).
+     * @param estimatedFirstStartAt        Wall-clock timestamp the FIRST
+     *                                     piece is expected to start
+     *                                     processing.
+     * @param estimatedLastCompleteAt      Wall-clock timestamp the LAST
+     *                                     piece is expected to complete
+     *                                     ({@code firstStart + N/cap hours}).
+     */
+    record EnqueueMpsResult(Long parentOrderNo, int enqueuedCount,
+                             LocalDateTime estimatedFirstStartAt,
+                             LocalDateTime estimatedLastCompleteAt) {}
 }
