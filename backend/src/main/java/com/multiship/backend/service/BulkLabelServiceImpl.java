@@ -9,6 +9,7 @@ import com.multiship.backend.model.BulkLabelJob;
 import com.multiship.backend.model.Order;
 import com.multiship.backend.repository.BulkLabelJobRepository;
 import com.multiship.backend.repository.OrderRepository;
+import com.multiship.backend.service.carriers.usps.queue.UspsDirectRoutingService;
 import com.multiship.backend.service.carriers.usps.queue.UspsLabelQueueService;
 import com.multiship.backend.service.carriers.usps.queue.UspsMpsSplitterService;
 import com.multiship.backend.service.output.DispatchContext;
@@ -176,6 +177,19 @@ public class BulkLabelServiceImpl implements BulkLabelService {
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private UspsMpsSplitterService uspsMpsSplitterService;
+
+    /**
+     * PR-G1 - shared routing service that all three label-generating
+     * paths (bulk, manual, background import) consult for USPS_DIRECT
+     * routing decisions. When wired, {@link #maybeEnqueueUspsDirect}
+     * delegates every branch through it so the decision tree lives in
+     * ONE place instead of drifting per-caller. Optional so pre-G1
+     * pure-Mockito unit tests that construct this service without a
+     * routing collaborator keep working - the legacy inline path
+     * below preserves their behavior byte-for-byte.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private UspsDirectRoutingService uspsDirectRoutingService;
     /**
      * Sprint 50 Tier 0.5 PR E - guard so a scoped USER cannot enqueue a
      * bulk job containing an order from a foreign tenant. We check every
@@ -858,6 +872,16 @@ public class BulkLabelServiceImpl implements BulkLabelService {
         Optional<MpsQueueDecision> decision = maybeEnqueueUspsDirect(orderNo);
         if (decision.isPresent()) {
             MpsQueueDecision d = decision.get();
+            if (d.isRejected()) {
+                // PR-G1 - routing service refused this order (intl-MPS
+                // under USPS_DIRECT). The connector would also fail
+                // (batched intl payload has no customs cascade) so we
+                // must NOT fall through to sync - record the actionable
+                // remediation on the outcome.
+                log.warn("Bulk-label worker: order {} rejected by USPS routing: {}",
+                        orderNo, d.rejectionReason());
+                return OrderOutcome.failure(orderNo, d.rejectionReason());
+            }
             if (d.mpsPieceCount() > 0) {
                 return OrderOutcome.queuedMps(orderNo, d.mpsPieceCount());
             }
@@ -923,6 +947,41 @@ public class BulkLabelServiceImpl implements BulkLabelService {
      * here.
      */
     Optional<MpsQueueDecision> maybeEnqueueUspsDirect(long orderNo) {
+        // PR-G1 - when the shared routing service is wired, delegate
+        // every decision through it so the manual + import + background
+        // paths all consult ONE authoritative branch tree. The bulk
+        // worker passes caller=null because it has no HTTP request
+        // context, and the routing service's re-entrancy guard only
+        // fires on the QUEUE_SYSTEM_USER username (which we never
+        // synthesise on the bulk path).
+        if (uspsDirectRoutingService != null) {
+            Optional<UspsDirectRoutingService.RoutingDecision> decision;
+            try {
+                decision = uspsDirectRoutingService.decide(orderNo, null);
+            } catch (Exception ex) {
+                // Unexpected routing failure must not tank the whole
+                // batch - fall through to sync so at least the current
+                // order tries to ship (mirrors the pre-G1 catch here).
+                log.warn("PR-G1: routing service threw for order {}: {} - sync fallback",
+                        orderNo, ex.getMessage());
+                return Optional.empty();
+            }
+            if (decision.isEmpty()) {
+                return Optional.empty();
+            }
+            UspsDirectRoutingService.RoutingDecision d = decision.get();
+            return switch (d.status()) {
+                case SYNC -> Optional.empty();
+                case SINGLE_QUEUED -> Optional.of(MpsQueueDecision.singleLabel(d.queueItemId()));
+                case MPS_QUEUED -> Optional.of(MpsQueueDecision.mpsBatch(
+                        d.mpsPieceCount() == null ? 0 : d.mpsPieceCount()));
+                case REJECTED -> Optional.of(MpsQueueDecision.rejected(d.reason()));
+            };
+        }
+
+        // Legacy inline path - preserved unchanged so pre-G1 pure-Mockito
+        // tests that construct this service without a routing collaborator
+        // continue to exercise the PR-F1/PR-F2 decision tree directly.
         if (uspsLabelQueueService == null || systemSettingService == null) return Optional.empty();
         String provider;
         try {
@@ -937,7 +996,7 @@ public class BulkLabelServiceImpl implements BulkLabelService {
         Order order = orderOpt.get();
         String canonical = ShippingConfigService.canonicalCarrierFor(order.getShipviaCd());
         if (canonical == null || !"USPS".equalsIgnoreCase(canonical)) {
-            // Non-USPS carrier in a mixed batch — stays on the sync path
+            // Non-USPS carrier in a mixed batch - stays on the sync path
             // (FedEx / UPS / DHL don't have USPS' 60/hr cap).
             return Optional.empty();
         }
@@ -945,7 +1004,7 @@ public class BulkLabelServiceImpl implements BulkLabelService {
                 ? order.getTenantId()
                 : (StringUtils.hasText(order.getCustNo()) ? order.getCustNo() : "unknown");
 
-        // PR-F2 — MPS branch. Fan into N queue rows sharing parent_order_no
+        // PR-F2 - MPS branch. Fan into N queue rows sharing parent_order_no
         // so the admin surface can render aggregate progress. Only
         // activated when the splitter is wired AND the order has a
         // multi-package count on the row; without either, the single-
@@ -957,7 +1016,7 @@ public class BulkLabelServiceImpl implements BulkLabelService {
                 UspsLabelQueueService.EnqueueMpsResult mpsResult = uspsMpsSplitterService
                         .splitAndEnqueueForOrder(orderNo, packageCount, tenantCode);
                 if (mpsResult == null || mpsResult.enqueuedCount() <= 0) {
-                    log.warn("PR-F2: USPS Direct MPS enqueue returned no rows for order {} — sync fallback",
+                    log.warn("PR-F2: USPS Direct MPS enqueue returned no rows for order {} - sync fallback",
                             orderNo);
                     return Optional.empty();
                 }
@@ -967,7 +1026,7 @@ public class BulkLabelServiceImpl implements BulkLabelService {
                         mpsResult.estimatedFirstStartAt(), mpsResult.estimatedLastCompleteAt());
                 return Optional.of(MpsQueueDecision.mpsBatch(mpsResult.enqueuedCount()));
             } catch (Exception ex) {
-                log.warn("PR-F2: USPS Direct MPS enqueue failed for order {}: {} — sync fallback",
+                log.warn("PR-F2: USPS Direct MPS enqueue failed for order {}: {} - sync fallback",
                         orderNo, ex.getMessage());
                 return Optional.empty();
             }
@@ -977,41 +1036,53 @@ public class BulkLabelServiceImpl implements BulkLabelService {
             UspsLabelQueueService.EnqueueResult result = uspsLabelQueueService.enqueue(
                     new UspsLabelQueueService.EnqueueRequest(tenantCode, orderNo, 0));
             if (result == null || result.queueItemId() == null) {
-                log.warn("PR-F1: USPS Direct enqueue returned null for order {} — falling back to sync", orderNo);
+                log.warn("PR-F1: USPS Direct enqueue returned null for order {} - falling back to sync", orderNo);
                 return Optional.empty();
             }
             log.info("PR-F1: order {} routed to USPS Direct queue (item {}, tenant {}, est start {})",
                     orderNo, result.queueItemId(), tenantCode, result.estimatedStartAt());
             return Optional.of(MpsQueueDecision.singleLabel(result.queueItemId()));
         } catch (Exception ex) {
-            // Enqueue failure must not tank the whole batch — fall through
+            // Enqueue failure must not tank the whole batch - fall through
             // to sync so at least the current order goes out (which will
             // then hit the connector directly; if the setting is truly
             // USPS_DIRECT the connector call succeeds too, just without
             // rate pacing for this one order).
-            log.warn("PR-F1: USPS Direct enqueue failed for order {}: {} — sync fallback",
+            log.warn("PR-F1: USPS Direct enqueue failed for order {}: {} - sync fallback",
                     orderNo, ex.getMessage());
             return Optional.empty();
         }
     }
 
     /**
-     * PR-F2 — dispatch result from {@link #maybeEnqueueUspsDirect}. One
-     * of two shapes:
+     * PR-F2 - dispatch result from {@link #maybeEnqueueUspsDirect}. One
+     * of three shapes:
      * <ul>
-     *   <li>{@link #singleLabel(Long)} — one queue row, PR-F1 shape.
+     *   <li>{@link #singleLabel(Long)} - one queue row, PR-F1 shape.
      *       {@code singleQueueItemId} is the row id; {@code mpsPieceCount}
      *       is 0.</li>
-     *   <li>{@link #mpsBatch(int)} — N queue rows, PR-F2 shape.
+     *   <li>{@link #mpsBatch(int)} - N queue rows, PR-F2 shape.
      *       {@code singleQueueItemId} is null; {@code mpsPieceCount} is N.</li>
+     *   <li>{@link #rejected(String)} - PR-G1: routing service refused
+     *       this order (intl-MPS under USPS_DIRECT). Both ids null +
+     *       piece count 0; {@code rejectionReason} carries the operator-
+     *       facing remediation. {@link #isRejected()} tells the caller
+     *       to record an OrderOutcome failure rather than either queued
+     *       or sync-fallback.</li>
      * </ul>
      */
-    record MpsQueueDecision(Long singleQueueItemId, int mpsPieceCount) {
+    record MpsQueueDecision(Long singleQueueItemId, int mpsPieceCount, String rejectionReason) {
         static MpsQueueDecision singleLabel(Long id) {
-            return new MpsQueueDecision(id, 0);
+            return new MpsQueueDecision(id, 0, null);
         }
         static MpsQueueDecision mpsBatch(int pieces) {
-            return new MpsQueueDecision(null, pieces);
+            return new MpsQueueDecision(null, pieces, null);
+        }
+        static MpsQueueDecision rejected(String reason) {
+            return new MpsQueueDecision(null, 0, reason);
+        }
+        boolean isRejected() {
+            return rejectionReason != null;
         }
     }
 
@@ -1386,11 +1457,22 @@ public class BulkLabelServiceImpl implements BulkLabelService {
     }
 
     /**
-     * PR-F2 test hook — allow pure-Mockito tests to inject the MPS
+     * PR-F2 test hook - allow pure-Mockito tests to inject the MPS
      * splitter. Package-private for test access only; production wiring
      * uses {@code @Autowired(required=false)}.
      */
     void setUspsMpsSplitterService(UspsMpsSplitterService svc) {
         this.uspsMpsSplitterService = svc;
+    }
+
+    /**
+     * PR-G1 test hook - allow pure-Mockito tests to inject the shared
+     * routing service. When set, {@link #maybeEnqueueUspsDirect} routes
+     * every decision through it (see the delegation branch at the top
+     * of that method). When null, the legacy inline path takes over
+     * so pre-G1 tests keep passing byte-for-byte.
+     */
+    void setUspsDirectRoutingService(UspsDirectRoutingService svc) {
+        this.uspsDirectRoutingService = svc;
     }
 }

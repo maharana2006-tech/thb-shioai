@@ -24,6 +24,15 @@ public class LabelGenerationResponse {
     private String trackingUrl;
     private String labelUrl;
     private String labelPdf;
+    /**
+     * Response status token — one of:
+     * {@code GENERATED} (sync label success), {@code QUEUED} (PR-G1: single
+     * USPS_DIRECT label routed to the 55/hr queue), {@code QUEUED_MPS}
+     * (PR-G1: MPS order fanned into N queue rows), {@code REJECTED}
+     * (PR-G1: intl-MPS refused before enqueue), plus the legacy
+     * pre-flight states ({@code CHOOSE_ACCOUNT}, {@code NEEDS_DETAILS},
+     * {@code CLIENT_MISSING}, {@code CUSTOMS_REQUIRED}, {@code ERROR}).
+     */
     private String status;
     private BigDecimal shippingCost;
     private LocalDateTime estimatedDelivery;
@@ -61,4 +70,24 @@ public class LabelGenerationResponse {
     private String prefillCarrierCode;
     private String prefillClientId;
     private String prefillEnvironment;
+
+    // ===== PR-G1 (USPS_DIRECT routing) — queue routing shape =====
+
+    /**
+     * PR-G1 — server-assigned id of the {@code usps_label_queue} row this
+     * label was enqueued under. Populated when {@link #status} is
+     * {@code QUEUED}; the FE uses it to render "queued — item #123" and
+     * to key backpressure polling. Null for sync {@code GENERATED} labels
+     * and for the MPS batch shape (see {@link #mpsPieceCount}).
+     */
+    private Long queueItemId;
+
+    /**
+     * PR-G1 — number of queue rows persisted when a multi-piece USPS
+     * order fans through {@code UspsMpsSplitterService}. Populated when
+     * {@link #status} is {@code QUEUED_MPS}; the FE uses it to mount the
+     * MPS progress card. Null for single-label enqueue (see
+     * {@link #queueItemId}) and for sync {@code GENERATED} labels.
+     */
+    private Integer mpsPieceCount;
 }
