@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   FiAlertCircle,
+  FiAlertTriangle,
   FiCheckCircle,
   FiDownload,
   FiPackage,
@@ -14,6 +15,13 @@ import {
   type BulkLabelFailureDetail,
   type BulkLabelJob,
 } from '../../api/bulkLabelService'
+import {
+  uspsLabelQueueService,
+  type UspsLabelQueueMetrics,
+} from '../../api/uspsLabelQueueService'
+import { isAbortError } from '../../api/apiClient'
+import BulkLabelQueueBadge from '../orders/BulkLabelQueueBadge'
+import { formatQueueDuration } from '../orders/uspsQueueFormat'
 import { notify } from '../../utils/notify'
 import { useFocusTrap } from '../../hooks/useFocusTrap'
 import { useEventStream } from '../../hooks/useEventStream'
@@ -23,11 +31,26 @@ import { useEventStream } from '../../hooks/useEventStream'
  * status every 2s, and offers a Download link when the ZIP is ready.
  * The whole flow lives in the modal — the parent just supplies the
  * order numbers.
+ *
+ * <p>PR-F1 (USPS_DIRECT scale-hardening) — surfaces the
+ * {@link BulkLabelQueueBadge} at the top of the modal, plus a warning
+ * banner when queue depth &gt; 50 OR estimated wait &gt; 1h so the
+ * operator sees rate-limit pressure BEFORE hitting Start. Both are
+ * self-hiding when USPS_PROVIDER is not USPS_DIRECT (no queue rows
+ * exist → depth === 0 → nothing renders).
  */
 export interface BulkLabelModalProps {
   onClose: () => void
   orderNumbers: number[]
 }
+
+/** Warning threshold: queue tail longer than this seconds surfaces a
+ *  "USPS is rate-limited to 60 labels/hour" banner. 3600 = 1h. */
+const QUEUE_WARN_WAIT_SEC = 3600
+/** Warning threshold: raw depth crossing this triggers the same banner
+ *  even if the estimated wait is under an hour (backlog visible before
+ *  the rate limiter fully kicks in). */
+const QUEUE_WARN_DEPTH = 50
 
 export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModalProps) {
   const [job, setJob] = useState<BulkLabelJob | null>(null)
@@ -291,6 +314,13 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
             <p className="mt-1 text-[11.5px] text-slate-500">
               Runs in the background — you can close this modal and come back later to download.
             </p>
+            {/* PR-F1 — USPS queue depth pill. Self-hides when the
+                queue is empty (i.e. USPS_PROVIDER != USPS_DIRECT, or
+                USPS_DIRECT with no backlog). Refreshes every 30s
+                on its own. */}
+            <div className="mt-2">
+              <BulkLabelQueueBadge />
+            </div>
           </div>
           <button
             type="button"
@@ -303,6 +333,12 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
         </div>
 
         <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+          {/* PR-F1 — rate-limit warning banner. Only appears when the
+              queue depth crosses a threshold OR the wait is over an
+              hour. Silent when USPS_PROVIDER != USPS_DIRECT because
+              the queue has no rows in those states. */}
+          <UspsQueueWarningBanner />
+
           {!job ? (
             <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-[12.5px] text-slate-700">
               <p className="font-semibold">Ready to submit</p>
@@ -365,6 +401,77 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
               {submitting ? 'Submitting…' : 'Start bulk job'}
             </button>
           ) : null}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * PR-F1 — rate-limit banner. Owns its own metrics fetch (kept
+ * separate from {@link BulkLabelQueueBadge} so each component has one
+ * job); refreshes on the same 30s cadence. Renders nothing on the
+ * empty-queue path so this is a no-op for STAMPS_COM operators.
+ *
+ * <p>The "60 labels/hour" copy references USPS's platform-wide cap;
+ * the actual pace-limit is 55/hr (safety margin — see
+ * {@code docs/usps-direct-integration.md} section 11). We surface the
+ * ceiling operators actually care about, not the internal margin.
+ */
+function UspsQueueWarningBanner() {
+  const [metrics, setMetrics] = useState<UspsLabelQueueMetrics | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      try {
+        const resp = await uspsLabelQueueService.getMetrics()
+        if (cancelled) return
+        setMetrics(resp?.data ?? null)
+      } catch (err) {
+        if (isAbortError(err)) return
+        console.debug('UspsQueueWarningBanner fetch failed', err)
+        if (!cancelled) setMetrics(null)
+      }
+    }
+    void load()
+    const timer = window.setInterval(() => void load(), 30_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [])
+
+  if (metrics == null) return null
+  const shouldWarn =
+    metrics.depth > QUEUE_WARN_DEPTH
+    || metrics.estimatedWaitSeconds > QUEUE_WARN_WAIT_SEC
+  if (!shouldWarn) return null
+
+  const perHourCap = metrics.totalPerHourCap ?? 60
+  return (
+    <div
+      role="alert"
+      data-testid="usps-queue-warning"
+      className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900"
+    >
+      <div className="flex items-start gap-1.5">
+        <FiAlertTriangle
+          className="mt-0.5 h-3.5 w-3.5 flex-shrink-0"
+          aria-hidden="true"
+        />
+        <div>
+          <p className="font-semibold">
+            USPS is rate-limited to {perHourCap} labels/hour.
+          </p>
+          <p className="mt-0.5">
+            {metrics.depth} label{metrics.depth === 1 ? '' : 's'} already queued;
+            new USPS orders in this batch will start printing in about{' '}
+            <span className="tabular-nums font-semibold">
+              {formatQueueDuration(metrics.estimatedWaitSeconds)}
+            </span>
+            . FedEx / UPS / DHL orders skip the queue.
+          </p>
         </div>
       </div>
     </div>
@@ -493,6 +600,8 @@ function codeChip(code: string): string {
   switch (code) {
     case 'ALREADY_LABELED':
       return 'bg-emerald-100 text-emerald-800'   // not really a failure — info
+    case 'USPS_QUEUED':
+      return 'bg-amber-100 text-amber-800'       // PR-F1 — routed to the queue
     case 'CANCELLED':
       return 'bg-amber-100 text-amber-800'
     case 'RATE_LIMITED':

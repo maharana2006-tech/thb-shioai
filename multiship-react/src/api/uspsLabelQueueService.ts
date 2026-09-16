@@ -1,0 +1,113 @@
+import { apiClient } from './apiClient'
+import type { ApiResponse } from './orderService'
+
+/**
+ * PR-F1 Agent-2 — typed API client for the USPS Direct persistent
+ * label queue (Agent-1's admin controller lives at
+ * {@code /admin/usps-direct/queue/*}).
+ *
+ * <p>Two callers today:
+ * <ul>
+ *   <li>{@link BulkLabelQueueBadge} — polls {@link #getMetrics} every
+ *       30s while mounted; used to show "12 in USPS queue · est. 45m"
+ *       inside the bulk-label modal.</li>
+ *   <li>Future admin dashboard — {@link #getItems} +
+ *       {@link #cancel} for operator triage. Not wired in this PR.</li>
+ * </ul>
+ *
+ * <p>Types mirror Agent-1's DTOs. Any field Agent-1 renames at merge
+ * time needs updating here; the safest merge test is to re-run
+ * {@code npx vitest run BulkLabelQueueBadge} against the merged
+ * branch and confirm the shape assertions still hold.
+ */
+
+/**
+ * Platform-wide (or tenant-scoped when {@link #tenantCode} is set)
+ * snapshot returned by {@code GET /admin/usps-direct/queue/metrics}.
+ * The {@code totalPerHourCap} is authoritative (backend reads USPS's
+ * 60/hr platform limit and applies a 55/hr safety margin) — the FE
+ * surfaces the number verbatim in the warning banner so operators
+ * don't guess.
+ */
+export interface UspsLabelQueueMetrics {
+  /** PENDING queue rows (waiting to be picked up). */
+  depth: number
+  /** RUNNING queue rows (actively hitting USPS right now). */
+  processing: number
+  /** Projected wait for the tail of the queue at the current rate,
+   *  in seconds. */
+  estimatedWaitSeconds: number
+  /** Platform-wide per-hour cap (55 by default; the FE surfaces this
+   *  verbatim in the warning banner so the number stays authoritative
+   *  on the backend). Null on tenant-scoped metrics. */
+  totalPerHourCap?: number | null
+  /** Tenant scope, or {@code null} for the platform-wide view. */
+  tenantCode?: string | null
+}
+
+/**
+ * One persistent-queue row surfaced by the admin listing endpoint. Not
+ * consumed by {@link BulkLabelQueueBadge} — kept here so a future
+ * admin dashboard can share the same typed client without duplicating
+ * the shape.
+ */
+export interface UspsLabelQueueItem {
+  id: number
+  tenantCode: string
+  shipmentId: number
+  /** Free-form status; expected values include PENDING, RUNNING,
+   *  DONE, FAILED, CANCELLED. */
+  status: string
+  retryCount: number
+  createdAt: string | null
+}
+
+/**
+ * Spring Data Page envelope — matches the response shape from the
+ * paged listing endpoint. Kept minimal (only the fields we consume);
+ * add more as callers need them.
+ */
+export interface Page<T> {
+  content: T[]
+  totalElements: number
+  totalPages: number
+  number: number
+  size: number
+}
+
+export const uspsLabelQueueService = {
+  /**
+   * Platform-wide snapshot; pass a {@code tenantCode} to scope to
+   * one tenant. When both callers exist we could parameterise a
+   * single endpoint, but keeping the tenant param optional here
+   * lets the badge stay a one-liner regardless of view scope.
+   */
+  getMetrics: (tenantCode?: string) => {
+    const suffix = tenantCode
+      ? `?tenantCode=${encodeURIComponent(tenantCode)}`
+      : ''
+    return apiClient.get<ApiResponse<UspsLabelQueueMetrics>>(
+      `/admin/usps-direct/queue/metrics${suffix}`,
+    )
+  },
+
+  /**
+   * Paged listing of queue rows. Used by the (not-yet-shipped) admin
+   * triage page — kept here so the client stays a single source of
+   * truth for the admin endpoints.
+   */
+  getItems: (page = 0, size = 20) =>
+    apiClient.get<ApiResponse<Page<UspsLabelQueueItem>>>(
+      `/admin/usps-direct/queue/items?page=${page}&size=${size}`,
+    ),
+
+  /**
+   * Cancel a PENDING queue row. Returns 404 if the row is unknown,
+   * 409 if the row already ran (Agent-1's controller decides the
+   * exact response codes; we keep the FE thin).
+   */
+  cancel: (id: number) =>
+    apiClient.delete<ApiResponse<void>>(
+      `/admin/usps-direct/queue/items/${id}`,
+    ),
+}
