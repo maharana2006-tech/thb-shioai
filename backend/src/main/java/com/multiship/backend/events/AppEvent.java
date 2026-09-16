@@ -27,7 +27,7 @@ package com.multiship.backend.events;
  * type-checked publish overloads — a stray {@code publish(Object)}
  * with a random POJO would silently escape the tenant filter.
  */
-public sealed interface AppEvent permits BulkLabelJobEvent, ImportBatchEvent {
+public sealed interface AppEvent permits BulkLabelJobEvent, ImportBatchEvent, VoidFailedEvent {
     String topic();
     String tenant();
     String eventType();
