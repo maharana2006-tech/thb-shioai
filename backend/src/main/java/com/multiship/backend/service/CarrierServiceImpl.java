@@ -178,7 +178,21 @@ public class CarrierServiceImpl implements CarrierService {
     @Override
     @Transactional(readOnly = true)
     public ApiResponse<List<CarrierListResponse>> getAvailableCarriers() {
-        List<CarrierListResponse> carriers = carrierConnectors.stream()
+        // USPS_DIRECT integration — StampsConnector and UspsDirectConnector
+        // both return getCarrierCode()="USPS". Deduplicate by carrier code
+        // and use the same active-provider dispatch as getCarrierConnector
+        // so the operator sees ONE USPS entry (Stamps or Direct depending
+        // on the platform toggle), not two.
+        java.util.Map<String, CarrierConnector> byCode = new java.util.LinkedHashMap<>();
+        for (CarrierConnector c : carrierConnectors) {
+            String code = c.getCarrierCode();
+            if (!StringUtils.hasText(code) || byCode.containsKey(code.toUpperCase())) continue;
+            CarrierConnector picked = "USPS".equalsIgnoreCase(code)
+                    ? getCarrierConnector("USPS")   // dispatch on USPS_PROVIDER
+                    : c;
+            byCode.put(code.toUpperCase(), picked);
+        }
+        List<CarrierListResponse> carriers = byCode.values().stream()
                 .map(this::toCarrierListResponse)
                 .sorted(Comparator.comparing(CarrierListResponse::getCarrierName))
                 .toList();
