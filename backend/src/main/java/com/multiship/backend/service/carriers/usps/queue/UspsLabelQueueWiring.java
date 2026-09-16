@@ -51,6 +51,15 @@ import org.springframework.util.StringUtils;
  * {@code CarrierServiceImpl.resolveUser()} tolerates the missing User
  * row by falling back to the account cascade — the bulk-label path
  * already exercises this pattern.
+ *
+ * <p><b>PR-F2.5 — MPS per-piece dispatch.</b> Queue rows enqueued by
+ * {@link UspsMpsSplitterService} (PR-F2) carry a negative synthetic
+ * shipmentId plus a non-null {@code parentOrderNo} + {@code sequenceNumber}.
+ * Those rows can't route through {@code CarrierService.generateLabel}
+ * (which treats one order as one shipment) so the callback delegates
+ * them to {@link UspsMpsPieceDispatcher#dispatchPiece(UspsLabelQueueItem)}
+ * — one HTTP label call per piece per queue tick. See the dispatcher's
+ * class javadoc for the full flow.
  */
 @Slf4j
 @Configuration
@@ -64,6 +73,14 @@ public class UspsLabelQueueWiring {
 
     private final UspsLabelQueueProcessor processor;
     private final CarrierService carrierService;
+    /**
+     * PR-F2.5 — per-piece MPS dispatch. Injected as a first-class
+     * collaborator (not looked up lazily) so a missing bean fails fast
+     * at context startup rather than at the first MPS queue tick. The
+     * dispatcher itself is a plain {@code @Service} with pure-JPA +
+     * connector dependencies; it has no scheduled tick of its own.
+     */
+    private final UspsMpsPieceDispatcher mpsPieceDispatcher;
 
     /**
      * Register {@link #processQueueItem} as the callback the processor
@@ -93,22 +110,14 @@ public class UspsLabelQueueWiring {
             throw new IllegalArgumentException(
                     "USPS queue item is missing shipmentId — cannot process.");
         }
-        // MPS pieces (PR-F2 enqueue side) carry a negative synthetic
-        // shipmentId + a non-null parentOrderNo. The single-label
-        // pipeline can't route those — per-piece dispatch needs its own
-        // ShipmentRequestDTO built from the parent order's Nth package
-        // slice, calling UspsDirectConnector.createShipment directly.
-        // Fail LOUD so ops sees the gap rather than a silent 404 on the
-        // synthetic id. Follow-up PR-F2.5 wires the per-piece dispatch.
+        // PR-F2.5 — MPS pieces (parentOrderNo != null) route to the
+        // per-piece dispatcher. Each piece = one USPS Direct label call
+        // = one queue tick. Non-MPS rows continue through the single-
+        // label path below (CarrierService.generateLabel) unchanged.
         if (item.getParentOrderNo() != null) {
-            throw new IllegalStateException(
-                    "MPS piece dispatch not yet implemented (queue item " + item.getId()
-                            + ", parent order " + item.getParentOrderNo()
-                            + ", piece " + item.getSequenceNumber() + "). "
-                            + "PR-F2 shipped the enqueue side + progress UI; per-piece runtime "
-                            + "dispatch ships in PR-F2.5. Until then MPS pieces will FAIL in "
-                            + "the queue with this message. Set USPS_PROVIDER=STAMPS_COM to "
-                            + "process MPS orders via Stamps.com's multi-package endpoint.");
+            log.debug("USPS Direct queue: MPS piece dispatch item={} parent={} seq={}",
+                    item.getId(), item.getParentOrderNo(), item.getSequenceNumber());
+            return mpsPieceDispatcher.dispatchPiece(item);
         }
         Long orderNo = item.getShipmentId();
         String idempotencyKey = "usps-queue-" + item.getId();
