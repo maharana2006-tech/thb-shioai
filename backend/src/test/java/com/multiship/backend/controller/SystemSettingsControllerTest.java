@@ -1,7 +1,9 @@
 package com.multiship.backend.controller;
 
 import com.multiship.backend.dto.SystemSettingDTO;
+import com.multiship.backend.dto.UspsProviderReadinessDTO;
 import com.multiship.backend.service.SystemSettingService;
+import com.multiship.backend.service.UspsProviderReadinessService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -38,11 +40,15 @@ import static org.mockito.Mockito.when;
  * in every test. Endpoints assert {@code times(1)} on the exercised
  * service methods + {@code never()} on siblings.
  *
- * <p>Endpoints covered (2):
+ * <p>Endpoints covered:
  * <ul>
  *   <li>GET /api/v1/admin/system-settings           — list registry-known settings</li>
  *   <li>PUT /api/v1/admin/system-settings/{key}     — upsert (404 on unknown key)</li>
  * </ul>
+ *
+ * <p>The USPS_PROVIDER transition guard lives in
+ * {@link UspsProviderTransitionGuardTest} — this test only asserts the
+ * three new registry entries are present at their expected indices.
  *
  * <p>Class-level {@code @PreAuthorize("hasRole('ADMIN')")} is pinned via
  * reflection — the entire family is admin-only.
@@ -50,17 +56,23 @@ import static org.mockito.Mockito.when;
 class SystemSettingsControllerTest {
 
     private SystemSettingService service;
+    private UspsProviderReadinessService uspsReadinessService;
     private SystemSettingsController controller;
 
     private static final String KNOWN_KEY = "openai.api-key";
     private static final String FLAVOR_KEY = "carrier.stamps.api-flavor";
     /** Registry size — grow this in lockstep with SystemSettingsController.KNOWN_SETTINGS. */
-    private static final int REGISTRY_SIZE = 2;
+    private static final int REGISTRY_SIZE = 5;
 
     @BeforeEach
     void setUp() {
         service = mock(SystemSettingService.class);
-        controller = new SystemSettingsController(service);
+        uspsReadinessService = mock(UspsProviderReadinessService.class);
+        // Default: don't fail readiness checks so the OpenAI + flavor tests
+        // don't accidentally trip the USPS guard.
+        when(uspsReadinessService.check()).thenReturn(UspsProviderReadinessDTO.builder()
+                .overallReady(true).build());
+        controller = new SystemSettingsController(service, uspsReadinessService);
     }
 
     // ================ helpers ================
@@ -82,7 +94,7 @@ class SystemSettingsControllerTest {
         assertEquals(HttpStatus.OK, re.getStatusCode());
         assertEquals(REGISTRY_SIZE, re.getBody().size(),
                 "Registry currently exposes " + REGISTRY_SIZE
-                        + " settings (openai.api-key + carrier.stamps.api-flavor).");
+                        + " settings (openai.api-key + carrier.stamps.api-flavor + USPS_PROVIDER + USPS_PLATFORM_CLIENT_ID + USPS_PLATFORM_CLIENT_SECRET).");
         SystemSettingDTO dto = re.getBody().stream()
                 .filter(d -> KNOWN_KEY.equals(d.getKey()))
                 .findFirst().orElseThrow();
@@ -169,7 +181,7 @@ class SystemSettingsControllerTest {
 
     @Test
     void update_flavorChoice_acceptsValidOption() {
-        ResponseEntity<SystemSettingDTO> re = controller.update(
+        ResponseEntity<?> re = controller.update(
                 FLAVOR_KEY, Map.of("value", "SERA"), auth("admin"));
 
         assertEquals(HttpStatus.OK, re.getStatusCode());
@@ -178,7 +190,7 @@ class SystemSettingsControllerTest {
 
     @Test
     void update_flavorChoice_rejectsInvalidOption() {
-        ResponseEntity<SystemSettingDTO> re = controller.update(
+        ResponseEntity<?> re = controller.update(
                 FLAVOR_KEY, Map.of("value", "PIGEON_POST"), auth("admin"));
 
         assertEquals(HttpStatus.BAD_REQUEST, re.getStatusCode(),
@@ -188,7 +200,7 @@ class SystemSettingsControllerTest {
 
     @Test
     void update_flavorChoice_rejectsNullValue() {
-        ResponseEntity<SystemSettingDTO> re = controller.update(
+        ResponseEntity<?> re = controller.update(
                 FLAVOR_KEY, Map.of("other", "field"), auth("admin"));
 
         assertEquals(HttpStatus.BAD_REQUEST, re.getStatusCode(),
@@ -203,13 +215,14 @@ class SystemSettingsControllerTest {
         when(service.maskedPreview(KNOWN_KEY)).thenReturn(Optional.of("****9999"));
         when(service.has(KNOWN_KEY)).thenReturn(true);
 
-        ResponseEntity<SystemSettingDTO> re = controller.update(
+        ResponseEntity<?> re = controller.update(
                 KNOWN_KEY, Map.of("value", "sk-newkey"), auth("admin-user"));
 
         assertEquals(HttpStatus.OK, re.getStatusCode());
-        assertEquals(KNOWN_KEY, re.getBody().getKey());
-        assertTrue(re.getBody().isHasValue());
-        assertEquals("****9999", re.getBody().getMaskedValue());
+        SystemSettingDTO body = (SystemSettingDTO) re.getBody();
+        assertEquals(KNOWN_KEY, body.getKey());
+        assertTrue(body.isHasValue());
+        assertEquals("****9999", body.getMaskedValue());
         // Service called with the actor name from Authentication.
         verify(service, times(1)).setEncrypted(eq(KNOWN_KEY), eq("sk-newkey"), eq("admin-user"));
     }
@@ -219,7 +232,7 @@ class SystemSettingsControllerTest {
         // KNOWN_SETTINGS registry-driven; any unregistered key → 404 BEFORE
         // the service is called (so a caller can't sneak a rogue key past
         // the registry).
-        ResponseEntity<SystemSettingDTO> re = controller.update(
+        ResponseEntity<?> re = controller.update(
                 "bogus.key", Map.of("value", "hax"), auth("admin-user"));
 
         assertEquals(HttpStatus.NOT_FOUND, re.getStatusCode());
@@ -233,7 +246,7 @@ class SystemSettingsControllerTest {
         when(service.maskedPreview(KNOWN_KEY)).thenReturn(Optional.of(""));
         when(service.has(KNOWN_KEY)).thenReturn(false);
 
-        ResponseEntity<SystemSettingDTO> re = controller.update(
+        ResponseEntity<?> re = controller.update(
                 KNOWN_KEY, null, auth("admin-user"));
 
         assertEquals(HttpStatus.OK, re.getStatusCode());
@@ -293,8 +306,10 @@ class SystemSettingsControllerTest {
     @Test
     void constructor_isPureDelegation_noEagerServiceCalls() {
         SystemSettingService fresh = mock(SystemSettingService.class);
-        new SystemSettingsController(fresh);
+        UspsProviderReadinessService freshReadiness = mock(UspsProviderReadinessService.class);
+        new SystemSettingsController(fresh, freshReadiness);
         verifyNoInteractions(fresh);
+        verifyNoInteractions(freshReadiness);
     }
 
     /** Static helper so we can use {@code any(...)} for verify sugar. */
