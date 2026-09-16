@@ -74,6 +74,20 @@ export interface CarrierAccountRef {
    *  even when needsAuthorization=true; consumer falls back to
    *  {@link accountRefService.authorizeStampsSera}. */
   authorizeUrl?: string | null
+  /** USPS Direct — USPS EPS (Enterprise Payment System) account number.
+   *  Nullable; only populated on USPS carrier accounts once the platform
+   *  operator has switched the site-wide {@code USPS_PROVIDER} setting
+   *  toward {@code PROVISIONING_USPS_DIRECT} / {@code USPS_DIRECT}.
+   *  Plaintext identifier — not encrypted. */
+  uspsDirectAccountNumber?: string | null
+  /** USPS Direct — Customer Registration ID. Required by USPS platform
+   *  APIs {@code /labels/v3/label}, {@code /scan-forms/v3}, and
+   *  {@code /payments/v3/payment-authorization}. Nullable until the
+   *  operator provisions the value on the drawer. */
+  uspsDirectCrid?: string | null
+  /** USPS Direct — Mailer ID. Sent as {@code senderInfo.MID} on label
+   *  creation. Nullable until provisioned. */
+  uspsDirectMid?: string | null
 }
 
 export interface CredentialCheck {
@@ -162,6 +176,17 @@ export interface AccountRefUpsertPayload {
   thirdPartyState?: string | null
   thirdPartyPostcode?: string | null
   thirdPartyCountry?: string | null
+  /** USPS Direct — USPS EPS account number. Only meaningful on USPS rows;
+   *  ignored otherwise by the backend. Same null-vs-omit semantics as the
+   *  other optional per-account overrides above. */
+  uspsDirectAccountNumber?: string | null
+  /** USPS Direct — Customer Registration ID. Only meaningful on USPS rows.
+   *  Digits only, 5-15 chars (client-side); backend applies the same
+   *  pattern constraint before persisting. */
+  uspsDirectCrid?: string | null
+  /** USPS Direct — Mailer ID. Only meaningful on USPS rows. Digits only,
+   *  6 or 9 chars. */
+  uspsDirectMid?: string | null
 }
 
 /**
