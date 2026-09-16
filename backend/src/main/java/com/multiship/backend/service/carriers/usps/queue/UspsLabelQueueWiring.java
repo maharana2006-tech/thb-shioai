@@ -93,6 +93,23 @@ public class UspsLabelQueueWiring {
             throw new IllegalArgumentException(
                     "USPS queue item is missing shipmentId — cannot process.");
         }
+        // MPS pieces (PR-F2 enqueue side) carry a negative synthetic
+        // shipmentId + a non-null parentOrderNo. The single-label
+        // pipeline can't route those — per-piece dispatch needs its own
+        // ShipmentRequestDTO built from the parent order's Nth package
+        // slice, calling UspsDirectConnector.createShipment directly.
+        // Fail LOUD so ops sees the gap rather than a silent 404 on the
+        // synthetic id. Follow-up PR-F2.5 wires the per-piece dispatch.
+        if (item.getParentOrderNo() != null) {
+            throw new IllegalStateException(
+                    "MPS piece dispatch not yet implemented (queue item " + item.getId()
+                            + ", parent order " + item.getParentOrderNo()
+                            + ", piece " + item.getSequenceNumber() + "). "
+                            + "PR-F2 shipped the enqueue side + progress UI; per-piece runtime "
+                            + "dispatch ships in PR-F2.5. Until then MPS pieces will FAIL in "
+                            + "the queue with this message. Set USPS_PROVIDER=STAMPS_COM to "
+                            + "process MPS orders via Stamps.com's multi-package endpoint.");
+        }
         Long orderNo = item.getShipmentId();
         String idempotencyKey = "usps-queue-" + item.getId();
         UserDetails systemUser = buildSystemUser();

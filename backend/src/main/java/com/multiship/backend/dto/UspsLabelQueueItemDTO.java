@@ -13,6 +13,9 @@ import java.time.LocalDateTime;
  * {@code UspsLabelQueueAdminController.GET /items} so admins can see
  * exactly which USPS label requests are queued / in-flight / completed
  * without hitting the entity through the JPA-serialisation path.
+ *
+ * <p>PR-F2 adds {@link #parentOrderNo} + {@link #sequenceNumber} so the
+ * admin list surfaces which rows are MPS pieces (NULL = single-label).
  */
 @Data
 @Builder
@@ -44,6 +47,20 @@ public class UspsLabelQueueItemDTO {
     /** Populated on DONE - USPS-assigned tracking number. */
     private String trackingNumber;
 
+    /**
+     * PR-F2 - MPS parent order number. {@code null} on single-label
+     * enqueue rows; populated on rows that are pieces of an N-piece
+     * MPS shipment (see {@code UspsMpsSplitterService}). Aggregate
+     * progress lives on {@code /mps-progress/{orderNo}}.
+     */
+    private Long parentOrderNo;
+
+    /**
+     * PR-F2 - 1-based position within the parent MPS order.
+     * {@code null} on non-MPS rows.
+     */
+    private Integer sequenceNumber;
+
     /** Map an entity to its read-shape DTO. */
     public static UspsLabelQueueItemDTO from(UspsLabelQueueItem row) {
         if (row == null) return null;
@@ -59,6 +76,8 @@ public class UspsLabelQueueItemDTO {
                 .retryCount(row.getRetryCount())
                 .lastError(row.getLastError())
                 .trackingNumber(row.getTrackingNumber())
+                .parentOrderNo(row.getParentOrderNo())
+                .sequenceNumber(row.getSequenceNumber())
                 .build();
     }
 }
