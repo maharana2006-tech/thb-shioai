@@ -21,6 +21,7 @@ import {
 } from '../../api/uspsLabelQueueService'
 import { isAbortError } from '../../api/apiClient'
 import BulkLabelQueueBadge from '../orders/BulkLabelQueueBadge'
+import MpsProgressCard from '../orders/MpsProgressCard'
 import { formatQueueDuration } from '../orders/uspsQueueFormat'
 import { notify } from '../../utils/notify'
 import { useFocusTrap } from '../../hooks/useFocusTrap'
@@ -38,6 +39,15 @@ import { useEventStream } from '../../hooks/useEventStream'
  * operator sees rate-limit pressure BEFORE hitting Start. Both are
  * self-hiding when USPS_PROVIDER is not USPS_DIRECT (no queue rows
  * exist → depth === 0 → nothing renders).
+ *
+ * <p>PR-F2 (this PR) — when the submitted batch is a single order,
+ * surface {@link MpsProgressCard} above the aggregate progress block.
+ * "ONE order with 1000 pieces MPS" (docs/usps-direct-integration.md
+ * §MPS) is the scenario where the bulk-label counters ("1/1") give the
+ * operator zero useful signal; the MPS card polls the aggregate-
+ * progress endpoint and shows "400 of 1000 · 40.0%" until the child
+ * pieces settle. The card self-hides via its own 404 branch when the
+ * order isn't an MPS, so the change is a no-op for single-piece orders.
  */
 export interface BulkLabelModalProps {
   onClose: () => void
@@ -289,6 +299,24 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
       : 0
     : 0
 
+  /**
+   * PR-F2 — the MPS-progress card polls the aggregate-progress
+   * endpoint for one parent order. We derive the candidate parent
+   * order number here:
+   *
+   *   - Single-order submissions ({@code orderNumbers.length === 1}):
+   *     that order IS the candidate. If it's an MPS parent the card
+   *     shows aggregate progress; if not, the card's 404 branch
+   *     hides it. This covers the "ONE order with 1000 pieces MPS"
+   *     scenario docs/usps-direct-integration.md calls out.
+   *   - Multi-order submissions: skip. We don't currently get per-
+   *     row parent_order_no back from the submit response, and
+   *     mounting N cards would be noise. A future PR could add a
+   *     per-row parent_order_no on the wire and re-enable this for
+   *     mixed batches.
+   */
+  const candidateMpsParentOrderNo = orderNumbers.length === 1 ? orderNumbers[0] : null
+
   return (
     <div
       role="dialog"
@@ -338,6 +366,19 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
               hour. Silent when USPS_PROVIDER != USPS_DIRECT because
               the queue has no rows in those states. */}
           <UspsQueueWarningBanner />
+
+          {/* PR-F2 — MPS aggregate-progress card. Only mounted after a
+              submit (job != null) AND for single-order batches. The
+              card self-hides on 404, so single-piece orders show
+              nothing here. */}
+          {job && candidateMpsParentOrderNo != null ? (
+            <MpsProgressCard
+              orderNo={candidateMpsParentOrderNo}
+              onDownloadAllLabels={
+                job.downloadable ? () => void downloadZip(job.id) : undefined
+              }
+            />
+          ) : null}
 
           {!job ? (
             <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-[12.5px] text-slate-700">

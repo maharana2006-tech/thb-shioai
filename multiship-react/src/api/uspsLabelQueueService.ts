@@ -19,6 +19,12 @@ import type { ApiResponse } from './orderService'
  * time needs updating here; the safest merge test is to re-run
  * {@code npx vitest run BulkLabelQueueBadge} against the merged
  * branch and confirm the shape assertions still hold.
+ *
+ * <p>PR-F2 (this PR) — adds the MPS-progress endpoint typing +
+ * {@link #getMpsProgress} method, consumed by
+ * {@code useMpsProgress} / {@code MpsProgressCard} so operators
+ * running "ONE order with 1000 pieces" MPS shipments see aggregate
+ * progress without walking child rows.
  */
 
 /**
@@ -75,6 +81,42 @@ export interface Page<T> {
   size: number
 }
 
+/**
+ * PR-F2 — MPS progress payload from
+ * {@code GET /admin/usps-direct/queue/mps-progress/{orderNo}}.
+ *
+ * <p>One "ONE order with N pieces" MPS ships through the USPS Direct
+ * queue as N rows (one per piece); this endpoint aggregates them by
+ * status so the FE can render "400 of 1000 · 40.0%" without walking
+ * the child items itself.
+ *
+ * <p>404 on this endpoint means "no MPS queue items for this order"
+ * (either the order isn't an MPS, or every child row has been GC'd);
+ * the {@code useMpsProgress} hook translates that to a null progress
+ * so the card renders its own empty state.
+ */
+export interface UspsMpsProgress {
+  /** The MPS parent order number this progress belongs to. */
+  parentOrderNo: number
+  /** Total pieces (== child queue row count) across all statuses. */
+  totalPieces: number
+  /**
+   * Per-status counts. Backend omits keys with zero rows, so every
+   * bucket is optional; sum should equal {@link #totalPieces}.
+   */
+  byStatus: Partial<
+    Record<'QUEUED' | 'PROCESSING' | 'DONE' | 'FAILED' | 'CANCELLED', number>
+  >
+  /** 0-100, rounded to one decimal by the backend. */
+  percentComplete: number
+  /** ISO datetime; null until the first PROCESSING row exists. */
+  estimatedCompletionAt: string | null
+  /** ISO datetime; null until the first DONE row exists. */
+  startedAt: string | null
+  /** First 20 completed tracking numbers (backend caps the list). */
+  trackingNumbers: string[]
+}
+
 export const uspsLabelQueueService = {
   /**
    * Platform-wide snapshot; pass a {@code tenantCode} to scope to
@@ -109,5 +151,24 @@ export const uspsLabelQueueService = {
   cancel: (id: number) =>
     apiClient.delete<ApiResponse<void>>(
       `/admin/usps-direct/queue/items/${id}`,
+    ),
+
+  /**
+   * PR-F2 — MPS aggregate progress for one parent order.
+   *
+   * <p>Backend replies:
+   * <ul>
+   *   <li>{@code 200} + {@link UspsMpsProgress} when the order has any
+   *       USPS Direct queue rows (MPS or single-piece).</li>
+   *   <li>{@code 404} when no rows exist for the order — the caller's
+   *       hook maps that to a {@code null} progress so the card
+   *       renders "No MPS progress found" instead of an error toast.</li>
+   * </ul>
+   *
+   * <p>Auth: ADMIN OR USER — operators can watch their own MPS.
+   */
+  getMpsProgress: (orderNo: number) =>
+    apiClient.get<ApiResponse<UspsMpsProgress>>(
+      `/admin/usps-direct/queue/mps-progress/${orderNo}`,
     ),
 }
