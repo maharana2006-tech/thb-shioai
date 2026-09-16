@@ -415,9 +415,11 @@ public class OrderImportController {
     }
 
     @Operation(summary = "Live label-generation progress for a batch",
-            description = "Returns { done, total, running } while a generate/retry is in flight, so the "
-                    + "UI can show a real X-of-N progress bar. Cheap to poll (in-memory, no DB round-trip); "
-                    + "running=false with done=total=0 means nothing is generating for this batch.")
+            description = "Returns { done, total, running, queued } while a generate/retry is in flight, so the "
+                    + "UI can show a real X-of-N progress bar plus a separate \"waiting for USPS\" count. "
+                    + "PR-G2: \"queued\" counts rows this run pushed onto the USPS_DIRECT persistent queue "
+                    + "(they haven't been labelled yet — the 55/hr queue is still draining). Cheap to poll "
+                    + "(in-memory, no DB round-trip); running=false with done=total=0 means nothing is generating.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @GetMapping("/history/{id}/generate/progress")
     public ResponseEntity<ApiResponse<OrderImportService.GenProgressView>> generationProgress(
