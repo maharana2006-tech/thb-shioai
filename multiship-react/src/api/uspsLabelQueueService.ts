@@ -6,25 +6,25 @@ import type { ApiResponse } from './orderService'
  * label queue (Agent-1's admin controller lives at
  * {@code /admin/usps-direct/queue/*}).
  *
- * <p>Two callers today:
+ * <p>Callers today:
  * <ul>
  *   <li>{@link BulkLabelQueueBadge} — polls {@link #getMetrics} every
  *       30s while mounted; used to show "12 in USPS queue · est. 45m"
  *       inside the bulk-label modal.</li>
- *   <li>Future admin dashboard — {@link #getItems} +
- *       {@link #cancel} for operator triage. Not wired in this PR.</li>
+ *   <li>PR-F2 — {@link #getMpsProgress} feeds {@code useMpsProgress} +
+ *       {@code MpsProgressCard} for "ONE order with 1000 pieces" MPS
+ *       aggregate progress without walking child rows.</li>
+ *   <li>PR-F4 (this PR) — {@link #getDashboard} + the three per-panel
+ *       endpoints back the admin dashboard page at
+ *       {@code /settings/usps-direct/dashboard}. Composite endpoint is
+ *       what the page uses on every tick; per-panel endpoints exist so
+ *       future partial-refresh widgets can reuse the typed client.</li>
  * </ul>
  *
  * <p>Types mirror Agent-1's DTOs. Any field Agent-1 renames at merge
  * time needs updating here; the safest merge test is to re-run
- * {@code npx vitest run BulkLabelQueueBadge} against the merged
- * branch and confirm the shape assertions still hold.
- *
- * <p>PR-F2 (this PR) — adds the MPS-progress endpoint typing +
- * {@link #getMpsProgress} method, consumed by
- * {@code useMpsProgress} / {@code MpsProgressCard} so operators
- * running "ONE order with 1000 pieces" MPS shipments see aggregate
- * progress without walking child rows.
+ * {@code npx vitest run BulkLabelQueueBadge UspsDirectDashboardPage}
+ * against the merged branch and confirm the shape assertions still hold.
  */
 
 /**
@@ -34,6 +34,12 @@ import type { ApiResponse } from './orderService'
  * 60/hr platform limit and applies a 55/hr safety margin) — the FE
  * surfaces the number verbatim in the warning banner so operators
  * don't guess.
+ *
+ * <p>PR-F4 adds an optional {@code perTenantDepth} map so the
+ * dashboard's queue panel can rank tenants by depth. Backend leaves the
+ * field unset on the tenant-scoped view; on the platform-wide view it
+ * populates it with {@code tenantCode → depth}. The FE guards against
+ * both missing map and empty map.
  */
 export interface UspsLabelQueueMetrics {
   /** PENDING queue rows (waiting to be picked up). */
@@ -49,6 +55,10 @@ export interface UspsLabelQueueMetrics {
   totalPerHourCap?: number | null
   /** Tenant scope, or {@code null} for the platform-wide view. */
   tenantCode?: string | null
+  /** PR-F4 — per-tenant PENDING depth on the platform-wide view.
+   *  Absent (undefined) or empty on tenant-scoped metrics + on very
+   *  early boots before the backend has any tenant activity. */
+  perTenantDepth?: Record<string, number> | null
 }
 
 /**
@@ -117,6 +127,95 @@ export interface UspsMpsProgress {
   trackingNumbers: string[]
 }
 
+/**
+ * PR-F4 Agent-2 — USPS quota (55/hr token-bucket) headroom snapshot.
+ *
+ * <p>{@code hourlyCap} is authoritative (backend applies USPS's 55/hr
+ * safety margin over their 60/hr platform limit). The FE surfaces the
+ * number verbatim so the cap doesn't drift between BE and FE.
+ *
+ * <p>{@code utilizationPercent} is precomputed on the backend so the
+ * FE can't miscalculate under partial-token accounting;
+ * {@code nextReplenishInSeconds} is a client-side hint for the
+ * countdown display (the FE decrements locally between fetches so the
+ * countdown stays smooth).
+ */
+export interface UspsQuotaHeadroom {
+  /** Platform-wide hourly cap (55 by default). */
+  hourlyCap: number
+  /** Tokens available right now (0..hourlyCap). */
+  remainingTokens: number
+  /** 0-100 utilization percentage (precomputed). */
+  utilizationPercent: number
+  /** ISO datetime of the last token replenish tick. */
+  lastReplenishAt: string
+  /** Seconds until the next replenish tick (backend snapshot). */
+  nextReplenishInSeconds: number
+}
+
+/**
+ * PR-F4 Agent-2 — one hour-bucket in the retry/failure history.
+ * {@code hourStart} is the ISO datetime marking the start of that hour;
+ * buckets are pre-sorted oldest-first by the backend so the FE draws
+ * left-to-right chronologically.
+ */
+export interface UspsRetryBucketEntry {
+  hourStart: string
+  attempts: number
+  retries: number
+  failures: number
+}
+
+/**
+ * PR-F4 Agent-2 — full retry/failure history payload.
+ * {@code hoursLookback} echoes the request so the FE can render the
+ * axis label without keeping the original query.
+ */
+export interface UspsRetryBuckets {
+  hoursLookback: number
+  buckets: UspsRetryBucketEntry[]
+}
+
+/**
+ * PR-F4 Agent-2 — void-shipment reconciliation rollup for the last N
+ * days.
+ *
+ * <p>A voided shipment progresses:
+ * {@code notYetReconciled} → {@code reconciledApproved} (USPS credited
+ * the refund) OR {@code reconciledDenied} (USPS refused, usually
+ * because the label was already scanned).
+ *
+ * <p>{@code pendingRefundValue} is the sum of expected refund amounts
+ * still in flight (voided shipments not yet reconciled by USPS).
+ */
+export interface UspsReconciliationRollup {
+  lookbackDays: number
+  voidedShipmentsInWindow: number
+  reconciledApproved: number
+  reconciledDenied: number
+  notYetReconciled: number
+  /** ISO datetime of the most recent reconciliation run, or null if
+   *  the reconciler hasn't run yet. */
+  lastReconciliationAt: string | null
+  pendingRefundValue: number
+  /** ISO 4217 currency code (typically USD). */
+  currency: string
+}
+
+/**
+ * PR-F4 Agent-2 — composite dashboard payload. All four panel DTOs in
+ * one envelope so the dashboard page fires exactly one request per
+ * refresh tick.
+ */
+export interface UspsDashboardMetrics {
+  /** ISO datetime when this snapshot was generated on the backend. */
+  generatedAt: string
+  queue: UspsLabelQueueMetrics
+  quota: UspsQuotaHeadroom
+  retries: UspsRetryBuckets
+  reconciliation: UspsReconciliationRollup
+}
+
 export const uspsLabelQueueService = {
   /**
    * Platform-wide snapshot; pass a {@code tenantCode} to scope to
@@ -171,4 +270,64 @@ export const uspsLabelQueueService = {
     apiClient.get<ApiResponse<UspsMpsProgress>>(
       `/admin/usps-direct/queue/mps-progress/${orderNo}`,
     ),
+
+  /**
+   * PR-F4 Agent-2 — composite admin dashboard snapshot bundling all
+   * four panels (queue depth, quota headroom, retry buckets, void
+   * reconciliation) in one round-trip so the dashboard page renders
+   * atomically instead of showing four independent skeletons.
+   *
+   * <p>Endpoint: {@code GET /admin/usps-direct/dashboard}. ADMIN only.
+   *
+   * <p>The individual endpoints below are still exposed for future
+   * partial-refresh widgets (e.g. a "just refresh quota" button); the
+   * dashboard page itself calls this composite on mount + on interval.
+   */
+  getDashboard: (opts: { lookbackHours?: number; lookbackDays?: number } = {}) => {
+    const params = new URLSearchParams()
+    if (opts.lookbackHours != null) {
+      params.set('lookbackHours', String(opts.lookbackHours))
+    }
+    if (opts.lookbackDays != null) {
+      params.set('lookbackDays', String(opts.lookbackDays))
+    }
+    const qs = params.toString()
+    return apiClient.get<ApiResponse<UspsDashboardMetrics>>(
+      `/admin/usps-direct/dashboard${qs ? `?${qs}` : ''}`,
+    )
+  },
+
+  /**
+   * PR-F4 Agent-2 — quota headroom only (55/hr USPS token-bucket).
+   * Cheap; not called by the dashboard directly, kept for a future
+   * lightweight widget or health-check probe.
+   */
+  getQuotaHeadroom: () =>
+    apiClient.get<ApiResponse<UspsQuotaHeadroom>>(
+      `/admin/usps-direct/dashboard/quota-headroom`,
+    ),
+
+  /**
+   * PR-F4 Agent-2 — per-hour retry / failure buckets. Backend defaults
+   * to a 24h lookback; expose the param so a future control can widen
+   * or narrow the chart.
+   */
+  getRetryBuckets: (hoursLookback?: number) => {
+    const qs = hoursLookback != null ? `?hoursLookback=${hoursLookback}` : ''
+    return apiClient.get<ApiResponse<UspsRetryBuckets>>(
+      `/admin/usps-direct/dashboard/retry-buckets${qs}`,
+    )
+  },
+
+  /**
+   * PR-F4 Agent-2 — void-shipment reconciliation rollup for the last
+   * N days (defaults to 30 on the backend). Standalone endpoint kept
+   * so a future "reconciliation-only" screen can reuse it.
+   */
+  getReconciliationRollup: (lookbackDays?: number) => {
+    const qs = lookbackDays != null ? `?lookbackDays=${lookbackDays}` : ''
+    return apiClient.get<ApiResponse<UspsReconciliationRollup>>(
+      `/admin/usps-direct/dashboard/reconciliation-rollup${qs}`,
+    )
+  },
 }
