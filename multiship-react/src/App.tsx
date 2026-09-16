@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import AppRoutes from './routes/AppRoutes'
 import NotifyHost from './components/workspace/NotifyHost'
 import { bootstrapSessionFromCookie } from './hooks/useAppSession'
+import { useVoidFailedToast } from './hooks/useVoidFailedToast'
 
 export default function App() {
   // Sprint 50 PR Q2 — under cookie-mode auth the JWT is httpOnly so
@@ -13,6 +14,14 @@ export default function App() {
   useEffect(() => {
     void bootstrapSessionFromCookie()
   }, [])
+
+  // PR-D follow-up — subscribe to the void-failed SSE topic globally
+  // so an operator sees the toast on ANY page the instant the USPS
+  // reconciliation flips a void from VOIDED to VOID_FAILED (label
+  // scanned in transit, USPS refused the refund). The hook itself
+  // is inert for TENANT users and gated on the SSE endpoint being
+  // available (falls back silently when Redis isn't configured).
+  useVoidFailedToast()
 
   return (
     <>

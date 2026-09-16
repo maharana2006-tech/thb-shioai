@@ -2,7 +2,11 @@ package com.multiship.backend.service.carriers.usps;
 
 import com.multiship.backend.dto.UspsReconciliationRollupDTO;
 import com.multiship.backend.dto.UspsVoidReconciliationSummaryDTO;
+import com.multiship.backend.events.AppEventBus;
+import com.multiship.backend.events.VoidFailedEvent;
+import com.multiship.backend.model.Order;
 import com.multiship.backend.model.OrderTracking;
+import com.multiship.backend.repository.OrderRepository;
 import com.multiship.backend.repository.OrderTrackingRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
@@ -10,6 +14,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -19,6 +24,7 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -51,7 +57,11 @@ import java.util.Optional;
  * normalized during parsing so a report with lower-case or mixed-case
  * headers still reconciles. Rows with additional trailing columns are
  * ignored — USPS occasionally adds diagnostic fields between annual
- * releases and we don't want to fail-closed on those.
+ * releases and we don't want to fail-closed on those. When USPS
+ * publishes a free-text reason column ({@code RefundReason} — added
+ * ad-hoc in 2024's mid-year update, absent on older reports) the
+ * DENIED-branch event carries it verbatim; on reports without the
+ * column the {@code uspsReason} field on the event is null.
  *
  * <p>Per-row transitions (assumes the local status is currently
  * {@code VOIDED}):
@@ -61,8 +71,10 @@ import java.util.Optional;
  *       {@code status} stays {@code VOIDED}. Happy path.</li>
  *   <li>{@code DENIED} → flip {@code status = VOID_FAILED},
  *       mark {@code void_reconciliation_status = RECONCILED_DENIED};
- *       WARN log so ops see the toast candidate (event bus wiring is a
- *       follow-up; see the FE non-goal in PR-D scope).</li>
+ *       WARN log stays as offline-ops fallback and a
+ *       {@link VoidFailedEvent} is published on the shared event bus
+ *       for the real-time operator toast (subscribed by the FE
+ *       {@code useVoidFailedToast} hook via the SSE endpoint).</li>
  *   <li>{@code PENDING} → leave everything untouched; the row will be
  *       retried against the next report.</li>
  * </ul>
@@ -74,7 +86,10 @@ import java.util.Optional;
  * populated. This service reinforces the guarantee by SHORT-CIRCUITING
  * rows whose {@code voidReconciliationStatus} is already terminal
  * (APPROVED / DENIED) even if the caller passes a CSV that includes
- * them; the row is counted as {@code skipped} with a note.
+ * them; the row is counted as {@code skipped} with a note. A
+ * consequence: {@link VoidFailedEvent}s are ONLY published on the
+ * transition (first time a DENIED row is processed) — a re-upload of
+ * the same report never re-fires the toast.
  *
  * <p>PR-F4 adds {@link #getRollup(Duration)} - aggregate counts +
  * pending refund value for the admin dashboard.
@@ -84,6 +99,30 @@ import java.util.Optional;
 public class UspsDirectVoidReconciliationService {
 
     private final OrderTrackingRepository orderTrackingRepository;
+
+    /**
+     * Optional — used to resolve a per-DENIED-row tenant scope
+     * ({@code tenant_id} with a {@code cust_no} fallback, mirroring
+     * the app-wide {@code COALESCE(tenant_id, cust_no)} convention)
+     * for the emitted {@link VoidFailedEvent}. Nullable so the pure-
+     * Mockito unit tests can construct the service without stubbing
+     * a whole repository. Null orderNo / missing Order row / null
+     * repo all funnel to a null tenant on the event — the SSE
+     * controller treats null-tenant events as everyone-visible, which
+     * is the safe default when the operator toast would otherwise
+     * silently disappear.
+     */
+    private final OrderRepository orderRepository;
+
+    /**
+     * Optional — used to publish {@link VoidFailedEvent}s on the
+     * DENIED branch. Nullable for the same reason as
+     * {@link #orderRepository}: the older single-arg constructor
+     * stays legal for tests that predate this follow-up, and a null
+     * bus short-circuits the publish (the WARN log remains as the
+     * offline-ops fallback).
+     */
+    private final AppEventBus appEventBus;
 
     /**
      * EntityManager for the PR-F4 rollup query. Package-visible +
@@ -98,14 +137,29 @@ public class UspsDirectVoidReconciliationService {
     private EntityManager entityManager;
 
     /**
-     * Default constructor - Spring picks this and populates
-     * {@link #entityManager} via {@link PersistenceContext}. Existing
-     * unit tests kept working because their {@code new
-     * UspsDirectVoidReconciliationService(repo)} call still resolves.
+     * Spring-preferred constructor - wires the OrderRepository and
+     * AppEventBus needed for the DENIED-branch VoidFailedEvent
+     * publish. Both are optional so the legacy no-event unit tests
+     * ({@link #UspsDirectVoidReconciliationService(OrderTrackingRepository)})
+     * still construct cleanly.
      */
     @Autowired
-    public UspsDirectVoidReconciliationService(OrderTrackingRepository orderTrackingRepository) {
+    public UspsDirectVoidReconciliationService(OrderTrackingRepository orderTrackingRepository,
+                                                OrderRepository orderRepository,
+                                                AppEventBus appEventBus) {
         this.orderTrackingRepository = orderTrackingRepository;
+        this.orderRepository = orderRepository;
+        this.appEventBus = appEventBus;
+    }
+
+    /**
+     * Legacy constructor preserved for pure-Mockito tests that were
+     * written before the event-publish follow-up landed. A service
+     * built through this path silently no-ops the event publish
+     * (bus == null) — mirrors the "Redis not configured" NO-OP mode.
+     */
+    public UspsDirectVoidReconciliationService(OrderTrackingRepository orderTrackingRepository) {
+        this(orderTrackingRepository, null, null);
     }
 
     /**
@@ -121,6 +175,10 @@ public class UspsDirectVoidReconciliationService {
      *  report drops the optional columns. */
     private static final List<String> REQUIRED_HEADERS = List.of(
             "TrackingNumber", "RefundStatus");
+
+    /** Ad-hoc reason column USPS added in 2024. Absent on older
+     *  reports — treated as null. */
+    private static final String REASON_HEADER = "RefundReason";
 
     // Reconciliation-status enum values, exposed as public constants so
     // tests and controllers can reference them without magic strings.
@@ -267,11 +325,22 @@ public class UspsDirectVoidReconciliationService {
                 tracking.setVoidReconciliationStatus(RECONCILED_DENIED);
                 tracking.setVoidReconciliationCheckedAt(now);
                 orderTrackingRepository.save(tracking);
-                // WARN log so operators can spot flip candidates in the
-                // logs page while the FE toast wiring lands in a
-                // follow-up PR (see PR-D non-goals).
-                log.warn("USPS void reconciliation: tracking {} was flipped to VOID_FAILED — USPS refused the refund (likely scanned in transit). Operator toast required.",
-                        trackingNumber);
+
+                // Free-text reason from the (optional) RefundReason
+                // column — passed through to the operator toast so
+                // "label already scanned" vs "account closed" vs
+                // "past 30-day window" can be triaged at a glance.
+                String uspsReason = readCol(cols, headerIndex, REASON_HEADER);
+
+                // WARN log stays as the offline-ops fallback: even
+                // when the event bus is down / Redis is off, the
+                // reconciliation history is discoverable in the log
+                // file — a real-time push is a UX upgrade, not the
+                // sole channel.
+                log.warn("USPS VOID_FAILED: order {} tracking {} — USPS denied refund. Reason: {}",
+                        Objects.toString(tracking.getOrderNo(), "?"), trackingNumber, orEmpty(uspsReason));
+
+                publishVoidFailedEvent(tracking, uspsReason);
                 return Outcome.DENIED;
             }
             case "PENDING" -> {
@@ -288,6 +357,76 @@ public class UspsDirectVoidReconciliationService {
                 return Outcome.PENDING;
             }
         }
+    }
+
+    /**
+     * Fire-and-forget publish of the operator toast event. Wrapped in
+     * a broad catch so a Redis outage / serialization glitch / null
+     * bus never breaks the reconciliation loop — the reconciliation
+     * writes and the WARN log are the source of truth; the event
+     * publish is UX polish that must fail silently.
+     *
+     * <p>Publishing happens INSIDE the {@link Transactional}
+     * reconciliation method so the event surfaces as part of the same
+     * unit of work as the status flip; {@link AppEventBus} itself is
+     * not transaction-aware (it writes straight to the Redis Stream)
+     * so the toast lands the instant the flip completes rather than
+     * waiting for commit. Given the flip and event carry the same
+     * tracking number, a subsequent transaction rollback would leave
+     * the operator with a stale toast — the reconciliation service
+     * only rolls back on IllegalArgumentException from a malformed
+     * header (before any DENIED row is processed) or IOException on
+     * the stream (rare), so the leak window is narrow enough not to
+     * warrant a full transaction-synchronised publisher.
+     */
+    private void publishVoidFailedEvent(OrderTracking tracking, String uspsReason) {
+        if (appEventBus == null) {
+            log.debug("VoidFailedEvent publish skipped — event bus not wired (unit-test or NO-OP mode).");
+            return;
+        }
+        try {
+            Long orderNo = tracking.getOrderNo() == null ? null : tracking.getOrderNo().longValue();
+            String tenant = resolveTenantForOrder(tracking.getOrderNo());
+            VoidFailedEvent event = new VoidFailedEvent(
+                    VoidFailedEvent.EVENT_TYPE,
+                    tenant,
+                    orderNo,
+                    tracking.getTrackingNumber(),
+                    uspsReason,
+                    LocalDateTime.now(ZoneOffset.UTC));
+            appEventBus.publish(event);
+        } catch (Exception ex) {
+            // Publishing must never break the caller. The WARN log
+            // above is the durable record; the toast is polish.
+            log.debug("VoidFailedEvent publish for tracking {} threw: {}",
+                    tracking.getTrackingNumber(), ex.getMessage());
+        }
+    }
+
+    /**
+     * Resolve a tenant scope for the VoidFailedEvent by peeking at
+     * the order. Returns null when the order isn't found or the
+     * repository wasn't wired (legacy test constructor). Null tenant
+     * on the event → the SSE controller treats it as everyone-visible;
+     * we prefer that failure mode to silently suppressing operator
+     * toasts.
+     */
+    private String resolveTenantForOrder(Integer orderNo) {
+        if (orderNo == null || orderRepository == null) return null;
+        try {
+            Optional<Order> order = orderRepository.findByOrderNo(orderNo);
+            return order.map(o -> StringUtils.hasText(o.getTenantId())
+                            ? o.getTenantId()
+                            : o.getCustNo())
+                    .orElse(null);
+        } catch (Exception ex) {
+            log.debug("resolveTenantForOrder({}) threw: {}", orderNo, ex.getMessage());
+            return null;
+        }
+    }
+
+    private static String orEmpty(String s) {
+        return s == null ? "" : s;
     }
 
     // ================================================================

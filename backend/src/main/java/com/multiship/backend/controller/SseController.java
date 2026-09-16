@@ -70,8 +70,13 @@ public class SseController {
     private static final long SSE_TIMEOUT_MS = 30L * 60_000L;
 
     /** Topics we recognise. Anything else in the query string is
-     *  ignored (not an error — future compatibility). */
-    private static final Set<String> KNOWN_TOPICS = Set.of("bulk-labels", "import-batches");
+     *  ignored (not an error — future compatibility).
+     *
+     *  <p>{@code "void-failed"} — USPS_DIRECT reconciliation flipped
+     *  an optimistic void to VOID_FAILED after USPS refused the
+     *  refund; the FE's {@code useVoidFailedToast} hook subscribes
+     *  to this topic to render an operator toast in real time. */
+    private static final Set<String> KNOWN_TOPICS = Set.of("bulk-labels", "import-batches", "void-failed");
 
     /** Auth check + tenant lookup, injected via constructor. */
     private final TenantScopeEnforcer tenantScope;
