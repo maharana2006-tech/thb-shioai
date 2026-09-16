@@ -1,0 +1,14 @@
+{
+  "trackingNumber": "9400111899223197428490",
+  "mailClass": "USPS_GROUND_ADVANTAGE",
+  "eventType": "DELIVERED",
+  "eventTimestamp": "2026-09-15T16:35:00Z",
+  "eventLocation": {
+    "city": "LOUISVILLE",
+    "state": "KY",
+    "zip": "40202",
+    "country": "US"
+  },
+  "eventDescription": "Delivered, In/At Mailbox",
+  "MID": "901234567"
+}

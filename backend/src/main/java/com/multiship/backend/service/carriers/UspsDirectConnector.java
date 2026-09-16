@@ -18,10 +18,19 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -50,9 +59,18 @@ import java.util.concurrent.ThreadLocalRandom;
  *   <li>Label create via {@code POST /labels/v3/label} with dual-token
  *       headers.</li>
  * </ul>
- * Tracking, void, close-out, international labels, address validation and
- * pickup all inherit the {@code CarrierConnector} default NOT_SUPPORTED —
- * they land in follow-up PRs (B-E) on this same integration track.
+ *
+ * <p>PR-B adds tracking + webhook parse/verify:
+ * <ul>
+ *   <li>Tracking via {@code GET /tracking/v3.2/tracking/{trackingNumber}?expand=DETAIL}
+ *       (v3.2 — v3.0 retires 2027-07-31).</li>
+ *   <li>Webhook parse/verify for USPS Subscriptions-Tracking v3.2 push
+ *       notifications. Signature is {@code X-HMAC} =
+ *       {@code base64(HMAC-SHA256(timestamp + rawBody, secret))}.</li>
+ * </ul>
+ * Void, close-out, international labels, address validation and pickup
+ * all inherit the {@code CarrierConnector} default NOT_SUPPORTED — they
+ * land in follow-up PRs (C-E) on this same integration track.
  *
  * <p>Boundary guards mirror the F7 / FDX-I2 shape established by every
  * other connector: blank OAuth token or {@code -local-} placeholder →
@@ -99,6 +117,15 @@ public class UspsDirectConnector implements CarrierConnector {
      *  differentiates their quotas. */
     static final long RETRY_BASE_MILLIS = 2_000L;
     static final int MAX_RATE_LIMIT_RETRIES = 3;
+
+    /** USPS webhook signature header (PR-B). USPS Subscriptions-Tracking
+     *  v3.2 sends {@code X-HMAC} = base64(HMAC-SHA256(timestamp + rawBody, secret)). */
+    static final String WEBHOOK_HEADER_HMAC = "X-HMAC";
+    /** Timestamp header USPS pairs with X-HMAC. Rebroadcasted from USPS's
+     *  own push envelope; if absent we fall back to the payload's
+     *  {@code eventTimestamp} field (docs are inconsistent — real fixtures
+     *  in {@code src/test/resources/usps/v3/webhooks/} verify both paths). */
+    static final String WEBHOOK_HEADER_TIMESTAMP = "X-USPS-Timestamp";
 
     /** Primary constructor — Spring picks this up. Explicit rather than
      *  Lombok so tests can build without SystemSettingService. */
@@ -559,6 +586,18 @@ public class UspsDirectConnector implements CarrierConnector {
         }
     }
 
+    /** Overload used by non-shipment surfaces (tracking) that don't carry an
+     *  order to name in the guard message. Same actionable text — mirrors
+     *  the shipment-path guard so operators see one consistent phrasing. */
+    private static void assertRealTokenForTracking(String accessToken) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            throw new IllegalStateException(
+                    "USPS Direct is not configured platform-wide — no OAuth token available. "
+                            + "Set USPS_PLATFORM_CLIENT_ID / USPS_PLATFORM_CLIENT_SECRET in "
+                            + "/settings/system.");
+        }
+    }
+
     private static void assertRecipientCountry(ShipmentRequestDTO request, String context) {
         if (!StringUtils.hasText(request.getRecipientCountryCode())) {
             throw new IllegalArgumentException(
@@ -712,15 +751,478 @@ public class UspsDirectConnector implements CarrierConnector {
     }
 
     // ================================================================
-    // Tracking — URL-only stub. PR-D will wire the live v3 endpoint.
+    // Tracking (PR-B) — GET /tracking/v3.2/tracking/{trackingNumber}
     // ================================================================
 
+    /**
+     * URL-only fallback for pre-PR-B callers on the 1-arg overload. Kept
+     * as a soft "not found" URL result so any surface that hasn't been
+     * upgraded to the 3-arg (authenticated) overload still gets a
+     * clickable USPS tools link.
+     */
     @Override
     public TrackingResult trackShipment(String trackingNumber) {
         String url = StringUtils.hasText(trackingNumber)
                 ? "https://tools.usps.com/go/TrackConfirmAction?tLabels=" + trackingNumber
                 : null;
         return new TrackingResult(trackingNumber, "UNKNOWN", url, null, null, false, null);
+    }
+
+    /**
+     * Real USPS Direct v3.2 tracking call — {@code GET
+     * /tracking/v3.2/tracking/{trackingNumber}?expand=DETAIL} with a
+     * platform Bearer.
+     *
+     * <p>Guards mirror the rate-shop/label path: blank tracking number →
+     * {@link IllegalArgumentException}; blank / {@code -local-} token →
+     * {@link IllegalStateException} pointing at {@code /settings/system}.
+     *
+     * <p>404 responses (tracking number not yet visible to USPS — common
+     * in the ~15min after a label creates before the first scan) are
+     * handled as a SOFT "not found" TrackingResult with status
+     * {@code NOT_FOUND} + the URL-only tracking link — same shape a fresh
+     * label would produce from the 1-arg stub, so downstream doesn't
+     * need to distinguish the two paths.
+     *
+     * <p>429 responses retry with the shared exponential-backoff-with-
+     * jitter sequence used by rate-shop + label (2s / 4s / 8s).
+     */
+    @Override
+    public TrackingResult trackShipment(String trackingNumber, String accessToken, String environment) {
+        if (!StringUtils.hasText(trackingNumber)) {
+            throw new IllegalArgumentException(
+                    "USPS Direct tracking requires a tracking number.");
+        }
+        assertRealTokenForTracking(accessToken);
+
+        String trackingUrl = "https://tools.usps.com/go/TrackConfirmAction?tLabels=" + trackingNumber;
+        String url = UspsOAuthTokenCache.baseUrl(environment)
+                + "/tracking/v3.2/tracking/" + trackingNumber + "?expand=DETAIL";
+
+        int attempt = 0;
+        while (true) {
+            try {
+                String response = executeTrackingGet(url, accessToken);
+                if (response == null) {
+                    return notFoundTrackingResult(trackingNumber, trackingUrl);
+                }
+                return parseTrackingResponse(response, trackingNumber, trackingUrl);
+            } catch (RestClientResponseException ex) {
+                int status = ex.getStatusCode().value();
+                if (status == 429 && attempt < MAX_RATE_LIMIT_RETRIES) {
+                    long delay = backoffDelayMillis(attempt);
+                    log.warn("USPS Direct tracking 429 (attempt {}/{}); backing off {}ms.",
+                            attempt + 1, MAX_RATE_LIMIT_RETRIES, delay);
+                    sleepBeforeTrackingRetry(delay);
+                    attempt++;
+                    continue;
+                }
+                if (status == 404) {
+                    // USPS returns 404 for tracking numbers it hasn't seen
+                    // yet — brand-new labels take up to 15 min to appear in
+                    // the tracking system. Treat as soft "not found" so
+                    // the caller can retry later without an exception.
+                    log.debug("USPS Direct tracking 404 for {} — likely not yet visible in USPS.",
+                            trackingNumber);
+                    return notFoundTrackingResult(trackingNumber, trackingUrl);
+                }
+                log.warn("USPS Direct tracking rejected (HTTP {}): {}",
+                        status, safeBody(ex.getResponseBodyAsString()));
+                // Any other 4xx/5xx — return the URL-only stub rather
+                // than throw, matching FedEx/UPS/Stamps convention on
+                // tracking failures.
+                return trackShipment(trackingNumber);
+            } catch (Exception ex) {
+                log.warn("USPS Direct tracking failed for {}: {}", trackingNumber, ex.getMessage());
+                return trackShipment(trackingNumber);
+            }
+        }
+    }
+
+    /**
+     * Isolated seam over the actual USPS HTTP call so tests can override
+     * without a MockWebServer dependency. Default: {@code GET url} with
+     * the Bearer token and {@code Accept: application/json}. Returns the
+     * raw response body; throws {@link RestClientResponseException} for
+     * non-2xx so the caller can inspect the status code.
+     *
+     * <p>Package-visible / non-final; the tracking-test subclasses this
+     * to return canned bodies or throw synthetic HTTP-status exceptions.
+     */
+    String executeTrackingGet(String url, String accessToken) {
+        RestClient client = HttpClients.newBuilder().baseUrl(url).build();
+        return client.get()
+                .accept(MediaType.APPLICATION_JSON)
+                .header("Authorization", "Bearer " + accessToken)
+                .retrieve()
+                .body(String.class);
+    }
+
+    /**
+     * Sleep between tracking retry attempts. Package-visible / non-final
+     * so tests can override to skip the real 2/4/8s delays — production
+     * behavior unchanged (delegates to the shared quiet-sleep). Bounded
+     * separately from the rate-shop / label loop so a future test can
+     * tune retries per surface without affecting production sequencing.
+     */
+    void sleepBeforeTrackingRetry(long millis) {
+        sleepQuietly(millis);
+    }
+
+    private static TrackingResult notFoundTrackingResult(String trackingNumber, String trackingUrl) {
+        return new TrackingResult(trackingNumber, "NOT_FOUND", trackingUrl, null, null, false, null);
+    }
+
+    /**
+     * Parse a USPS v3.2 tracking response into a carrier-neutral
+     * {@link TrackingResult}. Package-visible for the parser tests.
+     *
+     * <p>USPS response fields we care about:
+     * <ul>
+     *   <li>{@code trackingNumber} — the tracker (echoed).</li>
+     *   <li>{@code statusCategory} — one of {@code Pre-Shipment},
+     *       {@code In Transit}, {@code Out for Delivery},
+     *       {@code Delivered}, {@code Alert}, {@code Return to Sender}.</li>
+     *   <li>{@code statusSummary} — human-readable status text.</li>
+     *   <li>{@code expectedDeliveryDate} + {@code expectedDeliveryTime}
+     *       — used for {@code estimatedDelivery}.</li>
+     *   <li>{@code trackingEvents[]} — per-scan detail (only present
+     *       when {@code expand=DETAIL} was requested).</li>
+     * </ul>
+     */
+    TrackingResult parseTrackingResponse(String responseJson, String trackingNumber, String trackingUrl)
+            throws Exception {
+        JsonNode root = objectMapper.readTree(responseJson == null ? "{}" : responseJson);
+        String statusCategory = root.path("statusCategory").asText(null);
+        String statusSummary = root.path("statusSummary").asText(null);
+        String status = mapStatusCategory(statusCategory, statusSummary);
+        boolean delivered = "Delivered".equalsIgnoreCase(statusCategory);
+
+        LocalDateTime estimatedDelivery = joinExpectedDelivery(
+                root.path("expectedDeliveryDate").asText(null),
+                root.path("expectedDeliveryTime").asText(null));
+
+        List<TrackingEvent> events = parseTrackingEvents(root.path("trackingEvents"));
+        String currentLocation = null;
+        // Latest event = last entry in USPS's oldest → newest ordering.
+        // That's the "current location" reported at the top of the timeline.
+        if (!events.isEmpty()) {
+            currentLocation = events.get(events.size() - 1).location();
+        }
+
+        return new TrackingResult(trackingNumber, status, trackingUrl, currentLocation,
+                estimatedDelivery, delivered, responseJson, events);
+    }
+
+    /**
+     * Map USPS's human-readable {@code statusCategory} to a canonical
+     * shorter status token that matches what the other connectors emit.
+     * When USPS gives us nothing, fall back to the summary text (or
+     * "UNKNOWN" as a last resort).
+     */
+    static String mapStatusCategory(String statusCategory, String statusSummary) {
+        if (!StringUtils.hasText(statusCategory)) {
+            return StringUtils.hasText(statusSummary) ? statusSummary : "UNKNOWN";
+        }
+        String normalized = statusCategory.trim().toUpperCase(Locale.ROOT);
+        return switch (normalized) {
+            case "PRE-SHIPMENT", "PRE_SHIPMENT" -> "PRE_SHIPMENT";
+            case "IN TRANSIT", "IN_TRANSIT" -> "IN_TRANSIT";
+            case "OUT FOR DELIVERY", "OUT_FOR_DELIVERY" -> "OUT_FOR_DELIVERY";
+            case "DELIVERED" -> "DELIVERED";
+            case "ALERT" -> "ALERT";
+            case "RETURN TO SENDER", "RETURN_TO_SENDER" -> "RETURN_TO_SENDER";
+            default -> statusCategory;
+        };
+    }
+
+    /**
+     * Parse USPS's {@code trackingEvents[]} into carrier-neutral
+     * {@link TrackingEvent}s. USPS lists events oldest → newest natively,
+     * so no reversal needed here — matches SWSIM's convention.
+     * Package-visible so parser tests can assert without HTTP.
+     */
+    List<TrackingEvent> parseTrackingEvents(JsonNode trackingEvents) {
+        if (trackingEvents == null || !trackingEvents.isArray() || trackingEvents.isEmpty()) {
+            return List.of();
+        }
+        List<TrackingEvent> out = new ArrayList<>();
+        for (JsonNode ev : trackingEvents) {
+            LocalDateTime ts = joinEventTimestamp(
+                    ev.path("eventDate").asText(null),
+                    ev.path("eventTime").asText(null));
+            String description = ev.path("eventDescription").asText(
+                    ev.path("eventType").asText(""));
+            String status = ev.path("eventType").asText(null);
+            String location = buildUspsLocation(
+                    ev.path("eventCity").asText(null),
+                    ev.path("eventState").asText(null),
+                    ev.path("eventCountry").asText(null),
+                    ev.path("eventZIP").asText(null));
+            out.add(new TrackingEvent(ts, status, description, location));
+        }
+        return List.copyOf(out);
+    }
+
+    /** Build "City, ST US" style location from USPS event coordinates.
+     *  Nulls / blanks are elided; entirely-blank input returns null so
+     *  the UI can hide the location tag. Package-visible for tests. */
+    static String buildUspsLocation(String city, String state, String country, String zip) {
+        StringBuilder sb = new StringBuilder();
+        if (StringUtils.hasText(city)) sb.append(city.trim());
+        if (StringUtils.hasText(state)) {
+            if (sb.length() > 0) sb.append(", ");
+            sb.append(state.trim());
+        }
+        if (StringUtils.hasText(zip)) {
+            if (sb.length() > 0) sb.append(' ');
+            sb.append(zip.trim());
+        }
+        if (StringUtils.hasText(country)) {
+            if (sb.length() > 0) sb.append(' ');
+            sb.append(country.trim());
+        }
+        return sb.length() == 0 ? null : sb.toString();
+    }
+
+    /**
+     * USPS emits {@code eventDate} = ISO local date, {@code eventTime} =
+     * "HH:mm:ss" (24-hour). Combine into a {@link LocalDateTime}; missing
+     * time defaults to midnight so we don't drop a whole event when USPS
+     * omits the clock (they do for the initial "Shipping Label Created"
+     * scan). Malformed date returns null.
+     * Package-visible for tests.
+     */
+    static LocalDateTime joinEventTimestamp(String date, String time) {
+        if (!StringUtils.hasText(date)) return null;
+        try {
+            LocalDate d = LocalDate.parse(date.trim());
+            if (!StringUtils.hasText(time)) {
+                return d.atStartOfDay();
+            }
+            try {
+                return d.atTime(LocalTime.parse(time.trim()));
+            } catch (DateTimeParseException ignore) {
+                // Garbled time = date at midnight, matches UPS convention.
+                return d.atStartOfDay();
+            }
+        } catch (DateTimeParseException ex) {
+            return null;
+        }
+    }
+
+    /** Combine {@code expectedDeliveryDate} + {@code expectedDeliveryTime}
+     *  into an ETA. USPS may return either or both. Missing date → null;
+     *  missing time defaults to 17:00 (traditional USPS end-of-day). */
+    static LocalDateTime joinExpectedDelivery(String date, String time) {
+        if (!StringUtils.hasText(date)) return null;
+        try {
+            LocalDate d = LocalDate.parse(date.trim());
+            if (!StringUtils.hasText(time)) {
+                return d.atTime(17, 0);
+            }
+            try {
+                return d.atTime(LocalTime.parse(time.trim()));
+            } catch (DateTimeParseException ignore) {
+                return d.atTime(17, 0);
+            }
+        } catch (DateTimeParseException ex) {
+            return null;
+        }
+    }
+
+    // ================================================================
+    // Webhook parse + verify (PR-B)
+    // ================================================================
+
+    /**
+     * Verify a USPS Subscriptions-Tracking v3.2 webhook signature.
+     *
+     * <p>USPS signs each push notification with
+     * {@code X-HMAC = base64(HMAC-SHA256(timestamp + rawBody, secret))}.
+     * The timestamp lives either in the {@code X-USPS-Timestamp} header
+     * (preferred; matches USPS docs) or, as a documented fallback, in
+     * the payload's {@code eventTimestamp} field — real fixtures cover
+     * both forms.
+     *
+     * <p>Returns {@code false} — never throws — when the signature,
+     * secret, header, or raw payload is missing. The
+     * {@link com.multiship.backend.service.WebhookService} then treats
+     * the row as unverified (401 back to USPS + audit trail).
+     */
+    @Override
+    public boolean verifyWebhookSignature(String rawPayload,
+                                           Map<String, String> headers,
+                                           String secret) {
+        if (!StringUtils.hasText(secret)) return false;
+        if (rawPayload == null) return false;
+        String provided = pickWebhookHeader(headers, WEBHOOK_HEADER_HMAC);
+        if (!StringUtils.hasText(provided)) return false;
+
+        String timestamp = pickWebhookHeader(headers, WEBHOOK_HEADER_TIMESTAMP);
+        if (!StringUtils.hasText(timestamp)) {
+            // Fall back to the payload's eventTimestamp — USPS docs are
+            // inconsistent about which surface carries the timestamp, so
+            // we accept either. If neither is present the signature can't
+            // reproduce and we return false rather than skip the timestamp
+            // (skipping would let a replayed payload verify).
+            timestamp = extractPayloadTimestamp(rawPayload);
+            if (!StringUtils.hasText(timestamp)) return false;
+        }
+
+        String expected = hmacSha256Base64(timestamp + rawPayload, secret);
+        if (expected == null) return false;
+        // Constant-time compare per OWASP. MessageDigest.isEqual is the
+        // JDK's constant-time-safe byte-array comparator.
+        return MessageDigest.isEqual(
+                provided.trim().getBytes(StandardCharsets.UTF_8),
+                expected.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * Parse a USPS push-notification payload into a carrier-neutral
+     * {@link TrackingWebhookEvent}. Payload shape (documented + observed):
+     * <pre>
+     * {
+     *   "trackingNumber": "...",
+     *   "mailClass": "USPS_GROUND_ADVANTAGE",
+     *   "eventType": "IN_TRANSIT",
+     *   "eventTimestamp": "2026-09-15T13:45:00Z",
+     *   "eventLocation": {"city": "...", "state": "...", "country": "US"},
+     *   "eventDescription": "Arrived at USPS facility",
+     *   "MID": "..."
+     * }
+     * </pre>
+     *
+     * <p>Missing optional fields → nulls (never throws). Malformed JSON →
+     * WARN log + null so {@code WebhookServiceImpl} skips the delivery
+     * (matches StampsConnector convention).
+     */
+    @Override
+    public TrackingWebhookEvent parseWebhookEvent(String rawPayload,
+                                                   Map<String, String> headers) {
+        try {
+            JsonNode root = objectMapper.readTree(Optional.ofNullable(rawPayload).orElse("{}"));
+            String tracking = root.path("trackingNumber").asText(null);
+            if (!StringUtils.hasText(tracking)) {
+                log.warn("USPS webhook parse: payload missing trackingNumber; skipping.");
+                return null;
+            }
+            String eventType = root.path("eventType").asText(null);
+            String description = root.path("eventDescription").asText(null);
+            LocalDateTime occurred = parseWebhookTimestamp(root.path("eventTimestamp").asText(null));
+
+            JsonNode loc = root.path("eventLocation");
+            String location = null;
+            if (!loc.isMissingNode() && !loc.isNull()) {
+                location = buildUspsLocation(
+                        loc.path("city").asText(null),
+                        loc.path("state").asText(null),
+                        loc.path("country").asText(null),
+                        loc.path("zip").asText(null));
+            }
+
+            boolean delivered = "DELIVERED".equalsIgnoreCase(eventType)
+                    || "DELIVERED".equalsIgnoreCase(description);
+            return new TrackingWebhookEvent(
+                    tracking,
+                    eventType,
+                    eventType,
+                    occurred,
+                    location,
+                    delivered,
+                    description == null ? "" : description);
+        } catch (Exception ex) {
+            // Try to salvage the tracking number for the log hint so ops
+            // can correlate a bad payload with a specific delivery event.
+            String hint = extractTrackingHint(rawPayload);
+            log.warn("USPS webhook parse failed{}: {}",
+                    hint == null ? "" : " (trackingNumber=" + hint + ")",
+                    ex.getMessage());
+            return null;
+        }
+    }
+
+    private static String pickWebhookHeader(Map<String, String> headers, String name) {
+        if (headers == null || name == null) return null;
+        for (Map.Entry<String, String> e : headers.entrySet()) {
+            if (name.equalsIgnoreCase(e.getKey())) return e.getValue();
+        }
+        return null;
+    }
+
+    /**
+     * Fallback for signature verification when USPS didn't send the
+     * timestamp header. Pull the {@code eventTimestamp} directly from
+     * the raw payload without re-parsing all of it — signature verify
+     * must operate on the RAW bytes, so we do a minimal string scan.
+     * Returns null when the field isn't present.
+     */
+    static String extractPayloadTimestamp(String rawPayload) {
+        if (!StringUtils.hasText(rawPayload)) return null;
+        // Grep for "eventTimestamp":"..." — Jackson-safe: rawPayload will
+        // never legitimately contain that key inside a nested string
+        // literal because USPS's Subscriptions envelope is flat.
+        int idx = rawPayload.indexOf("\"eventTimestamp\"");
+        if (idx < 0) return null;
+        int quoteStart = rawPayload.indexOf('"', idx + "\"eventTimestamp\"".length() + 1);
+        if (quoteStart < 0) return null;
+        int quoteEnd = rawPayload.indexOf('"', quoteStart + 1);
+        if (quoteEnd < 0) return null;
+        return rawPayload.substring(quoteStart + 1, quoteEnd);
+    }
+
+    /** Salvage the tracking number for the WARN log hint even when the
+     *  overall parse throws. Best-effort — returns null when we can't
+     *  spot it. Same approach as {@link #extractPayloadTimestamp}. */
+    static String extractTrackingHint(String rawPayload) {
+        if (!StringUtils.hasText(rawPayload)) return null;
+        int idx = rawPayload.indexOf("\"trackingNumber\"");
+        if (idx < 0) return null;
+        int quoteStart = rawPayload.indexOf('"', idx + "\"trackingNumber\"".length() + 1);
+        if (quoteStart < 0) return null;
+        int quoteEnd = rawPayload.indexOf('"', quoteStart + 1);
+        if (quoteEnd < 0) return null;
+        return rawPayload.substring(quoteStart + 1, quoteEnd);
+    }
+
+    /** Parse USPS's {@code eventTimestamp} — usually ISO-8601 with a
+     *  {@code Z} suffix, occasionally with a numeric offset. Returns null
+     *  on any parse failure so the caller keeps the row (with a null
+     *  timestamp) rather than dropping the whole event. */
+    static LocalDateTime parseWebhookTimestamp(String value) {
+        if (!StringUtils.hasText(value)) return null;
+        String v = value.trim();
+        try {
+            return OffsetDateTime.parse(v).toLocalDateTime();
+        } catch (DateTimeParseException ignore) {
+            // Fall through — try a local-only shape.
+        }
+        try {
+            return LocalDateTime.parse(v);
+        } catch (DateTimeParseException ignore) {
+            return null;
+        }
+    }
+
+    /**
+     * Compute {@code base64(HMAC-SHA256(message, secret))}. Package-visible
+     * so the webhook HMAC test can assert the exact digest shape a real
+     * USPS payload would produce. Returns null when the crypto init
+     * fails — the caller then returns {@code false} from the verify
+     * so we fail closed rather than accept an unsigned delivery.
+     */
+    static String hmacSha256Base64(String message, String secret) {
+        if (message == null || secret == null || secret.isEmpty()) return null;
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            byte[] digest = mac.doFinal(message.getBytes(StandardCharsets.UTF_8));
+            return Base64.getEncoder().encodeToString(digest);
+        } catch (Exception ex) {
+            log.warn("USPS webhook HMAC init failed: {}", ex.getMessage());
+            return null;
+        }
     }
 
     // ================================================================
@@ -738,7 +1240,7 @@ public class UspsDirectConnector implements CarrierConnector {
                 "v3",
                 UspsOAuthTokenCache.SANDBOX_HOST,
                 "/labels/v3/label",
-                "/tracking/v3/tracking",
+                "/tracking/v3.2/tracking",
                 "/oauth2/v3/token",
                 "https://developer.usps.com/logo.svg",
                 "https://developer.usps.com/apis",
