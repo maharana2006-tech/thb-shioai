@@ -33,6 +33,7 @@ import com.multiship.backend.service.carriers.CarrierConnector;
 import com.multiship.backend.service.carriers.exceptions.CarrierRateLimitException;
 import com.multiship.backend.service.resolution.ShipmentResolutionException;
 import com.multiship.backend.service.resolution.ShipmentResolutionService;
+import com.multiship.backend.service.carriers.usps.queue.UspsDirectRoutingService;
 import io.micrometer.core.annotation.Timed;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -174,6 +175,22 @@ public class CarrierServiceImpl implements CarrierService {
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private SystemSettingService systemSettingService;
+
+    /**
+     * PR-G1 (USPS_DIRECT cross-flow routing) - shared routing service the
+     * manual + list-view + regenerate entry points consult before firing
+     * the connector. When null (pure-Mockito tests that don't drive the
+     * USPS_DIRECT branch), routing is bypassed and the connector call
+     * proceeds unchanged. See {@code docs/usps-direct-integration-audit.md}
+     * for the audit findings that motivated the extraction.
+     *
+     * <p>Not a constructor arg for the same reason as
+     * {@code systemSettingService} - adding a final field shifts the
+     * Lombok all-args ctor and breaks pure-Mockito tests that positionally
+     * construct this service (see {@code feedback_lombok_constructor_arg_order.md}).
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private UspsDirectRoutingService uspsDirectRoutingService;
 
     @Override
     @Transactional(readOnly = true)
@@ -463,6 +480,25 @@ public class CarrierServiceImpl implements CarrierService {
                     "Order " + orderNo + " already has a generated label ("
                             + existingTracking.getTrackingNumber() + ").",
                     already);
+        }
+
+        // PR-G1 (USPS_DIRECT cross-flow routing) - consult the shared
+        // routing service BEFORE resolving accounts / firing the connector.
+        // When USPS_PROVIDER=USPS_DIRECT AND this order routes to USPS,
+        // the label goes on the 55/hr persistent queue instead of the
+        // connector call this method would otherwise make. The re-entrancy
+        // guard in the routing service short-circuits when the caller is
+        // the queue processor synthetic user (UspsLabelQueueWiring.QUEUE_SYSTEM_USER),
+        // so the queue callback -> generateLabel -> connector path still
+        // reaches the connector on the second hop as intended.
+        //
+        // Ordering: AFTER the already-generated pre-check (never enqueue
+        // an order that's already labelled) and BEFORE account resolution
+        // (skip the resolution round-trip when we're going to short-
+        // circuit to the queue anyway).
+        ApiResponse<LabelGenerationResponse> routed = maybeRouteUspsDirect(orderNo, userDetails);
+        if (routed != null) {
+            return routed;
         }
 
         String tenantId = firstNonBlank(order.getTenantId(), order.getCustNo());
@@ -859,6 +895,31 @@ public class CarrierServiceImpl implements CarrierService {
 
         if (req == null || req.getRecipient() == null) {
             return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR, "Recipient details are required.");
+        }
+        // PR-G1 (USPS_DIRECT cross-flow routing) - on the fix-and-regenerate
+        // path (existingOrderNo != null) the order row is already persisted,
+        // so we can consult the shared routing service BEFORE the connector
+        // dispatch below. When USPS_PROVIDER=USPS_DIRECT and the order
+        // routes to USPS, the label goes on the 55/hr queue (single-piece
+        // enqueue or MPS fan-out via UspsMpsSplitterService), or gets
+        // rejected as intl-MPS with the actionable remediation.
+        //
+        // Net-new orders (existingOrderNo=null) cannot be routed here
+        // because the Order row doesn't exist yet; they proceed on the
+        // sync connector path. This is an acceptable G1 scope limit -
+        // net-new manual submissions are inherently rate-limited by human
+        // click rate. The scripted / automated paths that actually
+        // exhaust the platform 60/hr quota go through generateLabel
+        // (POST /orders/{n}/label, list-view Generate) which IS routed
+        // above. Follow-up (PR-G4 or a G1-follow-up) could pre-save the
+        // net-new order as PENDING to unlock routing on first submission
+        // too, but that's outside the PR-G1 hot-fix scope.
+        if (existingOrderNo != null) {
+            ApiResponse<LabelGenerationResponse> routed =
+                    maybeRouteUspsDirect(existingOrderNo.longValue(), user);
+            if (routed != null) {
+                return routed;
+            }
         }
         // Sprint 50 Tier 0.5 PR G — clamp so a scoped USER can't submit a
         // manual shipment against a foreign clientCode. Null/blank input
@@ -3944,6 +4005,79 @@ public class CarrierServiceImpl implements CarrierService {
                 .message(message)
                 .timestamp(LocalDateTime.now())
                 .data(data)
+                .build();
+    }
+
+    /**
+     * PR-G1 - consult the shared USPS_DIRECT routing service for an
+     * order whose orderNo is already known. Returns:
+     * <ul>
+     *   <li>{@code null} - no routing applies, caller stays on its
+     *       sync/connector path (routing service unwired, STAMPS_COM
+     *       provider, non-USPS carrier, re-entrant queue callback,
+     *       order-not-found).</li>
+     *   <li>an {@link ApiResponse} - routing decided this order should
+     *       either be queued ({@link org.springframework.http.HttpStatus#OK}
+     *       200 with {@code status="QUEUED"} or {@code "QUEUED_MPS"}) or
+     *       rejected ({@link org.springframework.http.HttpStatus#UNPROCESSABLE_CONTENT}
+     *       422 with {@link ErrorCode#INTL_MPS_UNSUPPORTED}). Caller
+     *       short-circuits with the returned response.</li>
+     * </ul>
+     *
+     * <p>Never throws - a routing service outage surfaces as null (sync
+     * fallback) so a broken settings lookup can't brick label generation
+     * platform-wide.
+     */
+    private ApiResponse<LabelGenerationResponse> maybeRouteUspsDirect(
+            long orderNo, org.springframework.security.core.userdetails.UserDetails caller) {
+        if (uspsDirectRoutingService == null) return null;
+        Optional<UspsDirectRoutingService.RoutingDecision> maybe;
+        try {
+            maybe = uspsDirectRoutingService.decide(orderNo, caller);
+        } catch (Exception ex) {
+            log.warn("PR-G1: routing service threw for order {}: {} - sync fallback",
+                    orderNo, ex.getMessage());
+            return null;
+        }
+        if (maybe.isEmpty()) return null;
+        UspsDirectRoutingService.RoutingDecision d = maybe.get();
+        if (d.isRejected()) {
+            LabelGenerationResponse body = LabelGenerationResponse.builder()
+                    .orderNo(orderNo)
+                    .status("REJECTED")
+                    .message(d.reason())
+                    .build();
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.INTL_MPS_UNSUPPORTED,
+                    d.reason(), body);
+        }
+        if (!d.isEnqueued()) return null;
+        return success(
+                d.status() == UspsDirectRoutingService.RoutingDecision.Status.MPS_QUEUED
+                        ? "Queued for USPS Direct (multi-piece — " + d.mpsPieceCount() + " pieces)"
+                        : "Queued for USPS Direct",
+                buildQueuedResponse(orderNo, d));
+    }
+
+    /**
+     * PR-G1 - assemble the LabelGenerationResponse for a queued outcome.
+     * Populates the four PR-G1 fields ({@code status}, {@code queueItemId},
+     * {@code mpsPieceCount}, plus a human-readable {@code message}). Never
+     * touches carrier-response fields (trackingNumber, labelUrl, etc.) -
+     * those land later when the queue processor drains the row.
+     */
+    private LabelGenerationResponse buildQueuedResponse(
+            long orderNo, UspsDirectRoutingService.RoutingDecision d) {
+        boolean isMps = d.status() == UspsDirectRoutingService.RoutingDecision.Status.MPS_QUEUED;
+        return LabelGenerationResponse.builder()
+                .orderNo(orderNo)
+                .carrierCode("USPS")
+                .status(isMps ? "QUEUED_MPS" : "QUEUED")
+                .queueItemId(d.queueItemId())
+                .mpsPieceCount(d.mpsPieceCount())
+                .message(isMps
+                        ? "USPS Direct multi-piece order queued (" + d.mpsPieceCount()
+                                + " pieces) - the labels print as the 55/hr queue drains."
+                        : "USPS Direct label queued - it prints when the 55/hr queue reaches it.")
                 .build();
     }
 
