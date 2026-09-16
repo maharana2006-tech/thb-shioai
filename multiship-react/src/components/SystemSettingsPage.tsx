@@ -1,9 +1,14 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { notify } from '../utils/notify'
 import { FiCheck, FiLock, FiSave } from 'react-icons/fi'
-import { systemSettingsService, type SystemSetting } from '../api/systemSettingsService'
+import {
+  systemSettingsService,
+  type SystemSetting,
+  type UspsProviderReadiness,
+} from '../api/systemSettingsService'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
+import UspsProviderReadinessTable from './settings/UspsProviderReadinessTable'
 
 /**
  * Sprint 49 Tier 0 — admin surface for encrypted system secrets.
@@ -13,12 +18,43 @@ import type { SettingsOutletContext } from './layout/SettingsLayout'
  * text input to rotate the value. Values are encrypted at rest via
  * AES-GCM; the input clears on save and only the masked value is ever
  * re-fetched.
+ *
+ * <p>USPS_DIRECT (PR-A) additions:
+ *  - When the persisted {@code USPS_PROVIDER} is
+ *    {@code PROVISIONING_USPS_DIRECT}, render the
+ *    {@link UspsProviderReadinessTable} inline under the picker so the
+ *    ops team sees the per-tenant checklist without leaving the page.
+ *  - When the operator selects {@code USPS_DIRECT} in the picker, the
+ *    save button becomes gated: we fetch the readiness DTO on selection
+ *    and disable save with a tooltip when {@code overallReady=false}.
+ *    Backend applies the same gate (HTTP 409 with the DTO), so this is
+ *    UX polish, not the authoritative check.
  */
+const USPS_PROVIDER_KEY = 'USPS_PROVIDER'
+const USPS_DIRECT_VALUE = 'USPS_DIRECT'
+const PROVISIONING_VALUE = 'PROVISIONING_USPS_DIRECT'
+
+/** Whitelist of setting keys whose current values map to USPS provider modes.
+ *  Anything else (e.g. the OpenAI API key) is treated as a plain SECRET. */
+function isUspsProviderSetting(setting: SystemSetting): boolean {
+  return setting.key === USPS_PROVIDER_KEY
+}
+
 export default function SystemSettingsPage() {
   const [items, setItems] = useState<SystemSetting[]>([])
   const [loading, setLoading] = useState(true)
   const [inputs, setInputs] = useState<Record<string, string>>({})
   const [savingKey, setSavingKey] = useState<string | null>(null)
+  /**
+   * USPS readiness cached from the pre-save gate. Refreshed:
+   *  - Automatically when the operator picks USPS_DIRECT in the picker.
+   *  - Manually via the readiness table's Refresh button (bubbles up
+   *    through {@code onLoaded}).
+   * Null means "not fetched yet" — the save button is optimistically
+   * enabled and any 409 from the backend surfaces via notify.error.
+   */
+  const [uspsReadiness, setUspsReadiness] =
+    useState<UspsProviderReadiness | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -41,6 +77,66 @@ export default function SystemSettingsPage() {
     return () => registerRefresh(null)
   }, [registerRefresh, load])
 
+  const uspsProviderSetting = useMemo(
+    () => items.find((s) => s.key === USPS_PROVIDER_KEY) ?? null,
+    [items],
+  )
+  const persistedUspsProvider = useMemo(
+    () =>
+      (uspsProviderSetting?.currentValue
+        ?? uspsProviderSetting?.defaultValue
+        ?? '') as string,
+    [uspsProviderSetting],
+  )
+  const uspsProviderPickerValue = inputs[USPS_PROVIDER_KEY] ?? ''
+  const uspsPickerIsUspsDirect = uspsProviderPickerValue === USPS_DIRECT_VALUE
+
+  /**
+   * Fetch the readiness snapshot when the operator picks
+   * {@code USPS_DIRECT} but only if the persisted value isn't already
+   * {@code USPS_DIRECT} — we don't need to gate a no-op save.
+   */
+  useEffect(() => {
+    if (!uspsPickerIsUspsDirect) return
+    if (persistedUspsProvider === USPS_DIRECT_VALUE) return
+    let cancelled = false
+    systemSettingsService
+      .getUspsProviderReadiness()
+      .then((r) => {
+        if (cancelled) return
+        setUspsReadiness(r?.data ?? null)
+      })
+      .catch(() => {
+        // Non-fatal — leave button enabled and let the server-side gate
+        // reject if the DTO isn't reachable. The table itself surfaces
+        // errors via notify.apiError.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [uspsPickerIsUspsDirect, persistedUspsProvider])
+
+  /** Human-readable tooltip listing whichever readiness dimensions failed. */
+  const uspsBlockingReason = useMemo<string | null>(() => {
+    if (!uspsPickerIsUspsDirect) return null
+    if (!uspsReadiness) return null
+    if (uspsReadiness.overallReady) return null
+    const parts: string[] = []
+    if (!uspsReadiness.platformCreds.clientIdSet) parts.push('USPS platform CLIENT_ID')
+    if (!uspsReadiness.platformCreds.clientSecretSet) parts.push('USPS platform CLIENT_SECRET')
+    if (uspsReadiness.pendingAccounts.length) {
+      const tenants = uspsReadiness.pendingAccounts.slice(0, 3).map((r) => r.tenantCode).join(', ')
+      const more =
+        uspsReadiness.pendingAccounts.length > 3
+          ? ` (+${uspsReadiness.pendingAccounts.length - 3} more)`
+          : ''
+      parts.push(`${uspsReadiness.pendingAccounts.length} USPS account(s) pending: ${tenants}${more}`)
+    }
+    return parts.length
+      ? `Not ready to switch to USPS_DIRECT: ${parts.join('; ')}.`
+      : 'Not ready to switch to USPS_DIRECT.'
+  }, [uspsPickerIsUspsDirect, uspsReadiness])
+
   const save = async (key: string) => {
     const value = (inputs[key] ?? '').trim()
     if (!value) {
@@ -52,9 +148,32 @@ export default function SystemSettingsPage() {
       await systemSettingsService.update(key, value)
       notify.success('Setting updated.')
       setInputs((prev) => ({ ...prev, [key]: '' }))
+      // Refresh cached readiness after a USPS_PROVIDER save so the
+      // readiness table (still mounted while transitioning through
+      // PROVISIONING) reflects the new baseline.
+      if (key === USPS_PROVIDER_KEY) setUspsReadiness(null)
       void load()
     } catch (e) {
-      notify.apiError(e, 'Failed to update the setting.')
+      // Server-side gate authoritative: a 409 on USPS_PROVIDER=USPS_DIRECT
+      // includes the readiness DTO. Surface the reason inline so the
+      // operator sees the same detail the pre-save tooltip would show.
+      if (key === USPS_PROVIDER_KEY && value === USPS_DIRECT_VALUE) {
+        const anyErr = e as { status?: number; payload?: { data?: UspsProviderReadiness } | null }
+        const dto = anyErr?.payload?.data
+        if (anyErr?.status === 409 && dto) {
+          setUspsReadiness(dto)
+          const pending = dto.pendingAccounts.length
+          notify.error(
+            pending
+              ? `USPS_DIRECT rejected — ${pending} USPS account(s) still missing fields.`
+              : 'USPS_DIRECT rejected — USPS platform credentials are not set.',
+          )
+        } else {
+          notify.apiError(e, 'Failed to update the setting.')
+        }
+      } else {
+        notify.apiError(e, 'Failed to update the setting.')
+      }
     } finally {
       setSavingKey(null)
     }
@@ -91,6 +210,13 @@ export default function SystemSettingsPage() {
             const isChoice = item.kind === 'CHOICE' && Array.isArray(item.options) && item.options.length > 0
             const effectiveChoice =
               inputs[item.key] || item.currentValue || item.defaultValue || ''
+            const isUspsProvider = isUspsProviderSetting(item)
+            const pickedUspsDirect =
+              isUspsProvider && uspsProviderPickerValue === USPS_DIRECT_VALUE
+            const uspsDirectBlocked =
+              pickedUspsDirect
+              && !!uspsReadiness
+              && uspsReadiness.overallReady === false
             return (
               <section
                 key={item.key}
@@ -153,7 +279,12 @@ export default function SystemSettingsPage() {
                       disabled={
                         isSaving ||
                         !inputValue.trim() ||
-                        inputValue.trim() === (item.currentValue ?? '')
+                        inputValue.trim() === (item.currentValue ?? '') ||
+                        uspsDirectBlocked
+                      }
+                      title={uspsDirectBlocked ? (uspsBlockingReason ?? undefined) : undefined}
+                      aria-describedby={
+                        uspsDirectBlocked ? 'usps-direct-blocked-tooltip' : undefined
                       }
                       className="inline-flex items-center gap-1.5 rounded-lg border border-slate-900 bg-slate-900 px-3 py-1.5 text-[12.5px] font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
                     >
@@ -164,6 +295,15 @@ export default function SystemSettingsPage() {
                       )}
                       Apply
                     </button>
+                    {uspsDirectBlocked && uspsBlockingReason ? (
+                      <p
+                        id="usps-direct-blocked-tooltip"
+                        role="status"
+                        className="w-full text-[11.5px] text-rose-700"
+                      >
+                        {uspsBlockingReason}
+                      </p>
+                    ) : null}
                   </div>
                 ) : (
                   <div className="mt-3 flex gap-2">
@@ -195,6 +335,15 @@ export default function SystemSettingsPage() {
                     </button>
                   </div>
                 )}
+
+                {/* USPS_DIRECT provisioning readiness — rendered inline under
+                    the USPS_PROVIDER selector when the persisted value is
+                    PROVISIONING_USPS_DIRECT. Shows the per-tenant fill-in
+                    checklist so ops can drive it to 0/0 before flipping to
+                    USPS_DIRECT. */}
+                {isUspsProvider && persistedUspsProvider === PROVISIONING_VALUE ? (
+                  <UspsProviderReadinessTable onLoaded={setUspsReadiness} />
+                ) : null}
               </section>
             )
           })}

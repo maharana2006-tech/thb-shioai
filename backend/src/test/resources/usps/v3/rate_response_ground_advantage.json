@@ -1,0 +1,58 @@
+{
+  "rateOptions": [
+    {
+      "totalPrice": 8.85,
+      "totalBasePrice": 8.85,
+      "rates": [
+        {
+          "description": "USPS Ground Advantage",
+          "mailClass": "USPS_GROUND_ADVANTAGE",
+          "price": 8.85,
+          "weight": 1.0,
+          "dimensionalWeight": 0.0,
+          "fees": [],
+          "startDate": "2026-09-15",
+          "endDate": "2026-12-31",
+          "warnings": []
+        }
+      ],
+      "extraServices": []
+    },
+    {
+      "totalPrice": 12.65,
+      "totalBasePrice": 12.65,
+      "rates": [
+        {
+          "description": "Priority Mail",
+          "mailClass": "PRIORITY_MAIL",
+          "price": 12.65,
+          "weight": 1.0,
+          "dimensionalWeight": 0.0,
+          "fees": [],
+          "startDate": "2026-09-15",
+          "endDate": "2026-12-31",
+          "warnings": []
+        }
+      ],
+      "extraServices": []
+    },
+    {
+      "totalPrice": 32.15,
+      "totalBasePrice": 32.15,
+      "rates": [
+        {
+          "description": "Priority Mail Express",
+          "mailClass": "PRIORITY_MAIL_EXPRESS",
+          "price": 32.15,
+          "weight": 1.0,
+          "dimensionalWeight": 0.0,
+          "fees": [],
+          "startDate": "2026-09-15",
+          "endDate": "2026-12-31",
+          "warnings": []
+        }
+      ],
+      "extraServices": []
+    }
+  ]
+}

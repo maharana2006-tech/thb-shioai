@@ -1,0 +1,10 @@
+{
+  "paymentAuthorizationToken": "PAYMENT-AUTH-TOKEN-abc123",
+  "expiresIn": 28800,
+  "roles": [
+    { "roleName": "PAYER",       "CRID": "123456", "MID": "901234567", "accountNumber": "ACCT-7788", "accountType": "EPS" },
+    { "roleName": "LABEL_OWNER", "CRID": "123456", "MID": "901234567", "accountNumber": "ACCT-7788", "accountType": "EPS" },
+    { "roleName": "RATE_HOLDER", "CRID": "123456", "MID": "901234567", "accountNumber": "ACCT-7788", "accountType": "EPS" },
+    { "roleName": "PLATFORM",    "CRID": "123456", "MID": "901234567", "accountNumber": "ACCT-7788", "accountType": "EPS" }
+  ]
+}

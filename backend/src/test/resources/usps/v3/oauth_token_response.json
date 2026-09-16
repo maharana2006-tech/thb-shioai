@@ -1,0 +1,6 @@
+{
+  "access_token": "USPS-V3-ACCESS-TOKEN-xyz789",
+  "token_type": "Bearer",
+  "expires_in": 28800,
+  "scope": "addresses service-delivery-standards locations prices international-prices tracking subscriptions-tracking labels international-labels payments carrier-pickup"
+}

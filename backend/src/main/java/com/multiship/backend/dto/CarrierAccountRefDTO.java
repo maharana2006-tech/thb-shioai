@@ -73,6 +73,17 @@ public class CarrierAccountRefDTO {
     private String thirdPartyState;
     private String thirdPartyPostcode;
     private String thirdPartyCountry;
+    /**
+     * USPS Direct — per-account tenant identifiers. Plaintext (identifiers,
+     * not secrets); returned as-is by the account read endpoint so the FE
+     * can decide whether to render the "USPS Direct provisioned" state.
+     * All three NULL = not-yet-provisioned; the {@code USPS_PROVIDER}
+     * platform toggle drives whether the connector uses them at ship
+     * time. See {@code docs/usps-direct-integration.md} §4.2.
+     */
+    private String uspsDirectAccountNumber;
+    private String uspsDirectCrid;
+    private String uspsDirectMid;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

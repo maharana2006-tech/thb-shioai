@@ -29,6 +29,10 @@ import {
   type CarrierAccountRef,
 } from '../api/accountRefService'
 import { clientService } from '../api/clientService'
+import {
+  systemSettingsService,
+  type UspsProviderMode,
+} from '../api/systemSettingsService'
 import { isAbortError } from '../api/apiClient'
 import {
   carrierEnvironmentOptions,
@@ -177,6 +181,12 @@ interface DrawerState {
    *  no override (resolver falls back to PAPER_4X6). Only FEDEX rows
    *  render the picker; other carriers keep this null. */
   labelStockType: string | null
+  /** USPS Direct — USPS EPS account number, CRID, MID. Only meaningful on
+   *  USPS carrier rows; drawer only renders the fields when the site-wide
+   *  USPS_PROVIDER is PROVISIONING_USPS_DIRECT or USPS_DIRECT. */
+  uspsDirectAccountNumber: string
+  uspsDirectCrid: string
+  uspsDirectMid: string
   /** Third-party billing default. Only shown / persisted when the operator
    *  picked THIRD_PARTY for clearanceOption. All optional individually — a
    *  future per-shipment override on Shipment can fill in what's missing. */
@@ -209,6 +219,9 @@ const emptyDrawer: DrawerState = {
   labelStockWidth: null,
   labelImageType: null,
   labelStockType: null,
+  uspsDirectAccountNumber: '',
+  uspsDirectCrid: '',
+  uspsDirectMid: '',
   thirdPartyAccount: '',
   thirdPartyName: '',
   thirdPartyAddress1: '',
@@ -524,6 +537,9 @@ export default function CarrierConnections({
         labelStockWidth: account.labelStockWidth ?? null,
         labelImageType: account.labelImageType ?? null,
         labelStockType: account.labelStockType ?? null,
+        uspsDirectAccountNumber: account.uspsDirectAccountNumber || '',
+        uspsDirectCrid: account.uspsDirectCrid || '',
+        uspsDirectMid: account.uspsDirectMid || '',
         thirdPartyAccount:  account.thirdPartyAccount  || '',
         thirdPartyName:     account.thirdPartyName     || '',
         thirdPartyAddress1: account.thirdPartyAddress1 || '',
@@ -563,6 +579,58 @@ export default function CarrierConnections({
     }
     drawerFocusRef.current = null
   }, [drawerOpen])
+
+  // USPS_DIRECT integration — fetch the site-wide USPS_PROVIDER value on
+  // drawer open. Drives which credential fields render for USPS carriers:
+  //   STAMPS_COM (default)      -> Stamps fields only (existing behaviour).
+  //   PROVISIONING_USPS_DIRECT  -> BOTH Stamps + USPS Direct fields visible.
+  //   USPS_DIRECT               -> USPS Direct fields only.
+  // Non-USPS carriers never look at this; the state stays null and the
+  // existing render paths are untouched.
+  const [uspsProviderMode, setUspsProviderMode] = useState<UspsProviderMode | null>(null)
+  useEffect(() => {
+    if (!drawerOpen) return
+    if (normalizeCarrierCode(drawer.carrierCode) !== 'usps') {
+      // Not a USPS drawer — reset so a subsequent USPS open re-fetches.
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset when drawer opens on non-USPS carrier
+      setUspsProviderMode(null)
+      return
+    }
+    let cancelled = false
+    systemSettingsService
+      .list()
+      .then((rows) => {
+        if (cancelled) return
+        const arr = Array.isArray(rows) ? rows : []
+        const setting = arr.find((s) => s.key === 'USPS_PROVIDER')
+        const value = (setting?.currentValue ?? setting?.defaultValue ?? 'STAMPS_COM') as string
+        const mode: UspsProviderMode =
+          value === 'USPS_DIRECT'
+            ? 'USPS_DIRECT'
+            : value === 'PROVISIONING_USPS_DIRECT'
+              ? 'PROVISIONING_USPS_DIRECT'
+              : 'STAMPS_COM'
+        setUspsProviderMode(mode)
+      })
+      .catch((e) => {
+        if (!isAbortError(e)) console.debug('[secondary load] systemSettingsService.list', e)
+        // Fallback: pretend STAMPS_COM so the drawer still renders the
+        // legacy fields instead of a blank form.
+        if (!cancelled) setUspsProviderMode('STAMPS_COM')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [drawerOpen, drawer.carrierCode])
+
+  /** True only while the drawer is on a USPS carrier row. */
+  const isUspsDrawer = normalizeCarrierCode(drawer.carrierCode) === 'usps'
+  /** Show Stamps fields under STAMPS_COM + PROVISIONING; hide under USPS_DIRECT. */
+  const showStampsFields = !isUspsDrawer || uspsProviderMode !== 'USPS_DIRECT'
+  /** Show USPS Direct fields under PROVISIONING + USPS_DIRECT; hide under STAMPS_COM. */
+  const showUspsDirectFields =
+    isUspsDrawer
+    && (uspsProviderMode === 'PROVISIONING_USPS_DIRECT' || uspsProviderMode === 'USPS_DIRECT')
 
   const runDrawerCheck = async () => {
     const credentialTerms = credentialLabelsFor(drawer.carrierCode)
@@ -612,6 +680,13 @@ export default function CarrierConnections({
 
     // Carrier-aware field validation (formats, credential hygiene, required
     // fields). Surfaces inline errors under each field instead of one modal.
+    //
+    // USPS_DIRECT nuance: when the site-wide provider is USPS_DIRECT the
+    // Stamps credential fields are hidden from the drawer. Force the
+    // validator into "no credentials required" mode by pretending we're
+    // editing an existing account without rotating — then run the extra
+    // USPS Direct field checks below.
+    const stampsHidden = isUspsDrawer && uspsProviderMode === 'USPS_DIRECT'
     const errs = validateCarrierAccount(
       {
         carrierCode: drawer.carrierCode,
@@ -624,8 +699,8 @@ export default function CarrierConnections({
         environment: drawer.environment,
       },
       {
-        isEdit,
-        rotating: rotatingCredentials,
+        isEdit: stampsHidden ? true : isEdit,
+        rotating: stampsHidden ? false : rotatingCredentials,
         labels: {
           accountNumberLabel: credentialTerms.accountNumberLabel,
           idLabel: credentialTerms.idLong,
@@ -633,6 +708,36 @@ export default function CarrierConnections({
         },
       },
     )
+
+    // USPS Direct field validation — only enforced when the fields are
+    // rendered (PROVISIONING + USPS_DIRECT modes). Under PROVISIONING the
+    // fields are optional-but-encouraged (parallel-run state). Under
+    // USPS_DIRECT they are REQUIRED — a USPS shipment can't leave without
+    // EPS# / CRID / MID.
+    if (showUspsDirectFields) {
+      const required = uspsProviderMode === 'USPS_DIRECT'
+      const eps = drawer.uspsDirectAccountNumber.trim()
+      const crid = drawer.uspsDirectCrid.trim()
+      const mid = drawer.uspsDirectMid.trim()
+      if (required && !eps) {
+        errs.accountNumber = 'USPS EPS account number is required in USPS_DIRECT mode'
+      }
+      if (crid) {
+        if (!/^\d{5,15}$/.test(crid)) {
+          errs.clientId = 'CRID must be 5-15 digits'
+        }
+      } else if (required) {
+        errs.clientId = 'USPS CRID is required in USPS_DIRECT mode'
+      }
+      if (mid) {
+        if (!/^\d{6}$|^\d{9}$/.test(mid)) {
+          errs.clientSecret = 'MID must be 6 or 9 digits'
+        }
+      } else if (required) {
+        errs.clientSecret = 'USPS MID is required in USPS_DIRECT mode'
+      }
+    }
+
     if (Object.keys(errs).length > 0) {
       setDrawerErrors(errs)
       notify.error('Please fix the highlighted fields before saving.')
@@ -697,6 +802,25 @@ export default function CarrierConnections({
         thirdPartyState:    drawer.clearanceOption === 'THIRD_PARTY' ? (drawer.thirdPartyState    || null) : '',
         thirdPartyPostcode: drawer.clearanceOption === 'THIRD_PARTY' ? (drawer.thirdPartyPostcode || null) : '',
         thirdPartyCountry:  drawer.clearanceOption === 'THIRD_PARTY' ? (drawer.thirdPartyCountry  || null) : '',
+        // USPS Direct — only send the trio for USPS carriers. Non-USPS
+        // carriers omit the fields entirely (backend keeps its NULLs).
+        // Under STAMPS_COM the fields are never visible, so preserve whatever
+        // is persisted by omitting them (undefined -> skip). Under
+        // PROVISIONING + USPS_DIRECT the payload sends the drawer values
+        // (blank -> null clears the persisted value, matching the null-vs-omit
+        // convention used by the other overrides above).
+        uspsDirectAccountNumber:
+          isUspsDrawer && uspsProviderMode !== 'STAMPS_COM'
+            ? (drawer.uspsDirectAccountNumber.trim() || null)
+            : undefined,
+        uspsDirectCrid:
+          isUspsDrawer && uspsProviderMode !== 'STAMPS_COM'
+            ? (drawer.uspsDirectCrid.trim() || null)
+            : undefined,
+        uspsDirectMid:
+          isUspsDrawer && uspsProviderMode !== 'STAMPS_COM'
+            ? (drawer.uspsDirectMid.trim() || null)
+            : undefined,
       }
       const response = await accountRefService.upsertAccount(payload)
       const savedId = response.data?.id
@@ -1361,7 +1485,12 @@ export default function CarrierConnections({
                   />
                 </Field>
 
-                {drawer.editingId !== null && !rotatingCredentials ? (
+                {showStampsFields && isUspsDrawer && uspsProviderMode === 'PROVISIONING_USPS_DIRECT' ? (
+                  <p className="mb-2 inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-2 py-0.5 text-[10.5px] font-semibold text-emerald-800">
+                    Active provider · Stamps.com
+                  </p>
+                ) : null}
+                {!showStampsFields ? null : drawer.editingId !== null && !rotatingCredentials ? (
                   // Masked read-only view: credentials never come back from the
                   // API, so we show what we DO know (the clientId preview stored
                   // on the row) and expose an explicit Rotate button that
@@ -1446,6 +1575,64 @@ export default function CarrierConnections({
                     ) : null}
                   </>
                 )}
+
+                {showUspsDirectFields ? (
+                  <div className="mt-2 rounded-xl border border-sky-200 bg-sky-50/60 p-3">
+                    <div className="flex items-center justify-between">
+                      <p className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-sky-800">
+                        USPS Direct fields
+                      </p>
+                      <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10.5px] font-semibold ${
+                        uspsProviderMode === 'USPS_DIRECT'
+                          ? 'bg-sky-100 text-sky-800'
+                          : 'bg-amber-100 text-amber-800'
+                      }`}>
+                        {uspsProviderMode === 'USPS_DIRECT'
+                          ? 'Active provider'
+                          : 'Prepare for provider switch'}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[10.5px] leading-4 text-sky-900/70">
+                      {uspsProviderMode === 'USPS_DIRECT'
+                        ? 'Required — EPS account #, CRID and MID travel on every USPS Direct label call.'
+                        : 'Optional today. Populate ahead of the USPS_DIRECT switch so labels keep flowing once the site-wide provider flips.'}
+                    </p>
+                    <div className="mt-2 grid grid-cols-1 gap-2">
+                      <Field label="USPS EPS account #">
+                        <input
+                          value={drawer.uspsDirectAccountNumber}
+                          onChange={(e) => setDrawer((c) => ({ ...c, uspsDirectAccountNumber: e.target.value }))}
+                          maxLength={40}
+                          autoComplete="off"
+                          placeholder="Enterprise Payment System account #"
+                          className={inputClassName}
+                        />
+                      </Field>
+                      <Field label="CRID (Customer Registration ID)">
+                        <input
+                          value={drawer.uspsDirectCrid}
+                          onChange={(e) => setDrawer((c) => ({ ...c, uspsDirectCrid: e.target.value }))}
+                          maxLength={15}
+                          inputMode="numeric"
+                          autoComplete="off"
+                          placeholder="5-15 digits"
+                          className={inputClassName}
+                        />
+                      </Field>
+                      <Field label="MID (Mailer ID)">
+                        <input
+                          value={drawer.uspsDirectMid}
+                          onChange={(e) => setDrawer((c) => ({ ...c, uspsDirectMid: e.target.value }))}
+                          maxLength={9}
+                          inputMode="numeric"
+                          autoComplete="off"
+                          placeholder="6 or 9 digits"
+                          className={inputClassName}
+                        />
+                      </Field>
+                    </div>
+                  </div>
+                ) : null}
 
                 <Field label="Environment">
                   <Select
