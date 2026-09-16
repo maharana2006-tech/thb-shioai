@@ -2,6 +2,7 @@ package com.multiship.backend.service.carriers.usps.queue;
 
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.LabelGenerationResponse;
+import com.multiship.backend.model.UspsLabelQueueItem;
 import com.multiship.backend.service.CarrierService;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
