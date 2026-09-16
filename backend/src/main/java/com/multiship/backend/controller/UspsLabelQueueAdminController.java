@@ -2,16 +2,21 @@ package com.multiship.backend.controller;
 
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.ErrorCode;
+import com.multiship.backend.dto.UspsDashboardMetricsDTO;
 import com.multiship.backend.dto.UspsLabelQueueItemDTO;
 import com.multiship.backend.dto.UspsLabelQueueMetricsDTO;
 import com.multiship.backend.dto.UspsMpsProgressDTO;
+import com.multiship.backend.dto.UspsQuotaHeadroomDTO;
+import com.multiship.backend.dto.UspsReconciliationRollupDTO;
+import com.multiship.backend.dto.UspsRetryBucketDTO;
 import com.multiship.backend.model.UspsLabelQueueItem;
 import com.multiship.backend.model.UspsLabelQueueItem.Status;
 import com.multiship.backend.repository.UspsLabelQueueRepository;
+import com.multiship.backend.service.carriers.usps.UspsDirectVoidReconciliationService;
 import com.multiship.backend.service.carriers.usps.queue.UspsLabelQueueService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
@@ -26,6 +31,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -37,31 +43,70 @@ import java.util.Map;
  * The actual queue drain happens on a scheduler tick; this controller
  * exists to let operators see backpressure + intervene on stuck rows.
  *
- * <p>Most endpoints require ADMIN. PR-F2 adds {@code /mps-progress/{orderNo}}
+ * <p>Most endpoints require ADMIN. PR-F2 adds {@code /queue/mps-progress/{orderNo}}
  * which relaxes to {@code hasRole('ADMIN') or hasRole('USER')} because
  * operators (USER role) need it to check on their own MPS orders, not
  * just admin.
+ *
+ * <p>PR-F4 adds {@code /dashboard/*} - composite + focused dashboard
+ * views (quota headroom, retry histogram, reconciliation rollup). All
+ * ADMIN-only.
  *
  * <p>See {@code docs/usps-direct-integration.md} PR-F for the queue design.
  */
 @Tag(name = "USPS Direct label queue (admin)",
         description = "USPS_DIRECT PR-F - admin surface for the platform-wide USPS label queue")
 @RestController
-@RequestMapping("/api/v1/admin/usps-direct/queue")
-@RequiredArgsConstructor
+@RequestMapping("/api/v1/admin/usps-direct")
 @PreAuthorize("hasRole('ADMIN')")
 public class UspsLabelQueueAdminController {
 
     private final UspsLabelQueueService service;
     private final UspsLabelQueueRepository repository;
+    /**
+     * PR-F4 - only used by the {@code /dashboard/reconciliation-rollup}
+     * endpoint. Nullable so the two-arg legacy constructor (kept for
+     * pre-PR-F4 unit tests) still works; the reconciliation endpoint
+     * degrades to an empty rollup when the bean is absent.
+     */
+    private final UspsDirectVoidReconciliationService reconciliationService;
 
     /** Cap on the /items page size so an accidental huge page can't
      *  spike the DB. */
     private static final int MAX_PAGE_SIZE = 200;
 
+    /** PR-F4 - default dashboard windows when the caller omits query params. */
+    private static final int DEFAULT_RETRY_LOOKBACK_HOURS = 24;
+    private static final int DEFAULT_RECONCILIATION_LOOKBACK_DAYS = 30;
+
+    /**
+     * Legacy 2-arg constructor - kept for the pre-PR-F4 unit tests
+     * that predate the dashboard endpoints. The reconciliation service
+     * defaults to null; the reconciliation-rollup endpoint gracefully
+     * degrades to an empty rollup when it is null (see the endpoint's
+     * null guard).
+     */
+    public UspsLabelQueueAdminController(UspsLabelQueueService service,
+                                         UspsLabelQueueRepository repository) {
+        this(service, repository, null);
+    }
+
+    /**
+     * PR-F4 - production constructor. Spring picks this via
+     * {@code @Autowired} even when both constructors are visible.
+     */
+    @Autowired
+    public UspsLabelQueueAdminController(UspsLabelQueueService service,
+                                         UspsLabelQueueRepository repository,
+                                         UspsDirectVoidReconciliationService reconciliationService) {
+        this.service = service;
+        this.repository = repository;
+        this.reconciliationService = reconciliationService;
+    }
+
     @Operation(summary = "Backpressure metrics for the USPS label queue",
             description = "Platform-wide by default. Pass ?tenant=CODE for a tenant-scoped shape.")
-    @GetMapping("/metrics")
+    @GetMapping("/queue/metrics")
     public ResponseEntity<ApiResponse<UspsLabelQueueMetricsDTO>> metrics(
             @RequestParam(name = "tenant", required = false) String tenant) {
         UspsLabelQueueMetricsDTO data = (tenant == null || tenant.isBlank())
@@ -72,7 +117,7 @@ public class UspsLabelQueueAdminController {
 
     @Operation(summary = "Paginated list of queue rows",
             description = "Ordered by enqueued_at DESC so the newest work is on top.")
-    @GetMapping("/items")
+    @GetMapping("/queue/items")
     public ResponseEntity<ApiResponse<List<UspsLabelQueueItemDTO>>> items(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "50") int size) {
@@ -86,7 +131,7 @@ public class UspsLabelQueueAdminController {
 
     @Operation(summary = "Cancel a queued item",
             description = "204 on success (QUEUED -> CANCELLED). 409 when the row is already PROCESSING/DONE/FAILED. 404 when the id doesn't exist.")
-    @DeleteMapping("/items/{id}")
+    @DeleteMapping("/queue/items/{id}")
     public ResponseEntity<ApiResponse<Void>> cancel(@PathVariable Long id) {
         // Peek the row so we can distinguish 404 (missing) from 409
         // (present but not cancellable). service.cancel() is idempotent
@@ -124,7 +169,7 @@ public class UspsLabelQueueAdminController {
             description = "GROUP BY status over the parent's queue rows + a "
                     + "first-N tracking-number preview. 404 when the order has no MPS queue rows.")
     @PreAuthorize("hasRole('ADMIN') or hasRole('USER')")
-    @GetMapping("/mps-progress/{orderNo}")
+    @GetMapping("/queue/mps-progress/{orderNo}")
     public ResponseEntity<ApiResponse<UspsMpsProgressDTO>> mpsProgress(@PathVariable Long orderNo) {
         if (orderNo == null) {
             return mpsProgressNotFound(orderNo);
@@ -215,6 +260,91 @@ public class UspsLabelQueueAdminController {
                 .trackingNumbers(trackingPreview)
                 .build();
         return ok(dto);
+    }
+
+    // ============================================================
+    // PR-F4 - admin dashboard
+    // ============================================================
+
+    /**
+     * PR-F4 - composite dashboard payload. Loads queue metrics + quota
+     * headroom + retry histogram + reconciliation rollup in one call so
+     * the initial dashboard load is a single round-trip. The FE polls
+     * the focused endpoints below for live refreshes.
+     *
+     * @param lookbackHours retry-histogram window (default 24h)
+     * @param lookbackDays  reconciliation rollup window (default 30d)
+     */
+    @Operation(summary = "Composite USPS Direct admin dashboard",
+            description = "Queue + quota + retries + reconciliation, one round-trip. "
+                    + "Pass lookbackHours (retries) + lookbackDays (reconciliation) to tune windows.")
+    @GetMapping("/dashboard")
+    public ResponseEntity<ApiResponse<UspsDashboardMetricsDTO>> dashboard(
+            @RequestParam(name = "lookbackHours", required = false) Integer lookbackHours,
+            @RequestParam(name = "lookbackDays", required = false) Integer lookbackDays) {
+        Duration retryWin = Duration.ofHours(clampPositive(lookbackHours, DEFAULT_RETRY_LOOKBACK_HOURS));
+        Duration reconWin = Duration.ofDays(clampPositive(lookbackDays, DEFAULT_RECONCILIATION_LOOKBACK_DAYS));
+        UspsDashboardMetricsDTO data = service.getDashboardMetrics(retryWin, reconWin);
+        return ok(data);
+    }
+
+    /**
+     * PR-F4 - quota-headroom snapshot alone. Cheap, side-effect-free
+     * peek at the TokenBucket for the "42 / 55 label calls left this
+     * hour" gauge. FE polls every 15-30s for a live indicator.
+     */
+    @Operation(summary = "Quota headroom (lightweight polling)",
+            description = "Non-mutating peek at the platform TokenBucket. FE polls every 15-30s.")
+    @GetMapping("/dashboard/quota-headroom")
+    public ResponseEntity<ApiResponse<UspsQuotaHeadroomDTO>> quotaHeadroom() {
+        // Reuse the service's composite builder but ask for the smallest
+        // possible windows since we only need the quota sub-DTO; keeps
+        // this endpoint lightweight for 15-30s FE polling.
+        UspsDashboardMetricsDTO d = service.getDashboardMetrics(
+                Duration.ofHours(1), Duration.ofDays(1));
+        return ok(d.getQuota());
+    }
+
+    /**
+     * PR-F4 - per-hour retry / failure histogram alone. Feeds the
+     * stacked-bar chart on the admin dashboard.
+     */
+    @Operation(summary = "Per-hour retry / failure histogram",
+            description = "GROUP BY date_trunc('hour', enqueued_at) over the last N hours (default 24).")
+    @GetMapping("/dashboard/retry-buckets")
+    public ResponseEntity<ApiResponse<UspsRetryBucketDTO>> retryBuckets(
+            @RequestParam(name = "hoursLookback", required = false) Integer hoursLookback) {
+        Duration win = Duration.ofHours(clampPositive(hoursLookback, DEFAULT_RETRY_LOOKBACK_HOURS));
+        return ok(service.getRetryBuckets(win));
+    }
+
+    /**
+     * PR-F4 - reconciliation rollup alone. Answers "how many voids are
+     * we still waiting on USPS to acknowledge?" without pulling the
+     * full dashboard.
+     */
+    @Operation(summary = "Void-reconciliation rollup",
+            description = "Aggregate approved / denied / pending counts + pending refund value over the window.")
+    @GetMapping("/dashboard/reconciliation-rollup")
+    public ResponseEntity<ApiResponse<UspsReconciliationRollupDTO>> reconciliationRollup(
+            @RequestParam(name = "lookbackDays", required = false) Integer lookbackDays) {
+        Duration win = Duration.ofDays(clampPositive(lookbackDays, DEFAULT_RECONCILIATION_LOOKBACK_DAYS));
+        if (reconciliationService == null) {
+            // Legacy constructor path - degrade to an empty rollup so
+            // the endpoint stays alive even when the bean is absent
+            // (only unit-test wiring hits this branch).
+            return ok(UspsReconciliationRollupDTO.builder()
+                    .lookbackDays((int) Math.max(1, win.toDays()))
+                    .voidedShipmentsInWindow(0L)
+                    .reconciledApproved(0L).reconciledDenied(0L).notYetReconciled(0L)
+                    .pendingRefundValue(BigDecimal.ZERO).currency("USD").build());
+        }
+        return ok(reconciliationService.getRollup(win));
+    }
+
+    private static int clampPositive(Integer v, int fallback) {
+        if (v == null || v <= 0) return fallback;
+        return v;
     }
 
     // ============================================================

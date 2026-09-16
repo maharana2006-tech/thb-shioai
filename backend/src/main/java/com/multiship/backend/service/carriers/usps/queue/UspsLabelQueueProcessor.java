@@ -214,6 +214,40 @@ public class UspsLabelQueueProcessor {
     }
 
     // ============================================================
+    // PR-F4 - dashboard observability
+    // ============================================================
+
+    /**
+     * PR-F4 - remaining tokens on the platform-wide TokenBucket for
+     * the current rolling hour. Non-mutating peek used by the
+     * {@code /admin/usps-direct/dashboard/quota-headroom} endpoint to
+     * render the "42 / 55 label calls left this hour" gauge without
+     * consuming a token.
+     *
+     * <p>Returns 0 if the limiter has not been initialised yet (should
+     * never happen once {@link #init()} has run, but defensive so the
+     * dashboard never NPEs on a cold boot).
+     */
+    public int getRemainingHourlyQuota() {
+        TokenBucket b = this.limiter;
+        if (b == null) return 0;
+        long tokens = b.availableTokens();
+        if (tokens < 0) return 0;
+        if (tokens > Integer.MAX_VALUE) return Integer.MAX_VALUE;
+        return (int) tokens;
+    }
+
+    /**
+     * PR-F4 - the configured hourly cap so the dashboard can render
+     * "remaining / cap" without a second injection point. Reads the
+     * same {@code usps.direct.queue.hourly-cap} value the limiter was
+     * built with.
+     */
+    public long getConfiguredHourlyCap() {
+        return hourlyCap <= 0 ? 55L : hourlyCap;
+    }
+
+    // ============================================================
     // Test hooks
     // ============================================================
 
