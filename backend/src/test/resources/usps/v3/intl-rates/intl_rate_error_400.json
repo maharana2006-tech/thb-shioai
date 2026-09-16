@@ -1,0 +1,14 @@
+{
+  "apiVersion": "/international-prices/v3",
+  "error": {
+    "code": "400",
+    "message": "Bad Request",
+    "errors": [
+      {
+        "title": "invalid_destination",
+        "detail": "destinationCountryCode 'United Kingdom' is not a valid ISO alpha-2 country code.",
+        "source": "destinationCountryCode"
+      }
+    ]
+  }
+}

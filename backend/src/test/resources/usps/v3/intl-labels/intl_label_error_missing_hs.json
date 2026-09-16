@@ -1,0 +1,14 @@
+{
+  "apiVersion": "/international-labels/v3",
+  "error": {
+    "code": "400",
+    "message": "Bad Request",
+    "errors": [
+      {
+        "title": "invalid_customs_form",
+        "detail": "customsForm.commodities[0].hsTariffNumber is required (2025-09-01 HS-6 mandate).",
+        "source": "customsForm.commodities[0].hsTariffNumber"
+      }
+    ]
+  }
+}

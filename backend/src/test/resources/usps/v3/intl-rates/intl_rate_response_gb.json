@@ -1,0 +1,72 @@
+{
+  "rateOptions": [
+    {
+      "totalPrice": 42.15,
+      "totalBasePrice": 42.15,
+      "rates": [
+        {
+          "description": "Priority Mail International",
+          "mailClass": "PRIORITY_MAIL_INTERNATIONAL",
+          "price": 42.15,
+          "zone": "3",
+          "commitment": {
+            "name": "6-10 Business Days",
+            "scheduledDeliveryDate": "2026-09-25"
+          },
+          "weight": 1.0,
+          "dimensionalWeight": 0.0,
+          "fees": [],
+          "startDate": "2026-09-15",
+          "endDate": "2026-12-31",
+          "warnings": []
+        }
+      ],
+      "extraServices": []
+    },
+    {
+      "totalPrice": 68.95,
+      "totalBasePrice": 68.95,
+      "rates": [
+        {
+          "description": "Priority Mail Express International",
+          "mailClass": "PRIORITY_MAIL_EXPRESS_INTERNATIONAL",
+          "price": 68.95,
+          "zone": "3",
+          "commitment": {
+            "name": "3-5 Business Days",
+            "scheduledDeliveryDate": "2026-09-21"
+          },
+          "weight": 1.0,
+          "dimensionalWeight": 0.0,
+          "fees": [],
+          "startDate": "2026-09-15",
+          "endDate": "2026-12-31",
+          "warnings": []
+        }
+      ],
+      "extraServices": []
+    },
+    {
+      "totalPrice": 24.35,
+      "totalBasePrice": 24.35,
+      "rates": [
+        {
+          "description": "First-Class Package International Service",
+          "mailClass": "FIRST_CLASS_PACKAGE_INTERNATIONAL_SERVICE",
+          "price": 24.35,
+          "zone": "3",
+          "commitment": {
+            "name": "1-4 Weeks"
+          },
+          "weight": 1.0,
+          "dimensionalWeight": 0.0,
+          "fees": [],
+          "startDate": "2026-09-15",
+          "endDate": "2026-12-31",
+          "warnings": []
+        }
+      ],
+      "extraServices": []
+    }
+  ]
+}
