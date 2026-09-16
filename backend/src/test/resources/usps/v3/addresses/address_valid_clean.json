@@ -1,0 +1,29 @@
+{
+  "firm": "ACME Widgets",
+  "address": {
+    "streetAddress": "1600 PENNSYLVANIA AVE NW",
+    "secondaryAddress": "",
+    "city": "WASHINGTON",
+    "state": "DC",
+    "ZIPCode": "20500",
+    "ZIPPlus4": "0005",
+    "countryCode": "US",
+    "urbanization": ""
+  },
+  "additionalInfo": {
+    "deliveryPoint": "00",
+    "carrierRoute": "C000",
+    "DPVConfirmation": "Y",
+    "DPVCMRA": "N",
+    "business": "Y",
+    "centralDeliveryPoint": "N",
+    "vacant": "N"
+  },
+  "corrections": [],
+  "matches": [
+    {
+      "code": "31",
+      "text": "Exact match"
+    }
+  ]
+}
