@@ -1535,7 +1535,12 @@ public class CarrierServiceImpl implements CarrierService {
         // We save shipment_batch rows below (after the order row exists) so
         // that batch_id can FK back to the order.
         java.util.List<CarrierConnector.ShipmentResult> batchResults = new java.util.ArrayList<>();
-        try {
+        // PR-S1 (S-B1) — push the account's SERA refresh_token onto the
+        // connector's ThreadLocal so getAccessToken can use the refresh_token
+        // grant. Legacy SWSIM accounts leave the token null → no-op. Any
+        // return / exception clears the ThreadLocal via try-with-resources.
+        try (AutoCloseable ignored =
+                     com.multiship.backend.service.carriers.StampsSeraAuthContext.openFor(account)) {
             connector.validateCredentials(account.getClientId(), account.getClientSecret());
             String envForCall = firstNonBlank(account.getEnvironment(), carrierProperties.getDefaultEnvironment());
             // F-MODE-3 — pass envForCall to getAccessToken so FedEx routes
@@ -2200,6 +2205,17 @@ public class CarrierServiceImpl implements CarrierService {
     }
 
     private AutoShipmentAttempt attemptShipment(Order order, AccountResolution res, CarrierConnector connector) {
+        // PR-S1 (S-B1) — Stamps SERA accounts store their OAuth refresh_token
+        // on carrier_account_ref; the connector reads it off a ThreadLocal.
+        // Every carrier call path (interactive, background, import) needs
+        // to push the token before the connector fires, otherwise SERA
+        // silently falls back to a rejected token. Non-Stamps carriers
+        // no-op. Cleared in finally so the worker thread doesn't leak
+        // token state to the next order it services.
+        AutoCloseable stampsSeraCtx =
+                com.multiship.backend.service.carriers.StampsSeraAuthContext.openFor(
+                        carrierAccountRefRepository, res.carrierCode(), res.accountNumber());
+        try {
         connector.validateCredentials(res.clientId(), res.clientSecret());
         // F-MODE-3 — pass the resolved account's env so FedEx routes the
         // OAuth token URL to the matching host (sandbox vs prod).
@@ -2377,6 +2393,12 @@ public class CarrierServiceImpl implements CarrierService {
                     t -> fConnector.createShipment(sub, t, envForShipment)));
         }
         return new AutoShipmentAttempt(shipmentRequest, subRequests, results);
+        } finally {
+            // PR-S1 — clear the SERA ThreadLocal so the next order on this
+            // worker thread starts clean. NOOP path from openFor swallows
+            // its own close(); this catch is only for the real push path.
+            try { stampsSeraCtx.close(); } catch (Exception ignored) {}
+        }
     }
 
     /** True when the order's ship-to country differs from the platform shipper's origin. */
