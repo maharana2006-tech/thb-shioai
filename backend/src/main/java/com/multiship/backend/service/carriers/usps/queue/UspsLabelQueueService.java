@@ -3,6 +3,7 @@ package com.multiship.backend.service.carriers.usps.queue;
 import com.multiship.backend.dto.UspsDashboardMetricsDTO;
 import com.multiship.backend.dto.UspsLabelQueueMetricsDTO;
 import com.multiship.backend.dto.UspsRetryBucketDTO;
+import com.multiship.backend.model.UspsLabelQueueItem;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -30,6 +31,12 @@ import java.util.List;
  * quota + retries + reconciliation for the admin dashboard;
  * {@link #getRetryBuckets(Duration)} exposes the per-hour retry
  * histogram alone for lightweight polling.
+ *
+ * <p>PR-G3b adds provenance ({@link EnqueueRequest#sourceType()} +
+ * {@link EnqueueRequest#importBatchId()}) so the admin dashboard can
+ * attribute quota consumption to a specific surface and so a cancelled
+ * import batch can cascade to its queue rows via
+ * {@link #cancelPending(long)}.
  */
 public interface UspsLabelQueueService {
 
@@ -89,6 +96,26 @@ public interface UspsLabelQueueService {
      */
     boolean cancel(Long queueItemId);
 
+    /**
+     * PR-G3b - cancel every QUEUED row that belongs to the given
+     * import batch. Called by
+     * {@code OrderImportService.cancelGeneration} so a cancelled
+     * batch stops draining its remaining USPS Direct pieces through
+     * the 55/hr queue.
+     *
+     * <p>Only flips rows in {@link UspsLabelQueueItem.Status#QUEUED};
+     * rows already {@code PROCESSING} (in-flight to USPS) can't be
+     * rolled back without leaking a paid label, and rows already
+     * {@code DONE} / {@code FAILED} / {@code CANCELLED} are left
+     * alone. Returns the number cancelled so the caller can log the
+     * cascade count.
+     *
+     * @param importBatchId  the ImportBatch.id whose queue rows should
+     *                       be cancelled. When zero / negative or when
+     *                       no rows match, returns 0.
+     */
+    int cancelPending(long importBatchId);
+
     // ================================================================
     // PR-F4 - admin dashboard aggregates
     // ================================================================
@@ -122,14 +149,41 @@ public interface UspsLabelQueueService {
     /**
      * Enqueue request.
      *
-     * @param tenantCode  Non-blank tenant / client code.
-     * @param shipmentId  Non-null local shipment id (order_label_tracking.id
-     *                    or shipment.id). Unique-constrained on the row.
-     * @param priority    Lower = more urgent. Default via
-     *                    {@code UspsLabelQueueServiceImpl.DEFAULT_PRIORITY}
-     *                    when the caller doesn't care.
+     * <p>PR-G3b - {@link #sourceType} + {@link #importBatchId} are the
+     * provenance fields. Both nullable at the wire level; callers on
+     * pre-G3b code paths pass null via {@link #legacy(String, Long, int)}
+     * and their rows land with source_type NULL (dashboard renders as
+     * "legacy / unknown"). New callers should always supply a source.
+     *
+     * @param tenantCode     Non-blank tenant / client code.
+     * @param shipmentId     Non-null local shipment id (order_label_tracking.id
+     *                       or shipment.id). Unique-constrained on the row.
+     * @param priority       Lower = more urgent. Default via
+     *                       {@code UspsLabelQueueServiceImpl.DEFAULT_PRIORITY}
+     *                       when the caller doesn't care.
+     * @param sourceType     PR-G3b - which surface caused the enqueue.
+     *                       Nullable during the backfill window.
+     * @param importBatchId  PR-G3b - non-null iff the enqueue came from
+     *                       an import batch (operator or background).
      */
-    record EnqueueRequest(String tenantCode, Long shipmentId, int priority) {}
+    record EnqueueRequest(String tenantCode,
+                          Long shipmentId,
+                          int priority,
+                          UspsLabelQueueItem.SourceType sourceType,
+                          Long importBatchId) {
+
+        /**
+         * Back-compat 3-arg constructor for pre-G3b callers and tests
+         * that don't know about the provenance fields. Both new fields
+         * default to null; rows persist with source_type NULL and land
+         * in the dashboard's "legacy / unknown" bucket. Prefer the
+         * canonical 5-arg constructor for new code so ops can see who
+         * caused each spike.
+         */
+        public EnqueueRequest(String tenantCode, Long shipmentId, int priority) {
+            this(tenantCode, shipmentId, priority, null, null);
+        }
+    }
 
     /**
      * Enqueue response.
@@ -147,6 +201,12 @@ public interface UspsLabelQueueService {
     /**
      * PR-F2 - MPS batch enqueue request.
      *
+     * <p>PR-G3b - {@link #sourceType} + {@link #importBatchId} carry the
+     * same provenance semantics as {@link EnqueueRequest} above. Both
+     * apply uniformly to every persisted piece so the dashboard
+     * aggregates 1000 pieces to their real triggering surface (bulk /
+     * import / manual), not the splitter.
+     *
      * @param tenantCode      Non-blank tenant / client code (applied to
      *                        every persisted row).
      * @param parentOrderNo   Non-null MPS parent order number. Stored on
@@ -160,9 +220,31 @@ public interface UspsLabelQueueService {
      *                        every piece (bulk-triggered MPS runs at equal
      *                        priority so the processor's FIFO tie-break
      *                        preserves piece ordering).
+     * @param sourceType      PR-G3b - which surface caused the enqueue.
+     *                        Applied to every piece so the dashboard
+     *                        attributes to the triggering caller, not
+     *                        the splitter. Nullable for back-compat.
+     * @param importBatchId   PR-G3b - non-null iff the enqueue came from
+     *                        an import batch. Applied to every piece so
+     *                        the cancel-cascade catches all N rows.
      */
-    record EnqueueMpsRequest(String tenantCode, Long parentOrderNo,
-                              List<PieceRequest> pieces, int priority) {
+    record EnqueueMpsRequest(String tenantCode,
+                             Long parentOrderNo,
+                             List<PieceRequest> pieces,
+                             int priority,
+                             UspsLabelQueueItem.SourceType sourceType,
+                             Long importBatchId) {
+
+        /**
+         * Back-compat 4-arg constructor for pre-G3b callers and tests
+         * that don't know about the provenance fields. Both new fields
+         * default to null.
+         */
+        public EnqueueMpsRequest(String tenantCode, Long parentOrderNo,
+                                 List<PieceRequest> pieces, int priority) {
+            this(tenantCode, parentOrderNo, pieces, priority, null, null);
+        }
+
         /**
          * One piece in an MPS enqueue.
          *

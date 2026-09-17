@@ -139,6 +139,12 @@ public class UspsLabelQueueServiceImpl implements UspsLabelQueueService {
                 .priority(priority)
                 .status(Status.QUEUED)
                 .retryCount(0)
+                // PR-G3b - stamp provenance so the admin dashboard's
+                // by-source breakdown + the cancel-cascade lookup both
+                // work. Both nullable to preserve back-compat with the
+                // 3-arg EnqueueRequest ctor.
+                .sourceType(request.sourceType())
+                .importBatchId(request.importBatchId())
                 .build();
 
         UspsLabelQueueItem saved;
@@ -154,8 +160,9 @@ public class UspsLabelQueueServiceImpl implements UspsLabelQueueService {
         }
 
         LocalDateTime estStart = computeEstimatedStartAt(tenant);
-        log.info("USPS label queue: enqueued shipment={} tenant={} priority={} id={} est={}",
-                request.shipmentId(), tenant, priority, saved.getId(), estStart);
+        log.info("USPS label queue: enqueued shipment={} tenant={} priority={} id={} est={} source={} importBatch={}",
+                request.shipmentId(), tenant, priority, saved.getId(), estStart,
+                request.sourceType(), request.importBatchId());
         return new EnqueueResult(saved.getId(), estStart);
     }
 
@@ -218,6 +225,13 @@ public class UspsLabelQueueServiceImpl implements UspsLabelQueueService {
                     .retryCount(0)
                     .parentOrderNo(request.parentOrderNo())
                     .sequenceNumber(piece.sequenceNumber())
+                    // PR-G3b - every piece carries the parent enqueue's
+                    // source + importBatchId so the dashboard's by-source
+                    // aggregation attributes each of the 1000 pieces to the
+                    // triggering caller (bulk / import / manual), not the
+                    // splitter, and the cancel-cascade catches all N rows.
+                    .sourceType(request.sourceType())
+                    .importBatchId(request.importBatchId())
                     .build());
         }
 
@@ -242,8 +256,9 @@ public class UspsLabelQueueServiceImpl implements UspsLabelQueueService {
         LocalDateTime lastComplete = firstStart.plusSeconds(batchDrainSec);
 
         log.info("USPS label queue MPS: enqueued {} pieces for parentOrderNo={} tenant={} priority={} "
-                        + "firstStart={} lastComplete={}",
-                saved.size(), request.parentOrderNo(), tenant, priority, firstStart, lastComplete);
+                        + "firstStart={} lastComplete={} source={} importBatch={}",
+                saved.size(), request.parentOrderNo(), tenant, priority, firstStart, lastComplete,
+                request.sourceType(), request.importBatchId());
         return new EnqueueMpsResult(request.parentOrderNo(), saved.size(), firstStart, lastComplete);
     }
 
@@ -470,6 +485,48 @@ public class UspsLabelQueueServiceImpl implements UspsLabelQueueService {
         return true;
     }
 
+    /**
+     * PR-G3b - cascade cancellation of an import batch onto its live
+     * queue rows. Only touches {@code QUEUED} rows: {@code PROCESSING}
+     * items can't be rolled back without leaking a paid label and
+     * terminal rows are immutable audit history.
+     *
+     * <p>Batched-fetch + per-row save intentionally: we want each
+     * cancelled row to carry the correct {@code completedAt} timestamp
+     * (per-row so ops can see when the cascade fired) and to give
+     * Hibernate a chance to run its optimistic-lock / dirty-check on
+     * each row rather than a bulk UPDATE that skips the entity graph.
+     * The N is bounded by the import's own row count (typically &lt;1000).
+     */
+    @Override
+    @Transactional
+    public int cancelPending(long importBatchId) {
+        if (importBatchId <= 0L) {
+            return 0;
+        }
+        List<UspsLabelQueueItem> pending =
+                repo.findByImportBatchIdAndStatus(importBatchId, Status.QUEUED);
+        if (pending.isEmpty()) {
+            return 0;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        int cancelled = 0;
+        for (UspsLabelQueueItem row : pending) {
+            // Defense in depth - between the fetch above and this save
+            // the processor could have flipped the row PROCESSING. Skip
+            // silently in that case; the processor owns the DONE/FAILED
+            // resolution.
+            if (row.getStatus() != Status.QUEUED) continue;
+            row.setStatus(Status.CANCELLED);
+            row.setCompletedAt(now);
+            repo.save(row);
+            cancelled++;
+        }
+        log.info("USPS label queue: cancelPending importBatch={} cancelled {} of {} pending row(s)",
+                importBatchId, cancelled, pending.size());
+        return cancelled;
+    }
+
     // ============================================================
     // PR-F4 - admin dashboard aggregates
     // ============================================================
@@ -485,6 +542,9 @@ public class UspsLabelQueueServiceImpl implements UspsLabelQueueService {
         UspsQuotaHeadroomDTO quota = buildQuotaHeadroom();
         UspsRetryBucketDTO retries = buildRetryBuckets(retryWin);
         UspsReconciliationRollupDTO reconciliation = buildReconciliationRollup(reconWin);
+        // PR-G3b - by-source breakdown so ops can see "which surface
+        // caused the current spike?" without a second round-trip.
+        java.util.Map<String, UspsDashboardMetricsDTO.PerSourceStats> bySource = buildBySourceBreakdown();
 
         return UspsDashboardMetricsDTO.builder()
                 .generatedAt(Instant.now())
@@ -492,6 +552,7 @@ public class UspsLabelQueueServiceImpl implements UspsLabelQueueService {
                 .quota(quota)
                 .retries(retries)
                 .reconciliation(reconciliation)
+                .bySource(bySource)
                 .build();
     }
 
@@ -612,5 +673,58 @@ public class UspsLabelQueueServiceImpl implements UspsLabelQueueService {
                         .reconciledApproved(0L).reconciledDenied(0L).notYetReconciled(0L)
                         .pendingRefundValue(BigDecimal.ZERO).currency("USD")
                         .build());
+    }
+
+    /**
+     * PR-G3b - dashboard's by-source aggregation. Groups QUEUED depth
+     * by {@code source_type} and layers a full status breakdown on top
+     * for each source. Rows without a source_type (pre-G3b backfill
+     * window) collapse into an {@code UNKNOWN} bucket via the repo's
+     * COALESCE so ops don't see nine tiny groups while the queue
+     * drains legacy rows.
+     *
+     * <p>Returns an empty map when there's nothing queued so JSON
+     * consumers see {@code {}} rather than {@code null}.
+     */
+    private java.util.Map<String, UspsDashboardMetricsDTO.PerSourceStats> buildBySourceBreakdown() {
+        java.util.LinkedHashMap<String, UspsDashboardMetricsDTO.PerSourceStats> out =
+                new java.util.LinkedHashMap<>();
+        List<UspsLabelQueueRepository.SourceDepth> depths = repo.findQueueDepthBySource();
+        for (UspsLabelQueueRepository.SourceDepth row : depths) {
+            String sourceKey = row.getSourceType() == null ? "UNKNOWN" : row.getSourceType();
+            long queued = row.getDepth() == null ? 0L : row.getDepth();
+            long processing = 0L;
+            long done = 0L;
+            long failed = 0L;
+            long cancelled = 0L;
+            // Only look up per-source status counts for real enum values;
+            // the UNKNOWN bucket only carries a QUEUED depth (the other
+            // states aren't cheaply enumerable via the source column).
+            UspsLabelQueueItem.SourceType typed = tryParseSource(sourceKey);
+            if (typed != null) {
+                processing = repo.countBySourceTypeAndStatus(typed, Status.PROCESSING);
+                done = repo.countBySourceTypeAndStatus(typed, Status.DONE);
+                failed = repo.countBySourceTypeAndStatus(typed, Status.FAILED);
+                cancelled = repo.countBySourceTypeAndStatus(typed, Status.CANCELLED);
+            }
+            out.put(sourceKey, UspsDashboardMetricsDTO.PerSourceStats.builder()
+                    .sourceType(sourceKey)
+                    .queuedDepth(queued)
+                    .processingCount(processing)
+                    .doneCount(done)
+                    .failedCount(failed)
+                    .cancelledCount(cancelled)
+                    .build());
+        }
+        return out;
+    }
+
+    private static UspsLabelQueueItem.SourceType tryParseSource(String raw) {
+        if (raw == null || raw.isBlank() || "UNKNOWN".equalsIgnoreCase(raw)) return null;
+        try {
+            return UspsLabelQueueItem.SourceType.valueOf(raw);
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
     }
 }
