@@ -168,6 +168,20 @@ public class OrderImportServiceImpl implements OrderImportService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.service.carriers.usps.queue.UspsDirectRoutingService uspsDirectRoutingService;
 
+    /**
+     * PR-G3a (M-B3) — read-only view onto the {@code USPS_PROVIDER} platform
+     * toggle so {@link #processGroup} can distinguish "routing returned SYNC
+     * because the row wasn't a USPS_DIRECT candidate" (expected, silent) from
+     * "routing returned SYNC even though everything qualified" (unexpected,
+     * loud WARN — the background worker is about to burn a slot on the
+     * shared 60/hr OAuth quota outside the 55/hr fair-scheduler). Only used
+     * in background-worker context ({@code isBackgroundContext == true}) —
+     * sync operator paths keep their existing quiet behavior. Autowired
+     * required=false to preserve the pure-Mockito test constructors.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.SystemSettingService systemSettingService;
+
     /** Null-safe wrapper around {@link TenantScopeEnforcer#clampClientCode(String)}.
      *  Returns the input unchanged when the enforcer isn't wired (tests). */
     private String clamp(String requested) {
@@ -1800,6 +1814,31 @@ public class OrderImportServiceImpl implements OrderImportService {
                                                      java.util.function.BooleanSupplier cancelCheck,
                                                      java.util.function.Consumer<String> onNote,
                                                      Runnable onGroupQueued) {
+        // PR-G3a — operator paths pass jobId=null (== not background context).
+        // The background-worker path calls the {@code Long jobId} overload
+        // below and threads its worker-provided jobId through so processGroup
+        // can distinguish operator SYNC from background SYNC (M-B3 loud-alert).
+        return commit(rows, requestedBy, usePlatformAccount, sourceOverride,
+                onGroupComplete, cancelCheck, onNote, onGroupQueued, null);
+    }
+
+    /**
+     * PR-G3a overload — additionally accepts a nullable {@code jobId}. Non-null
+     * marks the call as originating from {@link ImportGenerationWorker}'s
+     * {@code executeGenerationJob} (background-worker context), threaded down
+     * to {@link #processGroup} so a SYNC fallback under USPS_DIRECT can be
+     * distinguished from an operator-driven sync call and logged at WARN
+     * (audit M-B3). Sync operator paths pass null and see the pre-G3a
+     * quiet behavior. See {@code docs/usps-direct-integration-audit.md}
+     * for the audit findings that motivated this signal.
+     */
+    public ApiResponse<OrderImportPreviewDTO> commit(List<OrderImportRowDTO> rows, String requestedBy,
+                                                     boolean usePlatformAccount, String sourceOverride,
+                                                     Runnable onGroupComplete,
+                                                     java.util.function.BooleanSupplier cancelCheck,
+                                                     java.util.function.Consumer<String> onNote,
+                                                     Runnable onGroupQueued,
+                                                     Long jobId) {
         if (rows == null || rows.isEmpty()) {
             return failure(HttpStatus.BAD_REQUEST, "No rows to commit.");
         }
@@ -1876,7 +1915,9 @@ public class OrderImportServiceImpl implements OrderImportService {
         List<List<OrderImportRowDTO>> groupList = new ArrayList<>(groups.values());
         List<Callable<GroupOutcome>> tasks = new ArrayList<>(groupCount);
         for (List<OrderImportRowDTO> group : groupList) {
-            tasks.add(groupTask(group, batchId, usePlatformAccount, sourceOverride, onGroupComplete, cancelCheck, onGroupQueued));
+            // PR-G3a: jobId != null tags this as a background-worker context so
+            // processGroup can loudly WARN on unexpected SYNC fallback (M-B3).
+            tasks.add(groupTask(group, batchId, usePlatformAccount, sourceOverride, onGroupComplete, cancelCheck, onGroupQueued, jobId));
         }
 
         // Sprint 50 Tier 1 finding #15 — tenant key for fair-share. Groups
@@ -1925,7 +1966,8 @@ public class OrderImportServiceImpl implements OrderImportService {
                         + pass + " of " + MAX_RATE_LIMIT_PASSES + ")");
                 List<Callable<GroupOutcome>> retryTasks = new ArrayList<>(deferred.size());
                 for (List<OrderImportRowDTO> g : deferred) {
-                    retryTasks.add(groupTask(g, batchId, usePlatformAccount, sourceOverride, onGroupComplete, cancelCheck, onGroupQueued));
+                    // PR-G3a: retry pass keeps the same jobId tag as the primary pass.
+                    retryTasks.add(groupTask(g, batchId, usePlatformAccount, sourceOverride, onGroupComplete, cancelCheck, onGroupQueued, jobId));
                 }
                 List<Future<GroupOutcome>> retryFutures = fairExecutor.submitAll(tenantKey, retryTasks);
                 List<List<OrderImportRowDTO>> still = new ArrayList<>();
@@ -2689,6 +2731,10 @@ public class OrderImportServiceImpl implements OrderImportService {
                 // A background run mirrors progress and reads Cancel through its job
                 // row (throttled), so any server — or this one after a restart —
                 // sees the same state.
+                //
+                // PR-G3a: thread {@code jobId} into the deepest commit overload so
+                // groupTask -> processGroup can distinguish background-worker context
+                // from operator context. Null on the operator inline-run path (jobId==null).
                 commit(rowsToProcess, requestedBy, platform, sourceOverride,
                         () -> { prog.done.incrementAndGet(); if (sync != null) sync.progress(prog, false); },
                         () -> cancelledBatchIds.contains(id) || (sync != null && sync.cancelRequested()),
@@ -2696,7 +2742,8 @@ public class OrderImportServiceImpl implements OrderImportService {
                         // PR-G2 (U7): tick the queued counter for every group routed to
                         // the USPS_DIRECT persistent queue so the progress endpoint can
                         // render "N labelled, M queued" separately from "done".
-                        () -> { prog.queued.incrementAndGet(); if (sync != null) sync.progress(prog, false); });
+                        () -> { prog.queued.incrementAndGet(); if (sync != null) sync.progress(prog, false); },
+                        jobId);
             } finally {
                 if (sync != null) sync.progress(prog, true);
                 generationProgressByBatch.remove(id);
@@ -2788,6 +2835,33 @@ public class OrderImportServiceImpl implements OrderImportService {
 
         log.info("Import batch {} label generation ({}): {} → {} (labelBatch {})",
                 id, requestedBy, ordersSummary(rows), batch.getStatus(), batch.getLabelBatchId());
+        // PR-G3a — actor stamping for background-worker context. When the
+        // run originated from ImportGenerationWorker (jobId != null) AND at
+        // least one row landed on the USPS_DIRECT persistent queue during
+        // this run, stamp the audit-log actor as
+        // {@code system:import-worker/<workerId> on behalf of <originalRequestedBy>}
+        // so audit reviewers can tell which of the two contexts (operator vs
+        // background worker) drove the queue-enqueue burst. Sync-only runs
+        // (no queued rows) keep the raw operator name — the stamping
+        // guard is explicit so we never fudge the actor on a non-USPS_DIRECT
+        // background run.
+        String auditActor = requestedBy;
+        try {
+            if (jobId != null && generationJobRepository != null) {
+                boolean anyQueued = rows.stream()
+                        .anyMatch(r -> "QUEUED_USPS".equalsIgnoreCase(r.getGeneratedStatus()));
+                if (anyQueued) {
+                    String workerId = generationJobRepository.findById(jobId)
+                            .map(com.multiship.backend.model.ImportGenerationJob::getWorkerId)
+                            .orElse("unknown");
+                    auditActor = "system:import-worker/" + workerId
+                            + " on behalf of " + (requestedBy == null ? "unknown" : requestedBy);
+                }
+            }
+        } catch (RuntimeException ex) {
+            log.debug("PR-G3a: workerId lookup failed for jobId {} — falling back to raw requestedBy: {}",
+                    jobId, ex.getMessage());
+        }
         // Logs page: batch-generation summary in the shipment trail (per-order
         // LABEL_GENERATED / CARRIER_REJECTED rows come from the carrier layer).
         if (auditService != null) {
@@ -2797,7 +2871,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                     batch.getFileName(), null,
                     ordersSummary(rows)
                             + (invalid > 0 ? " · " + invalid + " row(s) still need fixes" : ""),
-                    null, requestedBy);
+                    null, auditActor);
         }
         return toBatchDTO(batch, rows);
     }
@@ -4590,9 +4664,35 @@ public class OrderImportServiceImpl implements OrderImportService {
      * each row's persistence gets its own tx — safe under concurrent
      * invocation). Catches every failure per-group so one bad row can't
      * take down the whole batch.
+     *
+     * <p>PR-G3a legacy delegator: operator paths (list-view Generate,
+     * /orders/manual-label, WMS commit) never enter background-worker
+     * context, so the {@code isBackgroundContext} overload below is called
+     * with {@code false}.
      */
     private GroupOutcome processGroup(List<OrderImportRowDTO> group, Integer batchId, boolean usePlatformAccount,
                                       String sourceOverride) {
+        return processGroup(group, batchId, usePlatformAccount, sourceOverride, false);
+    }
+
+    /**
+     * PR-G3a overload — when {@code isBackgroundContext} is true, this call
+     * originated from {@link ImportGenerationWorker#poll()} —
+     * {@code executeGenerationJob} — {@code runGeneration} — {@code commit}
+     * (i.e., no operator on the other end). Under USPS_DIRECT that context
+     * changes the meaning of a SYNC-decision fallback: operator-driven paths
+     * see SYNC as an intentional route (STAMPS_COM provider / non-USPS
+     * carrier / etc), whereas the background worker running 1000-row import
+     * jobs must NEVER silently sync when USPS Direct is the configured
+     * provider — that path bypasses the 55/hr fair-scheduler and burns
+     * quota for every other tenant. So: for a USPS carrier whose routing
+     * came back SYNC under USPS_PROVIDER=USPS_DIRECT, log WARN. The sync
+     * {@code generateManualLabel} still fires (G3b will add the admin
+     * dashboard alert on top); G3a's job is to make the fallback visible
+     * in the WARN log now.
+     */
+    private GroupOutcome processGroup(List<OrderImportRowDTO> group, Integer batchId, boolean usePlatformAccount,
+                                      String sourceOverride, boolean isBackgroundContext) {
         OrderImportRowDTO leader = group.get(0);
         // PR-G2 (M-I1) — retry idempotency for USPS_DIRECT queued rows.
         //
@@ -4786,6 +4886,33 @@ public class OrderImportServiceImpl implements OrderImportService {
                     // SYNC decision (Optional was empty in reality — defensive fall-through)
                 }
             }
+            // PR-G3a (M-B3) — loud alert when a background-worker context
+            // under USPS_DIRECT falls through to sync for a row that WOULD
+            // have qualified for the queue (USPS carrier + USPS_DIRECT
+            // provider). The sync fallback still fires below (G3b will add
+            // the admin dashboard alert wiring); G3a's job is to make the
+            // fallback visible in the log so ops can see when the routing
+            // service's safety nets fire during a big background import
+            // (missing order row race, splitter no-rows path, concurrent-
+            // writer race with no existing row).
+            //
+            // Detection: (a) we're in background-worker context; (b) routing
+            // service is wired (so USPS Direct infra IS deployed); (c) the
+            // row's carrier is USPS; (d) the platform toggle says
+            // USPS_PROVIDER=USPS_DIRECT (looked up defensively — a missing
+            // settings service just skips the WARN, matching the sync path
+            // that follows). All-4 satisfied and the routing decision came
+            // back empty (Optional.empty()) -> loud WARN.
+            if (isBackgroundContext
+                    && uspsDirectRoutingService != null
+                    && existingOrderNo != null
+                    && isUspsCarrier(leader)
+                    && isUspsDirectProviderActive()) {
+                log.warn("USPS Direct routing returned SYNC unexpectedly for background import row {} "
+                                + "(parentOrderNo={}, carrier=USPS, USPS_PROVIDER=USPS_DIRECT). Falling back "
+                                + "to sync connector call — this consumes USPS quota outside the 55/hr fair-scheduler.",
+                        leader.getRowNumber(), existingOrderNo);
+            }
             ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> resp =
                     carrierService.generateManualLabel(req, null, existingOrderNo);
             com.multiship.backend.dto.LabelGenerationResponse data =
@@ -4882,6 +5009,38 @@ public class OrderImportServiceImpl implements OrderImportService {
     }
 
     /**
+     * PR-G3a — true when the row's carrier code canonicalizes to USPS
+     * (any USPS variant: USPS, USPS_DIRECT, USPS_INTL, etc). Case-
+     * insensitive so CSV-supplied variants match. Only used by the M-B3
+     * SYNC-fallback WARN branch; safe to inline-null-check.
+     */
+    private static boolean isUspsCarrier(OrderImportRowDTO leader) {
+        if (leader == null) return false;
+        String cc = leader.getCarrierCode();
+        return cc != null && cc.trim().toUpperCase(Locale.ROOT).startsWith("USPS");
+    }
+
+    /**
+     * PR-G3a — true when the platform toggle {@code USPS_PROVIDER} is
+     * set to {@code USPS_DIRECT}. Falls back to false when the setting
+     * service isn't wired (unit tests) or the lookup throws — either
+     * case means we can't distinguish "queue-eligible" from "not eligible",
+     * so we suppress the WARN to avoid false alerts. Only called from the
+     * M-B3 background-context branch; the routing service itself performs
+     * its own USPS_PROVIDER check for the actual enqueue decision.
+     */
+    private boolean isUspsDirectProviderActive() {
+        if (systemSettingService == null) return false;
+        try {
+            return "USPS_DIRECT".equalsIgnoreCase(
+                    systemSettingService.getDecrypted("USPS_PROVIDER").orElse(""));
+        } catch (Exception ex) {
+            log.debug("PR-G3a: USPS_PROVIDER lookup threw during SYNC-fallback WARN gate: {}", ex.getMessage());
+            return false;
+        }
+    }
+
+    /**
      * Turn a raw carrier rejection into one operator-facing sentence. The raw
      * connector output ("FEDEX createShipment HTTP 400: {\"transactionId\":…}")
      * is debug noise — it's logged at WARN and kept out of the grid. Known
@@ -4925,7 +5084,8 @@ public class OrderImportServiceImpl implements OrderImportService {
     private Callable<GroupOutcome> groupTask(List<OrderImportRowDTO> group, Integer batchId, boolean usePlatformAccount,
                                              String sourceOverride, Runnable onGroupComplete,
                                              java.util.function.BooleanSupplier cancelCheck,
-                                             Runnable onGroupQueued) {
+                                             Runnable onGroupQueued,
+                                             Long jobId) {
         return () -> {
             GroupOutcome outcome = null;
             try {
@@ -4942,7 +5102,9 @@ public class OrderImportServiceImpl implements OrderImportService {
                     outcome = new GroupOutcome(0, 0, 0, false, true);
                     return outcome;
                 }
-                outcome = processGroup(group, batchId, usePlatformAccount, sourceOverride);
+                // PR-G3a: jobId != null flags background-worker context so processGroup
+                // can WARN on an unexpected SYNC fallback under USPS_DIRECT (M-B3).
+                outcome = processGroup(group, batchId, usePlatformAccount, sourceOverride, jobId != null);
                 return outcome;
             } finally {
                 boolean isQueued = outcome != null && outcome.queued();
