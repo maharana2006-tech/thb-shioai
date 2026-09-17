@@ -30,6 +30,8 @@ import {
   FiCopy,
   FiPrinter,
   FiSend,
+  FiChevronDown,
+  FiSettings,
 } from 'react-icons/fi'
 import { ApiError, isAbortError } from '../api/apiClient'
 import { normalizeCarrierCode } from '../utils/carrierUtils'
@@ -1001,6 +1003,7 @@ export default function OrdersWorkspace() {
   const [bulkPrinting, setBulkPrinting] = useState<'LABEL' | 'COMMERCIAL_INVOICE' | null>(null)
   // Network printing: each order goes to its client's assigned printer (Settings → Printers).
   const [sendToPrinterOpen, setSendToPrinterOpen] = useState(false)
+  const [printMenuOpen, setPrintMenuOpen] = useState(false)
   const printSelected = async (docType: 'LABEL' | 'COMMERCIAL_INVOICE') => {
     const orderNos = selectedOrderNos
     if (orderNos.length === 0 || bulkPrinting) return
@@ -1861,6 +1864,60 @@ export default function OrdersWorkspace() {
               <FiPackage className="h-3 w-3" />
               Bulk labels ({rows.length})
             </button>
+            <div className="relative">
+              <button type="button"
+                      onClick={() => setPrintMenuOpen((o) => !o)}
+                      aria-expanded={printMenuOpen}
+                      className={BTN_GHOST_SM}
+                      title="Print labels and commercial invoices for the selected orders, or send them to your network printers">
+                <FiPrinter className="h-3 w-3" />
+                Print{selectedCount > 0 && selectionEnabled ? ` (${selectedCount})` : ''}
+                <FiChevronDown className="h-3 w-3" />
+              </button>
+              {printMenuOpen ? (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setPrintMenuOpen(false)} />
+                  <div role="menu" className="absolute right-0 z-50 mt-1.5 w-[290px] overflow-hidden rounded-xl border border-[#e3d9c4] bg-white py-1 text-left shadow-[0_18px_50px_rgba(15,23,42,0.18)]">
+                    {selectedCount === 0 || !selectionEnabled ? (
+                      <p className="border-b border-[#efe7d6] bg-[#faf7f0] px-3 py-2 text-[12px] leading-snug text-[#5a4526]">
+                        Tick the orders to print first, in the <b>All</b> or <b>Generated</b> tab. Use <b>Filters → Carrier</b> to narrow to UPS, FedEx or USPS.
+                      </p>
+                    ) : (
+                      <p className="border-b border-[#efe7d6] px-3 py-2 text-[12px] text-slate-500">
+                        {selectedCount} order{selectedCount === 1 ? '' : 's'} selected
+                      </p>
+                    )}
+                    {[
+                      { key: 'labels', icon: <FiPrinter className="h-3.5 w-3.5" />, label: 'Print labels',
+                        hint: 'One PDF in your browser print dialog', run: () => void printSelected('LABEL') },
+                      { key: 'invoices', icon: <FiFileText className="h-3.5 w-3.5" />, label: 'Print commercial invoices',
+                        hint: 'International orders only', run: () => void printSelected('COMMERCIAL_INVOICE') },
+                      { key: 'send', icon: <FiSend className="h-3.5 w-3.5" />, label: 'Send to network printer…',
+                        hint: "Each client's assigned printer, or one you pick", run: () => setSendToPrinterOpen(true) },
+                    ].map((item) => (
+                      <button key={item.key} type="button" role="menuitem"
+                        disabled={selectedCount === 0 || !selectionEnabled || busy || bulkPrinting !== null}
+                        onClick={() => { setPrintMenuOpen(false); item.run() }}
+                        className="flex w-full items-start gap-2.5 px-3 py-2 text-left hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent">
+                        <span className="mt-0.5 text-[#5a4526]">{item.icon}</span>
+                        <span>
+                          <span className="block text-[13px] font-semibold text-slate-900">{item.label}</span>
+                          <span className="block text-[11.5px] text-slate-500">{item.hint}</span>
+                        </span>
+                      </button>
+                    ))}
+                    {normalizeRole(sessionRole) === 'ADMIN' ? (
+                      <button type="button" role="menuitem"
+                        onClick={() => { setPrintMenuOpen(false); navigate(settingsPaths.printers) }}
+                        className="mt-1 flex w-full items-center gap-2.5 border-t border-[#efe7d6] px-3 py-2 text-left text-[13px] font-semibold text-slate-700 hover:bg-[#faf7f0]">
+                        <FiSettings className="h-3.5 w-3.5 text-[#5a4526]" />
+                        Manage printers &amp; client routing
+                      </button>
+                    ) : null}
+                  </div>
+                </>
+              ) : null}
+            </div>
             <button type="button"
                     onClick={() => setSplitOpen(true)}
                     className={BTN_GHOST_SM}
