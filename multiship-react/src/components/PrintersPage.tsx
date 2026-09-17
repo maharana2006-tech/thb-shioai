@@ -400,6 +400,10 @@ function PrinterEditor({ printer, onClose, onSaved }: { printer: Printer | null;
     : null
 
   const input = 'w-full rounded-md border border-slate-300 px-2.5 py-1.5 text-[13px] outline-none focus:border-slate-500'
+  // Separate class sets: two border colours on one element fight in the cascade.
+  const fieldCls = (invalid: boolean, extra = '') => invalid
+    ? `w-full rounded-md border border-rose-400 bg-rose-50/40 px-2.5 py-1.5 text-[13px] outline-none focus:border-rose-500 ${extra}`
+    : `${input} ${extra}`
   const labelCls = 'mb-1 block text-[11.5px] font-semibold uppercase tracking-wide text-slate-500'
 
   return (
@@ -415,7 +419,7 @@ function PrinterEditor({ printer, onClose, onSaved }: { printer: Printer | null;
         <div className="grid grid-cols-2 gap-3 px-5 py-4">
           <label className="col-span-2 sm:col-span-1">
             <span className={labelCls}>Name</span>
-            <input className={`${input} ${errors.name ? 'border-rose-400' : ''}`} value={form.name} aria-invalid={!!errors.name}
+            <input className={fieldCls(!!errors.name)} value={form.name} aria-invalid={!!errors.name}
               onChange={(e) => { set('name', e.target.value); clearError('name') }} placeholder="Dock 1 Zebra" />
             {fieldError(errors.name)}
           </label>
@@ -439,13 +443,13 @@ function PrinterEditor({ printer, onClose, onSaved }: { printer: Printer | null;
           </label>
           <label className="col-span-2 sm:col-span-1">
             <span className={labelCls}>IP address or hostname</span>
-            <input className={`${input} font-mono ${errors.host ? 'border-rose-400' : ''}`} value={form.host} aria-invalid={!!errors.host}
+            <input className={fieldCls(!!errors.host, 'font-mono')} value={form.host} aria-invalid={!!errors.host}
               onChange={(e) => { set('host', e.target.value); clearError('host') }} placeholder="192.168.1.50" />
             {fieldError(errors.host)}
           </label>
           <label className="col-span-2 sm:col-span-1">
             <span className={labelCls}>Port</span>
-            <input className={`${input} font-mono`} inputMode="numeric" value={form.port ?? ''}
+            <input className={fieldCls(!!errors.port, 'font-mono')} aria-invalid={!!errors.port} inputMode="numeric" value={form.port ?? ''}
               onChange={(e) => { set('port', e.target.value === '' ? null : Number(e.target.value.replace(/\D/g, ''))); clearError('port') }}
               placeholder={form.connection === 'IPP' ? '631' : '9100'} />
             {fieldError(errors.port)}

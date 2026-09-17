@@ -49,7 +49,9 @@ function ToastStack({ toasts }: { toasts: NotifyMessage[] }) {
 
   return (
     <div
-      className="pointer-events-none fixed bottom-4 right-4 z-[60] flex w-[min(380px,calc(100vw-2rem))] flex-col items-end gap-2 print:hidden"
+      // --toast-bottom: a page with a bottom action bar lifts the stack above it.
+      style={{ bottom: 'var(--toast-bottom, 1rem)' }}
+      className="pointer-events-none fixed right-4 z-[60] flex w-[min(380px,calc(100vw-2rem))] flex-col items-end gap-2 print:hidden"
       aria-live="polite"
     >
       {hidden > 0 ? (

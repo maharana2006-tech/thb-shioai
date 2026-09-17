@@ -1008,6 +1008,26 @@ export default function OrdersWorkspace() {
   const [printMenuAnchor, setPrintMenuAnchor] = useState<{ top: number; left: number; width: number } | null>(null)
   // Printing needs labelled orders: the All orders and Archive tabs (not Ready).
   const printableView = view === 'all' || view === 'generated'
+  // While the bottom action bar shows, lift the toast stack above it so a
+  // toast never covers the bar's buttons (NotifyHost reads --toast-bottom).
+  const actionBarRef = useRef<HTMLDivElement | null>(null)
+  const actionBarVisible = !!bulkProgress || (selectionEnabled && selectedCount > 0)
+  useEffect(() => {
+    const root = document.documentElement
+    const bar = actionBarRef.current
+    if (!actionBarVisible || !bar) {
+      root.style.removeProperty('--toast-bottom')
+      return
+    }
+    const update = () => root.style.setProperty('--toast-bottom', `${bar.offsetHeight + 32}px`)
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(bar)
+    return () => {
+      observer.disconnect()
+      root.style.removeProperty('--toast-bottom')
+    }
+  }, [actionBarVisible])
   useEffect(() => {
     if (!printMenuOpen) return
     // The menu is pinned to where the button was; close it rather than let it drift.
@@ -1421,13 +1441,21 @@ export default function OrdersWorkspace() {
             type="checkbox"
             aria-label={`Select order ${row.original.orderDetails.orderNo}`}
             checked={isOrderSelected(row.original.orderDetails.orderNo)}
-            onClick={(e) => {
+            onMouseDown={(e) => {
+              // Toggle on press, not click: each toggle re-renders the table,
+              // and a fast next click whose press and release straddle that
+              // re-render never produced a click (ticks were dropped).
+              if (e.button !== 0) return
+              if (e.shiftKey) e.preventDefault() // no text selection on range-select
               // Range-select — shift-click extends from the last-clicked
               // anchor to this row (Gmail/GitHub muscle memory).
               toggleOrder(row.original.orderDetails.orderNo, row.index, e.shiftKey)
-              // We handle the state change ourselves; stop React from
-              // firing the onChange handler with a fresh toggle.
+            }}
+            onClick={(e) => {
+              // We handle the state change ourselves; stop the browser's own toggle.
               e.preventDefault()
+              // detail 0 = keyboard (Space) — no mousedown came first.
+              if (e.detail === 0) toggleOrder(row.original.orderDetails.orderNo, row.index, e.shiftKey)
             }}
             onChange={() => { /* handled by onClick */ }}
             className="h-4 w-4 rounded border-[#cdbf9f] text-[#1f150c] focus:ring-[#e3d9c4]"
@@ -1907,7 +1935,7 @@ export default function OrdersWorkspace() {
                       className={BTN_GHOST_SM}
                       title="Print labels and commercial invoices for the selected orders, or send them to your network printers">
                 <FiPrinter className="h-3 w-3" />
-                Print{selectedCount > 0 && printableView ? ` (${selectedCount})` : ''}
+                Print{selectedCount > 0 && printableView ? ` (${selectedCount.toLocaleString()})` : ''}
                 <FiChevronDown className="h-3 w-3" />
               </button>
               {printMenuOpen && printMenuAnchor ? createPortal(
@@ -1922,7 +1950,7 @@ export default function OrdersWorkspace() {
                       </p>
                     ) : (
                       <p className="border-b border-[#efe7d6] px-3 py-2 text-[12px] text-slate-500">
-                        {selectedCount} order{selectedCount === 1 ? '' : 's'} selected
+                        {selectedCount.toLocaleString()} order{selectedCount === 1 ? '' : 's'} selected
                       </p>
                     )}
                     {[
@@ -2060,7 +2088,7 @@ export default function OrdersWorkspace() {
         {selectionEnabled && selectionMode === 'all-filtered' && allFilteredIds ? (
           <div className="mt-2 flex items-center justify-between gap-3 rounded-xl border border-sky-300 bg-sky-100 px-3 py-2 text-[11.5px] text-sky-900">
             <span>
-              All <span className="font-semibold">{selectedCount}</span> orders matching the current filter are selected
+              All <span className="font-semibold">{selectedCount.toLocaleString()}</span> orders matching the current filter are selected
               {selectionSet.size > 0 ? <> · <span className="font-semibold">{selectionSet.size}</span> excluded</> : null}.
             </span>
             <button
@@ -2462,7 +2490,9 @@ export default function OrdersWorkspace() {
              all/gen    → Void selected (labelled subset) + Copy order #s
       */}
       {bulkProgress || (selectionEnabled && selectedCount > 0) ? (
-        <div className="fixed inset-x-0 bottom-5 z-30 flex justify-center px-4">
+        // Sticky inside the content column (not fixed to the viewport), so it
+        // centres on the page content and never slides under the sidebar.
+        <div ref={actionBarRef} className="pointer-events-none sticky bottom-5 z-30 mt-4 flex justify-center [&>*]:pointer-events-auto">
           <div className="flex max-w-full flex-wrap items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2.5 shadow-[0_18px_50px_rgba(15,23,42,0.22)] sm:gap-3 sm:px-4">
             {bulkProgress ? (
               <>
@@ -2480,7 +2510,7 @@ export default function OrdersWorkspace() {
             ) : (
               <>
                 <span className="text-[13.5px] font-semibold text-slate-950 tabular-nums">
-                  {selectedCount} selected{selectionMode === 'all-filtered' ? ' (all matching filter)' : ''}
+                  {selectedCount.toLocaleString()} selected{selectionMode === 'all-filtered' ? ' (all matching filter)' : ''}
                 </span>
                 {view === 'ready' ? (
                   <button
