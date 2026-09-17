@@ -107,6 +107,17 @@ public interface UspsLabelQueueRepository
      */
     Page<UspsLabelQueueItem> findAllByOrderByEnqueuedAtDesc(Pageable pageable);
 
+    /**
+     * PR-G3b - source-scoped variant of the /items list. Uses the same
+     * enqueued_at DESC ordering so admin operators can page through rows
+     * for one surface only (e.g. only IMPORT_BACKGROUND spikes).
+     *
+     * <p>Backed by the partial index {@code idx_usps_label_queue_source_type
+     * (source_type, status) WHERE source_type IS NOT NULL} from V63.
+     */
+    Page<UspsLabelQueueItem> findBySourceTypeOrderByEnqueuedAtDesc(
+            UspsLabelQueueItem.SourceType sourceType, Pageable pageable);
+
     // ================================================================
     // PR-F2 - MPS aggregation
     // ================================================================

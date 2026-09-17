@@ -127,7 +127,7 @@ class OrderImportServiceImplUspsDirectRoutingTest {
 
     @Test
     void singleQueuedRowTransitionsToQueuedUspsAndSkipsCarrierCall() {
-        when(routing.decide(eq(9001L), any())).thenReturn(Optional.of(
+        when(routing.decide(eq(9001L), any(), any())).thenReturn(Optional.of(
                 new RoutingDecision(RoutingDecision.Status.SINGLE_QUEUED, 42L, null, null)));
 
         ApiResponse<OrderImportPreviewDTO> resp = service.commit(
@@ -151,7 +151,7 @@ class OrderImportServiceImplUspsDirectRoutingTest {
 
     @Test
     void mpsQueuedRowTransitionsToQueuedUspsWithPieceCountMessage() {
-        when(routing.decide(eq(9002L), any())).thenReturn(Optional.of(
+        when(routing.decide(eq(9002L), any(), any())).thenReturn(Optional.of(
                 new RoutingDecision(RoutingDecision.Status.MPS_QUEUED, null, 5, null)));
 
         ApiResponse<OrderImportPreviewDTO> resp = service.commit(
@@ -172,7 +172,7 @@ class OrderImportServiceImplUspsDirectRoutingTest {
     void rejectedIntlMpsRowTransitionsToFailedWithReason() {
         String reason = "USPS Direct does not support multi-piece international shipments. "
                 + "Split into single-package intl shipments manually, or set USPS_PROVIDER=STAMPS_COM.";
-        when(routing.decide(eq(9003L), any())).thenReturn(Optional.of(
+        when(routing.decide(eq(9003L), any(), any())).thenReturn(Optional.of(
                 new RoutingDecision(RoutingDecision.Status.REJECTED, null, null, reason)));
 
         ApiResponse<OrderImportPreviewDTO> resp = service.commit(
@@ -194,7 +194,7 @@ class OrderImportServiceImplUspsDirectRoutingTest {
     void syncRoutingDecisionFallsThroughToGenerateManualLabel() {
         // Matches STAMPS_COM provider / non-USPS carrier / broken settings —
         // routing returns Optional.empty(), caller must sync.
-        when(routing.decide(eq(9004L), any())).thenReturn(Optional.empty());
+        when(routing.decide(eq(9004L), any(), any())).thenReturn(Optional.empty());
         when(carrierService.generateManualLabel(any(), any(), any()))
                 .thenReturn(okSync(9004L, "TN-9004"));
 
@@ -210,7 +210,7 @@ class OrderImportServiceImplUspsDirectRoutingTest {
     void fedexRowUnderUspsDirectProviderStillSyncsWhenRoutingReturnsEmpty() {
         // Under USPS_DIRECT, the routing service short-circuits non-USPS
         // carriers to Optional.empty(). FedEx must reach the sync path.
-        when(routing.decide(eq(9005L), any())).thenReturn(Optional.empty());
+        when(routing.decide(eq(9005L), any(), any())).thenReturn(Optional.empty());
         when(carrierService.generateManualLabel(any(), any(), any()))
                 .thenReturn(okSync(9005L, "TN-9005"));
 
@@ -258,7 +258,7 @@ class OrderImportServiceImplUspsDirectRoutingTest {
 
         verify(carrierService, times(1)).generateManualLabel(any(), any(), eq(null));
         // Import-site routing must not be consulted when we have no orderNo.
-        verify(routing, never()).decide(org.mockito.ArgumentMatchers.anyLong(), any());
+        verify(routing, never()).decide(org.mockito.ArgumentMatchers.anyLong(), any(), any());
     }
 
     // ================================================================
@@ -268,17 +268,17 @@ class OrderImportServiceImplUspsDirectRoutingTest {
     @Test
     void mixedBatchQueuesUspsRowsAndSyncsFedexRows() {
         // USPS rows -> routing returns SINGLE_QUEUED
-        when(routing.decide(eq(9101L), any())).thenReturn(Optional.of(
+        when(routing.decide(eq(9101L), any(), any())).thenReturn(Optional.of(
                 new RoutingDecision(RoutingDecision.Status.SINGLE_QUEUED, 501L, null, null)));
-        when(routing.decide(eq(9102L), any())).thenReturn(Optional.of(
+        when(routing.decide(eq(9102L), any(), any())).thenReturn(Optional.of(
                 new RoutingDecision(RoutingDecision.Status.SINGLE_QUEUED, 502L, null, null)));
-        when(routing.decide(eq(9103L), any())).thenReturn(Optional.of(
+        when(routing.decide(eq(9103L), any(), any())).thenReturn(Optional.of(
                 new RoutingDecision(RoutingDecision.Status.SINGLE_QUEUED, 503L, null, null)));
 
         // FedEx rows -> routing returns empty (SYNC), carrier answers OK
-        when(routing.decide(eq(9201L), any())).thenReturn(Optional.empty());
-        when(routing.decide(eq(9202L), any())).thenReturn(Optional.empty());
-        when(routing.decide(eq(9203L), any())).thenReturn(Optional.empty());
+        when(routing.decide(eq(9201L), any(), any())).thenReturn(Optional.empty());
+        when(routing.decide(eq(9202L), any(), any())).thenReturn(Optional.empty());
+        when(routing.decide(eq(9203L), any(), any())).thenReturn(Optional.empty());
         when(carrierService.generateManualLabel(any(), any(), any()))
                 .thenAnswer(inv -> {
                     Integer existingOrderNo = inv.getArgument(2);

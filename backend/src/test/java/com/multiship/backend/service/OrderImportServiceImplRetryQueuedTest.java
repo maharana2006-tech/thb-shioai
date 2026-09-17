@@ -130,7 +130,7 @@ class OrderImportServiceImplRetryQueuedTest {
 
         // No call to either collaborator: the guard fires at the very top
         // of processGroup, before validation / rate-limit / routing.
-        verify(routing, never()).decide(anyLong(), any());
+        verify(routing, never()).decide(anyLong(), any(), any());
         verifyNoInteractions(carrierService);
     }
 
@@ -147,7 +147,7 @@ class OrderImportServiceImplRetryQueuedTest {
             assertEquals("QUEUED_USPS", r.getGeneratedStatus(),
                     "row " + r.getRowNumber() + " must stay QUEUED_USPS on retry");
         }
-        verify(routing, never()).decide(anyLong(), any());
+        verify(routing, never()).decide(anyLong(), any(), any());
         verifyNoInteractions(carrierService);
     }
 
@@ -163,7 +163,7 @@ class OrderImportServiceImplRetryQueuedTest {
         // QUEUED_USPS, not FAILED), and returns SINGLE_QUEUED because the
         // queue's UNIQUE(shipment_id) permits a fresh insert for a
         // terminated prior row.
-        when(routing.decide(eq(8201L), any())).thenReturn(Optional.of(
+        when(routing.decide(eq(8201L), any(), any())).thenReturn(Optional.of(
                 new RoutingDecision(RoutingDecision.Status.SINGLE_QUEUED, 999L, null, null)));
 
         ApiResponse<OrderImportPreviewDTO> resp = service.commit(
@@ -175,7 +175,7 @@ class OrderImportServiceImplRetryQueuedTest {
                 "Retry of a FAILED row must land on the queue when routing says so");
         assertEquals(8201, row.getGeneratedOrderNo(),
                 "orderNo persists across the failed→queued transition");
-        verify(routing, times(1)).decide(eq(8201L), any());
+        verify(routing, times(1)).decide(eq(8201L), any(), any());
         // Sync path stays uncalled — the queue is what will fire the label.
         verifyNoInteractions(carrierService);
     }
@@ -185,7 +185,7 @@ class OrderImportServiceImplRetryQueuedTest {
         // Same failed row, but the operator meanwhile flipped USPS_PROVIDER
         // back to STAMPS_COM — routing returns Optional.empty(), caller
         // must go through the sync generateManualLabel path.
-        when(routing.decide(eq(8301L), any())).thenReturn(Optional.empty());
+        when(routing.decide(eq(8301L), any(), any())).thenReturn(Optional.empty());
         when(carrierService.generateManualLabel(any(), any(), any()))
                 .thenReturn(okSync(8301L, "TN-8301"));
 
@@ -205,7 +205,7 @@ class OrderImportServiceImplRetryQueuedTest {
     void mixedRetryBatchSkipsQueuedRowsButReRoutesFailedRows() {
         // A retry batch with a queued row alongside a failed row. Queued
         // stays put; failed goes through routing again.
-        when(routing.decide(eq(8401L), any())).thenReturn(Optional.of(
+        when(routing.decide(eq(8401L), any(), any())).thenReturn(Optional.of(
                 new RoutingDecision(RoutingDecision.Status.SINGLE_QUEUED, 777L, null, null)));
 
         ApiResponse<OrderImportPreviewDTO> resp = service.commit(
@@ -219,7 +219,7 @@ class OrderImportServiceImplRetryQueuedTest {
                 "the failed row got re-routed to the queue");
 
         // Only the failed row's orderNo reached the routing service.
-        verify(routing, times(1)).decide(eq(8401L), any());
-        verify(routing, never()).decide(eq(8402L), any());
+        verify(routing, times(1)).decide(eq(8401L), any(), any());
+        verify(routing, never()).decide(eq(8402L), any(), any());
     }
 }
