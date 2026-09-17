@@ -3,6 +3,7 @@ package com.multiship.backend.service.carriers.usps.queue;
 import com.multiship.backend.dto.PackageDetailDTO;
 import com.multiship.backend.dto.ShipmentRequestDTO;
 import com.multiship.backend.model.Order;
+import com.multiship.backend.model.UspsLabelQueueItem;
 import com.multiship.backend.repository.OrderRepository;
 import com.multiship.backend.service.carriers.usps.queue.UspsLabelQueueService.EnqueueMpsRequest;
 import com.multiship.backend.service.carriers.usps.queue.UspsLabelQueueService.EnqueueMpsResult;
@@ -70,6 +71,17 @@ import java.util.Optional;
  * Both entry points therefore fail fast with a remediation message
  * BEFORE any queue rows are written (transactional integrity - no
  * partial enqueue).
+ *
+ * <p><b>PR-G3b - provenance propagation.</b> Callers may pass a
+ * {@link UspsLabelQueueItem.SourceType} + {@code importBatchId} through
+ * the {@code splitAndEnqueueForOrder} 5-arg overload; those values are
+ * stamped on every persisted MPS piece so the admin dashboard's
+ * by-source aggregation attributes each of the N rows to the triggering
+ * caller (bulk / import / manual) and so
+ * {@code UspsLabelQueueService.cancelPending(importBatchId)} catches
+ * all N rows in one cascade. The 3-arg overload defaults to
+ * {@link UspsLabelQueueItem.SourceType#MPS_PIECE} with a null batch id
+ * for back-compat callers that don't know about the provenance fields.
  */
 @Slf4j
 @Service
@@ -171,13 +183,30 @@ public class UspsMpsSplitterService {
     }
 
     /**
-     * Convenience overload for callers (e.g. {@code BulkLabelServiceImpl})
-     * that only have an {@code Order} + its {@code packageCount} on hand
-     * and don't want to reconstruct a full {@link ShipmentRequestDTO}
-     * upfront. Semantically identical to
-     * {@link #splitAndEnqueue(ShipmentRequestDTO, String, Long)} - the
-     * queue processor builds the per-piece DTO from the Order later
-     * anyway.
+     * Legacy 3-arg overload for pre-G3b callers. Delegates to
+     * {@link #splitAndEnqueueForOrder(Long, int, String, UspsLabelQueueItem.SourceType, Long)}
+     * with {@link UspsLabelQueueItem.SourceType#MPS_PIECE} + null
+     * import batch id so pieces persist with a source stamp (attributes
+     * to the splitter surface) but no import-batch scope.
+     */
+    public EnqueueMpsResult splitAndEnqueueForOrder(
+            Long parentOrderNo, int packageCount, String tenantCode) {
+        return splitAndEnqueueForOrder(parentOrderNo, packageCount, tenantCode,
+                UspsLabelQueueItem.SourceType.MPS_PIECE, null);
+    }
+
+    /**
+     * PR-G3b - primary MPS enqueue for callers that know their
+     * provenance. Every persisted piece row carries the supplied
+     * {@code sourceType} + {@code importBatchId} so:
+     * <ul>
+     *   <li>the admin dashboard's by-source aggregation attributes each
+     *       of the N pieces to the real triggering surface (bulk /
+     *       import / manual) rather than the splitter;</li>
+     *   <li>the cancel-cascade path
+     *       ({@code UspsLabelQueueService.cancelPending(importBatchId)})
+     *       catches every piece in one round-trip.</li>
+     * </ul>
      *
      * <p>Loads the parent {@link Order} to re-check the recipient
      * country against the intl guard - callers on this path don't
@@ -190,9 +219,18 @@ public class UspsMpsSplitterService {
      * @param packageCount    Piece count (>= 2). Values <2 throw IAE
      *                        with the same message as the DTO path.
      * @param tenantCode      Non-blank tenant / client code.
+     * @param sourceType      PR-G3b - which surface caused the enqueue.
+     *                        Nullable (rows land as UNKNOWN in that
+     *                        case); prefer a real value for dashboard
+     *                        attribution.
+     * @param importBatchId   PR-G3b - non-null iff the enqueue came
+     *                        from an import batch. Enables the cancel-
+     *                        cascade path.
      */
     public EnqueueMpsResult splitAndEnqueueForOrder(
-            Long parentOrderNo, int packageCount, String tenantCode) {
+            Long parentOrderNo, int packageCount, String tenantCode,
+            UspsLabelQueueItem.SourceType sourceType,
+            Long importBatchId) {
         if (parentOrderNo == null) {
             throw new IllegalArgumentException("parentOrderNo must not be null");
         }
@@ -226,13 +264,15 @@ public class UspsMpsSplitterService {
         // triggered MPS runs at equal priority so the processor's FIFO
         // tie-break preserves piece ordering across the parent's pieces.
         EnqueueMpsRequest req = new EnqueueMpsRequest(
-                tenantCode.trim(), parentOrderNo, pieces, 0);
+                tenantCode.trim(), parentOrderNo, pieces, 0,
+                sourceType, importBatchId);
 
         EnqueueMpsResult result = uspsLabelQueueService.enqueueMps(req);
         log.info("USPS MPS splitter: parentOrderNo={} tenant={} pieces={} → enqueuedCount={} "
-                        + "firstStart={} lastComplete={}",
+                        + "firstStart={} lastComplete={} source={} importBatch={}",
                 parentOrderNo, tenantCode, packageCount, result.enqueuedCount(),
-                result.estimatedFirstStartAt(), result.estimatedLastCompleteAt());
+                result.estimatedFirstStartAt(), result.estimatedLastCompleteAt(),
+                sourceType, importBatchId);
         return result;
     }
 
