@@ -177,6 +177,7 @@ public class OrderServiceImpl implements OrderService {
         String sourceFilter = trimmed(filters.getSource()).toUpperCase(java.util.Locale.ROOT);
         // Shipping channel: D2C | B2B. '' = all channels.
         String channelFilter = trimmed(filters.getChannel()).toUpperCase(java.util.Locale.ROOT);
+        String carrierFilter = trimmed(filters.getCarrier()).toUpperCase(java.util.Locale.ROOT);
 
         if (!isValidDateFilter(createdFrom) || !isValidDateFilter(createdTo)) {
             return ApiResponse.<PageResponseDTO<OrderResponseDTO>>builder()
@@ -217,13 +218,13 @@ public class OrderServiceImpl implements OrderService {
                 statusFilter, tenantFilter, keywordFilter, resolutionFilter,
                 customerFilter, cityFilter, orderNoFilter, trackingFilter,
                 batchIdFilter,
-                createdFrom, createdTo, sourceFilter, channelFilter,
+                createdFrom, createdTo, sourceFilter, channelFilter, carrierFilter,
                 page * size, size, sortBy, sortDirection);
         long totalRecords = orderRepository.countOrdersUnified(
                 statusFilter, tenantFilter, keywordFilter, resolutionFilter,
                 customerFilter, cityFilter, orderNoFilter, trackingFilter,
                 batchIdFilter,
-                createdFrom, createdTo, sourceFilter, channelFilter);
+                createdFrom, createdTo, sourceFilter, channelFilter, carrierFilter);
 
         List<OrderResponseDTO> orders = results.stream()
                 .map(this::mapToOrderResponseDTO)
@@ -282,6 +283,7 @@ public class OrderServiceImpl implements OrderService {
         String createdTo = trimmed(filters.getCreatedTo());
         String sourceFilter = trimmed(filters.getSource()).toUpperCase(java.util.Locale.ROOT);
         String channelFilter = trimmed(filters.getChannel()).toUpperCase(java.util.Locale.ROOT);
+        String carrierFilter = trimmed(filters.getCarrier()).toUpperCase(java.util.Locale.ROOT);
 
         if (!isValidDateFilter(createdFrom) || !isValidDateFilter(createdTo)) {
             return ApiResponse.<java.util.List<Integer>>builder()
@@ -312,7 +314,7 @@ public class OrderServiceImpl implements OrderService {
                 statusFilter, tenantFilter, keywordFilter, resolutionFilter,
                 customerFilter, cityFilter, orderNoFilter, trackingFilter,
                 batchIdFilter,
-                createdFrom, createdTo, sourceFilter, channelFilter);
+                createdFrom, createdTo, sourceFilter, channelFilter, carrierFilter);
 
         return ApiResponse.<java.util.List<Integer>>builder()
                 .status("SUCCESS").code(200)
@@ -356,6 +358,7 @@ public class OrderServiceImpl implements OrderService {
         String createdTo = trimmed(filters.getCreatedTo());
         String sourceFilter = trimmed(filters.getSource()).toUpperCase(java.util.Locale.ROOT);
         String channelFilter = trimmed(filters.getChannel()).toUpperCase(java.util.Locale.ROOT);
+        String carrierFilter = trimmed(filters.getCarrier()).toUpperCase(java.util.Locale.ROOT);
 
         if (!isValidDateFilter(createdFrom) || !isValidDateFilter(createdTo)) {
             return ApiResponse.<java.util.List<java.util.Map<String, Object>>>builder()
@@ -370,7 +373,7 @@ public class OrderServiceImpl implements OrderService {
                 statusFilter, tenantFilter, keywordFilter, resolutionFilter,
                 customerFilter, cityFilter, orderNoFilter, trackingFilter,
                 batchIdFilter,
-                createdFrom, createdTo, sourceFilter, channelFilter);
+                createdFrom, createdTo, sourceFilter, channelFilter, carrierFilter);
 
         java.util.List<java.util.Map<String, Object>> out = rows.stream()
                 .map(r -> {

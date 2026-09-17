@@ -327,6 +327,11 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
                AND LOWER(BTRIM(b.ship_attn)) <> LOWER(BTRIM(b.ship_name)) THEN 'B2B'
               ELSE 'D2C'
           END)) = :channel)
+          AND (:carrier = '' OR UPPER(COALESCE(
+                (SELECT r.carrier_code FROM carrier_account_ref r
+                  WHERE UPPER(r.account_number) = UPPER(t.account_number) LIMIT 1),
+                (SELECT s2.carrier FROM shipping_service s2
+                  WHERE UPPER(s2.service_code) = UPPER(b.shipvia_cd) LIMIT 1))) = :carrier)
           AND (:resolution = ''
                OR (:resolution = 'READY' AND """ + RESOLUTION_READY_SQL + """
                )
@@ -415,6 +420,7 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("createdTo") String createdTo,
             @Param("source") String source,
             @Param("channel") String channel,
+            @Param("carrier") String carrier,
             @Param("offset") int offset,
             @Param("limit") int limit,
             @Param("sortBy") String sortBy,
@@ -439,7 +445,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("createdFrom") String createdFrom,
             @Param("createdTo") String createdTo,
             @Param("source") String source,
-            @Param("channel") String channel
+            @Param("channel") String channel,
+            @Param("carrier") String carrier
     );
 
     /**
@@ -469,7 +476,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("createdFrom") String createdFrom,
             @Param("createdTo") String createdTo,
             @Param("source") String source,
-            @Param("channel") String channel
+            @Param("channel") String channel,
+            @Param("carrier") String carrier
     );
 
     /**
@@ -501,7 +509,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("createdFrom") String createdFrom,
             @Param("createdTo") String createdTo,
             @Param("source") String source,
-            @Param("channel") String channel
+            @Param("channel") String channel,
+            @Param("carrier") String carrier
     );
 
     /** Tab counts for the Labels work queue, computed in one pass. */

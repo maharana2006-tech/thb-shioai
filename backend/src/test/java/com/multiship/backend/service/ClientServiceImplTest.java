@@ -525,7 +525,7 @@ class ClientServiceImplTest {
                 .thenReturn(Optional.of(c));
         // No orders — delete proceeds.
         when(orderRepo.countOrdersUnified(anyString(), eq("ACME"), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
                 .thenReturn(0L);
 
         // Owned warehouse must be deleted alongside the client (Sprint 55
@@ -564,7 +564,7 @@ class ClientServiceImplTest {
         when(clientRepo.findByClientCodeIgnoreCase("ACME"))
                 .thenReturn(Optional.of(c));
         when(orderRepo.countOrdersUnified(anyString(), eq("ACME"), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
                 .thenReturn(5L);
 
         ApiResponse<Void> res = service.deleteClient("acme");
@@ -629,7 +629,7 @@ class ClientServiceImplTest {
         when(accountRepo.findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc("ACME"))
                 .thenReturn(List.of());
         when(orderRepo.countOrdersUnified(any(), any(), any(), any(), any(), any(), any(), any(),
-                any(), any(), any(), any(), any())).thenReturn(0L);
+                any(), any(), any(), any(), any(), anyString())).thenReturn(0L);
 
         String csv = service.exportClientsCsv(ClientListFilters.builder().build());
 
@@ -653,7 +653,7 @@ class ClientServiceImplTest {
         when(accountRepo.findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc("ACME"))
                 .thenReturn(List.of());
         when(orderRepo.countOrdersUnified(any(), any(), any(), any(), any(), any(), any(), any(),
-                any(), any(), any(), any(), any())).thenReturn(0L);
+                any(), any(), any(), any(), any(), anyString())).thenReturn(0L);
 
         String csv = service.exportClientsCsv(ClientListFilters.builder().build());
 

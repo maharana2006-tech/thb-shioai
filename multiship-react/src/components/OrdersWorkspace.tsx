@@ -128,6 +128,7 @@ export default function OrdersWorkspace() {
   // Order source filter: '' (all) | MANUAL | BULK | API | WMS | ERP.
   const [sourceFilter, setSourceFilter] = useState('')
   const [channelFilter, setChannelFilter] = useState('')
+  const [carrierFilter, setCarrierFilter] = useState('')
   const [clientCodes, setClientCodes] = useState<string[]>([])
   // Sprint 51 migration — sort is owned by the shared AdvancedDataTable now.
   // sortBy / sortDirection remain the fetch-effect inputs (derived below).
@@ -278,6 +279,7 @@ export default function OrdersWorkspace() {
           createdTo: dateTo || undefined,
           source: sourceFilter || undefined,
           channel: channelFilter || undefined,
+          carrier: carrierFilter || undefined,
         })
         if (!cancelled) setBatchesForPicker(res.data ?? [])
       } catch {
@@ -287,7 +289,7 @@ export default function OrdersWorkspace() {
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showFilters, view, debouncedQuery, clientFilter,
-      dateFrom, dateTo, debouncedFilters, sourceFilter, channelFilter])
+      dateFrom, dateTo, debouncedFilters, sourceFilter, channelFilter, carrierFilter])
 
   /**
    * Signature of the current filter set — used both to invalidate the
@@ -299,8 +301,8 @@ export default function OrdersWorkspace() {
    */
   const filterSignature = useMemo(() => JSON.stringify({
     view, q: debouncedQuery, client: clientFilter, from: dateFrom, to: dateTo,
-    filters: debouncedFilters, source: sourceFilter, channel: channelFilter,
-  }), [view, debouncedQuery, clientFilter, dateFrom, dateTo, debouncedFilters, sourceFilter, channelFilter])
+    filters: debouncedFilters, source: sourceFilter, channel: channelFilter, carrier: carrierFilter,
+  }), [view, debouncedQuery, clientFilter, dateFrom, dateTo, debouncedFilters, sourceFilter, channelFilter, carrierFilter])
 
   // Filter change → clear selection and invalidate the all-filtered
   // cache. Prior behaviour also cleared on page/pageSize change, which
@@ -388,6 +390,7 @@ export default function OrdersWorkspace() {
       createdTo: dateTo || undefined,
       source: sourceFilter || undefined,
       channel: channelFilter || undefined,
+      carrier: carrierFilter || undefined,
       page: page - 1,
       size: pageSize,
       sortBy,
@@ -413,7 +416,7 @@ export default function OrdersWorkspace() {
     return () => {
       cancelled = true
     }
-  }, [view, page, pageSize, debouncedQuery, clientFilter, dateFrom, dateTo, sourceFilter, channelFilter, sortBy, sortDirection, debouncedFilters, reloadToken])
+  }, [view, page, pageSize, debouncedQuery, clientFilter, dateFrom, dateTo, sourceFilter, channelFilter, carrierFilter, sortBy, sortDirection, debouncedFilters, reloadToken])
 
   const refreshQueues = () => setReloadToken((token) => token + 1)
 
@@ -643,8 +646,9 @@ export default function OrdersWorkspace() {
       createdTo: dateTo || undefined,
       source: sourceFilter || undefined,
       channel: channelFilter || undefined,
+      carrier: carrierFilter || undefined,
     }
-  }, [view, clientFilter, debouncedQuery, debouncedFilters, dateFrom, dateTo, sourceFilter, channelFilter])
+  }, [view, clientFilter, debouncedQuery, debouncedFilters, dateFrom, dateTo, sourceFilter, channelFilter, carrierFilter])
 
   const selectAllFiltered = useCallback(async () => {
     try {
@@ -986,6 +990,33 @@ export default function OrdersWorkspace() {
   }, [])
 
   /** Fetch + print the label PDF for one order. */
+  // Bulk print from the selection bar: every selected order's label (or invoice)
+  // merged into ONE PDF, sent to the browser print dialog as a single job.
+  const [bulkPrinting, setBulkPrinting] = useState<'LABEL' | 'COMMERCIAL_INVOICE' | null>(null)
+  const printSelected = async (docType: 'LABEL' | 'COMMERCIAL_INVOICE') => {
+    const orderNos = selectedOrderNos
+    if (orderNos.length === 0 || bulkPrinting) return
+    if (orderNos.length > 500) {
+      notify.error(`Print at most 500 orders at a time — ${orderNos.length} are selected. Narrow the filter or select fewer.`)
+      return
+    }
+    setBulkPrinting(docType)
+    try {
+      const res = await orderService.printDocuments(orderNos, docType)
+      printPdfBlob(res.blob)
+      const what = docType === 'LABEL' ? 'label' : 'commercial invoice'
+      const why = docType === 'LABEL' ? 'no label yet' : 'no invoice — domestic or no customs data'
+      notify.success(
+        `Opening ${res.included} ${what}${res.included === 1 ? '' : 's'} in the print dialog`
+          + (res.skipped > 0 ? ` · ${res.skipped} skipped (${why})` : '') + '.',
+      )
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : 'Bulk print failed.')
+    } finally {
+      setBulkPrinting(null)
+    }
+  }
+
   const printLabelPdf = useCallback(async (orderNo: number) => {
     try {
       const blob = await orderService.getLabelPdf(orderNo, undefined, { main: true })
@@ -2252,6 +2283,21 @@ export default function OrdersWorkspace() {
                           <option value="B2B">B2B (business)</option>
                         </select>,
                       )}
+                      {advField(
+                        <FiTruck className="h-3 w-3" />,
+                        'Carrier',
+                        <select
+                          value={carrierFilter}
+                          onChange={(e) => setCarrierFilter(e.target.value)}
+                          className={advInputCls}
+                        >
+                          <option value="">Any carrier</option>
+                          <option value="UPS">UPS</option>
+                          <option value="FEDEX">FedEx</option>
+                          <option value="USPS">USPS</option>
+                          <option value="DHL">DHL</option>
+                        </select>,
+                      )}
                     </div>
 
                     <div className="mt-3 flex items-center justify-end gap-2 border-t border-dashed border-[#e3d9c4] pt-2.5">
@@ -2368,6 +2414,30 @@ export default function OrdersWorkspace() {
                     >
                       <FiSlash className="h-3.5 w-3.5" />
                       Void selected
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void printSelected('LABEL')}
+                      disabled={busy || bulkPrinting !== null}
+                      title="Print the labels of every selected order in one job (orders without a label are skipped)"
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:opacity-50"
+                    >
+                      {bulkPrinting === 'LABEL'
+                        ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#5a4526]" />
+                        : <FiPrinter className="h-3.5 w-3.5" />}
+                      Print labels
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void printSelected('COMMERCIAL_INVOICE')}
+                      disabled={busy || bulkPrinting !== null}
+                      title="Print the commercial invoices of every selected international order in one job"
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:opacity-50"
+                    >
+                      {bulkPrinting === 'COMMERCIAL_INVOICE'
+                        ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#5a4526]" />
+                        : <FiFileText className="h-3.5 w-3.5" />}
+                      Print invoices
                     </button>
                     <button
                       type="button"

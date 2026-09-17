@@ -263,6 +263,7 @@ public class OrderController {
             @Parameter(description = "Created on or before (yyyy-MM-dd)") @RequestParam(required = false) String createdTo,
             @Parameter(description = "Order source: MANUAL | BULK | API | WMS | ERP") @RequestParam(required = false) String source,
             @Parameter(description = "Shipping channel: D2C | B2B") @RequestParam(required = false) String channel,
+            @Parameter(description = "Carrier: UPS | FEDEX | USPS | DHL") @RequestParam(required = false) String carrier,
             @Parameter(description = "Attach the cascade's account pick (accountResolution) to each row") @RequestParam(defaultValue = "false") boolean includeResolution) {
 
         if (!isValidSortBy(sortBy)) {
@@ -295,6 +296,7 @@ public class OrderController {
                 .createdTo(createdTo)
                 .source(source)
                 .channel(channel)
+                .carrier(carrier)
                 .build();
 
         ApiResponse<PageResponseDTO<OrderResponseDTO>> response =
@@ -326,7 +328,8 @@ public class OrderController {
             @RequestParam(required = false) String createdFrom,
             @RequestParam(required = false) String createdTo,
             @RequestParam(required = false) String source,
-            @RequestParam(required = false) String channel) {
+            @RequestParam(required = false) String channel,
+            @RequestParam(required = false) String carrier) {
 
         OrderListFilters filters = OrderListFilters.builder()
                 .status(status)
@@ -342,6 +345,7 @@ public class OrderController {
                 .createdTo(createdTo)
                 .source(source)
                 .channel(channel)
+                .carrier(carrier)
                 .build();
 
         ApiResponse<java.util.List<Integer>> response = orderService.listOrderNos(filters);
@@ -370,7 +374,8 @@ public class OrderController {
             @RequestParam(required = false) String createdFrom,
             @RequestParam(required = false) String createdTo,
             @RequestParam(required = false) String source,
-            @RequestParam(required = false) String channel) {
+            @RequestParam(required = false) String channel,
+            @RequestParam(required = false) String carrier) {
 
         // NOTE: no batch param here on purpose — this endpoint POPULATES
         // the batch dropdown, so filtering by batch would collapse it to
@@ -388,6 +393,7 @@ public class OrderController {
                 .createdTo(createdTo)
                 .source(source)
                 .channel(channel)
+                .carrier(carrier)
                 .build();
 
         ApiResponse<java.util.List<java.util.Map<String, Object>>> response = orderService.listBatches(filters);
@@ -1447,6 +1453,102 @@ public class OrderController {
                 .header("Content-Disposition", "attachment; filename=" + name)
                 .header("Content-Type", org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
                 .body(merged);
+    }
+
+    /** Orders to print together, and which document: LABEL or COMMERCIAL_INVOICE. */
+    public record BulkDocumentPrintRequest(java.util.List<Integer> orderNumbers, String docType) {}
+
+    /** Most orders one bulk print may merge into a single PDF. */
+    private static final int MAX_BULK_PRINT_ORDERS = 500;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.config.OrderAccessEvaluator orderAccessEvaluator;
+
+    @Operation(summary = "One merged PDF of labels or commercial invoices for many orders",
+            description = "Bulk print from the Orders page. docType LABEL = each order's label (the label "
+                    + "page per package, as Print Label sends); COMMERCIAL_INVOICE = each international "
+                    + "order's invoice. Orders you can't view, without a generated label, or without customs "
+                    + "data are skipped — X-Documents-Included / X-Documents-Skipped / X-Skipped-Orders say "
+                    + "which. At most " + MAX_BULK_PRINT_ORDERS + " orders; 400/422 carry the reason in X-Error.")
+    @PreAuthorize("isAuthenticated()")
+    @PostMapping(value = "/documents/print", produces = org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
+    public ResponseEntity<byte[]> printDocuments(@org.springframework.web.bind.annotation.RequestBody BulkDocumentPrintRequest request) {
+        java.util.List<Integer> orderNos = request == null || request.orderNumbers() == null
+                ? java.util.List.of()
+                : request.orderNumbers().stream().filter(java.util.Objects::nonNull).distinct().toList();
+        String docType = request == null || request.docType() == null
+                ? "LABEL" : request.docType().trim().toUpperCase(java.util.Locale.ROOT);
+        if (!docType.equals("LABEL") && !docType.equals("COMMERCIAL_INVOICE")) {
+            return printRefusal(org.springframework.http.HttpStatus.BAD_REQUEST, "docType must be LABEL or COMMERCIAL_INVOICE.");
+        }
+        if (orderNos.isEmpty()) {
+            return printRefusal(org.springframework.http.HttpStatus.BAD_REQUEST, "Select at least one order to print.");
+        }
+        if (orderNos.size() > MAX_BULK_PRINT_ORDERS) {
+            return printRefusal(org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY,
+                    "Print at most " + MAX_BULK_PRINT_ORDERS + " orders at a time (" + orderNos.size() + " selected).");
+        }
+        org.springframework.security.core.Authentication auth =
+                org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+        java.util.List<byte[]> parts = new java.util.ArrayList<>(orderNos.size());
+        java.util.List<Integer> skipped = new java.util.ArrayList<>();
+        boolean labels = docType.equals("LABEL");
+        for (Integer orderNo : orderNos) {
+            // The per-order check the single-document endpoints apply, so a bulk
+            // print never reaches an order its caller couldn't print one by one.
+            if (orderAccessEvaluator != null && !orderAccessEvaluator.canViewOrder(auth, orderNo)) {
+                skipped.add(orderNo);
+                continue;
+            }
+            try {
+                if (labels) {
+                    boolean labelled = orderTrackingRepository.findByOrderNo(orderNo)
+                            .map(t -> Boolean.TRUE.equals(t.getIsLabelGenerated())
+                                    && t.getTrackingNumber() != null && !t.getTrackingNumber().isBlank())
+                            .orElse(false);
+                    ResponseEntity<byte[]> pdf = labelled ? getLabelPdf(orderNo, null, true) : null;
+                    if (pdf != null && pdf.getStatusCode().is2xxSuccessful() && pdf.getBody() != null && pdf.getBody().length > 0) {
+                        parts.add(pdf.getBody());
+                    } else {
+                        skipped.add(orderNo);
+                    }
+                } else {
+                    parts.add(commercialInvoiceService.render(orderNo));
+                }
+            } catch (IllegalArgumentException | IllegalStateException notPrintable) {
+                // Not found, or no customs data (domestic) — nothing to print for it.
+                skipped.add(orderNo);
+            } catch (RuntimeException ex) {
+                org.slf4j.LoggerFactory.getLogger(OrderController.class)
+                        .warn("Bulk print: {} for order {} failed: {}", docType, orderNo, ex.getMessage());
+                skipped.add(orderNo);
+            }
+        }
+        String skippedList = skipped.stream().limit(50).map(String::valueOf)
+                .collect(java.util.stream.Collectors.joining(","));
+        if (parts.isEmpty()) {
+            return ResponseEntity.status(org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY)
+                    .header("X-Error", labels
+                            ? "None of the selected orders has a generated label to print."
+                            : "None of the selected orders has a commercial invoice; invoices exist for international shipments only.")
+                    .header("X-Documents-Included", "0")
+                    .header("X-Documents-Skipped", String.valueOf(skipped.size()))
+                    .header("X-Skipped-Orders", skippedList)
+                    .build();
+        }
+        byte[] merged = parts.size() == 1 ? parts.get(0) : pdfMerger.mergeToOne(parts);
+        return ResponseEntity.ok()
+                .header("Content-Disposition", "inline; filename="
+                        + (labels ? "labels-" : "commercial-invoices-") + parts.size() + ".pdf")
+                .header("Content-Type", org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
+                .header("X-Documents-Included", String.valueOf(parts.size()))
+                .header("X-Documents-Skipped", String.valueOf(skipped.size()))
+                .header("X-Skipped-Orders", skippedList)
+                .body(merged);
+    }
+
+    private static ResponseEntity<byte[]> printRefusal(org.springframework.http.HttpStatus status, String reason) {
+        return ResponseEntity.status(status).header("X-Error", reason).build();
     }
 
     @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")

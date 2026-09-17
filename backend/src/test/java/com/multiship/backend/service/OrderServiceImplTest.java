@@ -73,13 +73,13 @@ class OrderServiceImplTest {
         when(orderRepository.findOrdersUnified(
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
                 anyInt(), anyInt(), anyString(), anyString()))
                 .thenReturn(List.of());
         when(orderRepository.countOrdersUnified(
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString()))
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
                 .thenReturn(0L);
     }
 
@@ -111,12 +111,12 @@ class OrderServiceImplTest {
         verify(orderRepository).findOrdersUnified(
                 anyString(), eq("ACME"), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
                 anyInt(), anyInt(), anyString(), anyString());
         verify(orderRepository).countOrdersUnified(
                 anyString(), eq("ACME"), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString());
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
     }
 
     @Test
@@ -130,7 +130,7 @@ class OrderServiceImplTest {
         verify(orderRepository).findOrdersUnified(
                 anyString(), eq(""), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
                 anyInt(), anyInt(), anyString(), anyString());
     }
 
@@ -176,7 +176,7 @@ class OrderServiceImplTest {
         verify(orderRepository).findOrdersUnified(
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
                 anyInt(), limitCap.capture(), anyString(), anyString());
         assertEquals(100, limitCap.getValue());
     }
@@ -188,7 +188,7 @@ class OrderServiceImplTest {
         verify(orderRepository).findOrdersUnified(
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
                 anyInt(), limitCap.capture(), anyString(), anyString());
         assertEquals(1, limitCap.getValue());
     }
@@ -200,7 +200,7 @@ class OrderServiceImplTest {
         verify(orderRepository).findOrdersUnified(
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
                 offsetCap.capture(), anyInt(), anyString(), anyString());
         assertEquals(0, offsetCap.getValue());
     }
@@ -215,7 +215,7 @@ class OrderServiceImplTest {
         verify(orderRepository).findOrdersUnified(
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
                 anyInt(), anyInt(), sortBy.capture(), sortDir.capture());
         assertEquals("orderNo", sortBy.getValue());
         assertEquals("ASC", sortDir.getValue());
@@ -245,7 +245,7 @@ class OrderServiceImplTest {
         when(orderRepository.findDistinctBatchesUnified(
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString()))
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
                 .thenReturn(List.of());
 
         ApiResponse<List<Map<String, Object>>> resp = service.listBatches(emptyFilters());
@@ -265,7 +265,7 @@ class OrderServiceImplTest {
         when(orderRepository.findDistinctBatchesUnified(
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString()))
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
                 .thenReturn(List.of(
                         new Object[]{42, 17L},
                         new Object[]{14, 3L}));
@@ -301,7 +301,7 @@ class OrderServiceImplTest {
         when(orderRepository.findDistinctBatchesUnified(
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString()))
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
                 .thenReturn(List.of());
 
         service.listBatches(f);
@@ -311,7 +311,7 @@ class OrderServiceImplTest {
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
                 batchCap.capture(),
-                anyString(), anyString(), anyString(), anyString());
+                anyString(), anyString(), anyString(), anyString(), anyString());
         assertEquals("14", batchCap.getValue());
     }
 
@@ -324,7 +324,7 @@ class OrderServiceImplTest {
         when(orderRepository.findDistinctBatchesUnified(
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString()))
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
                 .thenReturn(List.of());
 
         service.listBatches(f);
@@ -334,7 +334,7 @@ class OrderServiceImplTest {
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
                 batchCap.capture(),
-                anyString(), anyString(), anyString(), anyString());
+                anyString(), anyString(), anyString(), anyString(), anyString());
         assertEquals("", batchCap.getValue());
     }
 
@@ -346,7 +346,7 @@ class OrderServiceImplTest {
         when(orderRepository.findDistinctBatchesUnified(
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString()))
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
                 .thenReturn(List.of());
 
         service.listBatches(f);
@@ -354,7 +354,7 @@ class OrderServiceImplTest {
         verify(orderRepository).findDistinctBatchesUnified(
                 anyString(), eq("ACME"), anyString(), anyString(),
                 eq("BOB"), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString());
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
     }
 
     /* -------- search prefix syntax (2026-09-15) --------
@@ -376,7 +376,7 @@ class OrderServiceImplTest {
         verify(orderRepository).findOrdersUnified(
                 anyString(), anyString(), eq(""), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
-                eq("14"), anyString(), anyString(), anyString(), anyString(),
+                eq("14"), anyString(), anyString(), anyString(), anyString(), anyString(),
                 anyInt(), anyInt(), anyString(), anyString());
     }
 
@@ -391,7 +391,7 @@ class OrderServiceImplTest {
         verify(orderRepository).findOrdersUnified(
                 anyString(), anyString(), eq(""), anyString(),
                 anyString(), anyString(), eq("900044"), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
                 anyInt(), anyInt(), anyString(), anyString());
     }
 
@@ -406,7 +406,7 @@ class OrderServiceImplTest {
         verify(orderRepository).findOrdersUnified(
                 anyString(), anyString(), eq(""), anyString(),
                 anyString(), anyString(), anyString(), eq("1Z9999"),
-                anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
                 anyInt(), anyInt(), anyString(), anyString());
     }
 
@@ -421,7 +421,7 @@ class OrderServiceImplTest {
         verify(orderRepository).findOrdersUnified(
                 anyString(), anyString(), eq(""), anyString(),
                 eq("ARHDEV"), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
                 anyInt(), anyInt(), anyString(), anyString());
     }
 
@@ -437,7 +437,7 @@ class OrderServiceImplTest {
         verify(orderRepository).findOrdersUnified(
                 anyString(), anyString(), eq("foo:bar"), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
                 anyInt(), anyInt(), anyString(), anyString());
     }
 
@@ -453,7 +453,7 @@ class OrderServiceImplTest {
         verify(orderRepository).findOrdersUnified(
                 anyString(), anyString(), eq("14"), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
                 anyInt(), anyInt(), anyString(), anyString());
     }
 
@@ -470,7 +470,7 @@ class OrderServiceImplTest {
         verify(orderRepository).findOrdersUnified(
                 anyString(), anyString(), eq("batch:foo"), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
-                eq(""), anyString(), anyString(), anyString(), anyString(),
+                eq(""), anyString(), anyString(), anyString(), anyString(), anyString(),
                 anyInt(), anyInt(), anyString(), anyString());
     }
 
@@ -488,7 +488,7 @@ class OrderServiceImplTest {
         verify(orderRepository).findOrdersUnified(
                 anyString(), anyString(), eq("batch:22"), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
-                eq("14"), anyString(), anyString(), anyString(), anyString(),
+                eq("14"), anyString(), anyString(), anyString(), anyString(), anyString(),
                 anyInt(), anyInt(), anyString(), anyString());
     }
 
@@ -502,7 +502,7 @@ class OrderServiceImplTest {
         verify(orderRepository).findOrdersUnified(
                 anyString(), anyString(), eq(""), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
-                eq("14"), anyString(), anyString(), anyString(), anyString(),
+                eq("14"), anyString(), anyString(), anyString(), anyString(), anyString(),
                 anyInt(), anyInt(), anyString(), anyString());
     }
 }
