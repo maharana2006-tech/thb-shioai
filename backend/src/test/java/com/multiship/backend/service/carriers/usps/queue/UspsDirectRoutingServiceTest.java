@@ -476,4 +476,93 @@ class UspsDirectRoutingServiceTest {
         verify(queue).enqueue(captor.capture());
         assertEquals("FALLBACK", captor.getValue().tenantCode());
     }
+
+    // ================================================================
+    // PR-G5 D3 — tenantCodeHint precedence
+    // ================================================================
+
+    @Test
+    void tenantCodeHintWinsOverOrderTenantId() {
+        // Even when the loaded Order carries a tenantId (drift from a
+        // legacy import), the auth-time scope hint takes precedence so
+        // the queue row is scoped to what the operator was actually
+        // allowed to see.
+        stubProvider("USPS_DIRECT");
+        Order o = new Order();
+        o.setOrderNo((int) ORDER_NO);
+        o.setShipviaCd("USPS");
+        o.setTenantId("STALE_TENANT");
+        o.setCustNo("STALE_CUST");
+        o.setPackageCount(1);
+        o.setShiptoCountryCd("US");
+        when(orderRepo.findByOrderNo((int) ORDER_NO)).thenReturn(Optional.of(o));
+        when(queue.enqueue(any(UspsLabelQueueService.EnqueueRequest.class)))
+                .thenReturn(new UspsLabelQueueService.EnqueueResult(
+                        1L, LocalDateTime.of(2026, 9, 16, 12, 0)));
+
+        UspsDirectRoutingService.ProvenanceHint scopedHint =
+                UspsDirectRoutingService.ProvenanceHint.importBackgroundScoped(999L, "AUTH_SCOPED_TENANT");
+        routing.decide(ORDER_NO, null, scopedHint);
+
+        ArgumentCaptor<UspsLabelQueueService.EnqueueRequest> captor =
+                ArgumentCaptor.forClass(UspsLabelQueueService.EnqueueRequest.class);
+        verify(queue).enqueue(captor.capture());
+        assertEquals("AUTH_SCOPED_TENANT", captor.getValue().tenantCode(),
+                "tenantCodeHint must win over the order's tenantId/custNo fallback chain");
+    }
+
+    @Test
+    void tenantCodeHintNullFallsBackToOrderChain() {
+        // Manual + bulk-operator paths pass no hint. Pre-G5 derivation
+        // (tenantId → custNo → 'unknown') must still fire so those
+        // callers behave unchanged.
+        stubProvider("USPS_DIRECT");
+        Order o = new Order();
+        o.setOrderNo((int) ORDER_NO);
+        o.setShipviaCd("USPS");
+        o.setTenantId("ORDER_TENANT");
+        o.setCustNo("ORDER_CUST");
+        o.setPackageCount(1);
+        o.setShiptoCountryCd("US");
+        when(orderRepo.findByOrderNo((int) ORDER_NO)).thenReturn(Optional.of(o));
+        when(queue.enqueue(any(UspsLabelQueueService.EnqueueRequest.class)))
+                .thenReturn(new UspsLabelQueueService.EnqueueResult(
+                        1L, LocalDateTime.of(2026, 9, 16, 12, 0)));
+
+        routing.decide(ORDER_NO, null,
+                UspsDirectRoutingService.ProvenanceHint.manual());
+
+        ArgumentCaptor<UspsLabelQueueService.EnqueueRequest> captor =
+                ArgumentCaptor.forClass(UspsLabelQueueService.EnqueueRequest.class);
+        verify(queue).enqueue(captor.capture());
+        assertEquals("ORDER_TENANT", captor.getValue().tenantCode());
+    }
+
+    @Test
+    void tenantCodeHintBlankFallsBackToOrderChain() {
+        // Defensive: a whitespace-only hint mustn't blot out the order
+        // chain (would produce a nonsensical "  " tenant scope on the
+        // queue row).
+        stubProvider("USPS_DIRECT");
+        Order o = new Order();
+        o.setOrderNo((int) ORDER_NO);
+        o.setShipviaCd("USPS");
+        o.setTenantId(null);
+        o.setCustNo("ORDER_CUST");
+        o.setPackageCount(1);
+        o.setShiptoCountryCd("US");
+        when(orderRepo.findByOrderNo((int) ORDER_NO)).thenReturn(Optional.of(o));
+        when(queue.enqueue(any(UspsLabelQueueService.EnqueueRequest.class)))
+                .thenReturn(new UspsLabelQueueService.EnqueueResult(
+                        1L, LocalDateTime.of(2026, 9, 16, 12, 0)));
+
+        UspsDirectRoutingService.ProvenanceHint blankHint =
+                UspsDirectRoutingService.ProvenanceHint.importOperatorScoped(999L, "   ");
+        routing.decide(ORDER_NO, null, blankHint);
+
+        ArgumentCaptor<UspsLabelQueueService.EnqueueRequest> captor =
+                ArgumentCaptor.forClass(UspsLabelQueueService.EnqueueRequest.class);
+        verify(queue).enqueue(captor.capture());
+        assertEquals("ORDER_CUST", captor.getValue().tenantCode());
+    }
 }

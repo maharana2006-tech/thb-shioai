@@ -46,7 +46,14 @@ public interface CarrierService {
     ApiResponse<LabelGenerationResponse> generateManualLabel(com.multiship.backend.dto.ManualShipmentRequest request, UserDetails user);
 
     /** Fix-and-regenerate: apply corrected operator input to {@code existingOrderNo}
-     *  and re-label it in place (same order number). Used to recover failed orders. */
+     *  and re-label it in place (same order number). Used to recover failed orders.
+     *
+     *  <p>PR-G5 D1 — internal callers (import path, background workers) may set
+     *  {@code request.internalIdempotencyKey} to an order-anchored key from
+     *  {@code IdempotencyKeys.forUspsOrder(orderNo)}. The impl reads it on the
+     *  fix-and-regenerate branch so a retry from any surface shares dedup state
+     *  with the queue path. The field is {@code @JsonIgnore} — external callers
+     *  cannot smuggle a key over the wire. */
     ApiResponse<LabelGenerationResponse> generateManualLabel(com.multiship.backend.dto.ManualShipmentRequest request,
             UserDetails user, Integer existingOrderNo);
 

@@ -1,5 +1,6 @@
 package com.multiship.backend.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
@@ -217,6 +218,25 @@ public class ManualShipmentRequest {
      * {@link SplitStrategy} and docs/plans/commodity_autosplit.md.
      */
     private SplitStrategy splitStrategy;
+
+    /**
+     * PR-G5 D1 — internal-only idempotency key. Populated by cross-flow
+     * callers (import path, background workers) with
+     * {@code IdempotencyKeys.forUspsOrder(orderNo)} so
+     * {@link com.multiship.backend.service.CarrierServiceImpl#generateManualLabel}
+     * writes a matching key onto the order_tracking row. A subsequent
+     * retry from any surface (queue processor, manual controller with
+     * the same key) then hits {@code generateLabel}'s tracking-row dedup
+     * check and returns the first attempt's tracking verbatim instead of
+     * 409ing or re-billing.
+     *
+     * <p>{@code @JsonIgnore} — external callers cannot smuggle a key in
+     * over the wire. Only the manual controller's client-driven
+     * {@code Idempotency-Key} header namespace + this internal field are
+     * allowed to set the tracking row's idempotency key.
+     */
+    @JsonIgnore
+    private String internalIdempotencyKey;
 
     @Data
     public static class Address {
