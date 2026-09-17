@@ -4867,10 +4867,16 @@ public class OrderImportServiceImpl implements OrderImportService {
                 java.util.Optional<com.multiship.backend.service.carriers.usps.queue.UspsDirectRoutingService.RoutingDecision> maybe;
                 try {
                     Long batchIdLong = batchId != null ? Long.valueOf(batchId) : null;
+                    // PR-G5 D3 — pass the row's clientCode as the tenant
+                    // hint so the queue row is scoped to what the import
+                    // submit-time tenant clamp already validated (auth-time
+                    // truth) instead of the loaded Order's tenantId/custNo
+                    // fallback chain, which can drift on legacy rows.
+                    String tenantHint = leader.getClientCode();
                     com.multiship.backend.service.carriers.usps.queue.UspsDirectRoutingService.ProvenanceHint hint =
                             isBackgroundContext
-                                    ? com.multiship.backend.service.carriers.usps.queue.UspsDirectRoutingService.ProvenanceHint.importBackground(batchIdLong)
-                                    : com.multiship.backend.service.carriers.usps.queue.UspsDirectRoutingService.ProvenanceHint.importOperator(batchIdLong);
+                                    ? com.multiship.backend.service.carriers.usps.queue.UspsDirectRoutingService.ProvenanceHint.importBackgroundScoped(batchIdLong, tenantHint)
+                                    : com.multiship.backend.service.carriers.usps.queue.UspsDirectRoutingService.ProvenanceHint.importOperatorScoped(batchIdLong, tenantHint);
                     maybe = uspsDirectRoutingService.decide((long) existingOrderNo.intValue(), null, hint);
                 } catch (Exception ex) {
                     log.warn("PR-G2: routing service threw for order {} in import group (row {}): {} — sync fallback",
@@ -4943,6 +4949,17 @@ public class OrderImportServiceImpl implements OrderImportService {
                                 + "(parentOrderNo={}, carrier=USPS, USPS_PROVIDER=USPS_DIRECT). Falling back "
                                 + "to sync connector call — this consumes USPS quota outside the 55/hr fair-scheduler.",
                         leader.getRowNumber(), existingOrderNo);
+            }
+            // PR-G5 D1 — stamp an order-anchored idempotency key onto the
+            // request DTO so a subsequent retry from any surface (import,
+            // manual with the same key, queue) shares dedup state via
+            // order_tracking.idempotency_key. Only when we know the target
+            // order number; net-new rows fall through unchanged (there's
+            // no ambiguity to dedup against yet).
+            if (existingOrderNo != null) {
+                req.setInternalIdempotencyKey(
+                        com.multiship.backend.service.carriers.usps.queue.IdempotencyKeys
+                                .forUspsOrder(existingOrderNo.longValue()));
             }
             ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> resp =
                     carrierService.generateManualLabel(req, null, existingOrderNo);
