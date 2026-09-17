@@ -104,6 +104,43 @@ Total: 4 PRs / ~1200 LoC / ~2-3 days.
 - **BULK_WORKER_CONCURRENCY tuning** — application.properties formula already gates safely (`min(pool/2, 32)`); leave alone.
 - **CarrierServiceImpl full refactor** — the audit only touches the carrier-HTTP-inside-tx pattern via PR-P3's phase-C split. The wider ~5k-line file is a separate cleanup track.
 
+## Profiler run — 2026-09-17 (findings amendment)
+
+Ran the freshly-built backend against a dev Postgres + Redis, logged in via `/api/v1/auth/login`, scraped `/actuator/prometheus` at idle. **No synthetic load** — numbers below are steady-state after boot + one login round-trip. Concrete stress numbers still deferred to a proper `k6` / `JMeter` run.
+
+### Runtime confirmations (static findings validated)
+
+| Metric | Reading | Confirms |
+|---|---|---|
+| `hikaricp_connections_max` | **50.0** | PERF-B1 baseline; matches `application.properties` |
+| `hikaricp_connections_idle` | 10.0 | matches `minimum-idle=10` |
+| `hikaricp_connections_active` | 0.0 (idle) | as expected |
+| `hikaricp_connections_pending` | 0.0 | no waits at idle |
+| `hikaricp_connections_timeout_total` | 0.0 | no timeouts to date |
+| `hikaricp_connections_usage_seconds_max` | **0.263s** | one long-hold on the login round-trip — meaningful but bounded |
+| `jvm_threads_live_threads` | 31 | healthy at rest |
+| `jvm_threads_states_threads{blocked}` | 0 | no lock contention at rest |
+| `executor{name="taskExecutor"}` | core=4 / max=32 / queue-remaining=200 | matches `AsyncConfig` static finding |
+| `executor{name="webhookExecutor"}` | core=8 / max=8 / queue-remaining=500 | matches `WebhookAsyncConfig` static finding |
+
+### New findings uncovered by the profiler
+
+| ID | Severity | Description |
+|---|---|---|
+| **PERF-M15** | MAJOR (new) | `executor{name="taskScheduler"}` reports `max_threads=2.147483647E9` (Integer.MAX_VALUE) with UNBOUNDED queue (2.147e9 remaining). That's the default Spring `ThreadPoolTaskScheduler` — no cap. Any `@Scheduled` method that stalls will spawn a fresh thread on every tick until OOM. **Fix in P1**: configure `TaskSchedulerBuilder` bean with explicit `poolSize` (e.g. 4) + `awaitTermination(30s)`. |
+| **PERF-M16** | MAJOR (observability gap) | `BulkLabelServiceImpl.fanOutExecutor` + `OrderImportServiceImpl.fanOutExecutor` are `Executors.newFixedThreadPool(24)` — raw JDK executors NOT registered with Spring, so **Micrometer never sees them**. `/actuator/prometheus` shows only `taskExecutor` / `taskScheduler` / `webhookExecutor`. Ops has zero visibility into the two largest work queues on the platform. **Fix in P1**: swap to `ThreadPoolTaskExecutor` Spring beans (already planned for PERF-B2); confirm `@Bean` names surface as `executor{name="..."}` labels. |
+| **PERF-N1** | NOTE | 3 `401 UNKNOWN` requests hit `/actuator/*` before the login round-trip. Actuator paths aren't `permitAll` in `SecurityConfig`. If the K8s liveness / readiness probes are wired to `/actuator/health/liveness` (as the endpoint config suggests), the probes will 401 unless the K8s deployment passes a bearer token / basic auth header. **Fix path**: either add `.requestMatchers("/actuator/health/**").permitAll()` to `SecurityConfig` or document the probe-header requirement in the deployment runbook. Out of P-track scope; log as an ops follow-up. |
+
+### What the profiler could NOT confirm
+
+- **PERF-B1** (long tx holding row-lock during carrier HTTP) — requires synthetic load with a mocked slow carrier. Idle metrics only show `usage_seconds_max=0.263s` from the login flow, which is fine at rest.
+- **PERF-M2 / M3 / M4** (unbounded `Set<Long>` / SSE emitters / 429 deques) — no state buildup at idle. Would need a hot-path test to force accumulation.
+- **PERF-M11 / M12** (missing indexes / slow queries) — no query-level metrics exposed. Would need `pg_stat_statements` + PgHero.
+
+### Recommendation
+
+Roll **PERF-M15** (taskScheduler unbounded) + **PERF-M16** (fanOut invisible to Micrometer) into P1's scope — both are natural extensions of the "convert raw JDK executors to Spring beans" work. **PERF-N1** goes on the ops follow-up list.
+
 ## Related memory
 
 - [[usps-direct-integration]] — reference for Sprint 50 Tier 2 tx-timeout mitigation.
