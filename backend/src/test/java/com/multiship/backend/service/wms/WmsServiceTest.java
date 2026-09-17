@@ -8,7 +8,9 @@ import com.multiship.backend.dto.wms.WmsPendingOrderDTO.WmsAddress;
 import com.multiship.backend.dto.wms.WmsPendingOrderDTO.WmsContainer;
 import com.multiship.backend.dto.wms.WmsPullResultDTO;
 import com.multiship.backend.model.ImportBatch;
+import com.multiship.backend.model.ImportBatchRow;
 import com.multiship.backend.repository.ImportBatchRepository;
+import com.multiship.backend.repository.ImportBatchRowRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -21,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -38,6 +41,7 @@ class WmsServiceTest {
 
     private WmsClient wmsClient;
     private ImportBatchRepository importBatchRepository;
+    private ImportBatchRowRepository importBatchRowRepository;
     private final ObjectMapper mapper = new ObjectMapper();
     private WmsService service;
 
@@ -45,13 +49,28 @@ class WmsServiceTest {
     void setUp() {
         wmsClient = mock(WmsClient.class);
         importBatchRepository = mock(ImportBatchRepository.class);
+        // PR-WMS trunk-fix — the `order data validation` refactor moved
+        // row persistence off the batch's rows_json blob and onto a
+        // dedicated import_batch_row table. Tests now wire the row-repo
+        // mock and derive per-row assertions from what was passed to
+        // importBatchRowRepository.save(...).
+        importBatchRowRepository = mock(ImportBatchRowRepository.class);
         service = new WmsService(wmsClient);
         ReflectionTestUtils.setField(service, "importBatchRepository", importBatchRepository);
+        ReflectionTestUtils.setField(service, "importBatchRowRepository", importBatchRowRepository);
         ReflectionTestUtils.setField(service, "importObjectMapper", mapper);
         when(importBatchRepository.save(any(ImportBatch.class))).thenAnswer(inv -> {
             ImportBatch b = inv.getArgument(0);
             b.setId(1L);
             return b;
+        });
+        // Post-refactor: findById reads the batch back to attach rows in
+        // the row-persistence loop. Return the same instance the save
+        // captured so the loop can proceed.
+        when(importBatchRepository.findById(any())).thenAnswer(inv -> {
+            ImportBatch b = new ImportBatch();
+            b.setId((Long) inv.getArgument(0));
+            return java.util.Optional.of(b);
         });
     }
 
@@ -81,12 +100,53 @@ class WmsServiceTest {
         return dto;
     }
 
-    /** Parse the rows_json off the single ImportBatch the pull saved. */
+    /**
+     * Capture every ImportBatchRow the pull saved, convert back to
+     * OrderImportRowDTO for the field-by-field assertions the tests
+     * expect. Post-refactor equivalent of the pre-refactor
+     * "parse rows_json off the batch" helper.
+     */
     private List<OrderImportRowDTO> capturedRows() throws Exception {
-        ArgumentCaptor<ImportBatch> cap = ArgumentCaptor.forClass(ImportBatch.class);
-        verify(importBatchRepository).save(cap.capture());
-        return mapper.readValue(cap.getValue().getRowsJson(),
-                new TypeReference<List<OrderImportRowDTO>>() {});
+        ArgumentCaptor<ImportBatchRow> cap = ArgumentCaptor.forClass(ImportBatchRow.class);
+        verify(importBatchRowRepository, org.mockito.Mockito.atLeastOnce()).save(cap.capture());
+        return cap.getAllValues().stream().map(WmsServiceTest::toDto)
+                .collect(java.util.stream.Collectors.toList());
+    }
+
+    /** ImportBatchRow → OrderImportRowDTO conversion — inverse of
+     *  WmsService.toImportBatchRow(). Only the fields the tests assert on. */
+    private static OrderImportRowDTO toDto(ImportBatchRow row) {
+        OrderImportRowDTO dto = new OrderImportRowDTO();
+        dto.setRowNumber(row.getRowNumber());
+        dto.setOrderRef(row.getOrderRef());
+        dto.setReference(row.getReference());
+        dto.setClientCode(row.getClientCode());
+        dto.setWarehouseCode(row.getWarehouseCode());
+        dto.setRecipientName(row.getRecipientName());
+        dto.setRecipientCompany(row.getRecipientCompany());
+        dto.setRecipientPhone(row.getRecipientPhone());
+        dto.setRecipientEmail(row.getRecipientEmail());
+        dto.setAddressLine1(row.getAddressLine1());
+        dto.setAddressLine2(row.getAddressLine2());
+        dto.setCity(row.getCity());
+        dto.setState(row.getState());
+        dto.setPostalCode(row.getPostalCode());
+        dto.setCountryCode(row.getCountryCode());
+        dto.setCarrierCode(row.getCarrierCode());
+        dto.setServiceType(row.getServiceType());
+        dto.setAccountNumber(row.getAccountNumber());
+        dto.setPackageType(row.getPackageType());
+        dto.setWeight(row.getWeight());
+        dto.setWeightUnit(row.getWeightUnit());
+        // Errors survived as JSON on the row; parse back for the assertion
+        // that reads `errors.stream().anyMatch(...)` in blank-custNo test.
+        if (row.getErrors() != null && !row.getErrors().isBlank()) {
+            try {
+                dto.setErrors(new ObjectMapper().readValue(row.getErrors(),
+                        new TypeReference<List<String>>() {}));
+            } catch (Exception ignored) {}
+        }
+        return dto;
     }
 
     // ===== isConfigured — pure delegation =====
@@ -123,7 +183,7 @@ class WmsServiceTest {
     @Test
     void pullShippable_emptyList_reportsZeroCounts_noBatch() {
         when(wmsClient.isConfigured()).thenReturn(true);
-        when(wmsClient.fetchShippable()).thenReturn(List.of());
+        when(wmsClient.fetchShippableBatch(anyInt())).thenReturn(List.of());
 
         WmsPullResultDTO result = service.pullShippable("alice");
 
@@ -139,7 +199,7 @@ class WmsServiceTest {
     @Test
     void pullShippable_blankShipmentNumber_countsAsFailed_noBatch() {
         when(wmsClient.isConfigured()).thenReturn(true);
-        when(wmsClient.fetchShippable()).thenReturn(List.of(sample("   ", "ACME")));
+        when(wmsClient.fetchShippableBatch(anyInt())).thenReturn(List.of(sample("   ", "ACME")));
 
         WmsPullResultDTO result = service.pullShippable("alice");
 
@@ -153,7 +213,7 @@ class WmsServiceTest {
     @Test
     void pullShippable_nullDto_countsAsFailed_withoutNullPointer() {
         when(wmsClient.isConfigured()).thenReturn(true);
-        when(wmsClient.fetchShippable()).thenReturn(java.util.Arrays.asList((WmsPendingOrderDTO) null));
+        when(wmsClient.fetchShippableBatch(anyInt())).thenReturn(java.util.Arrays.asList((WmsPendingOrderDTO) null));
 
         WmsPullResultDTO result = service.pullShippable("alice");
 
@@ -166,7 +226,7 @@ class WmsServiceTest {
     @Test
     void pullShippable_neverSkips_recordsEveryShipment() {
         when(wmsClient.isConfigured()).thenReturn(true);
-        when(wmsClient.fetchShippable()).thenReturn(List.of(sample("SHP-1", "ACME")));
+        when(wmsClient.fetchShippableBatch(anyInt())).thenReturn(List.of(sample("SHP-1", "ACME")));
 
         WmsPullResultDTO result = service.pullShippable("alice");
 
@@ -180,7 +240,7 @@ class WmsServiceTest {
     @Test
     void pullShippable_sameSetReFetched_reusesExistingBatch_noNewSave() {
         when(wmsClient.isConfigured()).thenReturn(true);
-        when(wmsClient.fetchShippable()).thenReturn(List.of(sample("SHP-D1", "ACME")));
+        when(wmsClient.fetchShippableBatch(anyInt())).thenReturn(List.of(sample("SHP-D1", "ACME")));
         ImportBatch existing = new ImportBatch();
         existing.setId(77L);
         existing.setSource("WMS");
@@ -201,7 +261,7 @@ class WmsServiceTest {
     @Test
     void pullShippable_recordsOneBatch_sourceWms_ready() {
         when(wmsClient.isConfigured()).thenReturn(true);
-        when(wmsClient.fetchShippable()).thenReturn(List.of(sample("SHP-99", "ACME")));
+        when(wmsClient.fetchShippableBatch(anyInt())).thenReturn(List.of(sample("SHP-99", "ACME")));
 
         WmsPullResultDTO result = service.pullShippable("alice");
 
@@ -219,7 +279,7 @@ class WmsServiceTest {
     @Test
     void toImportRow_mapsFields_cleansAddress_sumsWeight_mapsCarrier() throws Exception {
         when(wmsClient.isConfigured()).thenReturn(true);
-        when(wmsClient.fetchShippable()).thenReturn(List.of(sample("SHP-42", "ACME")));
+        when(wmsClient.fetchShippableBatch(anyInt())).thenReturn(List.of(sample("SHP-42", "ACME")));
 
         service.pullShippable("alice");
 
@@ -246,7 +306,7 @@ class WmsServiceTest {
     @Test
     void toImportRow_blankCustNo_flagsClientRequired_batchIsDraft() throws Exception {
         when(wmsClient.isConfigured()).thenReturn(true);
-        when(wmsClient.fetchShippable()).thenReturn(List.of(sample("SHP-C", "")));
+        when(wmsClient.fetchShippableBatch(anyInt())).thenReturn(List.of(sample("SHP-C", "")));
 
         service.pullShippable("alice");
 
@@ -276,7 +336,7 @@ class WmsServiceTest {
     @Test
     void pullShippable_mixedBatch_reportsAccurateCounts() {
         when(wmsClient.isConfigured()).thenReturn(true);
-        when(wmsClient.fetchShippable()).thenReturn(List.of(
+        when(wmsClient.fetchShippableBatch(anyInt())).thenReturn(List.of(
                 sample("SHP-N1", "ACME"), sample("", "ACME"), sample("SHP-N2", "ACME")));
 
         WmsPullResultDTO result = service.pullShippable("alice");
