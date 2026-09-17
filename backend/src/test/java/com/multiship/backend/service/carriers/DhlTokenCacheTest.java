@@ -55,9 +55,14 @@ class DhlTokenCacheTest {
         tokenCacheField.setAccessible(true);
     }
 
+    /** PR-P1 — cache field is now a Caffeine {@link com.github.benmanes.caffeine.cache.Cache}
+     *  (was raw {@link java.util.concurrent.ConcurrentHashMap}). Return its
+     *  {@code asMap()} view so existing tests keep the same put/peek surface. */
     @SuppressWarnings("unchecked")
     private Map<String, Object> cache() throws Exception {
-        return (Map<String, Object>) tokenCacheField.get(connector);
+        com.github.benmanes.caffeine.cache.Cache<String, Object> cf =
+                (com.github.benmanes.caffeine.cache.Cache<String, Object>) tokenCacheField.get(connector);
+        return cf.asMap();
     }
 
     private static Object cachedToken(String token, Instant expiresAt) throws Exception {

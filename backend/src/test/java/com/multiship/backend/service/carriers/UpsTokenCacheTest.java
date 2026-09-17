@@ -57,9 +57,12 @@ class UpsTokenCacheTest {
         tokenCacheField.setAccessible(true);
     }
 
+    /** PR-P1 — cache is now Caffeine; expose asMap() view for the tests. */
     @SuppressWarnings("unchecked")
     private Map<String, Object> cache() throws Exception {
-        return (Map<String, Object>) tokenCacheField.get(connector);
+        com.github.benmanes.caffeine.cache.Cache<String, Object> cf =
+                (com.github.benmanes.caffeine.cache.Cache<String, Object>) tokenCacheField.get(connector);
+        return cf.asMap();
     }
 
     private static Object cachedToken(String token, Instant expiresAt) throws Exception {
