@@ -127,14 +127,23 @@ public class RateShopServiceImpl implements RateShopService {
         this.carrierAccountRefRepository = carrierAccountRefRepository;
         this.fxRateService = fxRateService;
         this.rateCacheService = rateCacheService;
-        // Bounded pool — fan-out is at most CARRIER_ORDER.size() calls, so
-        // 8 threads is comfortably enough to run every carrier concurrently
-        // for a couple of overlapping requests.
-        this.executor = Executors.newFixedThreadPool(8, r -> {
-            Thread t = new Thread(r, "rate-shop-fanout");
-            t.setDaemon(true);
-            return t;
-        });
+        // PR-P1 (audit PERF-M6) — bounded pool with a small queue +
+        // CallerRunsPolicy so rate-shop bursts (concurrent list-view page
+        // loads under USPS_DIRECT queue depth) apply back-pressure on the
+        // Tomcat request thread instead of piling in an unbounded queue.
+        // 8 threads × up to 4 concurrent overlapping requests = 32 queue
+        // slots is a comfortable margin.
+        java.util.concurrent.ThreadPoolExecutor pool = new java.util.concurrent.ThreadPoolExecutor(
+                8, 8,
+                60L, java.util.concurrent.TimeUnit.SECONDS,
+                new java.util.concurrent.ArrayBlockingQueue<>(64),
+                r -> {
+                    Thread t = new Thread(r, "rate-shop-fanout");
+                    t.setDaemon(true);
+                    return t;
+                },
+                new java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy());
+        this.executor = pool;
     }
 
     /** Package-private constructor for tests — inject a custom executor

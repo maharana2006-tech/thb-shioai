@@ -396,13 +396,18 @@ class UspsDirectSubscriptionServiceTest {
 
     /** Seed a real cache entry via reflection so the token path doesn't
      *  need to hit an OAuth server. Mirrors the pattern in
-     *  {@link UspsOAuthTokenCacheTest}. */
+     *  {@link UspsOAuthTokenCacheTest}.
+     *
+     *  <p>PR-P1 — cache backing store swapped from raw ConcurrentHashMap
+     *  to a Caffeine {@link com.github.benmanes.caffeine.cache.Cache};
+     *  seed via {@code cache.asMap().put(...)}. */
     private void seedTokenCache(String clientId, String environment, String token) throws Exception {
         java.lang.reflect.Field field = UspsOAuthTokenCache.class.getDeclaredField("tokenCache");
         field.setAccessible(true);
         @SuppressWarnings("unchecked")
-        java.util.concurrent.ConcurrentHashMap<String, Object> map =
-                (java.util.concurrent.ConcurrentHashMap<String, Object>) field.get(tokenCache);
+        com.github.benmanes.caffeine.cache.Cache<String, Object> cache =
+                (com.github.benmanes.caffeine.cache.Cache<String, Object>) field.get(tokenCache);
+        java.util.concurrent.ConcurrentMap<String, Object> map = cache.asMap();
         Class<?> clazz = Class.forName(
                 "com.multiship.backend.service.carriers.usps.UspsOAuthTokenCache$CachedToken");
         var ctor = clazz.getDeclaredConstructors()[0];

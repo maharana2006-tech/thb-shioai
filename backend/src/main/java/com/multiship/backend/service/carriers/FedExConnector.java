@@ -24,7 +24,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
+import java.time.Duration;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 
 @Slf4j
 @Component
@@ -66,7 +68,13 @@ public class FedExConnector implements CarrierConnector {
      * declared expiry so an in-flight worker doesn't burn a token that
      * expires mid-request.
      */
-    private final ConcurrentHashMap<String, CachedToken> tokenCache = new ConcurrentHashMap<>();
+    /** PR-P1 (audit PERF-M1) — Caffeine wrap so credential rotation doesn't
+     *  leak old cache entries. TTL matches FedEx token lifetime (1h);
+     *  maximumSize is defensive (realistic cardinality is small). */
+    private final Cache<String, CachedToken> tokenCache = Caffeine.newBuilder()
+            .expireAfterWrite(Duration.ofHours(1))
+            .maximumSize(1000)
+            .build();
 
     /** Refresh margin — we treat a token as expired {@value} seconds early
      *  so in-flight workers don't submit against a token that expires
@@ -248,16 +256,18 @@ public class FedExConnector implements CarrierConnector {
     @Override
     public String getAccessToken(String clientId, String clientSecret, String accountNumber, String environment) {
         String cacheKey = clientId + "|" + envKey(environment);
-        CachedToken existing = tokenCache.get(cacheKey);
+        CachedToken existing = tokenCache.getIfPresent(cacheKey);
         if (existing != null && existing.isValid()) {
             return existing.token();
         }
         // Miss (or near-expiry) — single-flight the refresh so 24 concurrent
         // bulk workers hitting the same account don't all fire an OAuth POST.
-        // compute() holds a per-bin lock; other keys can still refresh in
-        // parallel. Recheck inside the lambda so a competing thread that
-        // already refreshed doesn't get re-fetched.
-        CachedToken refreshed = tokenCache.compute(cacheKey, (k, cur) -> {
+        // Caffeine's atomic get(key, loader) holds a per-key lock; other
+        // keys refresh in parallel.
+        // asMap().compute so stale entries get re-fetched (Cache.get(key,
+        // loader) would shortcut to the existing value even when it's
+        // past the refresh margin).
+        CachedToken refreshed = tokenCache.asMap().compute(cacheKey, (k, cur) -> {
             if (cur != null && cur.isValid()) return cur;
             return fetchTokenUncached(clientId, clientSecret, environment);
         });
@@ -268,7 +278,7 @@ public class FedExConnector implements CarrierConnector {
      *  number of distinct (clientId, environment) tuples in the system,
      *  which is small (dozens at most). */
     void clearTokenCache() {
-        tokenCache.clear();
+        tokenCache.invalidateAll();
     }
 
     private static String envKey(String environment) {
