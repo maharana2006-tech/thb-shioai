@@ -442,7 +442,43 @@ export interface LabelGenerationResponse {
   trackingNumber?: string
   trackingUrl?: string
   labelFilePath?: string
-  status?: string
+  /**
+   * PR-G1 (USPS_DIRECT routing) — outcome discriminator for the label call.
+   *
+   * <ul>
+   *   <li>{@code GENERATED} (or unset — pre-G1 back-compat) — carrier
+   *       returned a tracking number synchronously; {@code trackingNumber}
+   *       + {@code labelFilePath} are populated as usual.</li>
+   *   <li>{@code QUEUED} — under USPS_DIRECT the label was parked in the
+   *       55/hr platform queue instead of dispatched. {@code queueItemId}
+   *       identifies the row; {@code trackingNumber} is null until the
+   *       queue processor drains this item.</li>
+   *   <li>{@code QUEUED_MPS} — same as QUEUED but the shipment was an MPS;
+   *       {@code queueItemId} is the parent row and {@code mpsPieceCount}
+   *       is the number of child pieces (poll
+   *       {@code /admin/usps-direct/queue/mps-progress/{orderNo}} for
+   *       aggregate progress).</li>
+   *   <li>{@code REJECTED} — surfaced on the error branch (422 with
+   *       {@code errorCode='INTL_MPS_UNSUPPORTED'} today) rather than a
+   *       200 body; kept here for exhaustiveness so downstream code that
+   *       spreads over all known states doesn't miss the value.</li>
+   * </ul>
+   *
+   * <p>Legacy call sites read {@code status} loosely (e.g. the labelling
+   * dashboard's {@code IN_PROGRESS} string), so the type stays open at
+   * {@code string} with the known values called out for type-narrowing
+   * consumers. The {@code (string & {})} branch preserves autocomplete on
+   * the four known literals without narrowing the type away from string.
+   */
+  status?: 'GENERATED' | 'QUEUED' | 'QUEUED_MPS' | 'REJECTED' | (string & {})
+  /** PR-G1 — persistent queue row id when {@code status} is
+   *  {@code QUEUED} or {@code QUEUED_MPS}. Null otherwise. Used by the
+   *  FE to link to Data History / MPS progress. */
+  queueItemId?: number | null
+  /** PR-G1 — number of child pieces when {@code status} is
+   *  {@code QUEUED_MPS}. Null for single-piece queued rows and for
+   *  synchronous GENERATED responses. */
+  mpsPieceCount?: number | null
   /** Which source shipped this label: ORDER, REFERENCE, or DEFAULT. */
   accountSource?: string
   // Scenario 2: generation paused — the order needs its carrier details completed.

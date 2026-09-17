@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import MpsProgressCard from './orders/MpsProgressCard'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { notify } from '../utils/notify'
@@ -547,6 +548,20 @@ export default function NewShipmentPage() {
   // strategy options; on operator pick, we re-submit with splitStrategy.
   const [splitPrompt, setSplitPrompt] = useState<SplitRequiredPayload | null>(null)
   const [pendingSplitPayload, setPendingSplitPayload] = useState<ManualShipmentPayload | null>(null)
+  /**
+   * PR-G4 (USPS_DIRECT UX) — set when the submit response comes back
+   * with {@code status='QUEUED'} or {@code 'QUEUED_MPS'}. Under
+   * USPS_DIRECT the label was parked in the 55/hr platform queue;
+   * we surface a compact "Queued for USPS" panel inline instead of
+   * navigating to /label/{n} (there IS no label yet). {@code isMps}
+   * gates the {@code MpsProgressCard} render.
+   */
+  const [queuedInfo, setQueuedInfo] = useState<{
+    orderNo: number | null
+    queueItemId: number | null
+    isMps: boolean
+    mpsPieceCount: number | null
+  } | null>(null)
 
   const [sender, setSender] = useState<ManualShipmentAddress>(defaultSender())
   const [recipient, setRecipient] = useState<ManualShipmentAddress>(blankAddress())
@@ -2348,11 +2363,31 @@ export default function NewShipmentPage() {
     setSplitPrompt(null)
     setPendingSplitPayload(null)
     setSubmitting(true)
+    setQueuedInfo(null)
     try {
       const res = fixOrderNo
         ? await orderService.regenerateOrder(fixOrderNo, nextPayload)
         : await orderService.generateManualLabel(nextPayload)
-      const orderNo = res.data?.orderNo
+      const orderNo = res.data?.orderNo ?? null
+      const status = res.data?.status
+      // PR-G4 — under USPS_DIRECT the split's child labels went to the
+      // 55/hr queue instead of being dispatched. Surface the queued
+      // panel INSTEAD of navigating; the operator watches progress
+      // in Data History (or via the MpsProgressCard for QUEUED_MPS).
+      if (status === 'QUEUED' || status === 'QUEUED_MPS') {
+        setQueuedInfo({
+          orderNo,
+          queueItemId: res.data?.queueItemId ?? null,
+          isMps: status === 'QUEUED_MPS',
+          mpsPieceCount: res.data?.mpsPieceCount ?? null,
+        })
+        notify.info({
+          title: 'Queued for USPS',
+          body:
+            'Your split shipment is in the USPS Direct queue (~55 labels/hr platform cap). Track progress below or in Data History.',
+        })
+        return
+      }
       notify.success(res.message || `Shipment split into ${res.data?.orderNo ? 'multiple' : 'N'} labels.`)
       navigate(orderNo ? `/label/${orderNo}` : '/orders')
     } catch (e) {
@@ -2548,6 +2583,7 @@ export default function NewShipmentPage() {
     }
 
     setSubmitting(true)
+    setQueuedInfo(null)
     try {
       const res = fixOrderNo
         ? await orderService.regenerateOrder(fixOrderNo, payload)
@@ -2566,6 +2602,26 @@ export default function NewShipmentPage() {
           )
         }
       }
+      // PR-G4 — USPS_DIRECT routes labels through the 55/hr platform
+      // queue. status='QUEUED' (single) / 'QUEUED_MPS' (multi-piece)
+      // means the label was NOT dispatched sync; there's no
+      // trackingNumber yet and navigating to /label/{n} would show an
+      // empty label. Surface the queued panel inline instead.
+      const status = res.data?.status
+      if (status === 'QUEUED' || status === 'QUEUED_MPS') {
+        setQueuedInfo({
+          orderNo: orderNo ?? null,
+          queueItemId: res.data?.queueItemId ?? null,
+          isMps: status === 'QUEUED_MPS',
+          mpsPieceCount: res.data?.mpsPieceCount ?? null,
+        })
+        notify.info({
+          title: 'Queued for USPS',
+          body:
+            'Your label is in the USPS Direct queue (~55 labels/hr platform cap). Estimated wait time and progress are shown below.',
+        })
+        return
+      }
       notify.success(res.message || 'Shipment label generated.')
       navigate(orderNo ? `/label/${orderNo}` : '/orders')
     } catch (e) {
@@ -2576,6 +2632,19 @@ export default function NewShipmentPage() {
           && e.payload?.data) {
         setSplitPrompt(e.payload.data as SplitRequiredPayload)
         setPendingSplitPayload(payload)
+        return
+      }
+      // PR-G4 — 422 INTL_MPS_UNSUPPORTED (USPS_DIRECT rejects
+      // international multi-piece at enqueue-time — v3 API has no
+      // batched intl endpoint). Surface the actionable backend message
+      // as a persistent error toast instead of the generic error path.
+      if (e instanceof ApiError && e.errorCode === 'INTL_MPS_UNSUPPORTED') {
+        notify.error({
+          title: 'International MPS not supported on USPS Direct',
+          body:
+            e.message ||
+            'USPS Direct does not accept international multi-piece shipments. Split into single-piece labels or pick another carrier.',
+        })
         return
       }
       const raw = e instanceof ApiError
@@ -2670,6 +2739,68 @@ export default function NewShipmentPage() {
         </div>
       ) : null}
       <div className="w-full space-y-4">
+        {/* PR-G4 — USPS_DIRECT queued-response panel. Only rendered
+            when submit() got back status='QUEUED' or 'QUEUED_MPS'; the
+            operator sees an inline "your label is in the USPS queue"
+            state instead of being navigated to /label/{n} (which would
+            show an empty label until the queue processor drains).
+            MpsProgressCard is mounted for QUEUED_MPS so per-piece
+            aggregate progress ticks in place. */}
+        {queuedInfo ? (
+          <section
+            role="status"
+            aria-live="polite"
+            data-testid="usps-direct-queued-panel"
+            className="rounded-2xl border border-amber-200 bg-amber-50 p-4 shadow-sm"
+          >
+            <div className="flex items-start gap-3">
+              <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
+                <FiPackage className="h-4 w-4" aria-hidden="true" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-[13px] font-bold text-amber-900">
+                  Queued for USPS Direct
+                </p>
+                <p className="mt-0.5 text-[12px] text-amber-800">
+                  {queuedInfo.isMps
+                    ? `This ${queuedInfo.mpsPieceCount ?? 'multi'}-piece shipment is queued for the USPS Direct 55/hr platform cap. Progress updates in place below; the label opens once the queue processor drains every piece.`
+                    : 'Your label is in the USPS Direct queue (~55 labels/hr platform cap). Estimated wait shows in the queue badge; the label opens once the queue processor drains this item.'}
+                </p>
+                <p className="mt-1 text-[11.5px] text-amber-700">
+                  {queuedInfo.queueItemId != null
+                    ? `Queue item #${queuedInfo.queueItemId}`
+                    : 'Queue item registered.'}
+                  {queuedInfo.orderNo != null ? ` · Order #${queuedInfo.orderNo}` : ''}
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                {queuedInfo.orderNo != null ? (
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/label/${queuedInfo.orderNo}`)}
+                    data-testid="usps-direct-queued-open-order"
+                    className="inline-flex items-center rounded-xl border border-amber-300 bg-white px-3 py-1.5 text-[12px] font-semibold text-amber-900 shadow-sm transition hover:border-amber-400 hover:bg-amber-100"
+                  >
+                    Open order
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => navigate('/data-history')}
+                  data-testid="usps-direct-queued-open-history"
+                  className="inline-flex items-center rounded-xl border border-amber-300 bg-white px-3 py-1.5 text-[12px] font-semibold text-amber-900 shadow-sm transition hover:border-amber-400 hover:bg-amber-100"
+                >
+                  Open Data History
+                </button>
+              </div>
+            </div>
+            {queuedInfo.isMps ? (
+              <div className="mt-3" data-testid="usps-direct-queued-mps-slot">
+                <MpsProgressCard orderNo={queuedInfo.orderNo} />
+              </div>
+            ) : null}
+          </section>
+        ) : null}
         {loading ? (
           <section className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-sm text-[#6b5c42] shadow-sm">
             Loading carriers, services and packaging…

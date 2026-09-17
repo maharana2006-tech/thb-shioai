@@ -22,6 +22,40 @@ import {
 import { notify, notifyStore } from '../../utils/notify'
 import { ApiError } from '../../api/apiClient'
 import VirtualTable from '../VirtualTable'
+// PR-G4 — USPS_DIRECT UX. Queue badge auto-hides when the platform
+// isn't on USPS_DIRECT (metrics endpoint returns depth=0); banner
+// only appears once we've confirmed USPS_PROVIDER=USPS_DIRECT AND
+// the parsed CSV contains enough USPS rows to blow past ~1h at the
+// 55/hr platform cap. Both surfaces close audit gap U2 + U4.
+import BulkLabelQueueBadge from '../orders/BulkLabelQueueBadge'
+import { systemSettingsService } from '../../api/systemSettingsService'
+import { normalizeCarrierCode } from '../../utils/carrierUtils'
+
+/**
+ * PR-G4 — seconds per USPS Direct label at the platform's 55/hr cap
+ * (3600 / 55 ≈ 65 s). Used to project the "this import will take
+ * X hours" banner in the upload results section.
+ */
+const USPS_DIRECT_SECONDS_PER_LABEL = 65
+/** PR-G4 — show the warning banner only when the import would take
+ *  >= 1 hour end-to-end at the USPS Direct pace. Below that the queue
+ *  drains fast enough that the banner is noise. */
+const USPS_DIRECT_BANNER_THRESHOLD_SECONDS = 3600
+
+/**
+ * PR-G4 — count how many rows in the staged upload would hit USPS
+ * (any USPS-family carrier code alias — see {@link normalizeCarrierCode}).
+ * Empty / null carrierCode rows don't count (backend cascade might
+ * pick a non-USPS default; assume the row won't need the queue).
+ */
+function countUspsRows(rows: { carrierCode?: string | null }[] | null | undefined): number {
+  if (!rows || rows.length === 0) return 0
+  let n = 0
+  for (const r of rows) {
+    if (normalizeCarrierCode(r.carrierCode) === 'usps') n += 1
+  }
+  return n
+}
 
 /** Clean, user-facing text + a friendly title for an upload/save failure —
  *  duplicate-file (409) gets its own heading instead of "Something went wrong". */
@@ -88,6 +122,34 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
       .catch(() => { if (alive) setOpenUploads([]) })
     return () => { alive = false }
   }, [staging, openUploadsTick])
+
+  /**
+   * PR-G4 — read the site-wide USPS_PROVIDER setting once per mount.
+   * Only used to gate the pre-commit rate-limit warning banner (U4)
+   * and — indirectly — the queue-badge helper copy. Non-admin users
+   * silently get null (list endpoint returns 403); the banner then
+   * stays hidden which is the safe default.
+   */
+  const [uspsProvider, setUspsProvider] = useState<string | null>(null)
+  useEffect(() => {
+    let alive = true
+    systemSettingsService
+      .list()
+      .then((rows) => {
+        if (!alive) return
+        const arr = Array.isArray(rows) ? rows : []
+        const setting = arr.find((s) => s.key === 'USPS_PROVIDER')
+        setUspsProvider((setting?.currentValue ?? setting?.maskedValue ?? '') as string)
+      })
+      .catch(() => {
+        // Non-admin (403), rate-limit blip, or endpoint failure — leave
+        // banner hidden. Never surface an error toast here; the setting
+        // is background UX polish.
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
 
   const step: 1 | 2 | 3 = lastSave && staging ? 3 : staging ? 2 : 1
   const preview: OrderImportPreview | null = staging
@@ -408,6 +470,42 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
           ) : null}
           {step === 2 && staging && preview ? (
             <>
+              {/* PR-G4 — USPS queue depth pill. Self-hides when there
+                  are no queue rows (USPS_PROVIDER != USPS_DIRECT, or
+                  USPS_DIRECT with an empty queue). Non-admin users get
+                  a silent empty (metrics endpoint requires admin). */}
+              <div data-testid="usps-queue-badge-slot">
+                <BulkLabelQueueBadge />
+              </div>
+              {/* PR-G4 — pre-commit rate-limit banner (audit U4). Only
+                  shows when the platform runs USPS_DIRECT AND the parsed
+                  CSV contains enough USPS rows to blow past ~1h at the
+                  55/hr platform cap. Below the threshold the queue drains
+                  fast enough that the banner is noise. */}
+              {(() => {
+                if (uspsProvider !== 'USPS_DIRECT') return null
+                const uspsRowCount = countUspsRows(staging.rows)
+                if (uspsRowCount <= 0) return null
+                const projectedSeconds = uspsRowCount * USPS_DIRECT_SECONDS_PER_LABEL
+                if (projectedSeconds < USPS_DIRECT_BANNER_THRESHOLD_SECONDS) return null
+                const projectedHours = Math.max(1, Math.round(projectedSeconds / 3600))
+                return (
+                  <div
+                    role="alert"
+                    data-testid="usps-direct-import-warning"
+                    className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-[12px] text-amber-900"
+                  >
+                    <FiAlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" aria-hidden="true" />
+                    <span className="flex-1">
+                      <span className="font-semibold">USPS Direct is rate-limited to ~55 labels/hour.</span>{' '}
+                      This import contains {uspsRowCount} USPS order
+                      {uspsRowCount === 1 ? '' : 's'}; estimated completion:{' '}
+                      {projectedHours} hour{projectedHours === 1 ? '' : 's'}. Progress
+                      will be visible in Data History.
+                    </span>
+                  </div>
+                )
+              })()}
               <div className="rounded-xl border border-[#e3d9c4] bg-white px-3.5 py-2.5">
                 <div className="flex flex-wrap items-center gap-2">
                   <FiFile className="h-3.5 w-3.5 text-[#6b5c42]" />
