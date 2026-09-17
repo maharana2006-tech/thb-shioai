@@ -5,6 +5,7 @@ import com.multiship.backend.model.UspsLabelQueueItem.Status;
 import com.multiship.backend.repository.UspsLabelQueueRepository;
 import com.multiship.backend.service.ratelimit.TokenBucket;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.ApplicationEventPublisher;
@@ -111,7 +112,13 @@ public class UspsLabelQueueProcessor {
      * PR-G3b - production constructor. Spring auto-wires all three
      * arguments; the event publisher drives
      * {@link UspsQueueImportRowReconciler}'s cross-flow bridge.
+     *
+     * <p>{@code @Autowired} explicitly resolves Spring's constructor
+     * ambiguity with the legacy 2-arg overload above — without it the
+     * container falls through to a zero-arg lookup and blows up with
+     * {@code NoSuchMethodException: <init>()} at context load.
      */
+    @Autowired
     public UspsLabelQueueProcessor(UspsLabelQueueRepository repo,
                                    UspsLabelQueueFairScheduler scheduler,
                                    ApplicationEventPublisher eventPublisher) {
