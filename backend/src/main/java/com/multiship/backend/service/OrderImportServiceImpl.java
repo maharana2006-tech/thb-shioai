@@ -3187,6 +3187,29 @@ public class OrderImportServiceImpl implements OrderImportService {
         }
     }
 
+    /**
+     * PR-S3 (S-B5) — build the audit actor stamp for a Stamps
+     * label call routed through this service. Two shapes:
+     * <ul>
+     *   <li>{@code system:import-worker/{jobId}} — background worker
+     *       (isBackgroundContext=true); the jobId anchors the label back
+     *       to the {@code import_generation_job} row that dispatched it.</li>
+     *   <li>{@code system:import-operator} — inline operator run
+     *       (isBackgroundContext=false); actor lookup falls back to the
+     *       SecurityContext for the specific operator name via
+     *       {@code currentActor()} inside AuditService.</li>
+     * </ul>
+     * Kept as a static helper so the CarrierServiceImpl audit-emit path
+     * only sees the finished string; no coupling to import internals.
+     */
+    private static String buildImportAuditActor(boolean isBackgroundContext, Long jobId) {
+        if (isBackgroundContext) {
+            String workerId = jobId != null ? String.valueOf(jobId) : "unknown";
+            return "system:import-worker/" + workerId;
+        }
+        return "system:import-operator";
+    }
+
     private static boolean isGenerating(com.multiship.backend.model.ImportBatch b) {
         String st = b.getStatus() == null ? "" : b.getStatus().trim().toUpperCase(Locale.ROOT);
         return st.equals("IN_PROGRESS") || st.equals("GENERATING");
@@ -5011,6 +5034,16 @@ public class OrderImportServiceImpl implements OrderImportService {
                         com.multiship.backend.service.carriers.usps.queue.IdempotencyKeys
                                 .forUspsOrder(existingOrderNo.longValue()));
             }
+            // PR-S3 (S-B5) — stamp the audit actor so background-worker /
+            // inline-import Stamps calls land on the audit log with a
+            // meaningful `actor` column instead of NULL. Background context
+            // uses `system:import-worker/{batchId}`; operator context uses
+            // `system:import-operator`. batchId (not jobId) because
+            // processGroup only has the batchId in scope — jobId lives up
+            // in the commit orchestrator; batchId is a stable anchor that
+            // audit consumers can join back to import_batch.
+            Long auditAnchor = batchId != null ? batchId.longValue() : null;
+            req.setInternalAuditActor(buildImportAuditActor(isBackgroundContext, auditAnchor));
             ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> resp =
                     carrierService.generateManualLabel(req, null, existingOrderNo);
             com.multiship.backend.dto.LabelGenerationResponse data =
