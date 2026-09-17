@@ -12,7 +12,7 @@ import lombok.Setter;
 
 import java.time.LocalDateTime;
 
-/** A registered printer (V64). Assigned to clients per document type via {@link PrinterAssignment}. */
+/** A registered printer (V65). Assigned to clients per document type via {@link PrinterAssignment}. */
 @Entity
 @Table(name = "printer")
 @Getter

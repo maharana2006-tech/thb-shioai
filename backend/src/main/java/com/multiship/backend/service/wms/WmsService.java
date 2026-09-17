@@ -114,7 +114,7 @@ public class WmsService {
                 .configured(true)
                 .fetched(totalFetched)
                 .imported(batchResult.shipments)
-                .skipped(0)
+                .skipped(batchResult.skipped)
                 .failed(batchResult.failed)
                 .batchId(null)               // label batch is assigned when labels are generated
                 .importBatchId(batchResult.importBatchId)
@@ -128,13 +128,22 @@ public class WmsService {
         int shipments;
         int failed;
         int totalRows;
+        /** Reuse-branch count — shipments that WEREN'T persisted because the
+         *  content hash matched an existing live batch. Old callers set 0. */
+        int skipped;
         Long importBatchId;
         List<String> messages;
 
         BatchProcessResult(int shipments, int failed, int totalRows, Long importBatchId, List<String> messages) {
+            this(shipments, failed, totalRows, 0, importBatchId, messages);
+        }
+
+        BatchProcessResult(int shipments, int failed, int totalRows, int skipped,
+                           Long importBatchId, List<String> messages) {
             this.shipments = shipments;
             this.failed = failed;
             this.totalRows = totalRows;
+            this.skipped = skipped;
             this.importBatchId = importBatchId;
             this.messages = messages;
         }
@@ -180,6 +189,11 @@ public class WmsService {
             if (existing != null) {
                 importBatchId = existing.getId();
                 messages.add("Batch " + batchCount + ": These shipments were already fetched — showing batch #" + existing.getId() + ".");
+                // Reused batch — nothing new was persisted. Report imported=0
+                // (was: batchShipments count, which contradicted the "already
+                // fetched" message and made the operator think a duplicate
+                // batch was written).
+                return new BatchProcessResult(0, 0, batchTotal, batchShipments, importBatchId, messages);
             } else {
                 ImportBatch trashed = null;
                 try {

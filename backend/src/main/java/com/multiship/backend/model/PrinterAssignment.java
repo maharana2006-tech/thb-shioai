@@ -13,7 +13,7 @@ import lombok.Setter;
 import java.time.LocalDateTime;
 
 /**
- * Which printer a client's documents go to (V64). {@code clientCode} null is the
+ * Which printer a client's documents go to (V65). {@code clientCode} null is the
  * default for that document type, used by clients without their own assignment.
  */
 @Entity
