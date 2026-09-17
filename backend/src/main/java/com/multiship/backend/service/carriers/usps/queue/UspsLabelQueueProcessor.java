@@ -5,8 +5,10 @@ import com.multiship.backend.model.UspsLabelQueueItem.Status;
 import com.multiship.backend.repository.UspsLabelQueueRepository;
 import com.multiship.backend.service.ratelimit.TokenBucket;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -44,6 +46,14 @@ import java.util.concurrent.atomic.AtomicReference;
  * otherwise); the callback is invoked sequentially on that thread.
  * The 55/hour cap makes concurrency moot at the platform level - one
  * thread can trivially issue one HTTP call per 65s tick.
+ *
+ * <h3>PR-G3b - terminal-status event bus</h3>
+ * On every DONE / FAILED transition the processor publishes a
+ * {@link UspsLabelQueueTerminalEvent} via Spring's
+ * {@link ApplicationEventPublisher}. {@link UspsQueueImportRowReconciler}
+ * subscribes and stamps the import row's {@code generatedStatus} so a
+ * completed queue row unblocks the "row stuck at QUEUED_USPS" state
+ * on the import history page (audit finding U5).
  */
 @Slf4j
 @Component
@@ -53,6 +63,13 @@ public class UspsLabelQueueProcessor {
 
     private final UspsLabelQueueRepository repo;
     private final UspsLabelQueueFairScheduler scheduler;
+    /**
+     * PR-G3b - Spring's app-event bus. Nullable in unit tests that
+     * construct the processor via the two-arg legacy constructor;
+     * production wiring uses the three-arg autowired constructor which
+     * populates this. Guarded on every publish.
+     */
+    private final ApplicationEventPublisher eventPublisher;
 
     /** Batch size per tick - sized so 60 ticks/hour * batchSize keeps
      *  the total under the hourly cap. Default 1 (60/hour) which is
@@ -80,10 +97,34 @@ public class UspsLabelQueueProcessor {
      */
     private final AtomicReference<LabelProcessCallback> callback = new AtomicReference<>();
 
+    /**
+     * Legacy 2-arg constructor kept for the pre-PR-G3b unit tests that
+     * pre-date the event bus. The event publisher defaults to null +
+     * the publish path guards on null so those tests keep running
+     * without touching Spring's app-event infrastructure.
+     */
     public UspsLabelQueueProcessor(UspsLabelQueueRepository repo,
                                    UspsLabelQueueFairScheduler scheduler) {
+        this(repo, scheduler, null);
+    }
+
+    /**
+     * PR-G3b - production constructor. Spring auto-wires all three
+     * arguments; the event publisher drives
+     * {@link UspsQueueImportRowReconciler}'s cross-flow bridge.
+     *
+     * <p>{@code @Autowired} explicitly resolves Spring's constructor
+     * ambiguity with the legacy 2-arg overload above — without it the
+     * container falls through to a zero-arg lookup and blows up with
+     * {@code NoSuchMethodException: <init>()} at context load.
+     */
+    @Autowired
+    public UspsLabelQueueProcessor(UspsLabelQueueRepository repo,
+                                   UspsLabelQueueFairScheduler scheduler,
+                                   ApplicationEventPublisher eventPublisher) {
         this.repo = repo;
         this.scheduler = scheduler;
+        this.eventPublisher = eventPublisher;
     }
 
     @PostConstruct
@@ -192,6 +233,11 @@ public class UspsLabelQueueProcessor {
                 repo.save(item);
                 log.info("USPS label queue: DONE id={} tenant={} shipment={} tracking={}",
                         item.getId(), item.getTenantCode(), item.getShipmentId(), tracking);
+                // PR-G3b - fan the completion out to the reconciler so
+                // the originating import row can flip QUEUED_USPS ->
+                // GENERATED. Import-batch id is null on manual / bulk
+                // paths; the reconciler short-circuits in that case.
+                publishTerminal(item, Status.DONE, tracking, null);
             } else {
                 item.setStatus(Status.FAILED);
                 item.setCompletedAt(LocalDateTime.now());
@@ -201,10 +247,44 @@ public class UspsLabelQueueProcessor {
                 log.warn("USPS label queue: FAILED id={} tenant={} shipment={} retry={} err={}",
                         item.getId(), item.getTenantCode(), item.getShipmentId(),
                         item.getRetryCount(), failure.toString());
+                // PR-G3b - even FAILED terminal states must bridge back
+                // to the import row so ops don't see a permanent
+                // QUEUED_USPS state after retries exhaust.
+                publishTerminal(item, Status.FAILED, null, item.getLastError());
             }
         } catch (RuntimeException persistFailure) {
             log.error("USPS label queue: could not persist outcome for id={}: {}",
                     item.getId(), persistFailure.toString(), persistFailure);
+        }
+    }
+
+    /**
+     * PR-G3b - fire the terminal-state event onto Spring's app-event
+     * bus. Fail-open: the publisher may be absent (legacy 2-arg ctor
+     * used by pure-Mockito tests), and even in production a broken
+     * listener must not tank the queue drain, so we swallow every
+     * exception here at WARN level.
+     */
+    private void publishTerminal(UspsLabelQueueItem item, Status terminal,
+                                 String trackingNumber, String errorMessage) {
+        if (eventPublisher == null) return;
+        try {
+            // For MPS pieces the "order" is the parent order number;
+            // for single-label rows shipmentId is the orderNo. Reconciler
+            // uses this for logging only - importBatchId drives the join.
+            Long orderNo = item.getParentOrderNo() != null
+                    ? item.getParentOrderNo()
+                    : item.getShipmentId();
+            eventPublisher.publishEvent(new UspsLabelQueueTerminalEvent(
+                    item.getId(),
+                    item.getImportBatchId(),
+                    orderNo,
+                    terminal,
+                    trackingNumber,
+                    errorMessage));
+        } catch (RuntimeException ex) {
+            log.warn("USPS label queue: terminal event publish failed for id={}: {}",
+                    item.getId(), ex.getMessage());
         }
     }
 

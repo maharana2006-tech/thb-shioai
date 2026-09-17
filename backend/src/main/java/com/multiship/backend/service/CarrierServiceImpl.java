@@ -4033,7 +4033,8 @@ public class CarrierServiceImpl implements CarrierService {
         if (uspsDirectRoutingService == null) return null;
         Optional<UspsDirectRoutingService.RoutingDecision> maybe;
         try {
-            maybe = uspsDirectRoutingService.decide(orderNo, caller);
+            maybe = uspsDirectRoutingService.decide(orderNo, caller,
+                    UspsDirectRoutingService.ProvenanceHint.manual());
         } catch (Exception ex) {
             log.warn("PR-G1: routing service threw for order {}: {} - sync fallback",
                     orderNo, ex.getMessage());

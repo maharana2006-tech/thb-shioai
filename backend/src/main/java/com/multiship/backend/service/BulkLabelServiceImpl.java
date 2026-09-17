@@ -957,7 +957,8 @@ public class BulkLabelServiceImpl implements BulkLabelService {
         if (uspsDirectRoutingService != null) {
             Optional<UspsDirectRoutingService.RoutingDecision> decision;
             try {
-                decision = uspsDirectRoutingService.decide(orderNo, null);
+                decision = uspsDirectRoutingService.decide(orderNo, null,
+                        UspsDirectRoutingService.ProvenanceHint.bulkOperator());
             } catch (Exception ex) {
                 // Unexpected routing failure must not tank the whole
                 // batch - fall through to sync so at least the current

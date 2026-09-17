@@ -225,7 +225,7 @@ class OrderImportServiceImplBackgroundActorTest {
         batch(100L, "USPS");
         seedJob(100L, "alice", "host-a:1234:abc");
         uspsProviderActive(true);
-        when(routing.decide(eq(12345L), any())).thenReturn(Optional.of(
+        when(routing.decide(eq(12345L), any(), any())).thenReturn(Optional.of(
                 new RoutingDecision(RoutingDecision.Status.SINGLE_QUEUED, 42L, null, null)));
 
         service.executeGenerationJob(1L);
@@ -255,7 +255,7 @@ class OrderImportServiceImplBackgroundActorTest {
         batch(101L, "FEDEX");
         seedJob(101L, "bob", "host-b:5678:def");
         uspsProviderActive(true);  // provider is USPS_DIRECT but row is FEDEX
-        when(routing.decide(anyLong(), any())).thenReturn(Optional.empty());
+        when(routing.decide(anyLong(), any(), any())).thenReturn(Optional.empty());
         carrierSucceeds(12345L);
 
         service.executeGenerationJob(1L);
@@ -284,7 +284,7 @@ class OrderImportServiceImplBackgroundActorTest {
         ImportBatch b = batch(102L, "USPS");
         // No seedJob -- inline path never creates a background job.
         uspsProviderActive(true);
-        when(routing.decide(eq(12345L), any())).thenReturn(Optional.of(
+        when(routing.decide(eq(12345L), any(), any())).thenReturn(Optional.of(
                 new RoutingDecision(RoutingDecision.Status.SINGLE_QUEUED, 77L, null, null)));
 
         // Directly call generateLabelsForBatch which reaches runGeneration
@@ -318,7 +318,7 @@ class OrderImportServiceImplBackgroundActorTest {
         batch(103L, "USPS");
         seedJob(103L, "alice", "host-c:9999:xyz");
         uspsProviderActive(true);
-        when(routing.decide(anyLong(), any())).thenReturn(Optional.empty());
+        when(routing.decide(anyLong(), any(), any())).thenReturn(Optional.empty());
         carrierSucceeds(12345L);
 
         service.executeGenerationJob(1L);
@@ -347,7 +347,7 @@ class OrderImportServiceImplBackgroundActorTest {
         batch(104L, "FEDEX");
         seedJob(104L, "alice", "host-d:1111:qqq");
         uspsProviderActive(true);
-        when(routing.decide(anyLong(), any())).thenReturn(Optional.empty());
+        when(routing.decide(anyLong(), any(), any())).thenReturn(Optional.empty());
         carrierSucceeds(12345L);
 
         service.executeGenerationJob(1L);
@@ -367,7 +367,7 @@ class OrderImportServiceImplBackgroundActorTest {
         batch(105L, "USPS");
         seedJob(105L, "alice", "host-e:2222:rrr");
         uspsProviderActive(false); // STAMPS_COM
-        when(routing.decide(anyLong(), any())).thenReturn(Optional.empty());
+        when(routing.decide(anyLong(), any(), any())).thenReturn(Optional.empty());
         carrierSucceeds(12345L);
 
         service.executeGenerationJob(1L);
@@ -388,7 +388,7 @@ class OrderImportServiceImplBackgroundActorTest {
         batch(106L, "USPS");
         // No seedJob -- operator inline path.
         uspsProviderActive(true);
-        when(routing.decide(anyLong(), any())).thenReturn(Optional.empty());
+        when(routing.decide(anyLong(), any(), any())).thenReturn(Optional.empty());
         carrierSucceeds(12345L);
 
         service.generateLabelsForBatch(106L, "dave", false, false, false);
@@ -411,7 +411,7 @@ class OrderImportServiceImplBackgroundActorTest {
         batch(107L, "USPS");
         seedJob(107L, "alice", "host-f:3333:sss");
         uspsProviderActive(true);
-        when(routing.decide(eq(12345L), any())).thenReturn(Optional.of(
+        when(routing.decide(eq(12345L), any(), any())).thenReturn(Optional.of(
                 new RoutingDecision(RoutingDecision.Status.SINGLE_QUEUED, 55L, null, null)));
 
         service.executeGenerationJob(1L);
