@@ -4,6 +4,7 @@ import { notify } from '../utils/notify'
 import { clientService, type Client } from '../api/clientService'
 import {
   CONNECTION_LABEL,
+  notifyPrinterProblem,
   PAPER_LABEL,
   printerService,
   type PrintDocType,
@@ -37,7 +38,7 @@ export default function PrintersPage() {
         setAssignments(a.data ?? [])
         setClients(c)
       })
-      .catch((e) => notify.apiError(e, 'Could not load printers.'))
+      .catch((e) => notifyPrinterProblem('Printers did not load', e, 'Could not load printers. Refresh to try again.'))
       .finally(() => setLoading(false))
   }, [])
 
@@ -54,9 +55,9 @@ export default function PrintersPage() {
       const updated = res.data
       if (updated) setPrinters((list) => list.map((x) => (x.id === updated.id ? updated : x)))
       if (updated?.lastTestOk) notify.success(`${p.name}: ${updated.lastTestMessage ?? 'test job sent.'}`)
-      else notify.error({ title: `${p.name} did not print`, body: updated?.lastTestMessage ?? 'The test job failed.' })
+      else notify.error({ title: `${p.name} did not print`, body: updated?.lastTestMessage ?? 'The test job failed.', durationMs: 10_000 })
     } catch (e) {
-      notify.apiError(e, 'Test print failed.')
+      notifyPrinterProblem(`${p.name} did not print`, e, 'The test print could not be sent.')
     } finally {
       setTestingId(null)
     }
@@ -76,7 +77,7 @@ export default function PrintersPage() {
       notify.success(`${p.name} removed.`)
       await load()
     } catch (e) {
-      notify.apiError(e, 'Could not delete the printer.')
+      notifyPrinterProblem(`${p.name} was not deleted`, e, 'Could not delete the printer.')
     }
   }
 
@@ -105,7 +106,7 @@ export default function PrintersPage() {
       const a = await printerService.listAssignments()
       setAssignments(a.data ?? [])
     } catch (e) {
-      notify.apiError(e, 'Could not save the assignment.')
+      notifyPrinterProblem('Printer choice not saved', e, 'Could not save the assignment.')
     } finally {
       setSavingKey(null)
     }
@@ -151,7 +152,7 @@ export default function PrintersPage() {
               <th className="px-3 py-2">Address</th>
               <th className="px-3 py-2">Prints</th>
               <th className="px-3 py-2">Status</th>
-              <th className="px-3 py-2 text-right">Actions</th>
+              <th className="sticky right-0 bg-slate-50 px-3 py-2 text-right shadow-[-8px_0_8px_-8px_rgba(15,23,42,0.15)]">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -195,7 +196,7 @@ export default function PrintersPage() {
                       <span className="text-[12px] text-slate-500">Not tested</span>
                     )}
                   </td>
-                  <td className="px-3 py-2.5">
+                  <td className="sticky right-0 bg-white px-3 py-2.5 shadow-[-8px_0_8px_-8px_rgba(15,23,42,0.15)]">
                     <span className="flex items-center justify-end gap-1.5">
                       <button
                         type="button"
@@ -363,20 +364,40 @@ function PrinterEditor({ printer, onClose, onSaved }: { printer: Printer | null;
     paper: fmt === 'ZPL' ? 'LABEL_4X6' : f.paper === 'LABEL_4X6' ? 'LETTER' : f.paper,
   }))
 
+  const [errors, setErrors] = useState<{ name?: string; host?: string; port?: string; form?: string }>({})
+  const clearError = (key: 'name' | 'host' | 'port') => setErrors((cur) => ({ ...cur, [key]: undefined, form: undefined }))
+
   const save = async () => {
+    const found: typeof errors = {}
+    if (!form.name.trim()) found.name = 'Give the printer a name, e.g. "Dock 1 Zebra".'
+    if (!form.host.trim()) found.host = "Enter the printer's IP address or hostname."
+    else if (/^[a-z]+:\/\//i.test(form.host.trim())) found.host = 'Enter just the IP address or hostname, without http:// or ipp://.'
+    if (form.port != null && (form.port < 1 || form.port > 65535)) found.port = 'Port must be between 1 and 65535.'
+    setErrors(found)
+    if (Object.keys(found).length > 0) return
+
     setSaving(true)
     try {
       const payload: PrinterInput = { ...form, port: form.port ? Number(form.port) : null }
       if (printer) await printerService.update(printer.id, payload)
       else await printerService.create(payload)
-      notify.success(`${form.name.trim() || 'Printer'} saved.`)
+      notify.success(`${form.name.trim()} saved.`)
       await onSaved()
     } catch (e) {
-      notify.apiError(e, 'Could not save the printer.')
+      // Show the server's reason next to the field it is about.
+      const message = e instanceof Error && e.message ? e.message : 'Could not save the printer.'
+      const lower = message.toLowerCase()
+      if (lower.includes('name')) setErrors({ name: message })
+      else if (lower.includes('hostname') || lower.includes('ip address')) setErrors({ host: message })
+      else if (lower.includes('port')) setErrors({ port: message })
+      else setErrors({ form: message })
     } finally {
       setSaving(false)
     }
   }
+  const fieldError = (msg?: string) => msg
+    ? <span role="alert" className="mt-1 block text-[11.5px] font-medium text-rose-700">{msg}</span>
+    : null
 
   const input = 'w-full rounded-md border border-slate-300 px-2.5 py-1.5 text-[13px] outline-none focus:border-slate-500'
   const labelCls = 'mb-1 block text-[11.5px] font-semibold uppercase tracking-wide text-slate-500'
@@ -394,7 +415,9 @@ function PrinterEditor({ printer, onClose, onSaved }: { printer: Printer | null;
         <div className="grid grid-cols-2 gap-3 px-5 py-4">
           <label className="col-span-2 sm:col-span-1">
             <span className={labelCls}>Name</span>
-            <input className={input} value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="Dock 1 Zebra" />
+            <input className={`${input} ${errors.name ? 'border-rose-400' : ''}`} value={form.name} aria-invalid={!!errors.name}
+              onChange={(e) => { set('name', e.target.value); clearError('name') }} placeholder="Dock 1 Zebra" />
+            {fieldError(errors.name)}
           </label>
           <label className="col-span-2 sm:col-span-1">
             <span className={labelCls}>Location</span>
@@ -416,13 +439,16 @@ function PrinterEditor({ printer, onClose, onSaved }: { printer: Printer | null;
           </label>
           <label className="col-span-2 sm:col-span-1">
             <span className={labelCls}>IP address or hostname</span>
-            <input className={`${input} font-mono`} value={form.host} onChange={(e) => set('host', e.target.value)} placeholder="192.168.1.50" />
+            <input className={`${input} font-mono ${errors.host ? 'border-rose-400' : ''}`} value={form.host} aria-invalid={!!errors.host}
+              onChange={(e) => { set('host', e.target.value); clearError('host') }} placeholder="192.168.1.50" />
+            {fieldError(errors.host)}
           </label>
           <label className="col-span-2 sm:col-span-1">
             <span className={labelCls}>Port</span>
             <input className={`${input} font-mono`} inputMode="numeric" value={form.port ?? ''}
-              onChange={(e) => set('port', e.target.value === '' ? null : Number(e.target.value.replace(/\D/g, '')))}
+              onChange={(e) => { set('port', e.target.value === '' ? null : Number(e.target.value.replace(/\D/g, ''))); clearError('port') }}
               placeholder={form.connection === 'IPP' ? '631' : '9100'} />
+            {fieldError(errors.port)}
           </label>
           {form.connection === 'IPP' ? (
             <label className="col-span-2">
@@ -443,12 +469,15 @@ function PrinterEditor({ printer, onClose, onSaved }: { printer: Printer | null;
             <input type="checkbox" checked={form.active} onChange={(e) => set('active', e.target.checked)} />
             <span className="text-[13px] text-slate-700">Active</span>
           </label>
+          {errors.form ? (
+            <p role="alert" className="col-span-2 rounded-md bg-rose-50 px-3 py-2 text-[12.5px] text-rose-800">{errors.form}</p>
+          ) : null}
         </div>
         <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-3">
           <button type="button" onClick={onClose} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-[13px] font-semibold text-slate-700 hover:bg-slate-50">
             Cancel
           </button>
-          <button type="button" onClick={() => void save()} disabled={saving || !form.name.trim() || !form.host.trim()}
+          <button type="button" onClick={() => void save()} disabled={saving}
             className="rounded-md bg-slate-900 px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-slate-700 disabled:opacity-50">
             {saving ? 'Saving…' : 'Save printer'}
           </button>

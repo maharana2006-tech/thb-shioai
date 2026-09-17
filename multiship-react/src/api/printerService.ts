@@ -1,5 +1,6 @@
 import { apiClient } from './apiClient'
 import type { ApiResponse } from './orderService'
+import { notify } from '../utils/notify'
 
 /**
  * Printer management + client routing (Settings → Printers) and "Send to
@@ -87,6 +88,17 @@ export const printerService = {
       docType,
       printerId: printerId ?? null,
     }),
+}
+
+/**
+ * Printer problems are shown with a printer-specific title and the server's own
+ * reason (the generic API error titles talk about shipments). They dismiss
+ * themselves: the page also shows the outcome inline, so a sticky stack of
+ * toasts would only cover the controls.
+ */
+export function notifyPrinterProblem(title: string, err: unknown, fallback: string) {
+  const body = err instanceof Error && err.message ? err.message : fallback
+  return notify.error({ title, body, durationMs: 10_000 })
 }
 
 export const CONNECTION_LABEL: Record<PrinterConnection, string> = {

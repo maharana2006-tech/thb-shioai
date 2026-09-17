@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { FiAlertTriangle, FiCheckCircle, FiSend, FiX } from 'react-icons/fi'
 import { notify } from '../../utils/notify'
-import { printerService, type PrintDocType, type Printer, type SendToPrinterResult } from '../../api/printerService'
+import { notifyPrinterProblem, printerService, type PrintDocType, type Printer, type SendToPrinterResult } from '../../api/printerService'
 
 const MAX_ORDERS = 500
 
@@ -50,7 +50,7 @@ export default function SendToPrinterDialog({
       setResult(data ?? null)
       if (data && data.sent > 0 && data.printers.every((p) => p.ok)) notify.success(res.message ?? 'Sent to printer.')
     } catch (e) {
-      notify.apiError(e, 'Could not send to the printer.')
+      notifyPrinterProblem('Not sent to the printer', e, 'Could not send to the printer.')
     } finally {
       setSending(false)
     }
@@ -116,7 +116,7 @@ export default function SendToPrinterDialog({
             </p>
           ) : null}
 
-          {result ? <ResultSummary result={result} what={what} /> : null}
+          {result ? <ResultSummary result={result} what={what} onOpenSettings={canManagePrinters ? onOpenSettings : undefined} /> : null}
         </div>
 
         <div className="flex justify-end gap-2 border-t border-[#efe7d6] px-5 py-3">
@@ -138,7 +138,10 @@ export default function SendToPrinterDialog({
   )
 }
 
-function ResultSummary({ result, what }: { result: SendToPrinterResult; what: string }) {
+function ResultSummary({ result, what, onOpenSettings }: { result: SendToPrinterResult; what: string; onOpenSettings?: () => void }) {
+  const settingsLink = onOpenSettings
+    ? <button type="button" onClick={onOpenSettings} className="font-semibold underline">Settings → Printers</button>
+    : 'Settings → Printers (ask an admin)'
   const orderList = (nos: number[]) => nos.slice(0, 8).map((n) => `#${n}`).join(', ') + (nos.length > 8 ? ` and ${nos.length - 8} more` : '')
   return (
     <div className="space-y-2 rounded-lg border border-[#efe7d6] bg-[#fcfaf5] px-3 py-2.5 text-[12.5px]">
@@ -155,7 +158,7 @@ function ResultSummary({ result, what }: { result: SendToPrinterResult; what: st
       ))}
       {result.unassigned.length > 0 ? (
         <p className="text-amber-800">
-          <span className="font-semibold">No printer assigned</span> for {result.unassigned.length} order{result.unassigned.length === 1 ? '' : 's'} ({orderList(result.unassigned)}). Assign their client a printer or set a Default in Settings → Printers.
+          <span className="font-semibold">No printer assigned</span> for {result.unassigned.length} order{result.unassigned.length === 1 ? '' : 's'} ({orderList(result.unassigned)}). Assign their client a printer or set a Default in {settingsLink}.
         </p>
       ) : null}
       {result.wrongFormat.length > 0 ? (

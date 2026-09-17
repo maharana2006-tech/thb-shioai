@@ -85,9 +85,11 @@ export const notifyStore = {
   },
 }
 
-type OptionsOrString = string | { title?: string; body: string }
+/** durationMs overrides the per-type default — e.g. an error whose details the
+ *  page already shows inline can dismiss itself instead of staying sticky. */
+type OptionsOrString = string | { title?: string; body: string; durationMs?: number }
 
-function normalize(opts: OptionsOrString): { title?: string; body: string } {
+function normalize(opts: OptionsOrString): { title?: string; body: string; durationMs?: number } {
   return typeof opts === 'string' ? { body: opts } : opts
 }
 
@@ -95,7 +97,8 @@ function normalize(opts: OptionsOrString): { title?: string; body: string } {
  *  nothing in the app waits on a toast, and returning a promise keeps the
  *  old signature valid for any `void notify.x()` call sites. */
 function toast(type: Exclude<NotifyType, 'confirm'>, opts: OptionsOrString): Promise<void> {
-  push({ type, ...normalize(opts), durationMs: AUTO_DISMISS_MS[type] })
+  const n = normalize(opts)
+  push({ type, ...n, durationMs: n.durationMs ?? AUTO_DISMISS_MS[type] })
   return Promise.resolve()
 }
 

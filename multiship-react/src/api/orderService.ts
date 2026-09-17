@@ -997,7 +997,9 @@ export const orderService = {
     const skippedOrders = (response.headers.get('X-Skipped-Orders') || '')
       .split(',').map((v) => Number(v)).filter((n) => Number.isFinite(n) && n > 0)
     if (!response.ok) {
-      throw new Error(response.headers.get('X-Error') || `Bulk print failed (HTTP ${response.status}).`)
+      // status lets callers tell "nothing to print" (422) from a real failure.
+      throw Object.assign(new Error(response.headers.get('X-Error') || `Bulk print failed (HTTP ${response.status}).`),
+        { status: response.status })
     }
     return {
       blob: await response.blob(),

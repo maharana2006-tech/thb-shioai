@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { useLocation, useNavigate } from 'react-router-dom'
 import type { ColumnDef, SortingState } from '@tanstack/react-table'
 import { notify } from '../utils/notify'
@@ -1004,11 +1005,31 @@ export default function OrdersWorkspace() {
   // Network printing: each order goes to its client's assigned printer (Settings → Printers).
   const [sendToPrinterOpen, setSendToPrinterOpen] = useState(false)
   const [printMenuOpen, setPrintMenuOpen] = useState(false)
+  const [printMenuAnchor, setPrintMenuAnchor] = useState<{ top: number; left: number; width: number } | null>(null)
+  // Printing needs labelled orders: the All orders and Archive tabs (not Ready).
+  const printableView = view === 'all' || view === 'generated'
+  useEffect(() => {
+    if (!printMenuOpen) return
+    // The menu is pinned to where the button was; close it rather than let it drift.
+    const close = () => setPrintMenuOpen(false)
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close() }
+    window.addEventListener('resize', close)
+    window.addEventListener('scroll', close, true)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('resize', close)
+      window.removeEventListener('scroll', close, true)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [printMenuOpen])
   const printSelected = async (docType: 'LABEL' | 'COMMERCIAL_INVOICE') => {
     const orderNos = selectedOrderNos
     if (orderNos.length === 0 || bulkPrinting) return
     if (orderNos.length > 500) {
-      notify.error(`Print at most 500 orders at a time — ${orderNos.length} are selected. Narrow the filter or select fewer.`)
+      notify.info({
+        title: 'Too many orders to print',
+        body: `Print at most 500 orders at a time — ${orderNos.length.toLocaleString()} are selected. Narrow the filter or select fewer.`,
+      })
       return
     }
     setBulkPrinting(docType)
@@ -1022,7 +1043,10 @@ export default function OrdersWorkspace() {
           + (res.skipped > 0 ? ` · ${res.skipped} skipped (${why})` : '') + '.',
       )
     } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Bulk print failed.')
+      const status = (e as { status?: number }).status
+      const message = e instanceof Error ? e.message : 'Bulk print failed.'
+      if (status === 422) notify.info({ title: 'Nothing to print', body: message })
+      else notify.error({ title: 'Print failed', body: message })
     } finally {
       setBulkPrinting(null)
     }
@@ -1232,6 +1256,7 @@ export default function OrdersWorkspace() {
 
   const activeFilterCount =
     Object.values(columnFilters).filter(Boolean).length + (dateFrom ? 1 : 0) + (dateTo ? 1 : 0)
+    + (sourceFilter ? 1 : 0) + (channelFilter ? 1 : 0) + (carrierFilter ? 1 : 0)
   // 2026-09-15 operator indicator — Batch is an OVERRIDE: when set, the
   // /orders request drops every other filter server-side (see the
   // `batchOnly` branch in the fetch effect). Toolbar chip + panel banner
@@ -1245,6 +1270,9 @@ export default function OrdersWorkspace() {
     setColumnFilters(emptyColumnFilters)
     setDateFrom('')
     setDateTo('')
+    setSourceFilter('')
+    setChannelFilter('')
+    setCarrierFilter('')
   }
 
   const busy = generatingOrderNos.length > 0
@@ -1864,23 +1892,33 @@ export default function OrdersWorkspace() {
               <FiPackage className="h-3 w-3" />
               Bulk labels ({rows.length})
             </button>
-            <div className="relative">
+            <div>
               <button type="button"
-                      onClick={() => setPrintMenuOpen((o) => !o)}
+                      onClick={(e) => {
+                        // The toolbar scrolls sideways (overflow), which would clip an
+                        // absolutely-placed menu — anchor a fixed menu to the button instead.
+                        const r = e.currentTarget.getBoundingClientRect()
+                        const width = Math.min(290, window.innerWidth - 32)
+                        setPrintMenuAnchor({ top: r.bottom + 6, left: Math.max(16, Math.min(r.right - width, window.innerWidth - width - 16)), width })
+                        setPrintMenuOpen((o) => !o)
+                      }}
                       aria-expanded={printMenuOpen}
+                      aria-haspopup="menu"
                       className={BTN_GHOST_SM}
                       title="Print labels and commercial invoices for the selected orders, or send them to your network printers">
                 <FiPrinter className="h-3 w-3" />
-                Print{selectedCount > 0 && selectionEnabled ? ` (${selectedCount})` : ''}
+                Print{selectedCount > 0 && printableView ? ` (${selectedCount})` : ''}
                 <FiChevronDown className="h-3 w-3" />
               </button>
-              {printMenuOpen ? (
+              {printMenuOpen && printMenuAnchor ? createPortal(
                 <>
-                  <div className="fixed inset-0 z-40" onClick={() => setPrintMenuOpen(false)} />
-                  <div role="menu" className="absolute right-0 z-50 mt-1.5 w-[290px] overflow-hidden rounded-xl border border-[#e3d9c4] bg-white py-1 text-left shadow-[0_18px_50px_rgba(15,23,42,0.18)]">
-                    {selectedCount === 0 || !selectionEnabled ? (
+                  <div className="fixed inset-0 z-[60]" onClick={() => setPrintMenuOpen(false)} />
+                  <div role="menu"
+                    style={{ top: printMenuAnchor.top, left: printMenuAnchor.left, width: printMenuAnchor.width }}
+                    className="fixed z-[61] overflow-hidden rounded-xl border border-[#e3d9c4] bg-white py-1 text-left shadow-[0_18px_50px_rgba(15,23,42,0.18)]">
+                    {selectedCount === 0 || !printableView ? (
                       <p className="border-b border-[#efe7d6] bg-[#faf7f0] px-3 py-2 text-[12px] leading-snug text-[#5a4526]">
-                        Tick the orders to print first, in the <b>All</b> or <b>Generated</b> tab. Use <b>Filters → Carrier</b> to narrow to UPS, FedEx or USPS.
+                        Tick the orders to print first, in the <b>All orders</b> or <b>Archive</b> tab. Use <b>Filters → Carrier</b> to narrow to UPS, FedEx or USPS.
                       </p>
                     ) : (
                       <p className="border-b border-[#efe7d6] px-3 py-2 text-[12px] text-slate-500">
@@ -1896,7 +1934,7 @@ export default function OrdersWorkspace() {
                         hint: "Each client's assigned printer, or one you pick", run: () => setSendToPrinterOpen(true) },
                     ].map((item) => (
                       <button key={item.key} type="button" role="menuitem"
-                        disabled={selectedCount === 0 || !selectionEnabled || busy || bulkPrinting !== null}
+                        disabled={selectedCount === 0 || !printableView || busy || bulkPrinting !== null}
                         onClick={() => { setPrintMenuOpen(false); item.run() }}
                         className="flex w-full items-start gap-2.5 px-3 py-2 text-left hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent">
                         <span className="mt-0.5 text-[#5a4526]">{item.icon}</span>
@@ -1915,7 +1953,8 @@ export default function OrdersWorkspace() {
                       </button>
                     ) : null}
                   </div>
-                </>
+                </>,
+                document.body,
               ) : null}
             </div>
             <button type="button"
@@ -2424,7 +2463,7 @@ export default function OrdersWorkspace() {
       */}
       {bulkProgress || (selectionEnabled && selectedCount > 0) ? (
         <div className="fixed inset-x-0 bottom-5 z-30 flex justify-center px-4">
-          <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 shadow-[0_18px_50px_rgba(15,23,42,0.22)]">
+          <div className="flex max-w-full flex-wrap items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2.5 shadow-[0_18px_50px_rgba(15,23,42,0.22)] sm:gap-3 sm:px-4">
             {bulkProgress ? (
               <>
                 <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-900" />
