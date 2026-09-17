@@ -1551,6 +1551,196 @@ public class OrderController {
         return ResponseEntity.status(status).header("X-Error", reason).build();
     }
 
+    /** Orders to send, which document, and optionally one printer for all (else each client's printer). */
+    public record SendToPrinterRequest(java.util.List<Integer> orderNumbers, String docType, Long printerId) {}
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.printing.PrinterService printerService;
+
+    @Operation(summary = "Send labels or commercial invoices straight to network printers",
+            description = "Each order's document goes to its client's assigned printer (else the default "
+                    + "printer), or to printerId for all of them. ZPL printers receive the label ZPL; PDF "
+                    + "printers one merged PDF each. The response says what every printer received, which "
+                    + "orders have no printer assigned, and which were skipped (no label / no invoice / no access).")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PostMapping("/documents/send-to-printer")
+    public ResponseEntity<ApiResponse<java.util.Map<String, Object>>> sendToPrinter(
+            @org.springframework.web.bind.annotation.RequestBody SendToPrinterRequest request) {
+        java.util.List<Integer> orderNos = request == null || request.orderNumbers() == null
+                ? java.util.List.of()
+                : request.orderNumbers().stream().filter(java.util.Objects::nonNull).distinct().toList();
+        String docType = request == null || request.docType() == null
+                ? "LABEL" : request.docType().trim().toUpperCase(java.util.Locale.ROOT);
+        if (printerService == null) {
+            return sendRefusal(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE, "Printing is not available on this server.");
+        }
+        if (!docType.equals("LABEL") && !docType.equals("COMMERCIAL_INVOICE")) {
+            return sendRefusal(org.springframework.http.HttpStatus.BAD_REQUEST, "docType must be LABEL or COMMERCIAL_INVOICE.");
+        }
+        if (orderNos.isEmpty()) {
+            return sendRefusal(org.springframework.http.HttpStatus.BAD_REQUEST, "Select at least one order to print.");
+        }
+        if (orderNos.size() > MAX_BULK_PRINT_ORDERS) {
+            return sendRefusal(org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY,
+                    "Send at most " + MAX_BULK_PRINT_ORDERS + " orders at a time (" + orderNos.size() + " selected).");
+        }
+        boolean labels = docType.equals("LABEL");
+        com.multiship.backend.model.Printer chosen = null;
+        if (request.printerId() != null) {
+            try {
+                chosen = printerService.get(request.printerId());
+            } catch (java.util.NoSuchElementException gone) {
+                return sendRefusal(org.springframework.http.HttpStatus.NOT_FOUND, "That printer no longer exists.");
+            }
+            if (!chosen.isActive()) {
+                return sendRefusal(org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY, chosen.getName() + " is switched off in Printers.");
+            }
+            if (!labels && "ZPL".equals(chosen.getFormat())) {
+                return sendRefusal(org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY,
+                        chosen.getName() + " is a ZPL label printer; commercial invoices need a PDF printer.");
+            }
+        }
+        org.springframework.security.core.Authentication auth =
+                org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+        String user = auth == null ? null : auth.getName();
+
+        // Route every order to a printer first.
+        java.util.Map<Long, com.multiship.backend.model.Printer> byId = new java.util.LinkedHashMap<>();
+        java.util.Map<Long, java.util.List<Integer>> routed = new java.util.LinkedHashMap<>();
+        java.util.List<Integer> unassigned = new java.util.ArrayList<>();
+        java.util.List<Integer> skipped = new java.util.ArrayList<>();
+        java.util.List<Integer> wrongFormat = new java.util.ArrayList<>();
+        for (Integer orderNo : orderNos) {
+            if (orderAccessEvaluator != null && !orderAccessEvaluator.canViewOrder(auth, orderNo)) {
+                skipped.add(orderNo);
+                continue;
+            }
+            String clientCode = printerService.clientCodeOf(orderNo);
+            if (clientCode == null && !isLabelled(orderNo)) {
+                skipped.add(orderNo); // no such order
+                continue;
+            }
+            com.multiship.backend.model.Printer printer = chosen != null ? chosen
+                    : printerService.resolve(clientCode, docType).orElse(null);
+            if (printer == null) {
+                unassigned.add(orderNo);
+                continue;
+            }
+            if (!labels && "ZPL".equals(printer.getFormat())) {
+                wrongFormat.add(orderNo);
+                continue;
+            }
+            byId.putIfAbsent(printer.getId(), printer);
+            routed.computeIfAbsent(printer.getId(), k -> new java.util.ArrayList<>()).add(orderNo);
+        }
+
+        // Then build one job per printer, in the format that printer takes.
+        java.util.List<java.util.Map<String, Object>> results = new java.util.ArrayList<>();
+        int sent = 0;
+        for (java.util.Map.Entry<Long, java.util.List<Integer>> e : routed.entrySet()) {
+            com.multiship.backend.model.Printer printer = byId.get(e.getKey());
+            boolean zpl = "ZPL".equals(printer.getFormat());
+            java.util.List<byte[]> pdfParts = new java.util.ArrayList<>();
+            StringBuilder zplJob = new StringBuilder();
+            int documents = 0;
+            for (Integer orderNo : e.getValue()) {
+                byte[] pdf = null;
+                String zplText = null;
+                try {
+                    if (!labels) {
+                        pdf = commercialInvoiceService.render(orderNo);
+                    } else if (isLabelled(orderNo)) {
+                        if (zpl) {
+                            ResponseEntity<String> z = getLabelZpl(orderNo, null);
+                            zplText = z.getStatusCode().is2xxSuccessful() ? z.getBody() : null;
+                        } else {
+                            ResponseEntity<byte[]> l = getLabelPdf(orderNo, null, true);
+                            pdf = l.getStatusCode().is2xxSuccessful() ? l.getBody() : null;
+                        }
+                    }
+                } catch (IllegalArgumentException | IllegalStateException notPrintable) {
+                    // not found / no customs data — nothing to send for it
+                } catch (RuntimeException ex) {
+                    org.slf4j.LoggerFactory.getLogger(OrderController.class)
+                            .warn("Send to printer: {} for order {} failed: {}", docType, orderNo, ex.getMessage());
+                }
+                if (zplText != null && !zplText.isBlank()) {
+                    zplJob.append(zplText.strip()).append('\n');
+                    documents++;
+                } else if (pdf != null && pdf.length > 0) {
+                    pdfParts.add(pdf);
+                    documents++;
+                } else {
+                    skipped.add(orderNo);
+                }
+            }
+            java.util.Map<String, Object> r = new java.util.LinkedHashMap<>();
+            r.put("printerId", printer.getId());
+            r.put("printer", printer.getName());
+            r.put("format", printer.getFormat());
+            r.put("orders", e.getValue().size());
+            r.put("documents", documents);
+            if (documents == 0) {
+                r.put("ok", false);
+                r.put("message", "Nothing to print — none of these orders has the document yet.");
+            } else {
+                byte[] payload = zpl ? zplJob.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)
+                        : (pdfParts.size() == 1 ? pdfParts.get(0) : pdfMerger.mergeToOne(pdfParts));
+                String what = documents + (labels ? (documents == 1 ? " label" : " labels")
+                        : (documents == 1 ? " invoice" : " invoices"));
+                try {
+                    printerService.send(printer, payload, "Multiship " + what, user);
+                    r.put("ok", true);
+                    r.put("message", "Sent " + what + " (" + printer.getFormat() + ", " + Math.max(1, payload.length / 1024) + " KB).");
+                    sent += documents;
+                } catch (Exception ex) {
+                    if (ex instanceof InterruptedException) Thread.currentThread().interrupt();
+                    r.put("ok", false);
+                    r.put("message", "Could not reach " + printer.getHost() + ":" + printer.getPort() + " — "
+                            + (ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage()));
+                }
+            }
+            results.add(r);
+        }
+
+        java.util.Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("docType", docType);
+        data.put("sent", sent);
+        data.put("printers", results);
+        data.put("unassigned", unassigned);
+        data.put("skipped", skipped);
+        data.put("wrongFormat", wrongFormat);
+        long failed = results.stream().filter(r -> !Boolean.TRUE.equals(r.get("ok"))).count();
+        StringBuilder msg = new StringBuilder();
+        msg.append(sent).append(labels ? (sent == 1 ? " label" : " labels") : (sent == 1 ? " invoice" : " invoices"))
+                .append(" sent to ").append(results.size() - failed).append(results.size() - failed == 1 ? " printer" : " printers");
+        if (failed > 0) msg.append(" · ").append(failed).append(failed == 1 ? " printer failed" : " printers failed");
+        if (!unassigned.isEmpty()) msg.append(" · ").append(unassigned.size()).append(unassigned.size() == 1 ? " order has" : " orders have").append(" no printer assigned");
+        if (!wrongFormat.isEmpty()) msg.append(" · ").append(wrongFormat.size()).append(" routed to a ZPL printer, which can't print invoices");
+        if (!skipped.isEmpty()) msg.append(" · ").append(skipped.size()).append(" skipped (").append(labels ? "no label" : "no invoice").append(")");
+        return ResponseEntity.ok(ApiResponse.<java.util.Map<String, Object>>builder()
+                .status(sent > 0 && failed == 0 ? "SUCCESS" : sent > 0 ? "PARTIAL" : "ERROR").code(200)
+                .timestamp(java.time.LocalDateTime.now())
+                .message(msg.toString())
+                .data(data)
+                .build());
+    }
+
+    private boolean isLabelled(Integer orderNo) {
+        return orderTrackingRepository.findByOrderNo(orderNo)
+                .map(t -> Boolean.TRUE.equals(t.getIsLabelGenerated())
+                        && t.getTrackingNumber() != null && !t.getTrackingNumber().isBlank())
+                .orElse(false);
+    }
+
+    private static ResponseEntity<ApiResponse<java.util.Map<String, Object>>> sendRefusal(
+            org.springframework.http.HttpStatus status, String reason) {
+        return ResponseEntity.status(status).body(ApiResponse.<java.util.Map<String, Object>>builder()
+                .status("ERROR").code(status.value()).timestamp(java.time.LocalDateTime.now())
+                .errorCode(com.multiship.backend.dto.ErrorCode.VALIDATION_ERROR.name())
+                .message(reason).build());
+    }
+
     @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
     @GetMapping(value = "/{orderNo}/commercial-invoice",
             produces = org.springframework.http.MediaType.APPLICATION_PDF_VALUE)

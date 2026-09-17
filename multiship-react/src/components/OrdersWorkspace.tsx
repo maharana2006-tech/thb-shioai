@@ -29,6 +29,7 @@ import {
   FiSlash,
   FiCopy,
   FiPrinter,
+  FiSend,
 } from 'react-icons/fi'
 import { ApiError, isAbortError } from '../api/apiClient'
 import { normalizeCarrierCode } from '../utils/carrierUtils'
@@ -40,6 +41,10 @@ import AccountScenarioBadge from './workspace/AccountScenarioBadge'
 // PR #555 — inline compact status dot+label supersedes OrderStatusBadge.
 // import OrderStatusBadge from './workspace/OrderStatusBadge'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
+import SendToPrinterDialog from './workspace/SendToPrinterDialog'
+import { useAppSession } from '../hooks/useAppSession'
+import { normalizeRole } from '../utils/roles'
+import { settingsPaths } from '../routes/workspaceRoutes'
 // Bundle audit #434 follow-up: modals are only rendered behind
 // `xxxOpen ?` guards, so React.lazy defers each chunk fetch until an
 // operator actually opens the modal. Fallback is null — the modal
@@ -112,6 +117,7 @@ const relativeTime = (value?: string | null) => {
  */
 export default function OrdersWorkspace() {
   const navigate = useNavigate()
+  const { role: sessionRole } = useAppSession()
   const location = useLocation()
 
   const [stats, setStats] = useState<QueueStats | null>(null)
@@ -993,6 +999,8 @@ export default function OrdersWorkspace() {
   // Bulk print from the selection bar: every selected order's label (or invoice)
   // merged into ONE PDF, sent to the browser print dialog as a single job.
   const [bulkPrinting, setBulkPrinting] = useState<'LABEL' | 'COMMERCIAL_INVOICE' | null>(null)
+  // Network printing: each order goes to its client's assigned printer (Settings → Printers).
+  const [sendToPrinterOpen, setSendToPrinterOpen] = useState(false)
   const printSelected = async (docType: 'LABEL' | 'COMMERCIAL_INVOICE') => {
     const orderNos = selectedOrderNos
     if (orderNos.length === 0 || bulkPrinting) return
@@ -2441,6 +2449,16 @@ export default function OrdersWorkspace() {
                     </button>
                     <button
                       type="button"
+                      onClick={() => setSendToPrinterOpen(true)}
+                      disabled={busy}
+                      title="Send the selected orders' labels or invoices straight to your network printers — each client's assigned printer, or one you pick"
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:opacity-50"
+                    >
+                      <FiSend className="h-3.5 w-3.5" />
+                      Send to printer
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => void copySelectedOrderNos()}
                       title="Copy the selected order numbers to the clipboard, one per line"
                       className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
@@ -2610,6 +2628,15 @@ export default function OrdersWorkspace() {
 
         {importOpen ? (
           <OrderImportModal onClose={() => setImportOpen(false)} />
+        ) : null}
+
+        {sendToPrinterOpen ? (
+          <SendToPrinterDialog
+            orderNumbers={selectedOrderNos}
+            canManagePrinters={normalizeRole(sessionRole) === 'ADMIN'}
+            onClose={() => setSendToPrinterOpen(false)}
+            onOpenSettings={() => { setSendToPrinterOpen(false); navigate(settingsPaths.printers) }}
+          />
         ) : null}
       </Suspense>
     </div>
