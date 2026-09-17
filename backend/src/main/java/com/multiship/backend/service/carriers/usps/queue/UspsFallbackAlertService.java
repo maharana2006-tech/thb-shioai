@@ -101,6 +101,37 @@ public class UspsFallbackAlertService {
     }
 
     /**
+     * PR-S4 — String-typed source overload so non-USPS carriers (Stamps
+     * SERA fallback) can post into the same ring buffer without inventing
+     * a new SourceType enum entry. The DTO's source field is already
+     * String-typed (see build path above), so callers can pass any
+     * carrier-scoped label — {@code "STAMPS_SERA_FALLBACK"},
+     * {@code "STAMPS_SWSIM_401"} etc. — and the /dashboard/fallback-alerts
+     * endpoint surfaces them uniformly alongside USPS_DIRECT alerts.
+     */
+    public void record(Long orderNo,
+                       String tenantCode,
+                       Long importBatchId,
+                       String sourceLabel,
+                       String reason) {
+        if (reason == null || reason.isBlank()) return;
+        UspsFallbackAlertDTO alert = UspsFallbackAlertDTO.builder()
+                .occurredAt(Instant.now())
+                .orderNo(orderNo)
+                .tenantCode(tenantCode)
+                .importBatchId(importBatchId)
+                .reason(reason)
+                .source(sourceLabel == null || sourceLabel.isBlank() ? "UNKNOWN" : sourceLabel)
+                .build();
+        synchronized (alerts) {
+            while (alerts.size() >= maxAlerts) {
+                alerts.pollLast();
+            }
+            alerts.offerFirst(alert);
+        }
+    }
+
+    /**
      * Snapshot the current ring buffer, most-recent first. Returns an
      * immutable copy so callers can't accidentally mutate the shared
      * deque under the synchronised lock.

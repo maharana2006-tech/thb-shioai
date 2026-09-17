@@ -46,6 +46,7 @@ export const settingsPaths = {
   /** Sprint 52 — per-client output routing (LOCAL_FS / SFTP / PRINTER)
    *  for generated labels + commercial invoices. ADMIN-only. */
   outputDestinations: '/settings/output-destinations',
+  printers: '/settings/printers',
 } as const
 
 export const workspaceNavItems: Array<{
@@ -111,6 +112,9 @@ export const settingsNavItems: Array<{
     roles: ['ADMIN'] },
   { key: 'output-destinations', label: 'Output Destinations', to: settingsPaths.outputDestinations, iconKey: 'mapping',
     description: 'Route generated labels + commercial invoices per client — local filesystem, SFTP upload or network printer (RAW_9100 / IPP). Every dispatch is also copied to the database.',
+    roles: ['ADMIN'] },
+  { key: 'printers', label: 'Printers', to: settingsPaths.printers, iconKey: 'mapping',
+    description: 'Register network label and invoice printers, choose which printer each client prints on, and send test pages. Used by Send to printer on the Orders page.',
     roles: ['ADMIN'] },
   // ===== Hidden from the Settings menu =====
   // Routes below still resolve so direct URLs and any hard-coded links keep

@@ -168,9 +168,22 @@ public class UspsDirectRoutingService {
             return Optional.empty();
         }
 
-        String tenantCode = StringUtils.hasText(order.getTenantId())
-                ? order.getTenantId()
-                : (StringUtils.hasText(order.getCustNo()) ? order.getCustNo() : "unknown");
+        // PR-G5 D3 — auth-time tenant scope wins when the caller supplied one
+        // (import path passes job.getRequestedScope() so the queue row is
+        // scoped to what the operator was actually allowed to see, not
+        // whatever the loaded Order row happens to carry). Falls back to
+        // the pre-G5 order-derived chain so manual + bulk-operator paths
+        // (which never had a scope hint) behave unchanged.
+        String tenantCode;
+        if (StringUtils.hasText(safeHint.tenantCodeHint())) {
+            tenantCode = safeHint.tenantCodeHint().trim();
+        } else if (StringUtils.hasText(order.getTenantId())) {
+            tenantCode = order.getTenantId();
+        } else if (StringUtils.hasText(order.getCustNo())) {
+            tenantCode = order.getCustNo();
+        } else {
+            tenantCode = "unknown";
+        }
 
         Integer packageCount = order.getPackageCount();
         boolean isMps = packageCount != null && packageCount >= 2;
@@ -330,7 +343,17 @@ public class UspsDirectRoutingService {
      */
     public record ProvenanceHint(
             UspsLabelQueueItem.SourceType sourceType,
-            Long importBatchId) {
+            Long importBatchId,
+            String tenantCodeHint) {
+
+        /**
+         * PR-G3b two-arg back-compat constructor. Prefer the 3-arg
+         * canonical constructor for new code so tenant derivation stays
+         * consistent with the caller's auth-time truth (finding D3).
+         */
+        public ProvenanceHint(UspsLabelQueueItem.SourceType sourceType, Long importBatchId) {
+            this(sourceType, importBatchId, null);
+        }
 
         /**
          * Sentinel for callers with no source info (legacy code paths,
@@ -339,27 +362,49 @@ public class UspsDirectRoutingService {
          * UNKNOWN bucket.
          */
         public static ProvenanceHint unknown() {
-            return new ProvenanceHint(null, null);
+            return new ProvenanceHint(null, null, null);
         }
 
         /** Manual single-order path (CarrierServiceImpl.maybeRouteUspsDirect). */
         public static ProvenanceHint manual() {
-            return new ProvenanceHint(UspsLabelQueueItem.SourceType.MANUAL, null);
+            return new ProvenanceHint(UspsLabelQueueItem.SourceType.MANUAL, null, null);
         }
 
         /** Bulk-label modal path (BulkLabelServiceImpl.maybeEnqueueUspsDirect). */
         public static ProvenanceHint bulkOperator() {
-            return new ProvenanceHint(UspsLabelQueueItem.SourceType.BULK_OPERATOR, null);
+            return new ProvenanceHint(UspsLabelQueueItem.SourceType.BULK_OPERATOR, null, null);
         }
 
         /** Import path triggered by an operator inline (jobId==null). */
         public static ProvenanceHint importOperator(Long importBatchId) {
-            return new ProvenanceHint(UspsLabelQueueItem.SourceType.IMPORT_OPERATOR, importBatchId);
+            return new ProvenanceHint(UspsLabelQueueItem.SourceType.IMPORT_OPERATOR, importBatchId, null);
         }
 
         /** Import path running under the background worker (jobId!=null). */
         public static ProvenanceHint importBackground(Long importBatchId) {
-            return new ProvenanceHint(UspsLabelQueueItem.SourceType.IMPORT_BACKGROUND, importBatchId);
+            return new ProvenanceHint(UspsLabelQueueItem.SourceType.IMPORT_BACKGROUND, importBatchId, null);
+        }
+
+        /**
+         * PR-G5 D3 — import-operator variant with the auth-time tenant
+         * scope hint. Prefer over {@link #importOperator(Long)} when the
+         * caller knows the tenant from {@code job.getRequestedScope()};
+         * routing then derives tenantCode from the hint instead of the
+         * order's {@code tenantId}/{@code custNo} fallback chain, so the
+         * queue row is scoped to the auth-time truth (finding D3).
+         */
+        public static ProvenanceHint importOperatorScoped(Long importBatchId, String tenantCodeHint) {
+            return new ProvenanceHint(UspsLabelQueueItem.SourceType.IMPORT_OPERATOR,
+                    importBatchId, tenantCodeHint);
+        }
+
+        /**
+         * PR-G5 D3 — import-background variant with the auth-time tenant
+         * scope hint. See {@link #importOperatorScoped(Long, String)}.
+         */
+        public static ProvenanceHint importBackgroundScoped(Long importBatchId, String tenantCodeHint) {
+            return new ProvenanceHint(UspsLabelQueueItem.SourceType.IMPORT_BACKGROUND,
+                    importBatchId, tenantCodeHint);
         }
     }
 

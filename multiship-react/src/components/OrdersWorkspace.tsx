@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { useLocation, useNavigate } from 'react-router-dom'
 import type { ColumnDef, SortingState } from '@tanstack/react-table'
 import { notify } from '../utils/notify'
@@ -29,6 +30,9 @@ import {
   FiSlash,
   FiCopy,
   FiPrinter,
+  FiSend,
+  FiChevronDown,
+  FiSettings,
 } from 'react-icons/fi'
 import { ApiError, isAbortError } from '../api/apiClient'
 import { normalizeCarrierCode } from '../utils/carrierUtils'
@@ -40,6 +44,10 @@ import AccountScenarioBadge from './workspace/AccountScenarioBadge'
 // PR #555 — inline compact status dot+label supersedes OrderStatusBadge.
 // import OrderStatusBadge from './workspace/OrderStatusBadge'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
+import SendToPrinterDialog from './workspace/SendToPrinterDialog'
+import { useAppSession } from '../hooks/useAppSession'
+import { normalizeRole } from '../utils/roles'
+import { settingsPaths } from '../routes/workspaceRoutes'
 // Bundle audit #434 follow-up: modals are only rendered behind
 // `xxxOpen ?` guards, so React.lazy defers each chunk fetch until an
 // operator actually opens the modal. Fallback is null — the modal
@@ -112,6 +120,7 @@ const relativeTime = (value?: string | null) => {
  */
 export default function OrdersWorkspace() {
   const navigate = useNavigate()
+  const { role: sessionRole } = useAppSession()
   const location = useLocation()
 
   const [stats, setStats] = useState<QueueStats | null>(null)
@@ -128,6 +137,7 @@ export default function OrdersWorkspace() {
   // Order source filter: '' (all) | MANUAL | BULK | API | WMS | ERP.
   const [sourceFilter, setSourceFilter] = useState('')
   const [channelFilter, setChannelFilter] = useState('')
+  const [carrierFilter, setCarrierFilter] = useState('')
   const [clientCodes, setClientCodes] = useState<string[]>([])
   // Sprint 51 migration — sort is owned by the shared AdvancedDataTable now.
   // sortBy / sortDirection remain the fetch-effect inputs (derived below).
@@ -278,6 +288,7 @@ export default function OrdersWorkspace() {
           createdTo: dateTo || undefined,
           source: sourceFilter || undefined,
           channel: channelFilter || undefined,
+          carrier: carrierFilter || undefined,
         })
         if (!cancelled) setBatchesForPicker(res.data ?? [])
       } catch {
@@ -287,7 +298,7 @@ export default function OrdersWorkspace() {
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showFilters, view, debouncedQuery, clientFilter,
-      dateFrom, dateTo, debouncedFilters, sourceFilter, channelFilter])
+      dateFrom, dateTo, debouncedFilters, sourceFilter, channelFilter, carrierFilter])
 
   /**
    * Signature of the current filter set — used both to invalidate the
@@ -299,8 +310,8 @@ export default function OrdersWorkspace() {
    */
   const filterSignature = useMemo(() => JSON.stringify({
     view, q: debouncedQuery, client: clientFilter, from: dateFrom, to: dateTo,
-    filters: debouncedFilters, source: sourceFilter, channel: channelFilter,
-  }), [view, debouncedQuery, clientFilter, dateFrom, dateTo, debouncedFilters, sourceFilter, channelFilter])
+    filters: debouncedFilters, source: sourceFilter, channel: channelFilter, carrier: carrierFilter,
+  }), [view, debouncedQuery, clientFilter, dateFrom, dateTo, debouncedFilters, sourceFilter, channelFilter, carrierFilter])
 
   // Filter change → clear selection and invalidate the all-filtered
   // cache. Prior behaviour also cleared on page/pageSize change, which
@@ -388,6 +399,7 @@ export default function OrdersWorkspace() {
       createdTo: dateTo || undefined,
       source: sourceFilter || undefined,
       channel: channelFilter || undefined,
+      carrier: carrierFilter || undefined,
       page: page - 1,
       size: pageSize,
       sortBy,
@@ -413,7 +425,7 @@ export default function OrdersWorkspace() {
     return () => {
       cancelled = true
     }
-  }, [view, page, pageSize, debouncedQuery, clientFilter, dateFrom, dateTo, sourceFilter, channelFilter, sortBy, sortDirection, debouncedFilters, reloadToken])
+  }, [view, page, pageSize, debouncedQuery, clientFilter, dateFrom, dateTo, sourceFilter, channelFilter, carrierFilter, sortBy, sortDirection, debouncedFilters, reloadToken])
 
   const refreshQueues = () => setReloadToken((token) => token + 1)
 
@@ -643,8 +655,9 @@ export default function OrdersWorkspace() {
       createdTo: dateTo || undefined,
       source: sourceFilter || undefined,
       channel: channelFilter || undefined,
+      carrier: carrierFilter || undefined,
     }
-  }, [view, clientFilter, debouncedQuery, debouncedFilters, dateFrom, dateTo, sourceFilter, channelFilter])
+  }, [view, clientFilter, debouncedQuery, debouncedFilters, dateFrom, dateTo, sourceFilter, channelFilter, carrierFilter])
 
   const selectAllFiltered = useCallback(async () => {
     try {
@@ -986,6 +999,79 @@ export default function OrdersWorkspace() {
   }, [])
 
   /** Fetch + print the label PDF for one order. */
+  // Bulk print from the selection bar: every selected order's label (or invoice)
+  // merged into ONE PDF, sent to the browser print dialog as a single job.
+  const [bulkPrinting, setBulkPrinting] = useState<'LABEL' | 'COMMERCIAL_INVOICE' | null>(null)
+  // Network printing: each order goes to its client's assigned printer (Settings → Printers).
+  const [sendToPrinterOpen, setSendToPrinterOpen] = useState(false)
+  const [printMenuOpen, setPrintMenuOpen] = useState(false)
+  const [printMenuAnchor, setPrintMenuAnchor] = useState<{ top: number; left: number; width: number } | null>(null)
+  // Printing needs labelled orders: the All orders and Archive tabs (not Ready).
+  const printableView = view === 'all' || view === 'generated'
+  // While the bottom action bar shows, lift the toast stack above it so a
+  // toast never covers the bar's buttons (NotifyHost reads --toast-bottom).
+  const actionBarRef = useRef<HTMLDivElement | null>(null)
+  const actionBarVisible = !!bulkProgress || (selectionEnabled && selectedCount > 0)
+  useEffect(() => {
+    const root = document.documentElement
+    const bar = actionBarRef.current
+    if (!actionBarVisible || !bar) {
+      root.style.removeProperty('--toast-bottom')
+      return
+    }
+    const update = () => root.style.setProperty('--toast-bottom', `${bar.offsetHeight + 32}px`)
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(bar)
+    return () => {
+      observer.disconnect()
+      root.style.removeProperty('--toast-bottom')
+    }
+  }, [actionBarVisible])
+  useEffect(() => {
+    if (!printMenuOpen) return
+    // The menu is pinned to where the button was; close it rather than let it drift.
+    const close = () => setPrintMenuOpen(false)
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close() }
+    window.addEventListener('resize', close)
+    window.addEventListener('scroll', close, true)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('resize', close)
+      window.removeEventListener('scroll', close, true)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [printMenuOpen])
+  const printSelected = async (docType: 'LABEL' | 'COMMERCIAL_INVOICE') => {
+    const orderNos = selectedOrderNos
+    if (orderNos.length === 0 || bulkPrinting) return
+    if (orderNos.length > 500) {
+      notify.info({
+        title: 'Too many orders to print',
+        body: `Print at most 500 orders at a time — ${orderNos.length.toLocaleString()} are selected. Narrow the filter or select fewer.`,
+      })
+      return
+    }
+    setBulkPrinting(docType)
+    try {
+      const res = await orderService.printDocuments(orderNos, docType)
+      printPdfBlob(res.blob)
+      const what = docType === 'LABEL' ? 'label' : 'commercial invoice'
+      const why = docType === 'LABEL' ? 'no label yet' : 'no invoice — domestic or no customs data'
+      notify.success(
+        `Opening ${res.included} ${what}${res.included === 1 ? '' : 's'} in the print dialog`
+          + (res.skipped > 0 ? ` · ${res.skipped} skipped (${why})` : '') + '.',
+      )
+    } catch (e) {
+      const status = (e as { status?: number }).status
+      const message = e instanceof Error ? e.message : 'Bulk print failed.'
+      if (status === 422) notify.info({ title: 'Nothing to print', body: message })
+      else notify.error({ title: 'Print failed', body: message })
+    } finally {
+      setBulkPrinting(null)
+    }
+  }
+
   const printLabelPdf = useCallback(async (orderNo: number) => {
     try {
       const blob = await orderService.getLabelPdf(orderNo, undefined, { main: true })
@@ -1190,6 +1276,7 @@ export default function OrdersWorkspace() {
 
   const activeFilterCount =
     Object.values(columnFilters).filter(Boolean).length + (dateFrom ? 1 : 0) + (dateTo ? 1 : 0)
+    + (sourceFilter ? 1 : 0) + (channelFilter ? 1 : 0) + (carrierFilter ? 1 : 0)
   // 2026-09-15 operator indicator — Batch is an OVERRIDE: when set, the
   // /orders request drops every other filter server-side (see the
   // `batchOnly` branch in the fetch effect). Toolbar chip + panel banner
@@ -1203,6 +1290,9 @@ export default function OrdersWorkspace() {
     setColumnFilters(emptyColumnFilters)
     setDateFrom('')
     setDateTo('')
+    setSourceFilter('')
+    setChannelFilter('')
+    setCarrierFilter('')
   }
 
   const busy = generatingOrderNos.length > 0
@@ -1351,13 +1441,21 @@ export default function OrdersWorkspace() {
             type="checkbox"
             aria-label={`Select order ${row.original.orderDetails.orderNo}`}
             checked={isOrderSelected(row.original.orderDetails.orderNo)}
-            onClick={(e) => {
+            onMouseDown={(e) => {
+              // Toggle on press, not click: each toggle re-renders the table,
+              // and a fast next click whose press and release straddle that
+              // re-render never produced a click (ticks were dropped).
+              if (e.button !== 0) return
+              if (e.shiftKey) e.preventDefault() // no text selection on range-select
               // Range-select — shift-click extends from the last-clicked
               // anchor to this row (Gmail/GitHub muscle memory).
               toggleOrder(row.original.orderDetails.orderNo, row.index, e.shiftKey)
-              // We handle the state change ourselves; stop React from
-              // firing the onChange handler with a fresh toggle.
+            }}
+            onClick={(e) => {
+              // We handle the state change ourselves; stop the browser's own toggle.
               e.preventDefault()
+              // detail 0 = keyboard (Space) — no mousedown came first.
+              if (e.detail === 0) toggleOrder(row.original.orderDetails.orderNo, row.index, e.shiftKey)
             }}
             onChange={() => { /* handled by onClick */ }}
             className="h-4 w-4 rounded border-[#cdbf9f] text-[#1f150c] focus:ring-[#e3d9c4]"
@@ -1822,6 +1920,71 @@ export default function OrdersWorkspace() {
               <FiPackage className="h-3 w-3" />
               Bulk labels ({rows.length})
             </button>
+            <div>
+              <button type="button"
+                      onClick={(e) => {
+                        // The toolbar scrolls sideways (overflow), which would clip an
+                        // absolutely-placed menu — anchor a fixed menu to the button instead.
+                        const r = e.currentTarget.getBoundingClientRect()
+                        const width = Math.min(290, window.innerWidth - 32)
+                        setPrintMenuAnchor({ top: r.bottom + 6, left: Math.max(16, Math.min(r.right - width, window.innerWidth - width - 16)), width })
+                        setPrintMenuOpen((o) => !o)
+                      }}
+                      aria-expanded={printMenuOpen}
+                      aria-haspopup="menu"
+                      className={BTN_GHOST_SM}
+                      title="Print labels and commercial invoices for the selected orders, or send them to your network printers">
+                <FiPrinter className="h-3 w-3" />
+                Print{selectedCount > 0 && printableView ? ` (${selectedCount.toLocaleString()})` : ''}
+                <FiChevronDown className="h-3 w-3" />
+              </button>
+              {printMenuOpen && printMenuAnchor ? createPortal(
+                <>
+                  <div className="fixed inset-0 z-[60]" onClick={() => setPrintMenuOpen(false)} />
+                  <div role="menu"
+                    style={{ top: printMenuAnchor.top, left: printMenuAnchor.left, width: printMenuAnchor.width }}
+                    className="fixed z-[61] overflow-hidden rounded-xl border border-[#e3d9c4] bg-white py-1 text-left shadow-[0_18px_50px_rgba(15,23,42,0.18)]">
+                    {selectedCount === 0 || !printableView ? (
+                      <p className="border-b border-[#efe7d6] bg-[#faf7f0] px-3 py-2 text-[12px] leading-snug text-[#5a4526]">
+                        Tick the orders to print first, in the <b>All orders</b> or <b>Archive</b> tab. Use <b>Filters → Carrier</b> to narrow to UPS, FedEx or USPS.
+                      </p>
+                    ) : (
+                      <p className="border-b border-[#efe7d6] px-3 py-2 text-[12px] text-slate-500">
+                        {selectedCount.toLocaleString()} order{selectedCount === 1 ? '' : 's'} selected
+                      </p>
+                    )}
+                    {[
+                      { key: 'labels', icon: <FiPrinter className="h-3.5 w-3.5" />, label: 'Print labels',
+                        hint: 'One PDF in your browser print dialog', run: () => void printSelected('LABEL') },
+                      { key: 'invoices', icon: <FiFileText className="h-3.5 w-3.5" />, label: 'Print commercial invoices',
+                        hint: 'International orders only', run: () => void printSelected('COMMERCIAL_INVOICE') },
+                      { key: 'send', icon: <FiSend className="h-3.5 w-3.5" />, label: 'Send to network printer…',
+                        hint: "Each client's assigned printer, or one you pick", run: () => setSendToPrinterOpen(true) },
+                    ].map((item) => (
+                      <button key={item.key} type="button" role="menuitem"
+                        disabled={selectedCount === 0 || !printableView || busy || bulkPrinting !== null}
+                        onClick={() => { setPrintMenuOpen(false); item.run() }}
+                        className="flex w-full items-start gap-2.5 px-3 py-2 text-left hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent">
+                        <span className="mt-0.5 text-[#5a4526]">{item.icon}</span>
+                        <span>
+                          <span className="block text-[13px] font-semibold text-slate-900">{item.label}</span>
+                          <span className="block text-[11.5px] text-slate-500">{item.hint}</span>
+                        </span>
+                      </button>
+                    ))}
+                    {normalizeRole(sessionRole) === 'ADMIN' ? (
+                      <button type="button" role="menuitem"
+                        onClick={() => { setPrintMenuOpen(false); navigate(settingsPaths.printers) }}
+                        className="mt-1 flex w-full items-center gap-2.5 border-t border-[#efe7d6] px-3 py-2 text-left text-[13px] font-semibold text-slate-700 hover:bg-[#faf7f0]">
+                        <FiSettings className="h-3.5 w-3.5 text-[#5a4526]" />
+                        Manage printers &amp; client routing
+                      </button>
+                    ) : null}
+                  </div>
+                </>,
+                document.body,
+              ) : null}
+            </div>
             <button type="button"
                     onClick={() => setSplitOpen(true)}
                     className={BTN_GHOST_SM}
@@ -1925,7 +2088,7 @@ export default function OrdersWorkspace() {
         {selectionEnabled && selectionMode === 'all-filtered' && allFilteredIds ? (
           <div className="mt-2 flex items-center justify-between gap-3 rounded-xl border border-sky-300 bg-sky-100 px-3 py-2 text-[11.5px] text-sky-900">
             <span>
-              All <span className="font-semibold">{selectedCount}</span> orders matching the current filter are selected
+              All <span className="font-semibold">{selectedCount.toLocaleString()}</span> orders matching the current filter are selected
               {selectionSet.size > 0 ? <> · <span className="font-semibold">{selectionSet.size}</span> excluded</> : null}.
             </span>
             <button
@@ -2252,6 +2415,21 @@ export default function OrdersWorkspace() {
                           <option value="B2B">B2B (business)</option>
                         </select>,
                       )}
+                      {advField(
+                        <FiTruck className="h-3 w-3" />,
+                        'Carrier',
+                        <select
+                          value={carrierFilter}
+                          onChange={(e) => setCarrierFilter(e.target.value)}
+                          className={advInputCls}
+                        >
+                          <option value="">Any carrier</option>
+                          <option value="UPS">UPS</option>
+                          <option value="FEDEX">FedEx</option>
+                          <option value="USPS">USPS</option>
+                          <option value="DHL">DHL</option>
+                        </select>,
+                      )}
                     </div>
 
                     <div className="mt-3 flex items-center justify-end gap-2 border-t border-dashed border-[#e3d9c4] pt-2.5">
@@ -2312,8 +2490,10 @@ export default function OrdersWorkspace() {
              all/gen    → Void selected (labelled subset) + Copy order #s
       */}
       {bulkProgress || (selectionEnabled && selectedCount > 0) ? (
-        <div className="fixed inset-x-0 bottom-5 z-30 flex justify-center px-4">
-          <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 shadow-[0_18px_50px_rgba(15,23,42,0.22)]">
+        // Sticky inside the content column (not fixed to the viewport), so it
+        // centres on the page content and never slides under the sidebar.
+        <div ref={actionBarRef} className="pointer-events-none sticky bottom-5 z-30 mt-4 flex justify-center [&>*]:pointer-events-auto">
+          <div className="flex max-w-full flex-wrap items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2.5 shadow-[0_18px_50px_rgba(15,23,42,0.22)] sm:gap-3 sm:px-4">
             {bulkProgress ? (
               <>
                 <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-900" />
@@ -2330,7 +2510,7 @@ export default function OrdersWorkspace() {
             ) : (
               <>
                 <span className="text-[13.5px] font-semibold text-slate-950 tabular-nums">
-                  {selectedCount} selected{selectionMode === 'all-filtered' ? ' (all matching filter)' : ''}
+                  {selectedCount.toLocaleString()} selected{selectionMode === 'all-filtered' ? ' (all matching filter)' : ''}
                 </span>
                 {view === 'ready' ? (
                   <button
@@ -2368,6 +2548,40 @@ export default function OrdersWorkspace() {
                     >
                       <FiSlash className="h-3.5 w-3.5" />
                       Void selected
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void printSelected('LABEL')}
+                      disabled={busy || bulkPrinting !== null}
+                      title="Print the labels of every selected order in one job (orders without a label are skipped)"
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:opacity-50"
+                    >
+                      {bulkPrinting === 'LABEL'
+                        ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#5a4526]" />
+                        : <FiPrinter className="h-3.5 w-3.5" />}
+                      Print labels
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void printSelected('COMMERCIAL_INVOICE')}
+                      disabled={busy || bulkPrinting !== null}
+                      title="Print the commercial invoices of every selected international order in one job"
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:opacity-50"
+                    >
+                      {bulkPrinting === 'COMMERCIAL_INVOICE'
+                        ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#5a4526]" />
+                        : <FiFileText className="h-3.5 w-3.5" />}
+                      Print invoices
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSendToPrinterOpen(true)}
+                      disabled={busy}
+                      title="Send the selected orders' labels or invoices straight to your network printers — each client's assigned printer, or one you pick"
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:opacity-50"
+                    >
+                      <FiSend className="h-3.5 w-3.5" />
+                      Send to printer
                     </button>
                     <button
                       type="button"
@@ -2540,6 +2754,15 @@ export default function OrdersWorkspace() {
 
         {importOpen ? (
           <OrderImportModal onClose={() => setImportOpen(false)} />
+        ) : null}
+
+        {sendToPrinterOpen ? (
+          <SendToPrinterDialog
+            orderNumbers={selectedOrderNos}
+            canManagePrinters={normalizeRole(sessionRole) === 'ADMIN'}
+            onClose={() => setSendToPrinterOpen(false)}
+            onOpenSettings={() => { setSendToPrinterOpen(false); navigate(settingsPaths.printers) }}
+          />
         ) : null}
       </Suspense>
     </div>

@@ -4,6 +4,12 @@ import type { DangerousGoodsBlock } from './dgService'
 
 // ===== Request/Response Types =====
 
+/** CSRF echo for raw fetch calls that don't go through apiClient. */
+function readXsrfToken(): string | null {
+  const m = document.cookie.match(/(?:^|; )XSRF-TOKEN=([^;]*)/)
+  return m ? decodeURIComponent(m[1]) : null
+}
+
 export interface OrderDetails {
   orderNo: number
   orderSuffix: number
@@ -772,6 +778,8 @@ export interface OrderListParams {
   source?: string
   /** Shipping channel: D2C | B2B. Empty = all channels. */
   channel?: string
+  /** Carrier: UPS | FEDEX | USPS | DHL. Empty = all carriers. */
+  carrier?: string
 }
 
 /** Tab counts for the Labels work queue. */
@@ -837,6 +845,7 @@ export const orderService = {
     if (params.createdTo) query.set('createdTo', params.createdTo)
     if (params.source) query.set('source', params.source)
     if (params.channel) query.set('channel', params.channel)
+    if (params.carrier) query.set('carrier', params.carrier)
 
     return apiClient.get<ApiResponse<PaginatedOrderData>>(`/orders?${query.toString()}`)
   },
@@ -863,6 +872,7 @@ export const orderService = {
     if (params.createdTo) query.set('createdTo', params.createdTo)
     if (params.source) query.set('source', params.source)
     if (params.channel) query.set('channel', params.channel)
+    if (params.carrier) query.set('carrier', params.carrier)
     return apiClient.get<ApiResponse<number[]>>(`/orders/ids?${query.toString()}`)
   },
 
@@ -887,6 +897,7 @@ export const orderService = {
     if (params.createdTo) query.set('createdTo', params.createdTo)
     if (params.source) query.set('source', params.source)
     if (params.channel) query.set('channel', params.channel)
+    if (params.carrier) query.set('carrier', params.carrier)
     return apiClient.get<ApiResponse<Array<{ batchId: number; count: number }>>>(
       `/orders/batches?${query.toString()}`,
     )
@@ -966,6 +977,38 @@ export const orderService = {
    * persisted customs data) — the document that ships with an international
    * parcel. 422 means the order has no customs data (domestic).
    */
+  /**
+   * One merged PDF of labels or commercial invoices for many orders (bulk print).
+   * Orders without the document are skipped; the counts come back with the file.
+   */
+  printDocuments: async (
+    orderNumbers: number[],
+    docType: 'LABEL' | 'COMMERCIAL_INVOICE',
+  ): Promise<{ blob: Blob; included: number; skipped: number; skippedOrders: number[] }> => {
+    const response = await fetch(`${BASE_URL}/orders/documents/print`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(readXsrfToken() ? { 'X-XSRF-TOKEN': readXsrfToken() as string } : {}),
+      },
+      body: JSON.stringify({ orderNumbers, docType }),
+    })
+    const skippedOrders = (response.headers.get('X-Skipped-Orders') || '')
+      .split(',').map((v) => Number(v)).filter((n) => Number.isFinite(n) && n > 0)
+    if (!response.ok) {
+      // status lets callers tell "nothing to print" (422) from a real failure.
+      throw Object.assign(new Error(response.headers.get('X-Error') || `Bulk print failed (HTTP ${response.status}).`),
+        { status: response.status })
+    }
+    return {
+      blob: await response.blob(),
+      included: Number(response.headers.get('X-Documents-Included') || 0),
+      skipped: Number(response.headers.get('X-Documents-Skipped') || 0),
+      skippedOrders,
+    }
+  },
+
   getCommercialInvoicePdf: async (orderNo: number): Promise<Blob> => {
     const response = await fetch(`${BASE_URL}/orders/${orderNo}/commercial-invoice`, {
       credentials: 'include',

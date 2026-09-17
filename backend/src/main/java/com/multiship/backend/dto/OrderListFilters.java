@@ -61,4 +61,10 @@ public class OrderListFilters {
 
     /** Shipping-channel filter: D2C | B2B. Null/blank = all. */
     private String channel;
+
+    /**
+     * Carrier filter: UPS | FEDEX | USPS | DHL. Null/blank = all. Matched on the
+     * carrier of the account the order's label uses, else its service code's carrier.
+     */
+    private String carrier;
 }

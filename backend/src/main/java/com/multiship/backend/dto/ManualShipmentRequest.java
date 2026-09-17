@@ -1,5 +1,6 @@
 package com.multiship.backend.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
@@ -217,6 +218,46 @@ public class ManualShipmentRequest {
      * {@link SplitStrategy} and docs/plans/commodity_autosplit.md.
      */
     private SplitStrategy splitStrategy;
+
+    /**
+     * PR-G5 D1 — internal-only idempotency key. Populated by cross-flow
+     * callers (import path, background workers) with
+     * {@code IdempotencyKeys.forUspsOrder(orderNo)} so
+     * {@link com.multiship.backend.service.CarrierServiceImpl#generateManualLabel}
+     * writes a matching key onto the order_tracking row. A subsequent
+     * retry from any surface (queue processor, manual controller with
+     * the same key) then hits {@code generateLabel}'s tracking-row dedup
+     * check and returns the first attempt's tracking verbatim instead of
+     * 409ing or re-billing.
+     *
+     * <p>{@code @JsonIgnore} — external callers cannot smuggle a key in
+     * over the wire. Only the manual controller's client-driven
+     * {@code Idempotency-Key} header namespace + this internal field are
+     * allowed to set the tracking row's idempotency key.
+     */
+    @JsonIgnore
+    private String internalIdempotencyKey;
+
+    /**
+     * PR-S3 (audit finding S-B5) — internal-only audit actor override.
+     * Populated by cross-flow callers that have no
+     * {@code SecurityContextHolder} authentication set:
+     * <ul>
+     *   <li>background import worker: {@code "system:import-worker/{jobId}"}</li>
+     *   <li>inline operator import: {@code "system:import-operator/{createdBy}"}</li>
+     * </ul>
+     * {@code CarrierServiceImpl.generateManualLabel} routes the audit
+     * event through the {@code logEvent(..., actorOverride)} overload
+     * instead of {@code logShipment} so the override survives to the
+     * {@code audit_log.actor} column. Without it, background-worker
+     * Stamps calls write a NULL actor and analytics can't distinguish
+     * "the system did it" from "an operator did it".
+     *
+     * <p>{@code @JsonIgnore} — external callers cannot smuggle an actor
+     * in over the wire. Same guard as {@link #internalIdempotencyKey}.
+     */
+    @JsonIgnore
+    private String internalAuditActor;
 
     @Data
     public static class Address {

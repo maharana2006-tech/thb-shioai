@@ -735,6 +735,30 @@ public class CarrierServiceImpl implements CarrierService {
                         : "Shipment label generated successfully using the " + resolution.sourceDescription() + ".")
                 .build();
 
+        // PR-G5 D2 — analytics parity with the manual path. Before G5,
+        // queue-serviced labels (this method's callers: /orders/{n}/label
+        // + UspsLabelQueueWiring) never emitted a LABEL_GENERATED audit
+        // row, so joining "labels shipped" across manual + auto surfaces
+        // required stitching tracking rows to import batches. Now every
+        // successful label call emits the same LABEL_GENERATED / LABEL_REGENERATED
+        // event regardless of surface. Best-effort; audit failures never
+        // fail the label (see AuditService.logShipment).
+        if (auditService != null) {
+            try {
+                auditService.logShipment(
+                        AuditService.LABEL_GENERATED,
+                        order.getOrderNo(),
+                        order.getCustNo(),
+                        shipmentResult.trackingNumber(),
+                        connector.getCarrierCode()
+                                + " label on account " + used.accountNumber()
+                                + (usedFallback ? " (platform fallback)" : ""));
+            } catch (RuntimeException auditFail) {
+                log.warn("PR-G5 D2: LABEL_GENERATED audit emit failed for order {}: {}",
+                        order.getOrderNo(), auditFail.getMessage());
+            }
+        }
+
         return success("Label generated successfully.", response);
     }
 
@@ -896,6 +920,11 @@ public class CarrierServiceImpl implements CarrierService {
         if (req == null || req.getRecipient() == null) {
             return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR, "Recipient details are required.");
         }
+        // PR-G5 D1 — internal callers (import path) may stamp an order-anchored
+        // idempotency key onto the request DTO; the field is @JsonIgnore so
+        // external callers can't smuggle one over the wire. Normalise once so
+        // the tracking-row write below sees a consistent shape.
+        final String normalizedIdempotencyKey = normalizeInternalIdempotencyKey(req);
         // PR-G1 (USPS_DIRECT cross-flow routing) - on the fix-and-regenerate
         // path (existingOrderNo != null) the order row is already persisted,
         // so we can consult the shared routing service BEFORE the connector
@@ -1506,7 +1535,12 @@ public class CarrierServiceImpl implements CarrierService {
         // We save shipment_batch rows below (after the order row exists) so
         // that batch_id can FK back to the order.
         java.util.List<CarrierConnector.ShipmentResult> batchResults = new java.util.ArrayList<>();
-        try {
+        // PR-S1 (S-B1) — push the account's SERA refresh_token onto the
+        // connector's ThreadLocal so getAccessToken can use the refresh_token
+        // grant. Legacy SWSIM accounts leave the token null → no-op. Any
+        // return / exception clears the ThreadLocal via try-with-resources.
+        try (AutoCloseable ignored =
+                     com.multiship.backend.service.carriers.StampsSeraAuthContext.openFor(account)) {
             connector.validateCredentials(account.getClientId(), account.getClientSecret());
             String envForCall = firstNonBlank(account.getEnvironment(), carrierProperties.getDefaultEnvironment());
             // F-MODE-3 — pass envForCall to getAccessToken so FedEx routes
@@ -2104,19 +2138,40 @@ public class CarrierServiceImpl implements CarrierService {
         tracking.setMarkupValue(markup.value());
         tracking.setMarkupCurrency(markup.currency());
         tracking.setDispatchNextBusinessDay(nextBusinessDay);
+        // PR-G5 D1 — persist the caller's idempotency key so a subsequent
+        // retry (from queue OR import OR manual controller) that carries the
+        // same order-anchored key gets a success replay via generateLabel's
+        // tracking-row check. Null preserves the pre-G5 shape.
+        tracking.setIdempotencyKey(normalizedIdempotencyKey);
         tracking.setCreatedAt(LocalDateTime.now());
         tracking.setUpdatedAt(LocalDateTime.now());
         orderTrackingRepository.save(tracking);
 
         // Logs page: shipment-lifecycle trail (best-effort, own transaction).
+        // PR-S3 (S-B5) — internalAuditActor override lets background /
+        // import paths stamp `system:import-worker/{jobId}` on the audit
+        // row when SecurityContextHolder is empty (worker thread has no
+        // request-scoped auth). Route through logEvent(..., actorOverride)
+        // so the override reaches audit_log.actor; falls back to
+        // currentActor() when the override is blank/null.
         if (auditService != null) {
-            auditService.logShipment(
-                    existingOrderNo != null ? AuditService.LABEL_REGENERATED : AuditService.LABEL_GENERATED,
-                    orderNo, req.getClientCode(), result.trackingNumber(),
-                    carrier + " label on account " + billToNumber
-                            + (markup.billable() != null
-                                ? " · billable " + markup.billable() + " " + firstNonBlank(markup.currency(), "USD")
-                                : ""));
+            String auditNote = carrier + " label on account " + billToNumber
+                    + (markup.billable() != null
+                            ? " · billable " + markup.billable() + " " + firstNonBlank(markup.currency(), "USD")
+                            : "");
+            String actor = req.getInternalAuditActor();
+            if (actor != null && !actor.trim().isEmpty()) {
+                auditService.logEvent(
+                        AuditService.CAT_SHIPMENT,
+                        AuditService.SEV_INFO,
+                        existingOrderNo != null ? AuditService.LABEL_REGENERATED : AuditService.LABEL_GENERATED,
+                        AuditService.ORDER, orderNo, result.trackingNumber(),
+                        orderNo, auditNote, req.getClientCode(), actor.trim());
+            } else {
+                auditService.logShipment(
+                        existingOrderNo != null ? AuditService.LABEL_REGENERATED : AuditService.LABEL_GENERATED,
+                        orderNo, req.getClientCode(), result.trackingNumber(), auditNote);
+            }
         }
 
         LabelGenerationResponse response = LabelGenerationResponse.builder()
@@ -2166,6 +2221,17 @@ public class CarrierServiceImpl implements CarrierService {
     }
 
     private AutoShipmentAttempt attemptShipment(Order order, AccountResolution res, CarrierConnector connector) {
+        // PR-S1 (S-B1) — Stamps SERA accounts store their OAuth refresh_token
+        // on carrier_account_ref; the connector reads it off a ThreadLocal.
+        // Every carrier call path (interactive, background, import) needs
+        // to push the token before the connector fires, otherwise SERA
+        // silently falls back to a rejected token. Non-Stamps carriers
+        // no-op. Cleared in finally so the worker thread doesn't leak
+        // token state to the next order it services.
+        AutoCloseable stampsSeraCtx =
+                com.multiship.backend.service.carriers.StampsSeraAuthContext.openFor(
+                        carrierAccountRefRepository, res.carrierCode(), res.accountNumber());
+        try {
         connector.validateCredentials(res.clientId(), res.clientSecret());
         // F-MODE-3 — pass the resolved account's env so FedEx routes the
         // OAuth token URL to the matching host (sandbox vs prod).
@@ -2343,6 +2409,12 @@ public class CarrierServiceImpl implements CarrierService {
                     t -> fConnector.createShipment(sub, t, envForShipment)));
         }
         return new AutoShipmentAttempt(shipmentRequest, subRequests, results);
+        } finally {
+            // PR-S1 — clear the SERA ThreadLocal so the next order on this
+            // worker thread starts clean. NOOP path from openFor swallows
+            // its own close(); this catch is only for the real push path.
+            try { stampsSeraCtx.close(); } catch (Exception ignored) {}
+        }
     }
 
     /** True when the order's ship-to country differs from the platform shipper's origin. */
@@ -2386,6 +2458,21 @@ public class CarrierServiceImpl implements CarrierService {
         } catch (Exception ex) {
             log.warn("Order {}: could not persist line items: {}", order.getOrderNo(), ex.getMessage());
         }
+    }
+
+    /**
+     * PR-G5 D1 — pull the {@code internalIdempotencyKey} off the request
+     * DTO (populated by import / worker paths via {@code IdempotencyKeys}),
+     * trim and normalise blank/null to null so the tracking-row write
+     * downstream sees a consistent shape. Returns null when the field
+     * is unset — the pre-G5 New Shipment flow behaves unchanged.
+     */
+    private static String normalizeInternalIdempotencyKey(com.multiship.backend.dto.ManualShipmentRequest req) {
+        if (req == null) return null;
+        String raw = req.getInternalIdempotencyKey();
+        if (raw == null) return null;
+        String trimmed = raw.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     private static String clip(String v, int max) {
@@ -4027,6 +4114,17 @@ public class CarrierServiceImpl implements CarrierService {
      * <p>Never throws - a routing service outage surfaces as null (sync
      * fallback) so a broken settings lookup can't brick label generation
      * platform-wide.
+     *
+     * <p><b>PR-G5 M-M2 (retry-inside-idempotency-window).</b> When the
+     * order is already parked in the queue (QUEUED / PROCESSING), the
+     * routing service catches the enqueue-side {@link IllegalStateException}
+     * duplicate and returns the existing queue item's SINGLE_QUEUED /
+     * MPS_QUEUED verdict (see UspsDirectRoutingService lines 301-316 for
+     * single, 232-283 for MPS). This method therefore returns a QUEUED
+     * ApiResponse to the manual retry instead of falling through to a
+     * fresh sync carrier call — no double-charge, no queue race. Pinned
+     * by {@code CarrierServiceUspsManualQueueTest.routingSingleQueuedProducesQueuedResponse}
+     * + the routing-service-level dup tests.
      */
     private ApiResponse<LabelGenerationResponse> maybeRouteUspsDirect(
             long orderNo, org.springframework.security.core.userdetails.UserDetails caller) {

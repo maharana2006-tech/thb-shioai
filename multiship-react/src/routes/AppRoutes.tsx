@@ -83,6 +83,7 @@ const AdminUsersPage = lazy(() => import('../components/AdminUsersPage'))
 const CarrierShippingLimitsPage = lazy(() => import('../components/CarrierShippingLimitsPage'))
 // Sprint 52 — per-client output routing (LOCAL_FS / SFTP / PRINTER).
 const OutputDestinationsPage = lazy(() => import('../components/OutputDestinationsPage'))
+const PrintersPage = lazy(() => import('../components/PrintersPage'))
 // PR-F4 Agent-2 — USPS Direct admin dashboard (queue + quota + retries + reconciliation).
 const UspsDirectDashboardPage = lazy(() => import('../pages/UspsDirectDashboardPage'))
 // Lazy — one-shot flows (bulky but not on every page load).
@@ -173,6 +174,7 @@ export default function AppRoutes() {
                   <Route path="users" element={<AdminUsersPage />} />
                   <Route path="carrier-limits" element={<CarrierShippingLimitsPage />} />
                   <Route path="output-destinations" element={<OutputDestinationsPage />} />
+                  <Route path="printers" element={<PrintersPage />} />
                   {/* PR-F4 Agent-2 — USPS Direct admin dashboard: composite
                       view of queue depth, quota headroom, retry buckets and
                       void reconciliation. ADMIN only (RequireRole above +
