@@ -2,6 +2,8 @@ package com.multiship.backend.service.carriers.usps;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.multiship.backend.service.carriers.HttpClients;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -13,9 +15,9 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
@@ -87,8 +89,19 @@ public class UspsOAuthTokenCache {
      * Cache keyed by {@code clientId + "|" + environment}. Environment is
      * normalised to {@code SANDBOX} / {@code PRODUCTION} so a null / typo
      * env label doesn't create a phantom third slot.
+     *
+     * <p>PR-P1 (audit PERF-M1) — swapped from raw {@code ConcurrentHashMap}
+     * to a Caffeine {@link Cache} so credential rotation (or ops rotating
+     * the platform CLIENT_ID) doesn't leak old entries forever. TTL
+     * matches the USPS token lifetime + a small margin; maximumSize is
+     * generous vs the realistic cardinality (one platform CLIENT_ID
+     * × 2 environments = 2 entries; the 1000-slot bound is defensive
+     * against a mis-config that produced churn).
      */
-    private final ConcurrentHashMap<String, CachedToken> tokenCache = new ConcurrentHashMap<>();
+    private final Cache<String, CachedToken> tokenCache = Caffeine.newBuilder()
+            .expireAfterWrite(Duration.ofHours(8))
+            .maximumSize(1000)
+            .build();
 
     /**
      * Retrieve (mint on miss) a USPS v3 OAuth access token for the given
@@ -105,15 +118,19 @@ public class UspsOAuthTokenCache {
             return Optional.empty();
         }
         String key = cacheKey(clientId, environment);
-        CachedToken existing = tokenCache.get(key);
+        CachedToken existing = tokenCache.getIfPresent(key);
         if (existing != null && existing.isValid()) {
             return Optional.of(existing.token);
         }
-        // Single-flight the refresh under compute() so N concurrent callers
-        // on the same key only mint ONCE. Returning null from the lambda
-        // REMOVES the entry (compute() contract) — exactly what we want on
-        // failure so a transient outage doesn't poison the cache.
-        CachedToken refreshed = tokenCache.compute(key, (k, cur) -> {
+        // Single-flight the refresh via Caffeine's asMap().compute — same
+        // ConcurrentMap.compute contract as the pre-P1 raw ConcurrentHashMap
+        // (mapping fn ALWAYS runs; returning null REMOVES the entry). We
+        // deliberately do NOT use Cache.get(key, loader) here because that
+        // shortcuts to the existing value even when it's stale — which
+        // would leak an expired token past its refresh margin. compute()
+        // holds a per-bin lock so N concurrent callers land on the same
+        // slot and only mint ONCE.
+        CachedToken refreshed = tokenCache.asMap().compute(key, (k, cur) -> {
             if (cur != null && cur.isValid()) return cur;
             return fetchTokenWithRetry(clientId, clientSecret, environment);
         });
@@ -122,12 +139,14 @@ public class UspsOAuthTokenCache {
 
     /** Package-private for tests + ops hygiene. */
     void clear() {
-        tokenCache.clear();
+        tokenCache.invalidateAll();
     }
 
-    /** Package-private — cache size for observability tests. */
+    /** Package-private — cache size for observability tests.
+     *  Caffeine's {@code estimatedSize()} runs cleanup then returns a
+     *  best-effort count; sufficient for tests that assert 0/1 entries. */
     int size() {
-        return tokenCache.size();
+        return (int) tokenCache.estimatedSize();
     }
 
     static String cacheKey(String clientId, String environment) {

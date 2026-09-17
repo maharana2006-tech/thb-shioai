@@ -208,6 +208,12 @@ public class BulkLabelServiceImpl implements BulkLabelService {
      *  {@link #initExecutors()} so the {@code @Value} sizes have resolved. */
     private ExecutorService fanOutExecutor;
 
+    /** PR-P1 (PERF-M16) — Micrometer registry for the fanOut executor.
+     *  Nullable so pure-Mockito tests without Actuator wiring keep
+     *  passing; ExecutorServiceMetrics.monitor is null-guarded. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private io.micrometer.core.instrument.MeterRegistry meterRegistry;
+
     /**
      * Cooperative cancellation flags — one per running job. A worker
      * that finds its jobId here skips further orders (already-in-flight
@@ -318,11 +324,34 @@ public class BulkLabelServiceImpl implements BulkLabelService {
      */
     private synchronized void ensureExecutors() {
         if (fairExecutor != null) return;
-        this.fanOutExecutor = Executors.newFixedThreadPool(workerConcurrency, r -> {
-            Thread t = new Thread(r, "bulk-label-worker");
-            t.setDaemon(true);
-            return t;
-        });
+        // PR-P1 (audit PERF-B2 + PERF-M16) — bounded queue (200) with
+        // CallerRunsPolicy so a stalled carrier + burst import applies
+        // back-pressure on the submitting thread instead of piling
+        // unbounded tasks in a LinkedBlockingQueue (the OOM path). Same
+        // core/max threading footprint (workerConcurrency each way) so
+        // the FairTenantExecutor wrapping below sees identical semantics.
+        // FairTenantExecutor's per-tenant semaphores already gate
+        // concurrent dispatch to maxPerTenant, so CallerRunsPolicy only
+        // fires on genuine platform-wide saturation — expected + safe.
+        java.util.concurrent.ThreadPoolExecutor pool = new java.util.concurrent.ThreadPoolExecutor(
+                workerConcurrency, workerConcurrency,
+                60L, java.util.concurrent.TimeUnit.SECONDS,
+                new java.util.concurrent.ArrayBlockingQueue<>(200),
+                r -> {
+                    Thread t = new Thread(r, "bulk-label-worker");
+                    t.setDaemon(true);
+                    return t;
+                },
+                new java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy());
+        this.fanOutExecutor = pool;
+        // PR-P1 (PERF-M16) — register with Micrometer so /actuator/prometheus
+        // surfaces bulk-label-fanout queue depth + active-thread count on
+        // the ops dashboard. Null-guarded so pure-Mockito tests that
+        // don't wire the registry keep working.
+        if (meterRegistry != null) {
+            io.micrometer.core.instrument.binder.jvm.ExecutorServiceMetrics.monitor(
+                    meterRegistry, pool, "bulkLabelFanOut");
+        }
         this.fairExecutor = new com.multiship.backend.service.fairness.FairTenantExecutor(
                 fanOutExecutor, maxPerTenant, 60);
     }

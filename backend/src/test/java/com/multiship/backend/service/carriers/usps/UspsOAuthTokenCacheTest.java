@@ -4,10 +4,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import com.github.benmanes.caffeine.cache.Cache;
+
 import java.lang.reflect.Field;
 import java.time.Instant;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -61,9 +63,17 @@ class UspsOAuthTokenCacheTest {
         cacheField.setAccessible(true);
     }
 
+    /**
+     * PR-P1 — cache field is now a Caffeine {@link Cache} (was
+     * {@link java.util.concurrent.ConcurrentHashMap}). Return its
+     * {@code asMap()} view so existing tests can put / peek entries
+     * with the same API surface (Caffeine's asMap is a
+     * {@link ConcurrentMap}).
+     */
     @SuppressWarnings("unchecked")
-    private ConcurrentHashMap<String, Object> internalMap() throws Exception {
-        return (ConcurrentHashMap<String, Object>) cacheField.get(cache);
+    private ConcurrentMap<String, Object> internalMap() throws Exception {
+        Cache<String, Object> cf = (Cache<String, Object>) cacheField.get(cache);
+        return cf.asMap();
     }
 
     private static Object cachedToken(String token, Instant expiresAt) throws Exception {

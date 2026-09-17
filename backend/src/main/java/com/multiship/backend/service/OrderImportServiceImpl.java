@@ -381,6 +381,12 @@ public class OrderImportServiceImpl implements OrderImportService {
 
     private ExecutorService fanOutExecutor;
 
+    /** PR-P1 (PERF-M16) — Micrometer registry for the fanOut executor.
+     *  Nullable so pure-Mockito tests without Actuator wiring keep
+     *  passing; ExecutorServiceMetrics.monitor is null-guarded. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private io.micrometer.core.instrument.MeterRegistry meterRegistry;
+
     /**
      * Live label-generation progress per batch id, so the UI can poll a real
      * "X of N" while a generate/retry runs. In-memory + concurrent: the
@@ -539,11 +545,29 @@ public class OrderImportServiceImpl implements OrderImportService {
      *  on first use with whatever the compiled-in defaults are. */
     private synchronized void ensureExecutors() {
         if (fairExecutor != null) return;
-        this.fanOutExecutor = Executors.newFixedThreadPool(importCommitConcurrency, r -> {
-            Thread t = new Thread(r, "order-import-commit");
-            t.setDaemon(true);
-            return t;
-        });
+        // PR-P1 (audit PERF-B2 + PERF-M16) — bounded queue + CallerRunsPolicy
+        // so a stalled carrier + burst 1000-row import applies back-pressure
+        // instead of piling unbounded tasks in a LinkedBlockingQueue.
+        // FairTenantExecutor's per-tenant semaphores already gate concurrent
+        // dispatch to importMaxPerTenant.
+        java.util.concurrent.ThreadPoolExecutor pool = new java.util.concurrent.ThreadPoolExecutor(
+                importCommitConcurrency, importCommitConcurrency,
+                60L, java.util.concurrent.TimeUnit.SECONDS,
+                new java.util.concurrent.ArrayBlockingQueue<>(200),
+                r -> {
+                    Thread t = new Thread(r, "order-import-commit");
+                    t.setDaemon(true);
+                    return t;
+                },
+                new java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy());
+        this.fanOutExecutor = pool;
+        // PR-P1 (PERF-M16) — register with Micrometer so ops sees the queue
+        // depth on /actuator/prometheus (executor{name="importFanOut"}).
+        // Null-guarded for tests that don't wire the registry.
+        if (meterRegistry != null) {
+            io.micrometer.core.instrument.binder.jvm.ExecutorServiceMetrics.monitor(
+                    meterRegistry, pool, "importFanOut");
+        }
         this.fairExecutor = new com.multiship.backend.service.fairness.FairTenantExecutor(
                 fanOutExecutor, importMaxPerTenant, 60, IMPORT_MAX_BATCH_WAIT_MS);
     }

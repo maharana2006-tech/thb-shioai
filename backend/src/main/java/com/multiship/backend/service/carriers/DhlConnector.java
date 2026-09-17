@@ -29,7 +29,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
+import java.time.Duration;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 
 /**
  * DHL Express MyDHL API v2 connector. Differs from UPS/FedEx in one key way:
@@ -87,7 +89,13 @@ public class DhlConnector implements CarrierConnector {
      * operator fixing the credentials in the Carriers UI. compute()'s
      * "return null to remove" contract handles this cleanly.
      */
-    private final ConcurrentHashMap<String, CachedToken> tokenCache = new ConcurrentHashMap<>();
+    /** PR-P1 (audit PERF-M1) — Caffeine wrap so credential rotation doesn't
+     *  leak old cache entries. TTL matches TOKEN_TTL_MINUTES (6h);
+     *  maximumSize is defensive (realistic cardinality is small). */
+    private final Cache<String, CachedToken> tokenCache = Caffeine.newBuilder()
+            .expireAfterWrite(Duration.ofMinutes(360))
+            .maximumSize(1000)
+            .build();
 
     /** Re-verify credentials after {@value} minutes. Basic Auth doesn't
      *  "expire" but this bounds the window in which a revoked-at-DHL
@@ -217,21 +225,25 @@ public class DhlConnector implements CarrierConnector {
             return buildFallbackToken(clientId, clientSecret);
         }
         String cacheKey = clientId + "|" + envKey(environment);
-        CachedToken existing = tokenCache.get(cacheKey);
+        CachedToken existing = tokenCache.getIfPresent(cacheKey);
         if (existing != null && existing.isValid()) {
             return existing.token();
         }
         // Miss (or near-expiry) — single-flight the verify+cache so 24
-        // concurrent bulk workers hitting the same account don't all
-        // fire a verify GET. compute() serialises on the same map bin;
-        // other keys refresh in parallel. Returning null from the lambda
-        // REMOVES the entry (compute contract) — that's the intended
-        // handling when the verify fails, because we return a
+        // concurrent bulk workers hitting the same account don't all fire
+        // a verify GET. Caffeine's atomic get(key, loader) holds a per-key
+        // lock; other keys refresh in parallel. Returning null from the
+        // loader does NOT cache the entry (Caffeine contract) — the
+        // intended handling when the verify fails, because we return a
         // "-local-..." fallback token that must NEVER be cached (a
         // transient DHL outage would otherwise keep the account stuck
-        // on the fallback until the TTL, including through the operator
-        // fixing the credentials).
-        CachedToken refreshed = tokenCache.compute(cacheKey, (k, cur) -> {
+        // on the fallback until the TTL).
+        // asMap().compute so stale entries get re-fetched (Cache.get(key,
+        // loader) would shortcut to the existing value even when it's
+        // past the refresh margin). Returning null REMOVES the entry so
+        // a transient outage doesn't stick the account on the fallback
+        // token for a full TTL window.
+        CachedToken refreshed = tokenCache.asMap().compute(cacheKey, (k, cur) -> {
             if (cur != null && cur.isValid()) return cur;
             return verifyAndBuildBasicAuth(clientId, clientSecret, environment);
         });
@@ -243,7 +255,7 @@ public class DhlConnector implements CarrierConnector {
 
     /** Package-private for tests + operational hygiene. */
     void clearTokenCache() {
-        tokenCache.clear();
+        tokenCache.invalidateAll();
     }
 
     private static String envKey(String environment) {

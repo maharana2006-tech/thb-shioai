@@ -28,7 +28,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
+import java.time.Duration;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 
 @Slf4j
 @Component
@@ -110,7 +112,14 @@ public class UpsConnector implements CarrierConnector {
      * on OAuth failure) are NEVER put in the cache — otherwise a transient
      * OAuth outage would poison the cache for a whole TTL window.
      */
-    private final ConcurrentHashMap<String, CachedToken> tokenCache = new ConcurrentHashMap<>();
+    /** PR-P1 (audit PERF-M1) — Caffeine wrap so credential rotation doesn't
+     *  leak old cache entries. TTL matches token lifetime (4h);
+     *  maximumSize is defensive (realistic cardinality is small — one
+     *  UPS account per tenant × 2 environments). */
+    private final Cache<String, CachedToken> tokenCache = Caffeine.newBuilder()
+            .expireAfterWrite(Duration.ofHours(4))
+            .maximumSize(1000)
+            .build();
 
     /** Refresh margin — treat a token as expired {@value} seconds early so
      *  in-flight workers don't submit against a token that expires
@@ -308,7 +317,7 @@ public class UpsConnector implements CarrierConnector {
     @Override
     public String getAccessToken(String clientId, String clientSecret, String accountNumber, String environment) {
         String cacheKey = clientId + "|" + envKey(environment);
-        CachedToken existing = tokenCache.get(cacheKey);
+        CachedToken existing = tokenCache.getIfPresent(cacheKey);
         if (existing != null && existing.isValid()) {
             // Cache HIT — clear any stale per-thread auth detail from a
             // prior caller so consumeAuthFailureDetail() doesn't lie.
@@ -317,16 +326,17 @@ public class UpsConnector implements CarrierConnector {
         }
         // Miss (or near-expiry) — single-flight the refresh so 24 concurrent
         // bulk workers hitting the same account don't all fire an OAuth POST.
-        // compute() holds a per-bin lock; other keys refresh in parallel.
-        // Recheck inside the lambda so a competing thread that already
-        // refreshed doesn't get re-fetched.
-        //
-        // Returning null from the lambda REMOVES the entry (compute()
-        // contract) — that's exactly what we want when the fetch fails,
-        // because we return a "-local-..." fallback token that must
-        // NEVER be cached. A transient UPS OAuth outage would otherwise
+        // Caffeine's atomic get(key, loader) holds a per-key lock; other
+        // keys refresh in parallel. Returning null from the loader does NOT
+        // cache the entry (Caffeine contract) — exactly what we want when
+        // the fetch fails, because we fall back to a "-local-..." token that
+        // must NEVER be cached. A transient UPS OAuth outage would otherwise
         // poison the cache for a full TTL window.
-        CachedToken refreshed = tokenCache.compute(cacheKey, (k, cur) -> {
+        // asMap().compute so stale entries get re-fetched (Cache.get(key,
+        // loader) would shortcut to the existing value even when it's
+        // past the refresh margin). Returning null from the fn REMOVES
+        // the entry — the fallback path never poisons the cache.
+        CachedToken refreshed = tokenCache.asMap().compute(cacheKey, (k, cur) -> {
             if (cur != null && cur.isValid()) return cur;
             return fetchTokenUncached(clientId, clientSecret, accountNumber, environment);
         });
@@ -344,7 +354,7 @@ public class UpsConnector implements CarrierConnector {
      *  the number of distinct (clientId, environment) tuples in the system
      *  (dozens at most). */
     void clearTokenCache() {
-        tokenCache.clear();
+        tokenCache.invalidateAll();
     }
 
     private static String envKey(String environment) {
