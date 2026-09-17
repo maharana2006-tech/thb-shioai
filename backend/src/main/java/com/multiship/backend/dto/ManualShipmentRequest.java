@@ -238,6 +238,27 @@ public class ManualShipmentRequest {
     @JsonIgnore
     private String internalIdempotencyKey;
 
+    /**
+     * PR-S3 (audit finding S-B5) — internal-only audit actor override.
+     * Populated by cross-flow callers that have no
+     * {@code SecurityContextHolder} authentication set:
+     * <ul>
+     *   <li>background import worker: {@code "system:import-worker/{jobId}"}</li>
+     *   <li>inline operator import: {@code "system:import-operator/{createdBy}"}</li>
+     * </ul>
+     * {@code CarrierServiceImpl.generateManualLabel} routes the audit
+     * event through the {@code logEvent(..., actorOverride)} overload
+     * instead of {@code logShipment} so the override survives to the
+     * {@code audit_log.actor} column. Without it, background-worker
+     * Stamps calls write a NULL actor and analytics can't distinguish
+     * "the system did it" from "an operator did it".
+     *
+     * <p>{@code @JsonIgnore} — external callers cannot smuggle an actor
+     * in over the wire. Same guard as {@link #internalIdempotencyKey}.
+     */
+    @JsonIgnore
+    private String internalAuditActor;
+
     @Data
     public static class Address {
         private String name;

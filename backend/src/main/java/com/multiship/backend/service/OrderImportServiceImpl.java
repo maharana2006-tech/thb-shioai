@@ -2696,6 +2696,11 @@ public class OrderImportServiceImpl implements OrderImportService {
         batch = importBatchRepository.findById(id).orElse(batch);
         if (batch.getLabelBatchId() == null && labelBatch != null) batch.setLabelBatchId(labelBatch);
         batch.setStatus("IN_PROGRESS");
+        // PR-S2 (S-B3) — clear the durable cancel signal so a second cancel
+        // later this run is distinguishable from the previous run's. Mirror
+        // the cancelledBatchIds.remove above; without this a Retry would
+        // immediately no-op because the poll would fire true forever.
+        batch.setCancelRequestedAt(null);
         // Clear the previous completion timestamp when a retry starts so
         // the FE doesn't render "completed 8m ago" alongside an
         // "In progress" status pill. The new terminal transition at the
@@ -2750,7 +2755,14 @@ public class OrderImportServiceImpl implements OrderImportService {
                 // from operator context. Null on the operator inline-run path (jobId==null).
                 commit(rowsToProcess, requestedBy, platform, sourceOverride,
                         () -> { prog.done.incrementAndGet(); if (sync != null) sync.progress(prog, false); },
-                        () -> cancelledBatchIds.contains(id) || (sync != null && sync.cancelRequested()),
+                        // PR-S2 (S-B3) — poll the DB column too so a cross-JVM
+                        // cancel or a cancel that arrived AFTER this JVM read
+                        // `cancelledBatchIds` still fires. Fail-open on the DB
+                        // read: if the lookup throws, fall back to the in-memory
+                        // signal so a DB blip can't ignore a fresh cancel.
+                        () -> cancelledBatchIds.contains(id)
+                                || (sync != null && sync.cancelRequested())
+                                || isBatchCancelRequestedDurable(id),
                         n -> { prog.note = n; if (sync != null) sync.progress(prog, true); },
                         // PR-G2 (U7): tick the queued counter for every group routed to
                         // the USPS_DIRECT persistent queue so the progress endpoint can
@@ -3042,6 +3054,19 @@ public class OrderImportServiceImpl implements OrderImportService {
                     .build();
         }
         cancelledBatchIds.add(id);
+        // PR-S2 (S-B3) — durable cancel signal on the batch row itself.
+        // The in-memory cancelledBatchIds set above catches the immediate
+        // signal within THIS JVM; the DB column catches (a) restart-recovery
+        // (a resumed background job re-reads the batch and sees the cancel)
+        // and (b) cross-instance visibility (a background job on JVM #2
+        // sees the flag set by JVM #1's cancel handler).
+        try {
+            batch.setCancelRequestedAt(java.time.LocalDateTime.now());
+            importBatchRepository.save(batch);
+        } catch (RuntimeException e) {
+            log.warn("Import batch {}: could not persist cancel_requested_at column: {}",
+                    id, e.getMessage());
+        }
         if (generationJobRepository != null) {
             try {
                 generationJobRepository.requestCancel(id);
@@ -3135,6 +3160,54 @@ public class OrderImportServiceImpl implements OrderImportService {
         public int getStatus() { return status; }
         /** Specific code for the client to act on (null = IMPORT_BATCH_STATE). */
         public String getErrorCode() { return errorCode; }
+    }
+
+    /**
+     * PR-S2 (S-B3) — poll the batch's durable cancel signal (V64
+     * {@code cancel_requested_at} column). Used by cancel-check
+     * suppliers alongside the in-memory {@code cancelledBatchIds} set
+     * so cancels survive JVM restart + cross-instance deploys.
+     *
+     * <p>Fail-open: any read exception returns false so a broken DB
+     * lookup can't ignore a fresh in-memory cancel that fired above
+     * (the caller's OR guarantees the in-memory path still catches it).
+     * A missing row also returns false — a batch that doesn't exist
+     * anymore isn't cancellable, and the outer worker loop will exit
+     * on its own next tick.
+     */
+    private boolean isBatchCancelRequestedDurable(long batchId) {
+        if (importBatchRepository == null) return false;
+        try {
+            return importBatchRepository.findById(batchId)
+                    .map(b -> b.getCancelRequestedAt() != null)
+                    .orElse(false);
+        } catch (RuntimeException ex) {
+            log.debug("Import batch {}: durable cancel-check lookup threw: {}", batchId, ex.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * PR-S3 (S-B5) — build the audit actor stamp for a Stamps
+     * label call routed through this service. Two shapes:
+     * <ul>
+     *   <li>{@code system:import-worker/{jobId}} — background worker
+     *       (isBackgroundContext=true); the jobId anchors the label back
+     *       to the {@code import_generation_job} row that dispatched it.</li>
+     *   <li>{@code system:import-operator} — inline operator run
+     *       (isBackgroundContext=false); actor lookup falls back to the
+     *       SecurityContext for the specific operator name via
+     *       {@code currentActor()} inside AuditService.</li>
+     * </ul>
+     * Kept as a static helper so the CarrierServiceImpl audit-emit path
+     * only sees the finished string; no coupling to import internals.
+     */
+    private static String buildImportAuditActor(boolean isBackgroundContext, Long jobId) {
+        if (isBackgroundContext) {
+            String workerId = jobId != null ? String.valueOf(jobId) : "unknown";
+            return "system:import-worker/" + workerId;
+        }
+        return "system:import-operator";
     }
 
     private static boolean isGenerating(com.multiship.backend.model.ImportBatch b) {
@@ -4961,6 +5034,16 @@ public class OrderImportServiceImpl implements OrderImportService {
                         com.multiship.backend.service.carriers.usps.queue.IdempotencyKeys
                                 .forUspsOrder(existingOrderNo.longValue()));
             }
+            // PR-S3 (S-B5) — stamp the audit actor so background-worker /
+            // inline-import Stamps calls land on the audit log with a
+            // meaningful `actor` column instead of NULL. Background context
+            // uses `system:import-worker/{batchId}`; operator context uses
+            // `system:import-operator`. batchId (not jobId) because
+            // processGroup only has the batchId in scope — jobId lives up
+            // in the commit orchestrator; batchId is a stable anchor that
+            // audit consumers can join back to import_batch.
+            Long auditAnchor = batchId != null ? batchId.longValue() : null;
+            req.setInternalAuditActor(buildImportAuditActor(isBackgroundContext, auditAnchor));
             ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> resp =
                     carrierService.generateManualLabel(req, null, existingOrderNo);
             com.multiship.backend.dto.LabelGenerationResponse data =

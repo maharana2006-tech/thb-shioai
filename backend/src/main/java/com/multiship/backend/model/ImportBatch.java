@@ -76,6 +76,21 @@ public class ImportBatch {
     private LocalDateTime generationStartedAt;
 
     /**
+     * PR-S2 (STAMPS_COM audit S-B3) — durable cancel signal. Set by
+     * {@code OrderImportServiceImpl.cancelGeneration} when the operator
+     * fires the cancel; polled by workers before every row so a cancel
+     * survives (a) JVM restart, and (b) cross-instance deploys where the
+     * in-memory {@code cancelledBatchIds} set on one JVM isn't visible
+     * to the worker running on another.
+     *
+     * <p>NULL for pre-S2 rows and any batch that was never cancelled.
+     * Cleared on Retry when the batch flips back to IN_PROGRESS so a
+     * second cancel later can be distinguished from the first.
+     */
+    @Column(name = "cancel_requested_at")
+    private LocalDateTime cancelRequestedAt;
+
+    /**
      * Batch-level note surfaced under the status pill on Data History.
      * Populated when the retry-pass loop exhausts with deferred rows
      * remaining (Batch #11 post-mortem, 2026-09-12): "UPS was rate-

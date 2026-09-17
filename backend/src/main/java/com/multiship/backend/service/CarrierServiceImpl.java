@@ -2148,14 +2148,30 @@ public class CarrierServiceImpl implements CarrierService {
         orderTrackingRepository.save(tracking);
 
         // Logs page: shipment-lifecycle trail (best-effort, own transaction).
+        // PR-S3 (S-B5) — internalAuditActor override lets background /
+        // import paths stamp `system:import-worker/{jobId}` on the audit
+        // row when SecurityContextHolder is empty (worker thread has no
+        // request-scoped auth). Route through logEvent(..., actorOverride)
+        // so the override reaches audit_log.actor; falls back to
+        // currentActor() when the override is blank/null.
         if (auditService != null) {
-            auditService.logShipment(
-                    existingOrderNo != null ? AuditService.LABEL_REGENERATED : AuditService.LABEL_GENERATED,
-                    orderNo, req.getClientCode(), result.trackingNumber(),
-                    carrier + " label on account " + billToNumber
-                            + (markup.billable() != null
-                                ? " · billable " + markup.billable() + " " + firstNonBlank(markup.currency(), "USD")
-                                : ""));
+            String auditNote = carrier + " label on account " + billToNumber
+                    + (markup.billable() != null
+                            ? " · billable " + markup.billable() + " " + firstNonBlank(markup.currency(), "USD")
+                            : "");
+            String actor = req.getInternalAuditActor();
+            if (actor != null && !actor.trim().isEmpty()) {
+                auditService.logEvent(
+                        AuditService.CAT_SHIPMENT,
+                        AuditService.SEV_INFO,
+                        existingOrderNo != null ? AuditService.LABEL_REGENERATED : AuditService.LABEL_GENERATED,
+                        AuditService.ORDER, orderNo, result.trackingNumber(),
+                        orderNo, auditNote, req.getClientCode(), actor.trim());
+            } else {
+                auditService.logShipment(
+                        existingOrderNo != null ? AuditService.LABEL_REGENERATED : AuditService.LABEL_GENERATED,
+                        orderNo, req.getClientCode(), result.trackingNumber(), auditNote);
+            }
         }
 
         LabelGenerationResponse response = LabelGenerationResponse.builder()
