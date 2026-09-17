@@ -49,7 +49,23 @@ public interface OrderTrackingRepository extends JpaRepository<OrderTracking, Lo
 
     List<OrderTracking> findByStatus(String status);
 
+    /**
+     * PR-P2 (PERF-M14) — paged variant so callers can bound scans of the
+     * ever-growing order_label_tracking table by a page size instead of
+     * materialising every row in a status. Pre-P2 callers of the
+     * unbounded overload should migrate; the unbounded version stays for
+     * back-compat with the shipment-lifecycle backfill scripts that
+     * genuinely need the full set.
+     */
+    List<OrderTracking> findByStatus(String status, org.springframework.data.domain.Pageable pageable);
+
     List<OrderTracking> findByIsLabelGeneratedFalse();
+
+    /**
+     * PR-P2 (PERF-M14) — paged variant. Same rationale as
+     * {@link #findByStatus(String, org.springframework.data.domain.Pageable)}.
+     */
+    List<OrderTracking> findByIsLabelGeneratedFalse(org.springframework.data.domain.Pageable pageable);
 
     /** Newest generated labels first — feeds the unified Documents table
      *  (one row per labelled order: tracking + label + invoice + statement). */

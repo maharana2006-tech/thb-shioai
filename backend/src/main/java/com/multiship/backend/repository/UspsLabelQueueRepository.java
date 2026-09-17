@@ -71,8 +71,22 @@ public interface UspsLabelQueueRepository
      * Pick-next order for the processor: priority ASC (lower = more
      * urgent), then enqueued_at ASC (FIFO within same priority). The
      * fair scheduler consumes this list and round-robins across tenants.
+     *
+     * <p>PR-P2 (PERF-M13) — the unbounded overload below is kept only for
+     * the fair-scheduler which explicitly needs the full pending set to
+     * do its round-robin. Every other caller MUST use the paged variant
+     * so a queue-backlog surge can't materialize 10k+ rows into the
+     * processor's heap on each tick.
      */
     List<UspsLabelQueueItem> findByStatusOrderByPriorityAscEnqueuedAtAsc(Status status);
+
+    /**
+     * PR-P2 (PERF-M13) — paged variant of the pick-next query. Same
+     * ordering, but bounded by the caller's {@link Pageable} so processor
+     * ticks + admin dashboards don't scan the whole queue when only the
+     * top N are needed.
+     */
+    List<UspsLabelQueueItem> findByStatusOrderByPriorityAscEnqueuedAtAsc(Status status, Pageable pageable);
 
     /** Total rows in a given status - platform-wide depth metric. */
     long countByStatus(Status status);
