@@ -93,6 +93,7 @@ export default function DataHistoryPage() {
   const [nowTick, setNowTick] = useState(() => Date.now())
   const [rowsById, setRowsById] = useState<Record<number, OrderImportRow[] | 'loading'>>({})
   const [generatingId, setGeneratingId] = useState<number | null>(null)
+  const [validatingId, setValidatingId] = useState<number | null>(null)
   // Live "X of N" label-generation progress per batch, polled while a batch
   // generate/retry runs so the button shows a real progress bar, not a spinner.
   const [genProgressById, setGenProgressById] = useState<Record<number, { done: number; total: number; note?: string | null; cancelling?: boolean; jobStatus?: string | null }>>({})
@@ -742,6 +743,32 @@ export default function DataHistoryPage() {
     }
   }
 
+  /** Validate all rows in a batch */
+  const validateAll = async (id: number) => {
+    setValidatingId(id)
+    try {
+      const res = await orderImportService.validateAllRows(id)
+      const updated = res.data
+      if (updated) {
+        // Update the batch in the list
+        setBatches((list) =>
+          list.map((b) =>
+            b.id === id
+              ? { ...b, status: updated.status, totalRows: updated.totalRows, savedRows: updated.savedRows, invalidRows: updated.invalidRows }
+              : b,
+          ),
+        )
+        // Update the expanded rows
+        if (updated.rows) setRowsById((m) => ({ ...m, [id]: updated.rows }))
+        notify.success('All rows validated successfully. Errors have been updated.')
+      }
+    } catch (e) {
+      notify.apiError(e, 'Validation failed.')
+    } finally {
+      setValidatingId(null)
+    }
+  }
+
   /** Generate a label for a single row inside a batch. */
   const generateRow = async (batchId: number, rowNumber: number, allowDuplicate = false) => {
     const key = `${batchId}-${rowNumber}`
@@ -1116,6 +1143,21 @@ export default function DataHistoryPage() {
                 ) : null
               ) : (
                 <>
+                  {/* Validate All button - validate all rows and update errors */}
+                  <button
+                    type="button"
+                    onClick={() => void validateAll(b.id)}
+                    disabled={validatingId === b.id || (b.status || '').toUpperCase() === 'IN_PROGRESS'}
+                    title="Validate all rows in this batch and update their errors/warnings"
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-3 py-2 text-[12px] font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300"
+                  >
+                    {validatingId === b.id ? (
+                      <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                    ) : (
+                      <FiSearch className="h-3.5 w-3.5" />
+                    )}
+                    {validatingId === b.id ? 'Validating...' : 'Validate All'}
+                  </button>
                   {/* Keep the button mounted while THIS batch is generating — the
                       click optimistically flips status to IN_PROGRESS, which isn't
                       in canGenerate's set, so without `|| busy` the whole control
@@ -1277,13 +1319,14 @@ export default function DataHistoryPage() {
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
     // nowTick re-renders the running-elapsed caption once a second.
-    [canWrite, viewTrash, trashBusyId, confirmGenId, billingSavingId, generatingId, genProgressById, nowTick, cancellingId, cancelRequested],
+    [canWrite, viewTrash, trashBusyId, confirmGenId, billingSavingId, generatingId, genProgressById, nowTick, cancellingId, cancelRequested, validatingId],
   )
 
   /** Expanded content for a batch row — the all-columns editable grid. */
   const renderBatchExpanded = (b: ImportBatchSummary) => {
     const rows = rowsById[b.id]
     const list = Array.isArray(rows) ? rows : []
+    console.log('renderBatchExpanded called for batch', b.id, 'rows:', rows, 'list.length:', list.length)
     const filter = gridFilter[b.id] ?? 'all'
     const needsAttention = (r: (typeof list)[number]) =>
       (r.errors?.length ?? 0) > 0 || (r.generatedStatus ?? '').toUpperCase() === 'FAILED'
@@ -1349,6 +1392,23 @@ export default function DataHistoryPage() {
                   </button>
                 ))}
               </div>
+              {/* Validate All button - validate all rows and update errors */}
+              {!viewTrash ? (
+                <button
+                  type="button"
+                  onClick={() => void validateAll(b.id)}
+                  disabled={validatingId === b.id || (b.status || '').toUpperCase() === 'IN_PROGRESS'}
+                  title="Validate all rows in this batch and update their errors/warnings"
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-[10.5px] font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300"
+                >
+                  {validatingId === b.id ? (
+                    <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                  ) : (
+                    <FiSearch className="h-3 w-3" />
+                  )}
+                  {validatingId === b.id ? 'Validating...' : 'Validate All'}
+                </button>
+              ) : null}
               <p className="text-[10.5px] text-[#b6a684]">
                 {viewTrash
                   ? 'Read-only in Trash — restore this import to edit rows or generate labels.'

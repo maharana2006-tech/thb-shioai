@@ -174,6 +174,9 @@ public interface OrderImportService {
         return generateLabelsForBatch(id, requestedBy, onlyFailed, usePlatformAccount, allowDuplicate);
     }
 
+    /** Validate all rows in a batch and update their errors/warnings. Returns the updated batch. */
+    com.multiship.backend.dto.ImportBatchDTO validateAllRows(Long id, String requestedBy);
+
     /** Run one claimed generation job to completion (called by the background worker). */
     default void executeGenerationJob(Long jobId) {
         throw new UnsupportedOperationException("executeGenerationJob");

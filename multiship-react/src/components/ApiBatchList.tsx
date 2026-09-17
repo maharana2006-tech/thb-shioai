@@ -48,6 +48,7 @@ export default function ApiBatchList() {
   const [genProgressById, setGenProgressById] = useState<Record<number, { done: number; total: number; note?: string | null }>>({})
   const [billingSavingId, setBillingSavingId] = useState<number | null>(null)
   const [confirmGenId, setConfirmGenId] = useState<number | null>(null)
+  const [validatingId, setValidatingId] = useState<number | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -220,6 +221,23 @@ export default function ApiBatchList() {
       await load()
     } finally {
       setBillingSavingId(null)
+    }
+  }
+
+  /** Validate all rows in a batch */
+  const validateAll = async (id: number) => {
+    setValidatingId(id)
+    try {
+      const res = await orderImportService.validateAllRows(id)
+      const updated = res.data
+      if (updated) {
+        applyUpdate(id, updated)
+        notify.success('All rows validated successfully. Errors have been updated.')
+      }
+    } catch (e) {
+      notify.apiError(e, 'Validation failed.')
+    } finally {
+      setValidatingId(null)
     }
   }
 
@@ -414,6 +432,21 @@ export default function ApiBatchList() {
                   <span className="shrink-0 rounded-full bg-[#f4eede] px-2.5 py-1 text-[11px] font-bold text-[#5a4526]">
                     {b.totalRows} {b.totalRows === 1 ? 'shipment' : 'shipments'}
                   </span>
+                  {/* Validate All button - validate all rows and update errors */}
+                  <button
+                    type="button"
+                    onClick={() => void validateAll(b.id)}
+                    disabled={validatingId === b.id || st === 'IN_PROGRESS'}
+                    title="Validate all rows in this batch and update their errors/warnings"
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-blue-600 px-3 py-2 text-[12px] font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300"
+                  >
+                    {validatingId === b.id ? (
+                      <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                    ) : (
+                      <FiRefreshCw className="h-3.5 w-3.5" />
+                    )}
+                    {validatingId === b.id ? 'Validating...' : 'Validate'}
+                  </button>
                   {/* Keep the controls mounted while THIS batch generates — the
                       click optimistically flips status to IN_PROGRESS (not in
                       CAN_GENERATE), so without `|| genBusy` the progress bar

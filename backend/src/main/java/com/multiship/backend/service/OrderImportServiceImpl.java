@@ -122,6 +122,10 @@ public class OrderImportServiceImpl implements OrderImportService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.repository.ImportBatchRepository importBatchRepository;
 
+    /** Row data store for WMS imports (import_batch_row table) */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.ImportBatchRowRepository importBatchRowRepository;
+
     /** Durable queue for label-generation runs (V57). Optional: unit-test
      *  constructors don't wire it, and without it Generate runs inline. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -221,10 +225,33 @@ public class OrderImportServiceImpl implements OrderImportService {
         return null;
     }
 
-    /** Sprint 50 Tier 0.5 PR G — parse an ImportBatch's rowsJson to a list of
-     *  OrderImportRowDTO. Empty list on any failure. */
+    /** Fetch an ImportBatch's rows from import_batch_row table (WMS imports) or parse from rowsJson (CSV/manual imports).
+     *  Returns empty list on any failure. */
     private List<OrderImportRowDTO> parseBatchRows(com.multiship.backend.model.ImportBatch batch) {
-        if (batch == null || batch.getRowsJson() == null || importObjectMapper == null) {
+        if (batch == null) {
+            return java.util.List.of();
+        }
+
+        // For WMS/API imports, fetch from import_batch_row table
+        if (batch.getSource() != null && (batch.getSource().equalsIgnoreCase("WMS") || batch.getSource().equalsIgnoreCase("API"))) {
+            if (importBatchRowRepository != null) {
+                try {
+                    java.util.List<com.multiship.backend.model.ImportBatchRow> rows = importBatchRowRepository.findByImportBatchId(batch.getId());
+                    log.info("parseBatchRows: batch {} (source: {}) fetched {} rows from import_batch_row",
+                            batch.getId(), batch.getSource(), rows.size());
+                    return rows.stream().map(this::convertToOrderImportRowDTO).toList();
+                } catch (Exception e) {
+                    log.warn("parseBatchRows: error fetching rows for batch {} from import_batch_row: {}", batch.getId(), e.getMessage());
+                    return java.util.List.of();
+                }
+            } else {
+                log.warn("parseBatchRows: importBatchRowRepository is null for batch {} (source: {})", batch.getId(), batch.getSource());
+                return java.util.List.of();
+            }
+        }
+
+        // For CSV/manual imports, parse from rowsJson
+        if (batch.getRowsJson() == null || importObjectMapper == null) {
             return java.util.List.of();
         }
         try {
@@ -234,6 +261,100 @@ public class OrderImportServiceImpl implements OrderImportService {
         } catch (Exception e) {
             return java.util.List.of();
         }
+    }
+
+    /** Convert ImportBatchRow entity to OrderImportRowDTO for API responses */
+    private OrderImportRowDTO convertToOrderImportRowDTO(com.multiship.backend.model.ImportBatchRow row) {
+        OrderImportRowDTO dto = new OrderImportRowDTO();
+        dto.setRowNumber(row.getRowNumber());
+        dto.setOrderRef(row.getOrderRef());
+        dto.setBillTo(row.getBillTo());
+        dto.setReference(row.getReference());
+        dto.setBatchId(row.getBatchId());
+        dto.setClientCode(row.getClientCode());
+        dto.setWarehouseCode(row.getWarehouseCode());
+        dto.setRecipientName(row.getRecipientName());
+        dto.setRecipientCompany(row.getRecipientCompany());
+        dto.setRecipientPhone(row.getRecipientPhone());
+        dto.setRecipientEmail(row.getRecipientEmail());
+        dto.setAddressLine1(row.getAddressLine1());
+        dto.setAddressLine2(row.getAddressLine2());
+        dto.setCity(row.getCity());
+        dto.setState(row.getState());
+        dto.setPostalCode(row.getPostalCode());
+        dto.setCountryCode(row.getCountryCode());
+        dto.setCarrierCode(row.getCarrierCode());
+        dto.setServiceType(row.getServiceType());
+        dto.setAccountNumber(row.getAccountNumber());
+        dto.setPackageType(row.getPackageType());
+        dto.setWeight(row.getWeight());
+        dto.setWeightUnit(row.getWeightUnit());
+        dto.setWeightInherited(row.getWeightInherited());
+        dto.setLength(row.getLength());
+        dto.setWidth(row.getWidth());
+        dto.setHeight(row.getHeight());
+        dto.setDimUnit(row.getDimUnit());
+        dto.setCurrency(row.getCurrency());
+        dto.setIncoterms(row.getIncoterms());
+        dto.setHsCode(row.getHsCode());
+        dto.setCountryOfOrigin(row.getCountryOfOrigin());
+        dto.setItemSku(row.getItemSku());
+        dto.setItemDescription(row.getItemDescription());
+        dto.setItemQuantity(row.getItemQuantity());
+        dto.setItemUnitValue(row.getItemUnitValue());
+        // Generated fields are set after label generation
+        if (row.getGeneratedOrderNo() != null) {
+            try {
+                dto.setGeneratedOrderNo(Integer.parseInt(row.getGeneratedOrderNo()));
+            } catch (NumberFormatException e) {
+                log.debug("Invalid generatedOrderNo format: {}", row.getGeneratedOrderNo());
+            }
+        }
+        dto.setGeneratedTrackingNumber(row.getGeneratedTrackingNumber());
+        dto.setGeneratedStatus(row.getGeneratedStatus());
+        dto.setGeneratedMessage(row.getGeneratedMessage());
+
+        // Parse custom fields if present
+        if (row.getCustomFields() != null && !row.getCustomFields().isEmpty() && importObjectMapper != null) {
+            try {
+                dto.setCustomFields(importObjectMapper.readValue(row.getCustomFields(), java.util.Map.class));
+            } catch (Exception e) {
+                log.debug("Failed to parse customFields for row {}: {}", row.getId(), e.getMessage());
+            }
+        }
+
+        // Parse errors and warnings from JSON strings
+        if (row.getErrors() != null && !row.getErrors().isEmpty()) {
+            try {
+                if (importObjectMapper != null) {
+                    dto.setErrors(importObjectMapper.readValue(row.getErrors(), new com.fasterxml.jackson.core.type.TypeReference<List<String>>() {}));
+                } else {
+                    dto.setErrors(java.util.List.of(row.getErrors()));
+                }
+            } catch (Exception e) {
+                log.debug("Failed to parse errors for row {}: {}", row.getId(), e.getMessage());
+                dto.setErrors(java.util.List.of(row.getErrors()));
+            }
+        } else {
+            dto.setErrors(java.util.List.of());
+        }
+
+        if (row.getWarnings() != null && !row.getWarnings().isEmpty()) {
+            try {
+                if (importObjectMapper != null) {
+                    dto.setWarnings(importObjectMapper.readValue(row.getWarnings(), new com.fasterxml.jackson.core.type.TypeReference<List<String>>() {}));
+                } else {
+                    dto.setWarnings(java.util.List.of(row.getWarnings()));
+                }
+            } catch (Exception e) {
+                log.debug("Failed to parse warnings for row {}: {}", row.getId(), e.getMessage());
+                dto.setWarnings(java.util.List.of(row.getWarnings()));
+            }
+        } else {
+            dto.setWarnings(java.util.List.of());
+        }
+
+        return dto;
     }
 
     /**
@@ -2252,24 +2373,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                     String owner = firstClientCode(parseBatchRows(b));
                     return owner != null && scope.get().equalsIgnoreCase(owner.trim());
                 })
-                .map(b -> com.multiship.backend.dto.ImportBatchDTO.builder()
-                        .id(b.getId())
-                        .createdBy(b.getCreatedBy())
-                        .fileName(b.getFileName())
-                        .status(b.getStatus())
-                        .labelBatchId(b.getLabelBatchId())
-                        .createdAt(b.getCreatedAt() == null ? null : b.getCreatedAt().toString())
-                        .completedAt(b.getCompletedAt() == null ? null : b.getCompletedAt().toString())
-                        .generationStartedAt(b.getGenerationStartedAt() == null ? null : b.getGenerationStartedAt().toString())
-                        .note(b.getNote())
-                        .totalRows(b.getTotalRows())
-                        .savedRows(b.getSavedRows())
-                        .invalidRows(b.getInvalidRows())
-                        .deletedAt(b.getDeletedAt() == null ? null : b.getDeletedAt().toString())
-                        .deletedBy(b.getDeletedBy())
-                        .billingMode(StringUtils.hasText(b.getBillingMode()) ? b.getBillingMode() : "AUTO")
-                        .source(StringUtils.hasText(b.getSource()) ? b.getSource() : "BULK")
-                        .build())
+                .map(b -> toBatchDTO(b, parseBatchRows(b)))
                 .toList();
     }
 
@@ -2382,16 +2486,8 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (importBatchRepository == null || id == null) return null;
         com.multiship.backend.model.ImportBatch b = importBatchRepository.findById(id).orElse(null);
         if (b == null) return null;
-        List<OrderImportRowDTO> parsedRows = java.util.List.of();
-        if (importObjectMapper != null && b.getRowsJson() != null) {
-            try {
-                parsedRows = importObjectMapper.readValue(
-                        b.getRowsJson(),
-                        new com.fasterxml.jackson.core.type.TypeReference<List<OrderImportRowDTO>>() {});
-            } catch (Exception e) {
-                parsedRows = java.util.List.of();
-            }
-        }
+        // Use parseBatchRows() which handles both WMS (import_batch_row) and CSV (rowsJson) sources
+        List<OrderImportRowDTO> parsedRows = parseBatchRows(b);
         // Sprint 50 Tier 0.5 PR G — enforce tenant match before returning
         // the payload. ImportBatch has no direct tenant column, so the
         // clientCode on the persisted rows is the source of truth.
@@ -2995,6 +3091,82 @@ public class OrderImportServiceImpl implements OrderImportService {
      * <p>Called from OrderImportController.cancelGeneration().
      */
     @Override
+    public com.multiship.backend.dto.ImportBatchDTO validateAllRows(Long id, String requestedBy) {
+        if (importBatchRepository == null || id == null) return null;
+        com.multiship.backend.model.ImportBatch batch = importBatchRepository.findById(id).orElse(null);
+        if (batch == null) return null;
+
+        // Load all rows
+        List<OrderImportRowDTO> rows = parseBatchRows(batch);
+        if (rows.isEmpty()) {
+            log.info("Batch {} has no rows to validate", id);
+            return historyDetail(id);
+        }
+
+        // Tenant match — enforce access control
+        requireMatch(firstClientCode(rows));
+
+        // Re-validate all rows
+        log.info("Validating all {} rows in batch {}", rows.size(), id);
+        validate(rows);
+
+        // Update errors/warnings in import_batch_row for WMS/API batches
+        boolean isWmsOrApi = batch.getSource() != null &&
+                (batch.getSource().equalsIgnoreCase("WMS") || batch.getSource().equalsIgnoreCase("API"));
+
+        if (isWmsOrApi && importBatchRowRepository != null) {
+            List<com.multiship.backend.model.ImportBatchRow> dbRows = importBatchRowRepository.findByImportBatchId(id);
+            for (int i = 0; i < rows.size() && i < dbRows.size(); i++) {
+                OrderImportRowDTO validatedRow = rows.get(i);
+                com.multiship.backend.model.ImportBatchRow dbRow = dbRows.get(i);
+
+                // Update errors/warnings
+                if (validatedRow.getErrors() != null && !validatedRow.getErrors().isEmpty() && importObjectMapper != null) {
+                    try {
+                        dbRow.setErrors(importObjectMapper.writeValueAsString(validatedRow.getErrors()));
+                    } catch (Exception e) {
+                        dbRow.setErrors(String.join(", ", validatedRow.getErrors()));
+                    }
+                } else {
+                    dbRow.setErrors(null);
+                }
+
+                if (validatedRow.getWarnings() != null && !validatedRow.getWarnings().isEmpty() && importObjectMapper != null) {
+                    try {
+                        dbRow.setWarnings(importObjectMapper.writeValueAsString(validatedRow.getWarnings()));
+                    } catch (Exception e) {
+                        dbRow.setWarnings(String.join(", ", validatedRow.getWarnings()));
+                    }
+                } else {
+                    dbRow.setWarnings(null);
+                }
+
+                // Update status
+                boolean clean = (validatedRow.getErrors() == null || validatedRow.getErrors().isEmpty());
+                dbRow.setGeneratedStatus(clean ? "SAVED" : "NEEDS_FIX");
+                dbRow.setUpdatedAt(java.time.LocalDateTime.now());
+
+                importBatchRowRepository.save(dbRow);
+            }
+        }
+
+        // Update batch stats
+        int total = rows.size();
+        int invalid = (int) rows.stream()
+                .filter(r -> r.getErrors() != null && !r.getErrors().isEmpty())
+                .count();
+
+        batch.setTotalRows(total);
+        batch.setSavedRows(total - invalid);
+        batch.setInvalidRows(invalid);
+        batch.setStatus(invalid > 0 ? "DRAFT" : "INITIATE");
+        batch = importBatchRepository.save(batch);
+
+        log.info("Batch {} validated: {} rows, {} valid, {} invalid", id, total, total - invalid, invalid);
+        return toBatchDTO(batch, rows);
+    }
+
+    @Override
     public ApiResponse<String> cancelGeneration(Long id) {
         if (importBatchRepository == null || id == null) {
             return ApiResponse.<String>builder()
@@ -3010,15 +3182,12 @@ public class OrderImportServiceImpl implements OrderImportService {
                     .message("Import batch " + id + " does not exist.")
                     .build();
         }
-        // Tenant match — parse enough of rowsJson to get the first clientCode.
+        // Tenant match — use parseBatchRows to get rows from both sources
         try {
-            List<OrderImportRowDTO> rows = importObjectMapper == null || batch.getRowsJson() == null
-                    ? java.util.List.of()
-                    : importObjectMapper.readValue(batch.getRowsJson(),
-                            new com.fasterxml.jackson.core.type.TypeReference<List<OrderImportRowDTO>>() {});
+            List<OrderImportRowDTO> rows = parseBatchRows(batch);
             requireMatch(firstClientCode(rows));
         } catch (Exception ignored) {
-            // Malformed rowsJson: fall through — tenant clamp on submit
+            // Error reading rows: fall through — tenant clamp on submit
             // already protected the write; this is a nice-to-have hardening.
         }
         String current = batch.getStatus();
@@ -3100,13 +3269,11 @@ public class OrderImportServiceImpl implements OrderImportService {
     }
 
     /** Best-effort tenant lookup for a batch — reads first row's
-     *  clientCode from rowsJson. Null on legacy or empty rows. */
+     *  clientCode from import_batch_row or rowsJson. Null on legacy or empty rows. */
     private String resolveTenantForBatch(com.multiship.backend.model.ImportBatch batch) {
-        if (importObjectMapper == null || batch.getRowsJson() == null) return null;
+        if (batch == null) return null;
         try {
-            List<OrderImportRowDTO> rows = importObjectMapper.readValue(
-                    batch.getRowsJson(),
-                    new com.fasterxml.jackson.core.type.TypeReference<List<OrderImportRowDTO>>() {});
+            List<OrderImportRowDTO> rows = parseBatchRows(batch);
             return firstClientCode(rows);
         } catch (Exception ignored) {
             return null;
@@ -3196,26 +3363,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         com.multiship.backend.model.ImportBatch batch = importBatchRepository.findById(id).orElse(null);
         if (batch == null) return null;
 
-        List<OrderImportRowDTO> rows = new ArrayList<>();
-        if (importObjectMapper != null && batch.getRowsJson() != null) {
-            try {
-                rows = importObjectMapper.readValue(
-                        batch.getRowsJson(),
-                        new com.fasterxml.jackson.core.type.TypeReference<List<OrderImportRowDTO>>() {});
-            } catch (Exception e) {
-                // Sprint 50 PR N post-audit #13 — was silent; that gave
-                // an empty rows list, firstClientCode(rows)==null, and
-                // requireMatch(null) which for OPERATORS is a no-op —
-                // effectively a silent operator-only tenant guard skip.
-                // Log the corruption so ops can see + investigate, and
-                // still fall through with empty rows (the guard below
-                // throws for scoped users on null; operators get an
-                // empty result which is the safer response).
-                log.warn("Import batch {} rowsJson parse failed — treating as empty: {}",
-                        id, e.getMessage());
-                rows = new ArrayList<>();
-            }
-        }
+        List<OrderImportRowDTO> rows = parseBatchRows(batch);
         // Sprint 50 Tier 0.5 PR G — enforce tenant match on the parent
         // batch before we generate for a single row. Single-row generation
         // must have the same tenant boundary as full-batch generation.
@@ -3392,16 +3540,26 @@ public class OrderImportServiceImpl implements OrderImportService {
         com.multiship.backend.model.ImportBatch batch = importBatchRepository.findById(id).orElse(null);
         if (batch == null) return null;
 
+        // Handle both WMS/API batches (import_batch_row) and CSV/manual (rowsJson)
+        boolean isWmsOrApi = batch.getSource() != null &&
+                (batch.getSource().equalsIgnoreCase("WMS") || batch.getSource().equalsIgnoreCase("API"));
+
         List<OrderImportRowDTO> rows = new ArrayList<>();
-        if (importObjectMapper != null && batch.getRowsJson() != null) {
-            try {
-                rows = importObjectMapper.readValue(
-                        batch.getRowsJson(),
-                        new com.fasterxml.jackson.core.type.TypeReference<List<OrderImportRowDTO>>() {});
-            } catch (Exception e) {
-                log.warn("Import batch {} rowsJson parse failed on edit — treating as empty: {}",
-                        id, e.getMessage());
-                rows = new ArrayList<>();
+        if (isWmsOrApi) {
+            // For WMS/API batches, fetch from import_batch_row table
+            rows = new ArrayList<>(parseBatchRows(batch));
+        } else {
+            // For CSV/manual batches, parse from rowsJson
+            if (importObjectMapper != null && batch.getRowsJson() != null) {
+                try {
+                    rows = importObjectMapper.readValue(
+                            batch.getRowsJson(),
+                            new com.fasterxml.jackson.core.type.TypeReference<List<OrderImportRowDTO>>() {});
+                } catch (Exception e) {
+                    log.warn("Import batch {} rowsJson parse failed on edit — treating as empty: {}",
+                            id, e.getMessage());
+                    rows = new ArrayList<>();
+                }
             }
         }
         // Same tenant boundary as read / generate: a scoped USER may only
@@ -3445,7 +3603,9 @@ public class OrderImportServiceImpl implements OrderImportService {
 
         // Re-validate the whole batch — mutates each row's errors/warnings
         // in place through the same pipeline preview/commit use.
+        log.info("Validating batch {} row {} before save: errors={}", id, rowNumber, rows.get(index).getErrors());
         validate(rows);
+        log.info("Validated batch {} row {} after validation: errors={}", id, rowNumber, rows.get(index).getErrors());
 
         // Re-stamp lifecycle status for every row that hasn't shipped.
         for (OrderImportRowDTO r : rows) {
@@ -3473,11 +3633,95 @@ public class OrderImportServiceImpl implements OrderImportService {
         batch.setInvalidRows(invalid);
         batch.setStatus(deriveGenerationStatus(total, generated, failed, invalid));
         stampCompletionIfTerminal(batch);
-        try {
-            if (importObjectMapper != null) batch.setRowsJson(importObjectMapper.writeValueAsString(rows));
-        } catch (Exception ex) {
-            log.warn("Import batch {} rowsJson serialisation failed on edit — keeping prior payload: {}",
-                    id, ex.getMessage());
+
+        // Save rows back to appropriate storage
+        if (isWmsOrApi && importBatchRowRepository != null) {
+            // For WMS/API batches, update import_batch_row table
+            try {
+                com.multiship.backend.model.ImportBatchRow dbRow = importBatchRowRepository
+                        .findByImportBatchId(batch.getId()).stream()
+                        .filter(r -> r.getRowNumber() != null && r.getRowNumber() == rowNumber)
+                        .findFirst()
+                        .orElse(null);
+
+                if (dbRow != null) {
+                    OrderImportRowDTO editedRow = rows.get(index);
+                    // Update the database row with edited values
+                    dbRow.setOrderRef(editedRow.getOrderRef());
+                    dbRow.setBillTo(editedRow.getBillTo());
+                    dbRow.setReference(editedRow.getReference());
+                    dbRow.setClientCode(editedRow.getClientCode());
+                    dbRow.setWarehouseCode(editedRow.getWarehouseCode());
+                    dbRow.setRecipientName(editedRow.getRecipientName());
+                    dbRow.setRecipientCompany(editedRow.getRecipientCompany());
+                    dbRow.setRecipientPhone(editedRow.getRecipientPhone());
+                    dbRow.setRecipientEmail(editedRow.getRecipientEmail());
+                    dbRow.setAddressLine1(editedRow.getAddressLine1());
+                    dbRow.setAddressLine2(editedRow.getAddressLine2());
+                    dbRow.setCity(editedRow.getCity());
+                    dbRow.setState(editedRow.getState());
+                    dbRow.setPostalCode(editedRow.getPostalCode());
+                    dbRow.setCountryCode(editedRow.getCountryCode());
+                    dbRow.setCarrierCode(editedRow.getCarrierCode());
+                    dbRow.setServiceType(editedRow.getServiceType());
+                    dbRow.setAccountNumber(editedRow.getAccountNumber());
+                    dbRow.setPackageType(editedRow.getPackageType());
+                    dbRow.setWeight(editedRow.getWeight());
+                    dbRow.setWeightUnit(editedRow.getWeightUnit());
+                    dbRow.setWeightInherited(editedRow.getWeightInherited());
+                    dbRow.setLength(editedRow.getLength());
+                    dbRow.setWidth(editedRow.getWidth());
+                    dbRow.setHeight(editedRow.getHeight());
+                    dbRow.setDimUnit(editedRow.getDimUnit());
+                    dbRow.setCurrency(editedRow.getCurrency());
+                    dbRow.setIncoterms(editedRow.getIncoterms());
+                    dbRow.setHsCode(editedRow.getHsCode());
+                    dbRow.setCountryOfOrigin(editedRow.getCountryOfOrigin());
+                    dbRow.setItemSku(editedRow.getItemSku());
+                    dbRow.setItemDescription(editedRow.getItemDescription());
+                    dbRow.setItemQuantity(editedRow.getItemQuantity());
+                    dbRow.setItemUnitValue(editedRow.getItemUnitValue());
+                    dbRow.setGeneratedStatus(editedRow.getGeneratedStatus());
+
+                    // Serialize errors and warnings
+                    if (editedRow.getErrors() != null && !editedRow.getErrors().isEmpty() && importObjectMapper != null) {
+                        try {
+                            dbRow.setErrors(importObjectMapper.writeValueAsString(editedRow.getErrors()));
+                            log.info("Saved errors for row {}: {}", rowNumber, dbRow.getErrors());
+                        } catch (Exception e) {
+                            dbRow.setErrors(String.join(", ", editedRow.getErrors()));
+                            log.warn("Error serializing errors: {}", e.getMessage());
+                        }
+                    } else {
+                        dbRow.setErrors(null);
+                        log.info("Clearing errors for row {} (clean={}, empty={})", rowNumber,
+                                editedRow.getErrors() == null,
+                                editedRow.getErrors() == null || editedRow.getErrors().isEmpty());
+                    }
+                    if (editedRow.getWarnings() != null && !editedRow.getWarnings().isEmpty() && importObjectMapper != null) {
+                        try {
+                            dbRow.setWarnings(importObjectMapper.writeValueAsString(editedRow.getWarnings()));
+                        } catch (Exception e) {
+                            dbRow.setWarnings(String.join(", ", editedRow.getWarnings()));
+                        }
+                    } else {
+                        dbRow.setWarnings(null);
+                    }
+                    dbRow.setUpdatedAt(java.time.LocalDateTime.now());
+                    importBatchRowRepository.save(dbRow);
+                    log.info("Saved import_batch_row {} - errors={}, warnings={}", dbRow.getId(), dbRow.getErrors(), dbRow.getWarnings());
+                }
+            } catch (Exception ex) {
+                log.warn("Import batch {} error updating import_batch_row on edit: {}", id, ex.getMessage());
+            }
+        } else {
+            // For CSV/manual batches, save to rowsJson
+            try {
+                if (importObjectMapper != null) batch.setRowsJson(importObjectMapper.writeValueAsString(rows));
+            } catch (Exception ex) {
+                log.warn("Import batch {} rowsJson serialisation failed on edit — keeping prior payload: {}",
+                        id, ex.getMessage());
+            }
         }
         batch = importBatchRepository.save(batch);
 

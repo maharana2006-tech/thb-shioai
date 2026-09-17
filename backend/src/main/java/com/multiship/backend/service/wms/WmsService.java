@@ -63,12 +63,13 @@ public class WmsService {
     private com.multiship.backend.repository.WarehouseRepository warehouseRepository;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private OrderImportServiceImpl orderImportService;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.ImportBatchRowRepository importBatchRowRepository;
 
     public boolean isConfigured() {
         return wmsClient.isConfigured();
     }
 
-    @Transactional
     public WmsPullResultDTO pullShippable(String requestedBy) {
         if (!wmsClient.isConfigured()) {
             return WmsPullResultDTO.builder()
@@ -78,100 +79,159 @@ public class WmsService {
                     .build();
         }
 
-        List<WmsPendingOrderDTO> shippable = wmsClient.fetchShippable();
-        List<OrderImportRowDTO> rows = new ArrayList<>();
         List<String> messages = new ArrayList<>();
-        int failed = 0;
-        int shipments = 0;
+
+        // Fetch exactly 1000 records (10 pages × 100 per page) - single click = single batch
+        int pageNum = 0;
+        List<WmsPendingOrderDTO> shippable = wmsClient.fetchShippableBatch(pageNum);
+
+        if (shippable.isEmpty()) {
+            log.info("WMS pull: no orders available from page {}", pageNum);
+            return WmsPullResultDTO.builder()
+                    .configured(true)
+                    .fetched(0)
+                    .imported(0)
+                    .skipped(0)
+                    .failed(0)
+                    .batchId(null)
+                    .importBatchId(null)
+                    .importedOrderNos(List.of())
+                    .messages(List.of("No orders available to fetch from WMS"))
+                    .build();
+        }
+
+        int batchCount = 1;
+        int totalFetched = shippable.size();
+
+        // Process the batch in its own transaction
+        BatchProcessResult batchResult = processBatch(requestedBy, shippable, batchCount);
+
+        log.info("WMS pull ({}): fetched {} orders in 1 batch, {} row(s) → ({} need fixes, {} skipped)",
+                requestedBy, totalFetched, batchResult.totalRows,
+                batchResult.totalRows - batchResult.shipments, batchResult.failed);
+
+        return WmsPullResultDTO.builder()
+                .configured(true)
+                .fetched(totalFetched)
+                .imported(batchResult.shipments)
+                .skipped(0)
+                .failed(batchResult.failed)
+                .batchId(null)               // label batch is assigned when labels are generated
+                .importBatchId(batchResult.importBatchId)
+                .importedOrderNos(List.of())
+                .messages(batchResult.messages)
+                .build();
+    }
+
+    /** Helper class to return batch processing results */
+    private static class BatchProcessResult {
+        int shipments;
+        int failed;
+        int totalRows;
+        Long importBatchId;
+        List<String> messages;
+
+        BatchProcessResult(int shipments, int failed, int totalRows, Long importBatchId, List<String> messages) {
+            this.shipments = shipments;
+            this.failed = failed;
+            this.totalRows = totalRows;
+            this.importBatchId = importBatchId;
+            this.messages = messages;
+        }
+    }
+
+    /** Process one batch of 1000 orders in its own transaction to avoid timeout */
+    @Transactional
+    protected BatchProcessResult processBatch(String requestedBy, List<WmsPendingOrderDTO> shippable, int batchCount) {
+        List<OrderImportRowDTO> rows = new ArrayList<>();
+        int batchShipments = 0;
+        int batchFailed = 0;
+        List<String> messages = new ArrayList<>();
 
         for (WmsPendingOrderDTO src : shippable) {
             String externalId = src == null ? null : src.getShipmentNumber();
             if (!StringUtils.hasText(externalId)) {
-                failed++;
+                batchFailed++;
                 messages.add("Skipped a WMS shipment with no shipmentNumber.");
                 continue;
             }
-            shipments++;
+            batchShipments++;
             OrderImportRowDTO row = toImportRow(src, rows.size() + 1);
-            // Validate up front so the grid shows what needs fixing (e.g. the
-            // client to bill) the moment the batch is opened. Editing a cell
-            // re-runs the same validator, so errors clear as they're resolved.
             List<String> errors = new ArrayList<>(OrderImportServiceImpl.validateRow(row));
             errors.addAll(preflight(src, row));
             row.setErrors(errors);
             rows.add(row);
-            // One line per shipped item so the packing list / commercial invoice
-            // carries every SKU. The first row is the parcel (it owns the
-            // container weight); the item lines inherit it and are flagged as
-            // such so generation doesn't turn them into extra boxes.
             for (OrderImportRowDTO itemLine : itemLines(src, row, rows.size() + 1)) {
                 itemLine.setErrors(new ArrayList<>(OrderImportServiceImpl.validateRow(itemLine)));
                 rows.add(itemLine);
             }
         }
 
-        int total = rows.size();
-        int invalid = (int) rows.stream()
+        int batchTotal = rows.size();
+        int batchInvalid = (int) rows.stream()
                 .filter(r -> r.getErrors() != null && !r.getErrors().isEmpty())
                 .count();
 
-        // Dedup: fetching the same pending shipments again must NOT pile up
-        // duplicate batches. The content hash is computed from the as-fetched
-        // rows (deterministic), so an unchanged WMS pending set maps to the
-        // existing batch — even after the operator has edited/generated it.
         Long importBatchId = null;
-        boolean deduped = false;
-        if (total > 0 && importBatchRepository != null) {
+        if (batchTotal > 0 && importBatchRepository != null) {
             String hash = OrderImportServiceImpl.contentHash(rows);
             ImportBatch existing = hash == null ? null
                     : importBatchRepository.findFirstByContentHashAndDeletedAtIsNullOrderByIdDesc(hash).orElse(null);
             if (existing != null) {
                 importBatchId = existing.getId();
-                deduped = true;
-                messages.add("These shipments were already fetched — showing batch #" + existing.getId() + ".");
+                messages.add("Batch " + batchCount + ": These shipments were already fetched — showing batch #" + existing.getId() + ".");
             } else {
-                // The same set was fetched before but the operator trashed that
-                // batch: its labelled orders still exist, so re-importing would
-                // ship them twice. Flag every row that already has a live label
-                // and say where the original batch went.
                 ImportBatch trashed = null;
                 try {
                     trashed = hash == null ? null
                             : importBatchRepository.findFirstByContentHashOrderByIdDesc(hash)
                                 .filter(b -> b.getDeletedAt() != null).orElse(null);
-                } catch (Exception ignore) { /* optional lookup */ }
+                } catch (Exception ignore) { }
                 if (orderImportService != null) {
-                    try { orderImportService.flagOrderRefsAlreadyGenerated(rows); } catch (Exception ignore) { /* advisory */ }
+                    try { orderImportService.flagOrderRefsAlreadyGenerated(rows); } catch (Exception ignore) { }
                 }
                 long flagged = rows.stream().filter(r -> r.getWarnings() != null
                         && r.getWarnings().stream().anyMatch(w -> w.contains("already generated")))
                         .map(r -> r.getOrderRef() == null ? "" : r.getOrderRef().trim().toUpperCase())
                         .distinct().count();
                 if (trashed != null) {
-                    messages.add("These shipments were fetched before as batch #" + trashed.getId()
+                    messages.add("Batch " + batchCount + ": These shipments were fetched before as batch #" + trashed.getId()
                             + ", which is in Trash. Restore it from Data History → Trash instead of generating again"
                             + (flagged > 0 ? " — " + flagged + " order(s) already have a live label and are flagged." : "."));
                 } else if (flagged > 0) {
-                    messages.add(flagged + " order(s) were already labelled from an earlier import — generating again creates duplicate shipments.");
+                    messages.add("Batch " + batchCount + ": " + flagged + " order(s) were already labelled from an earlier import — generating again creates duplicate shipments.");
                 }
-                importBatchId = recordBatch(requestedBy, rows, invalid, hash);
+                importBatchId = recordBatch(requestedBy, rows, batchInvalid, hash);
+                // Save each row to import_batch_row table
+                if (importBatchId != null && importBatchRowRepository != null) {
+                    ImportBatch batch = importBatchRepository.findById(importBatchId).orElse(null);
+                    if (batch != null) {
+                        try {
+                            for (OrderImportRowDTO rowDto : rows) {
+                                com.multiship.backend.model.ImportBatchRow importBatchRow = toImportBatchRow(batch, rowDto);
+                                importBatchRowRepository.save(importBatchRow);
+                            }
+                            log.info("WMS pull batch {} : saved {} rows to import_batch_row table", batchCount, rows.size());
+                        } catch (Exception e) {
+                            log.error("WMS pull batch {}: error saving rows to import_batch_row: {}", batchCount, e.getMessage(), e);
+                        }
+                    } else {
+                        log.warn("WMS pull batch {}: batch #{} not found after recording", batchCount, importBatchId);
+                    }
+                } else {
+                    if (importBatchId == null) {
+                        log.warn("WMS pull batch {}: importBatchId is null, skipping row persistence", batchCount);
+                    }
+                    if (importBatchRowRepository == null) {
+                        log.warn("WMS pull batch {}: importBatchRowRepository is null", batchCount);
+                    }
+                }
+                log.info("WMS pull batch {} : recorded batch #{} with {} row(s)",
+                        batchCount, importBatchId, batchTotal);
             }
         }
 
-        log.info("WMS pull ({}): fetched {}, {} row(s) → batch #{}{} ({} need fixes, {} skipped)",
-                requestedBy, shippable.size(), total, importBatchId,
-                deduped ? " (existing, deduped)" : "", invalid, failed);
-        return WmsPullResultDTO.builder()
-                .configured(true)
-                .fetched(shippable.size())
-                .imported(deduped ? 0 : shipments)
-                .skipped(deduped ? shipments : 0)     // already-present when the same set was re-fetched
-                .failed(failed)
-                .batchId(null)               // label batch is assigned when labels are generated
-                .importBatchId(importBatchId)
-                .importedOrderNos(List.of())
-                .messages(messages)
-                .build();
+        return new BatchProcessResult(batchShipments, batchFailed, batchTotal, importBatchId, messages);
     }
 
     /** Persist the fetched shipments as one editable/generatable import batch. */
@@ -182,21 +242,78 @@ public class WmsService {
             batch.setCreatedBy(requestedBy);
             batch.setFileName("WMS fetch — " + rows.size() + " shipment" + (rows.size() == 1 ? "" : "s"));
             batch.setSource("WMS");
-            // DRAFT while any row still needs fixing (Generate is gated off);
-            // INITIATE = all clean and ready to generate.
             batch.setStatus(invalid > 0 ? "DRAFT" : "INITIATE");
             batch.setCreatedAt(LocalDateTime.now());
             batch.setTotalRows(rows.size());
             batch.setSavedRows(rows.size());
             batch.setInvalidRows(invalid);
             batch.setBillingMode("AUTO");
-            batch.setContentHash(contentHash);   // identifies this fetch for re-fetch dedup
-            batch.setRowsJson(importObjectMapper != null ? importObjectMapper.writeValueAsString(rows) : "[]");
+            batch.setContentHash(contentHash);
             return importBatchRepository.save(batch).getId();
         } catch (Exception e) {
             log.warn("WMS pull: could not record the fetch batch: {}", e.getMessage());
             return null;
         }
+    }
+
+    /** Convert OrderImportRowDTO to ImportBatchRow for database persistence */
+    private com.multiship.backend.model.ImportBatchRow toImportBatchRow(ImportBatch batch, OrderImportRowDTO dto) {
+        com.multiship.backend.model.ImportBatchRow row = new com.multiship.backend.model.ImportBatchRow();
+        row.setImportBatch(batch);
+        row.setRowNumber(dto.getRowNumber());
+        row.setOrderRef(dto.getOrderRef());
+        row.setReference(dto.getReference());
+        row.setClientCode(dto.getClientCode());
+        row.setWarehouseCode(dto.getWarehouseCode());
+        row.setRecipientName(dto.getRecipientName());
+        row.setRecipientCompany(dto.getRecipientCompany());
+        row.setRecipientPhone(dto.getRecipientPhone());
+        row.setRecipientEmail(dto.getRecipientEmail());
+        row.setAddressLine1(dto.getAddressLine1());
+        row.setAddressLine2(dto.getAddressLine2());
+        row.setCity(dto.getCity());
+        row.setState(dto.getState());
+        row.setPostalCode(dto.getPostalCode());
+        row.setCountryCode(dto.getCountryCode());
+        row.setCarrierCode(dto.getCarrierCode());
+        row.setServiceType(dto.getServiceType());
+        row.setAccountNumber(dto.getAccountNumber());
+        row.setPackageType(dto.getPackageType());
+        row.setWeight(dto.getWeight());
+        row.setWeightUnit(dto.getWeightUnit());
+        row.setWeightInherited(dto.getWeightInherited());
+        row.setLength(dto.getLength());
+        row.setWidth(dto.getWidth());
+        row.setHeight(dto.getHeight());
+        row.setDimUnit(dto.getDimUnit());
+        row.setCurrency(dto.getCurrency());
+        row.setIncoterms(dto.getIncoterms());
+        row.setHsCode(dto.getHsCode());
+        row.setCountryOfOrigin(dto.getCountryOfOrigin());
+        row.setItemSku(dto.getItemSku());
+        row.setItemDescription(dto.getItemDescription());
+        row.setItemQuantity(dto.getItemQuantity());
+        row.setItemUnitValue(dto.getItemUnitValue());
+
+        // Convert errors and warnings lists to JSON strings
+        if (dto.getErrors() != null && !dto.getErrors().isEmpty()) {
+            try {
+                row.setErrors(importObjectMapper != null ? importObjectMapper.writeValueAsString(dto.getErrors()) : null);
+            } catch (Exception e) {
+                row.setErrors(String.join(", ", dto.getErrors()));
+            }
+        }
+        if (dto.getWarnings() != null && !dto.getWarnings().isEmpty()) {
+            try {
+                row.setWarnings(importObjectMapper != null ? importObjectMapper.writeValueAsString(dto.getWarnings()) : null);
+            } catch (Exception e) {
+                row.setWarnings(String.join(", ", dto.getWarnings()));
+            }
+        }
+
+        row.setCreatedAt(LocalDateTime.now());
+        row.setUpdatedAt(LocalDateTime.now());
+        return row;
     }
 
     /** Map one WMS pending shipment to an editable import row. */

@@ -15,6 +15,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -34,6 +35,9 @@ public class WmsClient {
 
     private static final Logger log = LoggerFactory.getLogger(WmsClient.class);
     private static final String PENDING_PATH = "/api/v1/shipping-label/pending-orders";
+    private static final String ALL_ORDERS_PATH = "/api/v1/shipping-label/all-orders";
+    private static final int PAGE_SIZE = 100;
+    private static final int PAGES_PER_BATCH = 10;
 
     private final String baseUrl;
     private final String apiKey;
@@ -90,6 +94,61 @@ public class WmsClient {
             log.warn("WMS pending-orders fetch failed ({}): {}", url, e.getMessage());
             throw new WmsException("Could not reach the WMS at " + url + ": " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Fetch a batch of 1000 orders (10 pages × 100 records) from the WMS's all-orders endpoint.
+     * Starts from the given page number and fetches PAGES_PER_BATCH pages sequentially.
+     *
+     * @param startPage the starting page number (0-indexed)
+     * @return accumulated list of up to 1000 orders (may be less on final batch)
+     * @throws WmsException on transport / HTTP / parse errors
+     */
+    public List<WmsPendingOrderDTO> fetchShippableBatch(int startPage) {
+        if (!isConfigured()) return List.of();
+
+        List<WmsPendingOrderDTO> batchedOrders = new ArrayList<>();
+        String baseUrlTrimmed = baseUrl.replaceAll("/+$", "");
+
+        for (int i = 0; i < PAGES_PER_BATCH; i++) {
+            int currentPage = startPage + i;
+            String url = baseUrlTrimmed + ALL_ORDERS_PATH + "?page=" + currentPage + "&pageSize=" + PAGE_SIZE;
+
+            try {
+                HttpRequest.Builder req = HttpRequest.newBuilder()
+                        .uri(URI.create(url))
+                        .timeout(Duration.ofSeconds(30))
+                        .header("Accept", "*/*")
+                        .GET();
+                if (StringUtils.hasText(apiKey)) {
+                    req.header("X-Api-Key", apiKey);
+                }
+                HttpResponse<String> resp = http.send(req.build(), HttpResponse.BodyHandlers.ofString());
+                if (resp.statusCode() / 100 != 2) {
+                    throw new WmsException("WMS returned HTTP " + resp.statusCode()
+                            + " for " + url + ": " + truncate(resp.body()));
+                }
+                WmsPendingResponse parsed = mapper.readValue(resp.body(), WmsPendingResponse.class);
+                List<WmsPendingOrderDTO> pageData = parsed == null ? null : parsed.getData();
+
+                if (pageData != null && !pageData.isEmpty()) {
+                    batchedOrders.addAll(pageData);
+                    log.debug("WMS batch fetch: page {} returned {} records, total now: {}",
+                            currentPage, pageData.size(), batchedOrders.size());
+                } else {
+                    log.debug("WMS batch fetch: page {} returned empty/null, stopping batch", currentPage);
+                    break;
+                }
+            } catch (WmsException e) {
+                throw e;
+            } catch (Exception e) {
+                log.warn("WMS batch fetch failed at page {} ({}): {}", currentPage, url, e.getMessage());
+                throw new WmsException("Could not reach the WMS at " + url + ": " + e.getMessage(), e);
+            }
+        }
+
+        log.info("WMS batch fetch from page {}: accumulated {} orders", startPage, batchedOrders.size());
+        return batchedOrders;
     }
 
     private static String truncate(String s) {

@@ -431,6 +431,28 @@ public class OrderImportController {
                 .build());
     }
 
+    @Operation(summary = "Validate all rows in a batch",
+            description = "Re-validates all rows in the batch, updates their errors/warnings, " +
+                    "and returns the updated batch with validation results.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @org.springframework.web.bind.annotation.PostMapping("/history/{id}/validate-all")
+    public ResponseEntity<ApiResponse<com.multiship.backend.dto.ImportBatchDTO>> validateAllRows(
+            @org.springframework.web.bind.annotation.PathVariable Long id,
+            @AuthenticationPrincipal UserDetails userDetails) {
+        String username = userDetails == null ? "unknown" : userDetails.getUsername();
+        com.multiship.backend.dto.ImportBatchDTO dto = orderImportService.validateAllRows(id, username);
+        if (dto == null) {
+            return ResponseEntity.status(404).body(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
+                    .status("ERROR").code(404).timestamp(java.time.LocalDateTime.now())
+                    .message("Import batch not found.")
+                    .build());
+        }
+        return ResponseEntity.ok(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
+                .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
+                .message("All rows validated successfully.")
+                .data(dto).build());
+    }
+
     @Operation(summary = "Correct one row of a saved import (Data History inline edit)",
             description = "Sprint 51 — replaces the row with the operator's edit, re-validates the " +
                     "whole batch, re-stamps each ungenerated row SAVED / NEEDS_FIX, and recomputes " +

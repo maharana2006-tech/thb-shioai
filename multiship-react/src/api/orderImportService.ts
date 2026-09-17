@@ -350,6 +350,15 @@ export const orderImportService = {
     apiClient.delete<ApiResponse<string>>(`/orders/import/history/${id}/generate`),
 
   /**
+   * Validate all rows in a batch and update their errors/warnings
+   */
+  validateAllRows: (id: number) =>
+    apiClient.post<ApiResponse<ImportBatchDetail>>(
+      `/orders/import/history/${id}/validate-all`,
+      {},
+    ),
+
+  /**
    * Live label-generation progress for a batch, polled ALONGSIDE the generate
    * request so the UI can show a real "X of N" bar. `running` is false (with
    * done=total=0) when nothing is generating for the batch.
