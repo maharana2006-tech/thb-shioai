@@ -75,4 +75,24 @@ public final class IdempotencyKeys {
     static String legacyForQueueItem(long queueItemId) {
         return LEGACY_USPS_QUEUE_PREFIX + queueItemId;
     }
+
+    /**
+     * PR-S3 (audit D1) — semantic alias for {@link #forUspsOrder(long)}.
+     * The internal-key namespace is deliberately carrier-agnostic (the
+     * "usps-" prefix is a G5-era historical accident, not a carrier
+     * identifier). Any USPS-family label — whether the tenant's USPS_PROVIDER
+     * is set to STAMPS_COM (goes through StampsConnector) or USPS_DIRECT
+     * (goes through UspsDirectConnector) — should mint the same key for
+     * the same {@code orderNo} so that provider-flip mid-batch retries
+     * still hit {@code CarrierServiceImpl.generateLabel}'s tracking-row
+     * dedup instead of double-charging.
+     *
+     * <p>Kept as a separate method (not just calling {@code forUspsOrder}
+     * directly) so future refactors can migrate to a per-carrier
+     * namespace if that becomes necessary without changing the Stamps
+     * call sites.
+     */
+    public static String forStampsOrder(long orderNo) {
+        return forUspsOrder(orderNo);
+    }
 }
