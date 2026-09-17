@@ -735,6 +735,30 @@ public class CarrierServiceImpl implements CarrierService {
                         : "Shipment label generated successfully using the " + resolution.sourceDescription() + ".")
                 .build();
 
+        // PR-G5 D2 — analytics parity with the manual path. Before G5,
+        // queue-serviced labels (this method's callers: /orders/{n}/label
+        // + UspsLabelQueueWiring) never emitted a LABEL_GENERATED audit
+        // row, so joining "labels shipped" across manual + auto surfaces
+        // required stitching tracking rows to import batches. Now every
+        // successful label call emits the same LABEL_GENERATED / LABEL_REGENERATED
+        // event regardless of surface. Best-effort; audit failures never
+        // fail the label (see AuditService.logShipment).
+        if (auditService != null) {
+            try {
+                auditService.logShipment(
+                        AuditService.LABEL_GENERATED,
+                        order.getOrderNo(),
+                        order.getCustNo(),
+                        shipmentResult.trackingNumber(),
+                        connector.getCarrierCode()
+                                + " label on account " + used.accountNumber()
+                                + (usedFallback ? " (platform fallback)" : ""));
+            } catch (RuntimeException auditFail) {
+                log.warn("PR-G5 D2: LABEL_GENERATED audit emit failed for order {}: {}",
+                        order.getOrderNo(), auditFail.getMessage());
+            }
+        }
+
         return success("Label generated successfully.", response);
     }
 
@@ -896,6 +920,11 @@ public class CarrierServiceImpl implements CarrierService {
         if (req == null || req.getRecipient() == null) {
             return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR, "Recipient details are required.");
         }
+        // PR-G5 D1 — internal callers (import path) may stamp an order-anchored
+        // idempotency key onto the request DTO; the field is @JsonIgnore so
+        // external callers can't smuggle one over the wire. Normalise once so
+        // the tracking-row write below sees a consistent shape.
+        final String normalizedIdempotencyKey = normalizeInternalIdempotencyKey(req);
         // PR-G1 (USPS_DIRECT cross-flow routing) - on the fix-and-regenerate
         // path (existingOrderNo != null) the order row is already persisted,
         // so we can consult the shared routing service BEFORE the connector
@@ -2104,6 +2133,11 @@ public class CarrierServiceImpl implements CarrierService {
         tracking.setMarkupValue(markup.value());
         tracking.setMarkupCurrency(markup.currency());
         tracking.setDispatchNextBusinessDay(nextBusinessDay);
+        // PR-G5 D1 — persist the caller's idempotency key so a subsequent
+        // retry (from queue OR import OR manual controller) that carries the
+        // same order-anchored key gets a success replay via generateLabel's
+        // tracking-row check. Null preserves the pre-G5 shape.
+        tracking.setIdempotencyKey(normalizedIdempotencyKey);
         tracking.setCreatedAt(LocalDateTime.now());
         tracking.setUpdatedAt(LocalDateTime.now());
         orderTrackingRepository.save(tracking);
@@ -2386,6 +2420,21 @@ public class CarrierServiceImpl implements CarrierService {
         } catch (Exception ex) {
             log.warn("Order {}: could not persist line items: {}", order.getOrderNo(), ex.getMessage());
         }
+    }
+
+    /**
+     * PR-G5 D1 — pull the {@code internalIdempotencyKey} off the request
+     * DTO (populated by import / worker paths via {@code IdempotencyKeys}),
+     * trim and normalise blank/null to null so the tracking-row write
+     * downstream sees a consistent shape. Returns null when the field
+     * is unset — the pre-G5 New Shipment flow behaves unchanged.
+     */
+    private static String normalizeInternalIdempotencyKey(com.multiship.backend.dto.ManualShipmentRequest req) {
+        if (req == null) return null;
+        String raw = req.getInternalIdempotencyKey();
+        if (raw == null) return null;
+        String trimmed = raw.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     private static String clip(String v, int max) {
@@ -4027,13 +4076,25 @@ public class CarrierServiceImpl implements CarrierService {
      * <p>Never throws - a routing service outage surfaces as null (sync
      * fallback) so a broken settings lookup can't brick label generation
      * platform-wide.
+     *
+     * <p><b>PR-G5 M-M2 (retry-inside-idempotency-window).</b> When the
+     * order is already parked in the queue (QUEUED / PROCESSING), the
+     * routing service catches the enqueue-side {@link IllegalStateException}
+     * duplicate and returns the existing queue item's SINGLE_QUEUED /
+     * MPS_QUEUED verdict (see UspsDirectRoutingService lines 301-316 for
+     * single, 232-283 for MPS). This method therefore returns a QUEUED
+     * ApiResponse to the manual retry instead of falling through to a
+     * fresh sync carrier call — no double-charge, no queue race. Pinned
+     * by {@code CarrierServiceUspsManualQueueTest.routingSingleQueuedProducesQueuedResponse}
+     * + the routing-service-level dup tests.
      */
     private ApiResponse<LabelGenerationResponse> maybeRouteUspsDirect(
             long orderNo, org.springframework.security.core.userdetails.UserDetails caller) {
         if (uspsDirectRoutingService == null) return null;
         Optional<UspsDirectRoutingService.RoutingDecision> maybe;
         try {
-            maybe = uspsDirectRoutingService.decide(orderNo, caller);
+            maybe = uspsDirectRoutingService.decide(orderNo, caller,
+                    UspsDirectRoutingService.ProvenanceHint.manual());
         } catch (Exception ex) {
             log.warn("PR-G1: routing service threw for order {}: {} - sync fallback",
                     orderNo, ex.getMessage());

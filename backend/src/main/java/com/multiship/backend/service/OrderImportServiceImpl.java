@@ -169,6 +169,19 @@ public class OrderImportServiceImpl implements OrderImportService {
     private com.multiship.backend.service.carriers.usps.queue.UspsDirectRoutingService uspsDirectRoutingService;
 
     /**
+     * PR-G3b (M-B4) - cancel-cascade to USPS_DIRECT queue rows enqueued
+     * by this import batch. When the operator cancels the import,
+     * cancelPending(batchId) flips any still-QUEUED rows to CANCELLED so
+     * the queue processor doesn't drain them after the batch is dead.
+     * PROCESSING / DONE / FAILED rows are left alone.
+     *
+     * <p>Optional so pure-Mockito tests can construct the service
+     * without a queue collaborator.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.carriers.usps.queue.UspsLabelQueueService uspsLabelQueueService;
+
+    /**
      * PR-G3a (M-B3) — read-only view onto the {@code USPS_PROVIDER} platform
      * toggle so {@link #processGroup} can distinguish "routing returned SYNC
      * because the row wasn't a USPS_DIRECT candidate" (expected, silent) from
@@ -3037,6 +3050,19 @@ public class OrderImportServiceImpl implements OrderImportService {
             }
         }
         log.info("Import batch {} cancellation requested (current status={}).", id, current);
+        // PR-G3b (M-B4) — cascade the cancel to any live USPS_DIRECT queue rows
+        // this batch enqueued. Only QUEUED rows flip to CANCELLED; PROCESSING/DONE/
+        // FAILED are left alone so terminal outcomes stay accurate.
+        if (uspsLabelQueueService != null) {
+            try {
+                int cancelledQueue = uspsLabelQueueService.cancelPending(id);
+                if (cancelledQueue > 0) {
+                    log.info("Import batch {} cancel cascaded to {} USPS queue rows.", id, cancelledQueue);
+                }
+            } catch (RuntimeException e) {
+                log.warn("Import batch {}: USPS queue cancel-cascade failed: {}", id, e.getMessage());
+            }
+        }
         publishBatchEvent(batch, "batch-cancel-requested");
         return ApiResponse.<String>builder()
                 .status("success").code(HttpStatus.OK.value())
@@ -4840,7 +4866,18 @@ public class OrderImportServiceImpl implements OrderImportService {
             if (existingOrderNo != null && uspsDirectRoutingService != null) {
                 java.util.Optional<com.multiship.backend.service.carriers.usps.queue.UspsDirectRoutingService.RoutingDecision> maybe;
                 try {
-                    maybe = uspsDirectRoutingService.decide((long) existingOrderNo.intValue(), null);
+                    Long batchIdLong = batchId != null ? Long.valueOf(batchId) : null;
+                    // PR-G5 D3 — pass the row's clientCode as the tenant
+                    // hint so the queue row is scoped to what the import
+                    // submit-time tenant clamp already validated (auth-time
+                    // truth) instead of the loaded Order's tenantId/custNo
+                    // fallback chain, which can drift on legacy rows.
+                    String tenantHint = leader.getClientCode();
+                    com.multiship.backend.service.carriers.usps.queue.UspsDirectRoutingService.ProvenanceHint hint =
+                            isBackgroundContext
+                                    ? com.multiship.backend.service.carriers.usps.queue.UspsDirectRoutingService.ProvenanceHint.importBackgroundScoped(batchIdLong, tenantHint)
+                                    : com.multiship.backend.service.carriers.usps.queue.UspsDirectRoutingService.ProvenanceHint.importOperatorScoped(batchIdLong, tenantHint);
+                    maybe = uspsDirectRoutingService.decide((long) existingOrderNo.intValue(), null, hint);
                 } catch (Exception ex) {
                     log.warn("PR-G2: routing service threw for order {} in import group (row {}): {} — sync fallback",
                             existingOrderNo, leader.getRowNumber(), ex.getMessage());
@@ -4912,6 +4949,17 @@ public class OrderImportServiceImpl implements OrderImportService {
                                 + "(parentOrderNo={}, carrier=USPS, USPS_PROVIDER=USPS_DIRECT). Falling back "
                                 + "to sync connector call — this consumes USPS quota outside the 55/hr fair-scheduler.",
                         leader.getRowNumber(), existingOrderNo);
+            }
+            // PR-G5 D1 — stamp an order-anchored idempotency key onto the
+            // request DTO so a subsequent retry from any surface (import,
+            // manual with the same key, queue) shares dedup state via
+            // order_tracking.idempotency_key. Only when we know the target
+            // order number; net-new rows fall through unchanged (there's
+            // no ambiguity to dedup against yet).
+            if (existingOrderNo != null) {
+                req.setInternalIdempotencyKey(
+                        com.multiship.backend.service.carriers.usps.queue.IdempotencyKeys
+                                .forUspsOrder(existingOrderNo.longValue()));
             }
             ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> resp =
                     carrierService.generateManualLabel(req, null, existingOrderNo);

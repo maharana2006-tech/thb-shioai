@@ -41,6 +41,15 @@ import java.time.LocalDateTime;
  * MPS ("one order = N label calls") aggregation keys. Non-MPS rows
  * leave both NULL; the admin surface aggregates progress via
  * {@code GROUP BY parent_order_no}.
+ *
+ * <p>PR-G3b - {@link #sourceType} + {@link #importBatchId} are the
+ * cross-flow provenance fields. Every enqueue caller stamps a source
+ * so the admin dashboard can attribute quota consumption to a specific
+ * surface (bulk modal vs import operator vs import background vs
+ * manual vs MPS split). {@link #importBatchId} is non-null iff the
+ * enqueue originated inside an import batch and enables the cancel-
+ * cascade path ({@code OrderImportService.cancelGeneration} calls
+ * {@code uspsLabelQueueService.cancelPending(importBatchId)}).
  */
 @Entity
 @Table(name = "usps_label_queue",
@@ -68,6 +77,44 @@ public class UspsLabelQueueItem {
         DONE,
         FAILED,
         CANCELLED
+    }
+
+    /**
+     * PR-G3b - which surface caused this enqueue. Filled at enqueue
+     * time by every caller of {@link com.multiship.backend.service.carriers.usps.queue.UspsLabelQueueService};
+     * the admin dashboard groups + filters by this so ops can answer
+     * "is this spike from a background import job or the manual modal?".
+     *
+     * <p>Values:
+     * <ul>
+     *   <li>{@link #BULK_OPERATOR} - bulk-label modal driven by an operator
+     *       ({@code BulkLabelServiceImpl.processOneOrder}).</li>
+     *   <li>{@link #IMPORT_OPERATOR} - CSV/XLSX import Generate Labels
+     *       triggered inline by an operator (jobId==null in
+     *       {@code OrderImportServiceImpl.commit}).</li>
+     *   <li>{@link #IMPORT_BACKGROUND} - CSV/XLSX import Generate Labels
+     *       running under a background worker (jobId!=null; see
+     *       {@code ImportGenerationWorker}). Highest blast-radius origin.</li>
+     *   <li>{@link #MPS_PIECE} - one piece of an MPS batch fanned out by
+     *       {@code UspsMpsSplitterService} without a more specific parent
+     *       source. When the parent enqueue also carries a specific origin
+     *       (bulk vs import) the split pieces inherit it, so the dashboard
+     *       attributes to the real triggering surface.</li>
+     *   <li>{@link #MANUAL} - single-order manual /orders/manual-label or
+     *       list-view Generate button
+     *       ({@code CarrierServiceImpl.maybeRouteUspsDirect}).</li>
+     * </ul>
+     *
+     * <p>Nullable at the DB layer for pre-G3b rows enqueued before the
+     * migration landed; the dashboard treats NULL as "legacy / unknown"
+     * so the backfill window doesn't skew percentages.
+     */
+    public enum SourceType {
+        BULK_OPERATOR,
+        IMPORT_OPERATOR,
+        IMPORT_BACKGROUND,
+        MPS_PIECE,
+        MANUAL
     }
 
     @Id
@@ -138,4 +185,30 @@ public class UspsLabelQueueItem {
      */
     @Column(name = "sequence_number")
     private Integer sequenceNumber;
+
+    /**
+     * PR-G3b - Which surface caused this enqueue. See {@link SourceType}
+     * for the value set. Nullable for pre-G3b rows during the backfill
+     * window; the admin dashboard treats NULL as "legacy / unknown" so
+     * the aggregation doesn't skew percentages while old rows drain out.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "source_type", length = 24)
+    private SourceType sourceType;
+
+    /**
+     * PR-G3b - FK-analog to {@code import_batch.id} when this enqueue
+     * originated inside an import batch (operator or background). Enables
+     * the cancel-cascade path ({@code OrderImportService.cancelGeneration}
+     * -&gt; {@code uspsLabelQueueService.cancelPending(importBatchId)}) and
+     * the "which queue rows belong to import #N" admin drill-down.
+     *
+     * <p>NULL for BULK_OPERATOR / MANUAL / standalone MPS - those
+     * enqueues never carry an import-batch identity. Not a formal FK
+     * because the queue outlives the batch (a CANCELLED batch keeps its
+     * DONE queue rows for auditing) and CASCADE DELETE would lose
+     * tracking-number history.
+     */
+    @Column(name = "import_batch_id")
+    private Long importBatchId;
 }

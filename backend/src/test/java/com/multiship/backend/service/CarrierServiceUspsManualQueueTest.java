@@ -128,7 +128,7 @@ class CarrierServiceUspsManualQueueTest {
 
     @Test
     void routingReturnsEmptyLeavesCallerOnSyncPath() {
-        when(routing.decide(eq(ORDER_NO), any())).thenReturn(Optional.empty());
+        when(routing.decide(eq(ORDER_NO), any(), any())).thenReturn(Optional.empty());
         ApiResponse<LabelGenerationResponse> resp = invokeMaybeRoute(ORDER_NO, operator());
         assertNull(resp, "Empty decision (SYNC) must return null so caller proceeds");
     }
@@ -137,7 +137,7 @@ class CarrierServiceUspsManualQueueTest {
     void routingSingleQueuedProducesQueuedResponse() {
         RoutingDecision d = new RoutingDecision(
                 RoutingDecision.Status.SINGLE_QUEUED, 999L, null, null);
-        when(routing.decide(eq(ORDER_NO), any())).thenReturn(Optional.of(d));
+        when(routing.decide(eq(ORDER_NO), any(), any())).thenReturn(Optional.of(d));
 
         ApiResponse<LabelGenerationResponse> resp = invokeMaybeRoute(ORDER_NO, operator());
         assertNotNull(resp);
@@ -157,7 +157,7 @@ class CarrierServiceUspsManualQueueTest {
     void routingMpsQueuedProducesQueuedMpsResponse() {
         RoutingDecision d = new RoutingDecision(
                 RoutingDecision.Status.MPS_QUEUED, null, 5, null);
-        when(routing.decide(eq(ORDER_NO), any())).thenReturn(Optional.of(d));
+        when(routing.decide(eq(ORDER_NO), any(), any())).thenReturn(Optional.of(d));
 
         ApiResponse<LabelGenerationResponse> resp = invokeMaybeRoute(ORDER_NO, operator());
         assertNotNull(resp);
@@ -178,7 +178,7 @@ class CarrierServiceUspsManualQueueTest {
                 + "Split into single-package intl shipments manually, or set USPS_PROVIDER=STAMPS_COM";
         RoutingDecision d = new RoutingDecision(
                 RoutingDecision.Status.REJECTED, null, null, reason);
-        when(routing.decide(eq(ORDER_NO), any())).thenReturn(Optional.of(d));
+        when(routing.decide(eq(ORDER_NO), any(), any())).thenReturn(Optional.of(d));
 
         ApiResponse<LabelGenerationResponse> resp = invokeMaybeRoute(ORDER_NO, operator());
         assertNotNull(resp);
@@ -196,7 +196,7 @@ class CarrierServiceUspsManualQueueTest {
     void routingThrowFallsBackToSync() {
         // Unexpected failure in the routing service must NOT bubble into
         // the caller — a routing outage cannot brick label generation.
-        when(routing.decide(eq(ORDER_NO), any()))
+        when(routing.decide(eq(ORDER_NO), any(), any()))
                 .thenThrow(new RuntimeException("routing crashed"));
 
         ApiResponse<LabelGenerationResponse> resp = invokeMaybeRoute(ORDER_NO, operator());
@@ -210,20 +210,20 @@ class CarrierServiceUspsManualQueueTest {
         // UspsDirectRoutingServiceTest. This test just proves the
         // CarrierServiceImpl wiring passes the caller through unchanged
         // (doesn't strip it or replace it).
-        when(routing.decide(eq(ORDER_NO), any(UserDetails.class))).thenReturn(Optional.empty());
+        when(routing.decide(eq(ORDER_NO), any(UserDetails.class), any())).thenReturn(Optional.empty());
 
         invokeMaybeRoute(ORDER_NO, queueProcessor());
-        verify(routing).decide(eq(ORDER_NO), any(UserDetails.class));
+        verify(routing).decide(eq(ORDER_NO), any(UserDetails.class), any());
     }
 
     @Test
     void nullCallerPassedThroughToRoutingService() {
         // Background contexts (queue callback dispatch shim, tests) pass
         // null; must reach the routing service so it can decide.
-        when(routing.decide(eq(ORDER_NO), eq(null))).thenReturn(Optional.empty());
+        when(routing.decide(eq(ORDER_NO), eq(null), any())).thenReturn(Optional.empty());
 
         invokeMaybeRoute(ORDER_NO, null);
-        verify(routing).decide(eq(ORDER_NO), eq(null));
+        verify(routing).decide(eq(ORDER_NO), eq(null), any());
     }
 
     // ================================================================

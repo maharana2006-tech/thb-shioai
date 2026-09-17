@@ -1,6 +1,7 @@
 package com.multiship.backend.repository;
 
 import com.multiship.backend.model.UspsLabelQueueItem;
+import com.multiship.backend.model.UspsLabelQueueItem.SourceType;
 import com.multiship.backend.model.UspsLabelQueueItem.Status;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -42,6 +43,17 @@ import java.util.Optional;
  *   <li>{@link #findRetryCountsByHour(LocalDateTime)} - GROUP BY over
  *       {@code date_trunc('hour', enqueued_at)} for the per-hour
  *       retry / failure histogram on the admin dashboard.</li>
+ * </ul>
+ *
+ * <p>PR-G3b adds source + import-batch access:
+ * <ul>
+ *   <li>{@link #findByImportBatchIdAndStatus(Long, Status)} - powers
+ *       the cancel-cascade path from
+ *       {@code OrderImportService.cancelGeneration} + the "queue rows
+ *       for import #N" admin drill-down.</li>
+ *   <li>{@link #countBySourceTypeAndStatus(SourceType, Status)} +
+ *       {@link #findDepthBySource()} - drive the dashboard's by-source
+ *       breakdown answering "which surface caused the current spike?".</li>
  * </ul>
  */
 @Repository
@@ -94,6 +106,17 @@ public interface UspsLabelQueueRepository
      * DESC so the newest work is on top.
      */
     Page<UspsLabelQueueItem> findAllByOrderByEnqueuedAtDesc(Pageable pageable);
+
+    /**
+     * PR-G3b - source-scoped variant of the /items list. Uses the same
+     * enqueued_at DESC ordering so admin operators can page through rows
+     * for one surface only (e.g. only IMPORT_BACKGROUND spikes).
+     *
+     * <p>Backed by the partial index {@code idx_usps_label_queue_source_type
+     * (source_type, status) WHERE source_type IS NOT NULL} from V63.
+     */
+    Page<UspsLabelQueueItem> findBySourceTypeOrderByEnqueuedAtDesc(
+            UspsLabelQueueItem.SourceType sourceType, Pageable pageable);
 
     // ================================================================
     // PR-F2 - MPS aggregation
@@ -173,6 +196,54 @@ public interface UspsLabelQueueRepository
             """, nativeQuery = true)
     List<HourlyRetryBucket> findRetryCountsByHour(@Param("startInstant") LocalDateTime startInstant);
 
+    // ================================================================
+    // PR-G3b - source + import-batch access
+    // ================================================================
+
+    /**
+     * PR-G3b - list every queue row belonging to a given import batch,
+     * scoped to the caller-supplied status. Used by the cancel-cascade
+     * path ({@code Status.QUEUED} filter) and by the admin drill-down
+     * that walks a specific import's queue provenance.
+     *
+     * <p>Backed by the partial index {@code idx_usps_label_queue_import_batch
+     * (import_batch_id, status) WHERE import_batch_id IS NOT NULL}
+     * added in V63 so the lookup stays O(k) in the number of matching
+     * rows.
+     */
+    List<UspsLabelQueueItem> findByImportBatchIdAndStatus(Long importBatchId, Status status);
+
+    /**
+     * PR-G3b - count queue rows in the given ({@code sourceType},
+     * {@code status}) tuple. Called once per (source, status) cell by
+     * the dashboard's by-source breakdown. Deliberately unindexed on
+     * status here because the partial
+     * {@code idx_usps_label_queue_source_type (source_type, status)
+     * WHERE source_type IS NOT NULL} covers the read path already.
+     */
+    long countBySourceTypeAndStatus(SourceType sourceType, Status status);
+
+    /**
+     * PR-G3b - GROUP BY {@code source_type} over the currently QUEUED
+     * rows. Feeds the dashboard's "queue depth by source" ranking so
+     * ops can see at a glance which surface caused the current spike.
+     *
+     * <p>NULL source_type rows are collapsed into a single "UNKNOWN"
+     * bucket via the coalesce so a partial backfill window doesn't
+     * split the aggregation across nine tiny groups.
+     *
+     * <p>Ordered by depth DESC so the loudest source appears first.
+     */
+    @Query(value = """
+            SELECT COALESCE(source_type, 'UNKNOWN') AS sourceType,
+                   COUNT(*)                          AS depth
+              FROM usps_label_queue
+             WHERE status = 'QUEUED'
+          GROUP BY COALESCE(source_type, 'UNKNOWN')
+          ORDER BY depth DESC
+            """, nativeQuery = true)
+    List<SourceDepth> findQueueDepthBySource();
+
     /**
      * Native GROUP BY row shape - Spring Data will project a native
      * result into this interface automatically. Kept intentionally
@@ -180,6 +251,16 @@ public interface UspsLabelQueueRepository
      */
     interface TenantDepth {
         String getTenantCode();
+        Long getDepth();
+    }
+
+    /**
+     * PR-G3b - projection interface for {@link #findQueueDepthBySource()}.
+     * {@code sourceType} is a plain String so the "UNKNOWN" coalesced
+     * bucket doesn't have to be a real enum value.
+     */
+    interface SourceDepth {
+        String getSourceType();
         Long getDepth();
     }
 

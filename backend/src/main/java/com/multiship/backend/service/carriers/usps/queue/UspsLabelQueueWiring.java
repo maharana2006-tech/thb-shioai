@@ -120,7 +120,12 @@ public class UspsLabelQueueWiring {
             return mpsPieceDispatcher.dispatchPiece(item);
         }
         Long orderNo = item.getShipmentId();
-        String idempotencyKey = "usps-queue-" + item.getId();
+        // PR-G5 D1 — order-anchored key (was `usps-queue-{itemId}`, which
+        // rotated on every re-enqueue and defeated the tracking-row dedup
+        // check on retries). Shared with the import path so a manual retry
+        // of an import-serviced order lands on the first attempt's tracking
+        // row instead of double-charging USPS or 409ing.
+        String idempotencyKey = IdempotencyKeys.forUspsOrder(orderNo);
         UserDetails systemUser = buildSystemUser();
         log.debug("USPS Direct queue: processing item {} (tenant={}, order={})",
                 item.getId(), item.getTenantCode(), orderNo);

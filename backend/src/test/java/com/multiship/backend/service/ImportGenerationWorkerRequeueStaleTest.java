@@ -211,12 +211,12 @@ class ImportGenerationWorkerRequeueStaleTest {
         // is consulted for the first time and returns SINGLE_QUEUED --
         // exactly the behavior of a fresh (never-crashed) run.
         seedResumedJob(201L, null, null, 9002);
-        when(routing.decide(eq(9002L), any())).thenReturn(Optional.of(
+        when(routing.decide(eq(9002L), any(), any())).thenReturn(Optional.of(
                 new RoutingDecision(RoutingDecision.Status.SINGLE_QUEUED, 500L, null, null)));
 
         service.executeGenerationJob(1L);
 
-        verify(routing, times(1)).decide(eq(9002L), any());
+        verify(routing, times(1)).decide(eq(9002L), any(), any());
         verifyNoInteractions(carrierService);
 
         List<OrderImportRowDTO> after = json.readValue(batches.get(201L).getRowsJson(),
@@ -241,14 +241,14 @@ class ImportGenerationWorkerRequeueStaleTest {
         // block a new one for the same shipment_id).
         seedResumedJob(202L, "FAILED",
                 "USPS OAuth 429 -- retry exhausted after 4 automatic passes", 9003);
-        when(routing.decide(eq(9003L), any())).thenReturn(Optional.of(
+        when(routing.decide(eq(9003L), any(), any())).thenReturn(Optional.of(
                 new RoutingDecision(RoutingDecision.Status.SINGLE_QUEUED, 501L, null, null)));
 
         service.executeGenerationJob(1L);
 
         // Routing IS consulted (the guard only fires for QUEUED_USPS, not
         // FAILED), and returns a fresh queue item id.
-        verify(routing, times(1)).decide(eq(9003L), any());
+        verify(routing, times(1)).decide(eq(9003L), any(), any());
         verifyNoInteractions(carrierService);
 
         List<OrderImportRowDTO> after = json.readValue(batches.get(202L).getRowsJson(),

@@ -68,6 +68,17 @@ import java.util.Optional;
  * Defense in depth — either guard alone stops the bad request; both
  * make sure operators get an actionable message from the first layer
  * that inspects the order.
+ *
+ * <p><b>PR-G3b - provenance.</b> Every caller passes a {@link ProvenanceHint}
+ * describing which surface triggered the routing decision (bulk vs
+ * import operator vs background vs manual). The hint plumbs through to
+ * {@link UspsLabelQueueService#enqueue}'s {@code sourceType} +
+ * {@code importBatchId} so the admin dashboard's by-source aggregation
+ * can attribute quota consumption to the real triggering surface and so
+ * {@code cancelPending(importBatchId)} can cascade a cancelled batch.
+ * The one-arg {@link #decide(long, UserDetails)} overload uses
+ * {@link ProvenanceHint#unknown()} for pre-G3b callers that haven't
+ * updated to the two-arg form.
  */
 @Slf4j
 @Service
@@ -81,8 +92,20 @@ public class UspsDirectRoutingService {
     private final UspsLabelQueueRepository uspsLabelQueueRepository;
 
     /**
-     * Decide how to route the label call for {@code orderNo}. See class
-     * javadoc for the four possible outcomes.
+     * Legacy 2-arg overload for pre-PR-G3b callers. Delegates to
+     * {@link #decide(long, UserDetails, ProvenanceHint)} with
+     * {@link ProvenanceHint#unknown()} so rows land without a source
+     * stamp (dashboard shows them in the UNKNOWN bucket). Prefer the
+     * 3-arg overload for new code.
+     */
+    public Optional<RoutingDecision> decide(long orderNo, UserDetails caller) {
+        return decide(orderNo, caller, ProvenanceHint.unknown());
+    }
+
+    /**
+     * PR-G3b - decide how to route the label call for {@code orderNo}
+     * with an explicit provenance hint stamped onto every persisted
+     * queue row. See class javadoc for the four possible outcomes.
      *
      * @param orderNo  local order number (positive long — synthetic MPS
      *                 shipmentIds never reach here because the splitter
@@ -92,10 +115,16 @@ public class UspsDirectRoutingService {
      *                 bulk-label worker); the re-entrancy guard only
      *                 fires when {@code caller != null} and the username
      *                 matches {@link UspsLabelQueueWiring#QUEUE_SYSTEM_USER}.
+     * @param hint     PR-G3b - which surface caused the routing call.
+     *                 Non-null (use {@link ProvenanceHint#unknown()} if
+     *                 the caller genuinely has no source info); the hint
+     *                 is stamped onto every persisted queue row so the
+     *                 admin dashboard can attribute quota consumption.
      * @return empty when the caller should stay on its sync path; a
      *         {@link RoutingDecision} otherwise.
      */
-    public Optional<RoutingDecision> decide(long orderNo, UserDetails caller) {
+    public Optional<RoutingDecision> decide(long orderNo, UserDetails caller, ProvenanceHint hint) {
+        ProvenanceHint safeHint = hint == null ? ProvenanceHint.unknown() : hint;
         // Re-entrancy guard — the queue processor callback runs under
         // the synthetic 'usps-queue-processor' username (see
         // UspsLabelQueueWiring.java:72 for the constant). Without this
@@ -139,9 +168,22 @@ public class UspsDirectRoutingService {
             return Optional.empty();
         }
 
-        String tenantCode = StringUtils.hasText(order.getTenantId())
-                ? order.getTenantId()
-                : (StringUtils.hasText(order.getCustNo()) ? order.getCustNo() : "unknown");
+        // PR-G5 D3 — auth-time tenant scope wins when the caller supplied one
+        // (import path passes job.getRequestedScope() so the queue row is
+        // scoped to what the operator was actually allowed to see, not
+        // whatever the loaded Order row happens to carry). Falls back to
+        // the pre-G5 order-derived chain so manual + bulk-operator paths
+        // (which never had a scope hint) behave unchanged.
+        String tenantCode;
+        if (StringUtils.hasText(safeHint.tenantCodeHint())) {
+            tenantCode = safeHint.tenantCodeHint().trim();
+        } else if (StringUtils.hasText(order.getTenantId())) {
+            tenantCode = order.getTenantId();
+        } else if (StringUtils.hasText(order.getCustNo())) {
+            tenantCode = order.getCustNo();
+        } else {
+            tenantCode = "unknown";
+        }
 
         Integer packageCount = order.getPackageCount();
         boolean isMps = packageCount != null && packageCount >= 2;
@@ -179,16 +221,18 @@ public class UspsDirectRoutingService {
         if (isMps) {
             try {
                 UspsLabelQueueService.EnqueueMpsResult result = uspsMpsSplitterService
-                        .splitAndEnqueueForOrder(orderNo, packageCount, tenantCode);
+                        .splitAndEnqueueForOrder(orderNo, packageCount, tenantCode,
+                                safeHint.sourceType(), safeHint.importBatchId());
                 if (result == null || result.enqueuedCount() <= 0) {
                     log.warn("PR-G1: USPS Direct MPS enqueue returned no rows for order {} — sync fallback",
                             orderNo);
                     return Optional.empty();
                 }
                 log.info("PR-G1: order {} routed to USPS Direct MPS queue (pieces={}, tenant={}, "
-                                + "firstStart={}, lastComplete={})",
+                                + "firstStart={}, lastComplete={}, source={}, importBatch={})",
                         orderNo, result.enqueuedCount(), tenantCode,
-                        result.estimatedFirstStartAt(), result.estimatedLastCompleteAt());
+                        result.estimatedFirstStartAt(), result.estimatedLastCompleteAt(),
+                        safeHint.sourceType(), safeHint.importBatchId());
                 return Optional.of(RoutingDecision.mpsQueued(result.enqueuedCount()));
             } catch (IllegalArgumentException iae) {
                 // Splitter's fail-fast validation (intl-MPS peer, sub-2
@@ -242,13 +286,17 @@ public class UspsDirectRoutingService {
         // Single-label branch — one queue row (PR-F1 shape).
         try {
             UspsLabelQueueService.EnqueueResult result = uspsLabelQueueService.enqueue(
-                    new UspsLabelQueueService.EnqueueRequest(tenantCode, orderNo, 0));
+                    new UspsLabelQueueService.EnqueueRequest(
+                            tenantCode, orderNo, 0,
+                            safeHint.sourceType(),
+                            safeHint.importBatchId()));
             if (result == null || result.queueItemId() == null) {
                 log.warn("PR-G1: USPS Direct enqueue returned null for order {} — sync fallback", orderNo);
                 return Optional.empty();
             }
-            log.info("PR-G1: order {} routed to USPS Direct queue (item {}, tenant {}, est start {})",
-                    orderNo, result.queueItemId(), tenantCode, result.estimatedStartAt());
+            log.info("PR-G1: order {} routed to USPS Direct queue (item {}, tenant {}, est start {}, source {}, importBatch {})",
+                    orderNo, result.queueItemId(), tenantCode, result.estimatedStartAt(),
+                    safeHint.sourceType(), safeHint.importBatchId());
             return Optional.of(RoutingDecision.singleQueued(result.queueItemId()));
         } catch (IllegalStateException dup) {
             // UspsLabelQueueServiceImpl.enqueue throws IllegalStateException
@@ -280,6 +328,84 @@ public class UspsDirectRoutingService {
     private UspsLabelQueueItem lookupFirstPiece(long parentOrderNo) {
         long firstPieceSyntheticId = UspsMpsSplitterService.syntheticShipmentIdFor(parentOrderNo, 1);
         return uspsLabelQueueRepository.findByShipmentId(firstPieceSyntheticId).orElse(null);
+    }
+
+    /**
+     * PR-G3b - provenance stamp for a routing call. Composed by the
+     * caller once and threaded through so every enqueue (single or MPS
+     * fan-out) inherits the same source. See
+     * {@link UspsLabelQueueItem.SourceType} for the value semantics.
+     *
+     * <p>{@link #importBatchId} is non-null iff the routing call
+     * originated inside an import batch (operator or background). The
+     * splitter propagates the value to every persisted MPS piece so
+     * {@code cancelPending} catches all N rows in one cascade.
+     */
+    public record ProvenanceHint(
+            UspsLabelQueueItem.SourceType sourceType,
+            Long importBatchId,
+            String tenantCodeHint) {
+
+        /**
+         * PR-G3b two-arg back-compat constructor. Prefer the 3-arg
+         * canonical constructor for new code so tenant derivation stays
+         * consistent with the caller's auth-time truth (finding D3).
+         */
+        public ProvenanceHint(UspsLabelQueueItem.SourceType sourceType, Long importBatchId) {
+            this(sourceType, importBatchId, null);
+        }
+
+        /**
+         * Sentinel for callers with no source info (legacy code paths,
+         * back-compat overloads). Persisted queue rows land with
+         * {@code source_type = NULL} and appear under the dashboard's
+         * UNKNOWN bucket.
+         */
+        public static ProvenanceHint unknown() {
+            return new ProvenanceHint(null, null, null);
+        }
+
+        /** Manual single-order path (CarrierServiceImpl.maybeRouteUspsDirect). */
+        public static ProvenanceHint manual() {
+            return new ProvenanceHint(UspsLabelQueueItem.SourceType.MANUAL, null, null);
+        }
+
+        /** Bulk-label modal path (BulkLabelServiceImpl.maybeEnqueueUspsDirect). */
+        public static ProvenanceHint bulkOperator() {
+            return new ProvenanceHint(UspsLabelQueueItem.SourceType.BULK_OPERATOR, null, null);
+        }
+
+        /** Import path triggered by an operator inline (jobId==null). */
+        public static ProvenanceHint importOperator(Long importBatchId) {
+            return new ProvenanceHint(UspsLabelQueueItem.SourceType.IMPORT_OPERATOR, importBatchId, null);
+        }
+
+        /** Import path running under the background worker (jobId!=null). */
+        public static ProvenanceHint importBackground(Long importBatchId) {
+            return new ProvenanceHint(UspsLabelQueueItem.SourceType.IMPORT_BACKGROUND, importBatchId, null);
+        }
+
+        /**
+         * PR-G5 D3 — import-operator variant with the auth-time tenant
+         * scope hint. Prefer over {@link #importOperator(Long)} when the
+         * caller knows the tenant from {@code job.getRequestedScope()};
+         * routing then derives tenantCode from the hint instead of the
+         * order's {@code tenantId}/{@code custNo} fallback chain, so the
+         * queue row is scoped to the auth-time truth (finding D3).
+         */
+        public static ProvenanceHint importOperatorScoped(Long importBatchId, String tenantCodeHint) {
+            return new ProvenanceHint(UspsLabelQueueItem.SourceType.IMPORT_OPERATOR,
+                    importBatchId, tenantCodeHint);
+        }
+
+        /**
+         * PR-G5 D3 — import-background variant with the auth-time tenant
+         * scope hint. See {@link #importOperatorScoped(Long, String)}.
+         */
+        public static ProvenanceHint importBackgroundScoped(Long importBatchId, String tenantCodeHint) {
+            return new ProvenanceHint(UspsLabelQueueItem.SourceType.IMPORT_BACKGROUND,
+                    importBatchId, tenantCodeHint);
+        }
     }
 
     /**

@@ -3,6 +3,7 @@ package com.multiship.backend.controller;
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.ErrorCode;
 import com.multiship.backend.dto.UspsDashboardMetricsDTO;
+import com.multiship.backend.dto.UspsFallbackAlertDTO;
 import com.multiship.backend.dto.UspsLabelQueueItemDTO;
 import com.multiship.backend.dto.UspsLabelQueueMetricsDTO;
 import com.multiship.backend.dto.UspsMpsProgressDTO;
@@ -13,6 +14,7 @@ import com.multiship.backend.model.UspsLabelQueueItem;
 import com.multiship.backend.model.UspsLabelQueueItem.Status;
 import com.multiship.backend.repository.UspsLabelQueueRepository;
 import com.multiship.backend.service.carriers.usps.UspsDirectVoidReconciliationService;
+import com.multiship.backend.service.carriers.usps.queue.UspsFallbackAlertService;
 import com.multiship.backend.service.carriers.usps.queue.UspsLabelQueueService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -71,6 +73,14 @@ public class UspsLabelQueueAdminController {
      */
     private final UspsDirectVoidReconciliationService reconciliationService;
 
+    /**
+     * PR-G3b — in-memory ring buffer of silent-fallback events surfaced
+     * by {@code /dashboard/fallback-alerts}. Nullable so the two legacy
+     * constructors keep working for pre-PR-G3b unit tests; endpoint
+     * degrades to an empty list when absent.
+     */
+    private final UspsFallbackAlertService fallbackAlertService;
+
     /** Cap on the /items page size so an accidental huge page can't
      *  spike the DB. */
     private static final int MAX_PAGE_SIZE = 200;
@@ -88,20 +98,34 @@ public class UspsLabelQueueAdminController {
      */
     public UspsLabelQueueAdminController(UspsLabelQueueService service,
                                          UspsLabelQueueRepository repository) {
-        this(service, repository, null);
+        this(service, repository, null, null);
     }
 
     /**
-     * PR-F4 - production constructor. Spring picks this via
-     * {@code @Autowired} even when both constructors are visible.
+     * PR-F4 3-arg legacy constructor — kept so pre-PR-G3b tests that
+     * wired the reconciliation service directly still compile. The
+     * fallback-alert service defaults to null; the endpoint degrades
+     * to an empty list when absent.
+     */
+    public UspsLabelQueueAdminController(UspsLabelQueueService service,
+                                         UspsLabelQueueRepository repository,
+                                         UspsDirectVoidReconciliationService reconciliationService) {
+        this(service, repository, reconciliationService, null);
+    }
+
+    /**
+     * PR-G3b production constructor. Spring picks this via
+     * {@code @Autowired} even when the legacy constructors are visible.
      */
     @Autowired
     public UspsLabelQueueAdminController(UspsLabelQueueService service,
                                          UspsLabelQueueRepository repository,
-                                         UspsDirectVoidReconciliationService reconciliationService) {
+                                         UspsDirectVoidReconciliationService reconciliationService,
+                                         UspsFallbackAlertService fallbackAlertService) {
         this.service = service;
         this.repository = repository;
         this.reconciliationService = reconciliationService;
+        this.fallbackAlertService = fallbackAlertService;
     }
 
     @Operation(summary = "Backpressure metrics for the USPS label queue",
@@ -116,17 +140,46 @@ public class UspsLabelQueueAdminController {
     }
 
     @Operation(summary = "Paginated list of queue rows",
-            description = "Ordered by enqueued_at DESC so the newest work is on top.")
+            description = "Ordered by enqueued_at DESC so the newest work is on top. "
+                    + "PR-G3b: pass ?sourceType=BULK_OPERATOR|IMPORT_OPERATOR|IMPORT_BACKGROUND|MPS_PIECE|MANUAL "
+                    + "to filter by originating surface. Unknown / blank values return all rows.")
     @GetMapping("/queue/items")
     public ResponseEntity<ApiResponse<List<UspsLabelQueueItemDTO>>> items(
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "50") int size) {
+            @RequestParam(defaultValue = "50") int size,
+            @RequestParam(name = "sourceType", required = false) String sourceType) {
         int safePage = Math.max(0, page);
         int safeSize = Math.max(1, Math.min(MAX_PAGE_SIZE, size));
-        Page<UspsLabelQueueItemDTO> pageData = repository
-                .findAllByOrderByEnqueuedAtDesc(PageRequest.of(safePage, safeSize))
+        UspsLabelQueueItem.SourceType typedSource = parseSourceType(sourceType);
+        Page<UspsLabelQueueItemDTO> pageData = (typedSource == null
+                ? repository.findAllByOrderByEnqueuedAtDesc(PageRequest.of(safePage, safeSize))
+                : repository.findBySourceTypeOrderByEnqueuedAtDesc(typedSource,
+                        PageRequest.of(safePage, safeSize)))
                 .map(UspsLabelQueueItemDTO::from);
         return ok(pageData.getContent());
+    }
+
+    /**
+     * PR-G3b — back-compat overload for pre-G3b unit tests that never
+     * cared about the sourceType filter. Delegates with a null filter.
+     * NOT a {@code @GetMapping} — Spring only sees the 3-arg method.
+     */
+    ResponseEntity<ApiResponse<List<UspsLabelQueueItemDTO>>> items(int page, int size) {
+        return items(page, size, null);
+    }
+
+    /**
+     * PR-G3b — best-effort parse of the {@code ?sourceType=} query param.
+     * Blank / unknown values return null so the caller falls back to the
+     * unfiltered list (defensive UX — never 400 an admin over a typo).
+     */
+    private static UspsLabelQueueItem.SourceType parseSourceType(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        try {
+            return UspsLabelQueueItem.SourceType.valueOf(raw.trim().toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
     }
 
     @Operation(summary = "Cancel a queued item",
@@ -340,6 +393,28 @@ public class UspsLabelQueueAdminController {
                     .pendingRefundValue(BigDecimal.ZERO).currency("USD").build());
         }
         return ok(reconciliationService.getRollup(win));
+    }
+
+    /**
+     * PR-G3b — recent silent-fallback events (M-B3). Reads from the
+     * in-memory ring buffer {@link UspsFallbackAlertService}, most
+     * recent first. Bounded (default 50) — see the service javadoc for
+     * durability trade-offs.
+     *
+     * <p>Returns an empty list (200) when the buffer is empty or when
+     * the service bean is absent (legacy-constructor test path). The
+     * FE renders the banner only when {@code alerts.length > 0}.
+     */
+    @Operation(summary = "Recent USPS Direct silent-fallback alerts",
+            description = "In-memory ring buffer, most-recent first. Populated when a background "
+                    + "worker skips USPS_DIRECT routing (M-B3 audit finding). Empty when nothing has "
+                    + "fallen back since the JVM last started.")
+    @GetMapping("/dashboard/fallback-alerts")
+    public ResponseEntity<ApiResponse<List<UspsFallbackAlertDTO>>> fallbackAlerts() {
+        if (fallbackAlertService == null) {
+            return ok(java.util.Collections.emptyList());
+        }
+        return ok(fallbackAlertService.recentAlerts());
     }
 
     private static int clampPositive(Integer v, int fallback) {
