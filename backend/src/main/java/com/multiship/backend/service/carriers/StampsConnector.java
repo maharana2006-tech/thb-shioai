@@ -112,6 +112,16 @@ public class StampsConnector implements CarrierConnector {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private StampsSeraOAuthService seraOAuthService;
 
+    /**
+     * PR-S4 (S-B2) — field injection of the shared fallback-alerts ring
+     * buffer. Non-null in Spring runtime so a SERA auth failure surfaces
+     * on the ops dashboard alongside USPS_DIRECT alerts. Null in unit
+     * tests that construct the connector directly; the recorder call is
+     * null-guarded so those tests keep passing without wiring the bean.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.carriers.usps.queue.UspsFallbackAlertService fallbackAlertService;
+
     /** Per-thread reason the last getAccessToken fell back — read by verify. */
     private static final ThreadLocal<String> LAST_AUTH_DETAIL = new ThreadLocal<>();
 
@@ -424,6 +434,17 @@ public class StampsConnector implements CarrierConnector {
             LAST_AUTH_DETAIL.set("Stamps.com SERA refresh_token exchange failed: " + r.errorMessage()
                     + ". The operator may need to re-authorize the account.");
             log.warn("Stamps SERA refresh_token grant failed: {}", r.errorMessage());
+            // PR-S4 (S-B2) — surface this on the /dashboard/fallback-alerts
+            // ring buffer so ops see it without tailing the log file.
+            // WARN log stays as the durable record; alert is transient
+            // telemetry. Null-guard for pure-Mockito test paths that
+            // construct the connector without wiring the alert bean.
+            if (fallbackAlertService != null) {
+                fallbackAlertService.record(null, null, null,
+                        "STAMPS_SERA_REFRESH_FAILED",
+                        "Stamps.com SERA refresh_token grant failed: " + r.errorMessage()
+                                + " — operator must re-authorize the account.");
+            }
             // Flag needs-authorization so the FE can prompt the operator
             // to click "Reconnect" and complete the browser authorize flow
             // again (typical cause: refresh_token revoked by Stamps.com or
