@@ -143,12 +143,23 @@ public interface OrderImportService {
      * an inline run. {@code resultStatus} / {@code resultMessage}: the import's outcome once the job ends —
      * what the page shows when a run it didn't wait for finishes.
      */
+    /**
+     * PR-G2 (U7): {@code queued} counts rows this run pushed onto the USPS_DIRECT persistent queue.
+     * FE (G4) polls this alongside {@code done} to distinguish "labels generated" from "queued waiting for USPS".
+     * Queued rows are NOT counted toward {@code done}; the queue processor bridge (PR-G3b) flips them to
+     * GENERATED (and bumps {@code done}) as the 55/hr queue drains. Zero on any run that touched no
+     * USPS_DIRECT orders (the pre-PR-G2 shape). {@code done + queued <= total} always.
+     */
     record GenProgressView(int done, int total, boolean running, String note, boolean cancelling,
-                           String jobStatus, String resultStatus, String resultMessage) {
-        public GenProgressView(int done, int total, boolean running) { this(done, total, running, null, false, null, null, null); }
-        public GenProgressView(int done, int total, boolean running, String note) { this(done, total, running, note, false, null, null, null); }
+                           String jobStatus, String resultStatus, String resultMessage, int queued) {
+        public GenProgressView(int done, int total, boolean running) { this(done, total, running, null, false, null, null, null, 0); }
+        public GenProgressView(int done, int total, boolean running, String note) { this(done, total, running, note, false, null, null, null, 0); }
         public GenProgressView(int done, int total, boolean running, String note, boolean cancelling) {
-            this(done, total, running, note, cancelling, null, null, null);
+            this(done, total, running, note, cancelling, null, null, null, 0);
+        }
+        public GenProgressView(int done, int total, boolean running, String note, boolean cancelling,
+                               String jobStatus, String resultStatus, String resultMessage) {
+            this(done, total, running, note, cancelling, jobStatus, resultStatus, resultMessage, 0);
         }
     }
 

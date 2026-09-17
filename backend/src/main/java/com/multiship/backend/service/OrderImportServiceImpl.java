@@ -151,6 +151,23 @@ public class OrderImportServiceImpl implements OrderImportService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.service.TenantScopeEnforcer tenantScope;
 
+    /**
+     * PR-G2 — shared USPS_DIRECT routing service (PR-G1 / commit 51d7eee).
+     * Consulted in {@link #processGroup} before the sync {@code
+     * generateManualLabel} call so bulk-import rows for USPS orders land on
+     * the 55/hr persistent queue instead of hammering the 60/hr platform
+     * OAuth quota via the 24-thread fan-out. See
+     * {@code docs/usps-direct-integration-audit.md} for the audit findings
+     * (BLOCKERs B-I1 / B-I2, MAJORs M-I1 / M-I2) that motivated this wiring.
+     *
+     * <p>Autowired-required=false so pure-Mockito test constructors that
+     * bypass Spring still compile — the no-arg + legacy 1-arg import
+     * service constructors leave every optional collaborator null, and
+     * {@code processGroup} guards against that same null before dispatching.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.carriers.usps.queue.UspsDirectRoutingService uspsDirectRoutingService;
+
     /** Null-safe wrapper around {@link TenantScopeEnforcer#clampClientCode(String)}.
      *  Returns the input unchanged when the enforcer isn't wired (tests). */
     private String clamp(String requested) {
@@ -254,6 +271,16 @@ public class OrderImportServiceImpl implements OrderImportService {
     /** Mutable counter behind {@link GenProgressView}. */
     private static final class GenProgress {
         final java.util.concurrent.atomic.AtomicInteger done = new java.util.concurrent.atomic.AtomicInteger();
+        /**
+         * PR-G2 (U7) — rows this run pushed onto the USPS_DIRECT queue.
+         * Ticked (once per group) when {@link #processGroup} routes a group to the
+         * queue instead of firing the sync carrier call, so the progress endpoint
+         * can distinguish "labels generated" from "queued waiting for USPS". A
+         * queued group does NOT also increment {@code done} — the queue processor
+         * bridge (PR-G3b) is what will eventually flip the row to GENERATED and
+         * bump {@code done} then.
+         */
+        final java.util.concurrent.atomic.AtomicInteger queued = new java.util.concurrent.atomic.AtomicInteger();
         final int total;
         /** Shown under the progress bar while the run waits on a carrier; null otherwise. */
         volatile String note;
@@ -1756,6 +1783,23 @@ public class OrderImportServiceImpl implements OrderImportService {
                                                      Runnable onGroupComplete,
                                                      java.util.function.BooleanSupplier cancelCheck,
                                                      java.util.function.Consumer<String> onNote) {
+        return commit(rows, requestedBy, usePlatformAccount, sourceOverride,
+                onGroupComplete, cancelCheck, onNote, null);
+    }
+
+    /**
+     * PR-G2 overload — additionally accepts {@code onGroupQueued}, a Runnable
+     * invoked once per group that routed to the USPS_DIRECT persistent queue
+     * (rather than firing sync). {@code runGeneration} wires this to
+     * {@code prog.queued.incrementAndGet()} so the {@code progressQueued} field on
+     * {@link GenProgressView} reflects the live count. Null from every other caller.
+     */
+    public ApiResponse<OrderImportPreviewDTO> commit(List<OrderImportRowDTO> rows, String requestedBy,
+                                                     boolean usePlatformAccount, String sourceOverride,
+                                                     Runnable onGroupComplete,
+                                                     java.util.function.BooleanSupplier cancelCheck,
+                                                     java.util.function.Consumer<String> onNote,
+                                                     Runnable onGroupQueued) {
         if (rows == null || rows.isEmpty()) {
             return failure(HttpStatus.BAD_REQUEST, "No rows to commit.");
         }
@@ -1832,7 +1876,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         List<List<OrderImportRowDTO>> groupList = new ArrayList<>(groups.values());
         List<Callable<GroupOutcome>> tasks = new ArrayList<>(groupCount);
         for (List<OrderImportRowDTO> group : groupList) {
-            tasks.add(groupTask(group, batchId, usePlatformAccount, sourceOverride, onGroupComplete, cancelCheck));
+            tasks.add(groupTask(group, batchId, usePlatformAccount, sourceOverride, onGroupComplete, cancelCheck, onGroupQueued));
         }
 
         // Sprint 50 Tier 1 finding #15 — tenant key for fair-share. Groups
@@ -1881,7 +1925,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                         + pass + " of " + MAX_RATE_LIMIT_PASSES + ")");
                 List<Callable<GroupOutcome>> retryTasks = new ArrayList<>(deferred.size());
                 for (List<OrderImportRowDTO> g : deferred) {
-                    retryTasks.add(groupTask(g, batchId, usePlatformAccount, sourceOverride, onGroupComplete, cancelCheck));
+                    retryTasks.add(groupTask(g, batchId, usePlatformAccount, sourceOverride, onGroupComplete, cancelCheck, onGroupQueued));
                 }
                 List<Future<GroupOutcome>> retryFutures = fairExecutor.submitAll(tenantKey, retryTasks);
                 List<List<OrderImportRowDTO>> still = new ArrayList<>();
@@ -2648,7 +2692,11 @@ public class OrderImportServiceImpl implements OrderImportService {
                 commit(rowsToProcess, requestedBy, platform, sourceOverride,
                         () -> { prog.done.incrementAndGet(); if (sync != null) sync.progress(prog, false); },
                         () -> cancelledBatchIds.contains(id) || (sync != null && sync.cancelRequested()),
-                        n -> { prog.note = n; if (sync != null) sync.progress(prog, true); });
+                        n -> { prog.note = n; if (sync != null) sync.progress(prog, true); },
+                        // PR-G2 (U7): tick the queued counter for every group routed to
+                        // the USPS_DIRECT persistent queue so the progress endpoint can
+                        // render "N labelled, M queued" separately from "done".
+                        () -> { prog.queued.incrementAndGet(); if (sync != null) sync.progress(prog, false); });
             } finally {
                 if (sync != null) sync.progress(prog, true);
                 generationProgressByBatch.remove(id);
@@ -3179,17 +3227,24 @@ public class OrderImportServiceImpl implements OrderImportService {
                 : generationJobRepository.findFirstByImportBatchIdOrderByIdDesc(id).orElse(null);
         if (p != null) {
             // Running in this JVM: the live counter is freshest. Clamp done ≤ total
-            // in case a poll lands between the last tick and removal.
+            // in case a poll lands between the last tick and removal. PR-G2 (U7) also
+            // surfaces the queued counter so FE can render "N labelled, M queued" while
+            // the USPS_DIRECT persistent queue drains.
             boolean cancelling = cancelledBatchIds.contains(id) || (job != null && job.isActive() && job.isCancelRequested());
+            int queued = Math.min(p.queued.get(), p.total);
             return new GenProgressView(Math.min(p.done.get(), p.total), p.total, true, p.note, cancelling,
-                    job == null ? null : job.getStatus(), null, null);
+                    job == null ? null : job.getStatus(), null, null, queued);
         }
         if (job != null) {
             // Queued, running on another server, or finished: the job row says.
+            // No cross-JVM queued mirror yet (job row only persists progressDone/Total)
+            // — PR-G3 will add source-typed queue rows we can count. Until then a
+            // read on a foreign JVM reports queued=0, matching the pre-G2 shape for
+            // this branch.
             boolean active = job.isActive();
             return new GenProgressView(Math.min(job.getProgressDone(), job.getProgressTotal()), job.getProgressTotal(),
                     active, active ? job.getNote() : null, active && job.isCancelRequested(),
-                    job.getStatus(), job.getResultStatus(), job.getResultMessage());
+                    job.getStatus(), job.getResultStatus(), job.getResultMessage(), 0);
         }
         return new GenProgressView(0, 0, false);
     }
@@ -4539,6 +4594,22 @@ public class OrderImportServiceImpl implements OrderImportService {
     private GroupOutcome processGroup(List<OrderImportRowDTO> group, Integer batchId, boolean usePlatformAccount,
                                       String sourceOverride) {
         OrderImportRowDTO leader = group.get(0);
+        // PR-G2 (M-I1) — retry idempotency for USPS_DIRECT queued rows.
+        //
+        // When an operator clicks Retry (or Retry-only-failed) on a batch that
+        // already has rows sitting on the USPS Direct persistent queue, the naive
+        // re-run would call {@code UspsDirectRoutingService.decide} again and hit
+        // an IllegalStateException on the UNIQUE(shipment_id) constraint. The
+        // routing service catches that and returns the existing queue row, but
+        // it's cheaper (and clearer) to just skip the whole group here: the queue
+        // is already doing its job for this order. The queue-processor bridge
+        // (PR-G3b) will flip these rows to GENERATED (or FAILED on exhaust) when
+        // the queue drains — until then they must stay in QUEUED_USPS.
+        if (isQueuedUsps(leader)) {
+            log.debug("Order import group (leader row {}) skipped: already in QUEUED_USPS from a prior run.",
+                    leader.getRowNumber());
+            return new GroupOutcome(group.size(), 0, 0, false, false, true);
+        }
         // Merge shape errors with the reference/international errors already
         // stamped on the row by the pre-loop validators (commit() runs
         // validateReferences + validateInternationalItems before fanning out).
@@ -4647,6 +4718,74 @@ public class OrderImportServiceImpl implements OrderImportService {
                 return new GroupOutcome(valid, 0, 0, true);
             }
             Integer existingOrderNo = leader.getGeneratedOrderNo();
+            // PR-G2 (B-I1, B-I2) — route through the shared USPS_DIRECT queue when
+            // USPS_DIRECT is the active provider. Without this the 24-thread import
+            // fan-out blows the platform's 60/hr USPS OAuth quota in ~2.5 min for a
+            // 100-order USPS batch, cascading 429s to every other tenant. The routing
+            // service (PR-G1 / commit 51d7eee) inspects USPS_PROVIDER, the order's
+            // carrier + package count, and returns one of four decisions:
+            //   → Optional.empty() : SYNC path (STAMPS_COM, non-USPS, unwired) —
+            //     fall through to the existing generateManualLabel call.
+            //   → SINGLE_QUEUED    : row enqueued as one queue item; mark QUEUED_USPS.
+            //   → MPS_QUEUED       : domestic multi-piece fanned into N queue items.
+            //   → REJECTED         : intl-MPS refused before enqueue — mark FAILED
+            //     with the actionable remediation string.
+            // We only route when we already know the orderNo (existingOrderNo != null)
+            // — for a fresh row on a first attempt the order hasn't been minted yet,
+            // so the routing service has nothing to look up. That path still goes
+            // through {@code generateManualLabel} which itself consults the routing
+            // service AFTER it mints the order (PR-G1's CarrierServiceImpl wiring),
+            // so the net-new import row still gets the queue treatment — it just
+            // reaches the queue one hop later.
+            if (existingOrderNo != null && uspsDirectRoutingService != null) {
+                java.util.Optional<com.multiship.backend.service.carriers.usps.queue.UspsDirectRoutingService.RoutingDecision> maybe;
+                try {
+                    maybe = uspsDirectRoutingService.decide((long) existingOrderNo.intValue(), null);
+                } catch (Exception ex) {
+                    log.warn("PR-G2: routing service threw for order {} in import group (row {}): {} — sync fallback",
+                            existingOrderNo, leader.getRowNumber(), ex.getMessage());
+                    maybe = java.util.Optional.empty();
+                }
+                if (maybe.isPresent()) {
+                    com.multiship.backend.service.carriers.usps.queue.UspsDirectRoutingService.RoutingDecision d = maybe.get();
+                    if (d.isRejected()) {
+                        for (OrderImportRowDTO gr : group) {
+                            gr.setGeneratedStatus("FAILED");
+                            gr.setGeneratedMessage(d.reason());
+                            gr.setGeneratedOrderNo(existingOrderNo);
+                            if (batchId != null) gr.setBatchId(batchId);
+                        }
+                        log.info("Order import group (leader row {}, order {}) rejected by USPS_DIRECT routing: {}",
+                                leader.getRowNumber(), existingOrderNo, d.reason());
+                        return new GroupOutcome(valid, 0, 0);
+                    }
+                    if (d.isEnqueued()) {
+                        String msg = d.status() == com.multiship.backend.service.carriers.usps.queue.UspsDirectRoutingService.RoutingDecision.Status.MPS_QUEUED
+                                ? "USPS Direct multi-piece order queued (" + d.mpsPieceCount() + " pieces) — labels print as the 55/hr queue drains."
+                                : "Queued USPS Direct label (item " + d.queueItemId() + ") — label prints when the 55/hr queue reaches it.";
+                        for (OrderImportRowDTO gr : group) {
+                            gr.setGeneratedStatus("QUEUED_USPS");
+                            gr.setGeneratedMessage(msg);
+                            gr.setGeneratedOrderNo(existingOrderNo);
+                            if (batchId != null) gr.setBatchId(batchId);
+                        }
+                        // Refresh the order's batchId too so the resulting shipment stays
+                        // grouped with the file upload even though it hasn't been
+                        // labelled yet — matches the sync-success bookkeeping below.
+                        if (batchId != null && orderRepository != null) {
+                            final Integer existingOrderNoF = existingOrderNo;
+                            orderRepository.findByOrderNo(existingOrderNoF).ifPresent(order -> {
+                                order.setBatchId(batchId);
+                                orderRepository.save(order);
+                            });
+                        }
+                        log.info("Order import group (leader row {}, order {}) routed to USPS_DIRECT queue ({}, tenant {})",
+                                leader.getRowNumber(), existingOrderNo, d.status(), leader.getClientCode());
+                        return new GroupOutcome(valid, 0, 0, false, false, true);
+                    }
+                    // SYNC decision (Optional was empty in reality — defensive fall-through)
+                }
+            }
             ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> resp =
                     carrierService.generateManualLabel(req, null, existingOrderNo);
             com.multiship.backend.dto.LabelGenerationResponse data =
@@ -4731,6 +4870,18 @@ public class OrderImportServiceImpl implements OrderImportService {
     }
 
     /**
+     * PR-G2 — true when the leader row is already parked in the QUEUED_USPS state
+     * from a prior run of this batch (Retry, or a background job resumed after a
+     * restart). Idempotency guard for {@link #processGroup}: re-processing a queued
+     * row would either double-enqueue on the queue's UNIQUE(shipment_id) constraint
+     * or spuriously re-mark it FAILED. Queued rows stay put until the queue
+     * processor bridge (PR-G3b) flips them to GENERATED / FAILED.
+     */
+    private static boolean isQueuedUsps(OrderImportRowDTO row) {
+        return row != null && "QUEUED_USPS".equalsIgnoreCase(row.getGeneratedStatus());
+    }
+
+    /**
      * Turn a raw carrier rejection into one operator-facing sentence. The raw
      * connector output ("FEDEX createShipment HTTP 400: {\"transactionId\":…}")
      * is debug noise — it's logged at WARN and kept out of the grid. Known
@@ -4746,10 +4897,18 @@ public class OrderImportServiceImpl implements OrderImportService {
                 raw, leader == null ? null : leader.getCarrierCode());
     }
 
-    /** Sprint 50 Tier 1 finding #8 — return shape for a per-group commit worker. */
-    private record GroupOutcome(int valid, int invalid, int generated, boolean rateLimited, boolean skipped) {
-        GroupOutcome(int valid, int invalid, int generated) { this(valid, invalid, generated, false, false); }
-        GroupOutcome(int valid, int invalid, int generated, boolean rateLimited) { this(valid, invalid, generated, rateLimited, false); }
+    /**
+     * Sprint 50 Tier 1 finding #8 — return shape for a per-group commit worker.
+     * PR-G2 adds {@code queued}: true when the group's rows were routed to the
+     * USPS_DIRECT persistent queue (rather than fired sync). Queued groups skip
+     * the {@code onGroupComplete} tick so the "done" counter stays honest — the
+     * queue-processor bridge (PR-G3b) is what will eventually mark those rows
+     * GENERATED and increment progress.
+     */
+    private record GroupOutcome(int valid, int invalid, int generated, boolean rateLimited, boolean skipped, boolean queued) {
+        GroupOutcome(int valid, int invalid, int generated) { this(valid, invalid, generated, false, false, false); }
+        GroupOutcome(int valid, int invalid, int generated, boolean rateLimited) { this(valid, invalid, generated, rateLimited, false, false); }
+        GroupOutcome(int valid, int invalid, int generated, boolean rateLimited, boolean skipped) { this(valid, invalid, generated, rateLimited, skipped, false); }
     }
 
     /**
@@ -4757,10 +4916,16 @@ public class OrderImportServiceImpl implements OrderImportService {
      * bar once when the group settles; a group deferred by a carrier rate limit ticks
      * when its automatic retry settles instead, so the bar doesn't reach 100% while
      * orders are still queued.
+     *
+     * <p>PR-G2: additionally fires {@code onGroupQueued} once when the outcome
+     * indicates the group was routed to the USPS_DIRECT persistent queue. The
+     * done-bar tick ({@code onGroupComplete}) is suppressed for the same outcome
+     * so the two counters don't double-count the same group.
      */
     private Callable<GroupOutcome> groupTask(List<OrderImportRowDTO> group, Integer batchId, boolean usePlatformAccount,
                                              String sourceOverride, Runnable onGroupComplete,
-                                             java.util.function.BooleanSupplier cancelCheck) {
+                                             java.util.function.BooleanSupplier cancelCheck,
+                                             Runnable onGroupQueued) {
         return () -> {
             GroupOutcome outcome = null;
             try {
@@ -4780,8 +4945,18 @@ public class OrderImportServiceImpl implements OrderImportService {
                 outcome = processGroup(group, batchId, usePlatformAccount, sourceOverride);
                 return outcome;
             } finally {
-                if (onGroupComplete != null && (outcome == null || (!outcome.rateLimited() && !outcome.skipped()))) {
+                boolean isQueued = outcome != null && outcome.queued();
+                // PR-G2: a "queued" outcome routed the group to the USPS_DIRECT
+                // persistent queue instead of firing sync; treat it like rateLimited
+                // + skipped so the "done" counter doesn't sprint to 100% while the
+                // 55/hr queue is still draining. The queue-processor bridge (G3b)
+                // is what ticks the bar for those rows.
+                if (onGroupComplete != null && (outcome == null
+                        || (!outcome.rateLimited() && !outcome.skipped() && !isQueued))) {
                     onGroupComplete.run();
+                }
+                if (onGroupQueued != null && isQueued) {
+                    onGroupQueued.run();
                 }
             }
         };
