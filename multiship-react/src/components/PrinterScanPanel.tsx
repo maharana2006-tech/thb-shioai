@@ -40,7 +40,15 @@ export default function PrinterScanPanel({ tenantCode }: { tenantCode: string })
     }
   }, [tenantCode])
 
-  useEffect(() => { void load() }, [load])
+  // Kick off the initial fetch on mount + when tenantCode changes. Guard
+  // against the "sync setState in effect → cascading render" lint by
+  // deferring the load one microtask so the effect returns before load()'s
+  // synchronous setLoading(true) fires.
+  useEffect(() => {
+    let cancelled = false
+    queueMicrotask(() => { if (!cancelled) void load() })
+    return () => { cancelled = true }
+  }, [load])
 
   const handleScanNow = async () => {
     if (scanning) return
