@@ -1,5 +1,7 @@
 package com.multiship.backend.controller;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -13,12 +15,12 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.Map;
 import java.util.Queue;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Sprint 51 FE-M3 — receiver for the SPA's client-side render errors.
@@ -49,10 +51,29 @@ public class ClientErrorReportController {
     /** Reports per IP per {@link #WINDOW_MS} milliseconds. */
     private static final int MAX_PER_WINDOW = 30;
     private static final long WINDOW_MS = 60_000L;
-    /** Cap the map so a scripted IP-spoofing attacker can't OOM the JVM. */
+    /** Cap the map so a scripted IP-spoofing attacker can't OOM the JVM.
+     *  PR-P4 (PERF-M5): the pre-P4 raw {@code ConcurrentHashMap} used to
+     *  {@code clear()} the ENTIRE map on overflow, giving an attacker
+     *  with rotating X-Forwarded-For values a way to flush every legit
+     *  IP's rate-limit window on every 10 001th request. The Caffeine
+     *  wrap below evicts individual idle entries (10-min inactivity)
+     *  instead + hard-caps at MAX_TRACKED_IPS via {@code maximumSize},
+     *  so an attacker's spammed keys age out on their own and can't
+     *  reset a legit user's counter. */
     private static final int MAX_TRACKED_IPS = 10_000;
 
-    private final Map<String, Queue<Long>> reportsByIp = new ConcurrentHashMap<>();
+    /**
+     * PR-P4 (PERF-M5) — Caffeine cache with per-entry TTL + hard maximum
+     * size. Entries auto-evict after 10 minutes of inactivity (much
+     * larger than the 60-second rate-limit window, so a legit IP's
+     * hits never expire under it), and the maximumSize cap enforces the
+     * {@link #MAX_TRACKED_IPS} bound without the "clear-the-whole-map"
+     * anti-pattern of the raw ConcurrentHashMap.
+     */
+    private final Cache<String, Queue<Long>> reportsByIp = Caffeine.newBuilder()
+            .expireAfterAccess(Duration.ofMinutes(10))
+            .maximumSize(MAX_TRACKED_IPS)
+            .build();
 
     @Operation(summary = "Report a frontend render error",
             description = "Accepts a small JSON payload describing a React error boundary catch. "
@@ -81,13 +102,14 @@ public class ClientErrorReportController {
         return ResponseEntity.status(HttpStatus.ACCEPTED).build();
     }
 
-    /** Sliding-window token check per source IP. */
+    /** Sliding-window token check per source IP.
+     *  PR-P4: Caffeine's {@code get(key, loader)} atomically fetches-or-creates
+     *  the per-IP queue (equivalent to the pre-P4 {@code computeIfAbsent}).
+     *  No manual overflow clear — {@code maximumSize} on the cache handles
+     *  eviction one entry at a time via Window-TinyLFU. */
     private boolean allow(String ip) {
         long now = System.currentTimeMillis();
-        if (reportsByIp.size() > MAX_TRACKED_IPS) {
-            reportsByIp.clear();
-        }
-        Queue<Long> hits = reportsByIp.computeIfAbsent(ip, k -> new LinkedList<>());
+        Queue<Long> hits = reportsByIp.get(ip, k -> new LinkedList<>());
         synchronized (hits) {
             while (!hits.isEmpty() && now - hits.peek() > WINDOW_MS) {
                 hits.poll();
