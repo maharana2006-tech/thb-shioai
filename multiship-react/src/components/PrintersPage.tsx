@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { FiAlertTriangle, FiCheckCircle, FiEdit2, FiPlus, FiPrinter, FiRadio, FiTrash2, FiX } from 'react-icons/fi'
 import { notify } from '../utils/notify'
 import { clientService, type Client } from '../api/clientService'
+import PrinterScanPanel from './PrinterScanPanel'
 import {
   CONNECTION_LABEL,
   notifyPrinterProblem,
@@ -30,6 +31,12 @@ export default function PrintersPage() {
   const [testingId, setTestingId] = useState<number | null>(null)
   const [savingKey, setSavingKey] = useState<string | null>(null)
   const [extraClients, setExtraClients] = useState<string[]>([])
+  // PR-Printer-P1.6 — the LAN scan panel needs a tenant scope; the FE
+  // session doesn't carry tenantCode today (see docs/printer-auto-detect-design.md
+  // "open questions"). Interim: text field the admin types their tenant
+  // code into. Follow-up P1.7 replaces with a proper tenant selector
+  // once we teach useAppSession about scope.
+  const [scanTenant, setScanTenant] = useState('')
 
   const load = useCallback(() => {
     return Promise.all([printerService.list(), printerService.listAssignments(), loadAllClients()])
@@ -142,6 +149,28 @@ export default function PrintersPage() {
           Add printer
         </button>
       </header>
+
+      {/* PR-Printer-P1.6 — LAN scan panel. Tenant-code input is a
+          placeholder until P1.7 lands a proper tenant selector. */}
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
+        <div className="flex items-center gap-3">
+          <label className="flex flex-1 items-center gap-2 text-[12px] font-semibold text-slate-600">
+            Tenant code
+            <input
+              type="text"
+              value={scanTenant}
+              onChange={(e) => setScanTenant(e.target.value)}
+              placeholder="e.g. ACME"
+              className="w-40 rounded-md border border-slate-200 px-2 py-1 text-[12.5px] font-mono text-slate-900 outline-none focus:border-slate-400"
+            />
+          </label>
+          <span className="text-[11px] text-slate-400">
+            Enter the tenant to enroll a LAN scanner for.
+          </span>
+        </div>
+      </section>
+
+      {scanTenant.trim() ? <PrinterScanPanel tenantCode={scanTenant.trim()} /> : null}
 
       <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
         <table className="min-w-full text-[13px]">
