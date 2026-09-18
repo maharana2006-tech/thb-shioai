@@ -346,4 +346,67 @@ class WmsServiceTest {
         assertEquals(1, result.getFailed());      // blank shipmentNumber
         assertEquals(0, result.getSkipped());
     }
+
+    // ===== ship via mapping (same rules a CSV upload follows) =====
+
+    private static com.multiship.backend.model.ShippingService svc(String carrier, String code, String name) {
+        com.multiship.backend.model.ShippingService s = new com.multiship.backend.model.ShippingService();
+        s.setCarrier(carrier);
+        s.setServiceCode(code);
+        s.setName(name);
+        s.setEnabled(true);
+        return s;
+    }
+
+    private String resolve(String clientCode, String carrier, String shipVia, com.multiship.backend.dto.OrderImportRowDTO row) {
+        return ReflectionTestUtils.invokeMethod(service, "resolveService",
+                clientCode, carrier, shipVia, null, "US", row);
+    }
+
+    /**
+     * The mapping decides the carrier too: the WMS ship-via's first letter is
+     * only a guess, and a client may route "U11" wherever they like.
+     */
+    @Test
+    void theClientsRuleWinsAndSetsTheCarrier() {
+        com.multiship.backend.service.ShippingConfigService cfg =
+                mock(com.multiship.backend.service.ShippingConfigService.class);
+        when(cfg.resolveRule(any(), any(), any(), any())).thenReturn(java.util.Optional.empty());
+        when(cfg.resolveRule(org.mockito.ArgumentMatchers.eq("ACME"),
+                org.mockito.ArgumentMatchers.eq("U11"), any(), any()))
+                .thenReturn(java.util.Optional.of(svc("FEDEX", "FEDEX_GROUND", "FedEx Ground")));
+        ReflectionTestUtils.setField(service, "shippingConfigService", cfg);
+
+        com.multiship.backend.dto.OrderImportRowDTO row = new com.multiship.backend.dto.OrderImportRowDTO();
+        row.setCarrierCode("UPS"); // the letter heuristic's guess
+        assertEquals("FEDEX_GROUND", resolve("ACME", "UPS", "U11", row));
+        assertEquals("FEDEX", row.getCarrierCode(), "the rule's carrier replaces the guess");
+        assertEquals("U11", row.getShipViaCode());
+        assertTrue(row.getShipViaNote().contains("FedEx Ground"), row.getShipViaNote());
+    }
+
+    /**
+     * An unmapped code used to ship the parcel on the carrier's ground service
+     * with only a warning. It now leaves the service blank so the row is flagged
+     * and someone decides, exactly as a CSV upload does.
+     */
+    @Test
+    void anUnmappedShipViaNoLongerDefaultsToGround() {
+        com.multiship.backend.service.ShippingConfigService cfg =
+                mock(com.multiship.backend.service.ShippingConfigService.class);
+        when(cfg.resolveRule(any(), any(), any(), any())).thenReturn(java.util.Optional.empty());
+        when(cfg.resolveServiceCode(any(), any(), any())).thenReturn(java.util.Optional.empty());
+        ReflectionTestUtils.setField(service, "shippingConfigService", cfg);
+
+        com.multiship.backend.dto.OrderImportRowDTO row = new com.multiship.backend.dto.OrderImportRowDTO();
+        row.setCarrierCode("UPS");
+        row.setClientCode("ACME");
+        assertNull(resolve("ACME", "UPS", "ZZ9", row), "nothing is invented for an unmapped code");
+
+        @SuppressWarnings("unchecked")
+        java.util.List<String> errors = (java.util.List<String>) ReflectionTestUtils.invokeMethod(
+                service, "preflight", sample("SHP-1", "ACME"), row);
+        assertTrue(errors.stream().anyMatch(e -> e.contains("is not mapped for ACME")), String.valueOf(errors));
+        assertTrue(errors.stream().anyMatch(e -> e.contains("Shipping Service Mapping")), String.valueOf(errors));
+    }
 }

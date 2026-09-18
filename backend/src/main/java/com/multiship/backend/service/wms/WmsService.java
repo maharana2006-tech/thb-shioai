@@ -389,28 +389,27 @@ public class WmsService {
         String canon = carrier == null ? null : carrier.trim().toUpperCase();
         if (canon == null || canon.isBlank()) return trimOrNull(shipMethod);
         try {
+            // Settings → Shipping Service Mapping FIRST, through the same rule
+            // engine a CSV upload uses: client, destination and warehouse
+            // specificity all count, and a disabled service doesn't match. The
+            // rule also decides the carrier — the WMS ship-via's first letter is
+            // only a guess, and a client may route "U11" to anyone they like.
+            if (StringUtils.hasText(shipVia)) {
+                var ruled = shippingConfigService.resolveRule(clientCode, shipVia.trim(), destCountry, null);
+                if (ruled.isPresent() && StringUtils.hasText(ruled.get().getServiceCode())) {
+                    var svc = ruled.get();
+                    if (row != null && StringUtils.hasText(svc.getCarrier())) {
+                        row.setCarrierCode(svc.getCarrier().trim().toUpperCase());
+                        row.setShipViaCode(shipVia.trim().toUpperCase());
+                        row.setShipViaNote(shipVia.trim().toUpperCase() + " maps to " + svc.getName()
+                                + " (" + svc.getCarrier() + " " + svc.getServiceCode() + ")");
+                    }
+                    return svc.getServiceCode();
+                }
+            }
             if (StringUtils.hasText(shipMethod)) {
                 var hit = shippingConfigService.resolveServiceCode(canon, shipMethod, null);
                 if (hit.isPresent()) return hit.get().getServiceCode();
-            }
-            // Settings → Shipping Service Mapping: the client's own rule for this
-            // ship-via code wins; a rule with no client is a platform default.
-            if (StringUtils.hasText(shipVia) && shipViaMappingRepository != null && shippingServiceRepository != null) {
-                var rules = shipViaMappingRepository.findByShipviaCdIgnoreCase(shipVia.trim());
-                var rule = rules.stream()
-                        .filter(m -> m.getServiceId() != null)
-                        .filter(m -> StringUtils.hasText(clientCode) && m.getClientCode() != null
-                                && m.getClientCode().equalsIgnoreCase(clientCode.trim()))
-                        .findFirst()
-                        .or(() -> rules.stream()
-                                .filter(m -> m.getServiceId() != null && !StringUtils.hasText(m.getClientCode()))
-                                .findFirst());
-                if (rule.isPresent()) {
-                    var svc = shippingServiceRepository.findById(rule.get().getServiceId());
-                    if (svc.isPresent() && StringUtils.hasText(svc.get().getServiceCode())) {
-                        return svc.get().getServiceCode();
-                    }
-                }
             }
             if (StringUtils.hasText(shipVia) && StringUtils.hasText(clientCode)
                     && clientShipviaCodeMapRepository != null && shippingServiceRepository != null) {
@@ -433,14 +432,11 @@ public class WmsService {
                     if (hit.isPresent()) return hit.get().getServiceCode();
                 }
             }
-            var ground = shippingConfigService.resolveServiceCode(canon, "GROUND", null);
-            if (ground.isPresent()) {
-                addWarning(row, "WMS ship-via '" + (StringUtils.hasText(shipVia) ? shipVia.trim() : "(blank)")
-                        + "' isn't mapped for " + clientCode + " — defaulted to " + canon + " "
-                        + ground.get().getServiceCode() + " (" + ground.get().getName()
-                        + "). Map it under Settings → Shipping Service Mapping to stop this warning.");
-                return ground.get().getServiceCode();
-            }
+            // No silent Ground default any more. An unmapped ship-via used to
+            // ship the client's parcel on the carrier's cheapest ground service
+            // with only a warning to show for it; now the row stops here and
+            // preflight() turns the blank service into an error the operator
+            // fixes — the same rule a CSV upload follows.
         } catch (Exception e) {
             log.warn("WMS pull: service resolution for ship-via '{}' failed: {}", shipVia, e.getMessage());
         }
@@ -537,11 +533,14 @@ public class WmsService {
     /** Errors the carrier would certainly raise — surfaced now so the row isn't shown as Ready. */
     private List<String> preflight(WmsPendingOrderDTO src, OrderImportRowDTO row) {
         List<String> errors = new ArrayList<>();
-        if (shippingConfigService != null && StringUtils.hasText(row.getCarrierCode())
-                && !StringUtils.hasText(row.getServiceType())) {
-            errors.add("serviceType could not be resolved from WMS ship-via '"
-                    + (StringUtils.hasText(src.getShipVia()) ? src.getShipVia().trim() : "(blank)")
-                    + "' — pick a " + row.getCarrierCode() + " service, or map the code under Shipping Service Mapping");
+        if (shippingConfigService != null && !StringUtils.hasText(row.getServiceType())) {
+            String code = StringUtils.hasText(src.getShipVia()) ? src.getShipVia().trim().toUpperCase() : null;
+            String who = StringUtils.hasText(row.getClientCode()) ? row.getClientCode().trim() : "this client";
+            errors.add(code == null
+                    ? "serviceType is required — this WMS order carries no ship via code"
+                    : "serviceType '" + code + "' is not mapped for " + who
+                        + " — add the ship via code in Settings → Shipping Service Mapping, "
+                        + "or pick a service on this row");
         }
         return errors;
     }

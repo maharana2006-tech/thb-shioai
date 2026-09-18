@@ -1541,7 +1541,7 @@ export default function DataHistoryPage() {
                                     <button
                                       type="button"
                                       onClick={() => {
-                                        setLabelModalOrderNo(r.generatedOrderNo)
+                                        setLabelModalOrderNo(r.generatedOrderNo ?? null)
                                         setShowLabelModal(true)
                                       }}
                                       className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-semibold text-white bg-blue-600 hover:bg-blue-700 transition"

@@ -1,11 +1,16 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
-import { FiDownloadCloud, FiHome, FiRefreshCw, FiZap } from 'react-icons/fi'
+import { FiDownloadCloud, FiHome, FiRefreshCw, FiX, FiZap } from 'react-icons/fi'
 import { wmsService } from '../api/wmsService'
 import { orderImportService } from '../api/orderImportService'
 import type { ImportBatchSummary, OrderImportRow } from '../api/orderImportService'
 import { notify } from '../utils/notify'
 import { ApiError } from '../api/apiClient'
 import { GridCell, DH_COLUMNS, RowIssuesIcon, RowChannelChip, bucketRowErrors, type DhColumn } from './batchGrid'
+import { AddShipViaMappingDialog, ShipViaCodesPanel } from './modals/ShipViaCodes'
+import { useAppSession } from '../hooks/useAppSession'
+import { normalizeRole } from '../utils/roles'
+import { useNavigate } from 'react-router-dom'
+import { settingsPaths } from '../routes/workspaceRoutes'
 import VirtualTable from './VirtualTable'
 import { BTN_PRIMARY, BTN_GHOST, BTN_PRIMARY_SM } from './ui/buttons'
 
@@ -23,6 +28,9 @@ import { BTN_PRIMARY, BTN_GHOST, BTN_PRIMARY_SM } from './ui/buttons'
 // countryOfOrigin / item fields the grid gave you no way to enter.
 const API_COLUMNS: DhColumn[] = DH_COLUMNS
 
+/** The error raised for a WMS ship via code no rule covers. */
+const UNMAPPED_SHIP_VIA = /serviceType '([^']+)' is (?:not mapped|mapped, but not)/
+
 const fmtDateTime = (v?: string | null) =>
   v
     ? new Date(v).toLocaleString('en-US', {
@@ -33,6 +41,13 @@ const fmtDateTime = (v?: string | null) =>
 const CAN_GENERATE = new Set(['INITIATE', 'PARTIAL_COMPLETE', 'FAILED', 'CANCELLED'])
 
 export default function ApiBatchList() {
+  const navigate = useNavigate()
+  const { role } = useAppSession()
+  // Same audience as Settings → Shipping Service Mapping.
+  const canMapShipVia = normalizeRole(role) !== 'TENANT'
+  /** The unmapped code being mapped, and the batch to re-check afterwards. */
+  const [mapping, setMapping] = useState<{ code: string; clientCode: string | null; batchId: number } | null>(null)
+  const [codesTick, setCodesTick] = useState(0)
   const [batches, setBatches] = useState<ImportBatchSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [fetching, setFetching] = useState(false)
@@ -241,6 +256,18 @@ export default function ApiBatchList() {
       notify.apiError(e, 'Validation failed.')
     } finally {
       setValidatingId(null)
+    }
+  }
+
+  /** Re-check one batch after its ship via code was mapped — same call as
+   *  Validate, without the "all rows validated" toast the mapping already
+   *  reported. */
+  const revalidateBatch = async (id: number) => {
+    try {
+      const res = await orderImportService.validateAllRows(id)
+      if (res.data) applyUpdate(id, res.data)
+    } catch (e) {
+      notify.apiError(e, 'Mapping saved, but the rows could not be re-checked — press Validate.')
     }
   }
 
@@ -567,6 +594,21 @@ export default function ApiBatchList() {
                         <p className="px-4 pt-3 text-[11px] text-[#6b5c42]">
                           Click any cell to edit — it saves and re-validates on blur. Fix the flagged cells, then generate.
                         </p>
+                        {/* The WMS sends the client's own ship via code, and these
+                            are the ones that resolve to a carrier service. */}
+                        <div className="px-4 pt-2">
+                          <ShipViaCodesPanel
+                            clientCode={(() => {
+                              const codes = Array.from(new Set(
+                                rows.map((r) => (r.clientCode ?? '').trim().toUpperCase()).filter(Boolean),
+                              ))
+                              return codes.length === 1 ? codes[0] : null
+                            })()}
+                            canEdit={canMapShipVia}
+                            onOpenMapping={() => navigate(settingsPaths.shippingServiceMapping)}
+                            reloadKey={codesTick}
+                          />
+                        </div>
                         <VirtualTable
                           rows={rows}
                           rowKey={(r) => r.rowNumber}
@@ -634,8 +676,11 @@ export default function ApiBatchList() {
                                   </td>
                                   {API_COLUMNS.map((c) => {
                                     const raw = (r as unknown as Record<string, unknown>)[c.key]
+                                    const unmapped = c.key === 'serviceType'
+                                      ? (byField.serviceType ?? []).map((m) => m.match(UNMAPPED_SHIP_VIA)).find(Boolean)
+                                      : null
                                     return (
-                                      <td key={c.key} className="border-b border-[#f2ecdf] px-1 py-1">
+                                      <td key={c.key} className="border-b border-[#f2ecdf] px-1 py-1 align-top">
                                         <div className={c.w}>
                                           <GridCell
                                             value={raw == null ? '' : String(raw)}
@@ -645,6 +690,29 @@ export default function ApiBatchList() {
                                             mono={c.mono}
                                             onCommit={(v) => void commitCell(b.id, r, c, v)}
                                           />
+                                          {/* Same two affordances as the CSV importer: what the
+                                              WMS code became, and a way to map an unknown one. */}
+                                          {c.key === 'serviceType' && r.shipViaCode ? (
+                                            <span
+                                              title={r.shipViaNote ?? undefined}
+                                              className="mt-0.5 block cursor-help truncate font-mono text-[9px] text-[#8a7a5c]"
+                                            >
+                                              ← {r.shipViaCode}
+                                            </span>
+                                          ) : null}
+                                          {unmapped && canMapShipVia && !generated ? (
+                                            <button
+                                              type="button"
+                                              onClick={() => setMapping({
+                                                code: unmapped[1],
+                                                clientCode: (r.clientCode ?? '').trim().toUpperCase() || null,
+                                                batchId: b.id,
+                                              })}
+                                              className="mt-0.5 block w-full truncate rounded border border-[#e3d9c4] bg-white px-1 py-0.5 text-[9px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]"
+                                            >
+                                              Map {unmapped[1]}…
+                                            </button>
+                                          ) : null}
                                         </div>
                                       </td>
                                     )
@@ -665,7 +733,7 @@ export default function ApiBatchList() {
                                               <button
                                                 type="button"
                                                 onClick={() => {
-                                                  setLabelModalOrderNo(r.generatedOrderNo)
+                                                  setLabelModalOrderNo(r.generatedOrderNo ?? null)
                                                   setShowLabelModal(true)
                                                 }}
                                                 className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-semibold text-white bg-blue-600 hover:bg-blue-700 transition"
@@ -788,6 +856,22 @@ export default function ApiBatchList() {
             </div>
           </div>
         </div>
+      ) : null}
+
+      {mapping ? (
+        <AddShipViaMappingDialog
+          code={mapping.code}
+          clientCode={mapping.clientCode}
+          onClose={() => setMapping(null)}
+          onSaved={() => {
+            const batchId = mapping.batchId
+            setMapping(null)
+            setCodesTick((t) => t + 1)
+            // Re-read the batch: the server re-validates its rows, so the ones
+            // that failed on this code clear without another WMS fetch.
+            void revalidateBatch(batchId)
+          }}
+        />
       ) : null}
     </div>
   )
