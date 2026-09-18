@@ -13,19 +13,40 @@ import {
  * One thunk for every order-list view: server-side pagination, sorting,
  * status filter, and keyword search compose in a single request.
  */
-export const fetchOrders = createAsyncThunk(
+// PR-F1 (FE-ERR-7) — fetchOrders + fetchDashboardStats now use the
+// rejectWithValue pattern so the slice sees a meaningful error message
+// on failure instead of the default action.error.message (which is often
+// undefined for async failures thrown outside try/catch). Matches the
+// pre-P1 generateLabel shape below.
+export const fetchOrders = createAsyncThunk<
+  Awaited<ReturnType<typeof orderService.listOrders>>['data'],
+  OrderListParams,
+  { rejectValue: string }
+>(
   'orders/fetchList',
-  async (params: OrderListParams) => {
-    const response = await orderService.listOrders(params)
-    return response.data
+  async (params, { rejectWithValue }) => {
+    try {
+      const response = await orderService.listOrders(params)
+      return response.data
+    } catch (error) {
+      return rejectWithValue(error instanceof Error ? error.message : 'Failed to load orders')
+    }
   }
 )
 
-export const fetchDashboardStats = createAsyncThunk(
+export const fetchDashboardStats = createAsyncThunk<
+  Awaited<ReturnType<typeof orderService.getDashboardStats>>['data'],
+  void,
+  { rejectValue: string }
+>(
   'orders/fetchStats',
-  async () => {
-    const response = await orderService.getDashboardStats()
-    return response.data
+  async (_, { rejectWithValue }) => {
+    try {
+      const response = await orderService.getDashboardStats()
+      return response.data
+    } catch (error) {
+      return rejectWithValue(error instanceof Error ? error.message : 'Failed to load dashboard stats')
+    }
   }
 )
 
