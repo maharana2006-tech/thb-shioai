@@ -164,6 +164,26 @@ public class GlobalExceptionHandler {
                 .build());
     }
 
+    /**
+     * A controller that names its own status means it — honour it.
+     *
+     * <p>{@code ResponseStatusException} is a RuntimeException, so the
+     * catch-all below was turning every deliberate 503 / 404 / 409 into
+     * "Something went wrong on the server" with a 500. Live updates refusing
+     * with 503 when Redis is absent came back as a 500 that way.
+     */
+    @ExceptionHandler(org.springframework.web.server.ResponseStatusException.class)
+    public ResponseEntity<ApiResponse<Void>> handleResponseStatus(
+            org.springframework.web.server.ResponseStatusException ex) {
+        int code = ex.getStatusCode().value();
+        log.debug("Deliberate {} from a controller: {}", code, ex.getReason());
+        return ResponseEntity.status(code).body(ApiResponse.<Void>builder()
+                .status("error").code(code)
+                .message(ex.getReason() != null ? ex.getReason() : "Request refused.")
+                .errorCode(HttpStatus.valueOf(code).name())
+                .build());
+    }
+
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<ApiResponse<Void>> handleUnexpectedRuntime(RuntimeException ex) {
         // Client-disconnect detection: HttpMessageNotWritableException

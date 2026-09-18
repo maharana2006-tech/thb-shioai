@@ -1845,13 +1845,16 @@ public class OrderImportServiceImpl implements OrderImportService {
         String ext = filename == null ? "" : filename.toLowerCase(Locale.ROOT);
         try {
             List<OrderImportRowDTO> rows;
-            if (ext.endsWith(".xlsx")) {
+            // .xlsm is the same OOXML workbook as .xlsx plus a macro project,
+            // and the template we hand out IS an .xlsm — refusing it sent
+            // operators back to Save As for no reason. POI reads both.
+            if (ext.endsWith(".xlsx") || ext.endsWith(".xlsm")) {
                 rows = parseXlsx(body);
             } else if (ext.endsWith(".csv") || ext.endsWith(".txt")) {
                 rows = parseCsv(body);
             } else {
                 return failure(HttpStatus.UNSUPPORTED_MEDIA_TYPE,
-                        "Only .csv, .txt, and .xlsx files are supported.");
+                        "Only .csv, .txt, .xlsx and .xlsm files are supported.");
             }
             // Sprint 50 Tier 0.5 PR G — clamp each row's clientCode to the
             // caller's tenant scope. For scoped USERs a blank code is forced
@@ -6200,7 +6203,9 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (base.isBlank()) base = "upload";
         base = base + "-errors";
         boolean xlsx = format != null ? "xlsx".equalsIgnoreCase(format.trim())
-                : up.getFileName() != null && up.getFileName().toLowerCase(Locale.ROOT).endsWith(".xlsx");
+                : up.getFileName() != null
+                        && (up.getFileName().toLowerCase(Locale.ROOT).endsWith(".xlsx")
+                            || up.getFileName().toLowerCase(Locale.ROOT).endsWith(".xlsm"));
         try {
             return xlsx
                     ? new StagingErrorFile(errorsXlsx(header, table), base + ".xlsx",

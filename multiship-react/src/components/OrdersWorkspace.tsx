@@ -927,8 +927,10 @@ export default function OrdersWorkspace() {
     if (targets.length > 500) {
       notify.info({
         title: 'Too many orders to void',
-        body: `Void at most 500 orders at a time — ${targets.length.toLocaleString()} are selected. `
-          + 'Narrow the filter or select fewer.',
+        // Count the labelled subset, not the raw selection — those are the
+        // only rows a void would touch.
+        body: `Void at most 500 orders at a time — ${targets.length.toLocaleString()} of the selected `
+          + 'orders have labels. Narrow the filter or select fewer.',
       })
       return
     }

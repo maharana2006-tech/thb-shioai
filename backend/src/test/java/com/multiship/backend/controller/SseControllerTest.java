@@ -158,4 +158,24 @@ class SseControllerTest {
         assertTrue(elapsedMs < 500,
                 "20k extractions should take well under 500ms; got " + elapsedMs + "ms");
     }
+
+    /**
+     * With Redis absent the stream must refuse synchronously with 503.
+     * Completing an emitter with an error instead pushed the failure down an
+     * async ERROR dispatch that carries no security context, so the browser
+     * was told 401 "Please sign in again" and every live stream looked like
+     * an expired session.
+     */
+    @Test
+    void streamRefusesWithServiceUnavailableWhenRedisIsMissing() {
+        SseController controller = new SseController(
+                org.mockito.Mockito.mock(com.multiship.backend.service.TenantScopeEnforcer.class), null);
+        org.springframework.web.server.ResponseStatusException e =
+                org.junit.jupiter.api.Assertions.assertThrows(
+                        org.springframework.web.server.ResponseStatusException.class,
+                        () -> controller.stream("import-batches", null));
+        assertEquals(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE, e.getStatusCode());
+        org.junit.jupiter.api.Assertions.assertTrue(
+                String.valueOf(e.getReason()).contains("Redis"), e.getReason());
+    }
 }

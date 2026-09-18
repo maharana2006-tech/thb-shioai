@@ -776,10 +776,10 @@ function UploadStep({
         <p className="mt-3 text-[13px] font-semibold text-[#1f150c]">
           Drag &amp; drop your file here, or <span className="text-[#412d15] underline underline-offset-2">browse</span>
         </p>
-        <p className="mt-1 text-[11px] text-[#6b5c42]">CSV or Excel (.csv, .xlsx) · one order per orderRef — extra item lines repeat the orderRef</p>
+        <p className="mt-1 text-[11px] text-[#6b5c42]">CSV or Excel (.csv, .xlsx, .xlsm) · one order per orderRef — extra item lines repeat the orderRef</p>
         <input
           type="file"
-          accept=".csv,.xlsx,.txt"
+          accept=".csv,.xlsx,.xlsm,.txt"
           onChange={(e) => {
             onFileChange(e.target.files?.[0] ?? null)
             // Reset so re-selecting the SAME file fires onChange again
