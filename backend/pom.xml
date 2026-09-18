@@ -419,4 +419,52 @@
 		</plugins>
 	</build>
 
+	<!--
+	    PR-D3 — OWASP dependency-check-maven under a gated profile so
+	    every dev's `mvn install` doesn't pay the 5-15min CVE scan.
+	    The nightly `backend-cve-audit.yml` workflow activates the
+	    profile explicitly. failBuildOnCVSS=7 is the cutoff — CVSS 7+
+	    is CRITICAL/HIGH per NVD, worth waking someone up for.
+	    Skip suppressions file for MVP; add a `dependency-check-suppressions.xml`
+	    only when a real false positive appears.
+	-->
+	<profiles>
+		<profile>
+			<id>dep-check</id>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.owasp</groupId>
+						<artifactId>dependency-check-maven</artifactId>
+						<version>13.0.0</version>
+						<executions>
+							<execution>
+								<id>owasp-cve-scan</id>
+								<phase>verify</phase>
+								<goals><goal>check</goal></goals>
+							</execution>
+						</executions>
+						<configuration>
+							<failBuildOnCVSS>7</failBuildOnCVSS>
+							<!-- HTML for humans, JSON for machine post-processing
+							     if we later wire an alert bot. -->
+							<formats>
+								<format>HTML</format>
+								<format>JSON</format>
+							</formats>
+							<!-- Skip .NET/Ruby/etc analyzers we'll never hit. -->
+							<assemblyAnalyzerEnabled>false</assemblyAnalyzerEnabled>
+							<nuspecAnalyzerEnabled>false</nuspecAnalyzerEnabled>
+							<nugetconfAnalyzerEnabled>false</nugetconfAnalyzerEnabled>
+							<msbuildAnalyzerEnabled>false</msbuildAnalyzerEnabled>
+							<rubygemsAnalyzerEnabled>false</rubygemsAnalyzerEnabled>
+							<!-- Node/npm audit runs on its own in frontend-ci.yml. -->
+							<nodeAnalyzerEnabled>false</nodeAnalyzerEnabled>
+						</configuration>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+	</profiles>
+
 </project>
