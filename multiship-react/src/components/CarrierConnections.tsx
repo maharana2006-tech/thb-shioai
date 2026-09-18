@@ -1095,17 +1095,27 @@ export default function CarrierConnections({
     [busyId, admin],
   )
 
+  // PR-F4 (FE-PERF-1) — health-strip card definitions memoised on the four
+  // counts they depend on. Pre-P4, the array literal + object literals inside
+  // it were allocated on EVERY render (form input, drawer toggle, busy-id
+  // change), forcing all 4 child cards to re-render. Now the array's
+  // identity is stable across renders that don't move the counts.
+  const healthStripCards = useMemo(
+    () => [
+      { label: 'Ready to ship', value: `${readyCount}/${accounts.length}`, tone: 'text-emerald-600', icon: FiCheckCircle, chip: 'bg-emerald-50 text-emerald-600' },
+      { label: 'Unverified', value: unverifiedCount, tone: unverifiedCount ? 'text-amber-600' : 'text-slate-950', icon: FiAlertTriangle, chip: unverifiedCount ? 'bg-amber-50 text-amber-600' : 'bg-slate-100 text-slate-400' },
+      { label: 'Platform accounts', value: platformCount, tone: 'text-slate-950', icon: FiBox, chip: 'bg-slate-100 text-slate-500' },
+      { label: 'Client accounts', value: clientCount, tone: 'text-slate-950', icon: FiUsers, chip: 'bg-[#412d15]/10 text-[#412d15]' },
+    ],
+    [readyCount, accounts.length, unverifiedCount, platformCount, clientCount],
+  )
+
   return (
     <div className="space-y-4">
       {/* ===== health strip — hidden in embedded mode so the tab doesn't duplicate totals from the outer page ===== */}
       {!embedded ? (
         <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          {[
-            { label: 'Ready to ship', value: `${readyCount}/${accounts.length}`, tone: 'text-emerald-600', icon: FiCheckCircle, chip: 'bg-emerald-50 text-emerald-600' },
-            { label: 'Unverified', value: unverifiedCount, tone: unverifiedCount ? 'text-amber-600' : 'text-slate-950', icon: FiAlertTriangle, chip: unverifiedCount ? 'bg-amber-50 text-amber-600' : 'bg-slate-100 text-slate-400' },
-            { label: 'Platform accounts', value: platformCount, tone: 'text-slate-950', icon: FiBox, chip: 'bg-slate-100 text-slate-500' },
-            { label: 'Client accounts', value: clientCount, tone: 'text-slate-950', icon: FiUsers, chip: 'bg-[#412d15]/10 text-[#412d15]' },
-          ].map((card) => (
+          {healthStripCards.map((card) => (
             <div key={card.label} className="flex items-start justify-between rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
               <div>
                 <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">{card.label}</p>
