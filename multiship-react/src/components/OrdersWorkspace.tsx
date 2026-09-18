@@ -1046,12 +1046,21 @@ export default function OrdersWorkspace() {
       root.style.removeProperty('--toast-bottom')
       return
     }
-    const update = () => root.style.setProperty('--toast-bottom', `${bar.offsetHeight + 32}px`)
+    // Measure from the bar's own position: it sticks 20px off the bottom and
+    // wraps to two or three rows on a narrow window.
+    const update = () => {
+      const gap = Math.max(0, window.innerHeight - bar.getBoundingClientRect().bottom)
+      root.style.setProperty('--toast-bottom', `${bar.offsetHeight + gap + 12}px`)
+    }
     update()
     const observer = new ResizeObserver(update)
     observer.observe(bar)
+    window.addEventListener('resize', update)
+    window.addEventListener('scroll', update, true)
     return () => {
       observer.disconnect()
+      window.removeEventListener('resize', update)
+      window.removeEventListener('scroll', update, true)
       root.style.removeProperty('--toast-bottom')
     }
   }, [actionBarVisible])
@@ -1913,7 +1922,10 @@ export default function OrdersWorkspace() {
 
   return (
     <div className="pb-24">
-      <div className="mb-4 flex flex-nowrap items-center justify-end gap-1.5 overflow-x-auto">
+      {/* Wraps instead of scrolling: a nowrap row with justify-end pushed the
+          first buttons off the LEFT edge at narrow widths, where nothing could
+          scroll them back. */}
+      <div className="mb-4 flex flex-wrap items-center justify-end gap-1.5">
             <button type="button" onClick={refreshQueues} className={BTN_GHOST_SM}>
               <FiRefreshCw className="h-3 w-3" />
               Refresh

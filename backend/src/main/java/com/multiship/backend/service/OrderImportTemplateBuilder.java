@@ -156,7 +156,7 @@ final class OrderImportTemplateBuilder {
                 data.setColumnWidth(i, columnWidthFor(headers.get(i)));
             }
             data.createFreezePane(0, 1);
-            addSampleRows(data, headers, clients, accounts, sampleStyle);
+            addSampleRows(data, headers, clients, accounts, sampleStyle, shipViaByClient);
 
             // ===== Reference sheet: build lookup ranges + name them =====
             Map<String, CellRangeInfo> namedRanges = writeReferenceSheet(
@@ -657,7 +657,8 @@ final class OrderImportTemplateBuilder {
 
     private static void addSampleRows(XSSFSheet data, List<String> headers,
                                        List<Client> clients, List<CarrierAccountRef> accounts,
-                                       CellStyle sampleStyle) {
+                                       CellStyle sampleStyle,
+                                       Map<String, Map<String, String>> shipViaByClient) {
         // Pick a plausible sample client — the first client with at least
         // one active + complete account. Falls back to nothing when the
         // catalog is empty so we don't try to guess.
@@ -682,6 +683,7 @@ final class OrderImportTemplateBuilder {
         setCell(r, headers, "clientCode", sampleClient == null ? "" : sampleClient, sampleStyle);
         setCell(r, headers, "billTo", "SENDER", sampleStyle);
         setCell(r, headers, "recipientName", "Ava Chen", sampleStyle);
+        setCell(r, headers, "recipientPhone", "5035550137", sampleStyle);
         setCell(r, headers, "addressLine1", "42 Sample Way", sampleStyle);
         setCell(r, headers, "city", "Portland", sampleStyle);
         setCell(r, headers, "state", "OR", sampleStyle);
@@ -689,6 +691,13 @@ final class OrderImportTemplateBuilder {
         setCell(r, headers, "countryCode", "US", sampleStyle);
         setCell(r, headers, "carrierCode", sampleCarrier == null ? "" : sampleCarrier, sampleStyle);
         setCell(r, headers, "accountNumber", sampleAccount == null ? "" : sampleAccount, sampleStyle);
+        // The sample row has to pass validation, and serviceType is required —
+        // fill in one of this client's own ship via codes when they have one.
+        Map<String, String> sampleCodes = sampleClient == null || shipViaByClient == null ? null
+                : shipViaByClient.get(sampleClient.toUpperCase(Locale.ROOT));
+        if (sampleCodes != null && !sampleCodes.isEmpty()) {
+            setCell(r, headers, "serviceType", sampleCodes.keySet().iterator().next(), sampleStyle);
+        }
         setCellNumber(r, headers, "weight", 2.5, sampleStyle);
         setCell(r, headers, "weightUnit", "LB", sampleStyle);
         setCell(r, headers, "currency", "USD", sampleStyle);
@@ -758,7 +767,8 @@ final class OrderImportTemplateBuilder {
         notes.createRow(6).createCell(0).setCellValue(
                 "6. hsCode + countryOfOrigin are required for international shipments; leave blank for domestic.");
         notes.createRow(7).createCell(0).setCellValue(
-                "7. Save as CSV (UTF-8) before uploading — File → Save As → CSV UTF-8. The importer also accepts this .xlsx directly.");
+                "7. Upload this workbook as it is — the importer reads the Import sheet. You can also use the "
+                        + "Save as CSV button (or File → Save As → CSV UTF-8) if you prefer a CSV.");
 
         // Ship via legend: which carrier service each of the client's codes
         // buys. Without it the dropdown is a list of codes with no meaning.

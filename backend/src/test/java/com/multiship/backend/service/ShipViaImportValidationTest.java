@@ -139,4 +139,30 @@ class ShipViaImportValidationTest {
         assertTrue(r.getWarnings().stream().anyMatch(w -> w.contains("not FEDEX as the file says")),
                 r.getWarnings().toString());
     }
+
+    /**
+     * Our own template's first tab is a blank pad holding the macro buttons,
+     * and operators keep notes or a read-me in front of their data. Reading
+     * sheet 0 blindly answered "The file has no order rows."
+     */
+    @Test
+    void theOrderSheetIsFoundBehindABlankFirstTab() throws Exception {
+        try (org.apache.poi.xssf.usermodel.XSSFWorkbook wb = new org.apache.poi.xssf.usermodel.XSSFWorkbook()) {
+            wb.createSheet("Sheet1"); // blank pad, as the macro template has
+            org.apache.poi.ss.usermodel.Sheet imp = wb.createSheet("Import");
+            org.apache.poi.ss.usermodel.Row head = imp.createRow(0);
+            head.createCell(0).setCellValue("orderRef");
+            head.createCell(1).setCellValue("clientCode");
+            org.apache.poi.ss.usermodel.Row body = imp.createRow(1);
+            body.createCell(0).setCellValue("A-1");
+            body.createCell(1).setCellValue("DES875");
+
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            wb.write(out);
+            List<OrderImportRowDTO> rows = ReflectionTestUtils.invokeMethod(
+                    service, "parseXlsx", new java.io.ByteArrayInputStream(out.toByteArray()));
+            assertEquals(1, rows == null ? 0 : rows.size(), "the Import sheet's row is read, not the blank tab");
+            assertEquals("A-1", rows.get(0).getOrderRef());
+        }
+    }
 }

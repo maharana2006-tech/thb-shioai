@@ -4431,11 +4431,42 @@ public class OrderImportServiceImpl implements OrderImportService {
         return out;
     }
 
+    /**
+     * Which sheet holds the orders.
+     *
+     * <p>Reading sheet 0 blindly rejected our own template: its first tab is a
+     * blank pad holding the macro buttons, so every upload came back "The file
+     * has no order rows." Operators also keep notes, pivot tables and a
+     * read-me tab in front of their data.
+     *
+     * <p>Order of preference: a sheet named "Import", then the first sheet
+     * whose header row names columns we know, then sheet 0 so the error
+     * message still points at something.
+     */
+    private Sheet pickOrderSheet(Workbook workbook, DataFormatter fmt) {
+        if (workbook.getNumberOfSheets() == 0) return null;
+        Sheet named = workbook.getSheet("Import");
+        if (named != null && named.getPhysicalNumberOfRows() > 0) return named;
+        for (int i = 0; i < workbook.getNumberOfSheets(); i++) {
+            Sheet candidate = workbook.getSheetAt(i);
+            if (candidate == null || candidate.getPhysicalNumberOfRows() == 0) continue;
+            Row header = candidate.getRow(candidate.getFirstRowNum());
+            if (header == null) continue;
+            for (Cell cell : header) {
+                String label = fmt.formatCellValue(cell).trim().toLowerCase(Locale.ROOT);
+                if ("orderref".equals(label) || "clientcode".equals(label) || "recipientname".equals(label)) {
+                    return candidate;
+                }
+            }
+        }
+        return workbook.getSheetAt(0);
+    }
+
     private List<OrderImportRowDTO> parseXlsx(InputStream body) throws Exception {
         List<OrderImportRowDTO> out = new ArrayList<>();
         DataFormatter fmt = new DataFormatter();
         try (Workbook workbook = new XSSFWorkbook(body)) {
-            Sheet sheet = workbook.getSheetAt(0);
+            Sheet sheet = pickOrderSheet(workbook, fmt);
             if (sheet == null || sheet.getPhysicalNumberOfRows() == 0) return out;
 
             Row header = sheet.getRow(sheet.getFirstRowNum());
