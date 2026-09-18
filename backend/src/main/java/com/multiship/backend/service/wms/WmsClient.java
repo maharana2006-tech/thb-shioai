@@ -92,7 +92,11 @@ public class WmsClient {
             throw e;
         } catch (Exception e) {
             log.warn("WMS pending-orders fetch failed ({}): {}", url, e.getMessage());
-            throw new WmsException("Could not reach the WMS at " + url + ": " + e.getMessage(), e);
+            // The full URL and the host's IP belong in the log, not on an
+            // operator's screen — the address is internal infrastructure and
+            // the operator can't act on it anyway.
+            throw new WmsException("The WMS isn't reachable right now — check the WMS connection settings, "
+                    + "then try the fetch again.", e);
         }
     }
 
@@ -143,7 +147,11 @@ public class WmsClient {
                 throw e;
             } catch (Exception e) {
                 log.warn("WMS batch fetch failed at page {} ({}): {}", currentPage, url, e.getMessage());
-                throw new WmsException("Could not reach the WMS at " + url + ": " + e.getMessage(), e);
+                // The full URL and the host's IP belong in the log, not on an
+            // operator's screen — the address is internal infrastructure and
+            // the operator can't act on it anyway.
+            throw new WmsException("The WMS isn't reachable right now — check the WMS connection settings, "
+                    + "then try the fetch again.", e);
             }
         }
 

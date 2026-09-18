@@ -788,7 +788,13 @@ export default function ApiBatchList() {
                         />
                       </div>
                     ) : (
-                      <p className="px-4 py-6 text-center text-[12px] text-[#6b5c42]">No shipments in this batch.</p>
+                      <p className="px-4 py-6 text-center text-[12px] text-[#6b5c42]">
+                        {(b.totalRows ?? 0) > 0
+                          // An older fetch whose rows were dropped once its labels
+                          // were generated: the header's counts are all that's left.
+                          ? `The ${b.totalRows} shipments of this fetch are no longer stored — its labelled orders are in All orders.`
+                          : 'No shipments in this batch.'}
+                      </p>
                     )}
                   </div>
                 ) : null}

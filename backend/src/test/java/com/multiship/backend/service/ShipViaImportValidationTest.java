@@ -176,4 +176,18 @@ class ShipViaImportValidationTest {
                 .filter(e -> e.contains("U99")).findFirst().orElse("");
         assertTrue(err.contains("(this row has no client code)"), err);
     }
+
+    /**
+     * A file may name the service and leave the carrier column empty — the
+     * account cascade fills the rest in. "02" is UPS 2nd Day Air either way,
+     * and calling it an unmapped ship via code invited the operator to create
+     * a rule named after a real carrier code.
+     */
+    @Test
+    void aCarrierServiceCodeWithNoCarrierColumnIsAcceptedAndNamesItsCarrier() {
+        OrderImportRowDTO r = validate(row("02", null));
+        assertEquals(List.of(), r.getErrors(), r.getErrors().toString());
+        assertEquals("UPS", r.getCarrierCode(), "the code names the carrier");
+        assertNull(r.getShipViaCode(), "no rule fired — nothing was translated");
+    }
 }

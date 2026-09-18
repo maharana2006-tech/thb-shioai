@@ -821,6 +821,26 @@ public class OrderImportServiceImpl implements OrderImportService {
                 : packagePresetRepository.findAllByOrderByIsDefaultDescNameAsc();
         for (OrderImportRowDTO row : rows) {
             String carrier = row.getCarrierCode();
+            if (!StringUtils.hasText(carrier)) {
+                // No carrier column, but the service code names one: "02" is
+                // UPS's. Fill it in when exactly one carrier catalogs the code,
+                // so the account and lane checks below have something to work
+                // with. Ambiguous codes are left alone.
+                String code = normalizeOrNull(row.getServiceType());
+                if (code != null) {
+                    List<String> owners = services.stream()
+                            .filter(s -> code.equalsIgnoreCase(s.getServiceCode()))
+                            .map(com.multiship.backend.model.ShippingService::getCarrier)
+                            .filter(StringUtils::hasText)
+                            .map(c -> c.trim().toUpperCase(Locale.ROOT))
+                            .distinct()
+                            .toList();
+                    if (owners.size() == 1) {
+                        row.setCarrierCode(owners.get(0));
+                        carrier = owners.get(0);
+                    }
+                }
+            }
             if (!StringUtils.hasText(carrier)) continue;
             String carrierU = carrier.toUpperCase(Locale.ROOT);
             // Service: (carrier, name) case-insensitive match. Skip lookup
@@ -1088,6 +1108,14 @@ public class OrderImportServiceImpl implements OrderImportService {
                         : servicesByCarrier.getOrDefault(carrier, java.util.Set.of());
                 boolean catalogued = carrier != null && KNOWN_CARRIERS.contains(carrier)
                         && !known.isEmpty() && known.contains(service);
+                // A row may name the service without naming the carrier (the
+                // column is optional, and the cascade picks the account). "02"
+                // is UPS 2nd Day Air whether or not the file says UPS — calling
+                // it an unmapped ship via code invited the operator to create a
+                // rule named after a real carrier code.
+                if (!catalogued && carrier == null) {
+                    catalogued = servicesByCarrier.values().stream().anyMatch(codes -> codes.contains(service));
+                }
                 if (!catalogued) {
                     errors.add(shipViaError(service, client, carrier, known));
                 }
