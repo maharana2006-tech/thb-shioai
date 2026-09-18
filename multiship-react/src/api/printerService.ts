@@ -88,6 +88,67 @@ export const printerService = {
       docType,
       printerId: printerId ?? null,
     }),
+
+  // PR-Printer-P1.6 — LAN scan agent (admin surface only; the agent
+  // endpoints /printer-scan-agents/poll + /printers/discovered use the
+  // X-Printer-Scan-Key header from the Docker agent itself, never from
+  // the SPA). See docs/printer-auto-detect-design.md.
+  enrollScanAgent: (tenantCode: string, agentId: string, hostname?: string | null) =>
+    apiClient.post<ApiResponse<PrinterScanAgentEnrollResponse>>(
+      `/tenants/${encodeURIComponent(tenantCode)}/printer-scan-agents`,
+      { agentId, hostname: hostname ?? null },
+    ),
+  listScanAgents: (tenantCode: string) =>
+    apiClient.get<ApiResponse<PrinterScanAgent[]>>(
+      `/tenants/${encodeURIComponent(tenantCode)}/printer-scan-agents`,
+    ),
+  scanNow: (tenantCode: string) =>
+    apiClient.post<ApiResponse<{ agentsNudged: number }>>(
+      `/tenants/${encodeURIComponent(tenantCode)}/printers/scan-now`,
+      {},
+    ),
+  latestDiscovered: (tenantCode: string) =>
+    apiClient.get<ApiResponse<PrinterDiscovered[]>>(
+      `/tenants/${encodeURIComponent(tenantCode)}/printers/discovered/latest`,
+    ),
+}
+
+// ----- PR-Printer-P1.6 — scan agent types -----
+export interface PrinterScanAgent {
+  id: number
+  tenantCode: string
+  agentId: string
+  hostname: string | null
+  enrolledAt: string
+  enrolledBy: string | null
+  lastSeenAt: string | null
+  scanRequestedAt: string | null
+  active: boolean
+  revokedAt: string | null
+}
+
+export interface PrinterScanAgentEnrollResponse {
+  agentRowId: number
+  /** Shown to admin ONCE. Never re-fetchable. Paste into the Docker
+   *  agent's MULTISHIP_AGENT_KEY env; lost = rotate via revoke + re-enroll. */
+  rawKey: string
+}
+
+export interface PrinterDiscovered {
+  id: number
+  tenantCode: string
+  agentId: string
+  host: string
+  port: number
+  name: string | null
+  location: string | null
+  connectionGuess: PrinterConnection | null
+  formatGuess: PrinterFormat | null
+  paperGuess: PrinterPaper | null
+  queuePath: string | null
+  rawTxt: string | null
+  discoveredAt: string
+  scanSeq: number
 }
 
 /**
