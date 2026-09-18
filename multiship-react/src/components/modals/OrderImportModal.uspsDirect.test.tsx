@@ -130,6 +130,15 @@ vi.mock('../VirtualTable', () => ({
   default: ({ empty }: { empty?: React.ReactNode }) => <div data-testid="virtual-table-stub">{empty}</div>,
 }))
 
+// react-router-dom — OrderImportModal.tsx gained a useNavigate() call in
+// PR 95e035be (feat(import): ship via codes beside the upload). The test
+// renders the modal without a <Router>, so useNavigate throws. Stub the
+// hook to a no-op — navigation isn't exercised in any of these cases.
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
+  return { ...actual, useNavigate: () => () => undefined }
+})
+
 // ---------- Fixtures ----------
 
 /**
