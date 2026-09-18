@@ -102,11 +102,24 @@ Rotate policy: **on every operator change** at the customer site, or **on any su
 
 ---
 
-## 6. Upgrading the agent image
+## 6. Upgrading the agent image (auto-update flow)
 
-MVP publishes to `ghcr.io/multiship/lan-scanner:latest`. Customers running `:latest` pick up patches on container restart (or immediately with `docker pull` + restart).
+**How the two pieces work together** (shipped in P4c):
 
-Auto-update is deferred (see [`docs/printer-auto-detect-design.md`](printer-auto-detect-design.md) "open questions" § auto-update). For MVP, notify customers of the recommended tag bump via the operator channel; document breaking changes in the P2 subdir's `README.md` release notes section.
+1. **Backend advertises** the "latest recommended" version via `GET /api/v1/printer-scan-agents/latest-version` (public endpoint). Value is driven by `printer.scan-agent.latest-version` — set via env var or `application.properties`, no restart of the SPA required if driven by a config-refresh mechanism.
+2. **Agent polls** that endpoint every hour (configurable via `MULTISHIP_UPDATE_CHECK_MINUTES`). On mismatch with its baked-in `ScanAgent.VERSION`, the agent logs and calls `System.exit(0)`.
+3. **Customer's Docker restart mechanism** pulls the new image + relaunches. `--restart=always` alone **does not pull**; customers must pair it with one of:
+   - **Watchtower sidecar** (simplest): `docker run -d --name watchtower -v /var/run/docker.sock:/var/run/docker.sock containrrr/watchtower --interval 300 multiship-lan-scanner` — polls Docker Hub / GHCR every 5min, pulls, restarts.
+   - **Cron pull**: nightly `docker pull ghcr.io/{owner}/multiship-lan-scanner:latest && docker restart multiship-lan-scanner`.
+   - **systemd unit** with `ExecStartPre=/usr/bin/docker pull ghcr.io/{owner}/multiship-lan-scanner:latest`.
+
+**Ops sequence when publishing a new version:**
+
+1. Push a git tag `lan-scanner-v0.1.1` — the `printer-scan-agent-publish.yml` workflow builds + pushes `ghcr.io/{owner}/multiship-lan-scanner:0.1.1` + `:latest` to GHCR.
+2. Set `printer.scan-agent.latest-version=0.1.1` on the backend. Existing agents pick this up on their next hourly check and self-exit.
+3. Customers with any of the three restart mechanisms above are running the new image within ~1h + their pull cadence. Customers with none of the three need a manual `docker pull + docker restart`.
+
+Breaking changes: document in `printer-scan-agent/README.md` release notes so customers who see the exit-restart cycle can check what changed before running.
 
 ---
 
@@ -114,10 +127,10 @@ Auto-update is deferred (see [`docs/printer-auto-detect-design.md`](printer-auto
 
 The `printer-scan-agent-ci.yml` workflow runs `gradle shadowJar` on every PR touching `printer-scan-agent/**`. To cut a release:
 
-1. Bump `version` in `printer-scan-agent/build.gradle.kts`.
-2. Tag: `git tag lan-scanner-v0.1.1 && git push --tags`.
-3. Build + push the Docker image (registry setup deferred — for MVP, ops builds locally and pushes to `ghcr.io/multiship/lan-scanner:0.1.1` + retag `:latest`).
-4. Notify customers to `docker pull` on their host.
+1. Bump `ScanAgent.VERSION` and `version` in `printer-scan-agent/build.gradle.kts` (must match — the agent's baked-in string is what the update-checker compares against the backend advertisement).
+2. Tag: `git tag lan-scanner-v0.1.1 && git push --tags` — triggers `printer-scan-agent-publish.yml` which pushes `ghcr.io/{owner}/multiship-lan-scanner:0.1.1` + `:latest`.
+3. Bump `printer.scan-agent.latest-version=0.1.1` on the backend (env var or `application.properties`).
+4. Monitor `printer_scan_agent_last_seen_seconds` — a healthy rollout shows a brief spike (agent exit, container restart, first poll after new image comes up) then returns to <10s per §8.
 
 ---
 
