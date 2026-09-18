@@ -504,6 +504,7 @@ export default function ClientsPage() {
                 {showFilters ? (
                   <div
                     role="dialog"
+                    aria-modal="true"
                     aria-label="Filter clients"
                     className="absolute left-0 top-full z-30 mt-1.5 w-72 rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_20px_60px_rgba(15,23,42,0.15)]"
                   >
@@ -514,6 +515,7 @@ export default function ClientsPage() {
                           value={colFilters.code}
                           onChange={(e) => setColFilters((c) => ({ ...c, code: e.target.value }))}
                           placeholder="e.g. ARHDEV"
+                          aria-label="Filter clients by code"
                           className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12.5px] font-semibold text-slate-950 outline-none transition focus:border-[#412d15]"
                         />
                       </div>
@@ -523,6 +525,7 @@ export default function ClientsPage() {
                           value={colFilters.name}
                           onChange={(e) => setColFilters((c) => ({ ...c, name: e.target.value }))}
                           placeholder="e.g. Modern Art"
+                          aria-label="Filter clients by name"
                           className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12.5px] font-semibold text-slate-950 outline-none transition focus:border-[#412d15]"
                         />
                       </div>
@@ -532,6 +535,7 @@ export default function ClientsPage() {
                           value={colFilters.city}
                           onChange={(e) => setColFilters((c) => ({ ...c, city: e.target.value }))}
                           placeholder="e.g. Chicago"
+                          aria-label="Filter clients by city"
                           className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12.5px] font-semibold text-slate-950 outline-none transition focus:border-[#412d15]"
                         />
                       </div>

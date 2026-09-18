@@ -414,6 +414,7 @@ export default function ApiKeysPage() {
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm"
           role="dialog"
           aria-modal="true"
+          aria-labelledby="apikeys-issue-modal-heading"
           onClick={() => setIssueOpen(false)}
         >
           <div
@@ -421,7 +422,10 @@ export default function ApiKeysPage() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="mb-1 flex items-start justify-between">
-              <h3 className="inline-flex items-center gap-2 text-[15px] font-semibold text-slate-950">
+              <h3
+                id="apikeys-issue-modal-heading"
+                className="inline-flex items-center gap-2 text-[15px] font-semibold text-slate-950"
+              >
                 <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
                   <FiKey className="h-4 w-4" />
                 </span>

@@ -85,6 +85,9 @@ None. No security holes, no obvious data-loss paths.
 
 ### Downgraded / already-good during grading
 
+- **FE-ROLE-1 / FE-ROLE-2 / FE-ROLE-3 — ALL FALSE POSITIVES** (verified 2026-09-18 during F2 implementation). Backend endpoints are actually `hasAnyRole('ADMIN', 'USER')`, not admin-only: `upsertAccount` (line 46 of `AccountRefController.java`) + `setClientDefault` (line 57) + `toggleActive` (line 64). Only `getPlatformCredentials` (line 89) is `hasRole('ADMIN')`, and the FE already gates it correctly (`CarrierConnections.tsx:376`). F2 abandoned; role-gating drift is zero. Grading lesson: FE role-gating audit agents invent gates that don't exist; ALWAYS verify against `SecurityConfig` + `@PreAuthorize` annotations before implementing.
+- **FE-A11Y-4** — "Key name" input uses `<label>` wrapper (implicit association) — the pattern is valid; no `htmlFor` needed.
+- **FE-A11Y-5** — Environment "live"/"test" toggles have visible text content, which is the accessible name; no `aria-label` needed (would be redundant).
 - **FE-A11Y-6** (Scopes checkboxes) — already correctly labeled via `<label>` wrapping.
 - **FE-A11Y-9/10/11** (main + sidebar landmarks, mobile drawer, focus-trap hook) — exemplary; kept only as positive confirmations.
 - **FE-A11Y-12** (password toggle button) — correctly labeled.
