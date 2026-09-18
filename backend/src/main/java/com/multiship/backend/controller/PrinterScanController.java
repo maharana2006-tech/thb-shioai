@@ -9,8 +9,8 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.Data;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -46,12 +46,28 @@ import java.util.List;
         description = "Enrollment + ingestion for the multiship-lan-scanner Docker agent (per-tenant printer discovery).")
 @RestController
 @RequestMapping("/api/v1")
-@RequiredArgsConstructor
 public class PrinterScanController {
 
     static final String AGENT_KEY_HEADER = "X-Printer-Scan-Key";
 
     private final PrinterScanService scanService;
+    /**
+     * PR-Printer-P4c — the version string agents compare against on
+     * their hourly update-check. Bump this via env var / properties
+     * whenever a new {@code ghcr.io/{owner}/multiship-lan-scanner} tag
+     * is published; agents currently running an older version will
+     * {@code System.exit(0)} on the next check and their restart
+     * mechanism (Watchtower / cron / systemd — see runbook §6) pulls
+     * + relaunches.
+     */
+    private final String latestAgentVersion;
+
+    public PrinterScanController(
+            PrinterScanService scanService,
+            @Value("${printer.scan-agent.latest-version:0.1.0}") String latestAgentVersion) {
+        this.scanService = scanService;
+        this.latestAgentVersion = latestAgentVersion;
+    }
 
     // ================================================================
     // Admin surface (JWT + hasRole('ADMIN'))
@@ -145,6 +161,18 @@ public class PrinterScanController {
         }
     }
 
+    @Operation(summary = "Agent's hourly update check",
+            description = "Public (no auth) — returns the latest published agent version. "
+                    + "Agents call this every ~60min and System.exit(0) on mismatch; the customer's "
+                    + "restart mechanism (Watchtower / cron / systemd) then pulls + relaunches. "
+                    + "See docs/printer-scan-agent-runbook.md §6.")
+    @GetMapping("/printer-scan-agents/latest-version")
+    public ResponseEntity<ApiResponse<LatestVersionResponse>> latestVersion() {
+        LatestVersionResponse body = new LatestVersionResponse();
+        body.version = latestAgentVersion;
+        return ok(body);
+    }
+
     @Operation(summary = "Agent posts discovered printers")
     @PostMapping("/printers/discovered")
     public ResponseEntity<ApiResponse<DiscoveredResponse>> postDiscovered(
@@ -193,6 +221,13 @@ public class PrinterScanController {
         /** {@code true} if the row transitioned from active→revoked; {@code false}
          *  if the row didn't exist or was already revoked (idempotent). */
         private boolean revoked;
+    }
+
+    @Data public static class LatestVersionResponse {
+        /** Semver-ish string matching the {@code lan-scanner-v*} tag suffix
+         *  (without the {@code lan-scanner-v} prefix). Agents string-compare
+         *  against their baked-in {@code ScanAgent.VERSION}. */
+        private String version;
     }
 
     // ================================================================

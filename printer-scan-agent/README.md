@@ -19,6 +19,7 @@ the full multi-tenant SaaS reasoning + auth model.
 | `MULTISHIP_AGENT_KEY` | yes | — | raw key shown ONCE at enrollment |
 | `MULTISHIP_POLL_SECS` | no | 5 | long-poll interval |
 | `MULTISHIP_SCAN_TIMEOUT_SECS` | no | 15 | mDNS listen window per service type |
+| `MULTISHIP_UPDATE_CHECK_MINUTES` | no | 60 | auto-update poll interval (P4c) |
 
 ## Enrollment
 
@@ -37,17 +38,33 @@ re-enroll for a fresh key.
 ## Run (Docker)
 
 ```bash
-docker build -t multiship-lan-scanner .
+docker pull ghcr.io/maharana2006-tech/multiship-lan-scanner:latest
 
-docker run --rm --network host \
+docker run -d --restart=always --network host \
+  --name multiship-lan-scanner \
   -e MULTISHIP_API_BASE=https://app.multiship.com \
   -e MULTISHIP_AGENT_KEY=xxxxxxxxxxxxxxxx \
-  multiship-lan-scanner
+  ghcr.io/maharana2006-tech/multiship-lan-scanner:latest
 ```
 
 `--network host` is required so JmDNS can join the mDNS multicast group;
 Docker's default bridge network does not forward multicast so no printers
 will be discovered without it.
+
+### Auto-update
+
+The agent polls `/api/v1/printer-scan-agents/latest-version` every hour
+(configurable via `MULTISHIP_UPDATE_CHECK_MINUTES`). On version mismatch
+it exits — Docker's `--restart=always` restarts the same-tag image, but
+does NOT pull a new one. Pair one of these with the agent to actually
+pick up new versions:
+
+- **Watchtower** (simplest, single-line): `docker run -d --name watchtower -v /var/run/docker.sock:/var/run/docker.sock containrrr/watchtower --interval 300 multiship-lan-scanner`
+- **Cron**: nightly `docker pull … && docker restart multiship-lan-scanner`
+- **systemd** with `ExecStartPre=/usr/bin/docker pull …`
+
+Without one of those, the agent will restart itself hourly but keep running
+the same version indefinitely.
 
 ## Local dev
 

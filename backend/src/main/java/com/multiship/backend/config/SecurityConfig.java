@@ -188,6 +188,11 @@ public class SecurityConfig {
                         // would reject these as anonymous otherwise.
                         .requestMatchers(HttpMethod.GET, "/api/v1/printer-scan-agents/poll").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/printers/discovered").permitAll()
+                        // PR-Printer-P4c — auto-update check. Public because
+                        // any agent (with or without a valid key) needs to
+                        // know the latest version to self-exit. Response
+                        // carries no secrets.
+                        .requestMatchers(HttpMethod.GET, "/api/v1/printer-scan-agents/latest-version").permitAll()
                         // Admin-only credential management, decided before the
                         // request body is even parsed (403 beats 400).
                         .requestMatchers("/api/v1/carriers/connect", "/api/v1/carriers/disconnect").hasRole("ADMIN")
