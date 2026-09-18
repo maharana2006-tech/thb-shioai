@@ -91,7 +91,14 @@ const readStorageValue = (key: string) => {
     return null
   }
 
-  return window.localStorage.getItem(key)
+  // Storage can be missing or throw — a private window, blocked site data, or
+  // a test environment with no storage. A session read must never take the
+  // page down with it.
+  try {
+    return window.localStorage?.getItem(key) ?? null
+  } catch {
+    return null
+  }
 }
 
 const readConnectedCarriers = (rawValue: string | null): CarrierConnection[] => {

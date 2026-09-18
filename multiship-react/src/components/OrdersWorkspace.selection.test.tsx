@@ -221,8 +221,12 @@ const expectNoSelectedBar = async () => {
 // Selection clears on filter change (regression)
 // ==================================================================
 
-describe('OrdersWorkspace — selection clears on filter change', () => {
-  it('changing client filter clears selection (was: stale orderNos persisted)', async () => {
+vi.mock('../hooks/useAppSession', () => ({
+  useAppSession: () => ({ username: 'tester', role: 'ADMIN' }),
+}))
+
+describe('OrdersWorkspace — selection survives a filter change', () => {
+  it('changing client filter keeps hand-ticked rows (pick across searches, print once)', async () => {
     const Page = await loadPage()
     renderWithProviders(<Page />)
 
@@ -238,10 +242,10 @@ describe('OrdersWorkspace — selection clears on filter change', () => {
     expect(clientSelect).toBeTruthy()
     fireEvent.change(clientSelect!, { target: { value: 'ACME' } })
 
-    await expectNoSelectedBar()
+    await expectSelectedBar()
   })
 
-  it('changing date-from clears selection', async () => {
+  it('changing date-from keeps the selection', async () => {
     const Page = await loadPage()
     renderWithProviders(<Page />)
 
@@ -253,10 +257,10 @@ describe('OrdersWorkspace — selection clears on filter change', () => {
     expect(dateInputs.length).toBeGreaterThan(0)
     fireEvent.change(dateInputs[0], { target: { value: '2026-08-15' } })
 
-    await expectNoSelectedBar()
+    await expectSelectedBar()
   })
 
-  it('typing in the search box clears selection (after debounce)', async () => {
+  it('typing in the search box keeps the selection (after debounce)', async () => {
     const Page = await loadPage()
     renderWithProviders(<Page />)
 
@@ -267,13 +271,21 @@ describe('OrdersWorkspace — selection clears on filter change', () => {
     const search = screen.getByPlaceholderText(/search order|search/i) as HTMLInputElement
     fireEvent.change(search, { target: { value: '1001' } })
 
-    // 350ms debounce → wait a bit longer than that.
-    await waitFor(
-      () => {
-        expect(screen.queryByText(/\d+ selected/)).toBeNull()
-      },
-      { timeout: 2000 },
-    )
+    // 350ms debounce → wait past it, then the pick must still be there.
+    await new Promise((r) => setTimeout(r, 600))
+    await expectSelectedBar()
+  })
+
+  it('switching tab clears it — each tab acts on its rows differently', async () => {
+    const Page = await loadPage()
+    renderWithProviders(<Page />)
+
+    await selectFirstRow() // switches to Ready and ticks a row
+    await expectSelectedBar()
+
+    fireEvent.click(screen.getByRole('tab', { name: /all orders/i }))
+
+    await expectNoSelectedBar()
   })
 })
 

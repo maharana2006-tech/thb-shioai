@@ -36,6 +36,10 @@ vi.mock('../api/accountRefService', () => ({
   },
 }))
 
+vi.mock('../hooks/useAppSession', () => ({
+  useAppSession: () => ({ username: 'tester', role: 'ADMIN' }),
+}))
+
 describe('OrdersWorkspace', () => {
   it('renders without crashing within providers', async () => {
     const { default: OrdersWorkspace } = await import('./OrdersWorkspace')

@@ -848,12 +848,20 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
         return "items".equals(section) ? table.headerH() : pkgTable.headerH();
     }
 
+    /** Countries whose offices stock Letter rather than A4. */
+    private static final java.util.Set<String> LETTER_COUNTRIES = java.util.Set.of("US", "CA", "MX");
+
     private static PDRectangle resolvePageSize(Client client) {
-        if (client != null && client.getDefaultPaperSize() != null
-                && "LETTER".equals(client.getDefaultPaperSize().trim().toUpperCase())) {
-            return PDRectangle.LETTER;
-        }
-        return PDRectangle.A4;
+        if (client == null) return PDRectangle.A4;
+        String chosen = client.getDefaultPaperSize() == null ? "" : client.getDefaultPaperSize().trim().toUpperCase();
+        if ("LETTER".equals(chosen)) return PDRectangle.LETTER;
+        if ("A4".equals(chosen)) return PDRectangle.A4;
+        // Nothing chosen: follow where the client ships from, so a US tenant
+        // gets Letter out of the box instead of A4 pages that overhang the
+        // tray. An explicit choice above always wins.
+        String origin = client.getDefaultOriginCountry() == null ? ""
+                : client.getDefaultOriginCountry().trim().toUpperCase();
+        return LETTER_COUNTRIES.contains(origin) ? PDRectangle.LETTER : PDRectangle.A4;
     }
 
     // ---- page 1 header: title, meta panel, party grid --------------------
