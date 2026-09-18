@@ -88,6 +88,10 @@ public class OrderImportServiceImpl implements OrderImportService {
     private final CarrierAccountRefRepository accountRefRepository;
     /** Sprint 48 — service catalog for the template's serviceType dropdown. */
     private final ShippingServiceRepository shippingServiceRepository;
+    /** Ship-method rules — each client's own ship via codes for the template's
+     *  serviceType dropdown and its legend. Optional (null in tests). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.ShipViaMappingRepository shipViaMappingRepository;
     /** Sprint 48 — package presets for the template's packageType dropdown. */
     private final PackagePresetRepository packagePresetRepository;
     /** Sprint 48 — client list for the universal-template clientCode dropdown. */
@@ -658,6 +662,50 @@ public class OrderImportServiceImpl implements OrderImportService {
     @Override
     public ApiResponse<OrderImportPreviewDTO> preview(String filename, InputStream body) {
         return preview(filename, body, null);
+    }
+
+    /**
+     * Each client's own ship via codes for the .xlsx template: the codes the
+     * importer will accept from that client, with the service each one buys.
+     *
+     * <p>A rule with no client code belongs to every client, so it appears in
+     * each client's list — the operator filling the file shouldn't have to know
+     * which of their codes is global.
+     *
+     * @return client code (uppercase) → (ship via code → "UPS Ground (UPS 03)"),
+     *         clients without any rule left out entirely.
+     */
+    private Map<String, Map<String, String>> shipViaCodesByClient(
+            List<Client> clients, List<com.multiship.backend.model.ShippingService> services) {
+        Map<String, Map<String, String>> out = new LinkedHashMap<>();
+        if (shipViaMappingRepository == null) return out;
+        java.util.Map<Long, com.multiship.backend.model.ShippingService> serviceById = new java.util.HashMap<>();
+        for (com.multiship.backend.model.ShippingService s : services) {
+            if (s.getId() != null) serviceById.put(s.getId(), s);
+        }
+        List<com.multiship.backend.model.ShipViaMapping> rules;
+        try {
+            rules = shipViaMappingRepository.findAllByOrderByShipviaCdAsc();
+        } catch (RuntimeException e) {
+            log.warn("xlsxTemplate: ship via rules unavailable: {}", e.getMessage());
+            return out;
+        }
+        for (Client c : clients) {
+            String code = c.getClientCode() == null ? null : c.getClientCode().trim().toUpperCase(Locale.ROOT);
+            if (code == null || code.isBlank()) continue;
+            Map<String, String> mine = new java.util.TreeMap<>();
+            for (com.multiship.backend.model.ShipViaMapping rule : rules) {
+                String owner = rule.getClientCode();
+                // Global rules (no client) apply to everyone.
+                if (owner != null && !owner.isBlank() && !owner.trim().equalsIgnoreCase(code)) continue;
+                com.multiship.backend.model.ShippingService svc = serviceById.get(rule.getServiceId());
+                if (svc == null || !svc.isEnabled()) continue;
+                mine.put(rule.getShipviaCd().trim().toUpperCase(Locale.ROOT),
+                        svc.getName() + " (" + svc.getCarrier() + " " + svc.getServiceCode() + ")");
+            }
+            if (!mine.isEmpty()) out.put(code, mine);
+        }
+        return out;
     }
 
     /**
@@ -4259,7 +4307,8 @@ public class OrderImportServiceImpl implements OrderImportService {
         // accountId parameter is ignored — universal template.
         if (accountId != null) log.debug("xlsxTemplate ignored accountId={} (universal template)", accountId);
         return OrderImportTemplateBuilder.build(
-                HEADERS, clients, accounts, clientWarehouseCodes, services, presets);
+                HEADERS, clients, accounts, clientWarehouseCodes, services, presets,
+                shipViaCodesByClient(clients, services));
     }
 
     @Override
