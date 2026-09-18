@@ -1244,7 +1244,20 @@ function PreviewStep({
                   </td>
                   {PREVIEW_COLUMNS.map((c) => (
                     <td key={c.key} className="border-b border-[#f2ecdf] px-1 py-1 align-top">
-                      <div className={c.w}>{cellFor(r, c, byField[c.key])}</div>
+                      <div className={c.w}>
+                        {cellFor(r, c, byField[c.key])}
+                        {/* The cell shows the carrier's code, but the operator
+                            typed their own ship via code — show the translation
+                            so the swap isn't a mystery. */}
+                        {c.key === 'serviceType' && r.shipViaCode ? (
+                          <span
+                            title={r.shipViaNote ?? undefined}
+                            className="mt-0.5 block cursor-help truncate font-mono text-[9px] text-[#8a7a5c]"
+                          >
+                            ← {r.shipViaCode}
+                          </span>
+                        ) : null}
+                      </div>
                     </td>
                   ))}
                   {customCols.map((k) => (

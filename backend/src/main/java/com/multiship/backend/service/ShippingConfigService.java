@@ -101,6 +101,21 @@ public class ShippingConfigService {
      * unknown code to the carrier (UPS answers 120500 "Missing or invalid
      * service code" and every row fails).
      */
+    /**
+     * Is {@code code} a ship via code anyone has mapped — any client, any
+     * destination, enabled service or not?
+     *
+     * <p>Used by the CSV importer to tell "we have never heard of this code"
+     * apart from "this code exists, but not for this client / this destination,
+     * or the service it points at is switched off", so the row's error can say
+     * which of the two the operator has to fix.
+     */
+    @Transactional(readOnly = true)
+    public boolean shipViaCodeExists(String code) {
+        if (!StringUtils.hasText(code)) return false;
+        return !ruleRepository.findByShipviaCdIgnoreCase(code.trim()).isEmpty();
+    }
+
     public java.util.Optional<com.multiship.backend.model.ShippingService> resolveServiceCode(
             String carrier, String raw, String originCountry) {
         if (carrier == null || carrier.isBlank() || raw == null || raw.isBlank()) return java.util.Optional.empty();

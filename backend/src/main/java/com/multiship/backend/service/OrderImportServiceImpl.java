@@ -661,6 +661,85 @@ public class OrderImportServiceImpl implements OrderImportService {
     }
 
     /**
+     * The message for a ship via code nothing could resolve. Says which of the
+     * two fixes the operator needs: map the code, or correct it.
+     */
+    private String shipViaError(String code, String client, String carrier, java.util.Set<String> known) {
+        String who = client == null ? "this client" : client;
+        boolean mappedElsewhere = shippingConfigService != null
+                && shippingConfigService.shipViaCodeExists(code);
+        if (mappedElsewhere) {
+            return "serviceType '" + code + "' is mapped, but not for " + who
+                    + " shipping to this destination (or the service it maps to is switched off) — "
+                    + "check the rule in Settings → Shipping Service Mapping";
+        }
+        if (carrier != null && KNOWN_CARRIERS.contains(carrier) && !known.isEmpty()) {
+            return "serviceType '" + code + "' is not mapped for " + who
+                    + " and is not a " + carrier + " service code — add the ship via code in "
+                    + "Settings → Shipping Service Mapping, or use a code from Settings → Shipping services";
+        }
+        return "serviceType '" + code + "' is not mapped for " + who
+                + " — add the ship via code in Settings → Shipping Service Mapping";
+    }
+
+    /**
+     * Translate each row's ship via code through the client's ship-method
+     * rules (Settings → Shipping Service Mapping).
+     *
+     * <p>This is what a bulk file is for: the ERP writes its own code on the
+     * order, and the mapping says which carrier service that is for this
+     * client, warehouse and destination. The winning rule sets the carrier and
+     * the carrier's wire code on the row, so every downstream check — account,
+     * lane, weight, package — runs against the service that will actually be
+     * bought. A file that already carries a carrier code is left alone; a code
+     * no rule matches is left alone too, and {@link #validateReferences} turns
+     * it into the row's error.
+     *
+     * <p>The rule wins over the file's carrierCode: the mapping is the client's
+     * configured intent, a contradicting carrier column is a mistake in the
+     * file. The row keeps a note so the operator sees the swap.
+     */
+    private void applyShipViaMappings(List<OrderImportRowDTO> rows) {
+        if (shippingConfigService == null || rows.isEmpty()) return;
+        // (client, code, destination) → rule result; a 500-row file is usually
+        // a handful of distinct combinations.
+        Map<String, java.util.Optional<com.multiship.backend.model.ShippingService>> cache = new LinkedHashMap<>();
+        for (OrderImportRowDTO row : rows) {
+            row.setShipViaCode(null);
+            row.setShipViaNote(null);
+            String code = normalizeOrNull(row.getServiceType());
+            if (code == null) continue;
+            String client = normalizeOrNull(row.getClientCode());
+            String dest = normalizeOrNull(row.getCountryCode());
+            String key = (client == null ? "" : client) + '|' + code + '|' + (dest == null ? "" : dest);
+            com.multiship.backend.model.ShippingService service = cache
+                    .computeIfAbsent(key, k -> {
+                        try {
+                            return shippingConfigService.resolveRule(client, code, dest, null);
+                        } catch (RuntimeException e) {
+                            log.warn("Ship via lookup failed for {} / {}: {}", client, code, e.getMessage());
+                            return java.util.Optional.empty();
+                        }
+                    })
+                    .orElse(null);
+            if (service == null || !StringUtils.hasText(service.getServiceCode())) continue;
+
+            String fileCarrier = normalizeOrNull(row.getCarrierCode());
+            String ruleCarrier = service.getCarrier() == null ? null
+                    : service.getCarrier().trim().toUpperCase(Locale.ROOT);
+            row.setShipViaCode(code);
+            row.setServiceType(service.getServiceCode());
+            if (ruleCarrier != null) row.setCarrierCode(ruleCarrier);
+
+            String what = code + " maps to " + service.getName() + " (" + ruleCarrier + " "
+                    + service.getServiceCode() + ")";
+            row.setShipViaNote(fileCarrier != null && ruleCarrier != null && !fileCarrier.equals(ruleCarrier)
+                    ? what + ", not " + fileCarrier + " as the file says — the mapping wins"
+                    : what);
+        }
+    }
+
+    /**
      * Sprint 48 — reverse-lookup human names to wire codes on serviceType
      * and packageType. The universal template writes the user-friendly
      * name (e.g. "UPS Ground") into the cell, but every carrier connector
@@ -671,6 +750,11 @@ public class OrderImportServiceImpl implements OrderImportService {
      * work.
      */
     private void resolveNamesToCodes(List<OrderImportRowDTO> rows) {
+        // Ship-method rules first: the file's serviceType is normally the
+        // client's OWN ship via code (U11, P10…), and the rule decides which
+        // carrier + service it means. Runs before the catalog lookups below so
+        // a mapped row arrives there already carrying the carrier's wire code.
+        applyShipViaMappings(rows);
         if (shippingServiceRepository == null || rows.isEmpty()) return;
         List<com.multiship.backend.model.ShippingService> services =
                 shippingServiceRepository.findAllByOrderByCarrierAscSortOrderAsc();
@@ -926,14 +1010,32 @@ public class OrderImportServiceImpl implements OrderImportService {
                 }
             }
 
+            // ---- Ship via: the file's own code, checked against the client's
+            //      mapping (Settings → Shipping Service Mapping).
+            //
+            // applyShipViaMappings has already run: a row whose code matched a
+            // rule now carries the carrier's wire code (and shipViaCode holds
+            // what the file said). So anything still unrecognised here is
+            // either unmapped for this client or not a carrier code at all —
+            // and that is the one thing a bulk file must get right, so it's an
+            // ERROR, not a warning the operator discovers at label time.
             String service = normalizeOrNull(row.getServiceType());
-            if (service != null && carrier != null && KNOWN_CARRIERS.contains(carrier)) {
-                java.util.Set<String> known = servicesByCarrier.getOrDefault(carrier, java.util.Set.of());
-                if (!known.isEmpty() && !known.contains(service)) {
-                    errors.add("serviceType '" + service + "' is not in the " + carrier
-                            + " service catalog — use a code from Settings → Shipping services, "
-                            + "or leave it blank for the client's default service");
+            String shipVia = normalizeOrNull(row.getShipViaCode());
+            if (service == null) {
+                errors.add("serviceType is required — enter the client's ship via code "
+                        + "(Settings → Shipping Service Mapping) or a carrier service code");
+            } else if (shipVia == null) {
+                // No rule fired. Accept it only if it IS a carrier service code.
+                java.util.Set<String> known = carrier == null ? java.util.Set.of()
+                        : servicesByCarrier.getOrDefault(carrier, java.util.Set.of());
+                boolean catalogued = carrier != null && KNOWN_CARRIERS.contains(carrier)
+                        && !known.isEmpty() && known.contains(service);
+                if (!catalogued) {
+                    errors.add(shipViaError(service, client, carrier, known));
                 }
+            }
+            if (row.getShipViaNote() != null && row.getShipViaNote().contains("the mapping wins")) {
+                warnings.add(row.getShipViaNote());
             }
 
             String pkg = normalizeOrNull(row.getPackageType());

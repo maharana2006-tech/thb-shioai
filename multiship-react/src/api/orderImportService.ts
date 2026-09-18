@@ -27,6 +27,11 @@ export interface OrderImportRow {
   /** Sprint 41 — bill-to carrier account. Optional at import time. */
   accountNumber?: string | null
   serviceType?: string | null
+  /** The client's own ship via code from the file (U11, P10…) when a mapping
+   *  rule translated it — serviceType then holds the carrier's own code. */
+  shipViaCode?: string | null
+  /** What that rule did with the row, e.g. "U11 maps to UPS Ground (UPS 03)". */
+  shipViaNote?: string | null
   packageType?: string | null
   weight?: number | null
   weightUnit?: string | null
