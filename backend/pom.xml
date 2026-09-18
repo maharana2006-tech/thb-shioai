@@ -248,28 +248,6 @@
 					</excludes>
 				</configuration>
 			</plugin>
-			<!-- Disabled on Windows: cleanup-appledouble.sh requires bash
-			<plugin>
-				<groupId>org.codehaus.mojo</groupId>
-				<artifactId>exec-maven-plugin</artifactId>
-				<version>3.5.0</version>
-				<executions>
-					<execution>
-						<id>cleanup-appledouble-files</id>
-						<phase>validate</phase>
-						<goals>
-							<goal>exec</goal>
-						</goals>
-						<configuration>
-							<executable>bash</executable>
-							<arguments>
-								<argument>${project.basedir}/scripts/cleanup-appledouble.sh</argument>
-							</arguments>
-						</configuration>
-					</execution>
-				</executions>
-			</plugin>
-			-->
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-compiler-plugin</artifactId>
@@ -302,6 +280,74 @@
 									<artifactId>lombok</artifactId>
 								</path>
 							</annotationProcessorPaths>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+			<!--
+				macOS writes an extended attribute onto every file it touches.
+				exFAT can't store one, so the system puts it in a companion
+				"._name" file beside the real one. In target/classes that gives
+				Spring a "._BackendApplication.class" to component-scan, and
+				startup dies on "Bad magic number"; in target/test-classes it
+				makes surefire fork on junk and silently skip suites.
+
+				A shell script can't do this (it broke the Windows build, which
+				is why the previous attempt sits commented out above), and
+				validate ran too early — the files appear as the build writes
+				its output. Ant's delete task is plain Java, so it runs the same
+				everywhere, and it runs after each phase that writes to target.
+				scripts/cleanup-appledouble.sh stays for cleaning by hand.
+			-->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-antrun-plugin</artifactId>
+				<version>3.1.0</version>
+				<executions>
+					<execution>
+						<id>cleanup-appledouble-classes</id>
+						<phase>compile</phase>
+						<goals>
+							<goal>run</goal>
+						</goals>
+						<configuration>
+							<target>
+								<delete quiet="true">
+									<fileset dir="${project.build.directory}" includes="**/._*,**/.DS_Store"
+											 defaultexcludes="false" erroronmissingdir="false"/>
+								</delete>
+							</target>
+						</configuration>
+					</execution>
+					<execution>
+						<id>cleanup-appledouble-test-classes</id>
+						<phase>test-compile</phase>
+						<goals>
+							<goal>run</goal>
+						</goals>
+						<configuration>
+							<target>
+								<delete quiet="true">
+									<fileset dir="${project.build.directory}" includes="**/._*,**/.DS_Store"
+											 defaultexcludes="false" erroronmissingdir="false"/>
+								</delete>
+							</target>
+						</configuration>
+					</execution>
+					<execution>
+						<!-- Last pass before the jar is assembled, so none of it ships. -->
+						<id>cleanup-appledouble-package</id>
+						<phase>prepare-package</phase>
+						<goals>
+							<goal>run</goal>
+						</goals>
+						<configuration>
+							<target>
+								<delete quiet="true">
+									<fileset dir="${project.build.directory}" includes="**/._*,**/.DS_Store"
+											 defaultexcludes="false" erroronmissingdir="false"/>
+								</delete>
+							</target>
 						</configuration>
 					</execution>
 				</executions>
