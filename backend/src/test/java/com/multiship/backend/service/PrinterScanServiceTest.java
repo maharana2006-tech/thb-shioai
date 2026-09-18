@@ -129,10 +129,11 @@ class PrinterScanServiceTest {
     void revokeAgent_flipsActive_setsRevokedAt() {
         PrinterScanAgent agent = new PrinterScanAgent();
         agent.setId(7L);
+        agent.setTenantCode("ACME");
         agent.setActive(Boolean.TRUE);
         when(agentRepo.findById(7L)).thenReturn(Optional.of(agent));
 
-        boolean ok = service.revokeAgent(7L);
+        boolean ok = service.revokeAgent("ACME", 7L);
         assertTrue(ok);
         assertEquals(Boolean.FALSE, agent.getActive());
         assertNotNull(agent.getRevokedAt());
@@ -141,10 +142,33 @@ class PrinterScanServiceTest {
     @Test
     void revokeAgent_alreadyRevoked_returnsFalse() {
         PrinterScanAgent agent = new PrinterScanAgent();
+        agent.setTenantCode("ACME");
         agent.setActive(Boolean.FALSE);
         when(agentRepo.findById(7L)).thenReturn(Optional.of(agent));
 
-        assertFalse(service.revokeAgent(7L));
+        assertFalse(service.revokeAgent("ACME", 7L));
+    }
+
+    @Test
+    void revokeAgent_missingRow_returnsFalse() {
+        when(agentRepo.findById(99L)).thenReturn(Optional.empty());
+        assertFalse(service.revokeAgent("ACME", 99L));
+    }
+
+    @Test
+    void revokeAgent_wrongTenant_throwsIllegalArgument() {
+        // PR-P4b guard: URL says tenant=ACME but row 7 belongs to BETA.
+        // Must NOT silently revoke — throws so the controller returns 400.
+        PrinterScanAgent agent = new PrinterScanAgent();
+        agent.setId(7L);
+        agent.setTenantCode("BETA");
+        agent.setActive(Boolean.TRUE);
+        when(agentRepo.findById(7L)).thenReturn(Optional.of(agent));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.revokeAgent("ACME", 7L));
+        // Row must remain active — no silent damage.
+        assertEquals(Boolean.TRUE, agent.getActive());
     }
 
     // ================================================================

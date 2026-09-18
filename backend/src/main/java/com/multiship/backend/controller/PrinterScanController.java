@@ -16,6 +16,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -105,6 +106,24 @@ public class PrinterScanController {
         return ok(scanService.latestForTenant(tenantCode));
     }
 
+    @Operation(summary = "Revoke an enrolled scan agent",
+            description = "Flips active=false + sets revoked_at. The agent's next long-poll returns 401. "
+                    + "Re-enrolling with the same agentId reuses the row and returns a fresh key.")
+    @PreAuthorize("hasRole('ADMIN')")
+    @DeleteMapping("/tenants/{tenantCode}/printer-scan-agents/{id}")
+    public ResponseEntity<ApiResponse<RevokeResponse>> revokeAgent(
+            @PathVariable String tenantCode,
+            @PathVariable long id) {
+        try {
+            boolean revoked = scanService.revokeAgent(tenantCode, id);
+            RevokeResponse body = new RevokeResponse();
+            body.revoked = revoked;
+            return ok(body);
+        } catch (IllegalArgumentException bad) {
+            return badRequest(bad.getMessage());
+        }
+    }
+
     // ================================================================
     // Agent surface (X-Printer-Scan-Key header, permitAll in SecurityConfig)
     // ================================================================
@@ -168,6 +187,12 @@ public class PrinterScanController {
 
     @Data public static class DiscoveredResponse {
         private int upserted;
+    }
+
+    @Data public static class RevokeResponse {
+        /** {@code true} if the row transitioned from active→revoked; {@code false}
+         *  if the row didn't exist or was already revoked (idempotent). */
+        private boolean revoked;
     }
 
     // ================================================================

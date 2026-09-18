@@ -83,12 +83,19 @@ public class PrinterScanService {
     }
 
     /** Revoke an agent (admin). Idempotent — a re-enrollment reuses the
-     *  row and returns a fresh key. */
+     *  row and returns a fresh key. The URL tenantCode is guarded against
+     *  the loaded row's tenantCode: ADMIN sees every tenant, but a UI
+     *  that scoped the request to tenant ACME must not silently revoke a
+     *  BETA row because the ADMIN pasted the wrong id. */
     @Transactional
-    public boolean revokeAgent(long agentRowId) {
+    public boolean revokeAgent(String tenantCode, long agentRowId) {
         Optional<PrinterScanAgent> found = agentRepository.findById(agentRowId);
         if (found.isEmpty()) return false;
         PrinterScanAgent a = found.get();
+        if (tenantCode == null || !tenantCode.equalsIgnoreCase(a.getTenantCode())) {
+            throw new IllegalArgumentException(
+                    "Agent " + agentRowId + " does not belong to tenant " + tenantCode + ".");
+        }
         if (!Boolean.TRUE.equals(a.getActive())) return false;
         a.setActive(Boolean.FALSE);
         a.setRevokedAt(LocalDateTime.now());

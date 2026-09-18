@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { FiCheckCircle, FiCopy, FiDownload, FiKey, FiRefreshCw, FiWifi } from 'react-icons/fi'
+import { FiCheckCircle, FiCopy, FiDownload, FiKey, FiRefreshCw, FiTrash2, FiWifi } from 'react-icons/fi'
 import DiscoveredPickerModal from './DiscoveredPickerModal'
 import { printerService, type Printer, type PrinterScanAgent } from '../api/printerService'
 import { notify } from '../utils/notify'
@@ -39,6 +39,7 @@ export default function PrinterScanPanel({
   const [enrollOpen, setEnrollOpen] = useState(false)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [scanning, setScanning] = useState(false)
+  const [revokingId, setRevokingId] = useState<number | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -61,6 +62,31 @@ export default function PrinterScanPanel({
     queueMicrotask(() => { if (!cancelled) void load() })
     return () => { cancelled = true }
   }, [load])
+
+  const handleRevoke = async (agent: PrinterScanAgent) => {
+    if (revokingId !== null) return
+    const ok = await notify.confirm(
+      `Revoke ${agent.agentId}? The scanner will stop working within 5 seconds. `
+        + `You'll need to re-enroll and update the container env to resume discovery for this warehouse.`,
+      {
+        title: 'Revoke scanner',
+        confirmLabel: 'Revoke',
+        cancelLabel: 'Keep',
+        danger: true,
+      },
+    )
+    if (!ok) return
+    setRevokingId(agent.id)
+    try {
+      await printerService.revokeScanAgent(tenantCode, agent.id)
+      notify.success({ title: `${agent.agentId} revoked`, body: 'The scanner’s key is now invalid.' })
+      await load()
+    } catch (err) {
+      notify.apiError(err, `Could not revoke ${agent.agentId}`)
+    } finally {
+      setRevokingId(null)
+    }
+  }
 
   const handleScanNow = async () => {
     if (scanning) return
@@ -132,14 +158,28 @@ export default function PrinterScanPanel({
       {!loading && agents.length > 0 ? (
         <ul className="mt-3 space-y-1 border-t border-slate-100 pt-3 text-[12px]">
           {agents.map((a) => (
-            <li key={a.id} className="flex items-center justify-between text-slate-600">
-              <span className="flex items-center gap-1.5">
-                <FiCheckCircle className="h-3.5 w-3.5 text-emerald-600" />
+            <li key={a.id} className="flex items-center justify-between gap-3 text-slate-600">
+              <span className="flex items-center gap-1.5 min-w-0">
+                <FiCheckCircle className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
                 <span className="font-semibold text-slate-800">{a.agentId}</span>
-                {a.hostname ? <span className="text-slate-400">· {a.hostname}</span> : null}
+                {a.hostname ? <span className="truncate text-slate-400">· {a.hostname}</span> : null}
               </span>
-              <span className="text-[11px] text-slate-400">
-                {a.lastSeenAt ? `last seen ${formatSince(a.lastSeenAt)}` : 'never contacted'}
+              <span className="flex items-center gap-2 shrink-0">
+                <span className="text-[11px] text-slate-400">
+                  {a.lastSeenAt ? `last seen ${formatSince(a.lastSeenAt)}` : 'never contacted'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void handleRevoke(a)}
+                  disabled={revokingId !== null}
+                  aria-label={`Revoke ${a.agentId}`}
+                  title="Revoke this scanner — invalidates its key immediately"
+                  className="rounded-md border border-slate-200 bg-white p-1 text-slate-500 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-700 disabled:opacity-40"
+                >
+                  {revokingId === a.id
+                    ? <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
+                    : <FiTrash2 className="h-3 w-3" />}
+                </button>
               </span>
             </li>
           ))}

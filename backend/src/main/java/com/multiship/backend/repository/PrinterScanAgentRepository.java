@@ -25,4 +25,9 @@ public interface PrinterScanAgentRepository extends JpaRepository<PrinterScanAge
      *  /settings/printers page can show "warehouse-north was last
      *  seen 2 min ago". */
     List<PrinterScanAgent> findByTenantCodeAndActiveTrueOrderByEnrolledAtDesc(String tenantCode);
+
+    /** PR-Printer-P4b — feeds {@code PrinterScanAgentMetrics}, which
+     *  re-emits a {@code printer_scan_agent_last_seen_seconds} gauge
+     *  every 15s. Sorted so gauge rows are deterministic across runs. */
+    List<PrinterScanAgent> findByActiveTrueOrderByTenantCodeAscAgentIdAsc();
 }
