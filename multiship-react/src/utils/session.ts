@@ -12,6 +12,10 @@
 const CLIENT_EDITOR_DRAFT_PREFIX = 'clientEditorDraft:'
 const ADVANCED_DATA_TABLE_PREFIX = 'advanced-data-table:'
 const CONNECTED_CARRIERS_KEY = 'multiship_connected_carriers'
+// PR-Printer-P1.7 — the /settings/printers page remembers the last-
+// picked LAN scan tenant. Sweep on logout so a shared machine doesn't
+// hand the next admin a stale tenant scope on the printers page.
+const SCAN_TENANT_KEY = 'multiship_scan_tenant'
 
 export const clearAppStorage = (): void => {
   if (typeof window === 'undefined') return
@@ -24,7 +28,8 @@ export const clearAppStorage = (): void => {
       if (
         key.startsWith(CLIENT_EDITOR_DRAFT_PREFIX) ||
         key.startsWith(ADVANCED_DATA_TABLE_PREFIX) ||
-        key === CONNECTED_CARRIERS_KEY
+        key === CONNECTED_CARRIERS_KEY ||
+        key === SCAN_TENANT_KEY
       ) {
         keys.push(key)
       }

@@ -31,12 +31,12 @@ export default function PrintersPage() {
   const [testingId, setTestingId] = useState<number | null>(null)
   const [savingKey, setSavingKey] = useState<string | null>(null)
   const [extraClients, setExtraClients] = useState<string[]>([])
-  // PR-Printer-P1.6 — the LAN scan panel needs a tenant scope; the FE
-  // session doesn't carry tenantCode today (see docs/printer-auto-detect-design.md
-  // "open questions"). Interim: text field the admin types their tenant
-  // code into. Follow-up P1.7 replaces with a proper tenant selector
-  // once we teach useAppSession about scope.
-  const [scanTenant, setScanTenant] = useState('')
+  // PR-Printer-P1.7 — tenant selector for the LAN scan panel. Reads the
+  // already-loaded client list (this page is ADMIN-only via /printers'
+  // hasRole('ADMIN'), so the admin sees every tenant regardless of
+  // AccessScopePolicy). Remembers the last selection in localStorage so
+  // returning to this page doesn't force the admin to re-pick every visit.
+  const [scanTenant, setScanTenant] = useState<string>(() => readLastScanTenant())
 
   const load = useCallback(() => {
     return Promise.all([printerService.list(), printerService.listAssignments(), loadAllClients()])
@@ -123,6 +123,19 @@ export default function PrintersPage() {
     .map((c) => c.clientCode.toUpperCase())
     .filter((code) => !clientRows.includes(code))
 
+  // PR-Printer-P1.7 — dedupe + sort clientCodes for the scan-tenant
+  // selector. Uppercased for stability with the PrinterScanController
+  // path variable (tenantCode is a case-insensitive lookup on the
+  // backend but the DB row is stored uppercase).
+  const tenantChoices = useMemo(() => {
+    const seen = new Set<string>()
+    for (const c of clients) {
+      const code = c.clientCode?.trim().toUpperCase()
+      if (code) seen.add(code)
+    }
+    return [...seen].sort()
+  }, [clients])
+
   const labelChoices = printers.filter((p) => p.active)
   const invoiceChoices = printers.filter((p) => p.active && p.format === 'PDF')
 
@@ -150,22 +163,36 @@ export default function PrintersPage() {
         </button>
       </header>
 
-      {/* PR-Printer-P1.6 — LAN scan panel. Tenant-code input is a
-          placeholder until P1.7 lands a proper tenant selector. */}
+      {/* PR-Printer-P1.7 — tenant selector. Sourced from the already-
+          loaded client list (this page is ADMIN-only, so all tenants
+          are visible regardless of AccessScopePolicy). Empty option
+          shows nothing below; picking a tenant persists to localStorage. */}
       <section className="rounded-xl border border-slate-200 bg-white p-4">
         <div className="flex items-center gap-3">
           <label className="flex flex-1 items-center gap-2 text-[12px] font-semibold text-slate-600">
-            Tenant code
-            <input
-              type="text"
+            Tenant
+            <select
               value={scanTenant}
-              onChange={(e) => setScanTenant(e.target.value)}
-              placeholder="e.g. ACME"
-              className="w-40 rounded-md border border-slate-200 px-2 py-1 text-[12.5px] font-mono text-slate-900 outline-none focus:border-slate-400"
-            />
+              onChange={(e) => {
+                const next = e.target.value
+                setScanTenant(next)
+                writeLastScanTenant(next)
+              }}
+              disabled={loading || tenantChoices.length === 0}
+              className="w-56 rounded-md border border-slate-200 bg-white px-2 py-1 text-[12.5px] text-slate-900 outline-none focus:border-slate-400 disabled:opacity-50"
+            >
+              <option value="">
+                {tenantChoices.length === 0
+                  ? (loading ? 'Loading tenants…' : 'No tenants available')
+                  : 'Choose a tenant…'}
+              </option>
+              {tenantChoices.map((code) => (
+                <option key={code} value={code}>{code}</option>
+              ))}
+            </select>
           </label>
           <span className="text-[11px] text-slate-400">
-            Enter the tenant to enroll a LAN scanner for.
+            Pick the tenant to enroll a LAN scanner for.
           </span>
         </div>
       </section>
@@ -357,6 +384,26 @@ export default function PrintersPage() {
       ) : null}
     </div>
   )
+}
+
+// PR-Printer-P1.7 — remember the last-picked scan tenant across page
+// visits. The key is registered in utils/session.ts so clearAppStorage()
+// wipes it on logout — a shared machine must not hand the next admin a
+// stale tenant scope on the printers page.
+const SCAN_TENANT_STORAGE_KEY = 'multiship_scan_tenant'
+
+function readLastScanTenant(): string {
+  if (typeof window === 'undefined') return ''
+  try { return window.localStorage.getItem(SCAN_TENANT_STORAGE_KEY) ?? '' }
+  catch { return '' }
+}
+
+function writeLastScanTenant(value: string): void {
+  if (typeof window === 'undefined') return
+  try {
+    if (value.trim()) window.localStorage.setItem(SCAN_TENANT_STORAGE_KEY, value)
+    else window.localStorage.removeItem(SCAN_TENANT_STORAGE_KEY)
+  } catch { /* private mode / disabled storage — silently drop */ }
 }
 
 /** Every client, a page of 100 at a time (the list endpoint's cap). */
