@@ -58,8 +58,9 @@ public class LabelPackage {
     @Column(name = "sequence_number", nullable = false)
     private Integer sequenceNumber;
 
-    /** Per-box tracking number from the carrier (or the master when the carrier only returns one). */
-    @Column(name = "tracking_number", length = 255)
+    /** Per-box tracking number from the carrier (or the master when the carrier only returns one).
+     *  Some carriers include routing codes or concatenated identifiers that can exceed 255 chars. */
+    @Column(name = "tracking_number", columnDefinition = "text")
     private String trackingNumber;
 
     /** Carrier's per-box tracking page URL when returned. */
@@ -102,7 +103,7 @@ public class LabelPackage {
     @Column(name = "reference", length = 255)
     private String reference;
 
-    @Column(name = "description", length = 500)
+    @Column(name = "description", columnDefinition = "text")
     private String description;
 
     /**
