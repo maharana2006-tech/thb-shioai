@@ -312,6 +312,48 @@ public class SseController {
         return extractStringField(jsonBody, "eventType");
     }
 
+    /**
+     * PR-P4 (audit PERF-M3) — scheduled ping-and-evict pass for stale
+     * SSE emitters. The onCompletion / onTimeout / onError cleanup
+     * covers the happy path, but a hard tab-close BEFORE the client-side
+     * disconnect propagates through the proxy layer can leave an
+     * emitter parked in {@link #live} until the SSE_TIMEOUT_MS wall-
+     * clock expiry (currently 30 min). At scale — 100 operators × 10
+     * tab-reloads/day = 1000 orphaned entries/day. This tick sends a
+     * comment-line ping to every live emitter; an {@link IOException}
+     * proves the underlying HTTP connection is gone and we remove +
+     * complete the emitter (which fires the normal cleanup).
+     *
+     * <p>Runs every 5 min — small enough to bound orphan lifetime,
+     * large enough that the ping traffic is trivial (each ping is a
+     * comment line, no event payload).
+     */
+    @org.springframework.scheduling.annotation.Scheduled(
+            fixedDelayString = "${sse.evict-stale-interval-ms:300000}",
+            initialDelayString = "${sse.evict-stale-initial-delay-ms:60000}")
+    void evictStaleEmitters() {
+        int checked = 0;
+        int evicted = 0;
+        for (java.util.Map.Entry<Long, SseEmitter> e : live.entrySet()) {
+            checked++;
+            SseEmitter emitter = e.getValue();
+            try {
+                emitter.send(SseEmitter.event().comment("keepalive"));
+            } catch (IOException | IllegalStateException ex) {
+                // IOException: the underlying HTTP connection is dead.
+                // IllegalStateException: emitter already completed.
+                // Either way — remove + complete so no cleanup lambda
+                // is skipped.
+                try { emitter.complete(); } catch (Exception ignored) {}
+                live.remove(e.getKey());
+                evicted++;
+            }
+        }
+        if (evicted > 0) {
+            log.info("SSE evict-stale tick: checked {} live emitter(s), evicted {} dead.", checked, evicted);
+        }
+    }
+
     /** Cheap best-effort {@code "field":"value"} extractor — avoids
      *  spinning up Jackson for every relayed message. Matches the
      *  simple shape our events emit (no escapes needed on the value). */

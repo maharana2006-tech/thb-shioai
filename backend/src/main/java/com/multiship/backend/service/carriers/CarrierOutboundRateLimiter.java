@@ -209,6 +209,15 @@ public class CarrierOutboundRateLimiter {
             window.addLast(now);
             long cutoff = now - RATE_LIMIT_WINDOW_MS;
             while (!window.isEmpty() && window.peekFirst() < cutoff) window.pollFirst();
+            // PR-P4 (PERF-M4) — hard cap deque length as defense-in-depth.
+            // The time-window prune above already bounds it in the happy
+            // path, but a burst of 429s within a single window tick can
+            // still grow the deque past RATE_LIMIT_TRIGGER_COUNT (we only
+            // need to know "did we cross the threshold"). Trim from the
+            // FRONT — keeping the most recent RATE_LIMIT_TRIGGER_COUNT + 1
+            // events preserves both the trigger-check + the newestEvent
+            // read in maybeRestoreBaseline.
+            while (window.size() > RATE_LIMIT_TRIGGER_COUNT + 1) window.pollFirst();
             if (window.size() >= RATE_LIMIT_TRIGGER_COUNT) {
                 int current = effectiveRps.getOrDefault(key, baseline);
                 int nextRps = Math.max(ADAPTIVE_FLOOR_RPS, current / 2);
