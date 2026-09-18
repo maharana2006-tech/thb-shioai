@@ -154,4 +154,17 @@ public class OrderImportRowDTO {
      * persisted onto the order at commit.
      */
     private java.util.Map<String, String> customFields;
+
+    /**
+     * Label URL endpoint for retrieving the generated label PDF/image.
+     * Populated after successful label generation. Frontend can GET this URL.
+     * Format: /api/v1/orders/{orderNo}/label/pdf
+     */
+    private String labelUrl;
+
+    /**
+     * Tracking URL for the carrier's tracking page.
+     * Populated after successful label generation.
+     */
+    private String trackingUrl;
 }

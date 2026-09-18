@@ -1526,13 +1526,25 @@ export default function DataHistoryPage() {
                                   identical on every UPS row, so it alone cannot say which
                                   rows share an order. */}
                               {r.generatedOrderNo ? (
-                                <a
-                                  href={`/label/${r.generatedOrderNo}`}
-                                  className="font-mono text-[10px] font-semibold text-[#1f150c] underline-offset-2 hover:underline"
-                                  title="Open this order"
-                                >
-                                  #{r.generatedOrderNo}
-                                </a>
+                                <div className="flex items-center gap-1">
+                                  <a
+                                    href={`/label/${r.generatedOrderNo}`}
+                                    className="font-mono text-[10px] font-semibold text-[#1f150c] underline-offset-2 hover:underline"
+                                    title="Open this order"
+                                  >
+                                    #{r.generatedOrderNo}
+                                  </a>
+                                  {r.labelUrl ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => window.open(r.labelUrl, '_blank')}
+                                      className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-semibold text-white bg-blue-600 hover:bg-blue-700 transition"
+                                      title="View the generated label PDF"
+                                    >
+                                      📄 View
+                                    </button>
+                                  ) : null}
+                                </div>
                               ) : null}
                               {r.generatedTrackingNumber ? (
                                 <span className="font-mono text-[9.5px] text-[#6b5c42]">{r.generatedTrackingNumber}</span>

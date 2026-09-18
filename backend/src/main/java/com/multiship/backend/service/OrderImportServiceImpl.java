@@ -2963,6 +2963,8 @@ public class OrderImportServiceImpl implements OrderImportService {
         // its labels belong to. Keep any prior id if this run generated none.
         Integer labelBatchId = firstBatchId(rows);
         if (labelBatchId != null) batch.setLabelBatchId(labelBatchId);
+        // Persist generation results to ImportBatchRow so they survive a page refresh
+        persistGenerationResults(id, rows);
         try {
             if (importObjectMapper != null) batch.setRowsJson(importObjectMapper.writeValueAsString(rows));
         } catch (Exception ex) {
@@ -3547,6 +3549,8 @@ public class OrderImportServiceImpl implements OrderImportService {
         stampCompletionIfTerminal(batch);
         Integer labelBatchId = firstBatchId(rows);
         if (labelBatchId != null) batch.setLabelBatchId(labelBatchId);
+        // Persist generation results to ImportBatchRow so they survive a page refresh
+        persistGenerationResults(id, rows);
         try {
             if (importObjectMapper != null) batch.setRowsJson(importObjectMapper.writeValueAsString(rows));
         } catch (Exception ex) {
@@ -5325,6 +5329,11 @@ public class OrderImportServiceImpl implements OrderImportService {
                     gr.setGeneratedStatus("GENERATED");
                     gr.setGeneratedMessage(data.getMessage());
                     gr.setBatchId(batchId);
+                    // Set label and tracking URLs for frontend to display
+                    if (orderNo != null) {
+                        gr.setLabelUrl("/api/v1/orders/" + orderNo + "/label/pdf");
+                        gr.setTrackingUrl(data.getTrackingUrl());
+                    }
                 }
                 if (orderNo != null && batchId != null && orderRepository != null) {
                     orderRepository.findByOrderNo(orderNo).ifPresent(order -> {
@@ -6412,6 +6421,35 @@ public class OrderImportServiceImpl implements OrderImportService {
                 .status("error").code(status.value())
                 .errorCode(ErrorCode.VALIDATION_ERROR.name())
                 .message(message).data(null).build();
+    }
+
+    /** Persist generation results (generatedOrderNo, generatedStatus, etc.) back to the
+     *  ImportBatchRow entities in the database so they survive a page refresh. Called
+     *  after label generation completes to sync the in-memory DTOs back to the DB. */
+    private void persistGenerationResults(Long batchId, List<OrderImportRowDTO> rows) {
+        if (batchId == null || rows == null || rows.isEmpty() || importBatchRowRepository == null) {
+            return;
+        }
+        try {
+            List<com.multiship.backend.model.ImportBatchRow> dbRows = importBatchRowRepository.findByImportBatchId(batchId);
+            for (com.multiship.backend.model.ImportBatchRow dbRow : dbRows) {
+                OrderImportRowDTO dto = rows.stream()
+                        .filter(r -> r.getRowNumber() == dbRow.getRowNumber())
+                        .findFirst()
+                        .orElse(null);
+                if (dto != null) {
+                    dbRow.setGeneratedOrderNo(dto.getGeneratedOrderNo() != null ? String.valueOf(dto.getGeneratedOrderNo()) : null);
+                    dbRow.setGeneratedTrackingNumber(dto.getGeneratedTrackingNumber());
+                    dbRow.setGeneratedStatus(dto.getGeneratedStatus());
+                    dbRow.setGeneratedMessage(dto.getGeneratedMessage());
+                }
+            }
+            if (!dbRows.isEmpty()) {
+                importBatchRowRepository.saveAll(dbRows);
+            }
+        } catch (Exception ex) {
+            log.warn("Failed to persist generation results for batch {}: {}", batchId, ex.getMessage());
+        }
     }
 
     /** Used only in tests to keep IntelliJ happy about unused imports. */
