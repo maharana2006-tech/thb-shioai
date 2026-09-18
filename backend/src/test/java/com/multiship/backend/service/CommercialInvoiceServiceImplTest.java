@@ -467,4 +467,40 @@ class CommercialInvoiceServiceImplTest {
         // Sanity: header rendered as the first identifying text.
         assertEquals(text.indexOf("COMMERCIAL INVOICE") >= 0, true);
     }
+
+    // ===== paper size =====
+
+    /** A US shipper that never picked a paper size still gets Letter, not A4. */
+    @org.junit.jupiter.api.Test
+    void paperSizeFollowsTheClientsChoiceThenWhereItShipsFrom() {
+        com.multiship.backend.model.Client c = new com.multiship.backend.model.Client();
+
+        c.setDefaultPaperSize("LETTER");
+        c.setDefaultOriginCountry("DE");
+        assertEquals(org.apache.pdfbox.pdmodel.common.PDRectangle.LETTER, pageSizeOf(c),
+                "an explicit choice wins over the origin country");
+
+        c.setDefaultPaperSize("A4");
+        c.setDefaultOriginCountry("US");
+        assertEquals(org.apache.pdfbox.pdmodel.common.PDRectangle.A4, pageSizeOf(c));
+
+        c.setDefaultPaperSize(null);
+        for (String us : java.util.List.of("US", "CA", "MX", "us")) {
+            c.setDefaultOriginCountry(us);
+            assertEquals(org.apache.pdfbox.pdmodel.common.PDRectangle.LETTER, pageSizeOf(c),
+                    us + " ships from a Letter market");
+        }
+
+        c.setDefaultOriginCountry("GB");
+        assertEquals(org.apache.pdfbox.pdmodel.common.PDRectangle.A4, pageSizeOf(c));
+
+        c.setDefaultOriginCountry(null);
+        assertEquals(org.apache.pdfbox.pdmodel.common.PDRectangle.A4, pageSizeOf(c), "A4 remains the fallback");
+        assertEquals(org.apache.pdfbox.pdmodel.common.PDRectangle.A4, pageSizeOf(null));
+    }
+
+    private static org.apache.pdfbox.pdmodel.common.PDRectangle pageSizeOf(com.multiship.backend.model.Client c) {
+        return org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                CommercialInvoiceServiceImpl.class, "resolvePageSize", c);
+    }
 }

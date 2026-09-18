@@ -128,7 +128,8 @@ final class OrderImportTemplateBuilder {
                         List<CarrierAccountRef> accounts,
                         Map<String, List<String>> clientWarehouseCodes,
                         List<ShippingService> services,
-                        List<PackagePreset> presets) {
+                        List<PackagePreset> presets,
+                        Map<String, Map<String, String>> shipViaByClient) {
         try (XSSFWorkbook wb = new XSSFWorkbook();
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {
 
@@ -155,11 +156,12 @@ final class OrderImportTemplateBuilder {
                 data.setColumnWidth(i, columnWidthFor(headers.get(i)));
             }
             data.createFreezePane(0, 1);
-            addSampleRows(data, headers, clients, accounts, sampleStyle);
+            addSampleRows(data, headers, clients, accounts, sampleStyle, shipViaByClient);
 
             // ===== Reference sheet: build lookup ranges + name them =====
             Map<String, CellRangeInfo> namedRanges = writeReferenceSheet(
-                    ref, refHeaderStyle, clients, accounts, clientWarehouseCodes, services, presets);
+                    ref, refHeaderStyle, clients, accounts, clientWarehouseCodes, services, presets,
+                    shipViaByClient);
             for (Map.Entry<String, CellRangeInfo> entry : namedRanges.entrySet()) {
                 Name n = wb.createName();
                 n.setNameName(entry.getKey());
@@ -203,8 +205,18 @@ final class OrderImportTemplateBuilder {
                     "INDIRECT(\"_Accounts_\"&" + normalizedClient + "&\"_\"&" + carrierRef + ")",
                     /*stop=*/ false);
             // Service + package cascade off carrier only (same for every client).
+            // serviceType — the client's own ship via codes when that client
+            // has a mapping, else the carrier's service names. ISREF picks
+            // between them per row: _ShipVia_<client> exists only for mapped
+            // clients, so an unmapped one silently keeps the old dropdown.
+            boolean anyShipVia = shipViaByClient != null
+                    && shipViaByClient.values().stream().anyMatch(m -> m != null && !m.isEmpty());
             applyFormulaValidation(data, headers, "serviceType",
-                    "INDIRECT(\"_Services_\"&" + carrierRef + ")", true);
+                    anyShipVia
+                            ? "INDIRECT(IF(ISREF(INDIRECT(\"_ShipVia_\"&" + normalizedClient + ")),"
+                                    + "\"_ShipVia_\"&" + normalizedClient + ",\"_Services_\"&" + carrierRef + "))"
+                            : "INDIRECT(\"_Services_\"&" + carrierRef + ")",
+                    true);
             applyFormulaValidation(data, headers, "packageType",
                     "INDIRECT(\"_Packages_\"&" + carrierRef + ")", true);
 
@@ -254,7 +266,7 @@ final class OrderImportTemplateBuilder {
             }
 
             // ===== Instructions sheet =====
-            writeInstructionsSheet(notes, headerStyle);
+            writeInstructionsSheet(notes, headerStyle, shipViaByClient);
 
             // Auto-size reference sheet + instructions for readability.
             for (int i = 0; i < 4; i++) notes.autoSizeColumn(i);
@@ -399,7 +411,8 @@ final class OrderImportTemplateBuilder {
             XSSFSheet ref, CellStyle refHeaderStyle,
             List<Client> clients, List<CarrierAccountRef> accounts,
             Map<String, List<String>> clientWarehouseCodes,
-            List<ShippingService> services, List<PackagePreset> presets) {
+            List<ShippingService> services, List<PackagePreset> presets,
+            Map<String, Map<String, String>> shipViaByClient) {
 
         Map<String, CellRangeInfo> out = new LinkedHashMap<>();
         int col = 0;
@@ -460,6 +473,19 @@ final class OrderImportTemplateBuilder {
                 col = writeRefColumn(ref, refHeaderStyle, col,
                         "_Accounts_" + key + "_" + carrier, accountNumbers, out);
             }
+        }
+
+        // Per-client ship via codes — the client's OWN codes from Settings →
+        // Shipping Service Mapping, which is what their ERP writes on the
+        // order and what the importer validates. Only emitted for clients
+        // that have rules, so the serviceType dropdown can fall back to the
+        // carrier's service names for everyone else (see build()).
+        for (String clientCode : clientCodes) {
+            Map<String, String> codes = shipViaByClient == null ? null
+                    : shipViaByClient.get(clientCode.toUpperCase(Locale.ROOT));
+            if (codes == null || codes.isEmpty()) continue;
+            col = writeRefColumn(ref, refHeaderStyle, col,
+                    "_ShipVia_" + normalizeForName(clientCode), codes.keySet(), out);
         }
 
         // Per-carrier globals — service + package NAMES (not wire codes).
@@ -631,7 +657,8 @@ final class OrderImportTemplateBuilder {
 
     private static void addSampleRows(XSSFSheet data, List<String> headers,
                                        List<Client> clients, List<CarrierAccountRef> accounts,
-                                       CellStyle sampleStyle) {
+                                       CellStyle sampleStyle,
+                                       Map<String, Map<String, String>> shipViaByClient) {
         // Pick a plausible sample client — the first client with at least
         // one active + complete account. Falls back to nothing when the
         // catalog is empty so we don't try to guess.
@@ -656,6 +683,7 @@ final class OrderImportTemplateBuilder {
         setCell(r, headers, "clientCode", sampleClient == null ? "" : sampleClient, sampleStyle);
         setCell(r, headers, "billTo", "SENDER", sampleStyle);
         setCell(r, headers, "recipientName", "Ava Chen", sampleStyle);
+        setCell(r, headers, "recipientPhone", "5035550137", sampleStyle);
         setCell(r, headers, "addressLine1", "42 Sample Way", sampleStyle);
         setCell(r, headers, "city", "Portland", sampleStyle);
         setCell(r, headers, "state", "OR", sampleStyle);
@@ -663,6 +691,13 @@ final class OrderImportTemplateBuilder {
         setCell(r, headers, "countryCode", "US", sampleStyle);
         setCell(r, headers, "carrierCode", sampleCarrier == null ? "" : sampleCarrier, sampleStyle);
         setCell(r, headers, "accountNumber", sampleAccount == null ? "" : sampleAccount, sampleStyle);
+        // The sample row has to pass validation, and serviceType is required —
+        // fill in one of this client's own ship via codes when they have one.
+        Map<String, String> sampleCodes = sampleClient == null || shipViaByClient == null ? null
+                : shipViaByClient.get(sampleClient.toUpperCase(Locale.ROOT));
+        if (sampleCodes != null && !sampleCodes.isEmpty()) {
+            setCell(r, headers, "serviceType", sampleCodes.keySet().iterator().next(), sampleStyle);
+        }
         setCellNumber(r, headers, "weight", 2.5, sampleStyle);
         setCell(r, headers, "weightUnit", "LB", sampleStyle);
         setCell(r, headers, "currency", "USD", sampleStyle);
@@ -710,7 +745,8 @@ final class OrderImportTemplateBuilder {
 
     // ===== instructions sheet =====
 
-    private static void writeInstructionsSheet(XSSFSheet notes, CellStyle headerStyle) {
+    private static void writeInstructionsSheet(XSSFSheet notes, CellStyle headerStyle,
+                                               Map<String, Map<String, String>> shipViaByClient) {
         Row head = notes.createRow(0);
         Cell hc = head.createCell(0);
         hc.setCellValue("How to fill this template");
@@ -722,13 +758,43 @@ final class OrderImportTemplateBuilder {
         notes.createRow(3).createCell(0).setCellValue(
                 "3. accountNumber accepts either a value from the dropdown OR a free-text third-party account when billTo = THIRD_PARTY.");
         notes.createRow(4).createCell(0).setCellValue(
-                "4. serviceType and packageType show human names (\"UPS Ground\", \"UPS Letter\"). The importer resolves them to wire codes at commit time.");
+                "4. serviceType is your own ship via code (see the list below) when your client has a mapping; "
+                        + "otherwise it shows carrier service names (\"UPS Ground\"). Either way the importer "
+                        + "resolves it to the carrier's own code, and a code with no mapping fails at upload. "
+                        + "packageType shows names (\"UPS Letter\").");
         notes.createRow(5).createCell(0).setCellValue(
                 "5. For international shipments with multiple line-items, set the same orderRef on every row of the group. The first row carries recipient + shipment fields; later rows only need orderRef + item columns.");
         notes.createRow(6).createCell(0).setCellValue(
                 "6. hsCode + countryOfOrigin are required for international shipments; leave blank for domestic.");
         notes.createRow(7).createCell(0).setCellValue(
-                "7. Save as CSV (UTF-8) before uploading — File → Save As → CSV UTF-8. The importer also accepts this .xlsx directly.");
+                "7. Upload this workbook as it is — the importer reads the Import sheet. You can also use the "
+                        + "Save as CSV button (or File → Save As → CSV UTF-8) if you prefer a CSV.");
+
+        // Ship via legend: which carrier service each of the client's codes
+        // buys. Without it the dropdown is a list of codes with no meaning.
+        if (shipViaByClient == null || shipViaByClient.values().stream().allMatch(m -> m == null || m.isEmpty())) {
+            return;
+        }
+        int rowIdx = 9;
+        Cell title = notes.createRow(rowIdx++).createCell(0);
+        title.setCellValue("Ship via codes — put one of these in serviceType");
+        title.setCellStyle(headerStyle);
+        Row legendHead = notes.createRow(rowIdx++);
+        for (int i = 0; i < 3; i++) {
+            Cell c = legendHead.createCell(i);
+            c.setCellValue(List.of("Client", "Ship via", "Ships with").get(i));
+            c.setCellStyle(headerStyle);
+        }
+        for (Map.Entry<String, Map<String, String>> entry : shipViaByClient.entrySet()) {
+            if (entry.getValue() == null) continue;
+            for (Map.Entry<String, String> code : entry.getValue().entrySet()) {
+                Row r = notes.createRow(rowIdx++);
+                r.createCell(0).setCellValue(entry.getKey().isBlank() ? "Every client" : entry.getKey());
+                r.createCell(1).setCellValue(code.getKey());
+                r.createCell(2).setCellValue(code.getValue());
+            }
+        }
+        for (int i = 0; i < 3; i++) notes.setColumnWidth(i, 6000);
     }
 
     // ===== small helpers =====

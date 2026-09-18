@@ -123,13 +123,15 @@ public class SseController {
     @GetMapping(path = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream(@RequestParam(name = "topics", required = false) String topicsCsv,
                               @RequestHeader(value = "Last-Event-Id", required = false) String lastEventId) {
-        // Redis-absent: fail early with a well-known error so the FE
-        // EventSource's onerror falls back to polling immediately.
+        // Redis-absent: refuse synchronously with 503 so the FE's EventSource
+        // onerror falls back to polling. Completing an emitter with an error
+        // instead sent the failure down an async ERROR dispatch that carries
+        // no security context, so the client saw 401 "Please sign in again"
+        // and every stream looked like an expired session.
         if (streamListeners == null) {
-            SseEmitter emitter = new SseEmitter(0L);
-            emitter.completeWithError(new IllegalStateException(
-                    "SSE unavailable — Redis is not configured. Set REDIS_HOST to enable."));
-            return emitter;
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+                    "Live updates are unavailable — Redis is not configured. Set REDIS_HOST to enable.");
         }
 
         Set<String> topics = parseTopics(topicsCsv);

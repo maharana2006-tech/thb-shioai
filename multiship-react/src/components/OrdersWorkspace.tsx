@@ -313,18 +313,33 @@ export default function OrdersWorkspace() {
     filters: debouncedFilters, source: sourceFilter, channel: channelFilter, carrier: carrierFilter,
   }), [view, debouncedQuery, clientFilter, dateFrom, dateTo, debouncedFilters, sourceFilter, channelFilter, carrierFilter])
 
-  // Filter change → clear selection and invalidate the all-filtered
-  // cache. Prior behaviour also cleared on page/pageSize change, which
-  // is now DELIBERATELY dropped: paging through results shouldn't
-  // discard picks made on page 1.
+  // Filter change → invalidate the all-filtered cache, but KEEP rows the
+  // operator ticked by hand: they pick orders across several searches and
+  // then print or void the lot in one go. Only "all matching this filter"
+  // is dropped, because the filter is exactly what defined it. Paging and
+  // sorting have never cleared a selection either.
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- clear stale selection on filter change; user-input-driven, not derivable at render
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- a filter change invalidates the all-filtered selection; user-input-driven, not derivable at render
+    setSelectionMode((mode) => {
+      if (mode === 'all-filtered') setSelectionSet(new Set())
+      return 'individual'
+    })
+    setAllFilteredIds(null)
+    setAllFilteredSignature(null)
+    lastClickedIndexRef.current = null
+  }, [filterSignature])
+
+  // Switching tab DOES clear: each tab acts on its rows differently (Ready
+  // generates, Archive prints), and carrying picks across them is how
+  // "Generate selected" once fired on orders the operator never saw.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- tab change resets the selection; user-input-driven, not derivable at render
     setSelectionMode('individual')
     setSelectionSet(new Set())
     setAllFilteredIds(null)
     setAllFilteredSignature(null)
     lastClickedIndexRef.current = null
-  }, [filterSignature])
+  }, [view])
 
   // Each view has its own natural direction; reset when switching.
   useEffect(() => {
@@ -907,6 +922,18 @@ export default function OrdersWorkspace() {
       notify.info('Nothing to void — the selection has no labelled orders.')
       return
     }
+    // Same ceiling as printing. Voiding calls the carrier once per label and
+    // can't be undone, so a whole-filter selection has to be narrowed first.
+    if (targets.length > 500) {
+      notify.info({
+        title: 'Too many orders to void',
+        // Count the labelled subset, not the raw selection — those are the
+        // only rows a void would touch.
+        body: `Void at most 500 orders at a time — ${targets.length.toLocaleString()} of the selected `
+          + 'orders have labels. Narrow the filter or select fewer.',
+      })
+      return
+    }
     if (!window.confirm(`Void ${targets.length} label(s)? This calls the carrier's void API for each; already-voided rows are skipped silently.`)) {
       return
     }
@@ -1019,12 +1046,21 @@ export default function OrdersWorkspace() {
       root.style.removeProperty('--toast-bottom')
       return
     }
-    const update = () => root.style.setProperty('--toast-bottom', `${bar.offsetHeight + 32}px`)
+    // Measure from the bar's own position: it sticks 20px off the bottom and
+    // wraps to two or three rows on a narrow window.
+    const update = () => {
+      const gap = Math.max(0, window.innerHeight - bar.getBoundingClientRect().bottom)
+      root.style.setProperty('--toast-bottom', `${bar.offsetHeight + gap + 12}px`)
+    }
     update()
     const observer = new ResizeObserver(update)
     observer.observe(bar)
+    window.addEventListener('resize', update)
+    window.addEventListener('scroll', update, true)
     return () => {
       observer.disconnect()
+      window.removeEventListener('resize', update)
+      window.removeEventListener('scroll', update, true)
       root.style.removeProperty('--toast-bottom')
     }
   }, [actionBarVisible])
@@ -1886,7 +1922,10 @@ export default function OrdersWorkspace() {
 
   return (
     <div className="pb-24">
-      <div className="mb-4 flex flex-nowrap items-center justify-end gap-1.5 overflow-x-auto">
+      {/* Wraps instead of scrolling: a nowrap row with justify-end pushed the
+          first buttons off the LEFT edge at narrow widths, where nothing could
+          scroll them back. */}
+      <div className="mb-4 flex flex-wrap items-center justify-end gap-1.5">
             <button type="button" onClick={refreshQueues} className={BTN_GHOST_SM}>
               <FiRefreshCw className="h-3 w-3" />
               Refresh

@@ -101,6 +101,53 @@ public class ShippingConfigService {
      * unknown code to the carrier (UPS answers 120500 "Missing or invalid
      * service code" and every row fails).
      */
+    /**
+     * The ship via codes one client may use in a bulk file: their own rules
+     * plus the global ones, each with the service it buys.
+     *
+     * <p>Shown beside the upload so the operator can see which codes validate
+     * without opening the mapping screen. Pass null for every code.
+     */
+    @Transactional(readOnly = true)
+    public java.util.List<java.util.Map<String, Object>> shipViaCodesFor(String clientCode) {
+        String client = StringUtils.hasText(clientCode) ? clientCode.trim().toUpperCase(Locale.ROOT) : null;
+        java.util.Map<String, java.util.Map<String, Object>> byCode = new java.util.TreeMap<>();
+        for (ShipViaMapping rule : ruleRepository.findAllByOrderByShipviaCdAsc()) {
+            String owner = rule.getClientCode() == null || rule.getClientCode().isBlank()
+                    ? null : rule.getClientCode().trim().toUpperCase(Locale.ROOT);
+            if (client != null && owner != null && !owner.equals(client)) continue;
+            ShippingService svc = serviceRepository.findById(rule.getServiceId()).orElse(null);
+            if (svc == null) continue;
+            java.util.Map<String, Object> entry = new java.util.LinkedHashMap<>();
+            entry.put("code", rule.getShipviaCd().trim().toUpperCase(Locale.ROOT));
+            entry.put("clientCode", owner);
+            entry.put("carrier", svc.getCarrier());
+            entry.put("serviceCode", svc.getServiceCode());
+            entry.put("serviceName", svc.getName());
+            entry.put("enabled", svc.isEnabled());
+            entry.put("destination", StringUtils.hasText(rule.getDestValue()) ? rule.getDestValue() : null);
+            // A client's own rule beats the global one for the same code.
+            String key = (String) entry.get("code");
+            if (owner != null || !byCode.containsKey(key)) byCode.put(key, entry);
+        }
+        return new java.util.ArrayList<>(byCode.values());
+    }
+
+    /**
+     * Is {@code code} a ship via code anyone has mapped — any client, any
+     * destination, enabled service or not?
+     *
+     * <p>Used by the CSV importer to tell "we have never heard of this code"
+     * apart from "this code exists, but not for this client / this destination,
+     * or the service it points at is switched off", so the row's error can say
+     * which of the two the operator has to fix.
+     */
+    @Transactional(readOnly = true)
+    public boolean shipViaCodeExists(String code) {
+        if (!StringUtils.hasText(code)) return false;
+        return !ruleRepository.findByShipviaCdIgnoreCase(code.trim()).isEmpty();
+    }
+
     public java.util.Optional<com.multiship.backend.model.ShippingService> resolveServiceCode(
             String carrier, String raw, String originCountry) {
         if (carrier == null || carrier.isBlank() || raw == null || raw.isBlank()) return java.util.Optional.empty();

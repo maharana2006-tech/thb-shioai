@@ -84,6 +84,22 @@ public class ShippingConfigController {
         return ResponseEntity.status(r.getCode()).body(r);
     }
 
+    @Operation(summary = "The ship via codes a client may put in a bulk file",
+            description = "Every code mapped for this client plus the global ones, with the carrier service each "
+                    + "buys. The importer shows this beside the upload so an operator knows which codes validate. "
+                    + "Omit clientCode for every code on the platform.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping("/ship-via-codes")
+    public ResponseEntity<ApiResponse<java.util.List<java.util.Map<String, Object>>>> shipViaCodes(
+            @RequestParam(required = false) String clientCode) {
+        java.util.List<java.util.Map<String, Object>> codes = service.shipViaCodesFor(clientCode);
+        return ResponseEntity.ok(ApiResponse.<java.util.List<java.util.Map<String, Object>>>builder()
+                .status("success").code(200)
+                .message(codes.size() + " ship via code(s).")
+                .data(codes)
+                .build());
+    }
+
     @Operation(summary = "Create/update a ship-method rule (client + destination aware)",
             description = "Optional allowedPresetIds sets the rule's default package options; empty = unrestricted at the rule level.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")

@@ -78,6 +78,15 @@ public class OrderImportRowDTO {
      *  when absent, commit needs {@code accountId} or the default cascade. */
     private String accountNumber;
     private String serviceType;
+    /** The client's own ship via code as it arrived in the file (U11, P10, F77…)
+     *  when a ship-method rule translated it — {@link #serviceType} then holds
+     *  the carrier's wire code the rule resolved to. Null when the file already
+     *  carried a carrier service code. */
+    private String shipViaCode;
+    /** One line explaining what the ship-method rule did with this row, shown in
+     *  the review grid (and raised as a warning when the file disagreed with the
+     *  rule). Null when there was nothing worth saying. */
+    private String shipViaNote;
     private String packageType;
     private BigDecimal weight;
     private String weightUnit;

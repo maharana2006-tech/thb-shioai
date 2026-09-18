@@ -88,6 +88,10 @@ public class OrderImportServiceImpl implements OrderImportService {
     private final CarrierAccountRefRepository accountRefRepository;
     /** Sprint 48 — service catalog for the template's serviceType dropdown. */
     private final ShippingServiceRepository shippingServiceRepository;
+    /** Ship-method rules — each client's own ship via codes for the template's
+     *  serviceType dropdown and its legend. Optional (null in tests). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.ShipViaMappingRepository shipViaMappingRepository;
     /** Sprint 48 — package presets for the template's packageType dropdown. */
     private final PackagePresetRepository packagePresetRepository;
     /** Sprint 48 — client list for the universal-template clientCode dropdown. */
@@ -661,6 +665,137 @@ public class OrderImportServiceImpl implements OrderImportService {
     }
 
     /**
+     * Each client's own ship via codes for the .xlsx template: the codes the
+     * importer will accept from that client, with the service each one buys.
+     *
+     * <p>A rule with no client code belongs to every client, so it appears in
+     * each client's list — the operator filling the file shouldn't have to know
+     * which of their codes is global.
+     *
+     * @return client code (uppercase) → (ship via code → "UPS Ground (UPS 03)"),
+     *         clients without any rule left out entirely.
+     */
+    private Map<String, Map<String, String>> shipViaCodesByClient(
+            List<Client> clients, List<com.multiship.backend.model.ShippingService> services) {
+        Map<String, Map<String, String>> out = new LinkedHashMap<>();
+        if (shipViaMappingRepository == null) return out;
+        java.util.Map<Long, com.multiship.backend.model.ShippingService> serviceById = new java.util.HashMap<>();
+        for (com.multiship.backend.model.ShippingService s : services) {
+            if (s.getId() != null) serviceById.put(s.getId(), s);
+        }
+        List<com.multiship.backend.model.ShipViaMapping> rules;
+        try {
+            rules = shipViaMappingRepository.findAllByOrderByShipviaCdAsc();
+        } catch (RuntimeException e) {
+            log.warn("xlsxTemplate: ship via rules unavailable: {}", e.getMessage());
+            return out;
+        }
+        for (Client c : clients) {
+            String code = c.getClientCode() == null ? null : c.getClientCode().trim().toUpperCase(Locale.ROOT);
+            if (code == null || code.isBlank()) continue;
+            Map<String, String> mine = new java.util.TreeMap<>();
+            for (com.multiship.backend.model.ShipViaMapping rule : rules) {
+                String owner = rule.getClientCode();
+                // Global rules (no client) apply to everyone.
+                if (owner != null && !owner.isBlank() && !owner.trim().equalsIgnoreCase(code)) continue;
+                com.multiship.backend.model.ShippingService svc = serviceById.get(rule.getServiceId());
+                if (svc == null || !svc.isEnabled()) continue;
+                mine.put(rule.getShipviaCd().trim().toUpperCase(Locale.ROOT),
+                        svc.getName() + " (" + svc.getCarrier() + " " + svc.getServiceCode() + ")");
+            }
+            if (!mine.isEmpty()) out.put(code, mine);
+        }
+        return out;
+    }
+
+    /**
+     * The message for a ship via code nothing could resolve. Says which of the
+     * two fixes the operator needs: map the code, or correct it.
+     */
+    private String shipViaError(String code, String client, String carrier, java.util.Set<String> known) {
+        String who = client == null ? "this client" : client;
+        boolean mappedElsewhere = shippingConfigService != null
+                && shippingConfigService.shipViaCodeExists(code);
+        if (mappedElsewhere) {
+            return "serviceType '" + code + "' is mapped, but not for " + who
+                    + " shipping to this destination (or the service it maps to is switched off) — "
+                    + "check the rule in Settings → Shipping Service Mapping";
+        }
+        if (carrier != null && KNOWN_CARRIERS.contains(carrier) && !known.isEmpty()) {
+            return "serviceType '" + code + "' is not mapped for " + who
+                    + " and is not a " + carrier + " service code — add the ship via code in "
+                    + "Settings → Shipping Service Mapping, or use a code from Settings → Shipping services";
+        }
+        return "serviceType '" + code + "' is not mapped for " + who
+                + " — add the ship via code in Settings → Shipping Service Mapping";
+    }
+
+    /**
+     * Translate each row's ship via code through the client's ship-method
+     * rules (Settings → Shipping Service Mapping).
+     *
+     * <p>This is what a bulk file is for: the ERP writes its own code on the
+     * order, and the mapping says which carrier service that is for this
+     * client, warehouse and destination. The winning rule sets the carrier and
+     * the carrier's wire code on the row, so every downstream check — account,
+     * lane, weight, package — runs against the service that will actually be
+     * bought. A file that already carries a carrier code is left alone; a code
+     * no rule matches is left alone too, and {@link #validateReferences} turns
+     * it into the row's error.
+     *
+     * <p>The rule wins over the file's carrierCode: the mapping is the client's
+     * configured intent, a contradicting carrier column is a mistake in the
+     * file. The row keeps a note so the operator sees the swap.
+     */
+    private void applyShipViaMappings(List<OrderImportRowDTO> rows) {
+        if (shippingConfigService == null || rows.isEmpty()) return;
+        // (client, code, destination) → rule result; a 500-row file is usually
+        // a handful of distinct combinations.
+        Map<String, java.util.Optional<com.multiship.backend.model.ShippingService>> cache = new LinkedHashMap<>();
+        for (OrderImportRowDTO row : rows) {
+            String code = normalizeOrNull(row.getServiceType());
+            // A stored row already carries the carrier's code, so no rule will
+            // match it a second time. Keep the hint when it still describes the
+            // service on the row; drop it once an edit moves the row elsewhere.
+            String priorNote = row.getShipViaNote();
+            boolean noteStillFits = priorNote != null && code != null
+                    && priorNote.contains(" " + code + ")");
+            if (!noteStillFits) {
+                row.setShipViaCode(null);
+                row.setShipViaNote(null);
+            }
+            if (code == null) continue;
+            String client = normalizeOrNull(row.getClientCode());
+            String dest = normalizeOrNull(row.getCountryCode());
+            String key = (client == null ? "" : client) + '|' + code + '|' + (dest == null ? "" : dest);
+            com.multiship.backend.model.ShippingService service = cache
+                    .computeIfAbsent(key, k -> {
+                        try {
+                            return shippingConfigService.resolveRule(client, code, dest, null);
+                        } catch (RuntimeException e) {
+                            log.warn("Ship via lookup failed for {} / {}: {}", client, code, e.getMessage());
+                            return java.util.Optional.empty();
+                        }
+                    })
+                    .orElse(null);
+            if (service == null || !StringUtils.hasText(service.getServiceCode())) continue;
+
+            String fileCarrier = normalizeOrNull(row.getCarrierCode());
+            String ruleCarrier = service.getCarrier() == null ? null
+                    : service.getCarrier().trim().toUpperCase(Locale.ROOT);
+            row.setShipViaCode(code);
+            row.setServiceType(service.getServiceCode());
+            if (ruleCarrier != null) row.setCarrierCode(ruleCarrier);
+
+            String what = code + " maps to " + service.getName() + " (" + ruleCarrier + " "
+                    + service.getServiceCode() + ")";
+            row.setShipViaNote(fileCarrier != null && ruleCarrier != null && !fileCarrier.equals(ruleCarrier)
+                    ? what + ", not " + fileCarrier + " as the file says — the mapping wins"
+                    : what);
+        }
+    }
+
+    /**
      * Sprint 48 — reverse-lookup human names to wire codes on serviceType
      * and packageType. The universal template writes the user-friendly
      * name (e.g. "UPS Ground") into the cell, but every carrier connector
@@ -671,6 +806,11 @@ public class OrderImportServiceImpl implements OrderImportService {
      * work.
      */
     private void resolveNamesToCodes(List<OrderImportRowDTO> rows) {
+        // Ship-method rules first: the file's serviceType is normally the
+        // client's OWN ship via code (U11, P10…), and the rule decides which
+        // carrier + service it means. Runs before the catalog lookups below so
+        // a mapped row arrives there already carrying the carrier's wire code.
+        applyShipViaMappings(rows);
         if (shippingServiceRepository == null || rows.isEmpty()) return;
         List<com.multiship.backend.model.ShippingService> services =
                 shippingServiceRepository.findAllByOrderByCarrierAscSortOrderAsc();
@@ -926,14 +1066,32 @@ public class OrderImportServiceImpl implements OrderImportService {
                 }
             }
 
+            // ---- Ship via: the file's own code, checked against the client's
+            //      mapping (Settings → Shipping Service Mapping).
+            //
+            // applyShipViaMappings has already run: a row whose code matched a
+            // rule now carries the carrier's wire code (and shipViaCode holds
+            // what the file said). So anything still unrecognised here is
+            // either unmapped for this client or not a carrier code at all —
+            // and that is the one thing a bulk file must get right, so it's an
+            // ERROR, not a warning the operator discovers at label time.
             String service = normalizeOrNull(row.getServiceType());
-            if (service != null && carrier != null && KNOWN_CARRIERS.contains(carrier)) {
-                java.util.Set<String> known = servicesByCarrier.getOrDefault(carrier, java.util.Set.of());
-                if (!known.isEmpty() && !known.contains(service)) {
-                    errors.add("serviceType '" + service + "' is not in the " + carrier
-                            + " service catalog — use a code from Settings → Shipping services, "
-                            + "or leave it blank for the client's default service");
+            String shipVia = normalizeOrNull(row.getShipViaCode());
+            if (service == null) {
+                errors.add("serviceType is required — enter the client's ship via code "
+                        + "(Settings → Shipping Service Mapping) or a carrier service code");
+            } else if (shipVia == null) {
+                // No rule fired. Accept it only if it IS a carrier service code.
+                java.util.Set<String> known = carrier == null ? java.util.Set.of()
+                        : servicesByCarrier.getOrDefault(carrier, java.util.Set.of());
+                boolean catalogued = carrier != null && KNOWN_CARRIERS.contains(carrier)
+                        && !known.isEmpty() && known.contains(service);
+                if (!catalogued) {
+                    errors.add(shipViaError(service, client, carrier, known));
                 }
+            }
+            if (row.getShipViaNote() != null && row.getShipViaNote().contains("the mapping wins")) {
+                warnings.add(row.getShipViaNote());
             }
 
             String pkg = normalizeOrNull(row.getPackageType());
@@ -1695,13 +1853,16 @@ public class OrderImportServiceImpl implements OrderImportService {
         String ext = filename == null ? "" : filename.toLowerCase(Locale.ROOT);
         try {
             List<OrderImportRowDTO> rows;
-            if (ext.endsWith(".xlsx")) {
+            // .xlsm is the same OOXML workbook as .xlsx plus a macro project,
+            // and the template we hand out IS an .xlsm — refusing it sent
+            // operators back to Save As for no reason. POI reads both.
+            if (ext.endsWith(".xlsx") || ext.endsWith(".xlsm")) {
                 rows = parseXlsx(body);
             } else if (ext.endsWith(".csv") || ext.endsWith(".txt")) {
                 rows = parseCsv(body);
             } else {
                 return failure(HttpStatus.UNSUPPORTED_MEDIA_TYPE,
-                        "Only .csv, .txt, and .xlsx files are supported.");
+                        "Only .csv, .txt, .xlsx and .xlsm files are supported.");
             }
             // Sprint 50 Tier 0.5 PR G — clamp each row's clientCode to the
             // caller's tenant scope. For scoped USERs a blank code is forced
@@ -4169,7 +4330,8 @@ public class OrderImportServiceImpl implements OrderImportService {
         // accountId parameter is ignored — universal template.
         if (accountId != null) log.debug("xlsxTemplate ignored accountId={} (universal template)", accountId);
         return OrderImportTemplateBuilder.build(
-                HEADERS, clients, accounts, clientWarehouseCodes, services, presets);
+                HEADERS, clients, accounts, clientWarehouseCodes, services, presets,
+                shipViaCodesByClient(clients, services));
     }
 
     @Override
@@ -4289,11 +4451,42 @@ public class OrderImportServiceImpl implements OrderImportService {
         return out;
     }
 
+    /**
+     * Which sheet holds the orders.
+     *
+     * <p>Reading sheet 0 blindly rejected our own template: its first tab is a
+     * blank pad holding the macro buttons, so every upload came back "The file
+     * has no order rows." Operators also keep notes, pivot tables and a
+     * read-me tab in front of their data.
+     *
+     * <p>Order of preference: a sheet named "Import", then the first sheet
+     * whose header row names columns we know, then sheet 0 so the error
+     * message still points at something.
+     */
+    private Sheet pickOrderSheet(Workbook workbook, DataFormatter fmt) {
+        if (workbook.getNumberOfSheets() == 0) return null;
+        Sheet named = workbook.getSheet("Import");
+        if (named != null && named.getPhysicalNumberOfRows() > 0) return named;
+        for (int i = 0; i < workbook.getNumberOfSheets(); i++) {
+            Sheet candidate = workbook.getSheetAt(i);
+            if (candidate == null || candidate.getPhysicalNumberOfRows() == 0) continue;
+            Row header = candidate.getRow(candidate.getFirstRowNum());
+            if (header == null) continue;
+            for (Cell cell : header) {
+                String label = fmt.formatCellValue(cell).trim().toLowerCase(Locale.ROOT);
+                if ("orderref".equals(label) || "clientcode".equals(label) || "recipientname".equals(label)) {
+                    return candidate;
+                }
+            }
+        }
+        return workbook.getSheetAt(0);
+    }
+
     private List<OrderImportRowDTO> parseXlsx(InputStream body) throws Exception {
         List<OrderImportRowDTO> out = new ArrayList<>();
         DataFormatter fmt = new DataFormatter();
         try (Workbook workbook = new XSSFWorkbook(body)) {
-            Sheet sheet = workbook.getSheetAt(0);
+            Sheet sheet = pickOrderSheet(workbook, fmt);
             if (sheet == null || sheet.getPhysicalNumberOfRows() == 0) return out;
 
             Row header = sheet.getRow(sheet.getFirstRowNum());
@@ -6066,7 +6259,9 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (base.isBlank()) base = "upload";
         base = base + "-errors";
         boolean xlsx = format != null ? "xlsx".equalsIgnoreCase(format.trim())
-                : up.getFileName() != null && up.getFileName().toLowerCase(Locale.ROOT).endsWith(".xlsx");
+                : up.getFileName() != null
+                        && (up.getFileName().toLowerCase(Locale.ROOT).endsWith(".xlsx")
+                            || up.getFileName().toLowerCase(Locale.ROOT).endsWith(".xlsm"));
         try {
             return xlsx
                     ? new StagingErrorFile(errorsXlsx(header, table), base + ".xlsx",
