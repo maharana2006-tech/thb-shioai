@@ -49,6 +49,9 @@ export default function ApiBatchList() {
   const [billingSavingId, setBillingSavingId] = useState<number | null>(null)
   const [confirmGenId, setConfirmGenId] = useState<number | null>(null)
   const [validatingId, setValidatingId] = useState<number | null>(null)
+  // Label preview modal: stores the order number to show its label
+  const [showLabelModal, setShowLabelModal] = useState(false)
+  const [labelModalOrderNo, setLabelModalOrderNo] = useState<number | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -658,10 +661,13 @@ export default function ApiBatchList() {
                                             >
                                               #{r.generatedOrderNo}
                                             </a>
-                                            {r.labelUrl ? (
+                                            {r.labelUrl && r.generatedOrderNo ? (
                                               <button
                                                 type="button"
-                                                onClick={() => window.open(r.labelUrl, '_blank')}
+                                                onClick={() => {
+                                                  setLabelModalOrderNo(r.generatedOrderNo)
+                                                  setShowLabelModal(true)
+                                                }}
                                                 className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-semibold text-white bg-blue-600 hover:bg-blue-700 transition"
                                                 title="View the generated label PDF"
                                               >
@@ -723,6 +729,66 @@ export default function ApiBatchList() {
           })}
         </ul>
       )}
+
+      {/* Label Preview Modal */}
+      {showLabelModal && labelModalOrderNo ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setShowLabelModal(false)}
+        >
+          <div
+            className="relative w-full max-w-4xl rounded-lg bg-white shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-[#e3d9c4] px-6 py-4">
+              <h2 className="text-lg font-semibold text-[#1f150c]">Order #{labelModalOrderNo} - Label Preview</h2>
+              <button
+                type="button"
+                onClick={() => setShowLabelModal(false)}
+                className="rounded-full p-1 text-[#6b5c42] hover:bg-[#f2ecdf]"
+                title="Close"
+              >
+                <FiX className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Content - PDF Viewer */}
+            <div className="h-[70vh] overflow-auto bg-[#f9f6f0]">
+              <iframe
+                src={`/api/v1/orders/${labelModalOrderNo}/label/pdf`}
+                className="h-full w-full border-0"
+                title={`Label for order ${labelModalOrderNo}`}
+              />
+            </div>
+
+            {/* Footer - Action Buttons */}
+            <div className="flex items-center justify-end gap-2 border-t border-[#e3d9c4] px-6 py-3">
+              <button
+                type="button"
+                onClick={() => window.open(`/api/v1/orders/${labelModalOrderNo}/label/pdf`, '_blank')}
+                className="inline-flex items-center gap-1 rounded-lg px-3 py-2 text-[12px] font-semibold text-[#1f150c] hover:bg-[#f2ecdf]"
+              >
+                📥 Download
+              </button>
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="inline-flex items-center gap-1 rounded-lg px-3 py-2 text-[12px] font-semibold text-[#1f150c] hover:bg-[#f2ecdf]"
+              >
+                🖨️ Print
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowLabelModal(false)}
+                className="inline-flex items-center gap-1 rounded-lg bg-[#1f150c] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#412d15]"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

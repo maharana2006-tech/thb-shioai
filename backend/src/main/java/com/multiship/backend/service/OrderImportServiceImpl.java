@@ -3889,6 +3889,14 @@ public class OrderImportServiceImpl implements OrderImportService {
     /** Build the history DTO (list + rows) from an entity + parsed rows. */
     private com.multiship.backend.dto.ImportBatchDTO toBatchDTO(
             com.multiship.backend.model.ImportBatch batch, List<OrderImportRowDTO> rows) {
+        // Populate labelUrl and trackingUrl for generated orders so they're available in the frontend
+        for (OrderImportRowDTO r : rows) {
+            if (r.getGeneratedOrderNo() != null && "GENERATED".equalsIgnoreCase(r.getGeneratedStatus())) {
+                if (!StringUtils.hasText(r.getLabelUrl())) {
+                    r.setLabelUrl("/api/v1/orders/" + r.getGeneratedOrderNo() + "/label/pdf");
+                }
+            }
+        }
         return com.multiship.backend.dto.ImportBatchDTO.builder()
                 .id(batch.getId())
                 .createdBy(batch.getCreatedBy())
