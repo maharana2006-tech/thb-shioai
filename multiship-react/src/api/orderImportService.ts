@@ -63,6 +63,12 @@ export interface OrderImportRow {
   generatedTrackingNumber?: string | null
   generatedStatus?: 'GENERATED' | 'FAILED' | null
   generatedMessage?: string | null
+  /** Label URL endpoint for retrieving the generated label PDF.
+   *  Populated after successful label generation. Format: /api/v1/orders/{orderNo}/label/pdf */
+  labelUrl?: string | null
+  /** Tracking URL for the carrier's tracking page.
+   *  Populated after successful label generation. */
+  trackingUrl?: string | null
   /** Id shared by every order generated from this same file upload. Null until commit. */
   batchId?: number | null
 }

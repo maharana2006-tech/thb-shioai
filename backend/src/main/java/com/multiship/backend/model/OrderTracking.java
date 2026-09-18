@@ -21,7 +21,9 @@ public class OrderTracking {
     @Column(name = "order_suffix")
     private Integer orderSuffix = 0;
 
-    @Column(name = "tracking_number")
+    /** Tracking numbers from some carriers (e.g., with routing/tracking codes)
+     *  can exceed the default VARCHAR(255). Using TEXT for safety. */
+    @Column(name = "tracking_number", columnDefinition = "text")
     private String trackingNumber;
 
     /** Sprint 52 — TEXT (was default varchar 255). Carrier tracking deep-
