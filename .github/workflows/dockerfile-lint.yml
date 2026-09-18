@@ -15,6 +15,7 @@ on:
     paths:
       - 'backend/Dockerfile'
       - 'backend/.dockerignore'
+      - 'printer-scan-agent/Dockerfile'
       - '.hadolint.yaml'
       - '.github/workflows/dockerfile-lint.yml'
   push:
@@ -22,6 +23,7 @@ on:
     paths:
       - 'backend/Dockerfile'
       - 'backend/.dockerignore'
+      - 'printer-scan-agent/Dockerfile'
       - '.hadolint.yaml'
       - '.github/workflows/dockerfile-lint.yml'
 
@@ -31,7 +33,7 @@ concurrency:
 
 jobs:
   hadolint:
-    name: hadolint backend/Dockerfile
+    name: hadolint Dockerfiles
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -42,7 +44,7 @@ jobs:
       # hadolint-action v3.1.0 is the most recent tag (as of 2026-08).
       # It shells out to the hadolint binary and honours the repo-root
       # .hadolint.yaml automatically via the `config` input.
-      - name: Run hadolint
+      - name: Run hadolint on backend/Dockerfile
         uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: backend/Dockerfile
@@ -52,4 +54,16 @@ jobs:
           failure-threshold: error
           # SARIF output would be nicer but requires Advanced Security /
           # code-scanning setup — stick to plain output for now.
+          format: tty
+
+      # PR-Printer-P4 — the LAN scan agent's Dockerfile is a separate
+      # image (Gradle build → temurin JRE runtime) but shares the same
+      # .hadolint.yaml, so identical rules apply. Own step so failures
+      # point at the right file in the annotation.
+      - name: Run hadolint on printer-scan-agent/Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: printer-scan-agent/Dockerfile
+          config: .hadolint.yaml
+          failure-threshold: error
           format: tty
