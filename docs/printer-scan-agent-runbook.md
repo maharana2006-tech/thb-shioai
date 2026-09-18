@@ -59,9 +59,9 @@ Guessed fields (`connectionGuess`, `formatGuess`, `paperGuess`) map to defaults.
 
 Keys are stored on the backend as SHA-256 hex (not bcrypt — the agent polls every 5s so bcrypt would burn CPU). Once shown at enrollment, the raw key is **unrecoverable**. To rotate:
 
-1. On `/settings/printers`, the active-agents list shows each enrollment. **Revoke** the current row (icon TBD in P4b — for MVP, call `DELETE /api/v1/tenants/{t}/printer-scan-agents/{id}` via the admin token).
+1. On `/settings/printers`, the active-agents list shows each enrollment. Click the trash-can button next to the row (P4b). Confirm the warning dialog.
 2. Enroll a fresh agent with the **same** `agentId`. The backend reuses the row and returns a new key.
-3. Update `MULTISHIP_AGENT_KEY` on the customer's Docker host and restart the container. Old key stops working immediately.
+3. Update `MULTISHIP_AGENT_KEY` on the customer's Docker host and restart the container. Old key stops working within ~5s (the agent's next long-poll returns 401).
 
 Rotate policy: **on every operator change** at the customer site, or **on any suspected leak** (raw key committed to git, screenshot leaked, etc.).
 
@@ -73,7 +73,7 @@ Rotate policy: **on every operator change** at the customer site, or **on any su
 
 - Every active agent has a **last seen** timestamp within ~10 seconds of now.
 - New printers added at the customer site show up in the picker within one **Scan for printers** cycle.
-- No spike in `printer_scan_agent_key_invalid_total` (once P4b metrics ship).
+- `printer_scan_agent_last_seen_seconds{tenant,agent}` sits under 10 in Prometheus for every active agent — see §8.
 
 ### What "sick" looks like
 
@@ -121,13 +121,23 @@ The `printer-scan-agent-ci.yml` workflow runs `gradle shadowJar` on every PR tou
 
 ---
 
-## 8. Backend-side observability (deferred to P4b)
+## 8. Backend-side observability
 
-Not shipped yet — tracked as follow-up:
+**Metric** (shipped in P4b): `printer_scan_agent_last_seen_seconds{tenant, agent}` — seconds since the agent's last successful poll of `/printer-scan-agents/poll`. Emitted for every active enrollment (revoked agents drop out of the metric on the next 15s refresh).
 
-- `printer_scan_agent_last_seen_seconds{tenant, agentId}` Micrometer gauge exposed via `/actuator/prometheus`.
-- Grafana alert: `max(printer_scan_agent_last_seen_seconds) by (tenant,agentId) > 30` for 2m → PagerDuty warning.
-- Alert runbook link → this doc, §4 "What sick looks like".
+Scrape target: `/actuator/prometheus` on the backend.
+
+**Grafana alert:**
+
+```promql
+max(printer_scan_agent_last_seen_seconds) by (tenant, agent) > 30
+```
+
+for `2m` → PagerDuty warning severity. Runbook link → §4 of this document ("What sick looks like").
+
+A healthy 5s poll interval keeps this metric under 10s. Alert firing at 30s means the agent container crashed, lost network, or its key was rotated without an update to the container env. Emergency shutoff (§9) also causes the metric to disappear (not fire) because a revoked agent drops from the row set — use the "no data received in 5m" secondary alert on the same tag combination if you want visibility on planned revocations too.
+
+Related metric (not shipped): `printer_scan_agent_key_invalid_total` counter — surface for repeated bad-key attempts (brute force detection). Add when a real incident motivates it; today the WARN log is enough.
 
 ---
 

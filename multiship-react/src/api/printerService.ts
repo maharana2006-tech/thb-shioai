@@ -102,6 +102,13 @@ export const printerService = {
     apiClient.get<ApiResponse<PrinterScanAgent[]>>(
       `/tenants/${encodeURIComponent(tenantCode)}/printer-scan-agents`,
     ),
+  // PR-Printer-P4b — revoke a specific enrollment. Idempotent server-side;
+  // the agent's next long-poll returns 401 within ~5s. Re-enrolling with
+  // the same agentId reuses the row and issues a fresh key.
+  revokeScanAgent: (tenantCode: string, id: number) =>
+    apiClient.delete<ApiResponse<{ revoked: boolean }>>(
+      `/tenants/${encodeURIComponent(tenantCode)}/printer-scan-agents/${id}`,
+    ),
   scanNow: (tenantCode: string) =>
     apiClient.post<ApiResponse<{ agentsNudged: number }>>(
       `/tenants/${encodeURIComponent(tenantCode)}/printers/scan-now`,
