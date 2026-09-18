@@ -170,7 +170,13 @@ export default function PrintersPage() {
         </div>
       </section>
 
-      {scanTenant.trim() ? <PrinterScanPanel tenantCode={scanTenant.trim()} /> : null}
+      {scanTenant.trim() ? (
+        <PrinterScanPanel
+          tenantCode={scanTenant.trim()}
+          existingPrinters={printers}
+          onImported={load}
+        />
+      ) : null}
 
       <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
         <table className="min-w-full text-[13px]">
