@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { FiCheckCircle, FiCopy, FiKey, FiRefreshCw, FiWifi } from 'react-icons/fi'
-import { printerService, type PrinterScanAgent } from '../api/printerService'
+import { FiCheckCircle, FiCopy, FiDownload, FiKey, FiRefreshCw, FiWifi } from 'react-icons/fi'
+import DiscoveredPickerModal from './DiscoveredPickerModal'
+import { printerService, type Printer, type PrinterScanAgent } from '../api/printerService'
 import { notify } from '../utils/notify'
 
 /**
@@ -22,10 +23,21 @@ import { notify } from '../utils/notify'
  * lands the enrollment + nudge flow so the operator can start driving
  * discovery today.
  */
-export default function PrinterScanPanel({ tenantCode }: { tenantCode: string }) {
+export default function PrinterScanPanel({
+  tenantCode,
+  existingPrinters = [],
+  onImported,
+}: {
+  tenantCode: string
+  /** Existing registered printers — used by the picker (P3) to disable duplicate rows. */
+  existingPrinters?: Printer[]
+  /** Fired after the picker successfully imports one or more rows. */
+  onImported?: () => void | Promise<void>
+}) {
   const [agents, setAgents] = useState<PrinterScanAgent[]>([])
   const [loading, setLoading] = useState(true)
   const [enrollOpen, setEnrollOpen] = useState(false)
+  const [pickerOpen, setPickerOpen] = useState(false)
   const [scanning, setScanning] = useState(false)
 
   const load = useCallback(async () => {
@@ -101,10 +113,18 @@ export default function PrinterScanPanel({ tenantCode }: { tenantCode: string })
             type="button"
             onClick={() => void handleScanNow()}
             disabled={scanning}
-            className="inline-flex items-center gap-1.5 rounded-md bg-slate-900 px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <FiRefreshCw className={`h-3.5 w-3.5 ${scanning ? 'animate-spin' : ''}`} />
             Scan for printers
+          </button>
+          <button
+            type="button"
+            onClick={() => setPickerOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-md bg-slate-900 px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-slate-700"
+          >
+            <FiDownload className="h-3.5 w-3.5" />
+            Pick from scan
           </button>
         </div>
       </div>
@@ -130,6 +150,15 @@ export default function PrinterScanPanel({ tenantCode }: { tenantCode: string })
         <EnrollModal
           tenantCode={tenantCode}
           onClose={() => { setEnrollOpen(false); void load() }}
+        />
+      ) : null}
+
+      {pickerOpen ? (
+        <DiscoveredPickerModal
+          tenantCode={tenantCode}
+          existingPrinters={existingPrinters}
+          onClose={() => setPickerOpen(false)}
+          onImported={async () => { if (onImported) await onImported() }}
         />
       ) : null}
     </section>
