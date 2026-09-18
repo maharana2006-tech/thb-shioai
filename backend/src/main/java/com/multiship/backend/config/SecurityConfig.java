@@ -180,6 +180,14 @@ public class SecurityConfig {
                         // (crashes happen on the login page too). IP-rate-
                         // limited by the controller.
                         .requestMatchers(HttpMethod.POST, "/api/v1/client-errors").permitAll()
+                        // PR-Printer-P1.5 — LAN scan agent endpoints use the
+                        // X-Printer-Scan-Key header for auth (agent runs on
+                        // customer infra with no user session). Controller
+                        // verifies the SHA-256 hash of the header value
+                        // against printer_scan_agent.api_key_hash. JWT filter
+                        // would reject these as anonymous otherwise.
+                        .requestMatchers(HttpMethod.GET, "/api/v1/printer-scan-agents/poll").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/printers/discovered").permitAll()
                         // Admin-only credential management, decided before the
                         // request body is even parsed (403 beats 400).
                         .requestMatchers("/api/v1/carriers/connect", "/api/v1/carriers/disconnect").hasRole("ADMIN")
