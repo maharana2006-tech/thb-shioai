@@ -165,4 +165,15 @@ class ShipViaImportValidationTest {
             assertEquals("A-1", rows.get(0).getOrderRef());
         }
     }
+
+    /** A row with no client code can only match a global rule — the message
+     *  must not send the operator looking for a client rule that isn't there. */
+    @Test
+    void aRowWithNoClientCodeIsToldSoInsteadOfNamingAClient() {
+        OrderImportRowDTO r = row("U99", "UPS");
+        r.setClientCode(null);
+        String err = validate(r).getErrors().stream()
+                .filter(e -> e.contains("U99")).findFirst().orElse("");
+        assertTrue(err.contains("(this row has no client code)"), err);
+    }
 }

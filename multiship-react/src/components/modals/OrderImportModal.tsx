@@ -551,7 +551,9 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
                 onEdit={updateRow}
                 savingCell={savingCell}
                 savedRows={staging.savedRowNumbers ?? []}
-                canMapShipVia={normalizeRole(sessionRole) === 'ADMIN'}
+                /* Same audience as Settings → Shipping Service Mapping itself
+                   (ADMIN + USER); a tenant sees the codes but can't change them. */
+                canMapShipVia={normalizeRole(sessionRole) !== 'TENANT'}
                 onMappingSaved={reloadStaging}
                 onOpenMapping={() => { onClose?.(); navigate(settingsPaths.shippingServiceMapping) }}
               />

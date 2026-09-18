@@ -713,20 +713,22 @@ public class OrderImportServiceImpl implements OrderImportService {
      * two fixes the operator needs: map the code, or correct it.
      */
     private String shipViaError(String code, String client, String carrier, java.util.Set<String> known) {
-        String who = client == null ? "this client" : client;
+        // A row with no clientCode can only match a global rule, so naming a
+        // client would send the operator looking for one that isn't there.
+        String forWhom = client == null ? " (this row has no client code)" : " for " + client;
         boolean mappedElsewhere = shippingConfigService != null
                 && shippingConfigService.shipViaCodeExists(code);
         if (mappedElsewhere) {
-            return "serviceType '" + code + "' is mapped, but not for " + who
+            return "serviceType '" + code + "' is mapped, but not" + forWhom
                     + " shipping to this destination (or the service it maps to is switched off) — "
                     + "check the rule in Settings → Shipping Service Mapping";
         }
         if (carrier != null && KNOWN_CARRIERS.contains(carrier) && !known.isEmpty()) {
-            return "serviceType '" + code + "' is not mapped for " + who
+            return "serviceType '" + code + "' is not mapped" + forWhom
                     + " and is not a " + carrier + " service code — add the ship via code in "
                     + "Settings → Shipping Service Mapping, or use a code from Settings → Shipping services";
         }
-        return "serviceType '" + code + "' is not mapped for " + who
+        return "serviceType '" + code + "' is not mapped" + forWhom
                 + " — add the ship via code in Settings → Shipping Service Mapping";
     }
 
@@ -6269,9 +6271,9 @@ public class OrderImportServiceImpl implements OrderImportService {
         return k + " " + noun + (k == 1 ? "" : "s");
     }
 
-    /** "1 needs fixes" / "4 need fixes". */
+    /** "1 needs fixing" / "4 need fixes". */
     private static String needFixes(int k) {
-        return k + (k == 1 ? " needs fixes" : " need fixes");
+        return k + (k == 1 ? " needs fixing" : " need fixes");
     }
 
     /** Counts from the stored upload header (no rows) — for the list and the "already uploaded" answer. */
