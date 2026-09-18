@@ -102,6 +102,38 @@ public class ShippingConfigService {
      * service code" and every row fails).
      */
     /**
+     * The ship via codes one client may use in a bulk file: their own rules
+     * plus the global ones, each with the service it buys.
+     *
+     * <p>Shown beside the upload so the operator can see which codes validate
+     * without opening the mapping screen. Pass null for every code.
+     */
+    @Transactional(readOnly = true)
+    public java.util.List<java.util.Map<String, Object>> shipViaCodesFor(String clientCode) {
+        String client = StringUtils.hasText(clientCode) ? clientCode.trim().toUpperCase(Locale.ROOT) : null;
+        java.util.Map<String, java.util.Map<String, Object>> byCode = new java.util.TreeMap<>();
+        for (ShipViaMapping rule : ruleRepository.findAllByOrderByShipviaCdAsc()) {
+            String owner = rule.getClientCode() == null || rule.getClientCode().isBlank()
+                    ? null : rule.getClientCode().trim().toUpperCase(Locale.ROOT);
+            if (client != null && owner != null && !owner.equals(client)) continue;
+            ShippingService svc = serviceRepository.findById(rule.getServiceId()).orElse(null);
+            if (svc == null) continue;
+            java.util.Map<String, Object> entry = new java.util.LinkedHashMap<>();
+            entry.put("code", rule.getShipviaCd().trim().toUpperCase(Locale.ROOT));
+            entry.put("clientCode", owner);
+            entry.put("carrier", svc.getCarrier());
+            entry.put("serviceCode", svc.getServiceCode());
+            entry.put("serviceName", svc.getName());
+            entry.put("enabled", svc.isEnabled());
+            entry.put("destination", StringUtils.hasText(rule.getDestValue()) ? rule.getDestValue() : null);
+            // A client's own rule beats the global one for the same code.
+            String key = (String) entry.get("code");
+            if (owner != null || !byCode.containsKey(key)) byCode.put(key, entry);
+        }
+        return new java.util.ArrayList<>(byCode.values());
+    }
+
+    /**
      * Is {@code code} a ship via code anyone has mapped — any client, any
      * destination, enabled service or not?
      *

@@ -753,9 +753,17 @@ public class OrderImportServiceImpl implements OrderImportService {
         // a handful of distinct combinations.
         Map<String, java.util.Optional<com.multiship.backend.model.ShippingService>> cache = new LinkedHashMap<>();
         for (OrderImportRowDTO row : rows) {
-            row.setShipViaCode(null);
-            row.setShipViaNote(null);
             String code = normalizeOrNull(row.getServiceType());
+            // A stored row already carries the carrier's code, so no rule will
+            // match it a second time. Keep the hint when it still describes the
+            // service on the row; drop it once an edit moves the row elsewhere.
+            String priorNote = row.getShipViaNote();
+            boolean noteStillFits = priorNote != null && code != null
+                    && priorNote.contains(" " + code + ")");
+            if (!noteStillFits) {
+                row.setShipViaCode(null);
+                row.setShipViaNote(null);
+            }
             if (code == null) continue;
             String client = normalizeOrNull(row.getClientCode());
             String dest = normalizeOrNull(row.getCountryCode());

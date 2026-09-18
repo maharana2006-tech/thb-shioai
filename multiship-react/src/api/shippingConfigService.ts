@@ -201,6 +201,19 @@ export const fitAgainstService = (p: PackagePreset, s: ShippingServiceItem): Ser
   return { status: 'FITS', reason: '' }
 }
 
+/** One ship via code an operator may type in the file's serviceType column. */
+export interface ShipViaCode {
+  code: string
+  /** null = mapped for every client. */
+  clientCode: string | null
+  carrier: string
+  serviceCode: string
+  serviceName: string
+  enabled: boolean
+  /** Space-separated ISO codes when the rule only covers some destinations. */
+  destination: string | null
+}
+
 export interface ShippingCatalog {
   services: ShippingServiceItem[]
   rules: ShipMethodRule[]
@@ -283,6 +296,14 @@ export const shippingConfigService = {
     ),
 
   saveRule: (rule: ShipMethodRule) => apiClient.put<ApiResponse<ShipMethodRule>>('/ship-method-rules', rule),
+
+  /** The ship via codes a client may put in a bulk file — their own rules plus
+   *  the global ones, with the carrier service each buys. Omit the client for
+   *  every code on the platform. */
+  shipViaCodes: (clientCode?: string | null) =>
+    apiClient.get<ApiResponse<ShipViaCode[]>>(
+      `/ship-via-codes${clientCode ? `?clientCode=${encodeURIComponent(clientCode)}` : ''}`,
+    ),
 
   deleteRule: (id: number) => apiClient.delete<ApiResponse<void>>(`/ship-method-rules/${id}`),
 

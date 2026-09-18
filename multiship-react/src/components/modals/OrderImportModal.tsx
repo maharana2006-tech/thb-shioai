@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useFocusTrap } from '../../hooks/useFocusTrap'
+import { useAppSession } from '../../hooks/useAppSession'
+import { normalizeRole } from '../../utils/roles'
+import { settingsPaths } from '../../routes/workspaceRoutes'
+import { AddShipViaMappingDialog, ShipViaCodesPanel } from './ShipViaCodes'
 import {
   FiAlertCircle,
   FiArrowRight,
@@ -93,6 +98,8 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
   // Sprint 51 T6b — focus trap (modal only).
   const dialogRef = useRef<HTMLDivElement>(null)
   useFocusTrap(!inline, dialogRef)
+  const navigate = useNavigate()
+  const { role: sessionRole } = useAppSession()
   const [file, setFile] = useState<File | null>(null)
   /** The staged upload under validation. Non-null = step 2 (or 3 after a save). */
   const [staging, setStaging] = useState<StagingUpload | null>(null)
@@ -155,6 +162,16 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
   const preview: OrderImportPreview | null = staging
     ? { totalRows: staging.totalRows, validRows: staging.validRows, invalidRows: staging.invalidRows, rows: staging.rows, batchId: null }
     : null
+
+  /** Re-read the staged upload — opening it re-runs validation server-side, so
+   *  rows that failed on a missing ship via code clear as soon as it's mapped. */
+  const reloadStaging = () => {
+    if (!staging) return
+    orderImportService
+      .getStaging(staging.id)
+      .then((res) => { if (res.data) setStaging(res.data) })
+      .catch((e) => notify.apiError(e, 'Mapping saved, but the rows could not be re-checked — reopen the upload.'))
+  }
 
   /** Inline edit: apply locally, then persist to staging (server re-validates and returns fresh counts). */
   const updateRow = (rowNumber: number, patch: Partial<OrderImportRow>) => {
@@ -534,6 +551,9 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
                 onEdit={updateRow}
                 savingCell={savingCell}
                 savedRows={staging.savedRowNumbers ?? []}
+                canMapShipVia={normalizeRole(sessionRole) === 'ADMIN'}
+                onMappingSaved={reloadStaging}
+                onOpenMapping={() => { onClose?.(); navigate(settingsPaths.shippingServiceMapping) }}
               />
             </>
           ) : null}
@@ -1067,19 +1087,37 @@ const CARD_GROUPS: { title: string; keys: string[] }[] = [
   { title: 'Customs', keys: ['itemDescription', 'itemSku', 'itemQuantity', 'itemUnitValue', 'hsCode', 'countryOfOrigin'] },
 ]
 
+/** The error the importer raises for a ship via code no rule covers. */
+const UNMAPPED_SHIP_VIA = /serviceType '([^']+)' is (?:not mapped|mapped, but not)/
+
 function PreviewStep({
   preview,
   onEdit,
   savingCell,
   savedRows = [],
+  canMapShipVia = false,
+  onMappingSaved,
+  onOpenMapping,
 }: {
   preview: OrderImportPreview
   onEdit: (rowNumber: number, patch: Partial<OrderImportRow>) => void
   savingCell: boolean
   /** Rows already saved to Import history — shown as Saved and read-only. */
   savedRows?: number[]
+  /** Admins can map an unknown ship via code from the failing row itself. */
+  canMapShipVia?: boolean
+  onMappingSaved?: () => void
+  onOpenMapping?: () => void
 }) {
   const savedSet = new Set(savedRows)
+  // The code to map, and which client's file it came from.
+  const [mapping, setMapping] = useState<{ code: string; clientCode: string | null } | null>(null)
+  const [codesTick, setCodesTick] = useState(0)
+  // One client per file is the norm; a mixed file gets the platform-wide list.
+  const fileClients = Array.from(new Set(
+    preview.rows.map((r) => (r.clientCode ?? '').trim().toUpperCase()).filter(Boolean),
+  ))
+  const fileClient = fileClients.length === 1 ? fileClients[0] : null
   // Union of tenant custom-field keys across the batch → stable extra columns.
   const customCols = Array.from(
     new Set(preview.rows.flatMap((r) => Object.keys(r.customFields ?? {}))),
@@ -1122,6 +1160,20 @@ function PreviewStep({
 
   return (
     <div className="space-y-3">
+      <ShipViaCodesPanel
+        clientCode={fileClient}
+        canEdit={canMapShipVia}
+        onOpenMapping={() => onOpenMapping?.()}
+        reloadKey={codesTick}
+      />
+      {mapping ? (
+        <AddShipViaMappingDialog
+          code={mapping.code}
+          clientCode={mapping.clientCode}
+          onClose={() => setMapping(null)}
+          onSaved={() => { setMapping(null); setCodesTick((t) => t + 1); onMappingSaved?.() }}
+        />
+      ) : null}
       <div className="flex flex-wrap items-center gap-2">
         {/* Counts live in the order summary above; the grid only filters its rows. */}
         {/* View toggle: dense spreadsheet grid vs one card per order */}
@@ -1257,6 +1309,21 @@ function PreviewStep({
                             ← {r.shipViaCode}
                           </span>
                         ) : null}
+                        {/* Unknown code: map it here rather than sending the
+                            operator to Settings and back. */}
+                        {c.key === 'serviceType' && canMapShipVia ? (() => {
+                          const hit = (byField.serviceType ?? []).map((m) => m.match(UNMAPPED_SHIP_VIA)).find(Boolean)
+                          if (!hit) return null
+                          return (
+                            <button
+                              type="button"
+                              onClick={() => setMapping({ code: hit[1], clientCode: (r.clientCode ?? '').trim().toUpperCase() || null })}
+                              className="mt-0.5 block w-full truncate rounded border border-[#e3d9c4] bg-white px-1 py-0.5 text-[9px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]"
+                            >
+                              Map {hit[1]}…
+                            </button>
+                          )
+                        })() : null}
                       </div>
                     </td>
                   ))}
