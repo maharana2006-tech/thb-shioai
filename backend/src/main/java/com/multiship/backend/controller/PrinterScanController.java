@@ -18,6 +18,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -140,6 +141,34 @@ public class PrinterScanController {
         }
     }
 
+    @Operation(summary = "Unrevoke (reactivate) a previously-revoked scan agent",
+            description = "Flips active=true + clears revoked_at. The row's original api_key_hash is untouched, "
+                    + "so the customer's agent — still holding the pre-revoke key — resumes on its next poll. "
+                    + "USE ONLY for accidental revokes; for a leaked key, re-enroll instead (issues a new key).")
+    @PreAuthorize("hasRole('ADMIN')")
+    @PatchMapping("/tenants/{tenantCode}/printer-scan-agents/{id}/reactivate")
+    public ResponseEntity<ApiResponse<UnrevokeResponse>> unrevokeAgent(
+            @PathVariable String tenantCode,
+            @PathVariable long id) {
+        try {
+            boolean reactivated = scanService.unrevokeAgent(tenantCode, id);
+            UnrevokeResponse body = new UnrevokeResponse();
+            body.reactivated = reactivated;
+            return ok(body);
+        } catch (IllegalArgumentException bad) {
+            return badRequest(bad.getMessage());
+        }
+    }
+
+    @Operation(summary = "List revoked scan agents for a tenant (newest-revoked first)",
+            description = "Feeds the FE Scanners tab (R4) so ops can spot-check + unrevoke accidental clicks.")
+    @PreAuthorize("hasRole('ADMIN')")
+    @GetMapping("/tenants/{tenantCode}/printer-scan-agents/revoked")
+    public ResponseEntity<ApiResponse<List<PrinterScanAgent>>> listRevokedAgents(
+            @PathVariable String tenantCode) {
+        return ok(scanService.listRevokedAgentsForTenant(tenantCode));
+    }
+
     // ================================================================
     // Agent surface (X-Printer-Scan-Key header, permitAll in SecurityConfig)
     // ================================================================
@@ -221,6 +250,13 @@ public class PrinterScanController {
         /** {@code true} if the row transitioned from active→revoked; {@code false}
          *  if the row didn't exist or was already revoked (idempotent). */
         private boolean revoked;
+    }
+
+    @Data public static class UnrevokeResponse {
+        /** {@code true} if the row transitioned from revoked→active; {@code false}
+         *  if the row didn't exist or was already active (idempotent — safe to
+         *  double-click). */
+        private boolean reactivated;
     }
 
     @Data public static class LatestVersionResponse {

@@ -30,4 +30,9 @@ public interface PrinterScanAgentRepository extends JpaRepository<PrinterScanAge
      *  re-emits a {@code printer_scan_agent_last_seen_seconds} gauge
      *  every 15s. Sorted so gauge rows are deterministic across runs. */
     List<PrinterScanAgent> findByActiveTrueOrderByTenantCodeAscAgentIdAsc();
+
+    /** PR-Printer-R1 — revoked-agents list for the FE Scanners tab
+     *  (R4). Newest-revoked first so accidental-click recovery is
+     *  quick. Only inactive rows; revoke row is the sink state. */
+    List<PrinterScanAgent> findByTenantCodeAndActiveFalseOrderByRevokedAtDesc(String tenantCode);
 }
