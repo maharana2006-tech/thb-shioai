@@ -1,0 +1,139 @@
+/**
+ * F5-A — soft-delete + restore + empty-Trash actions for the imports
+ * view of DataHistoryPage, extracted so the batch-mutation side effects
+ * (busy spinner id, empty-Trash two-step confirm state, view-Trash
+ * toggle) live in one place instead of scattered across the monolithic
+ * component.
+ *
+ * <p>The hook takes the batch list and its setter from the parent so
+ * the Trash-view toggle can reload independently from the main
+ * history-list hook without duplicating the batches state.
+ */
+import { useState } from 'react'
+import { notify } from '../utils/notify'
+import { ApiError } from '../api/apiClient'
+import {
+  orderImportService,
+  type ImportBatchSummary,
+} from '../api/orderImportService'
+
+export interface UseTrashActionsOptions {
+  batches: ImportBatchSummary[]
+  setBatches: React.Dispatch<React.SetStateAction<ImportBatchSummary[]>>
+  openId: number | null
+  setOpenId: (id: number | null) => void
+}
+
+export interface UseTrashActionsResult {
+  viewTrash: boolean
+  setViewTrash: React.Dispatch<React.SetStateAction<boolean>>
+  trashBusyId: number | null
+  confirmEmpty: boolean
+  setConfirmEmpty: React.Dispatch<React.SetStateAction<boolean>>
+  emptying: boolean
+  handleEmptyTrash: () => Promise<void>
+  handleDelete: (id: number, fileName?: string | null) => Promise<void>
+  handleRestore: (
+    id: number,
+    fileName?: string | null,
+    allowDuplicate?: boolean,
+  ) => Promise<void>
+}
+
+export function useTrashActions({
+  batches: _batches,
+  setBatches,
+  openId,
+  setOpenId,
+}: UseTrashActionsOptions): UseTrashActionsResult {
+  // Silence the unused-arg warning — batches is accepted for symmetry
+  // with parent state and to make the hook API self-documenting even
+  // though the current implementation only mutates through setBatches.
+  void _batches
+
+  const [viewTrash, setViewTrash] = useState(false)
+  const [trashBusyId, setTrashBusyId] = useState<number | null>(null)
+  const [confirmEmpty, setConfirmEmpty] = useState(false)
+  const [emptying, setEmptying] = useState(false)
+
+  /** PERMANENTLY delete every batch currently in Trash. */
+  const handleEmptyTrash = async () => {
+    setEmptying(true)
+    try {
+      const res = await orderImportService.emptyTrash()
+      setBatches([])
+      setOpenId(null)
+      notify.success(res.message ?? 'Trash emptied.')
+    } catch (e) {
+      notify.apiError(e, 'Could not empty Trash.')
+    } finally {
+      setEmptying(false)
+      setConfirmEmpty(false)
+    }
+  }
+
+  /** Move a batch to Trash (soft delete). Recoverable from the Trash view. */
+  const handleDelete = async (id: number, fileName?: string | null) => {
+    setTrashBusyId(id)
+    try {
+      await orderImportService.deleteBatch(id)
+      setBatches((list) => list.filter((b) => b.id !== id))
+      if (openId === id) setOpenId(null)
+      notify.success(
+        `"${fileName || `Import #${id}`}" moved to Trash · restore it from Trash anytime.`,
+      )
+    } catch (e) {
+      notify.apiError(e, 'Could not delete import.')
+    } finally {
+      setTrashBusyId(null)
+    }
+  }
+
+  /** Restore a batch from Trash back to the live Data History list. */
+  const handleRestore = async (
+    id: number,
+    fileName?: string | null,
+    allowDuplicate = false,
+  ) => {
+    setTrashBusyId(id)
+    try {
+      await orderImportService.restoreBatch(id, allowDuplicate)
+      setBatches((list) => list.filter((b) => b.id !== id))
+      if (openId === id) setOpenId(null)
+      notify.success(`"${fileName || `Import #${id}`}" restored.`)
+    } catch (e) {
+      // Some orders are also in live imports — ask, like "Save anyway" does.
+      if (
+        !allowDuplicate &&
+        e instanceof ApiError &&
+        e.status === 409 &&
+        e.errorCode === 'IMPORT_DUPLICATE_ORDERS'
+      ) {
+        setTrashBusyId(null)
+        const ok = await notify.confirm(`${e.message}\n\nRestore anyway?`, {
+          title: 'Orders already in Import history',
+          confirmLabel: 'Restore anyway',
+          cancelLabel: 'Cancel',
+          danger: true,
+        })
+        if (ok) await handleRestore(id, fileName, true)
+        return
+      }
+      notify.apiError(e, 'Could not restore import.')
+    } finally {
+      setTrashBusyId(null)
+    }
+  }
+
+  return {
+    viewTrash,
+    setViewTrash,
+    trashBusyId,
+    confirmEmpty,
+    setConfirmEmpty,
+    emptying,
+    handleEmptyTrash,
+    handleDelete,
+    handleRestore,
+  }
+}
