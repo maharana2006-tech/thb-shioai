@@ -6,13 +6,13 @@ import {
 } from 'react-icons/fi'
 import { notify } from '../utils/notify'
 import { clientService, type Client } from '../api/clientService'
+import AssignmentMatrix from './AssignmentMatrix'
 import PrinterScanPanel from './PrinterScanPanel'
 import {
   CONNECTION_LABEL,
   notifyPrinterProblem,
   PAPER_LABEL,
   printerService,
-  type PrintDocType,
   type Printer,
   type PrinterAssignment,
   type PrinterConnection,
@@ -80,7 +80,9 @@ export default function PrintersPage() {
   // every Test button while one test was in flight. Now a Set so
   // per-row spinners work AND bulk Test-N can run concurrently.
   const [testingIds, setTestingIds] = useState<Set<number>>(new Set())
-  const [savingKey, setSavingKey] = useState<string | null>(null)
+  // Rows appended by the "Add a client" dropdown on the Assignments tab
+  // so a client with no current assignments can still show up in the
+  // matrix. Persisted only in-memory (fresh on each tab visit).
   const [extraClients, setExtraClients] = useState<string[]>([])
   // PR-Printer-R5 — search over name + host + location; multi-select
   // driving the sticky bulk-action bar (Test N / Deactivate N / Delete N).
@@ -108,8 +110,6 @@ export default function PrintersPage() {
   useEffect(() => {
     void load()
   }, [load])
-
-  const printerById = useMemo(() => new Map(printers.map((p) => [p.id, p])), [printers])
 
   const runTest = async (p: Printer) => {
     setTestingIds((cur) => new Set(cur).add(p.id))
@@ -253,28 +253,9 @@ export default function PrintersPage() {
     return [null, ...[...codes].sort()] as Array<string | null>
   }, [assignments, extraClients])
 
-  const assignmentFor = (client: string | null, docType: PrintDocType) =>
-    assignments.find((a) => (a.clientCode ?? null)?.toUpperCase?.() === client?.toUpperCase?.() && a.docType === docType)
-    ?? (client === null ? assignments.find((a) => a.clientCode === null && a.docType === docType) : undefined)
-
-  const setAssignment = async (client: string | null, docType: PrintDocType, printerId: string) => {
-    const key = `${client ?? '*'}-${docType}`
-    const current = assignmentFor(client, docType)
-    setSavingKey(key)
-    try {
-      if (!printerId) {
-        if (current) await printerService.unassign(current.id)
-      } else {
-        await printerService.assign(client, docType, Number(printerId))
-      }
-      const a = await printerService.listAssignments()
-      setAssignments(a.data ?? [])
-    } catch (e) {
-      notifyPrinterProblem('Printer choice not saved', e, 'Could not save the assignment.')
-    } finally {
-      setSavingKey(null)
-    }
-  }
+  // PR-Printer-R6 — assignmentFor / setAssignment / savingKey /
+  // printerById moved into AssignmentMatrix. This shell just passes
+  // the raw assignments list down and reloads on onChanged().
 
   const unassignedClients = clients
     .map((c) => c.clientCode.toUpperCase())
@@ -292,9 +273,6 @@ export default function PrintersPage() {
     }
     return [...seen].sort()
   }, [clients])
-
-  const labelChoices = printers.filter((p) => p.active)
-  const invoiceChoices = printers.filter((p) => p.active && p.format === 'PDF')
 
   // PR-Printer-R5 — filter for the Printers-table search input. Case-
   // insensitive substring across name / host / location. Empty search
@@ -643,92 +621,38 @@ export default function PrintersPage() {
       ) : null}
 
       {activeTab === 'assignments' ? (
-      <section className="rounded-xl border border-slate-200 bg-white">
-        <div className="flex flex-wrap items-end justify-between gap-3 border-b border-slate-100 px-4 py-3">
-          <div>
-            <h3 className="text-[14px] font-semibold text-slate-900">Where each client prints</h3>
-            <p className="mt-0.5 text-[12px] text-slate-500">
-              Invoices need a PDF printer. Changes save as soon as you pick a printer.
-            </p>
+        <section className="space-y-3">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h3 className="text-[14px] font-semibold text-slate-900">Where each client prints</h3>
+              <p className="mt-0.5 text-[12px] text-slate-500">
+                Rows = clients, columns = active printers. Click a cell to route Labels
+                (<span className="rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold text-sky-800">L</span>)
+                or Commercial invoices
+                (<span className="rounded-full bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold text-violet-800">I</span>)
+                through that printer. Default row is the fallback for any client without its own routing.
+              </p>
+            </div>
+            <label className="flex items-center gap-2 text-[12.5px] text-slate-600">
+              Add a client
+              <select
+                value=""
+                onChange={(e) => { if (e.target.value) setExtraClients((l) => [...l, e.target.value]) }}
+                disabled={unassignedClients.length === 0}
+                className="rounded-md border border-slate-300 bg-white px-2 py-1 text-[13px] disabled:opacity-50"
+              >
+                <option value="">{unassignedClients.length === 0 ? 'All clients listed' : 'Choose…'}</option>
+                {unassignedClients.map((code) => <option key={code} value={code}>{code}</option>)}
+              </select>
+            </label>
           </div>
-          <label className="flex items-center gap-2 text-[12.5px] text-slate-600">
-            Add a client
-            <select
-              value=""
-              onChange={(e) => { if (e.target.value) setExtraClients((l) => [...l, e.target.value]) }}
-              disabled={unassignedClients.length === 0}
-              className="rounded-md border border-slate-300 bg-white px-2 py-1 text-[13px] disabled:opacity-50"
-            >
-              <option value="">{unassignedClients.length === 0 ? 'All clients listed' : 'Choose…'}</option>
-              {unassignedClients.map((code) => <option key={code} value={code}>{code}</option>)}
-            </select>
-          </label>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-[13px]">
-            <thead className="bg-slate-50 text-left text-[11.5px] font-semibold uppercase tracking-wide text-slate-500">
-              <tr>
-                <th className="px-4 py-2">Client</th>
-                <th className="px-4 py-2">Labels print on</th>
-                <th className="px-4 py-2">Commercial invoices print on</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {clientRows.map((client) => (
-                <tr key={client ?? 'default'}>
-                  <td className="px-4 py-2.5">
-                    {client === null ? (
-                      <span>
-                        <span className="block font-semibold text-slate-900">Default</span>
-                        <span className="block text-[11.5px] text-slate-500">Every client without its own printer</span>
-                      </span>
-                    ) : (
-                      <span className="font-semibold text-slate-900">{client}</span>
-                    )}
-                  </td>
-                  {(['LABEL', 'COMMERCIAL_INVOICE'] as PrintDocType[]).map((docType) => {
-                    const current = assignmentFor(client, docType)
-                    const choices = docType === 'LABEL' ? labelChoices : invoiceChoices
-                    const key = `${client ?? '*'}-${docType}`
-                    const missing = current && !printerById.get(current.printerId)?.active
-                    return (
-                      <td key={docType} className="px-4 py-2.5">
-                        <span className="inline-flex items-center gap-2">
-                          <select
-                            value={current ? String(current.printerId) : ''}
-                            onChange={(e) => void setAssignment(client, docType, e.target.value)}
-                            disabled={savingKey !== null || choices.length === 0}
-                            className="min-w-[200px] rounded-md border border-slate-300 bg-white px-2 py-1 text-[13px] disabled:opacity-50"
-                          >
-                            <option value="">
-                              {client === null ? 'No default printer' : 'Use the default'}
-                            </option>
-                            {current && !choices.some((p) => p.id === current.printerId) ? (
-                              <option value={String(current.printerId)}>
-                                {printerById.get(current.printerId)?.name ?? `Printer ${current.printerId}`} (switched off)
-                              </option>
-                            ) : null}
-                            {choices.map((p) => (
-                              <option key={p.id} value={String(p.id)}>{p.name} · {p.format}</option>
-                            ))}
-                          </select>
-                          {savingKey === key ? (
-                            <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
-                          ) : missing ? (
-                            <span className="text-[11.5px] font-semibold text-amber-700" title="This printer is switched off, so the default is used instead">
-                              switched off
-                            </span>
-                          ) : null}
-                        </span>
-                      </td>
-                    )
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+          <AssignmentMatrix
+            clients={clientRows}
+            printers={printers.filter((p) => p.active)}
+            assignments={assignments}
+            onChanged={load}
+          />
+        </section>
       ) : null}
 
       {editing ? (
