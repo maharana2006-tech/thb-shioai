@@ -713,11 +713,12 @@ public class OrderImportServiceImpl implements OrderImportService {
      * two fixes the operator needs: map the code, or correct it.
      */
     /** The first few ship via codes this client may use, for an error message. */
-    private String shipViaCodesFor(String client) {
+    private String shipViaCodesFor(String client, String exclude) {
         if (shippingConfigService == null) return "";
         try {
             java.util.List<String> codes = shippingConfigService.shipViaCodesFor(client).stream()
                     .map(m -> String.valueOf(m.get("code")))
+                    .filter(c -> exclude == null || !c.equalsIgnoreCase(exclude))
                     .limit(6)
                     .toList();
             return String.join(", ", codes);
@@ -730,6 +731,19 @@ public class OrderImportServiceImpl implements OrderImportService {
         // A row with no clientCode can only match a global rule, so naming a
         // client would send the operator looking for one that isn't there.
         String forWhom = client == null ? " (this row has no client code)" : " for " + client;
+        // A rule for this client DOES map the code, but its service is switched
+        // off — the resolver skips those, so the row looked unmapped. Name the
+        // service and where to turn it back on; the mapping screen is the wrong
+        // place to send anyone for this.
+        if (shippingConfigService != null) {
+            var mapped = shippingConfigService.mappedServiceIgnoringEnabled(client, code);
+            if (mapped.isPresent() && !mapped.get().isEnabled()) {
+                var svc = mapped.get();
+                return "serviceType '" + code + "' maps to " + svc.getName() + " (" + svc.getCarrier() + " "
+                        + svc.getServiceCode() + "), which is switched off in Settings → Shipping services. "
+                        + "Turn it back on, or map " + code + " to another service";
+            }
+        }
         boolean mappedElsewhere = shippingConfigService != null
                 && shippingConfigService.shipViaCodeExists(code);
         if (mappedElsewhere) {
@@ -737,7 +751,7 @@ public class OrderImportServiceImpl implements OrderImportService {
             // use. The old wording bundled three causes into one sentence, and
             // "shipping to this destination" sent operators to check the
             // address when the row's client was the real problem.
-            String usable = shipViaCodesFor(client);
+            String usable = shipViaCodesFor(client, code);
             return "serviceType '" + code + "' is not set up" + forWhom
                     + " — it is mapped for other clients"
                     + (usable.isEmpty() ? "" : ". " + (client == null ? "Codes that work here" : client + " can use") + ": " + usable)
@@ -775,13 +789,18 @@ public class OrderImportServiceImpl implements OrderImportService {
         // a handful of distinct combinations.
         Map<String, java.util.Optional<com.multiship.backend.model.ShippingService>> cache = new LinkedHashMap<>();
         for (OrderImportRowDTO row : rows) {
-            String code = normalizeOrNull(row.getServiceType());
-            // A stored row already carries the carrier's code, so no rule will
-            // match it a second time. Keep the hint when it still describes the
-            // service on the row; drop it once an edit moves the row elsewhere.
+            String onRow = normalizeOrNull(row.getServiceType());
+            // A stored row carries the code the rule resolved to, so nothing
+            // would match it a second time. Resolve the CLIENT's code again
+            // instead, kept on the row since upload: the mapping is the source
+            // of truth, so a rule changed or deleted since then takes effect
+            // here rather than at the carrier. The hint is kept only while it
+            // still describes the row; an edit to the cell drops it.
             String priorNote = row.getShipViaNote();
-            boolean noteStillFits = priorNote != null && code != null
-                    && priorNote.contains(" " + code + ")");
+            String priorCode = normalizeOrNull(row.getShipViaCode());
+            boolean noteStillFits = priorNote != null && onRow != null
+                    && priorNote.contains(" " + onRow + ")");
+            String code = noteStillFits && priorCode != null ? priorCode : onRow;
             if (!noteStillFits) {
                 row.setShipViaCode(null);
                 row.setShipViaNote(null);
@@ -800,7 +819,17 @@ public class OrderImportServiceImpl implements OrderImportService {
                         }
                     })
                     .orElse(null);
-            if (service == null || !StringUtils.hasText(service.getServiceCode())) continue;
+            if (service == null || !StringUtils.hasText(service.getServiceCode())) {
+                if (noteStillFits && priorCode != null) {
+                    // The rule that resolved this row is gone (or its service
+                    // was switched off). Put the client's own code back so the
+                    // row fails validation naming the code the operator typed.
+                    row.setServiceType(priorCode);
+                    row.setShipViaCode(null);
+                    row.setShipViaNote(null);
+                }
+                continue;
+            }
 
             String fileCarrier = normalizeOrNull(row.getCarrierCode());
             String ruleCarrier = service.getCarrier() == null ? null

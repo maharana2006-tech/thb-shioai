@@ -761,6 +761,29 @@ public class ShippingConfigService {
     }
 
     /**
+     * The service a rule maps this code to, ignoring whether it is enabled.
+     *
+     * <p>{@link #resolveRule} filters disabled services out, so a switched-off
+     * service looks exactly like an unmapped code to every caller. This tells
+     * the difference apart so the error can name the real cause.
+     */
+    @Transactional(readOnly = true)
+    public java.util.Optional<ShippingService> mappedServiceIgnoringEnabled(String clientCode, String code) {
+        if (!StringUtils.hasText(code)) return java.util.Optional.empty();
+        String client = StringUtils.hasText(clientCode) ? clientCode.trim() : null;
+        return ruleRepository.findByShipviaCdIgnoreCase(code.trim()).stream()
+                .filter(r -> r.getServiceId() != null)
+                // A client's own rule first, then a rule that covers everyone.
+                .sorted(java.util.Comparator.comparingInt(r ->
+                        StringUtils.hasText(r.getClientCode()) ? 0 : 1))
+                .filter(r -> !StringUtils.hasText(r.getClientCode())
+                        || (client != null && r.getClientCode().trim().equalsIgnoreCase(client)))
+                .map(r -> serviceRepository.findById(r.getServiceId()).orElse(null))
+                .filter(java.util.Objects::nonNull)
+                .findFirst();
+    }
+
+    /**
      * The per-client aliases that map the same ship via code as this rule.
      * A client rule matches that client's aliases; a global rule (no client)
      * matches every client's alias for the code.
@@ -797,6 +820,25 @@ public class ShippingConfigService {
                         .filter(r -> !r.getId().equals(id))
                         .count()
                 : 0L;
+        // Which rule takes over, and what it ships. Deleting a client's rule
+        // while a global one exists moves those shipments to another carrier
+        // without a word, which is a surprise worth preventing.
+        String fallsBackTo = null;
+        if (otherRules > 0 && StringUtils.hasText(rule.getShipviaCd())) {
+            fallsBackTo = ruleRepository.findByShipviaCdIgnoreCase(rule.getShipviaCd().trim()).stream()
+                    .filter(r -> !r.getId().equals(id) && r.getServiceId() != null)
+                    .sorted(java.util.Comparator.comparingInt(r -> StringUtils.hasText(r.getClientCode()) ? 0 : 1))
+                    .map(r -> {
+                        ShippingService svc = serviceRepository.findById(r.getServiceId()).orElse(null);
+                        if (svc == null) return null;
+                        String owner = StringUtils.hasText(r.getClientCode())
+                                ? "the " + r.getClientCode().trim() + " rule" : "the Any client rule";
+                        return owner + " — " + svc.getName() + " (" + svc.getCarrier() + " " + svc.getServiceCode() + ")";
+                    })
+                    .filter(java.util.Objects::nonNull)
+                    .findFirst()
+                    .orElse(null);
+        }
         com.multiship.backend.dto.RuleCascadePreviewDTO body =
                 com.multiship.backend.dto.RuleCascadePreviewDTO.builder()
                         .ruleId(id)
@@ -805,6 +847,7 @@ public class ShippingConfigService {
                         .allowedWarehouseCount(warehouseCount)
                         .clientAliasCount(aliasCount)
                         .otherRulesForCode(otherRules)
+                        .fallsBackTo(fallsBackTo)
                         .build();
         return success("Cascade preview computed.", body);
     }

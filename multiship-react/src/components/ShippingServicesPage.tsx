@@ -16,6 +16,7 @@ import {
   shippingConfigService,
   type PackagePreset,
   type ServicePackageLink,
+  type ShipMethodRule,
   type ShippingServiceItem,
 } from '../api/shippingConfigService'
 import { allowlistUsageService, type ClientAllowedService } from '../api/clientCatalogService'
@@ -104,6 +105,8 @@ export default function ShippingServicesPage() {
   /** Carrier whose sync menu modal is open (env + account picker). */
   const [syncMenuFor, setSyncMenuFor] = useState<string | null>(null)
 
+  const [rules, setRules] = useState<ShipMethodRule[]>([])
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
@@ -114,6 +117,9 @@ export default function ShippingServicesPage() {
       ])
       setServices(catalog.services)
       setLinks(catalog.links)
+      // Kept so switching a service off can name the ship via rules that
+      // point at it — they stop resolving the moment it goes off.
+      setRules(catalog.rules)
       setOriginCountries(catalog.originCountries)
       setPresets(presetList)
       // Usage is decorative — a fetch failure shouldn't break the catalog view.
@@ -192,9 +198,33 @@ export default function ShippingServicesPage() {
   }
 
   const toggle = async (svc: ShippingServiceItem) => {
+    // Switching a service off is the quietest destructive action in Settings:
+    // every ship via rule pointing at it stops resolving at once, and files
+    // using those codes start failing at upload. Name them before it happens.
+    if (svc.enabled) {
+      const dependants = rules.filter((r) => r.serviceId === svc.id)
+      const named = dependants
+        .slice(0, 5)
+        .map((r) => `• ${r.shipviaCd} → ${r.clientCode?.trim() || 'any client'}`)
+        .join('\n')
+      const body = dependants.length === 0
+        ? `Switch off ${svc.name}? No ship via rule points at it.`
+        : `Switch off ${svc.name}?\n\n${dependants.length} ship via rule${dependants.length === 1 ? '' : 's'}`
+          + ` point${dependants.length === 1 ? 's' : ''} at it and will stop resolving — files using `
+          + `${dependants.length === 1 ? 'that code' : 'those codes'} will fail at upload:\n${named}`
+          + (dependants.length > 5 ? `\n• …and ${dependants.length - 5} more` : '')
+      if (!(await notify.confirm(body, {
+        title: 'Switch off service',
+        confirmLabel: 'Switch it off',
+        cancelLabel: 'Leave it on',
+        danger: true,
+      }))) return
+    }
     setServices((cur) => cur.map((s) => (s.id === svc.id ? { ...s, enabled: !s.enabled } : s)))
     try {
-      await shippingConfigService.setServiceEnabled(svc.id, !svc.enabled)
+      // The server counts the client aliases too, which the catalog doesn't carry.
+      const res = await shippingConfigService.setServiceEnabled(svc.id, !svc.enabled)
+      if (res.message) notify.success(res.message)
     } catch (e) {
       notify.apiError(e, 'Failed to update the service.')
       void load()

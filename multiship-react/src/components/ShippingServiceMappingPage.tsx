@@ -822,16 +822,21 @@ export default function ShippingServiceMappingPage() {
           // The aliases map the same code elsewhere; say so, because
           // removing them is a separate decision below.
           preview.clientAliasCount > 0
-            ? `• ${preview.clientAliasCount} client code alias(es) for ${rule.shipviaCd}, in Settings → Code Maps`
+            ? `• ${preview.clientAliasCount} ERP code alias${preview.clientAliasCount === 1 ? '' : 'es'} for `
+              + `${rule.shipviaCd} (Settings → Code Maps${rule.clientCode ? ` → ${rule.clientCode}` : ''})`
             : null,
         ].filter(Boolean) as string[]
         if (bullets.length > 0) {
           cascadeSummary = `\n\nAlso tied to this rule:\n${bullets.join('\n')}`
         }
         aliasCount = preview.clientAliasCount ?? 0
-        // No other rule covers the code once this one is gone.
+        // Always say what happens to the code — it either stops resolving, or
+        // quietly starts shipping on whatever rule takes over.
         if ((preview.otherRulesForCode ?? 0) === 0) {
           cascadeSummary += `\n\nAfter this, ${rule.shipviaCd} maps to nothing: files using that code will fail at upload until it is mapped again.`
+        } else if (preview.fallsBackTo) {
+          cascadeSummary += `\n\nAfter this, ${rule.shipviaCd} falls back to ${preview.fallsBackTo}`
+            + `${rule.clientCode ? ` — ${rule.clientCode}'s shipments move to that service` : ''}.`
         }
       }
     } catch {
@@ -850,13 +855,15 @@ export default function ShippingServiceMappingPage() {
     let withAliases = false
     if (aliasCount > 0) {
       withAliases = await notify.confirm(
-        `Also remove the ${aliasCount} client code alias(es) for ${rule.shipviaCd}? `
+        `Also remove the ${aliasCount} ERP code alias${aliasCount === 1 ? '' : 'es'} for ${rule.shipviaCd}? `
           + 'Left in place, the code keeps translating on the API path while bulk uploads refuse it.',
         { title: 'Remove the aliases too?', confirmLabel: 'Remove them', cancelLabel: 'Keep them' },
       )
     }
     try {
-      await shippingConfigService.deleteRule(rule.id, withAliases)
+      // A delete in two places deserves a receipt, like the saves get.
+      const res = await shippingConfigService.deleteRule(rule.id, withAliases)
+      notify.success(res.message || `${rule.shipviaCd} mapping removed.`)
       void load()
     } catch (e) {
       notify.apiError(e, 'Failed to remove the mapping.')

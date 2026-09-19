@@ -35,4 +35,9 @@ public class RuleCascadePreviewDTO {
     /** Other rules that also cover this code — when there are none, the code
      *  stops resolving entirely and files carrying it start failing. */
     private long otherRulesForCode;
+    /** What the code resolves to once this rule is gone, e.g. "the Any client
+     *  rule — FedEx Ground". Null when nothing else covers it: deleting then
+     *  silently moves those shipments to another carrier, which is worth
+     *  saying out loud. */
+    private String fallsBackTo;
 }

@@ -239,6 +239,9 @@ export interface RuleCascadePreview {
   /** Other rules still covering this code. Zero means the code stops resolving
    *  and files carrying it start failing at upload. */
   otherRulesForCode: number
+  /** The rule that takes over and what it ships, e.g. "the Any client rule —
+   *  FedEx Ground (FEDEX FEDEX_GROUND)". Null when nothing else covers it. */
+  fallsBackTo?: string | null
 }
 
 export interface SyncResult {
