@@ -352,9 +352,16 @@ export default function OrdersWorkspace() {
     clientService
       .listClients({ size: 100 })
       .then((response) => setClientCodes((response.data?.content ?? []).map((client) => client.clientCode)))
-      // Sprint 51 FE-L3 — log instead of silently swallowing a secondary load.
+      // PR-F1.6 (FE-ERR-2 parallel) — was log-only. Failed listClients
+      // leaves the Client filter dropdown empty; toast so the operator
+      // knows why the picker is blank.
       .catch((e) => {
-        if (!isAbortError(e)) console.debug('[secondary load] listClients', e)
+        if (isAbortError(e)) return
+        console.debug('[secondary load] listClients', e)
+        notify.error({
+          title: 'Client list unavailable',
+          body: 'Client filter dropdown is empty until this loads. Refresh to retry.',
+        })
       })
   }, [reloadToken])
 
@@ -373,8 +380,18 @@ export default function OrdersWorkspace() {
       .then((response) => {
         if (!cancelled && response.data) setStats(response.data)
       })
-      .catch(() => {
-        /* the rows request surfaces errors; stats are cosmetic counts */
+      // PR-F1.6 (FE-ERR-3) — was fully silent, leaving tab counters at
+      // zero with no indication. Log + surface a single info toast so
+      // the operator knows the numbers are stale, not truly-zero. The
+      // rows-fetch catch below still owns the "orders failed to load"
+      // toast, so this one is scoped narrowly to the stats endpoint.
+      .catch((e) => {
+        if (cancelled) return
+        console.debug('[queue-stats]', e)
+        notify.info({
+          title: 'Queue counts unavailable',
+          body: 'Tab counters may not reflect current queue depth. Refresh to retry.',
+        })
       })
     return () => {
       cancelled = true
