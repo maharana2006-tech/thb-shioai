@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  FiAlertTriangle, FiCheckCircle, FiEdit2, FiPrinter, FiRadio, FiTrash2, FiX,
+  FiAlertTriangle, FiCheckCircle, FiClock, FiEdit2, FiPrinter, FiRadio, FiTrash2, FiX,
 } from 'react-icons/fi'
 import {
-  CONNECTION_LABEL, PAPER_LABEL,
-  type Printer, type PrinterAssignment,
+  CONNECTION_LABEL, PAPER_LABEL, printerService,
+  type Printer, type PrinterAssignment, type PrinterTestHistoryEntry,
 } from '../api/printerService'
 
 /**
@@ -45,6 +45,41 @@ export default function PrinterDetailsPanel({
   onTest: () => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
+  // PR-R9.5b — test-history section. Fetched on open + refetched
+  // whenever the Retest button flips `testing` from true → false
+  // (a completed test just appended a row).
+  const [history, setHistory] = useState<PrinterTestHistoryEntry[]>([])
+  const [historyLoading, setHistoryLoading] = useState(true)
+
+  const loadHistory = useCallback(async () => {
+    setHistoryLoading(true)
+    try {
+      const res = await printerService.listPrinterTestHistory(printer.id, 10)
+      setHistory(res.data ?? [])
+    } catch {
+      // R9.5a endpoint may 404 in dev before backend deploys; render
+      // empty state rather than a toast — the section is optional.
+      setHistory([])
+    } finally {
+      setHistoryLoading(false)
+    }
+  }, [printer.id])
+
+  useEffect(() => {
+    let cancelled = false
+    queueMicrotask(() => { if (!cancelled) void loadHistory() })
+    return () => { cancelled = true }
+  }, [loadHistory])
+
+  // Refetch after a Retest completes. Guard on `testing` transitioning
+  // to false — the parent's testingIds set removes on completion.
+  const wasTesting = useRef(false)
+  useEffect(() => {
+    if (wasTesting.current && !testing) {
+      void loadHistory()
+    }
+    wasTesting.current = testing
+  }, [testing, loadHistory])
 
   // Close on Esc + click-outside.
   useEffect(() => {
@@ -227,10 +262,62 @@ export default function PrinterDetailsPanel({
               </span>
             )}
           </section>
+
+          {/* PR-R9.5b — rolling test-print history (last 10). Refetches
+              automatically when the Retest button completes. */}
+          <section className="rounded-lg border border-slate-200 p-3">
+            <h4 className="flex items-center gap-1.5 text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-500">
+              <FiClock className="h-3 w-3" />
+              Test history ({history.length})
+            </h4>
+            {historyLoading ? (
+              <p className="mt-2 text-[11.5px] text-slate-500">Loading…</p>
+            ) : history.length === 0 ? (
+              <p className="mt-2 text-[11.5px] text-slate-500">
+                No test attempts yet. Click <span className="font-semibold text-slate-700">Retest</span> above to make an entry.
+              </p>
+            ) : (
+              <ol className="mt-2 space-y-1.5 text-[12px]">
+                {history.map((h) => (
+                  <li key={h.id} className="flex items-start justify-between gap-3 border-b border-slate-100 pb-1.5 last:border-b-0 last:pb-0">
+                    <span className="flex min-w-0 items-start gap-1.5">
+                      {h.ok ? (
+                        <FiCheckCircle className="h-3.5 w-3.5 shrink-0 text-emerald-600" title="Sent OK" />
+                      ) : (
+                        <FiAlertTriangle className="h-3.5 w-3.5 shrink-0 text-rose-600" title="Test failed" />
+                      )}
+                      <span className="min-w-0">
+                        <span className="block text-[11.5px] font-semibold text-slate-800" title={new Date(h.testedAt).toLocaleString()}>
+                          {formatSince(h.testedAt)}
+                          {h.testedBy ? <span className="ml-1 font-normal text-slate-500">by {h.testedBy}</span> : null}
+                        </span>
+                        {h.message ? (
+                          <span className="block text-[11px] text-slate-500">{h.message}</span>
+                        ) : null}
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </section>
         </div>
       </div>
     </div>
   )
+}
+
+// PR-R9.5b — same formatSince helper the other panels use.
+function formatSince(iso: string): string {
+  const then = new Date(iso).getTime()
+  if (!Number.isFinite(then)) return iso
+  const ms = Date.now() - then
+  if (ms < 60_000) return 'just now'
+  const mins = Math.floor(ms / 60_000)
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  return `${Math.floor(hrs / 24)}d ago`
 }
 
 function ClientList({ codes }: { codes: string[] }) {

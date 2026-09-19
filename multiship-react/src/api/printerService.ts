@@ -81,6 +81,14 @@ export const printerService = {
     apiClient.put<ApiResponse<PrinterAssignment>>('/printers/assignments', { clientCode, docType, printerId }),
   unassign: (id: number) => apiClient.delete<ApiResponse<void>>(`/printers/assignments/${id}`),
 
+  // PR-Printer-R9.5a — rolling test-print log. Feeds the FE
+  // PrinterDetailsPanel > Test history section. Default backend
+  // limit is 10; capped at 100.
+  listPrinterTestHistory: (id: number, limit?: number) =>
+    apiClient.get<ApiResponse<PrinterTestHistoryEntry[]>>(
+      `/printers/${id}/test-history${limit != null ? `?limit=${limit}` : ''}`,
+    ),
+
   // PR-Printer-R8a — free-form tags per printer (M2M). replacePrinterTags
   // is bulk (send the full desired set on save; backend diffs). Distinct
   // list feeds the FE autocomplete on the editor input.
@@ -178,6 +186,18 @@ export interface PrinterScanAgentEnrollResponse {
   /** Shown to admin ONCE. Never re-fetchable. Paste into the Docker
    *  agent's MULTISHIP_AGENT_KEY env; lost = rotate via revoke + re-enroll. */
   rawKey: string
+}
+
+export interface PrinterTestHistoryEntry {
+  id: number
+  printerId: number
+  /** ISO-8601. */
+  testedAt: string
+  ok: boolean
+  /** Long carrier / IPP / raw-9100 responses fit here (TEXT column). */
+  message: string | null
+  /** JWT username who clicked Test; null for scheduled tests. */
+  testedBy: string | null
 }
 
 export interface PrinterTag {
