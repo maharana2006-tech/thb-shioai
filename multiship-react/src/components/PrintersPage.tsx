@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
-  FiAlertTriangle, FiCheckCircle, FiCheckSquare, FiEdit2, FiLink, FiPlus, FiPower,
-  FiPrinter, FiRadio, FiSearch, FiSquare, FiTrash2, FiWifi, FiX,
+  FiAlertTriangle, FiCheckCircle, FiCheckSquare, FiCopy, FiEdit2, FiFileText, FiPlus, FiPower,
+  FiPrinter, FiRadio, FiSearch, FiSquare, FiTag, FiTrash2, FiWifi, FiX,
 } from 'react-icons/fi'
 import { notify } from '../utils/notify'
 import { clientService, type Client } from '../api/clientService'
 import AssignmentMatrix from './AssignmentMatrix'
+import InvoiceCopiesMatrix from './InvoiceCopiesMatrix'
 import PrinterScanPanel from './PrinterScanPanel'
 import {
   CONNECTION_LABEL,
@@ -21,13 +22,17 @@ import {
   type PrinterPaper,
 } from '../api/printerService'
 
-// PR-Printer-R3 — tabbed page shell. Splits three concerns that used
-// to be stacked vertically on one page:
+// PR-Printer-R3 + R7b — tabbed page shell. R7b split the old
+// "Assignments" tab into three because label printers, invoice
+// printers, and per-carrier copy counts are three distinct concerns
+// admins configure independently.
 //   - Printers tab: register + edit network printers, run test prints
 //   - Scanners tab: LAN scanner enrollment + auto-discovery
-//   - Assignments tab: which printer prints which client's docs
+//   - Labels tab:   which printer prints each client's shipping labels
+//   - Invoices tab: which (PDF) printer prints each client's commercial invoices
+//   - Copies tab:   how many invoice copies per (client, carrier)
 // Deep-linkable via ?tab=. Default = printers (Add-printer surface).
-const TAB_KEYS = ['printers', 'scanners', 'assignments'] as const
+const TAB_KEYS = ['printers', 'scanners', 'labels', 'invoices', 'copies'] as const
 type TabKey = typeof TAB_KEYS[number]
 
 const TAB_META: Record<TabKey, { label: string; icon: typeof FiPrinter; help: string }> = {
@@ -41,10 +46,20 @@ const TAB_META: Record<TabKey, { label: string; icon: typeof FiPrinter; help: st
     icon: FiWifi,
     help: 'Enroll a LAN scan agent per warehouse so new printers auto-discover instead of being typed by hand.',
   },
-  assignments: {
-    label: 'Assignments',
-    icon: FiLink,
-    help: 'Route each client’s labels and commercial invoices to a specific printer. Clients without their own printer use the Default row.',
+  labels: {
+    label: 'Labels',
+    icon: FiTag,
+    help: 'Route each client’s shipping labels to a specific printer. Clients without their own routing use the Default row.',
+  },
+  invoices: {
+    label: 'Invoices',
+    icon: FiFileText,
+    help: 'Route each client’s commercial invoices to a specific PDF printer. ZPL printers can’t print invoices and are hidden.',
+  },
+  copies: {
+    label: 'Copies',
+    icon: FiCopy,
+    help: 'How many physical copies of the commercial invoice to print per (client, carrier). Default row = tenant-wide default per carrier; missing rule = 1.',
   },
 }
 
@@ -620,38 +635,74 @@ export default function PrintersPage() {
       </>
       ) : null}
 
-      {activeTab === 'assignments' ? (
+      {activeTab === 'labels' ? (
         <section className="space-y-3">
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
-              <h3 className="text-[14px] font-semibold text-slate-900">Where each client prints</h3>
+              <h3 className="text-[14px] font-semibold text-slate-900">Which printer prints each client’s labels</h3>
               <p className="mt-0.5 text-[12px] text-slate-500">
-                Rows = clients, columns = active printers. Click a cell to route Labels
+                Click a cell to route shipping labels
                 (<span className="rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold text-sky-800">L</span>)
-                or Commercial invoices
-                (<span className="rounded-full bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold text-violet-800">I</span>)
                 through that printer. Default row is the fallback for any client without its own routing.
               </p>
             </div>
-            <label className="flex items-center gap-2 text-[12.5px] text-slate-600">
-              Add a client
-              <select
-                value=""
-                onChange={(e) => { if (e.target.value) setExtraClients((l) => [...l, e.target.value]) }}
-                disabled={unassignedClients.length === 0}
-                className="rounded-md border border-slate-300 bg-white px-2 py-1 text-[13px] disabled:opacity-50"
-              >
-                <option value="">{unassignedClients.length === 0 ? 'All clients listed' : 'Choose…'}</option>
-                {unassignedClients.map((code) => <option key={code} value={code}>{code}</option>)}
-              </select>
-            </label>
+            <AddClientDropdown
+              unassignedClients={unassignedClients}
+              onAdd={(code) => setExtraClients((l) => [...l, code])}
+            />
           </div>
           <AssignmentMatrix
+            docType="LABEL"
             clients={clientRows}
             printers={printers.filter((p) => p.active)}
             assignments={assignments}
             onChanged={load}
           />
+        </section>
+      ) : null}
+
+      {activeTab === 'invoices' ? (
+        <section className="space-y-3">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h3 className="text-[14px] font-semibold text-slate-900">Which printer prints each client’s commercial invoices</h3>
+              <p className="mt-0.5 text-[12px] text-slate-500">
+                Click a cell to route commercial invoices
+                (<span className="rounded-full bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold text-violet-800">I</span>)
+                through that printer. Only PDF-capable printers are shown (ZPL can’t render invoice pages).
+              </p>
+            </div>
+            <AddClientDropdown
+              unassignedClients={unassignedClients}
+              onAdd={(code) => setExtraClients((l) => [...l, code])}
+            />
+          </div>
+          <AssignmentMatrix
+            docType="COMMERCIAL_INVOICE"
+            clients={clientRows}
+            printers={printers.filter((p) => p.active && p.format === 'PDF')}
+            assignments={assignments}
+            onChanged={load}
+          />
+        </section>
+      ) : null}
+
+      {activeTab === 'copies' ? (
+        <section className="space-y-3">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h3 className="text-[14px] font-semibold text-slate-900">How many copies per (client, carrier)</h3>
+              <p className="mt-0.5 text-[12px] text-slate-500">
+                Enter a number 1..20 to override, leave empty to inherit the Default row (or 1 if the
+                Default is also empty). Carriers come from the tenant’s connected accounts.
+              </p>
+            </div>
+            <AddClientDropdown
+              unassignedClients={unassignedClients}
+              onAdd={(code) => setExtraClients((l) => [...l, code])}
+            />
+          </div>
+          <InvoiceCopiesMatrix clients={clientRows} onChanged={load} />
         </section>
       ) : null}
 
@@ -663,6 +714,32 @@ export default function PrintersPage() {
         />
       ) : null}
     </div>
+  )
+}
+
+// PR-Printer-R7b — the same Add-a-client dropdown appears on all
+// three assignment-family tabs. Extracted here so its markup + a11y
+// stay consistent across Labels / Invoices / Copies.
+function AddClientDropdown({
+  unassignedClients,
+  onAdd,
+}: {
+  unassignedClients: string[]
+  onAdd: (code: string) => void
+}) {
+  return (
+    <label className="flex items-center gap-2 text-[12.5px] text-slate-600">
+      Add a client
+      <select
+        value=""
+        onChange={(e) => { if (e.target.value) onAdd(e.target.value) }}
+        disabled={unassignedClients.length === 0}
+        className="rounded-md border border-slate-300 bg-white px-2 py-1 text-[13px] disabled:opacity-50"
+      >
+        <option value="">{unassignedClients.length === 0 ? 'All clients listed' : 'Choose…'}</option>
+        {unassignedClients.map((code) => <option key={code} value={code}>{code}</option>)}
+      </select>
+    </label>
   )
 }
 
