@@ -211,7 +211,9 @@ describe('ShippingServiceMappingPage — delete row', () => {
       await userEvent.click(screen.getByRole('button', { name: /Remove mapping GND/i }))
     })
 
-    await waitFor(() => expect(deleteRuleMock).toHaveBeenCalledWith(10))
+    // Second arg is `withAliases`, default false — added by the "cleanup
+    // and reports what used it" trunk commit alongside previewRuleDelete.
+    await waitFor(() => expect(deleteRuleMock).toHaveBeenCalledWith(10, false))
     // Refetch after delete: catalog called twice (mount + post-delete).
     await waitFor(() => expect(catalogMock).toHaveBeenCalledTimes(2))
   })
