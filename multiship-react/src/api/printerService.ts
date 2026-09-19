@@ -81,6 +81,22 @@ export const printerService = {
     apiClient.put<ApiResponse<PrinterAssignment>>('/printers/assignments', { clientCode, docType, printerId }),
   unassign: (id: number) => apiClient.delete<ApiResponse<void>>(`/printers/assignments/${id}`),
 
+  // PR-Printer-R7a — per (client, carrier) commercial-invoice copies.
+  // clientCode=null on upsert = tenant-wide default row for the carrier.
+  // Fallback chain at print time: (client, carrier) → (null, carrier) → 1.
+  listInvoiceCopies: () =>
+    apiClient.get<ApiResponse<InvoiceCopiesRule[]>>('/invoice-copies'),
+  upsertInvoiceCopies: (clientCode: string | null, carrierCode: string, copies: number) =>
+    apiClient.put<ApiResponse<InvoiceCopiesRule>>('/invoice-copies', {
+      clientCode: clientCode ?? null, carrierCode, copies,
+    }),
+  deleteInvoiceCopiesTenantDefault: (carrierCode: string) =>
+    apiClient.delete<ApiResponse<void>>(`/invoice-copies/${encodeURIComponent(carrierCode)}`),
+  deleteInvoiceCopiesClientRule: (carrierCode: string, clientCode: string) =>
+    apiClient.delete<ApiResponse<void>>(
+      `/invoice-copies/${encodeURIComponent(carrierCode)}/clients/${encodeURIComponent(clientCode)}`,
+    ),
+
   /** Each order to its client's printer (or printerId for all). */
   sendToPrinter: (orderNumbers: number[], docType: PrintDocType, printerId?: number | null) =>
     apiClient.post<ApiResponse<SendToPrinterResult>>('/orders/documents/send-to-printer', {
@@ -152,6 +168,16 @@ export interface PrinterScanAgentEnrollResponse {
   /** Shown to admin ONCE. Never re-fetchable. Paste into the Docker
    *  agent's MULTISHIP_AGENT_KEY env; lost = rotate via revoke + re-enroll. */
   rawKey: string
+}
+
+export interface InvoiceCopiesRule {
+  id: number
+  /** null = tenant-wide default row for this carrier. */
+  clientCode: string | null
+  carrierCode: string
+  copies: number
+  createdAt: string
+  updatedAt: string
 }
 
 export interface PrinterDiscovered {

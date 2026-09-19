@@ -38,6 +38,7 @@ export default function AssignmentMatrix({
   printers,
   assignments,
   onChanged,
+  docType,
 }: {
   /** Uppercased client codes to render as rows (in order). `null` = Default. */
   clients: Array<string | null>
@@ -48,6 +49,10 @@ export default function AssignmentMatrix({
   assignments: PrinterAssignment[]
   /** Called after any save so the parent can refetch. */
   onChanged: () => void | Promise<void>
+  /** PR-Printer-R7b — when provided, the popover shows only that
+   *  doctype's checkbox and the cell badges filter accordingly. Omit
+   *  to render the mixed L+I cell (R6 behaviour). */
+  docType?: PrintDocType
 }) {
   const [popover, setPopover] = useState<{ client: string | null; printerId: number } | null>(null)
   const [saving, setSaving] = useState(false)
@@ -157,8 +162,13 @@ export default function AssignmentMatrix({
                 )}
               </td>
               {sortedPrinters.map((p) => {
-                const hasLabel = has(client, p.id, 'LABEL')
-                const hasInvoice = has(client, p.id, 'COMMERCIAL_INVOICE')
+                const rawHasLabel = has(client, p.id, 'LABEL')
+                const rawHasInvoice = has(client, p.id, 'COMMERCIAL_INVOICE')
+                // PR-R7b — when docType is set, hide the other doctype's
+                // badge but keep it visible in the popover so an admin
+                // can still add it without switching tabs.
+                const hasLabel = docType === 'COMMERCIAL_INVOICE' ? false : rawHasLabel
+                const hasInvoice = docType === 'LABEL' ? false : rawHasInvoice
                 const active = hasLabel || hasInvoice
                 const isPopoverOpen = popover?.client === client && popover?.printerId === p.id
                 return (
@@ -188,8 +198,9 @@ export default function AssignmentMatrix({
                       <CellPopover
                         clientCode={client}
                         printer={p}
-                        hasLabel={hasLabel}
-                        hasInvoice={hasInvoice}
+                        hasLabel={rawHasLabel}
+                        hasInvoice={rawHasInvoice}
+                        docType={docType}
                         saving={saving}
                         onClose={() => setPopover(null)}
                         onSave={(l, i) => void handleSave(client, p.id, l, i)}
@@ -212,6 +223,7 @@ function CellPopover({
   printer,
   hasLabel,
   hasInvoice,
+  docType,
   saving,
   onClose,
   onSave,
@@ -220,6 +232,8 @@ function CellPopover({
   printer: Printer
   hasLabel: boolean
   hasInvoice: boolean
+  /** PR-R7b — scope the popover to a single doctype. undefined = both. */
+  docType?: PrintDocType
   saving: boolean
   onClose: () => void
   onSave: (labels: boolean, invoice: boolean) => void
@@ -251,33 +265,37 @@ function CellPopover({
       <p className="text-[11.5px] font-semibold text-slate-500">
         Route which docs from <span className="text-slate-800">{clientCode ?? 'Default'}</span> to <span className="text-slate-800">{printer.name}</span>?
       </p>
-      <label className="mt-3 flex items-center gap-2 text-[12.5px] text-slate-800">
-        <input
-          type="checkbox"
-          checked={labels}
-          onChange={(e) => setLabels(e.target.checked)}
-          disabled={saving}
-        />
-        <span className="rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold text-sky-800">L</span>
-        Labels
-      </label>
-      <label
-        className={
-          'mt-2 flex items-center gap-2 text-[12.5px] '
-          + (invoiceAllowed ? 'text-slate-800' : 'text-slate-400')
-        }
-        title={invoiceAllowed ? undefined : 'Commercial invoices need a PDF printer. This one prints ZPL.'}
-      >
-        <input
-          type="checkbox"
-          checked={invoice}
-          onChange={(e) => setInvoice(e.target.checked)}
-          disabled={saving || !invoiceAllowed}
-        />
-        <span className="rounded-full bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold text-violet-800">I</span>
-        Commercial invoices
-        {!invoiceAllowed ? <span className="ml-auto text-[10px]">PDF only</span> : null}
-      </label>
+      {docType === undefined || docType === 'LABEL' ? (
+        <label className="mt-3 flex items-center gap-2 text-[12.5px] text-slate-800">
+          <input
+            type="checkbox"
+            checked={labels}
+            onChange={(e) => setLabels(e.target.checked)}
+            disabled={saving}
+          />
+          <span className="rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold text-sky-800">L</span>
+          Labels
+        </label>
+      ) : null}
+      {docType === undefined || docType === 'COMMERCIAL_INVOICE' ? (
+        <label
+          className={
+            'mt-2 flex items-center gap-2 text-[12.5px] '
+            + (invoiceAllowed ? 'text-slate-800' : 'text-slate-400')
+          }
+          title={invoiceAllowed ? undefined : 'Commercial invoices need a PDF printer. This one prints ZPL.'}
+        >
+          <input
+            type="checkbox"
+            checked={invoice}
+            onChange={(e) => setInvoice(e.target.checked)}
+            disabled={saving || !invoiceAllowed}
+          />
+          <span className="rounded-full bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold text-violet-800">I</span>
+          Commercial invoices
+          {!invoiceAllowed ? <span className="ml-auto text-[10px]">PDF only</span> : null}
+        </label>
+      ) : null}
       <div className="mt-3 flex items-center justify-end gap-1.5 border-t border-slate-100 pt-2">
         <button
           type="button"

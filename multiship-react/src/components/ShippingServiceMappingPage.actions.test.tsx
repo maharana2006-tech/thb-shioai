@@ -41,6 +41,10 @@ vi.mock('../api/shippingConfigService', () => ({
     listPresets: (...args: unknown[]) => listPresetsMock(...args),
     saveRule: (...args: unknown[]) => saveRuleMock(...args),
     deleteRule: (...args: unknown[]) => deleteRuleMock(...args),
+    // Added by the "cleanup and reports what used it" trunk commit —
+    // the component now fetches a cascade preview before the confirm.
+    // Silently resolve to null so the fallback (plain confirm) runs.
+    previewRuleDelete: vi.fn().mockResolvedValue({ data: null }),
     syncServices: vi.fn(),
     syncPackages: vi.fn(),
     setServiceEnabled: vi.fn(),
@@ -207,7 +211,9 @@ describe('ShippingServiceMappingPage — delete row', () => {
       await userEvent.click(screen.getByRole('button', { name: /Remove mapping GND/i }))
     })
 
-    await waitFor(() => expect(deleteRuleMock).toHaveBeenCalledWith(10))
+    // Second arg is `withAliases`, default false — added by the "cleanup
+    // and reports what used it" trunk commit alongside previewRuleDelete.
+    await waitFor(() => expect(deleteRuleMock).toHaveBeenCalledWith(10, false))
     // Refetch after delete: catalog called twice (mount + post-delete).
     await waitFor(() => expect(catalogMock).toHaveBeenCalledTimes(2))
   })
