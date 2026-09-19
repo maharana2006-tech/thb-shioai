@@ -4,6 +4,7 @@ import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.ErrorCode;
 import com.multiship.backend.model.PrinterDiscovered;
 import com.multiship.backend.model.PrinterScanAgent;
+import com.multiship.backend.service.PrinterDiscoveryEventPublisher;
 import com.multiship.backend.service.PrinterScanService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -24,6 +25,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
 
@@ -52,6 +54,8 @@ public class PrinterScanController {
     static final String AGENT_KEY_HEADER = "X-Printer-Scan-Key";
 
     private final PrinterScanService scanService;
+    /** PR-Printer-R2 — SSE pub-sub for the live discovery stream. */
+    private final PrinterDiscoveryEventPublisher discoveryPublisher;
     /**
      * PR-Printer-P4c — the version string agents compare against on
      * their hourly update-check. Bump this via env var / properties
@@ -65,8 +69,10 @@ public class PrinterScanController {
 
     public PrinterScanController(
             PrinterScanService scanService,
+            PrinterDiscoveryEventPublisher discoveryPublisher,
             @Value("${printer.scan-agent.latest-version:0.1.0}") String latestAgentVersion) {
         this.scanService = scanService;
+        this.discoveryPublisher = discoveryPublisher;
         this.latestAgentVersion = latestAgentVersion;
     }
 
@@ -121,6 +127,19 @@ public class PrinterScanController {
     public ResponseEntity<ApiResponse<List<PrinterDiscovered>>> latestDiscovered(
             @PathVariable String tenantCode) {
         return ok(scanService.latestForTenant(tenantCode));
+    }
+
+    @Operation(summary = "Server-sent events stream of newly discovered printers",
+            description = "PR-Printer-R2 — long-lived HTTP connection. Server pushes an "
+                    + "`event: discovered` frame every time an agent POSTs a new row for this "
+                    + "tenant. Includes an initial `event: hello` on connect and periodic "
+                    + "`: keepalive` comments every 30s (proxy-friendly). Emitter times out "
+                    + "after 30min — the SPA is expected to auto-reconnect via EventSource.")
+    @PreAuthorize("hasRole('ADMIN')")
+    @GetMapping(value = "/tenants/{tenantCode}/printers/discovered/stream",
+            produces = "text/event-stream")
+    public SseEmitter streamDiscovered(@PathVariable String tenantCode) {
+        return discoveryPublisher.subscribe(tenantCode);
     }
 
     @Operation(summary = "Revoke an enrolled scan agent",

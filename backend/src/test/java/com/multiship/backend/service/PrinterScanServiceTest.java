@@ -34,13 +34,19 @@ class PrinterScanServiceTest {
 
     private PrinterScanAgentRepository agentRepo;
     private PrinterDiscoveredRepository discoveredRepo;
+    private PrinterDiscoveryEventPublisher discoveryPublisher;
     private PrinterScanService service;
 
     @BeforeEach
     void setUp() {
         agentRepo = mock(PrinterScanAgentRepository.class);
         discoveredRepo = mock(PrinterDiscoveredRepository.class);
-        service = new PrinterScanService(agentRepo, discoveredRepo);
+        // PR-Printer-R2 — new SSE publisher dependency. Unit tests don't
+        // drive after-commit callbacks (no active tx synchronization) so
+        // the mock never receives a publish() call — kept as a no-op mock
+        // rather than a real instance to avoid the keep-alive scheduler.
+        discoveryPublisher = mock(PrinterDiscoveryEventPublisher.class);
+        service = new PrinterScanService(agentRepo, discoveredRepo, discoveryPublisher);
         when(agentRepo.save(any(PrinterScanAgent.class))).thenAnswer(inv -> {
             PrinterScanAgent a = inv.getArgument(0);
             if (a.getId() == null) a.setId(1L);
