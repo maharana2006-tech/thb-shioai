@@ -8,6 +8,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.StringUtils;
 
 import java.nio.charset.StandardCharsets;
@@ -36,6 +38,9 @@ public class PrinterScanService {
 
     private final PrinterScanAgentRepository agentRepository;
     private final PrinterDiscoveredRepository discoveredRepository;
+    /** PR-Printer-R2 — publisher fans out discovered rows to SSE
+     *  subscribers on the /printers/discovered/stream endpoint. */
+    private final PrinterDiscoveryEventPublisher discoveryPublisher;
     private final SecureRandom secureRandom = new SecureRandom();
 
     // ================================================================
@@ -213,6 +218,10 @@ public class PrinterScanService {
         long nextSeq = discoveredRepository.findMaxScanSeqForTenant(agent.getTenantCode()) + 1L;
         LocalDateTime now = LocalDateTime.now();
         int upserted = 0;
+        // PR-Printer-R2 — collect saved rows for after-commit SSE publish.
+        // Publishing before commit would let subscribers see rows that
+        // then roll back; TransactionSynchronization defers until commit.
+        List<PrinterDiscovered> saved = new java.util.ArrayList<>();
         for (DiscoveredRow row : rows) {
             if (!StringUtils.hasText(row.host()) || row.port() == null) continue;
             PrinterDiscovered pd = discoveredRepository
@@ -231,11 +240,22 @@ public class PrinterScanService {
             pd.setRawTxt(row.rawTxt());
             pd.setDiscoveredAt(now);
             pd.setScanSeq(nextSeq);
-            discoveredRepository.save(pd);
+            saved.add(discoveredRepository.save(pd));
             upserted++;
         }
         log.info("Printer scan ingest: tenant={} agent={} rows={} scanSeq={}",
                 agent.getTenantCode(), agent.getAgentId(), upserted, nextSeq);
+
+        if (!saved.isEmpty() && TransactionSynchronizationManager.isSynchronizationActive()) {
+            String tenant = agent.getTenantCode();
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override public void afterCommit() {
+                    for (PrinterDiscovered pd : saved) {
+                        discoveryPublisher.publish(tenant, pd);
+                    }
+                }
+            });
+        }
         return upserted;
     }
 
