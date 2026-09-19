@@ -1,27 +1,30 @@
-import { useCallback, useEffect, useState } from 'react'
-import { FiCheckCircle, FiCopy, FiDownload, FiKey, FiRefreshCw, FiTrash2, FiWifi } from 'react-icons/fi'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  FiCheckCircle, FiChevronDown, FiChevronRight, FiCopy, FiDownload, FiKey,
+  FiRadio, FiRefreshCw, FiRotateCcw, FiTrash2, FiWifi,
+} from 'react-icons/fi'
 import DiscoveredPickerModal from './DiscoveredPickerModal'
+import { BASE_URL } from '../api/apiClient'
 import { printerService, type Printer, type PrinterScanAgent } from '../api/printerService'
 import { notify } from '../utils/notify'
 
 /**
- * PR-Printer-P1.6 — admin panel on `/settings/printers` for the LAN
- * scan agent flow.
+ * PR-Printer-P1.6 (extended by R1 revoke, R2 SSE, R4 wiring) — admin
+ * panel on {@code /settings/printers → Scanners} tab.
  *
- * <p>Minimal MVP surface:
+ * <p>R4 surface adds:
  * <ul>
- *   <li>Lists active scan agents for the tenant (empty until first enroll).</li>
- *   <li>"Enroll scanner" → modal collects agentId + hostname, POSTs to
- *       {@code /tenants/{t}/printer-scan-agents}, shows the raw key
- *       ONCE with a copy-to-clipboard button.</li>
- *   <li>"Scan for printers" → POST {@code /tenants/{t}/printers/scan-now};
- *       toasts on success (agent picks up on next 5s long-poll).</li>
+ *   <li>Live discovery pill via {@link EventSource} on
+ *       {@code /printers/discovered/stream} (R2). Increments on every
+ *       {@code discovered} event; click opens the picker.</li>
+ *   <li>Prominent Refresh button (P4-audit finding — user could not
+ *       find the existing one inside the picker modal).</li>
+ *   <li>Revoked-agents collapsible section with Unrevoke button
+ *       (R1 endpoint). Confirm dialog surfaces the security caveat.</li>
+ *   <li>Pre-check on Scan-for-printers: disabled + tooltip when no
+ *       active agents (was firing the API only to toast "no scanner").</li>
+ *   <li>Modal-state reset on {@code tenantCode} change (audit finding).</li>
  * </ul>
- *
- * <p>The picker drawer that lets the admin bulk-add discovered printers
- * is P3's scope (docs/printer-auto-detect-design.md); this panel just
- * lands the enrollment + nudge flow so the operator can start driving
- * discovery today.
  */
 export default function PrinterScanPanel({
   tenantCode,
@@ -29,23 +32,33 @@ export default function PrinterScanPanel({
   onImported,
 }: {
   tenantCode: string
-  /** Existing registered printers — used by the picker (P3) to disable duplicate rows. */
   existingPrinters?: Printer[]
-  /** Fired after the picker successfully imports one or more rows. */
   onImported?: () => void | Promise<void>
 }) {
   const [agents, setAgents] = useState<PrinterScanAgent[]>([])
+  const [revoked, setRevoked] = useState<PrinterScanAgent[]>([])
+  const [revokedOpen, setRevokedOpen] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [enrollOpen, setEnrollOpen] = useState(false)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [scanning, setScanning] = useState(false)
   const [revokingId, setRevokingId] = useState<number | null>(null)
+  const [unrevokingId, setUnrevokingId] = useState<number | null>(null)
+  // PR-Printer-R2/R4 — count of `event: discovered` frames received
+  // since the current tenantCode mounted. Resets when the tenant
+  // changes or when the admin explicitly opens the picker.
+  const [liveDiscoveredCount, setLiveDiscoveredCount] = useState(0)
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await printerService.listScanAgents(tenantCode)
-      setAgents(res.data ?? [])
+      const [activeRes, revokedRes] = await Promise.all([
+        printerService.listScanAgents(tenantCode),
+        printerService.listRevokedScanAgents(tenantCode),
+      ])
+      setAgents(activeRes.data ?? [])
+      setRevoked(revokedRes.data ?? [])
     } catch (err) {
       notify.apiError(err, 'Could not load scan agents')
     } finally {
@@ -53,15 +66,52 @@ export default function PrinterScanPanel({
     }
   }, [tenantCode])
 
-  // Kick off the initial fetch on mount + when tenantCode changes. Guard
-  // against the "sync setState in effect → cascading render" lint by
-  // deferring the load one microtask so the effect returns before load()'s
-  // synchronous setLoading(true) fires.
+  // Initial fetch on mount + when tenantCode changes. Deferred one
+  // microtask so the effect returns before load()'s synchronous
+  // setLoading fires (react-hooks/set-state-in-effect lint).
   useEffect(() => {
     let cancelled = false
     queueMicrotask(() => { if (!cancelled) void load() })
     return () => { cancelled = true }
   }, [load])
+
+  // PR-Printer-R4 — audit-BLOCKER note: reset-on-tenant-change is
+  // handled at the parent by keying the panel with `key={tenantCode}`.
+  // That auto-remounts (fresh state) instead of leaving stale
+  // enrollOpen/pickerOpen/liveDiscoveredCount from the previous tenant.
+
+  // PR-Printer-R2/R4 — SSE subscription. EventSource sends the
+  // httpOnly cookie same-origin by default; withCredentials makes it
+  // work under cross-origin dev too. Auto-reconnects on network
+  // hiccup (browser-native). Detach on unmount / tenant change.
+  const esRef = useRef<EventSource | null>(null)
+  useEffect(() => {
+    if (!tenantCode) return
+    const url = `${BASE_URL}/tenants/${encodeURIComponent(tenantCode)}/printers/discovered/stream`
+    const es = new EventSource(url, { withCredentials: true })
+    esRef.current = es
+    const onDiscovered = () => setLiveDiscoveredCount((n) => n + 1)
+    es.addEventListener('discovered', onDiscovered)
+    // Silently drop errors — the browser reconnects on its own; a
+    // permanent 401/403 shows up as onerror but there's no auth
+    // recovery path we can take from here.
+    es.onerror = () => { /* noop — browser retries */ }
+    return () => {
+      es.removeEventListener('discovered', onDiscovered)
+      es.close()
+      esRef.current = null
+    }
+  }, [tenantCode])
+
+  const handleRefresh = async () => {
+    if (refreshing) return
+    setRefreshing(true)
+    try {
+      await load()
+    } finally {
+      setRefreshing(false)
+    }
+  }
 
   const handleRevoke = async (agent: PrinterScanAgent) => {
     if (revokingId !== null) return
@@ -88,6 +138,34 @@ export default function PrinterScanPanel({
     }
   }
 
+  const handleUnrevoke = async (agent: PrinterScanAgent) => {
+    if (unrevokingId !== null) return
+    // PR-Printer-R1 — surface the security caveat prominently in the
+    // confirm copy: unrevoke re-arms the ORIGINAL key. If the revoke
+    // was in response to a leak, re-enroll instead.
+    const ok = await notify.confirm(
+      `Reactivate ${agent.agentId}? The original scanner key is re-armed — the customer's `
+        + `container resumes on its next poll (~5s). Do NOT unrevoke if the previous revoke was a leak `
+        + `response; use "Enroll scanner" with the same id to rotate the key instead.`,
+      {
+        title: 'Reactivate scanner',
+        confirmLabel: 'Reactivate',
+        cancelLabel: 'Cancel',
+      },
+    )
+    if (!ok) return
+    setUnrevokingId(agent.id)
+    try {
+      await printerService.unrevokeScanAgent(tenantCode, agent.id)
+      notify.success({ title: `${agent.agentId} reactivated`, body: 'The scanner is active again.' })
+      await load()
+    } catch (err) {
+      notify.apiError(err, `Could not reactivate ${agent.agentId}`)
+    } finally {
+      setUnrevokingId(null)
+    }
+  }
+
   const handleScanNow = async () => {
     if (scanning) return
     setScanning(true)
@@ -102,7 +180,7 @@ export default function PrinterScanPanel({
       } else {
         notify.success({
           title: 'Scan requested',
-          body: `Nudged ${nudged} scanner${nudged === 1 ? '' : 's'}. Results appear within ~10s.`,
+          body: `Nudged ${nudged} scanner${nudged === 1 ? '' : 's'}. Watch the live count below or click Refresh.`,
         })
       }
     } catch (err) {
@@ -111,6 +189,14 @@ export default function PrinterScanPanel({
       setScanning(false)
     }
   }
+
+  const openPickerAndClearBadge = () => {
+    setPickerOpen(true)
+    setLiveDiscoveredCount(0)
+  }
+
+  const hasActiveAgents = agents.length > 0
+  const scanDisabled = scanning || !hasActiveAgents
 
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4">
@@ -129,6 +215,17 @@ export default function PrinterScanPanel({
         <div className="flex shrink-0 items-center gap-2">
           <button
             type="button"
+            onClick={() => void handleRefresh()}
+            disabled={refreshing || loading}
+            aria-label="Refresh scanners"
+            title="Reload the list of enrolled and revoked scanners"
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <FiRotateCcw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
+          <button
+            type="button"
             onClick={() => setEnrollOpen(true)}
             className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:bg-slate-50"
           >
@@ -138,24 +235,57 @@ export default function PrinterScanPanel({
           <button
             type="button"
             onClick={() => void handleScanNow()}
-            disabled={scanning}
+            disabled={scanDisabled}
+            title={hasActiveAgents
+              ? 'Nudge every active scanner to run a fresh discovery pass'
+              : 'Enroll a LAN scanner first — nothing to nudge.'}
             className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <FiRefreshCw className={`h-3.5 w-3.5 ${scanning ? 'animate-spin' : ''}`} />
+            <FiRadio className={`h-3.5 w-3.5 ${scanning ? 'animate-pulse' : ''}`} />
             Scan for printers
           </button>
           <button
             type="button"
-            onClick={() => setPickerOpen(true)}
-            className="inline-flex items-center gap-1.5 rounded-md bg-slate-900 px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-slate-700"
+            onClick={openPickerAndClearBadge}
+            className="relative inline-flex items-center gap-1.5 rounded-md bg-slate-900 px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-slate-700"
           >
             <FiDownload className="h-3.5 w-3.5" />
             Pick from scan
+            {liveDiscoveredCount > 0 ? (
+              <span
+                title={`${liveDiscoveredCount} new since page load`}
+                className="ml-1 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-emerald-500 px-1 text-[10px] font-bold leading-none text-white"
+              >
+                {liveDiscoveredCount > 99 ? '99+' : liveDiscoveredCount}
+              </span>
+            ) : null}
           </button>
         </div>
       </div>
 
-      {!loading && agents.length > 0 ? (
+      {/* Live discovery pill — appears when new rows arrive via SSE
+          but the picker hasn't been opened yet to clear the count. */}
+      {liveDiscoveredCount > 0 ? (
+        <button
+          type="button"
+          onClick={openPickerAndClearBadge}
+          className="mt-3 inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-[12px] font-semibold text-emerald-800 hover:bg-emerald-100"
+        >
+          <FiRefreshCw className="h-3 w-3" />
+          {liveDiscoveredCount} new printer{liveDiscoveredCount === 1 ? '' : 's'} discovered — click to review
+        </button>
+      ) : null}
+
+      {loading ? (
+        <p className="mt-3 border-t border-slate-100 pt-3 text-[12px] text-slate-500">
+          Loading scanners…
+        </p>
+      ) : !hasActiveAgents ? (
+        <p className="mt-3 border-t border-slate-100 pt-3 text-[12px] text-slate-500">
+          No scanners enrolled yet. Click <span className="font-semibold">Enroll scanner</span> to add
+          the first one for this tenant.
+        </p>
+      ) : (
         <ul className="mt-3 space-y-1 border-t border-slate-100 pt-3 text-[12px]">
           {agents.map((a) => (
             <li key={a.id} className="flex items-center justify-between gap-3 text-slate-600">
@@ -184,6 +314,54 @@ export default function PrinterScanPanel({
             </li>
           ))}
         </ul>
+      )}
+
+      {/* Revoked-agents collapsible — only shown when the tenant has
+          at least one revoked row. Newest-revoked first (server-side
+          ordering). Unrevoke re-arms the ORIGINAL key; the confirm
+          dialog spells out the leak-vs-accidental trade-off. */}
+      {!loading && revoked.length > 0 ? (
+        <div className="mt-3 border-t border-slate-100 pt-3">
+          <button
+            type="button"
+            onClick={() => setRevokedOpen((v) => !v)}
+            aria-expanded={revokedOpen}
+            className="inline-flex items-center gap-1 text-[11.5px] font-semibold text-slate-500 hover:text-slate-800"
+          >
+            {revokedOpen ? <FiChevronDown className="h-3 w-3" /> : <FiChevronRight className="h-3 w-3" />}
+            Revoked ({revoked.length})
+          </button>
+          {revokedOpen ? (
+            <ul className="mt-2 space-y-1 text-[12px]">
+              {revoked.map((a) => (
+                <li key={a.id} className="flex items-center justify-between gap-3 text-slate-500">
+                  <span className="flex items-center gap-1.5 min-w-0">
+                    <FiTrash2 className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                    <span className="font-semibold text-slate-700 line-through">{a.agentId}</span>
+                    {a.hostname ? <span className="truncate text-slate-400">· {a.hostname}</span> : null}
+                  </span>
+                  <span className="flex items-center gap-2 shrink-0">
+                    <span className="text-[11px] text-slate-400">
+                      {a.revokedAt ? `revoked ${formatSince(a.revokedAt)}` : 'revoked'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void handleUnrevoke(a)}
+                      disabled={unrevokingId !== null}
+                      aria-label={`Reactivate ${a.agentId}`}
+                      title="Reactivate — re-arms the original key. Use only for accidental revokes."
+                      className="rounded-md border border-slate-200 bg-white p-1 text-slate-500 hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700 disabled:opacity-40"
+                    >
+                      {unrevokingId === a.id
+                        ? <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
+                        : <FiRotateCcw className="h-3 w-3" />}
+                    </button>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
       ) : null}
 
       {enrollOpen ? (
