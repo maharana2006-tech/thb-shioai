@@ -112,11 +112,16 @@ public class ShippingConfigController {
         return ResponseEntity.status(r.getCode()).body(r);
     }
 
-    @Operation(summary = "Delete a ship-method rule")
+    @Operation(summary = "Delete a ship-method rule",
+            description = "withAliases also removes the per-client aliases for the same ship via code "
+                    + "(Settings → Code Maps). Left behind, they map the code through another screen, so "
+                    + "the code half-works after the rule is gone. The cascade preview reports the count.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @DeleteMapping("/ship-method-rules/{id}")
-    public ResponseEntity<ApiResponse<Void>> deleteRule(@PathVariable Long id) {
-        ApiResponse<Void> r = service.deleteRule(id);
+    public ResponseEntity<ApiResponse<Void>> deleteRule(
+            @PathVariable Long id,
+            @RequestParam(defaultValue = "false") boolean withAliases) {
+        ApiResponse<Void> r = service.deleteRule(id, withAliases);
         return ResponseEntity.status(r.getCode()).body(r);
     }
 

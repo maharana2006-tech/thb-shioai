@@ -51,6 +51,9 @@ public class ShippingConfigService {
     private final PackagePresetRepository presetRepository;
     private final ServicePackageRepository servicePackageRepository;
     private final com.multiship.backend.repository.ShipMethodRulePackageRepository rulePackageRepository;
+    /** Per-client code aliases — a second surface mapping the same ERP codes. */
+    private final com.multiship.backend.repository.ClientShipviaCodeMapRepository clientShipviaAliasRepository;
+    private final com.multiship.backend.repository.ClientServiceCodeMapRepository clientServiceAliasRepository;
     private final com.multiship.backend.repository.ShipMethodRuleWarehouseRepository ruleWarehouseRepository;
     /** F5-B — strict client-scoped package selection needs the client's allowlist. */
     private final com.multiship.backend.repository.ClientAllowedPackageRepository clientAllowedPackageRepository;
@@ -579,7 +582,20 @@ public class ShippingConfigService {
         // must clear cached prices for that carrier.
         eventPublisher.publishEvent(
                 new CarrierConfigChangedEvent(svc.getCarrier(), enabled ? "service-enabled" : "service-disabled"));
-        return success((enabled ? "Enabled " : "Disabled ") + svc.getName() + ".", svc);
+        if (enabled) {
+            return success("Enabled " + svc.getName() + ".", svc);
+        }
+        // Switching a service off doesn't delete anything, but every rule and
+        // alias pointing at it silently stops matching — the ship via code
+        // then fails at upload with no clue why. Say how much that is.
+        long rules = ruleRepository.findByServiceId(id).size();
+        long aliases = (clientShipviaAliasRepository == null ? 0 : clientShipviaAliasRepository.countByServiceId(id))
+                + (clientServiceAliasRepository == null ? 0 : clientServiceAliasRepository.countByServiceId(id));
+        String tail = rules + aliases == 0 ? "" :
+                " " + rules + " ship via rule" + (rules == 1 ? "" : "s")
+                + " and " + aliases + " client alias" + (aliases == 1 ? "" : "es")
+                + " point at it and will stop resolving.";
+        return success("Disabled " + svc.getName() + "." + tail, svc);
     }
 
     /**
@@ -711,14 +727,51 @@ public class ShippingConfigService {
 
     @Transactional
     public ApiResponse<Void> deleteRule(Long id) {
+        return deleteRule(id, false);
+    }
+
+    /**
+     * @param withAliases also remove the per-client aliases for the same ship
+     *        via code (Settings → Code Maps). They map the same code through a
+     *        different screen, so leaving them behind makes a deleted code
+     *        half-work: the importer refuses it while the API path still
+     *        translates it. Off by default — the caller decides, after
+     *        {@link #previewRuleDelete} has shown the count.
+     */
+    @Transactional
+    public ApiResponse<Void> deleteRule(Long id, boolean withAliases) {
+        int[] aliasesRemoved = {0};
         ruleRepository.findById(id).ifPresent(rule -> {
+            if (withAliases && StringUtils.hasText(rule.getShipviaCd())) {
+                List<com.multiship.backend.model.ClientShipviaCodeMap> aliases =
+                        aliasesForRule(rule);
+                aliasesRemoved[0] = aliases.size();
+                clientShipviaAliasRepository.deleteAll(aliases);
+            }
             // Cascade the rule's allowed-package rows so we don't leave
             // orphans that break the uq index on future re-adds.
             rulePackageRepository.deleteAllByRuleId(rule.getId());
             ruleWarehouseRepository.deleteAllByRuleId(rule.getId());
             ruleRepository.delete(rule);
         });
-        return success("Rule removed.", null);
+        return success(aliasesRemoved[0] == 0
+                ? "Rule removed."
+                : "Rule removed, with " + aliasesRemoved[0] + " client code alias"
+                    + (aliasesRemoved[0] == 1 ? "" : "es") + " for the same code.", null);
+    }
+
+    /**
+     * The per-client aliases that map the same ship via code as this rule.
+     * A client rule matches that client's aliases; a global rule (no client)
+     * matches every client's alias for the code.
+     */
+    private List<com.multiship.backend.model.ClientShipviaCodeMap> aliasesForRule(ShipViaMapping rule) {
+        if (clientShipviaAliasRepository == null || !StringUtils.hasText(rule.getShipviaCd())) return List.of();
+        String owner = StringUtils.hasText(rule.getClientCode())
+                ? rule.getClientCode().trim() : null;
+        return clientShipviaAliasRepository.findByErpCodeIgnoreCase(rule.getShipviaCd().trim()).stream()
+                .filter(a -> owner == null || (a.getClientCode() != null && a.getClientCode().trim().equalsIgnoreCase(owner)))
+                .toList();
     }
 
     /**
@@ -736,12 +789,22 @@ public class ShippingConfigService {
         }
         long packageCount = rulePackageRepository.countByRuleId(id);
         long warehouseCount = ruleWarehouseRepository.countByRuleId(id);
+        long aliasCount = aliasesForRule(rule).size();
+        // Rules other than this one that still cover the code. None means the
+        // code stops resolving: every file carrying it starts failing at upload.
+        long otherRules = StringUtils.hasText(rule.getShipviaCd())
+                ? ruleRepository.findByShipviaCdIgnoreCase(rule.getShipviaCd().trim()).stream()
+                        .filter(r -> !r.getId().equals(id))
+                        .count()
+                : 0L;
         com.multiship.backend.dto.RuleCascadePreviewDTO body =
                 com.multiship.backend.dto.RuleCascadePreviewDTO.builder()
                         .ruleId(id)
                         .shipviaCd(rule.getShipviaCd())
                         .allowedPackageCount(packageCount)
                         .allowedWarehouseCount(warehouseCount)
+                        .clientAliasCount(aliasCount)
+                        .otherRulesForCode(otherRules)
                         .build();
         return success("Cascade preview computed.", body);
     }

@@ -300,19 +300,19 @@ class ShippingConfigControllerTest {
 
     @Test
     void deleteRule_returns200_andDelegatesOnce() {
-        when(service.deleteRule(3L)).thenReturn(ok(null));
+        when(service.deleteRule(3L, false)).thenReturn(ok(null));
 
-        ResponseEntity<ApiResponse<Void>> re = controller.deleteRule(3L);
+        ResponseEntity<ApiResponse<Void>> re = controller.deleteRule(3L, false);
 
         assertEquals(HttpStatus.OK, re.getStatusCode());
-        verify(service, times(1)).deleteRule(3L);
+        verify(service, times(1)).deleteRule(3L, false);
     }
 
     @Test
     void deleteRule_serviceError500_isEchoed() {
-        when(service.deleteRule(3L)).thenReturn(err(500, ErrorCode.VALIDATION_ERROR, "boom"));
+        when(service.deleteRule(3L, false)).thenReturn(err(500, ErrorCode.VALIDATION_ERROR, "boom"));
 
-        ResponseEntity<ApiResponse<Void>> re = controller.deleteRule(3L);
+        ResponseEntity<ApiResponse<Void>> re = controller.deleteRule(3L, false);
 
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, re.getStatusCode());
     }
@@ -541,7 +541,7 @@ class ShippingConfigControllerTest {
 
     @Test
     void preAuthorize_deleteRule_requiresAdminOrUser() throws NoSuchMethodException {
-        assertEquals("hasAnyRole('ADMIN', 'USER')", preAuth("deleteRule", Long.class).value());
+        assertEquals("hasAnyRole('ADMIN', 'USER')", preAuth("deleteRule", Long.class, boolean.class).value());
     }
 
     @Test
@@ -603,7 +603,7 @@ class ShippingConfigControllerTest {
                 .getAnnotation(PatchMapping.class).value()[0].equals("/shipping-services/{id}"));
         assertTrue(ShippingConfigController.class.getMethod("upsertRule", ShipViaMapping.class)
                 .getAnnotation(PutMapping.class).value()[0].equals("/ship-method-rules"));
-        assertTrue(ShippingConfigController.class.getMethod("deleteRule", Long.class)
+        assertTrue(ShippingConfigController.class.getMethod("deleteRule", Long.class, boolean.class)
                 .getAnnotation(DeleteMapping.class).value()[0].equals("/ship-method-rules/{id}"));
         assertTrue(ShippingConfigController.class.getMethod("setServicePackages", Long.class, List.class)
                 .getAnnotation(PutMapping.class).value()[0].equals("/shipping-services/{id}/packages"));

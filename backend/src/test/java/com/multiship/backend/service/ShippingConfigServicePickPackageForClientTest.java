@@ -76,6 +76,8 @@ class ShippingConfigServicePickPackageForClientTest {
         service = new ShippingConfigService(
                 serviceRepository, ruleRepository, presetRepository,
                 servicePackageRepository, rulePackageRepository,
+                org.mockito.Mockito.mock(com.multiship.backend.repository.ClientShipviaCodeMapRepository.class),
+                org.mockito.Mockito.mock(com.multiship.backend.repository.ClientServiceCodeMapRepository.class),
                 ruleWarehouseRepository, clientAllowedPackageRepository,
                 warehouseRepository, List.<CarrierConnector>of(),
                 carrierAccountRefRepository, eventPublisher);

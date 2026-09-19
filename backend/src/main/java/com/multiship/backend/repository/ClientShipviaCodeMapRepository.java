@@ -13,4 +13,10 @@ public interface ClientShipviaCodeMapRepository extends JpaRepository<ClientShip
     List<ClientShipviaCodeMap> findByClientCodeIgnoreCaseOrderByErpCodeAsc(String clientCode);
 
     Optional<ClientShipviaCodeMap> findByClientCodeIgnoreCaseAndErpCodeIgnoreCase(String clientCode, String erpCode);
+
+    /** Every client's alias for one ERP code — the cascade behind a rule delete. */
+    List<ClientShipviaCodeMap> findByErpCodeIgnoreCase(String erpCode);
+
+    /** Aliases pointing at one catalog service — what stops resolving if it is switched off. */
+    long countByServiceId(Long serviceId);
 }

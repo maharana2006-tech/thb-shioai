@@ -28,4 +28,11 @@ public class RuleCascadePreviewDTO {
     private long allowedPackageCount;
     /** Count of restricted-warehouse rows attached to this rule. */
     private long allowedWarehouseCount;
+    /** Per-client aliases for the same ship via code, in Settings → Code Maps.
+     *  They are a second way to map the same code, so a delete that leaves them
+     *  behind makes the code half-work. Removed only when the caller asks. */
+    private long clientAliasCount;
+    /** Other rules that also cover this code — when there are none, the code
+     *  stops resolving entirely and files carrying it start failing. */
+    private long otherRulesForCode;
 }

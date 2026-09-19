@@ -233,6 +233,12 @@ export interface RuleCascadePreview {
   shipviaCd: string
   allowedPackageCount: number
   allowedWarehouseCount: number
+  /** Per-client aliases for the same code in Settings → Code Maps. They map the
+   *  code through another screen, so leaving them makes the code half-work. */
+  clientAliasCount: number
+  /** Other rules still covering this code. Zero means the code stops resolving
+   *  and files carrying it start failing at upload. */
+  otherRulesForCode: number
 }
 
 export interface SyncResult {
@@ -305,7 +311,9 @@ export const shippingConfigService = {
       `/ship-via-codes${clientCode ? `?clientCode=${encodeURIComponent(clientCode)}` : ''}`,
     ),
 
-  deleteRule: (id: number) => apiClient.delete<ApiResponse<void>>(`/ship-method-rules/${id}`),
+  /** withAliases also removes the per-client aliases for the same code. */
+  deleteRule: (id: number, withAliases = false) =>
+    apiClient.delete<ApiResponse<void>>(`/ship-method-rules/${id}${withAliases ? '?withAliases=true' : ''}`),
 
   /** Sprint 55 audit #297 — cascade preview counts (packages + warehouses)
    *  before the operator confirms a rule delete. */

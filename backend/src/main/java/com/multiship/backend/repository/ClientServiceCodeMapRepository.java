@@ -13,4 +13,7 @@ public interface ClientServiceCodeMapRepository extends JpaRepository<ClientServ
     List<ClientServiceCodeMap> findByClientCodeIgnoreCaseOrderByErpCodeAsc(String clientCode);
 
     Optional<ClientServiceCodeMap> findByClientCodeIgnoreCaseAndErpCodeIgnoreCase(String clientCode, String erpCode);
+
+    /** Aliases pointing at one catalog service — what stops resolving if it is switched off. */
+    long countByServiceId(Long serviceId);
 }

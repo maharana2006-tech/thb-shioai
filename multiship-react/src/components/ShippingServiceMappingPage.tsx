@@ -808,6 +808,7 @@ export default function ShippingServiceMappingPage() {
     // generic confirm so the delete path stays usable if the preview
     // endpoint is temporarily down.
     let cascadeSummary = ''
+    let aliasCount = 0
     try {
       const preview = (await shippingConfigService.previewRuleDelete(rule.id)).data
       if (preview) {
@@ -818,9 +819,19 @@ export default function ShippingServiceMappingPage() {
           preview.allowedWarehouseCount > 0
             ? `• ${preview.allowedWarehouseCount} restricted-warehouse link(s)`
             : null,
+          // The aliases map the same code elsewhere; say so, because
+          // removing them is a separate decision below.
+          preview.clientAliasCount > 0
+            ? `• ${preview.clientAliasCount} client code alias(es) for ${rule.shipviaCd}, in Settings → Code Maps`
+            : null,
         ].filter(Boolean) as string[]
         if (bullets.length > 0) {
-          cascadeSummary = `\n\nThis will also unlink:\n${bullets.join('\n')}`
+          cascadeSummary = `\n\nAlso tied to this rule:\n${bullets.join('\n')}`
+        }
+        aliasCount = preview.clientAliasCount ?? 0
+        // No other rule covers the code once this one is gone.
+        if ((preview.otherRulesForCode ?? 0) === 0) {
+          cascadeSummary += `\n\nAfter this, ${rule.shipviaCd} maps to nothing: files using that code will fail at upload until it is mapped again.`
         }
       }
     } catch {
@@ -834,8 +845,18 @@ export default function ShippingServiceMappingPage() {
         danger: true,
       },
     ))) return
+    // Aliases are a second mapping of the same code: ask once, rather than
+    // leaving the code working in one place and failing in another.
+    let withAliases = false
+    if (aliasCount > 0) {
+      withAliases = await notify.confirm(
+        `Also remove the ${aliasCount} client code alias(es) for ${rule.shipviaCd}? `
+          + 'Left in place, the code keeps translating on the API path while bulk uploads refuse it.',
+        { title: 'Remove the aliases too?', confirmLabel: 'Remove them', cancelLabel: 'Keep them' },
+      )
+    }
     try {
-      await shippingConfigService.deleteRule(rule.id)
+      await shippingConfigService.deleteRule(rule.id, withAliases)
       void load()
     } catch (e) {
       notify.apiError(e, 'Failed to remove the mapping.')
