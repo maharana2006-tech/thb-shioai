@@ -3,9 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   FiAlertCircle,
   FiArrowLeft,
-  FiCalendar,
   FiFileText,
-  FiFilter,
   FiHome,
   FiRefreshCw,
   FiSearch,
@@ -22,6 +20,7 @@ import AdvancedDataTable from './workspace/AdvancedDataTable'
 import AllOrdersHistory from './AllOrdersHistory'
 import OrderImportModal from './modals/OrderImportModal'
 import OrderDocumentsTable from './OrderDocumentsTable'
+import DataHistoryFilterToolbar from './DataHistoryFilterToolbar'
 import { GridCell, DH_COLUMNS, RowIssuesIcon, RowChannelChip, bucketRowErrors, type DhColumn } from './batchGrid'
 import VirtualTable from './VirtualTable'
 import { notify } from '../utils/notify'
@@ -33,6 +32,8 @@ import {
 } from '../api/orderImportService'
 import { useAppSession } from '../hooks/useAppSession'
 import { useEventStream } from '../hooks/useEventStream'
+import { useHistoryFilters } from '../hooks/useHistoryFilters'
+import { useTrashActions } from '../hooks/useTrashActions'
 import { normalizeRole } from '../utils/roles'
 // PR-G4 — USPS_DIRECT UX (audit U2 + U3). Badge surfaces queue depth
 // at the top of Data History so ops see rate-limit pressure without
@@ -128,140 +129,45 @@ export default function DataHistoryPage() {
   const [genRowKey, setGenRowKey] = useState<string | null>(null)
   // Inline correction: the cell being saved (rowKey), for a per-cell spinner.
   const [savingCell, setSavingCell] = useState<string | null>(null)
-  // Soft delete: whether we're viewing the Trash, and the row being deleted/restored.
-  const [viewTrash, setViewTrash] = useState(false)
-  const [trashBusyId, setTrashBusyId] = useState<number | null>(null)
-  // Empty Trash: two-step confirm before the irreversible purge.
-  const [confirmEmpty, setConfirmEmpty] = useState(false)
-  const [emptying, setEmptying] = useState(false)
   // Label preview modal: stores the order number to show its label
   const [showLabelModal, setShowLabelModal] = useState(false)
   const [labelModalOrderNo, setLabelModalOrderNo] = useState<number | null>(null)
 
-  // ── Advanced filter tools ────────────────────────────────────────────────
-  type StatusKey = 'ALL' | 'COMPLETE' | 'PARTIAL_COMPLETE' | 'IN_PROGRESS' | 'INITIATE' | 'DRAFT' | 'FAILED'
-  type SortKey = 'created' | 'fileName' | 'savedRows' | 'status' | 'labelBatch'
-  const [search, setSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState<StatusKey>('ALL')
-  const [sortKey, setSortKey] = useState<SortKey>('created')
-  const [sortDir, setSortDir] = useState<'ASC' | 'DESC'>('DESC')
-  const [showAdvanced, setShowAdvanced] = useState(false)
   // Order Intake has three views: "orders" (unified per-order list across
   // Bulk / Manual / API / WMS), "import" (inline CSV/Excel upload + validation),
   // and "imports" (history of bulk import batches).
   const [dhView, setDhView] = useState<'orders' | 'import' | 'imports' | 'docs'>('orders')
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
-  const [createdBy, setCreatedBy] = useState('')
-  const [batchPresence, setBatchPresence] = useState<'ANY' | 'HAS' | 'NONE'>('ANY')
-  const [minSaved, setMinSaved] = useState('')
 
-  // ── Pagination ────────────────────────────────────────────────────────────
-  // page + pageSize state kept as scaffolding for the pagination UI wired in
-  // by ad81192 ("import history"); page value and setPageSize setter aren't
-  // read yet (no pager control mounted). Disables silence lint until the UI
-  // catches up — see setPage usage in the filter-reset effect below.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- scaffold for the paginator UI; setPage is used in the reset effect below
-  const [_page, setPage] = useState(1)
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- scaffold; pageSize is read by the reset effect, setter waits for the pager UI
-  const [pageSize, _setPageSize] = useState(10)
+  // F5-A — advanced filter + sort + pagination state extracted to
+  // useHistoryFilters (see hooks/useHistoryFilters.ts). Behavior is
+  // preserved 1:1 including the DRAFT/IN_PROGRESS-first status tiebreaker
+  // and the reset-to-page-1 effect on filter change.
+  const filters = useHistoryFilters(batches)
+  // These four flow into `dhColumns` deps + the header Advanced button;
+  // the rest of the filter API is passed straight to the toolbar below.
+  const {
+    showAdvanced,
+    setShowAdvanced,
+    activeAdvancedCount,
+    filtered,
+    clearFilters,
+  } = filters
 
-  /** Distinct createdBy values for the advanced "Created by" dropdown. */
-  const creators = useMemo(
-    () => Array.from(new Set(batches.map((b) => b.createdBy).filter((v): v is string => !!v))).sort(),
-    [batches],
-  )
-
-  /** Per-status counts so the filter chips can show how many match each state. */
-  const statusCounts = useMemo(() => {
-    const c: Record<string, number> = { ALL: batches.length }
-    for (const b of batches) {
-      const k = (b.status || '').toUpperCase()
-      c[k] = (c[k] ?? 0) + 1
-    }
-    return c
-  }, [batches])
-
-  const activeAdvancedCount =
-    (createdBy ? 1 : 0) + (batchPresence !== 'ANY' ? 1 : 0) + (minSaved ? 1 : 0)
-  const dateFilterActive = dateFrom !== '' || dateTo !== ''
-  const anyFilterActive =
-    search.trim() !== '' || statusFilter !== 'ALL' || dateFilterActive || activeAdvancedCount > 0
-
-  const clearFilters = () => {
-    setSearch('')
-    setStatusFilter('ALL')
-    setDateFrom('')
-    setDateTo('')
-    setCreatedBy('')
-    setBatchPresence('ANY')
-    setMinSaved('')
-  }
-
-  /** Apply search + status + advanced filters, then sort. Pure client-side —
-   *  the history list is already fully loaded. */
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    const from = dateFrom ? new Date(dateFrom + 'T00:00:00').getTime() : null
-    const to = dateTo ? new Date(dateTo + 'T23:59:59').getTime() : null
-    const min = minSaved ? Number(minSaved) : null
-
-    const rows = batches.filter((b) => {
-      if (statusFilter !== 'ALL' && (b.status || '').toUpperCase() !== statusFilter) return false
-      if (q) {
-        const hay = `${b.fileName ?? ''} ${b.createdBy ?? ''} #${b.id} batch ${b.labelBatchId ?? ''}`.toLowerCase()
-        if (!hay.includes(q)) return false
-      }
-      if (createdBy && b.createdBy !== createdBy) return false
-      if (batchPresence === 'HAS' && b.labelBatchId == null) return false
-      if (batchPresence === 'NONE' && b.labelBatchId != null) return false
-      if (min != null && b.savedRows < min) return false
-      if (from != null || to != null) {
-        const t = b.createdAt ? new Date(b.createdAt).getTime() : NaN
-        if (Number.isNaN(t)) return false
-        if (from != null && t < from) return false
-        if (to != null && t > to) return false
-      }
-      return true
-    })
-
-    const statusOrder: Record<string, number> = {
-      DRAFT: 0, IN_PROGRESS: 0, INITIATE: 1, PARTIAL_COMPLETE: 2, FAILED: 3, COMPLETE: 4,
-    }
-    const dir = sortDir === 'ASC' ? 1 : -1
-    rows.sort((a, b) => {
-      let cmp: number
-      switch (sortKey) {
-        case 'fileName':
-          cmp = (a.fileName || '').localeCompare(b.fileName || '')
-          break
-        case 'savedRows':
-          cmp = a.totalRows - b.totalRows
-          break
-        case 'labelBatch':
-          cmp = (a.labelBatchId ?? -1) - (b.labelBatchId ?? -1)
-          break
-        case 'status':
-          cmp = (statusOrder[(a.status || '').toUpperCase()] ?? 9) - (statusOrder[(b.status || '').toUpperCase()] ?? 9)
-          break
-        default: {
-          const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0
-          const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0
-          cmp = ta - tb
-        }
-      }
-      if (cmp === 0) cmp = a.id - b.id
-      return cmp * dir
-    })
-    return rows
-  }, [batches, search, statusFilter, sortKey, sortDir, dateFrom, dateTo, createdBy, batchPresence, minSaved])
-
-  // Reset to the first page whenever the filter/sort set changes, so the user
-  // never lands on an out-of-range page after narrowing the results.
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- snap paging back to 1 on filter change; user-input-driven, not derivable at render
-    setPage(1)
-  }, [search, statusFilter, sortKey, sortDir, dateFrom, dateTo, createdBy, batchPresence, minSaved, pageSize])
+  // F5-A — soft-delete / restore / empty-Trash extracted to
+  // useTrashActions. The Trash-view toggle lives here now so we can
+  // reload independently when the operator flips between live and Trash.
+  const trash = useTrashActions({ batches, setBatches, openId, setOpenId })
+  const {
+    viewTrash,
+    setViewTrash,
+    trashBusyId,
+    confirmEmpty,
+    setConfirmEmpty,
+    emptying,
+    handleEmptyTrash,
+    handleDelete,
+    handleRestore,
+  } = trash
 
 
   const load = async () => {
@@ -465,64 +371,6 @@ export default function DataHistoryPage() {
       polls.clear()
     }
   }, [])
-
-  /** Empty the Trash — PERMANENTLY delete every batch currently in Trash. */
-  const handleEmptyTrash = async () => {
-    setEmptying(true)
-    try {
-      const res = await orderImportService.emptyTrash()
-      setBatches([])
-      setOpenId(null)
-      notify.success(res.message ?? 'Trash emptied.')
-    } catch (e) {
-      notify.apiError(e, 'Could not empty Trash.')
-    } finally {
-      setEmptying(false)
-      setConfirmEmpty(false)
-    }
-  }
-
-  /** Move a batch to Trash (soft delete). It stays recoverable from the Trash view. */
-  const handleDelete = async (id: number, fileName?: string | null) => {
-    setTrashBusyId(id)
-    try {
-      await orderImportService.deleteBatch(id)
-      setBatches((list) => list.filter((b) => b.id !== id))
-      if (openId === id) setOpenId(null)
-      notify.success(`"${fileName || `Import #${id}`}" moved to Trash · restore it from Trash anytime.`)
-    } catch (e) {
-      notify.apiError(e, 'Could not delete import.')
-    } finally {
-      setTrashBusyId(null)
-    }
-  }
-
-  /** Restore a batch from Trash back to the live Data History list. */
-  const handleRestore = async (id: number, fileName?: string | null, allowDuplicate = false) => {
-    setTrashBusyId(id)
-    try {
-      await orderImportService.restoreBatch(id, allowDuplicate)
-      setBatches((list) => list.filter((b) => b.id !== id))
-      if (openId === id) setOpenId(null)
-      notify.success(`"${fileName || `Import #${id}`}" restored.`)
-    } catch (e) {
-      // Some orders are also in live imports — ask, like "Save anyway" does.
-      if (!allowDuplicate && e instanceof ApiError && e.status === 409 && e.errorCode === 'IMPORT_DUPLICATE_ORDERS') {
-        setTrashBusyId(null)
-        const ok = await notify.confirm(`${e.message}\n\nRestore anyway?`, {
-          title: 'Orders already in Import history',
-          confirmLabel: 'Restore anyway',
-          cancelLabel: 'Cancel',
-          danger: true,
-        })
-        if (ok) await handleRestore(id, fileName, true)
-        return
-      }
-      notify.apiError(e, 'Could not restore import.')
-    } finally {
-      setTrashBusyId(null)
-    }
-  }
 
   /** Show a success / info / error toast that matches the generation outcome,
    *  so a FAILED batch never appears under a green "Success" header. */
@@ -1774,176 +1622,35 @@ export default function DataHistoryPage() {
       ) : (
       <>
       {/* ── Advanced filter toolbar ─────────────────────────────────────── */}
-      <section className="rounded-2xl border border-[#e3d9c4] bg-white p-4 shadow-sm">
-        {/* Status chips + clear */}
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex flex-wrap gap-1.5">
-              {([
-                { key: 'ALL', label: 'All' },
-                { key: 'DRAFT', label: 'Draft' },
-                { key: 'COMPLETE', label: 'Complete' },
-                { key: 'PARTIAL_COMPLETE', label: 'Partial complete' },
-                { key: 'IN_PROGRESS', label: 'In progress' },
-                { key: 'INITIATE', label: 'Saved · not generated' },
-                { key: 'FAILED', label: 'Failed' },
-              ] as { key: StatusKey; label: string }[]).map((s) => {
-                const active = statusFilter === s.key
-                const n = statusCounts[s.key] ?? 0
-                return (
-                  <button
-                    key={s.key}
-                    type="button"
-                    onClick={() => setStatusFilter(s.key)}
-                    className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[12px] font-semibold transition ${
-                      active
-                        ? 'bg-[#1f150c] text-[#f4eede]'
-                        : 'bg-[#faf7f0] text-[#5a4526] hover:bg-[#f0e9d8]'
-                    }`}
-                  >
-                    {s.label}
-                    <span
-                      className={`inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9.5px] font-bold ${
-                        active ? 'bg-[#f4eede]/25 text-[#f4eede]' : 'bg-white text-[#6b5c42] ring-1 ring-[#e3d9c4]'
-                      }`}
-                    >
-                      {n}
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
-            {anyFilterActive ? (
-              <button
-                type="button"
-                onClick={clearFilters}
-                className="inline-flex items-center gap-1 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[#6b5c42] transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700"
-              >
-                <FiX className="h-3.5 w-3.5" /> Clear filters
-              </button>
-            ) : null}
-          </div>
-
-          {/* Search + date range + sort */}
-          <div className="grid gap-2.5 lg:grid-cols-[minmax(0,1fr)_auto_auto_auto]">
-            <label className="relative block">
-              <FiSearch className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#b6a684]" />
-              <input
-                type="search"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search file name, batch #, or user…"
-                className="w-full rounded-xl border border-[#e3d9c4] bg-[#faf7f0] py-2 pl-9 pr-3 text-[13px] text-[#1f150c] outline-none transition placeholder:text-[#b6a684] focus:border-[#cdbf9f] focus:bg-white focus:ring-4 focus:ring-[#f0e9d8]"
-              />
-            </label>
-            {/* Created-date range — first-class, not buried in the Filters panel. */}
-            <div className="flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5">
-              <FiCalendar className="h-3.5 w-3.5 shrink-0 text-[#b6a684]" />
-              <span className="hidden font-mono text-[9px] font-bold uppercase tracking-[0.14em] text-[#b6a684] sm:inline">
-                Created
-              </span>
-              <input
-                type="date"
-                value={dateFrom}
-                max={dateTo || undefined}
-                onChange={(e) => setDateFrom(e.target.value)}
-                aria-label="Created from"
-                className="rounded-lg border border-[#e3d9c4] bg-[#faf7f0] px-2 py-1 text-[12px] text-[#1f150c] outline-none transition focus:border-[#cdbf9f] focus:bg-white"
-              />
-              <span className="text-[11px] text-[#b6a684]">to</span>
-              <input
-                type="date"
-                value={dateTo}
-                min={dateFrom || undefined}
-                onChange={(e) => setDateTo(e.target.value)}
-                aria-label="Created to"
-                className="rounded-lg border border-[#e3d9c4] bg-[#faf7f0] px-2 py-1 text-[12px] text-[#1f150c] outline-none transition focus:border-[#cdbf9f] focus:bg-white"
-              />
-              {dateFilterActive ? (
-                <button
-                  type="button"
-                  onClick={() => { setDateFrom(''); setDateTo('') }}
-                  title="Clear the date range"
-                  aria-label="Clear date range"
-                  className="rounded-lg p-1 text-[#b6a684] transition hover:bg-[#faf7f0] hover:text-rose-700"
-                >
-                  <FiX className="h-3.5 w-3.5" />
-                </button>
-              ) : null}
-            </div>
-            <select
-              value={sortKey}
-              onChange={(e) => setSortKey(e.target.value as SortKey)}
-              className="rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13px] font-semibold text-[#5a4526] outline-none transition focus:border-[#cdbf9f] focus:ring-4 focus:ring-[#f0e9d8]"
-            >
-              <option value="created">Sort: Date created</option>
-              <option value="fileName">Sort: File name</option>
-              <option value="savedRows">Sort: Rows</option>
-              <option value="status">Sort: Status</option>
-              <option value="labelBatch">Sort: Batch #</option>
-            </select>
-            <button
-              type="button"
-              onClick={() => setSortDir((d) => (d === 'ASC' ? 'DESC' : 'ASC'))}
-              title="Toggle sort direction"
-              className="rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
-            >
-              {sortDir === 'ASC' ? 'Ascending ↑' : 'Descending ↓'}
-            </button>
-          </div>
-
-          {/* Advanced panel */}
-          {showAdvanced ? (
-            <div className="grid gap-2.5 rounded-xl border border-dashed border-[#e3d9c4] bg-[#faf7f0]/60 p-3 sm:grid-cols-2 lg:grid-cols-3">
-              <label className="block">
-                <span className="mb-1 block font-mono text-[9px] font-bold uppercase tracking-[0.14em] text-[#b6a684]">Created by</span>
-                <select
-                  value={createdBy}
-                  onChange={(e) => setCreatedBy(e.target.value)}
-                  className="w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] text-[#1f150c] outline-none focus:border-[#cdbf9f]"
-                >
-                  <option value="">Anyone</option>
-                  {creators.map((c) => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="block">
-                <span className="mb-1 block font-mono text-[9px] font-bold uppercase tracking-[0.14em] text-[#b6a684]">Label batch</span>
-                <select
-                  value={batchPresence}
-                  onChange={(e) => setBatchPresence(e.target.value as 'ANY' | 'HAS' | 'NONE')}
-                  className="w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] text-[#1f150c] outline-none focus:border-[#cdbf9f]"
-                >
-                  <option value="ANY">Any</option>
-                  <option value="HAS">Has a batch</option>
-                  <option value="NONE">No batch yet</option>
-                </select>
-              </label>
-              <label className="block">
-                <span className="mb-1 block font-mono text-[9px] font-bold uppercase tracking-[0.14em] text-[#b6a684]">Min rows saved</span>
-                <input
-                  type="number"
-                  min={0}
-                  value={minSaved}
-                  onChange={(e) => setMinSaved(e.target.value)}
-                  placeholder="0"
-                  className="w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] text-[#1f150c] outline-none focus:border-[#cdbf9f]"
-                />
-              </label>
-            </div>
-          ) : null}
-
-          {/* Result summary */}
-          <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-[#6b5c42]">
-            <FiFilter className="h-3 w-3 text-[#b6a684]" />
-            <span className="font-semibold text-[#5a4526]">{filtered.length}</span>
-            <span>of {batches.length} {batches.length === 1 ? 'import' : 'imports'} shown</span>
-            {statusFilter !== 'ALL' ? <span className="text-[#cdbf9f]">·</span> : null}
-            {statusFilter !== 'ALL' ? <span>{statusMeta(statusFilter).label}</span> : null}
-          </div>
-        </div>
-      </section>
+      <DataHistoryFilterToolbar
+        statusFilter={filters.statusFilter}
+        setStatusFilter={filters.setStatusFilter}
+        statusCounts={filters.statusCounts}
+        statusMetaLabel={(s) => statusMeta(s).label}
+        anyFilterActive={filters.anyFilterActive}
+        clearFilters={filters.clearFilters}
+        search={filters.search}
+        setSearch={filters.setSearch}
+        dateFrom={filters.dateFrom}
+        setDateFrom={filters.setDateFrom}
+        dateTo={filters.dateTo}
+        setDateTo={filters.setDateTo}
+        dateFilterActive={filters.dateFilterActive}
+        sortKey={filters.sortKey}
+        setSortKey={filters.setSortKey}
+        sortDir={filters.sortDir}
+        setSortDir={filters.setSortDir}
+        showAdvanced={filters.showAdvanced}
+        createdBy={filters.createdBy}
+        setCreatedBy={filters.setCreatedBy}
+        creators={filters.creators}
+        batchPresence={filters.batchPresence}
+        setBatchPresence={filters.setBatchPresence}
+        minSaved={filters.minSaved}
+        setMinSaved={filters.setMinSaved}
+        filteredCount={filters.filtered.length}
+        totalCount={batches.length}
+      />
 
       <section className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
         {loading ? (
