@@ -679,27 +679,20 @@ export default function ApiBatchList() {
                                     const unmapped = c.key === 'serviceType'
                                       ? (byField.serviceType ?? []).map((m) => m.match(UNMAPPED_SHIP_VIA)).find(Boolean)
                                       : null
+                                    // Show the client's own ship via code, not the
+                                    // carrier's wire code it resolved to.
+                                    const showShipVia = c.key === 'serviceType' && !!r.shipViaCode
                                     return (
                                       <td key={c.key} className="border-b border-[#f2ecdf] px-1 py-1 align-top">
-                                        <div className={c.w}>
+                                        <div className={c.w} title={showShipVia ? (r.shipViaNote ?? undefined) : undefined}>
                                           <GridCell
-                                            value={raw == null ? '' : String(raw)}
+                                            value={showShipVia ? String(r.shipViaCode) : raw == null ? '' : String(raw)}
                                             readOnly={generated || c.key === 'orderRef' || savingKey === rowKey}
                                             bad={(byField[c.key]?.length ?? 0) > 0}
                                             errors={byField[c.key]}
                                             mono={c.mono}
                                             onCommit={(v) => void commitCell(b.id, r, c, v)}
                                           />
-                                          {/* Same two affordances as the CSV importer: what the
-                                              WMS code became, and a way to map an unknown one. */}
-                                          {c.key === 'serviceType' && r.shipViaCode ? (
-                                            <span
-                                              title={r.shipViaNote ?? undefined}
-                                              className="mt-0.5 block cursor-help truncate font-mono text-[9px] text-[#8a7a5c]"
-                                            >
-                                              ← {r.shipViaCode}
-                                            </span>
-                                          ) : null}
                                           {unmapped && canMapShipVia && !generated ? (
                                             <button
                                               type="button"

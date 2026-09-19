@@ -933,11 +933,14 @@ function EditCell({
   mono = false,
   errors,
   readOnly = false,
+  hint,
 }: {
   value: string
   onCommit: (v: string) => void
   bad?: boolean
   mono?: boolean
+  /** Hover text when the cell is fine — e.g. what a ship via code resolved to. */
+  hint?: string | null
   /** Saved to Import history — shown as plain text, not editable here. */
   readOnly?: boolean
   /** When present, shown as the cell's hover tooltip so the error text isn't
@@ -992,7 +995,7 @@ function EditCell({
       />
     )
   }
-  const tooltip = bad && errors && errors.length > 0 ? errors.join('\n') : value || undefined
+  const tooltip = bad && errors && errors.length > 0 ? errors.join('\n') : hint || value || undefined
   return (
     <button
       type="button"
@@ -1141,7 +1144,11 @@ function PreviewStep({
 
   const cellFor = (r: OrderImportRow, col: PreviewColumn, errs?: string[]) => {
     const raw = (r as unknown as Record<string, unknown>)[col.key]
-    const value = raw == null ? '' : String(raw)
+    // serviceType shows the code the operator typed (U11), not the carrier's
+    // wire code it resolved to (03) — that is what they recognise, and it is
+    // what they would edit. The resolved service is the cell's tooltip.
+    const showShipVia = col.key === 'serviceType' && !!r.shipViaCode
+    const value = showShipVia ? String(r.shipViaCode) : raw == null ? '' : String(raw)
     const commit = (v: string) => {
       let next: unknown = v
       if (col.numeric) next = v === '' ? null : Number(v)
@@ -1155,6 +1162,7 @@ function PreviewStep({
         bad={(errs?.length ?? 0) > 0}
         mono={col.mono}
         errors={errs}
+        hint={showShipVia ? r.shipViaNote : undefined}
         readOnly={savedSet.has(r.rowNumber)}
       />
     )
@@ -1300,17 +1308,6 @@ function PreviewStep({
                     <td key={c.key} className="border-b border-[#f2ecdf] px-1 py-1 align-top">
                       <div className={c.w}>
                         {cellFor(r, c, byField[c.key])}
-                        {/* The cell shows the carrier's code, but the operator
-                            typed their own ship via code — show the translation
-                            so the swap isn't a mystery. */}
-                        {c.key === 'serviceType' && r.shipViaCode ? (
-                          <span
-                            title={r.shipViaNote ?? undefined}
-                            className="mt-0.5 block cursor-help truncate font-mono text-[9px] text-[#8a7a5c]"
-                          >
-                            ← {r.shipViaCode}
-                          </span>
-                        ) : null}
                         {/* Unknown code: map it here rather than sending the
                             operator to Settings and back. */}
                         {c.key === 'serviceType' && canMapShipVia ? (() => {
