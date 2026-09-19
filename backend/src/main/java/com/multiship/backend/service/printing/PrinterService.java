@@ -63,6 +63,12 @@ public class PrinterService {
     private final PrinterAssignmentRepository assignments;
     private final ClientRepository clients;
     private final OrderRepository orders;
+    /** PR-R9.5a — optional so pure-Mockito unit tests that construct
+     *  PrinterService directly don't need to pass a 5th arg (widen-via-
+     *  field pattern instead of constructor arity, per
+     *  [[widen-via-dto-field-not-new-arg]] applied to service ctors). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.PrinterTestHistoryRepository testHistory;
 
     public PrinterService(PrinterRepository printers, PrinterAssignmentRepository assignments,
                           ClientRepository clients, OrderRepository orders) {
@@ -252,7 +258,21 @@ public class PrinterService {
             p.setLastTestMessage(truncate("Could not reach " + p.getHost() + ":" + p.getPort() + " — " + reason, 500));
             log.warn("Printer {} ({}:{}) test failed: {}", p.getName(), p.getHost(), p.getPort(), reason);
         }
-        p.setLastTestAt(LocalDateTime.now());
+        LocalDateTime now = LocalDateTime.now();
+        p.setLastTestAt(now);
+        // PR-R9.5a — also append to the rolling history for the FE
+        // PrinterDetailsPanel. Optional (testHistory nullable in unit
+        // tests) so an unwired repo doesn't break the test path.
+        if (testHistory != null) {
+            com.multiship.backend.model.PrinterTestHistory row =
+                    new com.multiship.backend.model.PrinterTestHistory();
+            row.setPrinterId(p.getId());
+            row.setTestedAt(now);
+            row.setOk(Boolean.TRUE.equals(p.getLastTestOk()));
+            row.setMessage(p.getLastTestMessage());
+            row.setTestedBy(user);
+            testHistory.save(row);
+        }
         return printers.save(p);
     }
 

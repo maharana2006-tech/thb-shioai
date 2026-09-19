@@ -5,10 +5,14 @@ import com.multiship.backend.dto.ErrorCode;
 import com.multiship.backend.model.Printer;
 import com.multiship.backend.model.PrinterAssignment;
 import com.multiship.backend.model.PrinterTag;
+import com.multiship.backend.model.PrinterTestHistory;
+import com.multiship.backend.repository.PrinterTestHistoryRepository;
 import com.multiship.backend.service.PrinterTagService;
 import com.multiship.backend.service.printing.PrinterService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -22,6 +26,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDateTime;
@@ -37,10 +42,18 @@ public class PrinterController {
     private final PrinterService printers;
     /** PR-Printer-R8a — free-form tags for grouping registered printers. */
     private final PrinterTagService tags;
+    /** PR-Printer-R9.5a — rolling test-print log per printer. */
+    private final PrinterTestHistoryRepository testHistory;
 
-    public PrinterController(PrinterService printers, PrinterTagService tags) {
+    /** Cap on ?limit=N to keep a runaway request from returning
+     *  megabytes of test messages. Default is 10 (feeds the FE panel). */
+    private static final int MAX_TEST_HISTORY_LIMIT = 100;
+
+    public PrinterController(PrinterService printers, PrinterTagService tags,
+                             PrinterTestHistoryRepository testHistory) {
         this.printers = printers;
         this.tags = tags;
+        this.testHistory = testHistory;
     }
 
     @Operation(summary = "List printers")
@@ -136,6 +149,23 @@ public class PrinterController {
     @GetMapping("/tags/distinct")
     public ResponseEntity<ApiResponse<List<String>>> distinctTags() {
         return ok("distinct tags", tags.distinctTags());
+    }
+
+    // ================================================================
+    // Test-print history (R9.5a)
+    // ================================================================
+
+    @Operation(summary = "Rolling test-print history for a printer (newest first)",
+            description = "Feeds the FE PrinterDetailsPanel > Test history section. Default limit 10, capped at 100.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping("/{id}/test-history")
+    public ResponseEntity<ApiResponse<List<PrinterTestHistory>>> testHistory(
+            @PathVariable Long id,
+            @RequestParam(defaultValue = "10") int limit) {
+        int capped = Math.max(1, Math.min(limit, MAX_TEST_HISTORY_LIMIT));
+        Pageable page = PageRequest.of(0, capped);
+        List<PrinterTestHistory> rows = testHistory.findByPrinterIdOrderByTestedAtDesc(id, page);
+        return ok(rows.size() + (rows.size() == 1 ? " attempt" : " attempts"), rows);
     }
 
     /** Wire input for {@link #replaceTags}. */
