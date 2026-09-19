@@ -110,13 +110,36 @@ export default function PrintersPage() {
   // AccessScopePolicy). Remembers the last selection in localStorage so
   // returning to this page doesn't force the admin to re-pick every visit.
   const [scanTenant, setScanTenant] = useState<string>(() => readLastScanTenant())
+  // PR-Printer-R8b — flat tags-by-printer-id map + distinct-tag list
+  // (autocomplete). Both loaded once at mount; refreshed after a save.
+  const [tagsByPrinter, setTagsByPrinter] = useState<Map<number, string[]>>(new Map())
+  const [distinctTags, setDistinctTags] = useState<string[]>([])
 
   const load = useCallback(() => {
-    return Promise.all([printerService.list(), printerService.listAssignments(), loadAllClients()])
-      .then(([p, a, c]) => {
-        setPrinters(p.data ?? [])
+    return Promise.all([
+      printerService.list(),
+      printerService.listAssignments(),
+      loadAllClients(),
+      printerService.listDistinctPrinterTags().catch(() => ({ data: [] as string[] })),
+    ])
+      .then(([p, a, c, tRes]) => {
+        const printers = p.data ?? []
+        setPrinters(printers)
         setAssignments(a.data ?? [])
         setClients(c)
+        setDistinctTags(tRes.data ?? [])
+        // R8b — fetch each printer's tags in parallel. N small
+        // requests is simpler than a batch endpoint (which the
+        // backend service supports via tagsByPrinterId but doesn't
+        // expose over REST yet). Fine for tenants with dozens, not
+        // hundreds, of printers.
+        return Promise.all(
+          printers.map((pr) =>
+            printerService.listPrinterTags(pr.id)
+              .then((r) => [pr.id, (r.data ?? []).map((t) => t.tag)] as [number, string[]])
+              .catch(() => [pr.id, [] as string[]] as [number, string[]]),
+          ),
+        ).then((entries) => setTagsByPrinter(new Map(entries)))
       })
       .catch((e) => notifyPrinterProblem('Printers did not load', e, 'Could not load printers. Refresh to try again.'))
       .finally(() => setLoading(false))
@@ -289,18 +312,20 @@ export default function PrintersPage() {
     return [...seen].sort()
   }, [clients])
 
-  // PR-Printer-R5 — filter for the Printers-table search input. Case-
-  // insensitive substring across name / host / location. Empty search
-  // = full list (perf: no filter cost).
+  // PR-Printer-R5 (+ R8b tags) — filter for the Printers-table search
+  // input. Case-insensitive substring across name / host / location /
+  // tag. Empty search = full list (perf: no filter cost).
   const filteredPrinters = useMemo(() => {
     const q = search.trim().toLowerCase()
     if (!q) return printers
-    return printers.filter((p) =>
-      p.name.toLowerCase().includes(q)
-      || p.host.toLowerCase().includes(q)
-      || (p.location ?? '').toLowerCase().includes(q),
-    )
-  }, [printers, search])
+    return printers.filter((p) => {
+      const tags = tagsByPrinter.get(p.id) ?? []
+      return p.name.toLowerCase().includes(q)
+        || p.host.toLowerCase().includes(q)
+        || (p.location ?? '').toLowerCase().includes(q)
+        || tags.some((t) => t.toLowerCase().includes(q))
+    })
+  }, [printers, search, tagsByPrinter])
 
   const allFilteredSelected = filteredPrinters.length > 0
     && filteredPrinters.every((p) => selectedIds.has(p.id))
@@ -479,22 +504,23 @@ export default function PrintersPage() {
                 <th className="px-3 py-2">Connection</th>
                 <th className="px-3 py-2">Address</th>
                 <th className="px-3 py-2">Prints</th>
+                <th className="px-3 py-2">Tags</th>
                 <th className="px-3 py-2">Status</th>
                 <th className="sticky right-0 bg-slate-50 px-3 py-2 text-right shadow-[-8px_0_8px_-8px_rgba(15,23,42,0.15)]">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
-                <tr><td colSpan={7} className="px-3 py-6 text-center text-slate-500">Loading…</td></tr>
+                <tr><td colSpan={8} className="px-3 py-6 text-center text-slate-500">Loading…</td></tr>
               ) : printers.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-3 py-8 text-center text-slate-500">
+                  <td colSpan={8} className="px-3 py-8 text-center text-slate-500">
                     No printers yet. Add your label printer and your invoice printer to start routing documents.
                   </td>
                 </tr>
               ) : filteredPrinters.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-3 py-8 text-center text-slate-500">
+                  <td colSpan={8} className="px-3 py-8 text-center text-slate-500">
                     No printers match “{search}”. <button type="button" onClick={() => setSearch('')} className="ml-1 underline">Clear search</button>
                   </td>
                 </tr>
@@ -523,6 +549,24 @@ export default function PrintersPage() {
                         <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">{p.format}</span>
                         <span className="text-[12px] text-slate-500">{PAPER_LABEL[p.paper] ?? p.paper}</span>
                       </span>
+                    </td>
+                    <td className="px-3 py-2.5">
+                      {/* PR-Printer-R8b — tag chips. Empty state shows a
+                          neutral dash so the column doesn't feel broken. */}
+                      {(() => {
+                        const tags = tagsByPrinter.get(p.id) ?? []
+                        return tags.length === 0
+                          ? <span className="text-[11px] text-slate-400">—</span>
+                          : (
+                            <span className="flex flex-wrap gap-1">
+                              {tags.map((t) => (
+                                <span key={t} className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10.5px] font-semibold text-indigo-800">
+                                  {t}
+                                </span>
+                              ))}
+                            </span>
+                          )
+                      })()}
                     </td>
                     <td className="px-3 py-2.5">
                       {!p.active ? (
@@ -709,6 +753,8 @@ export default function PrintersPage() {
       {editing ? (
         <PrinterEditor
           printer={editing === 'new' ? null : editing}
+          initialTags={editing === 'new' ? [] : (tagsByPrinter.get(editing.id) ?? [])}
+          distinctTags={distinctTags}
           onClose={() => setEditing(null)}
           onSaved={async () => { setEditing(null); await load() }}
         />
@@ -779,13 +825,24 @@ async function loadAllClients(): Promise<Client[]> {
   return all
 }
 
-function PrinterEditor({ printer, onClose, onSaved }: { printer: Printer | null; onClose: () => void; onSaved: () => Promise<void> }) {
+function PrinterEditor({
+  printer, initialTags, distinctTags, onClose, onSaved,
+}: {
+  printer: Printer | null
+  /** PR-R8b — starting tag chips (from parent's tagsByPrinter map). */
+  initialTags: string[]
+  /** PR-R8b — full distinct-tag list for autocomplete. */
+  distinctTags: string[]
+  onClose: () => void
+  onSaved: () => Promise<void>
+}) {
   const [form, setForm] = useState<PrinterInput>(() => printer
     ? {
         name: printer.name, location: printer.location, connection: printer.connection, host: printer.host,
         port: printer.port, queuePath: printer.queuePath, format: printer.format, paper: printer.paper, active: printer.active,
       }
     : { name: '', location: '', connection: 'RAW_9100', host: '', port: null, queuePath: '', format: 'ZPL', paper: 'LABEL_4X6', active: true })
+  const [tags, setTags] = useState<string[]>(initialTags)
   const [saving, setSaving] = useState(false)
   const set = <K extends keyof PrinterInput>(key: K, value: PrinterInput[K]) => setForm((f) => ({ ...f, [key]: value }))
 
@@ -818,8 +875,29 @@ function PrinterEditor({ printer, onClose, onSaved }: { printer: Printer | null;
     setSaving(true)
     try {
       const payload: PrinterInput = { ...form, port: form.port ? Number(form.port) : null }
-      if (printer) await printerService.update(printer.id, payload)
-      else await printerService.create(payload)
+      let savedId: number
+      if (printer) {
+        await printerService.update(printer.id, payload)
+        savedId = printer.id
+      } else {
+        const created = await printerService.create(payload)
+        savedId = created.data?.id ?? 0
+      }
+      // PR-R8b — replace-all tags after the printer save. Failure here
+      // is surfaced as a warning toast but does NOT roll back the
+      // printer save (backend enforces uniqueness so a repeat click
+      // fixes any partial-persist).
+      if (savedId > 0) {
+        try {
+          await printerService.replacePrinterTags(savedId, tags)
+        } catch (tagErr) {
+          notify.error({
+            title: 'Printer saved, tags did not',
+            body: tagErr instanceof Error && tagErr.message ? tagErr.message : 'Try again from the edit dialog.',
+            durationMs: 10_000,
+          })
+        }
+      }
       notify.success(`${form.name.trim()} saved.`)
       await onSaved()
     } catch (e) {
@@ -912,6 +990,16 @@ function PrinterEditor({ printer, onClose, onSaved }: { printer: Printer | null;
             <input type="checkbox" checked={form.active} onChange={(e) => set('active', e.target.checked)} />
             <span className="text-[13px] text-slate-700">Active</span>
           </label>
+          {/* PR-R8b — tag chips with autocomplete off the distinct-tag list. */}
+          <div className="col-span-2">
+            <span className={labelCls}>Tags</span>
+            <TagsInput
+              value={tags}
+              suggestions={distinctTags}
+              onChange={setTags}
+              disabled={saving}
+            />
+          </div>
           {errors.form ? (
             <p role="alert" className="col-span-2 rounded-md bg-rose-50 px-3 py-2 text-[12.5px] text-rose-800">{errors.form}</p>
           ) : null}
@@ -926,6 +1014,109 @@ function PrinterEditor({ printer, onClose, onSaved }: { printer: Printer | null;
           </button>
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * PR-Printer-R8b — chip-style tag input.
+ *
+ * <ul>
+ *   <li>Current tags render as removable chips.</li>
+ *   <li>Text input at the end. Enter or comma commits; Backspace on
+ *       an empty input removes the last chip.</li>
+ *   <li>Autocomplete dropdown filters `suggestions` by prefix + hides
+ *       already-picked tags. Click a suggestion to add it.</li>
+ *   <li>Duplicates are silently deduped (case-insensitive).</li>
+ * </ul>
+ */
+function TagsInput({
+  value,
+  suggestions,
+  onChange,
+  disabled,
+}: {
+  value: string[]
+  suggestions: string[]
+  onChange: (next: string[]) => void
+  disabled?: boolean
+}) {
+  const [text, setText] = useState('')
+  const [focused, setFocused] = useState(false)
+
+  const addTag = (raw: string) => {
+    const t = raw.trim().toLowerCase()
+    if (!t) return
+    if (value.some((v) => v.toLowerCase() === t)) return
+    onChange([...value, t])
+    setText('')
+  }
+  const removeTag = (t: string) => onChange(value.filter((v) => v !== t))
+
+  const filteredSuggestions = suggestions.filter((s) => {
+    const q = text.trim().toLowerCase()
+    if (!q) return false
+    if (!s.toLowerCase().startsWith(q)) return false
+    if (value.some((v) => v.toLowerCase() === s.toLowerCase())) return false
+    return true
+  }).slice(0, 6)
+
+  return (
+    <div className="relative">
+      <div className={
+        'flex flex-wrap items-center gap-1 rounded-md border px-2 py-1.5 '
+        + (focused ? 'border-slate-500' : 'border-slate-300')
+        + (disabled ? ' opacity-50' : '')
+      }>
+        {value.map((t) => (
+          <span key={t} className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2 py-0.5 text-[11.5px] font-semibold text-indigo-800">
+            {t}
+            <button
+              type="button"
+              onClick={() => removeTag(t)}
+              disabled={disabled}
+              aria-label={`Remove tag ${t}`}
+              className="text-indigo-600 hover:text-rose-700 disabled:opacity-40"
+            >
+              <FiX className="h-3 w-3" />
+            </button>
+          </span>
+        ))}
+        <input
+          type="text"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onFocus={() => setFocused(true)}
+          onBlur={() => window.setTimeout(() => setFocused(false), 120)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addTag(text) }
+            else if (e.key === 'Backspace' && !text && value.length > 0) { removeTag(value[value.length - 1]) }
+          }}
+          disabled={disabled}
+          placeholder={value.length === 0 ? 'add a tag…' : ''}
+          className="flex-1 min-w-[80px] bg-transparent text-[12.5px] text-slate-800 outline-none disabled:cursor-not-allowed"
+        />
+      </div>
+      {focused && filteredSuggestions.length > 0 ? (
+        <ul className="absolute left-0 top-full z-10 mt-1 w-56 rounded-md border border-slate-200 bg-white py-1 shadow-lg">
+          {filteredSuggestions.map((s) => (
+            <li key={s}>
+              <button
+                type="button"
+                // onMouseDown so the click fires BEFORE the input's
+                // onBlur → focused=false → dropdown unmount race.
+                onMouseDown={(e) => { e.preventDefault(); addTag(s) }}
+                className="w-full px-3 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-slate-50"
+              >
+                {s}
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <p className="mt-1 text-[10.5px] text-slate-400">
+        Type + press Enter or comma. Suggestions match every tag already used across your printers.
+      </p>
     </div>
   )
 }
