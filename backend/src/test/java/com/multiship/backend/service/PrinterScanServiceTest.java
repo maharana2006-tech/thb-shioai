@@ -172,6 +172,59 @@ class PrinterScanServiceTest {
     }
 
     // ================================================================
+    // unrevokeAgent — PR-Printer-R1
+    // ================================================================
+
+    @Test
+    void unrevokeAgent_flipsActive_clearsRevokedAt_preservesKeyHash() {
+        PrinterScanAgent agent = new PrinterScanAgent();
+        agent.setId(7L);
+        agent.setTenantCode("ACME");
+        agent.setActive(Boolean.FALSE);
+        agent.setRevokedAt(LocalDateTime.now().minusMinutes(2));
+        agent.setApiKeyHash("keep-this-hash");
+        when(agentRepo.findById(7L)).thenReturn(Optional.of(agent));
+
+        boolean ok = service.unrevokeAgent("ACME", 7L);
+        assertTrue(ok);
+        assertEquals(Boolean.TRUE, agent.getActive());
+        assertNull(agent.getRevokedAt());
+        // The original key hash MUST survive — the caveat is documented
+        // in the service javadoc and the FE confirm dialog.
+        assertEquals("keep-this-hash", agent.getApiKeyHash());
+    }
+
+    @Test
+    void unrevokeAgent_alreadyActive_returnsFalse() {
+        PrinterScanAgent agent = new PrinterScanAgent();
+        agent.setTenantCode("ACME");
+        agent.setActive(Boolean.TRUE);
+        when(agentRepo.findById(7L)).thenReturn(Optional.of(agent));
+
+        assertFalse(service.unrevokeAgent("ACME", 7L));
+    }
+
+    @Test
+    void unrevokeAgent_missingRow_returnsFalse() {
+        when(agentRepo.findById(99L)).thenReturn(Optional.empty());
+        assertFalse(service.unrevokeAgent("ACME", 99L));
+    }
+
+    @Test
+    void unrevokeAgent_wrongTenant_throwsIllegalArgument() {
+        PrinterScanAgent agent = new PrinterScanAgent();
+        agent.setId(7L);
+        agent.setTenantCode("BETA");
+        agent.setActive(Boolean.FALSE);
+        when(agentRepo.findById(7L)).thenReturn(Optional.of(agent));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.unrevokeAgent("ACME", 7L));
+        // Row must remain revoked — no cross-tenant repair path.
+        assertEquals(Boolean.FALSE, agent.getActive());
+    }
+
+    // ================================================================
     // pollScanRequest
     // ================================================================
 

@@ -109,6 +109,19 @@ export const printerService = {
     apiClient.delete<ApiResponse<{ revoked: boolean }>>(
       `/tenants/${encodeURIComponent(tenantCode)}/printer-scan-agents/${id}`,
     ),
+  // PR-Printer-R1 — reverse of revoke. Reactivates a previously-revoked
+  // enrollment WITHOUT rotating its api_key_hash — the customer's agent
+  // resumes on its next poll using the original key. USE ONLY for
+  // accidental revokes; for a leaked key, re-enroll instead.
+  unrevokeScanAgent: (tenantCode: string, id: number) =>
+    apiClient.patch<ApiResponse<{ reactivated: boolean }>>(
+      `/tenants/${encodeURIComponent(tenantCode)}/printer-scan-agents/${id}/reactivate`,
+      {},
+    ),
+  listRevokedScanAgents: (tenantCode: string) =>
+    apiClient.get<ApiResponse<PrinterScanAgent[]>>(
+      `/tenants/${encodeURIComponent(tenantCode)}/printer-scan-agents/revoked`,
+    ),
   scanNow: (tenantCode: string) =>
     apiClient.post<ApiResponse<{ agentsNudged: number }>>(
       `/tenants/${encodeURIComponent(tenantCode)}/printers/scan-now`,

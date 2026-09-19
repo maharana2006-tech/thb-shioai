@@ -82,6 +82,49 @@ public class PrinterScanService {
         return new EnrollResult(saved.getId(), rawKey);
     }
 
+    /**
+     * PR-Printer-R1 — reverse of {@link #revokeAgent}. Flips
+     * {@code active=true} + clears {@code revoked_at}. The original
+     * {@code api_key_hash} is untouched — the customer's agent env,
+     * still holding the pre-revoke key, resumes working within one
+     * poll interval.
+     *
+     * <p><b>Security caveat:</b> if the revoke was in response to a
+     * suspected key leak, DO NOT unrevoke — the compromised key gets
+     * re-armed. Ops should re-enroll (which issues a new key) instead.
+     * The FE Unrevoke button surfaces this trade-off in the confirm
+     * dialog copy.
+     *
+     * @return {@code true} if the row transitioned from revoked→active;
+     *         {@code false} if the row didn't exist or was already
+     *         active (idempotent — safe to double-click).
+     * @throws IllegalArgumentException if the URL tenantCode doesn't
+     *         match the loaded row's tenantCode.
+     */
+    @Transactional
+    public boolean unrevokeAgent(String tenantCode, long agentRowId) {
+        Optional<PrinterScanAgent> found = agentRepository.findById(agentRowId);
+        if (found.isEmpty()) return false;
+        PrinterScanAgent a = found.get();
+        if (tenantCode == null || !tenantCode.equalsIgnoreCase(a.getTenantCode())) {
+            throw new IllegalArgumentException(
+                    "Agent " + agentRowId + " does not belong to tenant " + tenantCode + ".");
+        }
+        if (Boolean.TRUE.equals(a.getActive())) return false;
+        a.setActive(Boolean.TRUE);
+        a.setRevokedAt(null);
+        agentRepository.save(a);
+        log.info("Printer scan agent unrevoked: tenant={} agentId={} id={}",
+                a.getTenantCode(), a.getAgentId(), a.getId());
+        return true;
+    }
+
+    /** PR-Printer-R1 — revoked-agents list for the FE Scanners tab
+     *  (R4). Newest-revoked first. */
+    public List<PrinterScanAgent> listRevokedAgentsForTenant(String tenantCode) {
+        return agentRepository.findByTenantCodeAndActiveFalseOrderByRevokedAtDesc(tenantCode);
+    }
+
     /** Revoke an agent (admin). Idempotent — a re-enrollment reuses the
      *  row and returns a fresh key. The URL tenantCode is guarded against
      *  the loaded row's tenantCode: ADMIN sees every tenant, but a UI
