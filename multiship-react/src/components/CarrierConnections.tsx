@@ -362,9 +362,16 @@ export default function CarrierConnections({
           (r.data?.content ?? []).map((c) => ({ code: c.clientCode, name: c.name || '' })),
         ),
       )
-      // Sprint 51 FE-L3 — swallowing every failure hides real 5xx here.
+      // PR-F1.6 (FE-ERR-2) — was silent debug log. A failed listClients
+      // leaves the drawer's client-code picker empty with no indication;
+      // surface a toast so the admin knows why the list is blank.
       .catch((e) => {
-        if (!isAbortError(e)) console.debug('[secondary load] listClients', e)
+        if (isAbortError(e)) return
+        console.debug('[secondary load] listClients', e)
+        notify.error({
+          title: 'Client list unavailable',
+          body: 'Your carrier drawer will show an empty client picker until this loads. Refresh the page.',
+        })
       })
   }, [loadAccounts])
 
@@ -396,9 +403,16 @@ export default function CarrierConnections({
           setDrawer((c) => ({ ...c, clientId: '', clientSecret: '' }))
         }
       })
-      // Sprint 51 FE-L3 — log secondary load failures instead of hiding.
+      // PR-F1.6 (FE-ERR-2) — was silent debug log. Failure means the
+      // Client-ID auto-prefill silently doesn't happen; admin might
+      // paste bad creds not realising the platform default exists.
       .catch((e) => {
-        if (!isAbortError(e)) console.debug('[secondary load] getPlatformCredentials', e)
+        if (isAbortError(e)) return
+        console.debug('[secondary load] getPlatformCredentials', e)
+        notify.error({
+          title: 'Platform credentials unavailable',
+          body: 'Client-ID auto-prefill for this carrier didn’t load. Enter creds manually or refresh.',
+        })
       })
     return () => {
       cancelled = true
@@ -843,10 +857,19 @@ export default function CarrierConnections({
       if (shouldPersistVerified && savedId) {
         // Best-effort — verification failure here is non-fatal; the account
         // simply lands in the "unverified" state and the user can re-run.
+        // PR-F1.6 (FE-ERR-10) — was fully silent. Surface a subtle info
+        // toast so the admin knows the account saved but the verified=
+        // stamp didn't land — the "unverified" badge will linger until
+        // they hit Verify manually.
         try {
           await accountRefService.verifyAccount(savedId)
-        } catch {
-          // swallow — the row is saved, verification is a secondary signal.
+        } catch (verifyErr) {
+          console.debug('[post-save verify]', verifyErr)
+          notify.info({
+            title: 'Account saved, but not stamped verified',
+            body: 'The verify call failed — click Verify on the row to re-run.',
+            durationMs: 7000,
+          })
         }
       }
       notify.success(`Account ${payload.accountNumber} saved to the account book.`)
