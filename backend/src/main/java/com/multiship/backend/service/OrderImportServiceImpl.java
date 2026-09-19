@@ -712,6 +712,20 @@ public class OrderImportServiceImpl implements OrderImportService {
      * The message for a ship via code nothing could resolve. Says which of the
      * two fixes the operator needs: map the code, or correct it.
      */
+    /** The first few ship via codes this client may use, for an error message. */
+    private String shipViaCodesFor(String client) {
+        if (shippingConfigService == null) return "";
+        try {
+            java.util.List<String> codes = shippingConfigService.shipViaCodesFor(client).stream()
+                    .map(m -> String.valueOf(m.get("code")))
+                    .limit(6)
+                    .toList();
+            return String.join(", ", codes);
+        } catch (RuntimeException e) {
+            return "";
+        }
+    }
+
     private String shipViaError(String code, String client, String carrier, java.util.Set<String> known) {
         // A row with no clientCode can only match a global rule, so naming a
         // client would send the operator looking for one that isn't there.
@@ -719,9 +733,15 @@ public class OrderImportServiceImpl implements OrderImportService {
         boolean mappedElsewhere = shippingConfigService != null
                 && shippingConfigService.shipViaCodeExists(code);
         if (mappedElsewhere) {
-            return "serviceType '" + code + "' is mapped, but not" + forWhom
-                    + " shipping to this destination (or the service it maps to is switched off) — "
-                    + "check the rule in Settings → Shipping Service Mapping";
+            // Say what was actually found, and name the codes this client CAN
+            // use. The old wording bundled three causes into one sentence, and
+            // "shipping to this destination" sent operators to check the
+            // address when the row's client was the real problem.
+            String usable = shipViaCodesFor(client);
+            return "serviceType '" + code + "' is not set up" + forWhom
+                    + " — it is mapped for other clients"
+                    + (usable.isEmpty() ? "" : ". " + (client == null ? "Codes that work here" : client + " can use") + ": " + usable)
+                    + ". Add a rule in Settings → Shipping Service Mapping, or correct the code";
         }
         if (carrier != null && KNOWN_CARRIERS.contains(carrier) && !known.isEmpty()) {
             return "serviceType '" + code + "' is not mapped" + forWhom
@@ -792,7 +812,8 @@ public class OrderImportServiceImpl implements OrderImportService {
             String what = code + " maps to " + service.getName() + " (" + ruleCarrier + " "
                     + service.getServiceCode() + ")";
             row.setShipViaNote(fileCarrier != null && ruleCarrier != null && !fileCarrier.equals(ruleCarrier)
-                    ? what + ", not " + fileCarrier + " as the file says — the mapping wins"
+                    ? what + ", not " + fileCarrier + " as the file says — the mapping wins. Nothing to do; "
+                        + "leave the carrierCode column empty to stop this warning"
                     : what);
         }
     }
@@ -4285,8 +4306,14 @@ public class OrderImportServiceImpl implements OrderImportService {
                 || row.getItemUnitValue() != null;
     }
 
-    @Override
-    public byte[] xlsxTemplate(Long accountId) {
+    /** Everything the template's dropdowns are built from, tenant-scoped. */
+    private record TemplateData(List<Client> clients,
+                                List<CarrierAccountRef> accounts,
+                                java.util.Map<String, List<String>> clientWarehouseCodes,
+                                List<com.multiship.backend.model.ShippingService> services,
+                                List<com.multiship.backend.model.PackagePreset> presets) { }
+
+    private TemplateData templateData(Long accountId) {
         // Sprint 48 — accountId is retained on the signature for backwards
         // compatibility with existing callers but the universal template
         // doesn't scope to a single account any more. Every client + every
@@ -4359,10 +4386,32 @@ public class OrderImportServiceImpl implements OrderImportService {
         }
         // accountId parameter is ignored — universal template.
         if (accountId != null) log.debug("xlsxTemplate ignored accountId={} (universal template)", accountId);
-        return OrderImportTemplateBuilder.build(
-                HEADERS, clients, accounts, clientWarehouseCodes, services, presets,
-                shipViaCodesByClient(clients, services));
+        return new TemplateData(clients, accounts, clientWarehouseCodes, services, presets);
     }
+
+    @Override
+    public byte[] xlsxTemplate(Long accountId) {
+        TemplateData d = templateData(accountId);
+        return OrderImportTemplateBuilder.build(
+                HEADERS, d.clients(), d.accounts(), d.clientWarehouseCodes(), d.services(), d.presets(),
+                shipViaCodesByClient(d.clients(), d.services()));
+    }
+    @Override
+    public byte[] xlsmTemplate(byte[] macroWorkbook) {
+        if (macroWorkbook == null || macroWorkbook.length == 0) return macroWorkbook;
+        try {
+            TemplateData d = templateData(null);
+            return OrderImportTemplateBuilder.buildMacroEnabled(macroWorkbook,
+                    HEADERS, d.clients(), d.accounts(), d.clientWarehouseCodes(), d.services(), d.presets(),
+                    shipViaCodesByClient(d.clients(), d.services()));
+        } catch (RuntimeException e) {
+            // Never fail the download over this: the stored workbook still
+            // works, it is just showing the reference data it was saved with.
+            log.warn("xlsmTemplate: falling back to the stored workbook: {}", e.getMessage());
+            return macroWorkbook;
+        }
+    }
+
 
     @Override
     public byte[] csvTemplate() {
@@ -4898,7 +4947,9 @@ public class OrderImportServiceImpl implements OrderImportService {
         // client, markup, or customs profile. Require it. Tenant-scoped users
         // never hit this — their blank code is clamped to their own tenant
         // before validation runs; only platform operators can leave it blank.
-        if (!StringUtils.hasText(row.getClientCode())) errors.add("clientCode is required");
+        if (!StringUtils.hasText(row.getClientCode())) {
+            errors.add("clientCode is required — use the client's code from Settings → Clients");
+        }
         if (!StringUtils.hasText(row.getRecipientName())) errors.add("recipientName is required");
         if (!StringUtils.hasText(row.getAddressLine1())) errors.add("addressLine1 is required");
         if (!StringUtils.hasText(row.getCity())) errors.add("city is required");

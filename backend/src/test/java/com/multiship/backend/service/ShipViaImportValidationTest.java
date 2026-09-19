@@ -111,8 +111,9 @@ class ShipViaImportValidationTest {
     void aCodeMappedForSomeoneElseSaysSoInsteadOfNeverHeardOfIt() {
         when(shippingConfig.shipViaCodeExists("U43")).thenReturn(true);
         String err = validate(row("U43", "UPS")).getErrors().get(0);
-        assertTrue(err.contains("is mapped, but not for DES875"), err);
-        assertTrue(err.contains("switched off") && err.contains("Shipping Service Mapping"), err);
+        assertTrue(err.contains("is not set up for DES875"), err);
+        assertTrue(err.contains("mapped for other clients"), err);
+        assertTrue(err.contains("Shipping Service Mapping"), err);
     }
 
     @Test

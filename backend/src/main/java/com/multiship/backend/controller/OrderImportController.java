@@ -560,7 +560,13 @@ public class OrderImportController {
                 org.springframework.core.io.Resource xlsm =
                         new org.springframework.core.io.ClassPathResource(path);
                 if (xlsm.exists()) {
-                    byte[] bytes = xlsm.getInputStream().readAllBytes();
+                    // The workbook supplies the macros, the buttons and the
+                    // front sheet; its data sheets are rebuilt from today's
+                    // clients, accounts and ship via rules. Serving the stored
+                    // file as-is handed out a snapshot, so a code mapped after
+                    // it was last merged was missing from the dropdown — and
+                    // the dropdown refuses anything off the list.
+                    byte[] bytes = orderImportService.xlsmTemplate(xlsm.getInputStream().readAllBytes());
                     // Serve under the canonical filename regardless of which
                     // resource path matched, so downstream tooling / URLs
                     // don't diverge on the `-generic` suffix.

@@ -252,6 +252,14 @@ public interface OrderImportService {
      */
     byte[] xlsxTemplate(Long accountId);
 
+    /**
+     * The same template written into the caller's macro-enabled workbook: its
+     * VBA project, buttons and front sheet are kept, the data sheets are
+     * rebuilt from current reference data. Falls back to returning the
+     * workbook untouched if it can't be read.
+     */
+    byte[] xlsmTemplate(byte[] macroWorkbook);
+
     // ── Staging: upload → validate → Save (2026-09-11 bulk-upload restructure) ──
     // Nothing reaches Import history until Save, and Save writes only orders whose
     // every row is valid. Invalid orders stay staged (editable / downloadable).

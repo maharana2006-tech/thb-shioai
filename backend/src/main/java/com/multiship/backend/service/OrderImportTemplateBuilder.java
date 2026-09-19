@@ -130,8 +130,57 @@ final class OrderImportTemplateBuilder {
                         List<ShippingService> services,
                         List<PackagePreset> presets,
                         Map<String, Map<String, String>> shipViaByClient) {
-        try (XSSFWorkbook wb = new XSSFWorkbook();
-             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+        try (XSSFWorkbook wb = new XSSFWorkbook()) {
+            return populate(wb, headers, clients, accounts, clientWarehouseCodes, services, presets, shipViaByClient);
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to build order-import .xlsx template", e);
+        }
+    }
+
+    /**
+     * The macro-enabled variant: the operator's own .xlsm (its VBA project,
+     * its buttons, its front sheet) with freshly generated Import, Reference
+     * and instructions sheets written into it.
+     *
+     * <p>The workbook used to be a snapshot taken when someone last merged the
+     * two by hand, so a ship via code mapped today was missing from its
+     * dropdown — and the dropdown refuses anything off the list, which left the
+     * new code unusable in Excel while working fine in CSV.
+     */
+    static byte[] buildMacroEnabled(byte[] macroWorkbook,
+                                    List<String> headers,
+                                    List<Client> clients,
+                                    List<CarrierAccountRef> accounts,
+                                    Map<String, List<String>> clientWarehouseCodes,
+                                    List<ShippingService> services,
+                                    List<PackagePreset> presets,
+                                    Map<String, Map<String, String>> shipViaByClient) {
+        try (XSSFWorkbook wb = new XSSFWorkbook(new java.io.ByteArrayInputStream(macroWorkbook))) {
+            // Drop the generated sheets and every name pointing into them; the
+            // front sheet holding the macro buttons is left untouched.
+            for (String name : List.of("Import", "Reference", "How to use")) {
+                int idx = wb.getSheetIndex(name);
+                if (idx >= 0) wb.removeSheetAt(idx);
+            }
+            for (Name n : new java.util.ArrayList<>(wb.getAllNames())) {
+                wb.removeName(n);
+            }
+            return populate(wb, headers, clients, accounts, clientWarehouseCodes, services, presets, shipViaByClient);
+        } catch (IOException | RuntimeException e) {
+            throw new IllegalStateException("Failed to build the macro-enabled order-import template", e);
+        }
+    }
+
+    /** Writes the three generated sheets into {@code wb} and returns the bytes. */
+    private static byte[] populate(XSSFWorkbook wb,
+                                   List<String> headers,
+                                   List<Client> clients,
+                                   List<CarrierAccountRef> accounts,
+                                   Map<String, List<String>> clientWarehouseCodes,
+                                   List<ShippingService> services,
+                                   List<PackagePreset> presets,
+                                   Map<String, Map<String, String>> shipViaByClient) {
+        try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
 
             XSSFSheet data = wb.createSheet("Import");
             XSSFSheet ref = wb.createSheet("Reference");
@@ -272,6 +321,13 @@ final class OrderImportTemplateBuilder {
             for (int i = 0; i < 4; i++) notes.autoSizeColumn(i);
             // (Skip auto-size on the Reference sheet — it can have 40+ columns
             //  and auto-sizing all of them slows the download noticeably.)
+
+            // Open on Import: in the macro workbook the first sheet is the pad
+            // holding the buttons, and landing there looks like an empty file.
+            wb.setActiveSheet(wb.getSheetIndex(data));
+            for (int i = 0; i < wb.getNumberOfSheets(); i++) {
+                wb.getSheetAt(i).setSelected(i == wb.getSheetIndex(data));
+            }
 
             wb.write(out);
             return fixDropdownArrowAttribute(out.toByteArray());
