@@ -8,6 +8,7 @@ import { notify } from '../utils/notify'
 import { clientService, type Client } from '../api/clientService'
 import AssignmentMatrix from './AssignmentMatrix'
 import InvoiceCopiesMatrix from './InvoiceCopiesMatrix'
+import PrinterDetailsPanel from './PrinterDetailsPanel'
 import PrinterScanPanel from './PrinterScanPanel'
 import {
   CONNECTION_LABEL,
@@ -91,6 +92,9 @@ export default function PrintersPage() {
   const [clients, setClients] = useState<Client[]>([])
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState<Printer | 'new' | null>(null)
+  // PR-R9 — printer clicked in the table opens a right-slide details
+  // panel. Distinct from `editing` (which mounts the full editor modal).
+  const [viewing, setViewing] = useState<Printer | null>(null)
   // PR-Printer-R5 — was single scalar (testingId), which blocked
   // every Test button while one test was in flight. Now a Set so
   // per-row spinners work AND bulk Test-N can run concurrently.
@@ -537,7 +541,15 @@ export default function PrintersPage() {
                       />
                     </td>
                     <td className="px-3 py-2.5">
-                      <span className="block font-semibold text-slate-900">{p.name}</span>
+                      {/* PR-R9 — printer name opens the details side-panel. */}
+                      <button
+                        type="button"
+                        onClick={() => setViewing(p)}
+                        aria-label={`Open details for ${p.name}`}
+                        className="block text-left font-semibold text-slate-900 hover:underline"
+                      >
+                        {p.name}
+                      </button>
                       {p.location ? <span className="block text-[11.5px] text-slate-500">{p.location}</span> : null}
                     </td>
                     <td className="px-3 py-2.5 text-slate-700">{CONNECTION_LABEL[p.connection] ?? p.connection}</td>
@@ -757,6 +769,19 @@ export default function PrintersPage() {
           distinctTags={distinctTags}
           onClose={() => setEditing(null)}
           onSaved={async () => { setEditing(null); await load() }}
+        />
+      ) : null}
+
+      {viewing ? (
+        <PrinterDetailsPanel
+          printer={viewing}
+          assignments={assignments}
+          tags={tagsByPrinter.get(viewing.id) ?? []}
+          testing={testingIds.has(viewing.id)}
+          onClose={() => setViewing(null)}
+          onEdit={() => { setEditing(viewing); setViewing(null) }}
+          onDelete={() => { void removePrinter(viewing); setViewing(null) }}
+          onTest={() => void runTest(viewing)}
         />
       ) : null}
     </div>
