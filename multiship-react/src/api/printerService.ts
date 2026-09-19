@@ -89,6 +89,12 @@ export const printerService = {
       `/printers/${id}/test-history${limit != null ? `?limit=${limit}` : ''}`,
     ),
 
+  // PR-Printer-R11 — queue depth poll: our in-flight send() count
+  // (portable) + IPP Get-Jobs count (IPP printers only). Feeds the
+  // FE PrinterDetailsPanel > Queue depth section with 5s auto-refresh.
+  getPrinterQueueDepth: (id: number) =>
+    apiClient.get<ApiResponse<PrinterQueueDepth>>(`/printers/${id}/queue-depth`),
+
   // PR-Printer-R8a — free-form tags per printer (M2M). replacePrinterTags
   // is bulk (send the full desired set on save; backend diffs). Distinct
   // list feeds the FE autocomplete on the editor input.
@@ -186,6 +192,18 @@ export interface PrinterScanAgentEnrollResponse {
   /** Shown to admin ONCE. Never re-fetchable. Paste into the Docker
    *  agent's MULTISHIP_AGENT_KEY env; lost = rotate via revoke + re-enroll. */
   rawKey: string
+}
+
+export interface PrinterQueueDepth {
+  /** Our in-JVM concurrent send() count for this printer. */
+  inFlight: number
+  /** Printer's own IPP Get-Jobs count. null for RAW_9100 (protocol
+   *  has no queue-status) or when the IPP poll failed. */
+  ippQueue: number | null
+  /** Reason ippQueue is null: "Not supported for RAW_9100 printers." /
+   *  network error / IPP refusal / etc. Null when ippQueue is a real
+   *  number. */
+  ippQueueError: string | null
 }
 
 export interface PrinterTestHistoryEntry {
