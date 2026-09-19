@@ -121,6 +121,19 @@ public class PrinterController {
     }
 
     // ================================================================
+    // Queue depth (R11)
+    // ================================================================
+
+    @Operation(summary = "Poll a printer's queue depth",
+            description = "PR-R11 — { inFlight: our concurrent send() count, ippQueue: printer's IPP Get-Jobs count (IPP only), "
+                    + "ippQueueError: string when IPP polling fails or is Not-supported (RAW_9100) }.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping("/{id}/queue-depth")
+    public ResponseEntity<ApiResponse<PrinterService.QueueDepth>> queueDepth(@PathVariable Long id) {
+        return ok("queue depth", printers.queueDepth(id));
+    }
+
+    // ================================================================
     // Printer tags (R8a)
     // ================================================================
 

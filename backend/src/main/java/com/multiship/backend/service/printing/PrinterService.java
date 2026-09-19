@@ -24,9 +24,12 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 
 /**
@@ -232,15 +235,52 @@ public class PrinterService {
 
     /* ------------------------------ delivery ------------------------------ */
 
+    /** PR-Printer-R11 — in-flight send count per printer_id. Single-node
+     *  in-memory tracker; when we scale to multi-node this becomes a
+     *  Redis counter (same pattern noted on the R2 SSE fan-out). */
+    private final Map<Long, AtomicInteger> inFlightByPrinter = new ConcurrentHashMap<>();
+
     /** Deliver a document to the printer, in the format the printer was registered with. */
     public void send(Printer printer, byte[] payload, String jobName, String user) throws Exception {
-        if ("IPP".equals(printer.getConnection())) {
-            PrinterTransport.sendIpp(printer.getHost(), printer.getPort(), printer.getQueuePath(), payload,
-                    "application/pdf", jobName, user);
-        } else {
-            PrinterTransport.sendRaw(printer.getHost(), printer.getPort(), payload);
+        AtomicInteger counter = inFlightByPrinter.computeIfAbsent(printer.getId(), k -> new AtomicInteger());
+        counter.incrementAndGet();
+        try {
+            if ("IPP".equals(printer.getConnection())) {
+                PrinterTransport.sendIpp(printer.getHost(), printer.getPort(), printer.getQueuePath(), payload,
+                        "application/pdf", jobName, user);
+            } else {
+                PrinterTransport.sendRaw(printer.getHost(), printer.getPort(), payload);
+            }
+        } finally {
+            counter.decrementAndGet();
         }
     }
+
+    /** PR-Printer-R11 — poll printer queue depth: our in-flight counter
+     *  (portable, single-node) + the printer's own IPP Get-Jobs count
+     *  (IPP printers only; RAW_9100 returns ippQueue=null with
+     *  ippQueueError = "Not supported"). Never throws — errors are
+     *  surfaced in the QueueDepth.ippQueueError field.
+     */
+    public QueueDepth queueDepth(Long id) {
+        Printer p = get(id);
+        int inFlight = inFlightByPrinter.getOrDefault(id, new AtomicInteger()).get();
+        Integer ippQueue = null;
+        String ippQueueError = null;
+        if ("IPP".equals(p.getConnection())) {
+            try {
+                ippQueue = PrinterTransport.ippJobCount(p.getHost(), p.getPort(), p.getQueuePath());
+            } catch (Exception ex) {
+                if (ex instanceof InterruptedException) Thread.currentThread().interrupt();
+                ippQueueError = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
+            }
+        } else {
+            ippQueueError = "Not supported for RAW_9100 printers.";
+        }
+        return new QueueDepth(inFlight, ippQueue, ippQueueError);
+    }
+
+    public record QueueDepth(int inFlight, Integer ippQueue, String ippQueueError) {}
 
     /** Print a small test job and record the outcome on the printer. */
     @Transactional

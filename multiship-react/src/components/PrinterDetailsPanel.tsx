@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  FiAlertTriangle, FiCheckCircle, FiClock, FiEdit2, FiPrinter, FiRadio, FiTrash2, FiX,
+  FiActivity, FiAlertTriangle, FiCheckCircle, FiClock, FiEdit2, FiPrinter, FiRadio, FiTrash2, FiX,
 } from 'react-icons/fi'
 import {
   CONNECTION_LABEL, PAPER_LABEL, printerService,
-  type Printer, type PrinterAssignment, type PrinterTestHistoryEntry,
+  type Printer, type PrinterAssignment, type PrinterQueueDepth, type PrinterTestHistoryEntry,
 } from '../api/printerService'
 
 /**
@@ -50,6 +50,9 @@ export default function PrinterDetailsPanel({
   // (a completed test just appended a row).
   const [history, setHistory] = useState<PrinterTestHistoryEntry[]>([])
   const [historyLoading, setHistoryLoading] = useState(true)
+  // PR-R11 — queue-depth section. Auto-refreshes every 5s while the
+  // panel is mounted so ops can watch a stuck printer clear (or not).
+  const [queueDepth, setQueueDepth] = useState<PrinterQueueDepth | null>(null)
 
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true)
@@ -80,6 +83,23 @@ export default function PrinterDetailsPanel({
     }
     wasTesting.current = testing
   }, [testing, loadHistory])
+
+  // PR-R11 — queue-depth poll. Initial fetch + 5s interval refresh
+  // while mounted. Silent on failure — the section shows dashes.
+  useEffect(() => {
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const res = await printerService.getPrinterQueueDepth(printer.id)
+        if (!cancelled) setQueueDepth(res.data ?? null)
+      } catch {
+        if (!cancelled) setQueueDepth(null)
+      }
+    }
+    void poll()
+    const tid = window.setInterval(() => void poll(), 5000)
+    return () => { cancelled = true; window.clearInterval(tid) }
+  }, [printer.id])
 
   // Close on Esc + click-outside.
   useEffect(() => {
@@ -203,6 +223,38 @@ export default function PrinterDetailsPanel({
               <p className="mt-2 text-[11.5px] text-slate-600">
                 <span className="font-semibold">Last test:</span> {printer.lastTestMessage}
               </p>
+            ) : null}
+          </section>
+
+          {/* PR-R11 — queue depth. Auto-refreshes every 5s. */}
+          <section className="rounded-lg border border-slate-200 p-3">
+            <h4 className="flex items-center gap-1.5 text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-500">
+              <FiActivity className="h-3 w-3" />
+              Queue depth
+              <span className="ml-auto text-[10px] font-normal normal-case text-slate-400">refreshes every 5s</span>
+            </h4>
+            <dl className="mt-2 grid grid-cols-2 gap-y-1 text-[12.5px]">
+              <dt className="text-slate-500">In-flight (our sends)</dt>
+              <dd className={queueDepth == null
+                ? 'text-slate-400'
+                : queueDepth.inFlight > 0 ? 'font-semibold text-amber-700' : 'text-slate-800'}>
+                {queueDepth == null ? '—' : queueDepth.inFlight}
+              </dd>
+              <dt className="text-slate-500">Printer queue (IPP)</dt>
+              <dd className={queueDepth == null
+                ? 'text-slate-400'
+                : queueDepth.ippQueue == null
+                  ? 'text-slate-400'
+                  : queueDepth.ippQueue > 0 ? 'font-semibold text-amber-700' : 'text-slate-800'}>
+                {queueDepth == null
+                  ? '—'
+                  : queueDepth.ippQueue == null
+                    ? <span title={queueDepth.ippQueueError ?? undefined}>—</span>
+                    : queueDepth.ippQueue}
+              </dd>
+            </dl>
+            {queueDepth?.ippQueueError && !queueDepth.ippQueueError.startsWith('Not supported') ? (
+              <p className="mt-2 text-[11px] text-rose-600">IPP poll failed: {queueDepth.ippQueueError}</p>
             ) : null}
           </section>
 
