@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  FiCheckCircle, FiChevronDown, FiChevronRight, FiCopy, FiDownload, FiKey,
+  FiCheckCircle, FiChevronDown, FiChevronRight, FiClock, FiCopy, FiDownload, FiKey,
   FiRadio, FiRefreshCw, FiRotateCcw, FiTrash2, FiWifi,
 } from 'react-icons/fi'
 import DiscoveredPickerModal from './DiscoveredPickerModal'
 import { BASE_URL } from '../api/apiClient'
-import { printerService, type Printer, type PrinterScanAgent } from '../api/printerService'
+import {
+  printerService, type Printer, type PrinterDiscovered, type PrinterScanAgent,
+} from '../api/printerService'
 import { notify } from '../utils/notify'
 
 /**
@@ -38,6 +40,11 @@ export default function PrinterScanPanel({
   const [agents, setAgents] = useState<PrinterScanAgent[]>([])
   const [revoked, setRevoked] = useState<PrinterScanAgent[]>([])
   const [revokedOpen, setRevokedOpen] = useState(false)
+  // PR-R10 — full discovered-row list for the scan-history section.
+  // Client-side aggregation (backend endpoint returns every row per tenant).
+  const [historyRows, setHistoryRows] = useState<PrinterDiscovered[]>([])
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [historyShowAll, setHistoryShowAll] = useState(false)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [enrollOpen, setEnrollOpen] = useState(false)
@@ -53,18 +60,62 @@ export default function PrinterScanPanel({
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [activeRes, revokedRes] = await Promise.all([
+      // PR-R10 — third parallel fetch for the history section.
+      // Same endpoint the picker uses; we group client-side by scan_seq.
+      const [activeRes, revokedRes, historyRes] = await Promise.all([
         printerService.listScanAgents(tenantCode),
         printerService.listRevokedScanAgents(tenantCode),
+        printerService.latestDiscovered(tenantCode)
+          .catch(() => ({ data: [] as PrinterDiscovered[] })),
       ])
       setAgents(activeRes.data ?? [])
       setRevoked(revokedRes.data ?? [])
+      setHistoryRows(historyRes.data ?? [])
     } catch (err) {
       notify.apiError(err, 'Could not load scan agents')
     } finally {
       setLoading(false)
     }
   }, [tenantCode])
+
+  // PR-R10 — group discovered rows by scan_seq into scan snapshots.
+  // Each snapshot has: seq, latest scannedAt in the batch (agents
+  // stamp discoveredAt per row, all within seconds of each other),
+  // printer count, and diff-vs-previous (new / removed / total).
+  // Snapshots sorted newest-first so the timeline reads left-to-right
+  // "newest → oldest" like a git log.
+  const scanHistory = useMemo(() => {
+    if (historyRows.length === 0) return []
+    const bySeq = new Map<number, PrinterDiscovered[]>()
+    for (const row of historyRows) {
+      const bucket = bySeq.get(row.scanSeq) ?? []
+      bucket.push(row)
+      bySeq.set(row.scanSeq, bucket)
+    }
+    const seqsDesc = [...bySeq.keys()].sort((a, b) => b - a)
+    const previousKey = (seq: number) => {
+      const idx = seqsDesc.indexOf(seq)
+      return idx >= 0 && idx + 1 < seqsDesc.length ? seqsDesc[idx + 1] : null
+    }
+    return seqsDesc.map((seq) => {
+      const rows = bySeq.get(seq) ?? []
+      const scannedAt = rows.reduce<string | null>((max, r) =>
+        max == null || r.discoveredAt > max ? r.discoveredAt : max, null) ?? ''
+      const prevSeq = previousKey(seq)
+      const prevRows = prevSeq != null ? (bySeq.get(prevSeq) ?? []) : []
+      const currentKeys = new Set(rows.map((r) => `${r.host}:${r.port}`))
+      const prevKeys = new Set(prevRows.map((r) => `${r.host}:${r.port}`))
+      const added = [...currentKeys].filter((k) => !prevKeys.has(k)).length
+      const removed = [...prevKeys].filter((k) => !currentKeys.has(k)).length
+      return {
+        seq,
+        scannedAt,
+        count: rows.length,
+        added,
+        removed,
+      }
+    })
+  }, [historyRows])
 
   // Initial fetch on mount + when tenantCode changes. Deferred one
   // microtask so the effect returns before load()'s synchronous
@@ -360,6 +411,67 @@ export default function PrinterScanPanel({
                 </li>
               ))}
             </ul>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* PR-R10 — historical scan snapshots timeline. Grouped by
+          scan_seq client-side (no new endpoint). Shows count +
+          delta-vs-previous-scan; timeline reads newest→oldest. */}
+      {!loading && scanHistory.length > 0 ? (
+        <div className="mt-3 border-t border-slate-100 pt-3">
+          <button
+            type="button"
+            onClick={() => setHistoryOpen((v) => !v)}
+            aria-expanded={historyOpen}
+            className="inline-flex items-center gap-1 text-[11.5px] font-semibold text-slate-500 hover:text-slate-800"
+          >
+            {historyOpen ? <FiChevronDown className="h-3 w-3" /> : <FiChevronRight className="h-3 w-3" />}
+            <FiClock className="h-3 w-3" />
+            Scan history ({scanHistory.length})
+          </button>
+          {historyOpen ? (
+            <>
+              <ol className="mt-2 space-y-1 text-[12px]">
+                {(historyShowAll ? scanHistory : scanHistory.slice(0, 10)).map((s, idx) => (
+                  <li
+                    key={s.seq}
+                    className="flex items-center justify-between gap-3 text-slate-600"
+                    title={`Scan #${s.seq} at ${new Date(s.scannedAt).toLocaleString()}`}
+                  >
+                    <span className="flex items-center gap-1.5 min-w-0">
+                      <span className={
+                        'inline-flex h-4 min-w-[16px] items-center justify-center rounded-full px-1 text-[10px] font-bold leading-none '
+                        + (idx === 0
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : 'bg-slate-100 text-slate-600')
+                      }>
+                        #{s.seq}
+                      </span>
+                      <span className="truncate text-slate-500">{formatSince(s.scannedAt)}</span>
+                    </span>
+                    <span className="flex items-center gap-2 shrink-0 text-[11px]">
+                      <span className="font-semibold text-slate-800">{s.count} printer{s.count === 1 ? '' : 's'}</span>
+                      {s.added > 0 ? (
+                        <span className="text-emerald-700" title="new since previous scan">+{s.added}</span>
+                      ) : null}
+                      {s.removed > 0 ? (
+                        <span className="text-rose-700" title="missing since previous scan">−{s.removed}</span>
+                      ) : null}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+              {scanHistory.length > 10 ? (
+                <button
+                  type="button"
+                  onClick={() => setHistoryShowAll((v) => !v)}
+                  className="mt-2 text-[11px] font-semibold text-slate-500 underline hover:text-slate-800"
+                >
+                  {historyShowAll ? `Show latest 10` : `Show all ${scanHistory.length}`}
+                </button>
+              ) : null}
+            </>
           ) : null}
         </div>
       ) : null}
