@@ -41,6 +41,10 @@ vi.mock('../api/shippingConfigService', () => ({
     listPresets: (...args: unknown[]) => listPresetsMock(...args),
     saveRule: (...args: unknown[]) => saveRuleMock(...args),
     deleteRule: (...args: unknown[]) => deleteRuleMock(...args),
+    // Added by the "cleanup and reports what used it" trunk commit —
+    // the component now fetches a cascade preview before the confirm.
+    // Silently resolve to null so the fallback (plain confirm) runs.
+    previewRuleDelete: vi.fn().mockResolvedValue({ data: null }),
     syncServices: vi.fn(),
     syncPackages: vi.fn(),
     setServiceEnabled: vi.fn(),
