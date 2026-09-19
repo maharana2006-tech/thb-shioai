@@ -316,6 +316,14 @@ export default function CarrierConnections({
   // attempt and cleared as soon as the operator edits any validated field.
   const [drawerErrors, setDrawerErrors] = useState<CarrierAccountErrors>({})
   const [saving, setSaving] = useState(false)
+  // PR-F1.5 (deferred from F-audit F1) — double-click guard. The
+  // `saving` STATE isn't enough: React batches state updates, so two
+  // rapid clicks can both read `saving === false` before either
+  // update lands. A ref is synchronous — the second click sees `true`
+  // and bails immediately. Set only AFTER validation passes so that
+  // clicking Save with unfilled fields, fixing them, and clicking
+  // again still runs the second attempt (the first didn't lock).
+  const saveLockRef = useRef(false)
   // When true, credential fields become editable on edit; when false (default
   // on edit), the drawer shows a masked read-only "credentials on file" note.
   const [rotatingCredentials, setRotatingCredentials] = useState(false)
@@ -673,6 +681,11 @@ export default function CarrierConnections({
   }
 
   const handleSave = async () => {
+    // PR-F1.5 — double-click guard. If a save is already in flight,
+    // silently no-op. Ref not state so React batching can't race a
+    // second click through before the first setSaving(true) lands.
+    if (saveLockRef.current) return
+
     const isEdit = drawer.editingId !== null
     const clientIdEntered = drawer.clientId.trim()
     const clientSecretEntered = drawer.clientSecret.trim()
@@ -751,6 +764,9 @@ export default function CarrierConnections({
     const shouldPersistVerified =
       drawerCheck.state === 'ok' && Boolean(clientIdEntered) && Boolean(clientSecretEntered)
 
+    // PR-F1.5 — lock the ref now that validation passed. Released in
+    // the finally below so a save that throws still unlocks.
+    saveLockRef.current = true
     setSaving(true)
     try {
       const payload: AccountRefUpsertPayload = {
@@ -840,6 +856,9 @@ export default function CarrierConnections({
       notify.apiError(error, 'Failed to save the account.')
     } finally {
       setSaving(false)
+      // PR-F1.5 — release the lock last, in finally, so a save that
+      // throws still unlocks and lets the user retry.
+      saveLockRef.current = false
     }
   }
 
