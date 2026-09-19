@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { FiAlertTriangle, FiCheckCircle, FiEdit2, FiPlus, FiPrinter, FiRadio, FiTrash2, FiX } from 'react-icons/fi'
+import { useSearchParams } from 'react-router-dom'
+import {
+  FiAlertTriangle, FiCheckCircle, FiEdit2, FiLink, FiPlus, FiPrinter, FiRadio, FiTrash2, FiWifi, FiX,
+} from 'react-icons/fi'
 import { notify } from '../utils/notify'
 import { clientService, type Client } from '../api/clientService'
 import PrinterScanPanel from './PrinterScanPanel'
@@ -17,12 +20,56 @@ import {
   type PrinterPaper,
 } from '../api/printerService'
 
+// PR-Printer-R3 — tabbed page shell. Splits three concerns that used
+// to be stacked vertically on one page:
+//   - Printers tab: register + edit network printers, run test prints
+//   - Scanners tab: LAN scanner enrollment + auto-discovery
+//   - Assignments tab: which printer prints which client's docs
+// Deep-linkable via ?tab=. Default = printers (Add-printer surface).
+const TAB_KEYS = ['printers', 'scanners', 'assignments'] as const
+type TabKey = typeof TAB_KEYS[number]
+
+const TAB_META: Record<TabKey, { label: string; icon: typeof FiPrinter; help: string }> = {
+  printers: {
+    label: 'Printers',
+    icon: FiPrinter,
+    help: 'Register network printers and run test prints. Label printers usually take ZPL on port 9100; office printers take PDF over IPP.',
+  },
+  scanners: {
+    label: 'Scanners',
+    icon: FiWifi,
+    help: 'Enroll a LAN scan agent per warehouse so new printers auto-discover instead of being typed by hand.',
+  },
+  assignments: {
+    label: 'Assignments',
+    icon: FiLink,
+    help: 'Route each client’s labels and commercial invoices to a specific printer. Clients without their own printer use the Default row.',
+  },
+}
+
+function isTabKey(v: string | null): v is TabKey {
+  return v != null && (TAB_KEYS as readonly string[]).includes(v)
+}
+
 /**
  * Settings → Printers. Register network printers once, then choose which
  * printer each client's labels and commercial invoices go to. The Default row
  * covers every client without its own printer. ADMIN-only.
+ *
+ * PR-Printer-R3 restructured into three tabs (Printers / Scanners /
+ * Assignments); deep-linkable via {@code ?tab=}.
  */
 export default function PrintersPage() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const tabFromUrl = searchParams.get('tab')
+  const activeTab: TabKey = isTabKey(tabFromUrl) ? tabFromUrl : 'printers'
+  const setTab = (next: TabKey) => {
+    // Preserve any other query params (there aren't any today, but be safe).
+    const params = new URLSearchParams(searchParams)
+    if (next === 'printers') params.delete('tab')
+    else params.set('tab', next)
+    setSearchParams(params, { replace: true })
+  }
   const [printers, setPrinters] = useState<Printer[]>([])
   const [assignments, setAssignments] = useState<PrinterAssignment[]>([])
   const [clients, setClients] = useState<Client[]>([])
@@ -139,72 +186,111 @@ export default function PrintersPage() {
   const labelChoices = printers.filter((p) => p.active)
   const invoiceChoices = printers.filter((p) => p.active && p.format === 'PDF')
 
+  const ActiveIcon = TAB_META[activeTab].icon
+
   return (
     <div className="space-y-6">
       <header className="flex items-start justify-between gap-4">
         <div>
           <h2 className="flex items-center gap-2 text-[17px] font-semibold text-slate-950">
-            <FiPrinter className="h-4 w-4 text-slate-500" />
+            <ActiveIcon className="h-4 w-4 text-slate-500" />
             Printers
           </h2>
           <p className="mt-1 max-w-[70ch] text-[12.5px] text-slate-500">
-            Register your network printers, then choose where each client&rsquo;s labels and commercial invoices print.
-            Label printers usually take ZPL on port 9100; office printers take PDF over IPP. Clients without their own
-            printer use the Default row.
+            {TAB_META[activeTab].help}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setEditing('new')}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-slate-900 px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-slate-700"
-        >
-          <FiPlus className="h-3.5 w-3.5" />
-          Add printer
-        </button>
+        {activeTab === 'printers' ? (
+          <button
+            type="button"
+            onClick={() => setEditing('new')}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-slate-900 px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-slate-700"
+          >
+            <FiPlus className="h-3.5 w-3.5" />
+            Add printer
+          </button>
+        ) : null}
       </header>
 
-      {/* PR-Printer-P1.7 — tenant selector. Sourced from the already-
-          loaded client list (this page is ADMIN-only, so all tenants
-          are visible regardless of AccessScopePolicy). Empty option
-          shows nothing below; picking a tenant persists to localStorage. */}
-      <section className="rounded-xl border border-slate-200 bg-white p-4">
-        <div className="flex items-center gap-3">
-          <label className="flex flex-1 items-center gap-2 text-[12px] font-semibold text-slate-600">
-            Tenant
-            <select
-              value={scanTenant}
-              onChange={(e) => {
-                const next = e.target.value
-                setScanTenant(next)
-                writeLastScanTenant(next)
-              }}
-              disabled={loading || tenantChoices.length === 0}
-              className="w-56 rounded-md border border-slate-200 bg-white px-2 py-1 text-[12.5px] text-slate-900 outline-none focus:border-slate-400 disabled:opacity-50"
+      {/* PR-Printer-R3 — tab strip. Deep-link via ?tab=; the Printers
+          tab is the default (no query param). */}
+      <nav
+        role="tablist"
+        aria-label="Printer settings sections"
+        className="flex items-center gap-1 border-b border-slate-200"
+      >
+        {TAB_KEYS.map((key) => {
+          const meta = TAB_META[key]
+          const Icon = meta.icon
+          const selected = key === activeTab
+          return (
+            <button
+              key={key}
+              type="button"
+              role="tab"
+              aria-selected={selected}
+              onClick={() => setTab(key)}
+              className={
+                'inline-flex items-center gap-1.5 border-b-2 px-3 py-2 text-[13px] font-semibold transition-colors '
+                + (selected
+                  ? 'border-slate-900 text-slate-900'
+                  : 'border-transparent text-slate-500 hover:text-slate-800')
+              }
             >
-              <option value="">
-                {tenantChoices.length === 0
-                  ? (loading ? 'Loading tenants…' : 'No tenants available')
-                  : 'Choose a tenant…'}
-              </option>
-              {tenantChoices.map((code) => (
-                <option key={code} value={code}>{code}</option>
-              ))}
-            </select>
-          </label>
-          <span className="text-[11px] text-slate-400">
-            Pick the tenant to enroll a LAN scanner for.
-          </span>
-        </div>
-      </section>
+              <Icon className="h-3.5 w-3.5" />
+              {meta.label}
+            </button>
+          )
+        })}
+      </nav>
 
-      {scanTenant.trim() ? (
-        <PrinterScanPanel
-          tenantCode={scanTenant.trim()}
-          existingPrinters={printers}
-          onImported={load}
-        />
+      {activeTab === 'scanners' ? (
+        <>
+          {/* PR-Printer-P1.7 — tenant selector. Sourced from the already-
+              loaded client list (this page is ADMIN-only, so all tenants
+              are visible regardless of AccessScopePolicy). Empty option
+              shows nothing below; picking a tenant persists to localStorage. */}
+          <section className="rounded-xl border border-slate-200 bg-white p-4">
+            <div className="flex items-center gap-3">
+              <label className="flex flex-1 items-center gap-2 text-[12px] font-semibold text-slate-600">
+                Tenant
+                <select
+                  value={scanTenant}
+                  onChange={(e) => {
+                    const next = e.target.value
+                    setScanTenant(next)
+                    writeLastScanTenant(next)
+                  }}
+                  disabled={loading || tenantChoices.length === 0}
+                  className="w-56 rounded-md border border-slate-200 bg-white px-2 py-1 text-[12.5px] text-slate-900 outline-none focus:border-slate-400 disabled:opacity-50"
+                >
+                  <option value="">
+                    {tenantChoices.length === 0
+                      ? (loading ? 'Loading tenants…' : 'No tenants available')
+                      : 'Choose a tenant…'}
+                  </option>
+                  {tenantChoices.map((code) => (
+                    <option key={code} value={code}>{code}</option>
+                  ))}
+                </select>
+              </label>
+              <span className="text-[11px] text-slate-400">
+                Pick the tenant to enroll a LAN scanner for.
+              </span>
+            </div>
+          </section>
+
+          {scanTenant.trim() ? (
+            <PrinterScanPanel
+              tenantCode={scanTenant.trim()}
+              existingPrinters={printers}
+              onImported={load}
+            />
+          ) : null}
+        </>
       ) : null}
 
+      {activeTab === 'printers' ? (
       <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
         <table className="min-w-full text-[13px]">
           <thead className="bg-slate-50 text-left text-[11.5px] font-semibold uppercase tracking-wide text-slate-500">
@@ -287,7 +373,9 @@ export default function PrintersPage() {
           </tbody>
         </table>
       </section>
+      ) : null}
 
+      {activeTab === 'assignments' ? (
       <section className="rounded-xl border border-slate-200 bg-white">
         <div className="flex flex-wrap items-end justify-between gap-3 border-b border-slate-100 px-4 py-3">
           <div>
@@ -374,6 +462,7 @@ export default function PrintersPage() {
           </table>
         </div>
       </section>
+      ) : null}
 
       {editing ? (
         <PrinterEditor
