@@ -4,6 +4,8 @@ import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.ErrorCode;
 import com.multiship.backend.model.Printer;
 import com.multiship.backend.model.PrinterAssignment;
+import com.multiship.backend.model.PrinterTag;
+import com.multiship.backend.service.PrinterTagService;
 import com.multiship.backend.service.printing.PrinterService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -33,9 +35,12 @@ import java.util.NoSuchElementException;
 public class PrinterController {
 
     private final PrinterService printers;
+    /** PR-Printer-R8a — free-form tags for grouping registered printers. */
+    private final PrinterTagService tags;
 
-    public PrinterController(PrinterService printers) {
+    public PrinterController(PrinterService printers, PrinterTagService tags) {
         this.printers = printers;
+        this.tags = tags;
     }
 
     @Operation(summary = "List printers")
@@ -100,6 +105,49 @@ public class PrinterController {
     public ResponseEntity<ApiResponse<Void>> deleteAssignment(@PathVariable Long id) {
         printers.deleteAssignment(id);
         return ok("Assignment removed.", null);
+    }
+
+    // ================================================================
+    // Printer tags (R8a)
+    // ================================================================
+
+    @Operation(summary = "List tags on a printer")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping("/{id}/tags")
+    public ResponseEntity<ApiResponse<List<PrinterTag>>> listTags(@PathVariable Long id) {
+        return ok("tags", tags.listForPrinter(id));
+    }
+
+    @Operation(summary = "Replace all tags on a printer (bulk).",
+            description = "Send the full desired set — the service diffs against current tags. "
+                    + "Empty array clears all tags. Duplicates + case variants are normalised (lowercase).")
+    @PreAuthorize("hasRole('ADMIN')")
+    @PutMapping("/{id}/tags")
+    public ResponseEntity<ApiResponse<List<PrinterTag>>> replaceTags(
+            @PathVariable Long id,
+            @RequestBody TagsInput input) {
+        List<String> desired = input == null ? List.of() : (input.getTags() == null ? List.of() : input.getTags());
+        List<PrinterTag> saved = tags.replaceAllForPrinter(id, desired);
+        return ok(saved.size() + (saved.size() == 1 ? " tag" : " tags"), saved);
+    }
+
+    @Operation(summary = "Distinct tags across every printer — feeds the FE autocomplete")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping("/tags/distinct")
+    public ResponseEntity<ApiResponse<List<String>>> distinctTags() {
+        return ok("distinct tags", tags.distinctTags());
+    }
+
+    /** Wire input for {@link #replaceTags}. */
+    public static class TagsInput {
+        private List<String> tags;
+        public List<String> getTags() { return tags; }
+        public void setTags(List<String> tags) { this.tags = tags; }
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ApiResponse<Void>> badTag(IllegalArgumentException ex) {
+        return error(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR, ex.getMessage());
     }
 
     @ExceptionHandler(PrinterService.PrinterValidationException.class)
