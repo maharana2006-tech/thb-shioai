@@ -6,7 +6,7 @@ import './App.css'
 import App from './App.tsx'
 import { store } from './store/store'
 import AppErrorBoundary from './components/errors/AppErrorBoundary'
-import { reportClientError } from './utils/errorReport'
+import { reportClientError, drainClientErrorQueue } from './utils/errorReport'
 
 // PR-F1 (audit FE-ERR-12) — async errors in event handlers (onClick
 // handlers that call an unhandled promise, Redux thunks that reject
@@ -34,6 +34,11 @@ if (typeof window !== 'undefined') {
       // Never let the telemetry sink itself blow up on the reporter's error path.
     }
   })
+
+  // F1.7 — flush any crash reports that couldn't reach the backend
+  // during a prior session (network out, backend restart). Best-effort;
+  // errorReport.ts owns the drain semantics + storage guards.
+  void drainClientErrorQueue()
 }
 
 createRoot(document.getElementById('root')!).render(
