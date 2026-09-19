@@ -51,7 +51,9 @@ function ToastStack({ toasts }: { toasts: NotifyMessage[] }) {
     <div
       // --toast-bottom: a page with a bottom action bar lifts the stack above it.
       style={{ bottom: 'var(--toast-bottom, 1rem)' }}
-      className="pointer-events-none fixed right-4 z-[60] flex w-[min(380px,calc(100vw-2rem))] flex-col items-end gap-2 print:hidden"
+      // Above the confirm modal (z-70): a receipt that fires as a dialog
+      // closes was sitting behind its backdrop until the dialog unmounted.
+      className="pointer-events-none fixed right-4 z-[80] flex w-[min(380px,calc(100vw-2rem))] flex-col items-end gap-2 print:hidden"
       aria-live="polite"
     >
       {hidden > 0 ? (

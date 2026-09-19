@@ -593,7 +593,7 @@ public class ShippingConfigService {
                 + (clientServiceAliasRepository == null ? 0 : clientServiceAliasRepository.countByServiceId(id));
         String tail = rules + aliases == 0 ? "" :
                 " " + rules + " ship via rule" + (rules == 1 ? "" : "s")
-                + " and " + aliases + " client alias" + (aliases == 1 ? "" : "es")
+                + " and " + aliases + " ERP code alias" + (aliases == 1 ? "" : "es")
                 + " point at it and will stop resolving.";
         return success("Disabled " + svc.getName() + "." + tail, svc);
     }
@@ -741,7 +741,11 @@ public class ShippingConfigService {
     @Transactional
     public ApiResponse<Void> deleteRule(Long id, boolean withAliases) {
         int[] aliasesRemoved = {0};
+        String[] removed = {null};
+        String[] removedClient = {null};
         ruleRepository.findById(id).ifPresent(rule -> {
+            removed[0] = rule.getShipviaCd();
+            removedClient[0] = StringUtils.hasText(rule.getClientCode()) ? rule.getClientCode().trim() : null;
             if (withAliases && StringUtils.hasText(rule.getShipviaCd())) {
                 List<com.multiship.backend.model.ClientShipviaCodeMap> aliases =
                         aliasesForRule(rule);
@@ -755,9 +759,10 @@ public class ShippingConfigService {
             ruleRepository.delete(rule);
         });
         return success(aliasesRemoved[0] == 0
-                ? "Rule removed."
-                : "Rule removed, with " + aliasesRemoved[0] + " client code alias"
-                    + (aliasesRemoved[0] == 1 ? "" : "es") + " for the same code.", null);
+                ? (removed[0] == null ? "Rule removed." : "Removed the " + removed[0] + " mapping.")
+                : "Removed the " + removed[0] + " mapping and its " + aliasesRemoved[0]
+                    + " ERP code alias" + (aliasesRemoved[0] == 1 ? "" : "es")
+                    + (removedClient[0] == null ? "" : " for " + removedClient[0]) + ".", null);
     }
 
     /**

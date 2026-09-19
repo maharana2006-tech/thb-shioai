@@ -823,8 +823,12 @@ public class OrderImportServiceImpl implements OrderImportService {
                 if (noteStillFits && priorCode != null) {
                     // The rule that resolved this row is gone (or its service
                     // was switched off). Put the client's own code back so the
-                    // row fails validation naming the code the operator typed.
+                    // row fails validation naming the code the operator typed,
+                    // and drop the carrier the rule chose with it — kept, it
+                    // made the error talk about that carrier's service catalog
+                    // when the fix is a mapping rule.
                     row.setServiceType(priorCode);
+                    row.setCarrierCode(null);
                     row.setShipViaCode(null);
                     row.setShipViaNote(null);
                 }
