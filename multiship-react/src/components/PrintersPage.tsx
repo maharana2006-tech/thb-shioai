@@ -281,7 +281,13 @@ export default function PrintersPage() {
           </section>
 
           {scanTenant.trim() ? (
+            // PR-Printer-R4 — key by tenantCode so a tenant switch
+            // remounts the panel with fresh state (closes any open
+            // enroll/picker modal, clears the live-discovered badge,
+            // collapses the revoked section). Cleaner than manually
+            // resetting all state in a useEffect.
             <PrinterScanPanel
+              key={scanTenant.trim()}
               tenantCode={scanTenant.trim()}
               existingPrinters={printers}
               onImported={load}
