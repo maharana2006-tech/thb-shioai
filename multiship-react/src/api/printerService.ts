@@ -81,6 +81,16 @@ export const printerService = {
     apiClient.put<ApiResponse<PrinterAssignment>>('/printers/assignments', { clientCode, docType, printerId }),
   unassign: (id: number) => apiClient.delete<ApiResponse<void>>(`/printers/assignments/${id}`),
 
+  // PR-Printer-R8a — free-form tags per printer (M2M). replacePrinterTags
+  // is bulk (send the full desired set on save; backend diffs). Distinct
+  // list feeds the FE autocomplete on the editor input.
+  listPrinterTags: (id: number) =>
+    apiClient.get<ApiResponse<PrinterTag[]>>(`/printers/${id}/tags`),
+  replacePrinterTags: (id: number, tags: string[]) =>
+    apiClient.put<ApiResponse<PrinterTag[]>>(`/printers/${id}/tags`, { tags }),
+  listDistinctPrinterTags: () =>
+    apiClient.get<ApiResponse<string[]>>('/printers/tags/distinct'),
+
   // PR-Printer-R7a — per (client, carrier) commercial-invoice copies.
   // clientCode=null on upsert = tenant-wide default row for the carrier.
   // Fallback chain at print time: (client, carrier) → (null, carrier) → 1.
@@ -168,6 +178,14 @@ export interface PrinterScanAgentEnrollResponse {
   /** Shown to admin ONCE. Never re-fetchable. Paste into the Docker
    *  agent's MULTISHIP_AGENT_KEY env; lost = rotate via revoke + re-enroll. */
   rawKey: string
+}
+
+export interface PrinterTag {
+  id: number
+  printerId: number
+  /** Backend stores lowercased for stable dedupe. FE may title-case on display. */
+  tag: string
+  createdAt: string
 }
 
 export interface InvoiceCopiesRule {
