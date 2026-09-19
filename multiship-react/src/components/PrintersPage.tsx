@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
-  FiAlertTriangle, FiCheckCircle, FiEdit2, FiLink, FiPlus, FiPrinter, FiRadio, FiTrash2, FiWifi, FiX,
+  FiAlertTriangle, FiCheckCircle, FiCheckSquare, FiEdit2, FiLink, FiPlus, FiPower,
+  FiPrinter, FiRadio, FiSearch, FiSquare, FiTrash2, FiWifi, FiX,
 } from 'react-icons/fi'
 import { notify } from '../utils/notify'
 import { clientService, type Client } from '../api/clientService'
@@ -75,9 +76,17 @@ export default function PrintersPage() {
   const [clients, setClients] = useState<Client[]>([])
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState<Printer | 'new' | null>(null)
-  const [testingId, setTestingId] = useState<number | null>(null)
+  // PR-Printer-R5 — was single scalar (testingId), which blocked
+  // every Test button while one test was in flight. Now a Set so
+  // per-row spinners work AND bulk Test-N can run concurrently.
+  const [testingIds, setTestingIds] = useState<Set<number>>(new Set())
   const [savingKey, setSavingKey] = useState<string | null>(null)
   const [extraClients, setExtraClients] = useState<string[]>([])
+  // PR-Printer-R5 — search over name + host + location; multi-select
+  // driving the sticky bulk-action bar (Test N / Deactivate N / Delete N).
+  const [search, setSearch] = useState('')
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+  const [bulkOp, setBulkOp] = useState<'test' | 'deactivate' | 'delete' | null>(null)
   // PR-Printer-P1.7 — tenant selector for the LAN scan panel. Reads the
   // already-loaded client list (this page is ADMIN-only via /printers'
   // hasRole('ADMIN'), so the admin sees every tenant regardless of
@@ -103,7 +112,7 @@ export default function PrintersPage() {
   const printerById = useMemo(() => new Map(printers.map((p) => [p.id, p])), [printers])
 
   const runTest = async (p: Printer) => {
-    setTestingId(p.id)
+    setTestingIds((cur) => new Set(cur).add(p.id))
     try {
       const res = await printerService.test(p.id)
       const updated = res.data
@@ -113,8 +122,109 @@ export default function PrintersPage() {
     } catch (e) {
       notifyPrinterProblem(`${p.name} did not print`, e, 'The test print could not be sent.')
     } finally {
-      setTestingId(null)
+      setTestingIds((cur) => {
+        const next = new Set(cur)
+        next.delete(p.id)
+        return next
+      })
     }
+  }
+
+  // PR-Printer-R5 — bulk ops. All three call the existing per-printer
+  // endpoints N times in parallel (no dedicated batch endpoint on the
+  // backend, matching the P3 picker's bulk-add pattern). Failures
+  // don't abort the batch; a summary toast reports added-vs-failed.
+  const runBulkTest = async () => {
+    if (bulkOp || selectedIds.size === 0) return
+    const targets = printers.filter((p) => selectedIds.has(p.id))
+    setBulkOp('test')
+    setTestingIds((cur) => {
+      const next = new Set(cur)
+      targets.forEach((p) => next.add(p.id))
+      return next
+    })
+    let ok = 0
+    const failures: string[] = []
+    const settled = await Promise.allSettled(targets.map((p) => printerService.test(p.id)))
+    settled.forEach((r, i) => {
+      const p = targets[i]
+      if (r.status === 'fulfilled' && r.value.data?.lastTestOk) ok++
+      else failures.push(`${p.name} — ${r.status === 'rejected' && r.reason instanceof Error ? r.reason.message : 'test failed'}`)
+    })
+    // Optimistic reload — every test mutates lastTestAt/lastTestOk/lastTestMessage.
+    await load()
+    setTestingIds(new Set())
+    setBulkOp(null)
+    if (ok > 0) notify.success({ title: `Test print sent to ${ok}`, body: failures.length > 0 ? `${failures.length} failed — see below.` : 'All test prints were accepted.' })
+    if (failures.length > 0) notify.error({
+      title: `${failures.length} test${failures.length === 1 ? '' : 's'} failed`,
+      body: failures.slice(0, 3).join('\n') + (failures.length > 3 ? `\n…and ${failures.length - 3} more` : ''),
+      durationMs: 15_000,
+    })
+  }
+
+  const runBulkDeactivate = async () => {
+    if (bulkOp || selectedIds.size === 0) return
+    const targets = printers.filter((p) => selectedIds.has(p.id) && p.active)
+    if (targets.length === 0) {
+      notify.info('Nothing to deactivate — all selected printers are already switched off.')
+      return
+    }
+    const okConfirm = await notify.confirm(
+      `Deactivate ${targets.length} printer${targets.length === 1 ? '' : 's'}? They'll stay in the list but stop receiving print jobs.`,
+      { title: 'Deactivate printers', confirmLabel: `Deactivate ${targets.length}`, cancelLabel: 'Keep active' },
+    )
+    if (!okConfirm) return
+    setBulkOp('deactivate')
+    let ok = 0
+    const failures: string[] = []
+    const settled = await Promise.allSettled(targets.map((p) => printerService.update(p.id, {
+      name: p.name, location: p.location, connection: p.connection, host: p.host, port: p.port,
+      queuePath: p.queuePath, format: p.format, paper: p.paper, active: false,
+    })))
+    settled.forEach((r, i) => {
+      if (r.status === 'fulfilled') ok++
+      else failures.push(`${targets[i].name} — ${r.reason instanceof Error ? r.reason.message : 'failed'}`)
+    })
+    await load()
+    setSelectedIds(new Set())
+    setBulkOp(null)
+    if (ok > 0) notify.success(`Deactivated ${ok} printer${ok === 1 ? '' : 's'}.`)
+    if (failures.length > 0) notify.error({
+      title: `${failures.length} failed`,
+      body: failures.slice(0, 3).join('\n'),
+      durationMs: 15_000,
+    })
+  }
+
+  const runBulkDelete = async () => {
+    if (bulkOp || selectedIds.size === 0) return
+    const targets = printers.filter((p) => selectedIds.has(p.id))
+    const totalAssignmentImpact = assignments.filter((a) => selectedIds.has(a.printerId)).length
+    const okConfirm = await notify.confirm(
+      totalAssignmentImpact > 0
+        ? `Delete ${targets.length} printer${targets.length === 1 ? '' : 's'}? ${totalAssignmentImpact} client assignment${totalAssignmentImpact === 1 ? '' : 's'} will be removed with them.`
+        : `Delete ${targets.length} printer${targets.length === 1 ? '' : 's'}?`,
+      { title: 'Delete printers', confirmLabel: `Delete ${targets.length}`, cancelLabel: 'Keep', danger: true },
+    )
+    if (!okConfirm) return
+    setBulkOp('delete')
+    let ok = 0
+    const failures: string[] = []
+    const settled = await Promise.allSettled(targets.map((p) => printerService.remove(p.id)))
+    settled.forEach((r, i) => {
+      if (r.status === 'fulfilled') ok++
+      else failures.push(`${targets[i].name} — ${r.reason instanceof Error ? r.reason.message : 'failed'}`)
+    })
+    await load()
+    setSelectedIds(new Set())
+    setBulkOp(null)
+    if (ok > 0) notify.success(`Removed ${ok} printer${ok === 1 ? '' : 's'}.`)
+    if (failures.length > 0) notify.error({
+      title: `${failures.length} failed`,
+      body: failures.slice(0, 3).join('\n'),
+      durationMs: 15_000,
+    })
   }
 
   const removePrinter = async (p: Printer) => {
@@ -185,6 +295,44 @@ export default function PrintersPage() {
 
   const labelChoices = printers.filter((p) => p.active)
   const invoiceChoices = printers.filter((p) => p.active && p.format === 'PDF')
+
+  // PR-Printer-R5 — filter for the Printers-table search input. Case-
+  // insensitive substring across name / host / location. Empty search
+  // = full list (perf: no filter cost).
+  const filteredPrinters = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    if (!q) return printers
+    return printers.filter((p) =>
+      p.name.toLowerCase().includes(q)
+      || p.host.toLowerCase().includes(q)
+      || (p.location ?? '').toLowerCase().includes(q),
+    )
+  }, [printers, search])
+
+  const allFilteredSelected = filteredPrinters.length > 0
+    && filteredPrinters.every((p) => selectedIds.has(p.id))
+  const toggleSelectAll = () => {
+    setSelectedIds((cur) => {
+      if (allFilteredSelected) {
+        // Clear only the filtered set — preserve any selections outside
+        // the current filter view.
+        const next = new Set(cur)
+        filteredPrinters.forEach((p) => next.delete(p.id))
+        return next
+      }
+      const next = new Set(cur)
+      filteredPrinters.forEach((p) => next.add(p.id))
+      return next
+    })
+  }
+  const toggleSelect = (id: number) => {
+    setSelectedIds((cur) => {
+      const next = new Set(cur)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   const ActiveIcon = TAB_META[activeTab].icon
 
@@ -297,88 +445,201 @@ export default function PrintersPage() {
       ) : null}
 
       {activeTab === 'printers' ? (
-      <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-        <table className="min-w-full text-[13px]">
-          <thead className="bg-slate-50 text-left text-[11.5px] font-semibold uppercase tracking-wide text-slate-500">
-            <tr>
-              <th className="px-3 py-2">Printer</th>
-              <th className="px-3 py-2">Connection</th>
-              <th className="px-3 py-2">Address</th>
-              <th className="px-3 py-2">Prints</th>
-              <th className="px-3 py-2">Status</th>
-              <th className="sticky right-0 bg-slate-50 px-3 py-2 text-right shadow-[-8px_0_8px_-8px_rgba(15,23,42,0.15)]">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {loading ? (
-              <tr><td colSpan={6} className="px-3 py-6 text-center text-slate-500">Loading…</td></tr>
-            ) : printers.length === 0 ? (
+      <>
+        {/* PR-Printer-R5 — search bar + selection counter above table. */}
+        <section className="flex flex-wrap items-center gap-2">
+          <label className="relative flex-1 min-w-[240px]">
+            <FiSearch className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+            <input
+              type="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search printers by name, host, or location…"
+              className="w-full rounded-md border border-slate-200 bg-white pl-8 pr-3 py-1.5 text-[13px] text-slate-900 outline-none focus:border-slate-400"
+            />
+          </label>
+          {search ? (
+            <span className="text-[12px] text-slate-500">
+              {filteredPrinters.length} of {printers.length}
+            </span>
+          ) : null}
+        </section>
+
+        <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+          <table className="min-w-full text-[13px]">
+            <thead className="bg-slate-50 text-left text-[11.5px] font-semibold uppercase tracking-wide text-slate-500">
               <tr>
-                <td colSpan={6} className="px-3 py-8 text-center text-slate-500">
-                  No printers yet. Add your label printer and your invoice printer to start routing documents.
-                </td>
+                <th className="px-3 py-2 w-8">
+                  <button
+                    type="button"
+                    onClick={toggleSelectAll}
+                    disabled={filteredPrinters.length === 0}
+                    aria-label={allFilteredSelected ? 'Clear selection' : 'Select all filtered'}
+                    className="inline-flex items-center text-slate-500 hover:text-slate-800 disabled:opacity-40"
+                  >
+                    {allFilteredSelected
+                      ? <FiCheckSquare className="h-4 w-4" />
+                      : <FiSquare className="h-4 w-4" />}
+                  </button>
+                </th>
+                <th className="px-3 py-2">Printer</th>
+                <th className="px-3 py-2">Connection</th>
+                <th className="px-3 py-2">Address</th>
+                <th className="px-3 py-2">Prints</th>
+                <th className="px-3 py-2">Status</th>
+                <th className="sticky right-0 bg-slate-50 px-3 py-2 text-right shadow-[-8px_0_8px_-8px_rgba(15,23,42,0.15)]">Actions</th>
               </tr>
-            ) : (
-              printers.map((p) => (
-                <tr key={p.id} className={p.active ? '' : 'opacity-60'}>
-                  <td className="px-3 py-2.5">
-                    <span className="block font-semibold text-slate-900">{p.name}</span>
-                    {p.location ? <span className="block text-[11.5px] text-slate-500">{p.location}</span> : null}
-                  </td>
-                  <td className="px-3 py-2.5 text-slate-700">{CONNECTION_LABEL[p.connection] ?? p.connection}</td>
-                  <td className="px-3 py-2.5 font-mono text-[12px] text-slate-700">
-                    {p.host}:{p.port}{p.connection === 'IPP' && p.queuePath ? `/${p.queuePath}` : ''}
-                  </td>
-                  <td className="px-3 py-2.5">
-                    <span className="inline-flex items-center gap-1.5">
-                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">{p.format}</span>
-                      <span className="text-[12px] text-slate-500">{PAPER_LABEL[p.paper] ?? p.paper}</span>
-                    </span>
-                  </td>
-                  <td className="px-3 py-2.5">
-                    {!p.active ? (
-                      <span className="text-[12px] text-slate-500">Switched off</span>
-                    ) : p.lastTestOk === true ? (
-                      <span className="inline-flex items-center gap-1 text-[12px] font-semibold text-emerald-700" title={p.lastTestMessage ?? undefined}>
-                        <FiCheckCircle className="h-3.5 w-3.5" /> Test OK
-                      </span>
-                    ) : p.lastTestOk === false ? (
-                      <span className="inline-flex max-w-[260px] items-center gap-1 truncate text-[12px] font-semibold text-rose-700" title={p.lastTestMessage ?? undefined}>
-                        <FiAlertTriangle className="h-3.5 w-3.5 shrink-0" /> Test failed
-                      </span>
-                    ) : (
-                      <span className="text-[12px] text-slate-500">Not tested</span>
-                    )}
-                  </td>
-                  <td className="sticky right-0 bg-white px-3 py-2.5 shadow-[-8px_0_8px_-8px_rgba(15,23,42,0.15)]">
-                    <span className="flex items-center justify-end gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => void runTest(p)}
-                        disabled={testingId !== null}
-                        className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-[12px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                      >
-                        {testingId === p.id
-                          ? <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
-                          : <FiRadio className="h-3 w-3" />}
-                        Test print
-                      </button>
-                      <button type="button" onClick={() => setEditing(p)} aria-label={`Edit ${p.name}`}
-                        className="rounded-md border border-slate-300 bg-white p-1.5 text-slate-600 hover:bg-slate-50">
-                        <FiEdit2 className="h-3.5 w-3.5" />
-                      </button>
-                      <button type="button" onClick={() => void removePrinter(p)} aria-label={`Delete ${p.name}`}
-                        className="rounded-md border border-slate-300 bg-white p-1.5 text-slate-600 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-700">
-                        <FiTrash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </span>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {loading ? (
+                <tr><td colSpan={7} className="px-3 py-6 text-center text-slate-500">Loading…</td></tr>
+              ) : printers.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="px-3 py-8 text-center text-slate-500">
+                    No printers yet. Add your label printer and your invoice printer to start routing documents.
                   </td>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </section>
+              ) : filteredPrinters.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="px-3 py-8 text-center text-slate-500">
+                    No printers match “{search}”. <button type="button" onClick={() => setSearch('')} className="ml-1 underline">Clear search</button>
+                  </td>
+                </tr>
+              ) : (
+                filteredPrinters.map((p) => (
+                  <tr key={p.id} className={p.active ? '' : 'opacity-60'}>
+                    <td className="px-3 py-2.5">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(p.id)}
+                        onChange={() => toggleSelect(p.id)}
+                        aria-label={`Select ${p.name}`}
+                        disabled={bulkOp !== null}
+                      />
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <span className="block font-semibold text-slate-900">{p.name}</span>
+                      {p.location ? <span className="block text-[11.5px] text-slate-500">{p.location}</span> : null}
+                    </td>
+                    <td className="px-3 py-2.5 text-slate-700">{CONNECTION_LABEL[p.connection] ?? p.connection}</td>
+                    <td className="px-3 py-2.5 font-mono text-[12px] text-slate-700">
+                      {p.host}:{p.port}{p.connection === 'IPP' && p.queuePath ? `/${p.queuePath}` : ''}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">{p.format}</span>
+                        <span className="text-[12px] text-slate-500">{PAPER_LABEL[p.paper] ?? p.paper}</span>
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5">
+                      {!p.active ? (
+                        <span className="text-[12px] text-slate-500">Switched off</span>
+                      ) : p.lastTestOk === true ? (
+                        <span className="inline-flex items-center gap-1 text-[12px] font-semibold text-emerald-700" title={p.lastTestMessage ?? undefined}>
+                          <FiCheckCircle className="h-3.5 w-3.5" /> Test OK
+                        </span>
+                      ) : p.lastTestOk === false ? (
+                        <span className="inline-flex max-w-[260px] items-center gap-1 truncate text-[12px] font-semibold text-rose-700" title={p.lastTestMessage ?? undefined}>
+                          <FiAlertTriangle className="h-3.5 w-3.5 shrink-0" /> Test failed
+                        </span>
+                      ) : (
+                        <span className="text-[12px] text-slate-500">Not tested</span>
+                      )}
+                    </td>
+                    <td className="sticky right-0 bg-white px-3 py-2.5 shadow-[-8px_0_8px_-8px_rgba(15,23,42,0.15)]">
+                      <span className="flex items-center justify-end gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => void runTest(p)}
+                          // PR-Printer-R5 — per-row disable only. Was
+                          // testingId (single-slot mutex) → blocked every
+                          // Test button while one test was in flight.
+                          disabled={testingIds.has(p.id) || bulkOp !== null}
+                          className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-[12px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                        >
+                          {testingIds.has(p.id)
+                            ? <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
+                            : <FiRadio className="h-3 w-3" />}
+                          Test print
+                        </button>
+                        <button type="button" onClick={() => setEditing(p)} aria-label={`Edit ${p.name}`}
+                          disabled={bulkOp !== null}
+                          className="rounded-md border border-slate-300 bg-white p-1.5 text-slate-600 hover:bg-slate-50 disabled:opacity-50">
+                          <FiEdit2 className="h-3.5 w-3.5" />
+                        </button>
+                        <button type="button" onClick={() => void removePrinter(p)} aria-label={`Delete ${p.name}`}
+                          disabled={bulkOp !== null}
+                          className="rounded-md border border-slate-300 bg-white p-1.5 text-slate-600 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-700 disabled:opacity-50">
+                          <FiTrash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </span>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </section>
+
+        {/* PR-Printer-R5 — bulk-action bar. Sticky-bottom on narrow
+            viewports (mobile), inline above nothing on desktop (still
+            fixed at the bottom of the screen so scrolling through a
+            long list keeps it in reach). Only rendered when a
+            selection exists. */}
+        {selectedIds.size > 0 ? (
+          <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-slate-200 bg-white shadow-[0_-8px_24px_-8px_rgba(15,23,42,0.15)] sm:sticky sm:bottom-4 sm:mx-auto sm:max-w-3xl sm:rounded-xl sm:border sm:shadow-lg">
+            <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5">
+              <span className="text-[13px] font-semibold text-slate-900">
+                {selectedIds.size} selected
+              </span>
+              <span className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void runBulkTest()}
+                  disabled={bulkOp !== null}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {bulkOp === 'test'
+                    ? <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
+                    : <FiRadio className="h-3.5 w-3.5" />}
+                  Test {selectedIds.size}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void runBulkDeactivate()}
+                  disabled={bulkOp !== null}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {bulkOp === 'deactivate'
+                    ? <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
+                    : <FiPower className="h-3.5 w-3.5" />}
+                  Deactivate {selectedIds.size}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void runBulkDelete()}
+                  disabled={bulkOp !== null}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-rose-300 bg-rose-50 px-3 py-1.5 text-[12.5px] font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {bulkOp === 'delete'
+                    ? <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-rose-300 border-t-rose-700" />
+                    : <FiTrash2 className="h-3.5 w-3.5" />}
+                  Delete {selectedIds.size}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedIds(new Set())}
+                  disabled={bulkOp !== null}
+                  aria-label="Clear selection"
+                  className="rounded-md border border-slate-200 bg-white p-1.5 text-slate-500 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  <FiX className="h-3.5 w-3.5" />
+                </button>
+              </span>
+            </div>
+          </div>
+        ) : null}
+      </>
       ) : null}
 
       {activeTab === 'assignments' ? (
