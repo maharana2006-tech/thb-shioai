@@ -1,14 +1,19 @@
 package com.multiship.backend.service;
 
+import com.multiship.backend.model.CarrierAccountRef;
 import com.multiship.backend.model.InvoiceCopies;
+import com.multiship.backend.model.OrderTracking;
+import com.multiship.backend.repository.CarrierAccountRefRepository;
 import com.multiship.backend.repository.InvoiceCopiesRepository;
-import lombok.RequiredArgsConstructor;
+import com.multiship.backend.repository.OrderTrackingRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.util.List;
+import java.util.Optional;
 
 /**
  * PR-Printer-R7a — resolve, list, upsert, delete the per (client,
@@ -26,7 +31,6 @@ import java.util.List;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class InvoiceCopiesService {
 
     /** Hard fallback when no rule exists. Historical behaviour was always 1. */
@@ -36,6 +40,58 @@ public class InvoiceCopiesService {
     static final int MAX_COPIES = 20;
 
     private final InvoiceCopiesRepository repository;
+    /** PR-Printer-R7c — nullable so the R7a service still constructs cleanly
+     *  in unit tests that don't touch the order-resolution path. */
+    private final OrderTrackingRepository orderTrackingRepository;
+    private final CarrierAccountRefRepository carrierAccountRefRepository;
+
+    @Autowired
+    public InvoiceCopiesService(InvoiceCopiesRepository repository,
+                                OrderTrackingRepository orderTrackingRepository,
+                                CarrierAccountRefRepository carrierAccountRefRepository) {
+        this.repository = repository;
+        this.orderTrackingRepository = orderTrackingRepository;
+        this.carrierAccountRefRepository = carrierAccountRefRepository;
+    }
+
+    /** R7a-era constructor kept for backwards-compat with tests that don't
+     *  exercise the R7c resolveCopiesForOrder path. Spring uses the
+     *  @Autowired 3-arg constructor for production wiring; this one is only
+     *  reachable from unit tests + is why the 3-arg one carries @Autowired
+     *  (per [[component-ctor-overload-needs-autowired]]). */
+    InvoiceCopiesService(InvoiceCopiesRepository repository) {
+        this(repository, null, null);
+    }
+
+    /**
+     * PR-Printer-R7c — the integration point for the invoice-print
+     * dispatch site. Looks up the order's OrderTracking, resolves the
+     * carrier via CarrierAccountRef, and returns copies per the R7a
+     * fallback chain. Never throws — a missing tracking / account
+     * / carrier just falls through to {@link #DEFAULT_COPIES}.
+     */
+    public int resolveCopiesForOrder(Integer orderNo) {
+        if (orderNo == null || orderTrackingRepository == null || carrierAccountRefRepository == null) {
+            return DEFAULT_COPIES;
+        }
+        try {
+            Optional<OrderTracking> tracking = orderTrackingRepository.findByOrderNo(orderNo);
+            if (tracking.isEmpty()) return DEFAULT_COPIES;
+            String accountNumber = tracking.get().getAccountNumber();
+            if (!StringUtils.hasText(accountNumber)) return DEFAULT_COPIES;
+            Optional<CarrierAccountRef> account = carrierAccountRefRepository
+                    .findFirstByAccountNumberIgnoreCaseOrderByUpdatedAtDesc(accountNumber);
+            if (account.isEmpty()) return DEFAULT_COPIES;
+            String carrierCode = account.get().getCarrierCode();
+            String clientCode = account.get().getCustomerNo();
+            return resolveCopies(clientCode, carrierCode);
+        } catch (Exception e) {
+            // Any lookup blip: fall back to the historical behaviour.
+            // Never let a copies-config lookup fail an invoice-print job.
+            log.warn("resolveCopiesForOrder({}) failed, defaulting to 1: {}", orderNo, e.toString());
+            return DEFAULT_COPIES;
+        }
+    }
 
     /**
      * The main integration point for the print-dispatch site.

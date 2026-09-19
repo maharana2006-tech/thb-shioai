@@ -124,6 +124,12 @@ public class OrderController {
     @Autowired
     private com.multiship.backend.service.CommercialInvoiceService commercialInvoiceService;
 
+    // PR-Printer-R7c — resolves per (client, carrier) invoice copies.
+    // Optional so the dispatch keeps working if the service isn't
+    // wired (defensive; production always has it).
+    @Autowired(required = false)
+    private com.multiship.backend.service.InvoiceCopiesService invoiceCopiesService;
+
     // Unified documents table — one row per labelled order (tracking + label
     // + invoice + statement figures together).
     @Autowired
@@ -1668,8 +1674,15 @@ public class OrderController {
                     zplJob.append(zplText.strip()).append('\n');
                     documents++;
                 } else if (pdf != null && pdf.length > 0) {
-                    pdfParts.add(pdf);
-                    documents++;
+                    // PR-Printer-R7c — INVOICE branch multiplies by the
+                    // configured per (client, carrier) copies rule.
+                    // LABEL always prints once. Copies value is bounded
+                    // 1..20 at the DB, defensive Math.max(1) below.
+                    int copies = !labels && invoiceCopiesService != null
+                            ? Math.max(1, invoiceCopiesService.resolveCopiesForOrder(orderNo))
+                            : 1;
+                    for (int c = 0; c < copies; c++) pdfParts.add(pdf);
+                    documents += copies;
                 } else {
                     skipped.add(orderNo);
                 }
