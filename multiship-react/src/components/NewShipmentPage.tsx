@@ -1082,38 +1082,32 @@ export default function NewShipmentPage() {
    * "silently defaulted to PDF/PAPER_4X6/GIF" surprise the old
    * account-null branch produced.
    */
+  // Prefill label fields when the resolved account changes; hard-overwrite
+  // by design so switching accounts always shows the new account's saved
+  // defaults, not stale user overrides from the previous account. Unlike
+  // the label fields, pickupType falls back to the backend's hardcoded
+  // default (USE_SCHEDULED_PICKUP) when the account has NULL — no force-
+  // pick, per operator call. Reason of export prefills from
+  // account.shippingPurpose; NULL leaves the field blank and the guard in
+  // submit/validate blocks international shipments until the operator
+  // picks. Clearance option (customs duties): prefill only when the saved
+  // value is in the current carrier's vocabulary; guards against admin
+  // misconfiguration (UPS account with a FedEx-only 'RECIPIENT' value) and
+  // carrier-swap staleness.
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- prefill label fields when the resolved account changes; hard-overwrite by design so switching accounts always shows the new account's saved defaults, not stale user overrides from the previous account.
+    /* eslint-disable react-hooks/set-state-in-effect -- hard-overwrite of
+       form-field defaults when the resolved account changes; cannot be
+       derived at render because the operator can subsequently edit these
+       values within the same account. */
     setLabelImageType(matchedAccount?.labelImageType ?? '')
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- same rationale as labelImageType above.
     setLabelStockType(matchedAccount?.labelStockType ?? '')
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- same rationale as labelImageType above.
     setLabelImageFormat(matchedAccount?.labelImageFormat ?? '')
-    // Unlike the label fields, pickupType falls back to the backend's
-    // hardcoded default (USE_SCHEDULED_PICKUP) when the account has
-    // NULL — no force-pick, per operator call. Showing the effective
-    // value in the UI still beats hiding it behind a silent backend
-    // fallback.
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- same rationale as labelImageType above.
     setPickupType(matchedAccount?.pickupType ?? 'USE_SCHEDULED_PICKUP')
-    // Reason of export prefills from account.shippingPurpose; NULL
-    // leaves the field blank and the guard in submit/validate blocks
-    // international shipments until the operator picks. Applied
-    // regardless of isInternational so the value is ready if the
-    // operator flips domestic→international mid-form; the guard only
-    // fires on international.
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- same rationale as labelImageType above.
     setReasonForExport(matchedAccount?.shippingPurpose ?? '')
-    // Clearance option (customs duties): prefill from account only when
-    // the saved value is in the current carrier's vocabulary. Guards
-    // against admin misconfiguration (e.g. UPS account with a FedEx-
-    // only 'RECIPIENT' value) and the carrier-swap case (account's
-    // saved value from prior carrier still cached). NULL / not-in-list
-    // → blank; backend connector applies its own default.
     const saved = matchedAccount?.clearanceOption
     const allowed = clearanceOptionsForCarrier(canon(carrier))
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- same rationale as labelImageType above.
     setClearanceOption(saved && allowed.some((o) => o.value === saved) ? saved : '')
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [matchedAccount, carrier])
 
   /**
@@ -1161,7 +1155,9 @@ export default function NewShipmentPage() {
     if (isInternational && /THIRD/.test(clearanceOption.toUpperCase()) && !dutiesAccount.trim()) missing.push('Duties payor account')
     return missing
   }, [carrier, labelImageType, labelStockType, labelImageFormat, isInternational, reasonForExport, incoterms,
-      sender.countryCode, recipient.countryCode, recipientEffectiveCountry, currency, declaredValue, ftrExemption, aesCitation,
+      // recipient.countryCode is intentionally omitted — recipientEffectiveCountry
+      // is derived from it and already covers the value the memo actually reads.
+      sender.countryCode, recipientEffectiveCountry, currency, declaredValue, ftrExemption, aesCitation,
       // typed fields the list checks — without these the memo kept reporting
       // "Duties payor account" after the operator had typed one
       clearanceOption, dutiesAccount])
@@ -1362,7 +1358,8 @@ export default function NewShipmentPage() {
       })(),
     }),
     [isInternational, isCustomPkg, clientCode, carrier, accountNumber, incoterms, reasonForExport,
-      currency, sender, recipient, weight, declaredValue, insuredValue, length, width, height, items],
+      currency, sender, recipient, weight, declaredValue, insuredValue, length, width, height, items,
+      recipientTerritoryEarly],
   )
   const formik = useFormik<ShipmentFormValues>({
     initialValues: formValues as unknown as ShipmentFormValues,
@@ -1780,7 +1777,6 @@ export default function NewShipmentPage() {
     ftrExemption: ftrExemption || undefined,
     aesCitation: aesCitation || undefined,
     exportDeclarationReference: exportDeclarationReference || undefined,
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- autoItemWeight is a stable derived helper over items + weight; adding it triggers a new identity every render.
   }), [items, incoterms, reasonForExport, currency, weightUnit, ftrExemption, aesCitation, exportDeclarationReference])
 
   /** Copy wizard-side state back into the inline form state so both stay in sync. */
