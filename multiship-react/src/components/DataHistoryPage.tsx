@@ -363,10 +363,11 @@ export default function DataHistoryPage() {
   }, [batches, viewTrash, generatingId])
 
   /** Cleanup on unmount — cancel every in-flight observer poll so the
-   *  loop doesn't outlive the component. */
+   *  loop doesn't outlive the component. Ref captured OUTSIDE the cleanup
+   *  so React lint doesn't warn about a stale ref.current read. */
   useEffect(() => {
+    const polls = observerPollsRef.current
     return () => {
-      const polls = observerPollsRef.current
       for (const [, poll] of polls) poll.cancel()
       polls.clear()
     }
@@ -1168,8 +1169,12 @@ export default function DataHistoryPage() {
         meta: { headerLabel: 'Actions', exportable: false },
       },
     ],
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     // nowTick re-renders the running-elapsed caption once a second.
+    // Handlers (cancelGeneration/generate/handleDelete/handleRestore/setBilling)
+    // are re-created every render but close over their own state correctly —
+    // adding them here would defeat memoization by giving dhColumns a new
+    // identity every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [canWrite, viewTrash, trashBusyId, confirmGenId, billingSavingId, generatingId, genProgressById, nowTick, cancellingId, cancelRequested, validatingId],
   )
 

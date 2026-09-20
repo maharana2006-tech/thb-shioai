@@ -296,7 +296,6 @@ export default function OrdersWorkspace() {
       }
     })()
     return () => { cancelled = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showFilters, view, debouncedQuery, clientFilter,
       dateFrom, dateTo, debouncedFilters, sourceFilter, channelFilter, carrierFilter])
 
@@ -542,7 +541,12 @@ export default function OrdersWorkspace() {
   // rows aren't actionable via bulk in the current workflow set.
   const SELECTABLE_VIEWS: readonly View[] = ['ready', 'all', 'generated']
   const selectionEnabled = SELECTABLE_VIEWS.includes(view)
-  const selectableVisible = selectionEnabled ? rows : []
+  // Wrap in useMemo so downstream useCallbacks that depend on this list
+  // (toggleOrder / selectPage) don't get a fresh identity every render.
+  const selectableVisible = useMemo(
+    () => (selectionEnabled ? rows : []),
+    [selectionEnabled, rows],
+  )
 
   /**
    * True when the given order_no is currently selected under the
