@@ -24,7 +24,7 @@ BEGIN
             -- because scheduled / system tests may have no user.
             tested_by   VARCHAR(120),
             CONSTRAINT fk_printer_test_history_printer
-                FOREIGN KEY (printer_id) REFERENCES public.printers(id)
+                FOREIGN KEY (printer_id) REFERENCES public.printer(id)
                 ON DELETE CASCADE
         );
 

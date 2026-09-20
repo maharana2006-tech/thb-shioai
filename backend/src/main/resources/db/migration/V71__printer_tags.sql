@@ -20,7 +20,7 @@ BEGIN
             tag         VARCHAR(60)  NOT NULL,
             created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
             CONSTRAINT fk_printer_tags_printer
-                FOREIGN KEY (printer_id) REFERENCES public.printers(id)
+                FOREIGN KEY (printer_id) REFERENCES public.printer(id)
                 ON DELETE CASCADE,
             CONSTRAINT uk_printer_tags_printer_tag
                 UNIQUE (printer_id, tag)
