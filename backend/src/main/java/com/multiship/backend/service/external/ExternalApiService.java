@@ -77,6 +77,18 @@ public class ExternalApiService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.repository.LabelPackageRepository labelPackageRepositoryForTracking;
 
+    /**
+     * Slice-2 tenant channel gate. Optional (@Autowired required=false)
+     * so pure-Mockito unit tests that don't wire the guard degrade to
+     * pre-slice-2 behaviour (no gate) instead of NullPointerException.
+     * When present, {@link #createShipment} classifies the incoming
+     * request and calls {@code requireChannel} — a mismatched channel
+     * or an unconfigured tenant surfaces as ExternalApiException 403
+     * TENANT_CHANNEL_NOT_ENABLED.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.TenantChannelGuard channelGuard;
+
     public ExternalApiService(ShippingConfigService shippingConfigService,
                               ShippingServiceRepository serviceRepository,
                               CarrierAccountRefRepository carrierAccountRefRepository,
@@ -114,6 +126,24 @@ public class ExternalApiService {
         if (req.getParcel() == null || req.getParcel().getWeight() == null
                 || req.getParcel().getWeight().signum() <= 0) {
             throw new ExternalApiException(422, ErrorCode.VALIDATION_ERROR, "parcel.weight (> 0) is required.");
+        }
+        // Slice-2 gate: fail fast BEFORE any translation / carrier lookup /
+        // idempotency work so a customer with a mis-configured tenant sees
+        // the 403 immediately, not after the platform has done real work.
+        // ExternalAddress has no residential flag today; classify from
+        // explicit channel + company presence only (matches the classifier
+        // in CarrierServiceImpl.resolveOrderChannel for the same input set).
+        if (channelGuard != null) {
+            com.multiship.backend.service.TenantSettingsService.Channel classified =
+                    com.multiship.backend.service.TenantChannelGuard.classify(
+                            req.getChannel(),
+                            /* residential */ null,
+                            req.getShipTo() == null ? null : req.getShipTo().getCompany());
+            try {
+                channelGuard.requireChannel(clientCode, classified);
+            } catch (com.multiship.backend.service.TenantChannelGuard.ChannelNotEnabledException e) {
+                throw new ExternalApiException(403, ErrorCode.TENANT_CHANNEL_NOT_ENABLED, e.getMessage());
+            }
         }
 
         // Phase 5c — order-intake translation. Snapshot raw ERP codes before

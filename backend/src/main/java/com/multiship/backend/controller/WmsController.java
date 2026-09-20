@@ -1,9 +1,12 @@
 package com.multiship.backend.controller;
 
 import com.multiship.backend.dto.ApiResponse;
+import com.multiship.backend.dto.ErrorCode;
 import com.multiship.backend.dto.ImportBatchDTO;
 import com.multiship.backend.dto.wms.WmsPullResultDTO;
 import com.multiship.backend.service.OrderImportService;
+import com.multiship.backend.service.TenantChannelGuard;
+import com.multiship.backend.service.TenantScopeEnforcer;
 import com.multiship.backend.service.wms.WmsClient;
 import com.multiship.backend.service.wms.WmsService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -39,6 +42,17 @@ public class WmsController {
 
     private final WmsService wmsService;
     private final OrderImportService orderImportService;
+    /**
+     * Slice-2 tenant channel gate. Optional (@Autowired required=false)
+     * so pure-Mockito tests that pre-date the guard degrade cleanly
+     * (no gate = pre-slice-2 behavior). See TenantChannelGuard for the
+     * force-picking rejection rule.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private TenantChannelGuard channelGuard;
+    /** Slice-2 tenant scope for tag-per-user; optional to keep tests happy. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private TenantScopeEnforcer scope;
 
     @Operation(summary = "Is the WMS integration configured?",
             description = "Returns { configured: true|false }. False until WMS_BASE_URL + WMS_API_KEY are set.")
@@ -90,6 +104,31 @@ public class WmsController {
     public ResponseEntity<ApiResponse<WmsPullResultDTO>> pull(
             @AuthenticationPrincipal UserDetails userDetails) {
         String username = userDetails == null ? "unknown" : userDetails.getUsername();
+        // Slice-2 gate: WMS pull is tenant-scoped by the caller's JWT.
+        // Force-picking default — a tenant that hasn't chosen at least
+        // one channel at /settings/system can't pull yet. Per-order
+        // channel classification isn't possible here (WMS orders are
+        // PENDING until later work-flow), so we gate on configuration
+        // presence only. Platform operators (no tenant scope) skip.
+        // Catch + re-render inline: SecurityConfig's default
+        // accessDeniedHandler returns a generic "FORBIDDEN" body without
+        // the errorCode, so we render the tenant-specific 403 here.
+        if (channelGuard != null && scope != null) {
+            java.util.Optional<String> tenantOpt = scope.resolveScope();
+            if (tenantOpt.isPresent()) {
+                try {
+                    channelGuard.requireConfigured(tenantOpt.get());
+                } catch (TenantChannelGuard.ChannelNotEnabledException e) {
+                    return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                            .body(ApiResponse.<WmsPullResultDTO>builder()
+                                    .status("ERROR").code(HttpStatus.FORBIDDEN.value())
+                                    .timestamp(LocalDateTime.now())
+                                    .message(e.getMessage())
+                                    .errorCode(ErrorCode.TENANT_CHANNEL_NOT_ENABLED.name())
+                                    .build());
+                }
+            }
+        }
         try {
             WmsPullResultDTO result = wmsService.pullShippable(username);
             String msg = !result.isConfigured()
