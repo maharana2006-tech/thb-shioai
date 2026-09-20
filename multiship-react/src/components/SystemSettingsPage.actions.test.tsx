@@ -63,6 +63,23 @@ vi.mock('../api/apiClient', () => ({
   apiClient: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn(), patch: vi.fn() },
 }))
 
+// Slice-3 SystemChannelSection nested-render deps; stub both so the
+// channel card mounts silently and doesn't leak calls into these
+// actions-focused assertions.
+vi.mock('../api/clientService', () => ({
+  clientService: {
+    listClients: vi.fn().mockResolvedValue({ data: { content: [], totalPages: 1 } }),
+  },
+}))
+vi.mock('../api/tenantSettingsService', () => ({
+  tenantSettingsService: {
+    getEnabledChannels: vi.fn().mockResolvedValue({
+      tenantCode: '', enabledChannels: [], isConfigured: false,
+    }),
+    setEnabledChannels: vi.fn(),
+  },
+}))
+
 // ---------- Fixtures ----------
 
 const setting = (overrides: Partial<{
