@@ -125,6 +125,12 @@ public enum ErrorCode {
     ACCOUNT_HAS_LABELS,
     TENANT_REQUIRED,
     TENANT_ACCOUNT_NOT_FOUND,
+    /** External order intake refused: the incoming order's shipping channel
+     *  (D2C / B2B) isn't in the tenant's enabled-channels allowlist, OR the
+     *  tenant hasn't configured allowed channels yet (force-picking default —
+     *  operator must set at /settings/system before intake works). Fired by
+     *  the intake gate on /api/v1/external/**, /api/v2/external/**, WMS pull. */
+    TENANT_CHANNEL_NOT_ENABLED,
     CARRIER_CONNECTION_FAILED,
 
     ACCOUNT_SELECTION_REQUIRED,
