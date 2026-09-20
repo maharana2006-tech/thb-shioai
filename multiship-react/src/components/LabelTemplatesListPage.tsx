@@ -393,7 +393,7 @@ export default function LabelTemplatesListPage() {
     return () => {
       if (previewUrl) URL.revokeObjectURL(previewUrl)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- unmount-only cleanup; previewUrl read via closure — if we added it here, every URL change would revoke prematurely
   }, [])
 
   const filtersActive = !!(typeFilter || logoFilter)

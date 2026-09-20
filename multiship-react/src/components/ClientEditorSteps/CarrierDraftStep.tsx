@@ -163,7 +163,7 @@ export function CarrierDraftStep({
     const ok = clearanceOptionsForCarrier(f.carrierCode).some((o) => o.value === f.clearanceOption)
     // eslint-disable-next-line react-hooks/set-state-in-effect -- clear stale clearance option on carrier change; guards submit-time invalid combos, cannot be derived at render
     if (!ok) setF((cur) => ({ ...cur, clearanceOption: '' }))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- f.clearanceOption intentionally omitted; only carrier-change should re-evaluate. Including it would clear the field on any operator edit.
   }, [f.carrierCode])
 
   return (

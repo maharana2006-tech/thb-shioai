@@ -139,6 +139,12 @@ const CUSTOM_PKG = 'CUSTOM'
 const joinParts = (parts: (string | null | undefined)[], sep = ', ') =>
   parts.map((p) => (p || '').trim()).filter(Boolean).join(sep)
 
+/** US-territory ISO codes carriers treat as "international" for customs
+ *  paperwork purposes (commercial invoice, FTR/AES, incoterms) even though
+ *  they're US soil. Hoisted to module scope so useMemo deps around it
+ *  don't churn on every render. */
+const US_TERRITORY_CODES = new Set(['PR', 'VI', 'GU', 'AS', 'MP', 'UM'])
+
 export default function NewShipmentPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -626,14 +632,12 @@ export default function NewShipmentPage() {
   // banner + service filter used this predicate but isInternational did
   // not, so the customs UI stayed hidden and the wire went out with
   // country=PR but no commodities → UPS 120502.
-  const US_TERRITORY_CODES = new Set(['PR', 'VI', 'GU', 'AS', 'MP', 'UM'])
   const recipientTerritoryEarly = useMemo<string | null>(() => {
     const c = (recipient.countryCode || '').trim().toUpperCase()
     const s = (recipient.state || '').trim().toUpperCase()
     if ((c === 'US' || c === '') && US_TERRITORY_CODES.has(s)) return s
     if (US_TERRITORY_CODES.has(c)) return c
     return null
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recipient.countryCode, recipient.state])
   const senderTerritoryEarly = useMemo<string | null>(() => {
     const c = (sender.countryCode || '').trim().toUpperCase()
@@ -641,7 +645,6 @@ export default function NewShipmentPage() {
     if ((c === 'US' || c === '') && US_TERRITORY_CODES.has(s)) return s
     if (US_TERRITORY_CODES.has(c)) return c
     return null
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sender.countryCode, sender.state])
   // "Effective country" for classification purposes — treat a US-territory
   // state as if it were the territory country code, mirroring what the
@@ -837,7 +840,7 @@ export default function NewShipmentPage() {
         .filter((s) => isTerritoryLane || scopeFits(s.scope))
         .filter((s) => !allowedServiceIds || allowedServiceIds.has(s.id))
         .filter((s) => isServiceAllowedForUsTerritory(recipientTerritory, carrier, s.serviceCode)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- originMatch / scopeFits close over sender.countryCode (already in deps) and neededScope (already in deps); helpers themselves are pure and don't need to be listed
     [services, carrier, sender.countryCode, neededScope, allowedServiceIds, recipientTerritory, isTerritoryLane],
   )
   // Sprint 52 PR 2 — service_package compatibility. Empty set for a
@@ -868,7 +871,7 @@ export default function NewShipmentPage() {
         // and stay unfiltered (server guard treats them as always-allowed
         // via the kind=CUSTOM short-circuit). Null set = no filter.
         .filter((p) => !compatiblePresetIdsForService || p.id == null || compatiblePresetIdsForService.has(p.id)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- originMatch / scopeFits close over sender.countryCode (already in deps) and neededScope (already in deps); helpers themselves are pure and don't need to be listed
     [packages, carrier, sender.countryCode, neededScope, allowedPackageIds, compatiblePresetIdsForService, isTerritoryLane],
   )
   const customBoxes = useMemo(

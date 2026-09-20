@@ -239,7 +239,7 @@ export default function RulePackagesDrawer({
 
   const selectedGroupCount = useMemo(
     () => groups.filter((g) => groupState(g) !== 'none').length,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- groupState is a helper closed over `selected`; already in the deps via that dependency
     [selected, groups],
   )
 

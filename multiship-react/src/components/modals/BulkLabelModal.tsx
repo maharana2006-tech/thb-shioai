@@ -282,7 +282,7 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
     } else if (pollTimer.current == null) {
       startPolling(activeJobId)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- clearPoll + startPolling are stable helpers over refs; only SSE status + job id should toggle the poll on/off
   }, [sseStatus, activeJobId])
 
   useEffect(() => {

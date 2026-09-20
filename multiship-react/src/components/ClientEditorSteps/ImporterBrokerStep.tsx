@@ -44,7 +44,7 @@ export function ImporterBrokerStep({
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on client change; refresh() sets loading + profiles state
     void refresh()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh is defined inline and only reads clientCode via closure; fetch-on-mount + on-clientCode-change is the intended trigger
   }, [clientCode])
 
   const remove = async (profile: CustomsProfile) => {

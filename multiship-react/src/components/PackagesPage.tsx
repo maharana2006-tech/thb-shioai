@@ -284,7 +284,7 @@ export default function PackagesPage() {
    */
   const editorSnapshot = useMemo(
     () => (editing ? JSON.stringify(editing) : null),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- snapshot key is editing.id only; the whole `editing` object is read once at snapshot time as the pristine baseline for dirty-check comparison
     [editing?.id],
   )
   const currentEditingSnapshot = editing ? JSON.stringify(editing) : null

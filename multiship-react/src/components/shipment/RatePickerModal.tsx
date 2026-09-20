@@ -59,7 +59,7 @@ export default function RatePickerModal({ request, onClose, onSelect }: RatePick
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- on-mount data fetch; load() drives loading/error/result state that only exists after the async call
     void load()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire-once on mount; load reads request-payload props via closure but the modal only mounts with one request at a time
   }, [])
 
   useEffect(() => {
