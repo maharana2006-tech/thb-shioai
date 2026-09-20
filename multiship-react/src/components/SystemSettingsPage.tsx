@@ -9,6 +9,7 @@ import {
 } from '../api/systemSettingsService'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import UspsProviderReadinessTable from './settings/UspsProviderReadinessTable'
+import SystemChannelSection from './settings/SystemChannelSection'
 
 /**
  * Sprint 49 Tier 0 — admin surface for encrypted system secrets.
@@ -193,6 +194,13 @@ export default function SystemSettingsPage() {
           </p>
         </div>
       </header>
+
+      {/* Slice-3 tenant channel gate — per-tenant D2C/B2B toggle that
+          controls whether the external API + WMS pull accept intake.
+          Not backed by SystemSettingsService (that's for global
+          encrypted secrets); this one calls tenantSettingsService and
+          persists to tenant_settings. */}
+      <SystemChannelSection />
 
       {loading ? (
         <div className="rounded-xl border border-slate-200 bg-white p-6 text-[13px] text-slate-500">

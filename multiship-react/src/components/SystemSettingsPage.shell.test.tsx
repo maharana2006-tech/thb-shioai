@@ -59,6 +59,23 @@ vi.mock('../api/apiClient', () => ({
   apiClient: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn(), patch: vi.fn() },
 }))
 
+// Slice-3 SystemChannelSection nested-render deps. The channel card
+// isn't the SUT here; stub both service calls so its mount is silent
+// and it doesn't drag notify.apiError up into the shell-page assertions.
+vi.mock('../api/clientService', () => ({
+  clientService: {
+    listClients: vi.fn().mockResolvedValue({ data: { content: [], totalPages: 1 } }),
+  },
+}))
+vi.mock('../api/tenantSettingsService', () => ({
+  tenantSettingsService: {
+    getEnabledChannels: vi.fn().mockResolvedValue({
+      tenantCode: '', enabledChannels: [], isConfigured: false,
+    }),
+    setEnabledChannels: vi.fn(),
+  },
+}))
+
 // ---------- Fixtures ----------
 
 const setting = (overrides: Partial<{
