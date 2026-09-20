@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDateTime;
+import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Optional;
@@ -80,15 +81,21 @@ public class TenantSettingsController {
         }
         if (parsed.isEmpty()) {
             // Same guard as the service, surfaced early with a friendlier
-            // message for the FE toast.
-            throw new IllegalArgumentException(
+            // message for the FE toast. ResponseStatusException carries
+            // its own HTTP status through GlobalExceptionHandler — plain
+            // IllegalArgumentException fell through to the RuntimeException
+            // catch-all and surfaced as 500 (walk-through discovery).
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST,
                     "Pick at least one shipping channel (D2C, B2B, or both).");
         }
         String actor = auth != null ? auth.getName() : null;
         settings.setEnabledChannels(tenantCode, parsed, actor);
         EnabledChannelsResponse body = EnabledChannelsResponse.builder()
                 .tenantCode(tenantCode)
-                .enabledChannels(parsed.stream().sorted().map(Enum::name).toList())
+                .enabledChannels(parsed.stream()
+                        .sorted(Comparator.comparing(Enum::name))
+                        .map(Enum::name).toList())
                 .isConfigured(true)
                 .build();
         return ResponseEntity.ok(ApiResponse.<EnabledChannelsResponse>builder()
