@@ -52,7 +52,7 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
   const activePath = location.pathname
   useEffect(() => {
     if (mobileOpen) onMobileClose?.()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fires only on route change; mobileOpen + onMobileClose are read but intentionally not deps (route change is the sole trigger).
   }, [activePath])
   const dispatch = useAppDispatch()
   const { username, role } = useAppSession()

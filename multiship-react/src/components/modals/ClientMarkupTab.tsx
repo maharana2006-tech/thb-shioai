@@ -55,7 +55,7 @@ export default function ClientMarkupTab({ clientCode }: { clientCode: string }) 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on client change; load() sets loading + result state
     void load()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load is defined inline and only reads clientCode via closure; fetch-on-mount + on-clientCode-change is the intended trigger
   }, [clientCode])
 
   const save = async () => {

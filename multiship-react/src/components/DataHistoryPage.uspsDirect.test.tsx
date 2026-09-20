@@ -173,7 +173,7 @@ function AdvancedDataTableStub<T extends { id?: number | string }>(props: {
   useEffect(() => {
     if (!props.onRowExpand) return
     for (const r of rows) props.onRowExpand(r)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- test stub; deps intentionally minimal so onRowExpand fires only on row-count change, mirroring clicking each row header once
   }, [rows.length])
   return (
     <div data-testid="advanced-data-table-stub">

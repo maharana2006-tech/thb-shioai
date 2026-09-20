@@ -110,7 +110,7 @@ export default function LabelTemplateEditorPage() {
     } finally {
       setLoading(false)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- navigate + notify are stable; fetch-on-mount + on-id/reload-change is the intended trigger set
   }, [editingId, isEdit, reloadToken])
 
   useEffect(() => {

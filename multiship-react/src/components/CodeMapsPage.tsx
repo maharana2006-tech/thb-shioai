@@ -128,7 +128,7 @@ export default function CodeMapsPage() {
       })
       .catch(() => { /* covered by page-level loading */ })
     return () => { alive = false }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- selectedClient intentionally omitted; only re-fetch on the inactive toggle (or first mount) to avoid re-loading the client list on every selection change
   }, [showInactiveClients])
 
   // Reload rows when either the tab or the client changes.

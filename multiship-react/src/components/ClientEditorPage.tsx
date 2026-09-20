@@ -305,7 +305,7 @@ export default function ClientEditorPage() {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on client change; loadPickWarehouses() sets warehouse list state
     void loadPickWarehouses()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fetch-on-mount + on-clientCode-change; loadPickWarehouses is defined inline and only reads editingCode via closure
   }, [editingCode])
 
   // Pre-select the client's default attached warehouse in edit mode so the

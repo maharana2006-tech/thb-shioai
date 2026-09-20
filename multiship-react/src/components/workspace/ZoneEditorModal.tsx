@@ -69,7 +69,7 @@ export default function ZoneEditorModal({
     if (!open) return
     // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot tab init when modal opens; deriving from props at render time would flicker
     setTab(isDomesticOnly(codes, effectiveDomestic) ? 'domestic' : 'international')
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- codes / effectiveDomestic intentionally omitted; only the modal-open flip should re-init the tab (else operator edits would snap tab back)
   }, [open])
 
   if (!open) return null

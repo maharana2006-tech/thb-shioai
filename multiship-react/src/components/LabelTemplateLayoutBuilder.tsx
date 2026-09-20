@@ -154,7 +154,7 @@ export default function LabelTemplateLayoutBuilder({
     if (!previewOpen) return
     const t = window.setTimeout(() => { void refreshPreview() }, 400)
     return () => window.clearTimeout(t)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refreshPreview reads layout via closure; layoutJson is the stable string-serialized signal that drives the debounce
   }, [previewOpen, layoutJson])
 
   const selectedBlock = useMemo(

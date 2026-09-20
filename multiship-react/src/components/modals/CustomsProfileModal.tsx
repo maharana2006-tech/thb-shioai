@@ -344,7 +344,7 @@ export default function CustomsProfileModal({
     if (!originCountry) return
     // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot currency default when create-mode client's origin country changes; deriving at render would overwrite an explicit user pick
     setForm((cur) => ({ ...cur, currency: defaultCurrencyForCountry(originCountry) }))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- form.currency intentionally omitted; only origin-country / editing-mode flips should re-evaluate. Including form.currency would loop on the setForm call.
   }, [client?.shipFrom?.country, editing])
 
   // Countries already owned by ANOTHER profile of this client — cannot double-book.

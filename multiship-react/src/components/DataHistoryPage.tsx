@@ -204,7 +204,7 @@ export default function DataHistoryPage() {
     void load()
     setOpenId(null)
     setConfirmEmpty(false)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load/setOpenId/setConfirmEmpty are stable; only viewTrash toggle re-fetches
   }, [viewTrash])
 
   /**
@@ -241,7 +241,7 @@ export default function DataHistoryPage() {
     'batch-updated': () => { void reloadQuiet() },
     'batch-created': () => { void reloadQuiet() },
     'batch-cancel-requested': () => { void reloadQuiet() },
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- reloadQuiet reads only stable refs; empty deps keeps the handler map identity stable across renders so useEventStream doesn't churn subscriptions
   }), [])
 
   const { status: sseStatus } = useEventStream({
@@ -265,7 +265,7 @@ export default function DataHistoryPage() {
     if (!anyInProgress) return
     const timer = window.setInterval(() => { void reloadQuiet() }, 4_000)
     return () => window.clearInterval(timer)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reloadQuiet reads only stable state via closure; deps kept minimal so the interval doesn't churn on unrelated re-renders
   }, [batches, viewTrash, sseStatus])
 
   /**
@@ -281,7 +281,7 @@ export default function DataHistoryPage() {
       if (document.visibilityState === 'visible') void reloadQuiet()
     }, 20_000)
     return () => window.clearInterval(timer)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reloadQuiet + document.visibilityState read via closure; only viewTrash + sseStatus toggle the interval on/off
   }, [viewTrash, sseStatus])
 
   /**
@@ -359,7 +359,7 @@ export default function DataHistoryPage() {
         polls.delete(id)
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- observerPollsRef + reloadQuiet + setGenProgressById read via closure; batches/viewTrash/generatingId are the real driver signals
   }, [batches, viewTrash, generatingId])
 
   /** Cleanup on unmount — cancel every in-flight observer poll so the
