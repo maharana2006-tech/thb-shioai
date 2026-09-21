@@ -93,29 +93,10 @@ public class OracleDtcOrder {
     @Column(name = "LOCATION")
     private String location;
 
-    // Audit
-    @Column(name = "CREATED_DATE")
-    private Date createdDate;
-
-    @Column(name = "CREATED_BY")
-    private String createdBy;
-
-    @Column(name = "MODIFIED_DATE")
-    private Date modifiedDate;
-
     // Additional DTC Fields
     @Column(name = "CUST_PO")
     private String custPo;
 
     @Column(name = "GOODS_DESC")
     private String goodsDesc;
-
-    @Column(name = "CONTAINER_ID")
-    private String containerId;
-
-    @Column(name = "SHIP_METHOD")
-    private String shipMethod;
-
-    @Column(name = "ORDER_STATUS")
-    private String orderStatus;
 }

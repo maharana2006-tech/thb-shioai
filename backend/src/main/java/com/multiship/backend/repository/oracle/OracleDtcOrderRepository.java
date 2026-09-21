@@ -33,9 +33,9 @@ public interface OracleDtcOrderRepository extends JpaRepository<OracleDtcOrder, 
         SELECT o FROM OracleDtcOrder o
         WHERE o.batchId != 0
           AND o.toteNumber != 0
-          AND COALESCE(o.orderSuffix, '0') = '0'
+          AND COALESCE(o.orderSuffix, 0) = 0
           AND (:tenantId = '' OR o.tenantId = :tenantId)
-        ORDER BY o.createdDate DESC
+        ORDER BY o.batchId DESC
     """)
     List<OracleDtcOrder> findPendingDtcOrders(@Param("tenantId") String tenantId);
 
@@ -46,8 +46,8 @@ public interface OracleDtcOrderRepository extends JpaRepository<OracleDtcOrder, 
         SELECT o FROM OracleDtcOrder o
         WHERE o.batchId != 0
           AND o.toteNumber != 0
-          AND COALESCE(o.orderSuffix, '0') = '0'
-        ORDER BY o.createdDate DESC
+          AND COALESCE(o.orderSuffix, 0) = 0
+        ORDER BY o.batchId DESC
     """)
     List<OracleDtcOrder> findAllPendingDtcOrders();
 
@@ -59,8 +59,8 @@ public interface OracleDtcOrderRepository extends JpaRepository<OracleDtcOrder, 
         WHERE o.tenantId = :tenantId
           AND o.batchId != 0
           AND o.toteNumber != 0
-          AND COALESCE(o.orderSuffix, '0') = '0'
-        ORDER BY o.createdDate DESC
+          AND COALESCE(o.orderSuffix, 0) = 0
+        ORDER BY o.batchId DESC
     """)
     List<OracleDtcOrder> findPendingOrdersByTenant(@Param("tenantId") String tenantId);
 
@@ -93,7 +93,7 @@ public interface OracleDtcOrderRepository extends JpaRepository<OracleDtcOrder, 
         WHERE o.tenantId = :tenantId
           AND o.batchId != 0
           AND o.toteNumber != 0
-          AND COALESCE(o.orderSuffix, '0') = '0'
+          AND COALESCE(o.orderSuffix, 0) = 0
     """)
     long countPendingByTenant(@Param("tenantId") String tenantId);
 }
