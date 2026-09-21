@@ -46,6 +46,7 @@ public interface SavedRecipientRepository extends JpaRepository<SavedRecipient, 
           AND (:q IS NULL OR :q = ''
                OR LOWER(r.name) LIKE LOWER(CONCAT('%', :q, '%'))
                OR LOWER(COALESCE(r.company, '')) LIKE LOWER(CONCAT('%', :q, '%'))
+               OR LOWER(r.addressLine1) LIKE LOWER(CONCAT('%', :q, '%'))
                OR LOWER(r.city) LIKE LOWER(CONCAT('%', :q, '%'))
                OR LOWER(r.postalCode) LIKE LOWER(CONCAT('%', :q, '%')))
         ORDER BY r.updatedAt DESC

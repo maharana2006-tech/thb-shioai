@@ -371,6 +371,14 @@ export default function NewShipmentPage() {
   const [recipientSearch, setRecipientSearch] = useState('')
   const [recipientSuggestions, setRecipientSuggestions] = useState<SavedRecipient[]>([])
   const [recipientDropdownOpen, setRecipientDropdownOpen] = useState(false)
+  /** Keyboard-highlighted suggestion (-1 = none). */
+  const [recipientActive, setRecipientActive] = useState(-1)
+  /** A search finished with nothing — show "No saved addresses match". */
+  const [recipientNoMatch, setRecipientNoMatch] = useState(false)
+  // Debounce + stale-response guard: typing "chicago" used to fire six
+  // requests, and a slow early one could land last and show the wrong list.
+  const recipientSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const recipientSearchSeq = useRef(0)
 
   // AI-assist per-section busy flags + pre-ship review result.
   const [pkgBusy, setPkgBusy] = useState(false)
@@ -1662,50 +1670,92 @@ export default function NewShipmentPage() {
    * (debounce-free — the endpoint caps at 25 hits and returns fast).
    * Empty / < 2 chars → clear suggestions.
    */
-  const runRecipientSearch = async (q: string) => {
+  const runRecipientSearch = (q: string) => {
     setRecipientSearch(q)
+    setRecipientActive(-1)
+    if (recipientSearchTimer.current) clearTimeout(recipientSearchTimer.current)
     if (!q || q.trim().length < 2) {
+      recipientSearchSeq.current++          // drop any answer still in flight
       setRecipientSuggestions([])
+      setRecipientNoMatch(false)
       setRecipientDropdownOpen(false)
       return
     }
-    try {
-      const hits = await recipientBookService.search(q, clientCode || null)
-      setRecipientSuggestions(hits)
-      setRecipientDropdownOpen(hits.length > 0)
-    } catch {
-      setRecipientSuggestions([])
-      setRecipientDropdownOpen(false)
+    recipientSearchTimer.current = setTimeout(async () => {
+      const seq = ++recipientSearchSeq.current
+      try {
+        const hits = await recipientBookService.search(q, clientCode || null)
+        if (seq !== recipientSearchSeq.current) return   // a newer search has started
+        setRecipientSuggestions(hits)
+        setRecipientNoMatch(hits.length === 0)
+        setRecipientDropdownOpen(true)
+      } catch {
+        if (seq !== recipientSearchSeq.current) return
+        setRecipientSuggestions([])
+        setRecipientNoMatch(false)
+        setRecipientDropdownOpen(false)
+      }
+    }, 200)
+  }
+
+  /** Arrow keys move through the suggestions, Enter picks, Escape closes. */
+  const onRecipientSearchKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    const n = recipientSuggestions.length
+    if (e.key === 'Escape') {
+      if (recipientDropdownOpen) {
+        e.preventDefault()
+        setRecipientDropdownOpen(false)
+        setRecipientActive(-1)
+      }
+      return
+    }
+    if (n === 0) return
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setRecipientDropdownOpen(true)
+      setRecipientActive((i) => (i + 1) % n)
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setRecipientDropdownOpen(true)
+      setRecipientActive((i) => (i <= 0 ? n - 1 : i - 1))
+    } else if (e.key === 'Enter' && recipientDropdownOpen && recipientActive >= 0) {
+      e.preventDefault()
+      applySavedRecipient(recipientSuggestions[recipientActive])
     }
   }
 
-  /** Apply a saved recipient — overwrites the current recipient block. */
+  /**
+   * Apply a saved recipient. It REPLACES the whole Ship to block: a field the
+   * saved address doesn't have is cleared, not kept. Merging used to leave the
+   * previous person behind — pick Jane then Marco and Marco got Jane's email,
+   * her "Suite 400" and her state, which could put the wrong contact on a label.
+   */
   const applySavedRecipient = (r: SavedRecipient) => {
-    setRecipient((cur) => {
-      // Country -> dial code is fully derived per operator ask
-      // (2026-09-12); ignore any saved phoneCountryCode and re-derive
-      // from the incoming (or current) country so a stale saved-
-      // address dial can't drift out of sync with its country.
-      const nextCountry = r.countryCode ?? cur.countryCode
-      return {
-        ...cur,
-        name: r.name ?? cur.name,
-        company: r.company ?? cur.company,
-        phone: r.phone ?? cur.phone,
-        phoneCountryCode: dialCodeFor(nextCountry) || '',
-        email: r.email ?? cur.email,
-        addressLine1: r.addressLine1 ?? cur.addressLine1,
-        addressLine2: r.addressLine2 ?? cur.addressLine2,
-        addressLine3: r.addressLine3 ?? cur.addressLine3,
-        city: r.city ?? cur.city,
-        state: r.state ?? cur.state,
-        postalCode: r.postalCode ?? cur.postalCode,
-        countryCode: nextCountry,
-        residential: r.residential ?? cur.residential,
-      }
+    const country = r.countryCode || 'US'
+    setRecipient({
+      name: r.name ?? '',
+      company: r.company ?? '',
+      phone: r.phone ?? '',
+      email: r.email ?? '',
+      addressLine1: r.addressLine1 ?? '',
+      addressLine2: r.addressLine2 ?? '',
+      addressLine3: r.addressLine3 ?? '',
+      city: r.city ?? '',
+      state: r.state ?? '',
+      postalCode: r.postalCode ?? '',
+      countryCode: country,
+      residential: r.residential ?? false,
+      // Dial code is always derived from the country (operator ask
+      // 2026-09-12), never taken from the saved row.
+      phoneCountryCode: dialCodeFor(country) || '',
     })
+    // A picked address carries its own residential flag; forget any
+    // earlier "ticked automatically" state from the previous recipient.
+    setResidentialOrigin(r.residential == null ? undefined : 'manual')
     setRecipientSearch(r.name)
     setRecipientSuggestions([])
+    setRecipientNoMatch(false)
+    setRecipientActive(-1)
     setRecipientDropdownOpen(false)
     notify.success(`Loaded ${r.name} from the address book.`)
   }
@@ -2929,46 +2979,69 @@ export default function NewShipmentPage() {
                   errors={addrErrors('recipient')}
                   extraAction={
                     // Sprint 38 — address-book combobox. Type ≥ 2 chars to
-                    // search; picking a suggestion overwrites every field
-                    // in the recipient block below.
+                    // search; picking a suggestion replaces the whole Ship to
+                    // block. Keyboard: ↓/↑ to move, Enter to pick, Esc to close.
                     <div className="relative">
                       <div className="relative">
                         <input
                           type="text"
+                          role="combobox"
+                          aria-label="Search the address book by name, company, street, city or postal code"
+                          aria-autocomplete="list"
+                          aria-expanded={recipientDropdownOpen}
+                          aria-controls="recipient-book-list"
+                          aria-activedescendant={recipientActive >= 0 ? `recipient-book-${recipientActive}` : undefined}
+                          title="Search saved addresses by name, company, street, city or postal code"
                           value={recipientSearch}
-                          onChange={(e) => void runRecipientSearch(e.target.value)}
-                          onFocus={() => recipientSuggestions.length > 0 && setRecipientDropdownOpen(true)}
-                          onBlur={() => setTimeout(() => setRecipientDropdownOpen(false), 150)}
-                          placeholder="Search address book (name, city, postal code)…"
+                          onChange={(e) => runRecipientSearch(e.target.value)}
+                          onKeyDown={onRecipientSearchKey}
+                          onFocus={() => (recipientSuggestions.length > 0 || recipientNoMatch) && setRecipientDropdownOpen(true)}
+                          onBlur={() => setTimeout(() => { setRecipientDropdownOpen(false); setRecipientActive(-1) }, 150)}
+                          placeholder="Search saved addresses…"
                           className="w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 pl-8 text-[12px] outline-none focus:border-[#1f150c]"
                         />
                         <FiSearch className="pointer-events-none absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-[#6b5c42]" />
                       </div>
-                      {recipientDropdownOpen && recipientSuggestions.length > 0 ? (
-                        <ul className="absolute z-10 mt-0.5 max-h-64 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
-                          {recipientSuggestions.map((s) => (
-                            <li key={s.id}>
-                              <button
-                                type="button"
-                                onMouseDown={(e) => e.preventDefault()}
-                                onClick={() => applySavedRecipient(s)}
-                                className="flex w-full items-start justify-between gap-2 px-2.5 py-1.5 text-left text-[11.5px] hover:bg-slate-50"
-                              >
-                                <div className="min-w-0">
-                                  <p className="truncate font-semibold text-slate-950">{s.name}</p>
-                                  <p className="truncate text-[10.5px] text-slate-500">
-                                    {s.addressLine1}
-                                    {s.city ? `, ${s.city}` : ''}
-                                    {s.state ? `, ${s.state}` : ''}
-                                    {' '}{s.postalCode} {s.countryCode}
-                                  </p>
-                                </div>
-                                {s.tag ? (
-                                  <span className="whitespace-nowrap rounded-full bg-slate-100 px-1.5 py-0.5 text-[9.5px] font-semibold text-slate-500">
-                                    {s.tag}
-                                  </span>
-                                ) : null}
-                              </button>
+                      {recipientDropdownOpen && (recipientSuggestions.length > 0 || recipientNoMatch) ? (
+                        // Wider than the input: at the input's width names read
+                        // "ZZ Ja…" and two similar people can't be told apart.
+                        <ul
+                          id="recipient-book-list"
+                          role="listbox"
+                          aria-label="Saved addresses"
+                          className="absolute left-0 z-20 mt-0.5 max-h-72 w-[min(26rem,calc(100vw-3rem))] overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg"
+                        >
+                          {recipientSuggestions.length === 0 ? (
+                            <li className="px-3 py-2 text-[11.5px] text-slate-500" role="option" aria-disabled="true" aria-selected="false">
+                              No saved addresses match &ldquo;{recipientSearch.trim()}&rdquo;.
+                            </li>
+                          ) : recipientSuggestions.map((s, i) => (
+                            <li
+                              key={s.id}
+                              id={`recipient-book-${i}`}
+                              role="option"
+                              aria-selected={i === recipientActive}
+                              onMouseDown={(e) => { e.preventDefault(); applySavedRecipient(s) }}
+                              onMouseEnter={() => setRecipientActive(i)}
+                              className={`flex cursor-pointer items-start justify-between gap-2 px-3 py-2 text-left text-[11.5px] ${
+                                i === recipientActive ? 'bg-[#faf7f0]' : 'hover:bg-slate-50'}`}
+                            >
+                              <div className="min-w-0">
+                                <p className="truncate font-semibold text-slate-950">
+                                  {s.name}{s.company ? <span className="font-normal text-slate-500"> · {s.company}</span> : null}
+                                </p>
+                                <p className="truncate text-[10.5px] text-slate-500">
+                                  {s.addressLine1}
+                                  {s.city ? `, ${s.city}` : ''}
+                                  {s.state ? `, ${s.state}` : ''}
+                                  {' '}{s.postalCode} {s.countryCode}
+                                </p>
+                              </div>
+                              {s.tag ? (
+                                <span className="whitespace-nowrap rounded-full bg-slate-100 px-1.5 py-0.5 text-[9.5px] font-semibold text-slate-500">
+                                  {s.tag}
+                                </span>
+                              ) : null}
                             </li>
                           ))}
                         </ul>
