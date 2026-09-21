@@ -47,10 +47,14 @@ public class SavedRecipientServiceImpl implements SavedRecipientService {
         // Sprint 50 Tier 0.5 PR E - Pattern A on the caller-supplied
         // customerNo filter. Scoped USER null → own tenant; foreign → 403.
         String scoped = tenantScope.clampClientCode(customerNo);
-        List<SavedRecipient> hits = repository.search(
-                StringUtils.hasText(scoped) ? scoped : null,
-                StringUtils.hasText(norm) ? norm : null);
-        if (hits.size() > SEARCH_MAX) hits = hits.subList(0, SEARCH_MAX);
+        // Each word must appear somewhere in the entry — see SavedRecipientSearch.
+        // Paged at the database rather than loading every match and trimming.
+        List<SavedRecipient> hits = repository.findAll(
+                SavedRecipientSearch.visibleTo(false, StringUtils.hasText(scoped) ? scoped : null)
+                        .and(SavedRecipientSearch.matching(norm)),
+                org.springframework.data.domain.PageRequest.of(0, SEARCH_MAX,
+                        org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.DESC, "updatedAt")))
+                .getContent();
         return ApiResponse.<List<SavedRecipientDTO>>builder()
                 .status("success").code(200)
                 .message(hits.isEmpty() ? "No matches." : hits.size() + " match(es).")
@@ -70,7 +74,9 @@ public class SavedRecipientServiceImpl implements SavedRecipientService {
         var pageable = org.springframework.data.domain.PageRequest.of(Math.max(0, page),
                 Math.min(Math.max(1, size), 100),
                 org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.DESC, "updatedAt"));
-        var rows = repository.page(all, owner, query, pageable).map(SavedRecipientServiceImpl::toDto);
+        var rows = repository.findAll(
+                SavedRecipientSearch.visibleTo(all, owner).and(SavedRecipientSearch.matching(query)), pageable)
+                .map(SavedRecipientServiceImpl::toDto);
         return success(rows, rows.getTotalElements() + " saved address(es).");
     }
 

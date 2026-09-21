@@ -6,11 +6,11 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
-import java.util.List;
 import java.util.Optional;
 
 @Repository
-public interface SavedRecipientRepository extends JpaRepository<SavedRecipient, Long> {
+public interface SavedRecipientRepository extends JpaRepository<SavedRecipient, Long>,
+        org.springframework.data.jpa.repository.JpaSpecificationExecutor<SavedRecipient> {
 
     /**
      * Deduplication lookup — matches an existing row with the same
@@ -28,69 +28,5 @@ public interface SavedRecipientRepository extends JpaRepository<SavedRecipient, 
             @Param("hash") String hash,
             @Param("ownerCustomerNo") String ownerCustomerNo);
 
-    /**
-     * Fuzzy search — matches {@code q} as a substring against name,
-     * company, city, or postalCode (all case-insensitive). Ordered by
-     * updatedAt DESC so recently-touched entries surface first.
-     *
-     * <p>Owner scoping: when {@code ownerCustomerNo} is supplied, matches
-     * both owner-scoped AND platform-wide entries (so a 3PL sees their
-     * own book plus the platform's shared entries). When null, matches
-     * only platform-wide entries.
-     */
-    @Query("""
-        SELECT r FROM SavedRecipient r
-        WHERE ((:ownerCustomerNo IS NULL AND r.ownerCustomerNo IS NULL)
-               OR (:ownerCustomerNo IS NOT NULL
-                   AND (r.ownerCustomerNo = :ownerCustomerNo OR r.ownerCustomerNo IS NULL)))
-          AND (:q IS NULL OR :q = ''
-               OR LOWER(r.name) LIKE LOWER(CONCAT('%', :q, '%'))
-               OR LOWER(COALESCE(r.company, '')) LIKE LOWER(CONCAT('%', :q, '%'))
-               OR LOWER(r.addressLine1) LIKE LOWER(CONCAT('%', :q, '%'))
-               OR LOWER(r.city) LIKE LOWER(CONCAT('%', :q, '%'))
-               OR LOWER(r.postalCode) LIKE LOWER(CONCAT('%', :q, '%')))
-        ORDER BY r.updatedAt DESC
-    """)
-    List<SavedRecipient> search(
-            @Param("ownerCustomerNo") String ownerCustomerNo,
-            @Param("q") String q);
 
-    /**
-     * The Address book page: one client's entries plus the shared ones, or —
-     * when {@code allOwners} — every entry on the platform (platform operators
-     * only; the service decides). Same text match as {@link #search}, paged.
-     */
-    @Query(value = """
-        SELECT r FROM SavedRecipient r
-        WHERE (:allOwners = true
-               OR (:ownerCustomerNo IS NULL AND r.ownerCustomerNo IS NULL)
-               OR (:ownerCustomerNo IS NOT NULL
-                   AND (r.ownerCustomerNo = :ownerCustomerNo OR r.ownerCustomerNo IS NULL)))
-          AND (:q IS NULL OR :q = ''
-               OR LOWER(r.name) LIKE LOWER(CONCAT('%', :q, '%'))
-               OR LOWER(COALESCE(r.company, '')) LIKE LOWER(CONCAT('%', :q, '%'))
-               OR LOWER(r.addressLine1) LIKE LOWER(CONCAT('%', :q, '%'))
-               OR LOWER(r.city) LIKE LOWER(CONCAT('%', :q, '%'))
-               OR LOWER(r.postalCode) LIKE LOWER(CONCAT('%', :q, '%'))
-               OR LOWER(COALESCE(r.tag, '')) LIKE LOWER(CONCAT('%', :q, '%')))
-        """,
-        countQuery = """
-        SELECT COUNT(r) FROM SavedRecipient r
-        WHERE (:allOwners = true
-               OR (:ownerCustomerNo IS NULL AND r.ownerCustomerNo IS NULL)
-               OR (:ownerCustomerNo IS NOT NULL
-                   AND (r.ownerCustomerNo = :ownerCustomerNo OR r.ownerCustomerNo IS NULL)))
-          AND (:q IS NULL OR :q = ''
-               OR LOWER(r.name) LIKE LOWER(CONCAT('%', :q, '%'))
-               OR LOWER(COALESCE(r.company, '')) LIKE LOWER(CONCAT('%', :q, '%'))
-               OR LOWER(r.addressLine1) LIKE LOWER(CONCAT('%', :q, '%'))
-               OR LOWER(r.city) LIKE LOWER(CONCAT('%', :q, '%'))
-               OR LOWER(r.postalCode) LIKE LOWER(CONCAT('%', :q, '%'))
-               OR LOWER(COALESCE(r.tag, '')) LIKE LOWER(CONCAT('%', :q, '%')))
-        """)
-    org.springframework.data.domain.Page<SavedRecipient> page(
-            @Param("allOwners") boolean allOwners,
-            @Param("ownerCustomerNo") String ownerCustomerNo,
-            @Param("q") String q,
-            org.springframework.data.domain.Pageable pageable);
 }

@@ -239,7 +239,7 @@ class SavedRecipientServiceImplTest {
         acme.setId(1L); acme.setName("Acme Warehouse"); acme.setOwnerCustomerNo("C001");
         acme.setAddressLine1("1 Way"); acme.setCity("L"); acme.setPostalCode("40209");
         acme.setCountryCode("US");
-        when(repo.search(eq("C001"), eq("acme"))).thenReturn(List.of(acme));
+        when(repo.findAll(any(org.springframework.data.jpa.domain.Specification.class), any(org.springframework.data.domain.Pageable.class))).thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(acme)));
 
         ApiResponse<List<SavedRecipientDTO>> resp = service.search("acme", "C001");
         assertEquals(1, resp.getData().size());
@@ -248,28 +248,31 @@ class SavedRecipientServiceImplTest {
 
     @Test
     void searchNullQueryTreatedAsEmpty() {
-        when(repo.search(any(), any())).thenReturn(List.of());
+        when(repo.findAll(any(org.springframework.data.jpa.domain.Specification.class), any(org.springframework.data.domain.Pageable.class))).thenReturn(new org.springframework.data.domain.PageImpl<>(List.<SavedRecipient>of()));
         ApiResponse<List<SavedRecipientDTO>> resp = service.search(null, null);
         assertEquals("success", resp.getStatus());
         assertNotNull(resp.getData());
     }
 
     @Test
-    void searchTruncatesTo25Results() {
-        java.util.List<SavedRecipient> lots = new java.util.ArrayList<>();
-        for (int i = 0; i < 40; i++) {
-            SavedRecipient r = new SavedRecipient();
-            r.setId((long) i);
-            r.setName("row " + i);
-            r.setAddressLine1("addr");
-            r.setCity("c");
-            r.setPostalCode("p");
-            r.setCountryCode("US");
-            lots.add(r);
-        }
-        when(repo.search(any(), any())).thenReturn(lots);
-        ApiResponse<List<SavedRecipientDTO>> resp = service.search(null, null);
-        assertEquals(25, resp.getData().size(), "Search cap is 25");
+    void searchAsksTheDatabaseForAtMost25NewestFirst() {
+        when(repo.findAll(any(org.springframework.data.jpa.domain.Specification.class), any(org.springframework.data.domain.Pageable.class))).thenReturn(new org.springframework.data.domain.PageImpl<>(List.<SavedRecipient>of()));
+        service.search("wacker chicago", null);
+        org.mockito.ArgumentCaptor<org.springframework.data.domain.Pageable> paging =
+                org.mockito.ArgumentCaptor.forClass(org.springframework.data.domain.Pageable.class);
+        org.mockito.Mockito.verify(repo).findAll(any(org.springframework.data.jpa.domain.Specification.class), paging.capture());
+        assertEquals(25, paging.getValue().getPageSize(), "Search cap is 25");
+        assertNotNull(paging.getValue().getSort().getOrderFor("updatedAt"));
+    }
+
+    /** Each word must match somewhere — so the text is split on spaces and commas. */
+    @Test
+    void theSearchTextIsSplitIntoWords() {
+        assertEquals(List.of("233", "wacker", "chicago", "60606"), SavedRecipientSearch.words("  233 Wacker,  Chicago 60606 "));
+        assertEquals(List.of("sw1a", "1aa"), SavedRecipientSearch.words("SW1A 1AA"));
+        assertEquals(List.of(), SavedRecipientSearch.words("   "));
+        assertEquals(List.of(), SavedRecipientSearch.words(null));
+        assertEquals(SavedRecipientSearch.MAX_WORDS, SavedRecipientSearch.words("a b c d e f g h").size());
     }
 
     @Test
@@ -328,15 +331,14 @@ class SavedRecipientServiceImplTest {
     }
 
     private void listAsOperator() {
-        when(repo.page(org.mockito.ArgumentMatchers.anyBoolean(), any(), any(), any()))
-                .thenReturn(new org.springframework.data.domain.PageImpl<>(List.of()));
-        service.list(null, null, 0, 25);
-        org.mockito.Mockito.verify(repo).page(eq(true), org.mockito.ArgumentMatchers.isNull(), any(), any());
+        when(repo.findAll(any(org.springframework.data.jpa.domain.Specification.class), any(org.springframework.data.domain.Pageable.class))).thenReturn(new org.springframework.data.domain.PageImpl<>(List.<SavedRecipient>of()));
+        assertEquals(200, service.list(null, null, 0, 25).getCode());
+        org.mockito.Mockito.clearInvocations(repo);
 
         service.list("chicago", "DES875", 2, 500);
         org.mockito.ArgumentCaptor<org.springframework.data.domain.Pageable> paging =
                 org.mockito.ArgumentCaptor.forClass(org.springframework.data.domain.Pageable.class);
-        org.mockito.Mockito.verify(repo).page(eq(false), eq("DES875"), eq("chicago"), paging.capture());
+        org.mockito.Mockito.verify(repo).findAll(any(org.springframework.data.jpa.domain.Specification.class), paging.capture());
         assertEquals(2, paging.getValue().getPageNumber());
         assertEquals(100, paging.getValue().getPageSize(), "page size is capped at 100");
     }

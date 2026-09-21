@@ -3065,18 +3065,18 @@ export default function NewShipmentPage() {
                         <input
                           type="text"
                           role="combobox"
-                          aria-label="Search the address book by name, company, street, city or postal code"
+                          aria-label="Search the address book by name, company, street, city, state, postal code, phone or email"
                           aria-autocomplete="list"
                           aria-expanded={recipientDropdownOpen}
                           aria-controls="recipient-book-list"
                           aria-activedescendant={recipientActive >= 0 ? `recipient-book-${recipientActive}` : undefined}
-                          title="Search saved addresses by name, company, street, city or postal code"
+                          title="Type any part of the address — name, street, city, ZIP, phone… Several words narrow it down, e.g. &quot;wacker chicago&quot;."
                           value={recipientSearch}
                           onChange={(e) => runRecipientSearch(e.target.value)}
                           onKeyDown={onRecipientSearchKey}
                           onFocus={() => (recipientSuggestions.length > 0 || recipientNoMatch) && setRecipientDropdownOpen(true)}
                           onBlur={() => setTimeout(() => { setRecipientDropdownOpen(false); setRecipientActive(-1) }, 150)}
-                          placeholder="Search saved addresses…"
+                          placeholder="Search by name, street, ZIP, phone…"
                           className="w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 pl-8 text-[12px] outline-none focus:border-[#1f150c]"
                         />
                         <FiSearch className="pointer-events-none absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-[#6b5c42]" />

@@ -105,7 +105,7 @@ export default function AddressBookPage() {
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search name, company, street, city, postal code or tag"
+            placeholder="Search any part of the address — name, street, city, ZIP, phone, email or tag"
             className="w-full rounded-md border border-slate-300 py-1.5 pl-8 pr-2.5 text-[13px] outline-none focus:border-slate-500"
           />
         </label>
