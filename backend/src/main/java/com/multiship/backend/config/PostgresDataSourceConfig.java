@@ -73,6 +73,7 @@ public class PostgresDataSourceConfig {
 
         Map<String, Object> properties = new HashMap<>();
         properties.put("hibernate.dialect", "org.hibernate.dialect.PostgreSQLDialect");
+        properties.put("hibernate.hbm2ddl.auto", "update");
         properties.put("hibernate.jdbc.batch_size", "50");
         properties.put("hibernate.order_inserts", "true");
         properties.put("hibernate.order_updates", "true");

@@ -1,9 +1,9 @@
 package com.multiship.backend.service.oracle;
 
-import com.multiship.backend.model.Order;
+import com.multiship.backend.model.DtcOrder;
 import com.multiship.backend.model.oracle.OracleDtcOrder;
 import com.multiship.backend.repository.oracle.OracleDtcOrderRepository;
-import com.multiship.backend.repository.OrderRepository;
+import com.multiship.backend.repository.DtcOrderRepository;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,7 +11,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
-import java.util.stream.Collectors;
 
 /**
  * Oracle DTC Order Synchronization Service.
@@ -19,8 +18,8 @@ import java.util.stream.Collectors;
  *
  * Flow:
  *   1. Fetch pending orders from Oracle TB_SHIPX_DTC_UVW
- *   2. Transform Oracle model to PostgreSQL Order model
- *   3. Bulk insert/update into PostgreSQL (handles ON CONFLICT)
+ *   2. Transform Oracle model to PostgreSQL DtcOrder model
+ *   3. Bulk insert/update into PostgreSQL (handles duplicates)
  *   4. Return summary (fetched, imported, skipped)
  */
 @Service
@@ -30,7 +29,7 @@ public class OracleDtcSyncService {
     private static final Logger log = LoggerFactory.getLogger(OracleDtcSyncService.class);
 
     private final OracleDtcOrderRepository oracleDtcOrderRepository;
-    private final OrderRepository postgresOrderRepository;
+    private final DtcOrderRepository dtcOrderRepository;
 
     /**
      * Fetch pending DTC orders from Oracle and sync to PostgreSQL.
@@ -71,7 +70,7 @@ public class OracleDtcSyncService {
 
     /**
      * Sync fetched Oracle orders to PostgreSQL.
-     * Handles duplicate prevention via ON CONFLICT DO NOTHING.
+     * Handles duplicate prevention via batch_id uniqueness.
      */
     @Transactional(value = "postgresTransactionManager")
     private OracleSyncResult syncOrdersToPostgres(List<OracleDtcOrder> oracleOrders) {
@@ -81,35 +80,34 @@ public class OracleDtcSyncService {
 
         for (OracleDtcOrder oracleOrder : oracleOrders) {
             try {
-                // Transform Oracle model to PostgreSQL Order model
-                Order postgresOrder = transformOracleToPostgres(oracleOrder);
-
                 // Check if order already exists (idempotent)
-                if (postgresOrderRepository.existsByWmsExternalId(
-                        String.valueOf(oracleOrder.getBatchId()))) {
-                    log.debug("Order {} already exists in PostgreSQL, skipping",
-                            oracleOrder.getOrderNo());
+                if (dtcOrderRepository.existsByBatchId(oracleOrder.getBatchId())) {
+                    log.debug("DTC Order batch={} already exists in PostgreSQL, skipping",
+                            oracleOrder.getBatchId());
                     skipped++;
                     continue;
                 }
 
+                // Transform Oracle model to PostgreSQL DtcOrder model
+                DtcOrder dtcOrder = transformOracleToPostgres(oracleOrder);
+
                 // Save to PostgreSQL
-                postgresOrderRepository.save(postgresOrder);
+                dtcOrderRepository.save(dtcOrder);
                 imported++;
 
                 if (imported % 100 == 0) {
-                    log.info("Imported {} orders so far...", imported);
+                    log.info("Imported {} DTC orders so far...", imported);
                 }
 
             } catch (Exception e) {
-                log.error("Failed to import Oracle order {}: {}",
-                        oracleOrder.getOrderNo(), e.getMessage());
+                log.error("Failed to import Oracle DTC order batch={}: {}",
+                        oracleOrder.getBatchId(), e.getMessage());
                 failed++;
             }
         }
 
         String message = String.format(
-                "Synced: imported=%d, skipped=%d, failed=%d",
+                "DTC Sync: imported=%d, skipped=%d, failed=%d",
                 imported, skipped, failed);
         log.info(message);
 
@@ -122,58 +120,52 @@ public class OracleDtcSyncService {
     }
 
     /**
-     * Transform Oracle DTC order to PostgreSQL Order model.
+     * Transform Oracle DTC order to PostgreSQL DtcOrder model.
      */
-    private Order transformOracleToPostgres(OracleDtcOrder oracleOrder) {
-        Order order = new Order();
+    private DtcOrder transformOracleToPostgres(OracleDtcOrder oracleOrder) {
+        DtcOrder dtcOrder = new DtcOrder();
 
-//        // Identifiers
-//        order.setOrderNo(oracleOrder.getOrderNo());
-//        order.setOrderSuffix("0");
-//        order.setWmsExternalId(String.valueOf(oracleOrder.getBatchId()));
-//        order.setBatchId(oracleOrder.getBatchId().intValue());
-//
-//        // Tenant/Customer
-//        order.setCustNo(oracleOrder.getCustNo());
-//        order.setTenantId(oracleOrder.getTenantId());
-//
-//        // Shipping method
-//        order.setShipvia(oracleOrder.getShipViaCode());
-//        order.setOrderChannel("D2C");  // DTC = Direct-to-Consumer
-//        order.setOrderSource("DTC");
-//
-//        // Ship-to address
-//        order.setShipName(oracleOrder.getShipName());
-//        order.setShipAttn(oracleOrder.getShipAttn());
-//        order.setShipAddr1(oracleOrder.getShipAddr1());
-//        order.setShipAddr2(oracleOrder.getShipAddr2());
-//        order.setShipAddr3(oracleOrder.getShipAddr3());
-//        order.setShiptoCity(oracleOrder.getShipToCity());
-//        order.setShiptoState(oracleOrder.getShipToState());
-//        order.setShiptoZip(oracleOrder.getShipToZip());
-//        order.setShiptoCoun(oracleOrder.getShipToCountryCode());
-//        order.setPhone(oracleOrder.getPhone());
-//        order.setEmail(oracleOrder.getEmail());
-//
-//        // Package details
-//        order.setWeight(oracleOrder.getWeight());
-//        order.setGoodsDesc(oracleOrder.getGoodsDesc());
-//        order.setCustomerRef(oracleOrder.getCustPo());
-//        order.setIntlYn(oracleOrder.getIntlYn());
-//
-//        // International flag
-//        order.setIntlYn("Y".equalsIgnoreCase(oracleOrder.getIntlYn()) ? "Y" : "N");
-//
-//        // Billing
-//        if (oracleOrder.getThirdPartyAccount() != null) {
-//            order.setThirdPartyAcc(oracleOrder.getThirdPartyAccount());
-//        }
-//
-//        // Audit
-//        order.setCreatedDate(oracleOrder.getCreatedDate());
-//        order.setIsManual("B");  // "B" = Background (automated pull)
+        // Identifiers
+        dtcOrder.setBatchId(oracleOrder.getBatchId());
+        dtcOrder.setToteNumber(oracleOrder.getToteNumber());
+        dtcOrder.setOrderNo(oracleOrder.getOrderNo());
+        dtcOrder.setOrderSuffix(oracleOrder.getOrderSuffix());
 
-        return order;
+        // Tenant/Customer
+        dtcOrder.setTenantId(oracleOrder.getTenantId());
+        dtcOrder.setCustNo(oracleOrder.getCustNo());
+
+        // Shipping method
+        dtcOrder.setShipViaCode(oracleOrder.getShipViaCode());
+
+        // Ship-to address
+        dtcOrder.setShipName(oracleOrder.getShipName());
+        dtcOrder.setShipAttn(oracleOrder.getShipAttn());
+        dtcOrder.setShipAddr1(oracleOrder.getShipAddr1());
+        dtcOrder.setShipAddr2(oracleOrder.getShipAddr2());
+        dtcOrder.setShipAddr3(oracleOrder.getShipAddr3());
+        dtcOrder.setShipToCity(oracleOrder.getShipToCity());
+        dtcOrder.setShipToState(oracleOrder.getShipToState());
+        dtcOrder.setShipToZip(oracleOrder.getShipToZip());
+        dtcOrder.setShipToCountryCode(oracleOrder.getShipToCountryCode());
+        dtcOrder.setPhone(oracleOrder.getPhone());
+        dtcOrder.setEmail(oracleOrder.getEmail());
+
+        // Package details
+        dtcOrder.setWeight(oracleOrder.getWeight());
+        dtcOrder.setUnitValue(oracleOrder.getUnitValue());
+        dtcOrder.setPrice(oracleOrder.getPrice());
+        dtcOrder.setGoodsDesc(oracleOrder.getGoodsDesc());
+
+        // Shipping details
+        dtcOrder.setThirdPartyAccount(oracleOrder.getThirdPartyAccount());
+        dtcOrder.setIntlYn(oracleOrder.getIntlYn());
+        dtcOrder.setLocation(oracleOrder.getLocation());
+
+        // Additional fields
+        dtcOrder.setCustPo(oracleOrder.getCustPo());
+
+        return dtcOrder;
     }
 
     /**

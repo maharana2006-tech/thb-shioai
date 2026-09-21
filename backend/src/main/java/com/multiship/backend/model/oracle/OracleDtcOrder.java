@@ -28,7 +28,7 @@ public class OracleDtcOrder {
     private Integer orderNo;
 
     @Column(name = "ORDER_SUFFIX")
-    private String orderSuffix;
+    private Integer orderSuffix;
 
     @Column(name = "SHIPVIA_CD")
     private String shipViaCode;
@@ -75,13 +75,13 @@ public class OracleDtcOrder {
 
     // Package Info
     @Column(name = "WEIGHT")
-    private BigDecimal weight;
+    private String weight;
 
     @Column(name = "UNIT_VALUE")
-    private BigDecimal unitValue;
+    private String unitValue;
 
     @Column(name = "PRICE")
-    private BigDecimal price;
+    private String price;
 
     // Shipping Details
     @Column(name = "THIRD_PARTY_ACC")
