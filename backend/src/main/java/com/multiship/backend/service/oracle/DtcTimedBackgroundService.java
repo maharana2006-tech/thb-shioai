@@ -33,7 +33,7 @@ public class DtcTimedBackgroundService {
      * Peak hours sync: Every 5 minutes during 12:00–21:59 (business hours).
      * Cron: 0 * /5 12-21 * * MON-FRI
      */
-    @Scheduled(cron = "0 */5 12-21 * * MON-FRI", zone = "UTC")
+//    @Scheduled(cron = "0 */5 12-21 * * MON-FRI", zone = "UTC")
     public void syncDtcOrdersPeakHours() {
         log.info("[DTC Peak] Starting DTC sync (5-min interval)");
         try {
@@ -49,7 +49,7 @@ public class DtcTimedBackgroundService {
      * Normal hours sync: Every 20 minutes during 06:00–11:59 (weekdays & weekends).
      * Cron: 0 * /20 6-11 * * *
      */
-    @Scheduled(cron = "0 */20 6-11 * * *", zone = "UTC")
+//    @Scheduled(cron = "0 */20 6-11 * * *", zone = "UTC")
     public void syncDtcOrdersNormalHours() {
         log.info("[DTC Normal] Starting DTC sync (20-min interval)");
         try {
@@ -65,7 +65,7 @@ public class DtcTimedBackgroundService {
      * Off-hours sync: Every 30 minutes during 22:00–05:59 (low traffic).
      * Cron: 0 * /30 22-23,0-5 * * *
      */
-    @Scheduled(cron = "0 */30 22-23,0-5 * * *", zone = "UTC")
+//    @Scheduled(cron = "0 */30 22-23,0-5 * * *", zone = "UTC")
     public void syncDtcOrdersOffHours() {
         log.info("[DTC OffHours] Starting DTC sync (30-min interval)");
         try {
@@ -81,7 +81,7 @@ public class DtcTimedBackgroundService {
      * Daily FedEx ETD (Electronic Trade Document) upload at 21:00 UTC.
      * Placeholder for FedEx commercial invoice upload logic.
      */
-    @Scheduled(cron = "0 0 21 * * *", zone = "UTC")
+//    @Scheduled(cron = "0 0 21 * * *", zone = "UTC")
     public void syncFedexEtdDaily() {
         log.info("[DTC ETD] Daily FedEx ETD sync at 21:00");
         try {
