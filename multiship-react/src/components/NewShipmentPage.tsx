@@ -63,7 +63,7 @@ import {
 } from './NewShipmentComponents/_shared'
 import { AddressBlock } from './NewShipmentComponents/AddressBlock'
 import { CarrierAddressBanner } from './NewShipmentComponents/CarrierAddressBanner'
-import ValidationQuote from './ValidationQuote'
+import ValidationChecklist from './ValidationChecklist'
 
 /** Canonicalise a carrier code (ERP aliases → UPS/FEDEX/USPS). */
 const canon = (c?: string | null) => {
@@ -368,6 +368,9 @@ export default function NewShipmentPage() {
   // banner. carrierAddressResult stays alongside so the pre-existing
   // "apply suggested address" flow keeps working unchanged.
   const [shipmentValidationResult, setShipmentValidationResult] = useState<ShipmentValidationResult | null>(null)
+  /** When the check ran, and the request it checked — to say "the form changed". */
+  const [validatedAt, setValidatedAt] = useState<Date | null>(null)
+  const [validatedRequest, setValidatedRequest] = useState('')
   // Sprint 38 — saved recipients: address-book search + save UI.
   const [recipientSearch, setRecipientSearch] = useState('')
   const [recipientSuggestions, setRecipientSuggestions] = useState<SavedRecipient[]>([])
@@ -1587,20 +1590,11 @@ export default function NewShipmentPage() {
       const res = await shipmentValidationService.validate(payload)
       const result = res.data ?? null
       setShipmentValidationResult(result)
-      // Sprint 52 — pre-flight is strictly server-side (no carrier calls).
-      // Address subresult stays null; the existing suggested-address
-      // banner (fed by carrierAddressResult) simply doesn't render here
-      // — clear it so a stale banner from a prior click doesn't linger.
+      setValidatedAt(new Date())
+      setValidatedRequest(formSnapshotRef.current)
+
+      // Pre-flight is server-side; the address-only banner doesn't apply.
       setCarrierAddressResult(null)
-      // Toast summary — one line per verdict so the operator gets
-      // feedback without having to visually scan the banner.
-      if (result?.overall === 'PASS') {
-        notify.success(result.message)
-      } else if (result?.overall === 'WARN') {
-        notify.info(result.message)
-      } else if (result?.overall === 'FAIL') {
-        notify.error(result.message)
-      }
     } catch (e) {
       notify.apiError(e, 'Shipment validation failed.')
     } finally {
@@ -2228,6 +2222,19 @@ export default function NewShipmentPage() {
     }
     return payload
   }
+
+  // Every value the label request is built from — when it differs from the
+  // one taken at the last check, the form changed since.
+  const formSnapshot = JSON.stringify([
+    sender, recipient, isReturn, returnType, reference, carrier, accountNumber, serviceId,
+    packageChoice, length, width, height, dimUnit, weight, weightUnit, clientCode, warehouseCode,
+    declaredValue, currency, dgBlock, signatureOption, insuredValue, labelImageType, labelStockType,
+    labelImageFormat, pickupType, extraPackages, items, reasonForExport, incoterms, clearanceOption,
+    dutiesAccount, ftrExemption, aesCitation, exportDeclarationReference, override,
+  ])
+  const validationStale = !!shipmentValidationResult && !!validatedRequest && formSnapshot !== validatedRequest
+  const formSnapshotRef = useRef('')
+  useEffect(() => { formSnapshotRef.current = formSnapshot }, [formSnapshot])
 
   const submit = async () => {
     // Yup + Formik gate — validate the mirrored form values before anything else.
@@ -3138,103 +3145,6 @@ export default function NewShipmentPage() {
                     onDismiss={() => setCarrierAddressResult(null)}
                   />
                 ) : null}
-                {/* Sprint 52 — shipment validation result banner. Renders
-                    the local pre-flight verdict + errors + warnings from
-                    the new /shipments/validate endpoint. Separate from
-                    the address banner above because this is a whole-
-                    shipment check, not an address-only one. */}
-                {shipmentValidationResult ? (
-                  <div
-                    data-testid="shipment-validation-banner"
-                    className={`mt-3 rounded-xl border px-3 py-2.5 text-[12px] ${
-                      shipmentValidationResult.overall === 'PASS'
-                        ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                        : shipmentValidationResult.overall === 'WARN'
-                          ? 'border-amber-200 bg-amber-50 text-amber-800'
-                          : 'border-rose-200 bg-rose-50 text-rose-800'
-                    }`}
-                  >
-                    <p className="flex items-center gap-2 font-semibold">
-                      {shipmentValidationResult.overall === 'PASS' ? (
-                        <FiCheckCircle className="h-4 w-4 shrink-0" />
-                      ) : (
-                        <FiAlertTriangle className="h-4 w-4 shrink-0" />
-                      )}
-                      {shipmentValidationResult.message}
-                    </p>
-                    {shipmentValidationResult.localErrors.length ? (
-                      <ul className="mt-1.5 list-disc space-y-0.5 pl-6">
-                        {shipmentValidationResult.localErrors.map((e, idx) => (
-                          <li key={`err-${idx}`}>
-                            {e.message}
-                            {e.field ? (
-                              <span className="ml-1 font-mono text-[10.5px] text-rose-600">
-                                [{e.field}]
-                              </span>
-                            ) : null}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : null}
-                    {shipmentValidationResult.localWarnings.length ? (
-                      <>
-                        <p className="mt-2 text-[10.5px] font-bold uppercase tracking-[0.14em] text-amber-700">
-                          Suggestions
-                        </p>
-                        <ul className="mt-1 list-disc space-y-0.5 pl-6">
-                          {shipmentValidationResult.localWarnings.map((w, idx) => (
-                            <li key={`warn-${idx}`}>
-                              {w.message}
-                              {w.field ? (
-                                <span className="ml-1 font-mono text-[10.5px] text-amber-700">
-                                  [{w.field}]
-                                </span>
-                              ) : null}
-                            </li>
-                          ))}
-                        </ul>
-                      </>
-                    ) : null}
-                    {shipmentValidationResult.quote ? <ValidationQuote quote={shipmentValidationResult.quote} /> : null}
-                    {/* Sprint 52 PR δ — carrier subresult section. Rendered
-                        below local errors/warnings so the operator sees
-                        "server-side gaps first, then what the carrier
-                        thinks." Only shown when carrier was actually
-                        called (skipped when local errors present or
-                        carrier isn't configured). */}
-                    {shipmentValidationResult.carrier ? (
-                      <>
-                        <p className="mt-2 text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-600">
-                          {shipmentValidationResult.carrier.carrierCode} check
-                          {shipmentValidationResult.carrier.kind === 'ADDRESS_ONLY' ? ' (address only)' : ''}
-                        </p>
-                        <p className={`mt-0.5 text-[11.5px] ${
-                          shipmentValidationResult.carrier.valid
-                            ? 'text-emerald-700'
-                            : shipmentValidationResult.carrier.matchLevel === 'NOT_SUPPORTED'
-                              ? 'text-slate-500'
-                              : 'text-rose-700'
-                        }`}>
-                          {shipmentValidationResult.carrier.matchLevel}: {shipmentValidationResult.carrier.message}
-                        </p>
-                        {shipmentValidationResult.carrier.warnings.length ? (
-                          <ul className="mt-1 list-disc space-y-0.5 pl-6 text-amber-800">
-                            {shipmentValidationResult.carrier.warnings.map((w, idx) => (
-                              <li key={`cw-${idx}`}>{w}</li>
-                            ))}
-                          </ul>
-                        ) : null}
-                        {shipmentValidationResult.carrier.errors.length ? (
-                          <ul className="mt-1 list-disc space-y-0.5 pl-6 text-rose-700">
-                            {shipmentValidationResult.carrier.errors.map((e, idx) => (
-                              <li key={`ce-${idx}`}>{e}</li>
-                            ))}
-                          </ul>
-                        ) : null}
-                      </>
-                    ) : null}
-                  </div>
-                ) : null}
               </SectionCard>
               <SectionCard
                 icon={<FiTruck className="h-3.5 w-3.5" />}
@@ -4015,6 +3925,16 @@ export default function NewShipmentPage() {
           form cards and the action bar. */}
       {!loading ? (
         <div className="sticky bottom-4 z-30 !mt-6 space-y-2">
+          {shipmentValidationResult ? (
+            <ValidationChecklist
+              result={shipmentValidationResult}
+              checkedAt={validatedAt}
+              stale={validationStale}
+              busy={carrierValidating}
+              onRevalidate={() => void validateShipment()}
+              onClose={() => setShipmentValidationResult(null)}
+            />
+          ) : null}
           {reviewWarnings ? (
             <div className="rounded-2xl border border-[#e3d9c4] bg-white p-3.5 shadow-[0_18px_50px_rgba(31,21,12,0.14)]">
               <div className="mb-2 flex items-center justify-between">
