@@ -59,6 +59,22 @@ public class SavedRecipientServiceImpl implements SavedRecipientService {
     }
 
     @Override
+    public ApiResponse<org.springframework.data.domain.Page<SavedRecipientDTO>> list(String q, String customerNo,
+                                                                                     int page, int size) {
+        String query = q == null ? null : q.trim();
+        // A platform operator with no client picked sees the whole book; a
+        // client-scoped user is clamped to their own tenant (and the shared
+        // entries), whatever they ask for.
+        boolean all = !StringUtils.hasText(customerNo) && tenantScope.isPlatformOperator();
+        String owner = all ? null : tenantScope.clampClientCode(customerNo);
+        var pageable = org.springframework.data.domain.PageRequest.of(Math.max(0, page),
+                Math.min(Math.max(1, size), 100),
+                org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.DESC, "updatedAt"));
+        var rows = repository.page(all, owner, query, pageable).map(SavedRecipientServiceImpl::toDto);
+        return success(rows, rows.getTotalElements() + " saved address(es).");
+    }
+
+    @Override
     public ApiResponse<SavedRecipientDTO> byId(Long id) {
         Optional<SavedRecipient> maybe = repository.findById(id);
         if (maybe.isEmpty()) {
@@ -113,10 +129,19 @@ public class SavedRecipientServiceImpl implements SavedRecipientService {
         // USER hitting an existing row that belongs to another tenant
         // gets a 403, not a silent overwrite.
         tenantScope.requireTenantMatch(row.getOwnerCustomerNo());
+        // An edit that turns this entry into a copy of another one (same
+        // name + street + postal code, same owner) would trip the unique
+        // index and surface as a bare 500. Say which entry it collides with.
+        String newHash = dedupHash(request.getName(), request.getAddressLine1(), request.getPostalCode());
+        Optional<SavedRecipient> clash = repository.findExisting(newHash, request.getOwnerCustomerNo());
+        if (clash.isPresent() && !clash.get().getId().equals(id)) {
+            return failure(HttpStatus.CONFLICT, clash.get().getName() + " at " + clash.get().getAddressLine1()
+                    + " is already in the address book — edit that entry, or change the name, street or postal code.");
+        }
         applyDto(row, request);
         // Recompute the dedup hash — a name / street / postal edit
         // shifts the dedup identity.
-        row.setDedupHash(dedupHash(request.getName(), request.getAddressLine1(), request.getPostalCode()));
+        row.setDedupHash(newHash);
         row.setUpdatedAt(LocalDateTime.now(ZoneOffset.UTC));
         return success(toDto(repository.save(row)), "Recipient updated.");
     }

@@ -54,4 +54,43 @@ public interface SavedRecipientRepository extends JpaRepository<SavedRecipient, 
     List<SavedRecipient> search(
             @Param("ownerCustomerNo") String ownerCustomerNo,
             @Param("q") String q);
+
+    /**
+     * The Address book page: one client's entries plus the shared ones, or —
+     * when {@code allOwners} — every entry on the platform (platform operators
+     * only; the service decides). Same text match as {@link #search}, paged.
+     */
+    @Query(value = """
+        SELECT r FROM SavedRecipient r
+        WHERE (:allOwners = true
+               OR (:ownerCustomerNo IS NULL AND r.ownerCustomerNo IS NULL)
+               OR (:ownerCustomerNo IS NOT NULL
+                   AND (r.ownerCustomerNo = :ownerCustomerNo OR r.ownerCustomerNo IS NULL)))
+          AND (:q IS NULL OR :q = ''
+               OR LOWER(r.name) LIKE LOWER(CONCAT('%', :q, '%'))
+               OR LOWER(COALESCE(r.company, '')) LIKE LOWER(CONCAT('%', :q, '%'))
+               OR LOWER(r.addressLine1) LIKE LOWER(CONCAT('%', :q, '%'))
+               OR LOWER(r.city) LIKE LOWER(CONCAT('%', :q, '%'))
+               OR LOWER(r.postalCode) LIKE LOWER(CONCAT('%', :q, '%'))
+               OR LOWER(COALESCE(r.tag, '')) LIKE LOWER(CONCAT('%', :q, '%')))
+        """,
+        countQuery = """
+        SELECT COUNT(r) FROM SavedRecipient r
+        WHERE (:allOwners = true
+               OR (:ownerCustomerNo IS NULL AND r.ownerCustomerNo IS NULL)
+               OR (:ownerCustomerNo IS NOT NULL
+                   AND (r.ownerCustomerNo = :ownerCustomerNo OR r.ownerCustomerNo IS NULL)))
+          AND (:q IS NULL OR :q = ''
+               OR LOWER(r.name) LIKE LOWER(CONCAT('%', :q, '%'))
+               OR LOWER(COALESCE(r.company, '')) LIKE LOWER(CONCAT('%', :q, '%'))
+               OR LOWER(r.addressLine1) LIKE LOWER(CONCAT('%', :q, '%'))
+               OR LOWER(r.city) LIKE LOWER(CONCAT('%', :q, '%'))
+               OR LOWER(r.postalCode) LIKE LOWER(CONCAT('%', :q, '%'))
+               OR LOWER(COALESCE(r.tag, '')) LIKE LOWER(CONCAT('%', :q, '%')))
+        """)
+    org.springframework.data.domain.Page<SavedRecipient> page(
+            @Param("allOwners") boolean allOwners,
+            @Param("ownerCustomerNo") String ownerCustomerNo,
+            @Param("q") String q,
+            org.springframework.data.domain.Pageable pageable);
 }

@@ -19,6 +19,7 @@ export const settingsPaths = {
    *  with `?tab=services` or `?tab=packages`. */
   shippingCatalog: '/settings/shipping-catalog',
   shippingServiceMapping: '/settings/shipping-service-mapping',
+  addressBook: '/settings/address-book',
   importerBroker: '/settings/importer-broker',
   /** Tenant-branded document templates — shipping label, packing slip,
    *  commercial invoice. Old `/settings/label-templates` still redirects
@@ -88,6 +89,9 @@ export const settingsNavItems: Array<{
     roles: ['ADMIN', 'USER'] },
   { key: 'shipping-service-mapping', label: 'Shipping Service Mapping', to: settingsPaths.shippingServiceMapping, iconKey: 'mapping',
     description: "How order ship-methods resolve to a carrier service — most specific mapping wins.",
+    roles: ['ADMIN', 'USER'] },
+  { key: 'address-book', label: 'Address book', to: settingsPaths.addressBook, iconKey: 'clients',
+    description: 'The saved addresses offered in Ship to on a new shipment — add, correct or remove them, per client or shared.',
     roles: ['ADMIN', 'USER'] },
   { key: 'importer-broker', label: 'Importer / Broker', to: settingsPaths.importerBroker, iconKey: 'customs',
     description: 'Customs identities — importer/broker profiles applied per destination country.',

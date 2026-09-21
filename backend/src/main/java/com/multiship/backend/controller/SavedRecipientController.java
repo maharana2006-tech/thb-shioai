@@ -45,6 +45,20 @@ public class SavedRecipientController {
         return ResponseEntity.status(response.getCode()).body(response);
     }
 
+    @Operation(summary = "The address book, paged (Settings → Address book)",
+            description = "Filter by text (name, company, street, city, postal code, tag). customerNo = that "
+                    + "client's entries plus shared ones; omit it as a platform operator for every entry.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and (#customerNo == null or @accessScope.canAccessTenant(authentication, #customerNo))")
+    @GetMapping
+    public ResponseEntity<ApiResponse<org.springframework.data.domain.Page<SavedRecipientDTO>>> list(
+            @RequestParam(name = "q", required = false) String q,
+            @RequestParam(name = "customerNo", required = false) String customerNo,
+            @RequestParam(name = "page", defaultValue = "0") int page,
+            @RequestParam(name = "size", defaultValue = "25") int size) {
+        var response = savedRecipientService.list(q, customerNo, page, size);
+        return ResponseEntity.status(response.getCode()).body(response);
+    }
+
     @Operation(summary = "Fetch one saved recipient by id")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @GetMapping("/{id}")

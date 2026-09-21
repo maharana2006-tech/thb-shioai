@@ -288,4 +288,56 @@ class SavedRecipientServiceImplTest {
     private static void assertNotEquals(Object a, Object b) {
         org.junit.jupiter.api.Assertions.assertNotEquals(a, b);
     }
+
+    /**
+     * Editing one entry into an exact copy of another (same name + street +
+     * postal code, same owner) must be refused with a message naming it —
+     * it used to hit the unique index and come back as a bare 500.
+     */
+    @Test
+    void anEditThatDuplicatesAnotherEntryIsRefusedByName() {
+        Long first = service.create(acmeRequest()).getData().getId();
+        SavedRecipientDTO other = acmeRequest();
+        other.setName("Acme Annex");
+        other.setAddressLine1("2 Annex Road");
+        Long second = service.create(other).getData().getId();
+
+        // The collision lookup finds the FIRST entry for the edited identity.
+        when(repo.findExisting(anyString(), any())).thenReturn(Optional.of(saved.get(first)));
+        ApiResponse<SavedRecipientDTO> r = service.update(second, acmeRequest());
+        assertEquals(409, r.getCode());
+        assertTrue(r.getMessage().contains("Acme Warehouse") && r.getMessage().contains("1 Warehouse Way"), r.getMessage());
+
+        // Editing an entry while keeping its own identity is not a collision.
+        ApiResponse<SavedRecipientDTO> self = service.update(first, acmeRequest());
+        assertEquals(200, self.getCode(), self.getMessage());
+    }
+
+    /** The Address book page: a platform operator with no client sees every entry. */
+    @Test
+    void theListShowsEveryEntryToAPlatformOperatorWithNoClientPicked() {
+        // A signed-in admin with no client of their own is a platform operator.
+        org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(
+                new org.springframework.security.authentication.UsernamePasswordAuthenticationToken("admin", null,
+                        List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_ADMIN"))));
+        try {
+            listAsOperator();
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.clearContext();
+        }
+    }
+
+    private void listAsOperator() {
+        when(repo.page(org.mockito.ArgumentMatchers.anyBoolean(), any(), any(), any()))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(List.of()));
+        service.list(null, null, 0, 25);
+        org.mockito.Mockito.verify(repo).page(eq(true), org.mockito.ArgumentMatchers.isNull(), any(), any());
+
+        service.list("chicago", "DES875", 2, 500);
+        org.mockito.ArgumentCaptor<org.springframework.data.domain.Pageable> paging =
+                org.mockito.ArgumentCaptor.forClass(org.springframework.data.domain.Pageable.class);
+        org.mockito.Mockito.verify(repo).page(eq(false), eq("DES875"), eq("chicago"), paging.capture());
+        assertEquals(2, paging.getValue().getPageNumber());
+        assertEquals(100, paging.getValue().getPageSize(), "page size is capped at 100");
+    }
 }

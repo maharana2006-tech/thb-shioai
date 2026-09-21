@@ -3,7 +3,7 @@ import MpsProgressCard from './orders/MpsProgressCard'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { notify } from '../utils/notify'
-import { FiZap, FiArrowRight, FiArrowLeft, FiTruck, FiPackage, FiMapPin, FiHome, FiUsers, FiFileText, FiPlus, FiTrash2, FiRotateCcw, FiGlobe, FiEdit3, FiCheckCircle, FiAlertTriangle, FiSearch, FiX, FiCopy, FiClipboard, FiAlertCircle } from 'react-icons/fi'
+import { FiZap, FiArrowRight, FiArrowLeft, FiTruck, FiPackage, FiMapPin, FiHome, FiUsers, FiFileText, FiPlus, FiTrash2, FiRotateCcw, FiGlobe, FiEdit3, FiCheckCircle, FiAlertTriangle, FiSearch, FiX, FiCopy, FiClipboard, FiAlertCircle, FiBookmark } from 'react-icons/fi'
 import { ApiError } from '../api/apiClient'
 import {
   orderService,
@@ -21,7 +21,7 @@ import { shippingConfigService, type ShippingServiceItem, type PackagePreset, ty
 import { customsService } from '../api/customsService'
 import { mapCarrierErrorToFields, summarizeCarrierError } from '../utils/carrierErrorMap'
 import { type AddressValidationResponse } from '../api/addressValidationService'
-import { recipientBookService, type SavedRecipient } from '../api/recipientBookService'
+import { isDuplicateSave, recipientBookService, type SavedRecipient } from '../api/recipientBookService'
 import { clientWarehouseService, type ClientWarehouse } from '../api/warehouseService'
 import {
   clientAllowedPackagesService,
@@ -1181,7 +1181,16 @@ export default function NewShipmentPage() {
   const applyClient = (code: string) => {
     setClientCode(code)
     const client = clients.find((c) => c.clientCode === code)
-    if (!client) return
+    if (!client) {
+      // Clearing the client used to return here and leave the previous
+      // client's company and warehouse as the shipper. Back to the default
+      // ship-from (fix-order mode keeps the order's own sender, as below).
+      if (!fixOrderNo) {
+        if (isReturn) setRecipient(defaultSender())
+        else setSender(defaultSender())
+      }
+      return
+    }
     const yourAddr = isReturn ? client.returnAddress ?? client.shipFrom : client.shipFrom
     // Always reset to defaultSender() before overlay — otherwise switching
     // from Client A (with shipFrom) to Client B (without) would leave A's
@@ -1758,6 +1767,76 @@ export default function NewShipmentPage() {
     setRecipientActive(-1)
     setRecipientDropdownOpen(false)
     notify.success(`Loaded ${r.name} from the address book.`)
+  }
+
+  /**
+   * Save the Ship to block to the address book — the only way an address gets
+   * there from the app. Belongs to the chosen client (or is shared when no
+   * client is picked). The server treats the same name + street + postal code
+   * as the same entry, so a repeat save offers to update it instead.
+   */
+  const [savingToBook, setSavingToBook] = useState(false)
+  const saveRecipientToBook = async () => {
+    const r = recipient
+    const missing = [
+      !r.name?.trim() && 'name',
+      !r.addressLine1?.trim() && 'street',
+      !r.city?.trim() && 'city',
+      !r.postalCode?.trim() && 'postal code',
+    ].filter(Boolean)
+    if (missing.length > 0) {
+      notify.info({ title: 'Not saved yet', body: `Fill in the ${missing.join(', ')} first.` })
+      return
+    }
+    const entry: SavedRecipient = {
+      ownerCustomerNo: clientCode || null,
+      name: r.name.trim(),
+      company: r.company?.trim() || null,
+      phone: r.phone?.trim() || null,
+      email: r.email?.trim() || null,
+      addressLine1: r.addressLine1.trim(),
+      addressLine2: r.addressLine2?.trim() || null,
+      addressLine3: r.addressLine3?.trim() || null,
+      city: r.city.trim(),
+      state: r.state?.trim() || null,
+      postalCode: r.postalCode.trim(),
+      countryCode: r.countryCode,
+      residential: r.residential ?? null,
+    }
+    const owner = clientCode ? `for ${clientCode}` : 'as a shared address (every client can use it)'
+    setSavingToBook(true)
+    try {
+      const res = await recipientBookService.save(entry)
+      const saved = res.data
+      if (!isDuplicateSave(res.message) || !saved?.id) {
+        notify.success(`Saved ${entry.name} to the address book ${owner}.`)
+        return
+      }
+      // Same person already saved: offer to bring it up to date, and say what
+      // would change so nobody overwrites a good phone number by accident.
+      const changed = (['company', 'phone', 'email', 'addressLine2', 'state', 'residential'] as const)
+        .filter((k) => (saved[k] ?? '') !== (entry[k] ?? ''))
+      if (changed.length === 0) {
+        notify.info(`${entry.name} is already in the address book, with these details.`)
+        return
+      }
+      const labels: Record<string, string> = {
+        company: 'company', phone: 'phone', email: 'email', addressLine2: 'address line 2',
+        state: 'state', residential: 'residential',
+      }
+      const ok = await notify.confirm(
+        `${entry.name} at ${entry.addressLine1} is already in the address book. `
+          + `Update its ${changed.map((k) => labels[k]).join(', ')} to what's on this form?`,
+        { title: 'Already saved', confirmLabel: 'Update it', cancelLabel: 'Keep the saved one' },
+      )
+      if (!ok) return
+      await recipientBookService.update(saved.id, entry)
+      notify.success(`Updated ${entry.name} in the address book.`)
+    } catch (e) {
+      notify.apiError(e, 'Could not save the address.')
+    } finally {
+      setSavingToBook(false)
+    }
   }
 
   /** Apply the carrier's suggested address to the recipient block. */
@@ -3049,7 +3128,23 @@ export default function NewShipmentPage() {
                     </div>
                   }
                 />
-                <div className="mt-3 flex justify-end">
+                <div className="mt-3 flex flex-wrap justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void saveRecipientToBook()}
+                    disabled={savingToBook}
+                    title={clientCode
+                      ? `Save this Ship to address to ${clientCode}'s address book`
+                      : 'Save this Ship to address as a shared entry every client can use'}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0] disabled:opacity-50"
+                  >
+                    {savingToBook ? (
+                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#5a4526]" />
+                    ) : (
+                      <FiBookmark className="h-3.5 w-3.5" />
+                    )}
+                    Save to address book
+                  </button>
                   <button
                     type="button"
                     onClick={() => void validateShipment()}

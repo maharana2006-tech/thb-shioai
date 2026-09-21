@@ -17,6 +17,10 @@ public interface SavedRecipientService {
      *  only. Capped at 25 entries per call. */
     ApiResponse<List<SavedRecipientDTO>> search(String q, String customerNo);
 
+    /** The Address book page, paged. customerNo null = every entry for a
+     *  platform operator; a scoped user always gets their own tenant. */
+    ApiResponse<org.springframework.data.domain.Page<SavedRecipientDTO>> list(String q, String customerNo, int page, int size);
+
     ApiResponse<SavedRecipientDTO> byId(Long id);
 
     /**
