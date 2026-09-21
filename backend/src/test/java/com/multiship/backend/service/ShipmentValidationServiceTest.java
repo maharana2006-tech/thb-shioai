@@ -1226,4 +1226,82 @@ class ShipmentValidationServiceTest {
         assertEquals(0, new BigDecimal("21.76").compareTo(q.getBillableWeight()), q.getBillableWeight().toString());
         assertTrue(q.isDimensional());
     }
+
+    // ─── PO boxes, repeat references, cutoff, insurance cost ────────────
+
+    @Test
+    void poBoxesAreRecognisedInTheUsualSpellings() {
+        for (String s : List.of("PO Box 12", "P.O. Box 7", "p o box 3", "Post Office Box 99", "POB 4", "PO BOX#5")) {
+            assertTrue(ShipmentValidationService.isPoBox(s), s);
+        }
+        for (String s : List.of("12 Boxwood Rd", "100 Poplar Ave", "Suite 400", "233 S Wacker Dr")) {
+            assertTrue(!ShipmentValidationService.isPoBox(s), s);
+        }
+    }
+
+    @Test
+    void fedexGroundToAPoBoxFailsButGroundEconomyIsFine() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.getRecipient().setAddressLine2("P.O. Box 118");
+        stubServiceAndPreset();
+        assertTrue(errorsOf(req).stream().anyMatch(m -> m.startsWith("FEDEX can't deliver to a PO box (\"P.O. Box 118\")")),
+                errorsOf(req).toString());
+
+        when(shippingServiceRepository.findById(1L)).thenReturn(Optional.of(ShippingService.builder()
+                .id(1L).carrier("FEDEX").serviceCode("SMART_POST").name("FedEx Ground Economy").build()));
+        assertTrue(errorsOf(req).stream().noneMatch(m -> m.contains("PO box")));
+    }
+
+    @Test
+    void aMilitaryAddressNeedsUsps() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.getRecipient().setCity("APO");
+        req.getRecipient().setState("AE");
+        req.getRecipient().setPostalCode("09001");
+        stubServiceAndPreset();
+        assertTrue(errorsOf(req).stream().anyMatch(m -> m.contains("only USPS delivers there")), errorsOf(req).toString());
+    }
+
+    @Test
+    void aReferenceThatAlreadyShippedIsAWarning() {
+        com.multiship.backend.repository.OrderRepository orders = mock(com.multiship.backend.repository.OrderRepository.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "orderRepository", orders);
+        com.multiship.backend.model.Order shipped = new com.multiship.backend.model.Order();
+        shipped.setOrderNo(905958);
+        shipped.setTrack("794600000001");
+        when(orders.findShippedByClientAndReference("ACME", "PO-7781")).thenReturn(Optional.of(shipped));
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setClientCode("ACME");
+        req.setReference("PO-7781");
+        stubServiceAndPreset();
+        ShipmentValidationResult r = service.validate(req).getData();
+        assertTrue(r.getLocalWarnings().stream().anyMatch(w -> w.getMessage().startsWith(
+                "Reference PO-7781 already shipped on order #905958, tracking 794600000001")), r.getLocalWarnings().toString());
+    }
+
+    @Test
+    void pastTheClientsCutoffIsAWarning() {
+        when(resolutionService.isPastCutoff(org.mockito.ArgumentMatchers.eq("ACME"), any())).thenReturn(true);
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setClientCode("ACME");
+        stubServiceAndPreset();
+        assertTrue(service.validate(req).getData().getLocalWarnings().stream()
+                .anyMatch(w -> w.getMessage().contains("past ACME's daily cutoff")));
+    }
+
+    @Test
+    void insuringAboveTheFreeAmountIsAWarning() {
+        CarrierLimitService limits = mock(CarrierLimitService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "carrierLimitService", limits);
+        when(limits.resolveLimit(any(), any(), org.mockito.ArgumentMatchers.anyBoolean())).thenReturn(
+                com.multiship.backend.model.CarrierShippingLimit.builder().freeDeclaredValue(new BigDecimal("100")).build());
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setInsuredValue(new BigDecimal("500"));
+        req.setInsuredValueCurrency("USD");
+        stubServiceAndPreset();
+        assertTrue(service.validate(req).getData().getLocalWarnings().stream().anyMatch(w -> w.getMessage()
+                .equals("FEDEX covers the first USD 100 free; insuring USD 500 adds a declared-value charge to the label.")));
+        req.setInsuredValue(new BigDecimal("80"));
+        assertTrue(service.validate(req).getData().getLocalWarnings().stream().noneMatch(w -> "insuredValue".equals(w.getField())));
+    }
 }

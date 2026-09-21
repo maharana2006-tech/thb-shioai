@@ -114,6 +114,12 @@ public class ShipmentValidationService {
      *  which Generate label enforces with @Valid. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private jakarta.validation.Validator beanValidator;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.OrderRepository orderRepository;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.ClientShippingPolicyRepository shippingPolicyRepository;
+    /** Clock for the cutoff check — replaceable in tests. */
+    java.time.Clock clock = java.time.Clock.systemUTC();
     @Value("${packaging.validation-enabled:true}")
     private boolean packagingValidationEnabled = true;
     @Value("${carrier.auto-split-enabled:true}")
@@ -260,6 +266,10 @@ public class ShipmentValidationService {
         }
 
         labelTimeChecks(req, service, preset, warehouseId, errors, warnings, skipped);
+        checkPoBoxAndMilitary(req, service, errors);
+        checkDuplicateReference(req, warnings);
+        checkCutoff(req, warnings);
+        checkInsuranceCost(req, service, warnings);
 
         // ─── Markup required (Sprint 50 Tier 1 finding #11 dry-run) ────────
         if (hasClient) {
@@ -1314,6 +1324,107 @@ public class ShipmentValidationService {
                 hasDims ? req.getWidth() : (preset != null ? preset.getWidth() : null),
                 hasDims ? req.getHeight() : (preset != null ? preset.getHeight() : null),
                 hasDims ? dimUnit : (preset != null ? preset.getDimUnit() : dimUnit)));
+    }
+
+    // ─── Checks neither button ran before ───────────────────────────────────
+
+    private static final java.util.regex.Pattern PO_BOX = java.util.regex.Pattern.compile(
+            "\\b(p\\.?\\s*o\\.?\\s*box|post\\s*office\\s*box|postal\\s*box|pob|p\\s*o\\s*b)\\b\\s*#?\\s*\\d*",
+            java.util.regex.Pattern.CASE_INSENSITIVE);
+    private static final Set<String> MILITARY_CITIES = Set.of("APO", "FPO", "DPO");
+    private static final Set<String> MILITARY_STATES = Set.of("AA", "AE", "AP");
+    /** Services that hand the last mile to the Postal Service, so a PO box is fine. */
+    private static final Set<String> PO_BOX_SERVICES = Set.of(
+            "SMART_POST", "FEDEX_GROUND_ECONOMY", "GROUND_ECONOMY",   // FedEx Ground Economy
+            "92", "93", "94", "95");                                   // UPS Ground Saver / SurePost
+
+    static boolean isPoBox(String line) {
+        return StringUtils.hasText(line) && PO_BOX.matcher(line).find();
+    }
+
+    /**
+     * FedEx, UPS and DHL can't deliver to a PO box (except the services that
+     * hand off to the Postal Service), and only the Postal Service delivers
+     * to military APO / FPO / DPO addresses. The label is bought either way
+     * and the parcel comes back — so this is an error, before the purchase.
+     */
+    private void checkPoBoxAndMilitary(ManualShipmentRequest req, ShippingService service, List<ValidationIssue> errors) {
+        ManualShipmentRequest.Address to = req.getRecipient();
+        if (to == null || !StringUtils.hasText(req.getCarrierCode())) return;
+        String carrier = blankTo(ShippingConfigService.canonicalCarrierFor(req.getCarrierCode()),
+                req.getCarrierCode().trim().toUpperCase(Locale.ROOT));
+        if ("USPS".equals(carrier) || "STAMPS".equals(carrier)) return;
+        String serviceCode = service != null && service.getServiceCode() != null
+                ? service.getServiceCode().trim().toUpperCase(Locale.ROOT) : "";
+        boolean military = (to.getCity() != null && MILITARY_CITIES.contains(to.getCity().trim().toUpperCase(Locale.ROOT)))
+                || (to.getState() != null && MILITARY_STATES.contains(to.getState().trim().toUpperCase(Locale.ROOT)));
+        if (military) {
+            errors.add(issue(ErrorCode.VALIDATION_ERROR, "This is a military (APO / FPO / DPO) address — only USPS "
+                    + "delivers there. Ship it with USPS.", "recipient.city"));
+            return;
+        }
+        if (PO_BOX_SERVICES.contains(serviceCode)) return;
+        String[] lines = { to.getAddressLine1(), to.getAddressLine2(), to.getAddressLine3() };
+        for (int i = 0; i < lines.length; i++) {
+            if (isPoBox(lines[i])) {
+                errors.add(issue(ErrorCode.VALIDATION_ERROR, carrier + " can't deliver to a PO box (\"" + lines[i].trim()
+                        + "\"). Give a street address, or ship with USPS"
+                        + ("FEDEX".equals(carrier) ? " or FedEx Ground Economy" : "UPS".equals(carrier) ? " or UPS Ground Saver" : "")
+                        + ".", "recipient.addressLine" + (i + 1)));
+                return;
+            }
+        }
+    }
+
+    /** The same reference / PO already shipped for this client — likely a double shipment. */
+    private void checkDuplicateReference(ManualShipmentRequest req, List<ValidationIssue> warnings) {
+        if (orderRepository == null || !StringUtils.hasText(req.getReference())) return;
+        String client = blankTo(req.getClientCode(), "MANUAL").trim();
+        orderRepository.findShippedByClientAndReference(client, req.getReference().trim()).ifPresent(o ->
+                warnings.add(issue(ErrorCode.VALIDATION_ERROR, "Reference " + req.getReference().trim()
+                        + " already shipped on order #" + o.getOrderNo()
+                        + (o.getCreatedDate() != null ? " (" + o.getCreatedDate() + ")" : "")
+                        + (StringUtils.hasText(o.getTrack()) ? ", tracking " + o.getTrack() : "")
+                        + ". Make sure this isn't a second shipment of the same order.", "reference")));
+    }
+
+    /** Past the client's daily cutoff, the label counts as the next business day's. */
+    private void checkCutoff(ManualShipmentRequest req, List<ValidationIssue> warnings) {
+        if (!StringUtils.hasText(req.getClientCode())) return;
+        if (!resolutionService.isPastCutoff(req.getClientCode(), clock.instant())) return;
+        String when = "";
+        if (shippingPolicyRepository != null) {
+            when = shippingPolicyRepository.findByClientCodeIgnoreCase(req.getClientCode().trim())
+                    .filter(p -> p.getCutoffTime() != null)
+                    .map(p -> " (" + p.getCutoffTime() + (StringUtils.hasText(p.getCutoffTz()) ? " " + p.getCutoffTz() : "") + ")")
+                    .orElse("");
+        }
+        warnings.add(issue(ErrorCode.VALIDATION_ERROR, "It's past " + req.getClientCode().trim()
+                + "'s daily cutoff" + when + " — this label will count as the next business day's shipment.",
+                "clientCode"));
+    }
+
+    /** Coverage above the carrier's free declared value is billed as a surcharge. */
+    private void checkInsuranceCost(ManualShipmentRequest req, ShippingService service, List<ValidationIssue> warnings) {
+        if (carrierLimitService == null || req.getInsuredValue() == null || req.getInsuredValue().signum() <= 0
+                || !StringUtils.hasText(req.getCarrierCode())) return;
+        String carrier = blankTo(ShippingConfigService.canonicalCarrierFor(req.getCarrierCode()),
+                req.getCarrierCode().trim().toUpperCase(Locale.ROOT));
+        ManualShipmentRequest.Address from = req.getSender();
+        ManualShipmentRequest.Address to = req.getRecipient();
+        boolean intl = from != null && to != null && from.getCountryCode() != null && to.getCountryCode() != null
+                && !from.getCountryCode().trim().equalsIgnoreCase(to.getCountryCode().trim());
+        com.multiship.backend.model.CarrierShippingLimit limit = carrierLimitService.resolveLimit(
+                carrier, service != null ? service.getServiceCode() : null, intl);
+        if (limit == null || limit.getFreeDeclaredValue() == null) return;
+        String currency = blankTo(req.getInsuredValueCurrency(), blankTo(req.getCurrency(), "USD")).trim().toUpperCase(Locale.ROOT);
+        BigDecimal insuredUsd = "USD".equals(currency) ? req.getInsuredValue()
+                : fxRateService.convert(req.getInsuredValue(), currency, "USD").orElse(null);
+        if (insuredUsd == null || insuredUsd.compareTo(limit.getFreeDeclaredValue()) <= 0) return;
+        warnings.add(issue(ErrorCode.VALIDATION_ERROR, carrier + " covers the first USD "
+                + limit.getFreeDeclaredValue().stripTrailingZeros().toPlainString() + " free; insuring "
+                + currency + " " + req.getInsuredValue().stripTrailingZeros().toPlainString()
+                + " adds a declared-value charge to the label.", "insuredValue"));
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────────
