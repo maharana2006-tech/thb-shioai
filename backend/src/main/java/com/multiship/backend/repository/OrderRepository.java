@@ -30,6 +30,20 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
 
     Optional<Order> findByOrderNo(Integer orderNo);
 
+    /** The newest order of this client that already shipped (a label was
+     *  bought) with this reference / PO. Backs Validate's duplicate check;
+     *  index idx_label_batch_cust_ref (V74). */
+    @Query(value = """
+            SELECT * FROM label_batch
+             WHERE upper(cust_no) = upper(:client)
+               AND lower(customer_ref) = lower(:ref)
+               AND customer_ref IS NOT NULL
+               AND order_status = 'GENERATED'
+             ORDER BY order_no DESC
+             LIMIT 1
+            """, nativeQuery = true)
+    Optional<Order> findShippedByClientAndReference(@Param("client") String client, @Param("ref") String ref);
+
     /**
      * Sprint 49 Tier 3 Fix 2 — batch fetch for the order-list resolve
      * loop. Replaces N individual {@code findByOrderNo} calls per page

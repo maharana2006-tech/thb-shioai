@@ -685,13 +685,12 @@ public class UpsConnector implements CarrierConnector {
     }
 
     /**
-     * PR δ.1 — native UPS shipment-level validation via ShipConfirm with
-     * {@code Request.RequestOption = "validate"}. UPS runs the same
-     * routing / rating / service-availability / packaging checks as a
-     * real ShipConfirm and returns any {@code Response.Alert[]} without
-     * actually generating a label. The wire payload is the same shape
-     * {@link #createShipment} sends so what the operator sees during
-     * "Validate shipment" mirrors what Generate Label would send.
+     * Native UPS shipment-level validation through the Rating API
+     * ({@code /api/rating/{v}/Rate}, RequestOption "Rate") for the picked
+     * service. UPS checks the lane, service availability, addresses and
+     * packages and returns any {@code Response.Alert[]} — and nothing is
+     * created. It used to POST to {@code /ship} with RequestOption
+     * "validate", which still creates a shipment and a label.
      *
      * <p>Response shape (200):
      * <pre>
@@ -754,25 +753,38 @@ public class UpsConnector implements CarrierConnector {
                     guardEx.getMessage(), null);
         }
         try {
-            Map<String, Object> payload = buildShipmentPayload(request, "validate");
+            // The Rating API, never Ship. POST /ship CREATES a shipment and a
+            // label whatever RequestOption says — "validate" only switches on
+            // city/state/ZIP checking — so every Validate click used to open
+            // a real UPS shipment that was then thrown away without a void.
+            // Rate with the picked service runs the lane, service, address
+            // and package checks and creates nothing.
+            Map<String, Object> shipment = buildRateShopShipment(request);
+            shipment.put("Service", Map.of("Code", firstNonBlank(request.getServiceType(), "03")));
+            Map<String, Object> rateRequest = new LinkedHashMap<>();
+            rateRequest.put("Request", Map.of(
+                    "RequestOption", "Rate",
+                    "SubVersion", "2205",
+                    "TransactionReference", Map.of("CustomerContext",
+                            firstNonBlank(request.getReferenceNumber(), ""))));
+            rateRequest.put("CustomerClassification", Map.of("Code", "00"));
+            rateRequest.put("Shipment", shipment);
+            Map<String, Object> payload = Map.of("RateRequest", rateRequest);
             String baseUrl = isSandbox(environment)
                     ? carrierProperties.getUps().getSandboxUrl()
                     : carrierProperties.getUps().getApiBaseUrl();
             logUpsWirePayload("validateShipment", payload, environment);
-            // Same .uri() bug as createShipment before PR #577 — no path
-            // meant POST to baseUrl root, UPS returned their marketing HTML
-            // index page, parseUpsValidateShipmentResponse choked on '<' at
-            // line 1 col 1.
-            String shipUri = carrierProperties.getUps().getShipmentPath()
-                    + "/" + carrierProperties.getUps().getApiVersion() + "/ship";
+            String rateUri = "/api/rating/" + carrierProperties.getUps().getApiVersion() + "/Rate";
             String response = HttpClients.newBuilder()
                     .baseUrl(baseUrl)
                     .build()
                     .post()
-                    .uri(shipUri)
+                    .uri(rateUri)
                     .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.APPLICATION_JSON)
                     .header("Authorization", "Bearer " + accessToken)
+                    .header("transId", java.util.UUID.randomUUID().toString())
+                    .header("transactionSrc", "multiship")
                     .body(payload)
                     .retrieve()
                     .body(String.class);
@@ -815,7 +827,8 @@ public class UpsConnector implements CarrierConnector {
         try {
             com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(
                     Optional.ofNullable(response).orElse("{}"));
-            com.fasterxml.jackson.databind.JsonNode resp = root.at("/ShipmentResponse/Response");
+            com.fasterxml.jackson.databind.JsonNode resp = root.at("/RateResponse/Response");
+            if (resp.isMissingNode()) resp = root.at("/ShipmentResponse/Response");
             String code = resp.at("/ResponseStatus/Code").asText("");
             String description = resp.at("/ResponseStatus/Description").asText("");
 
@@ -823,9 +836,9 @@ public class UpsConnector implements CarrierConnector {
             com.fasterxml.jackson.databind.JsonNode alert = resp.path("Alert");
             if (alert.isArray()) {
                 for (com.fasterxml.jackson.databind.JsonNode a : alert) {
-                    warnings.add(formatUpsAlert(a));
+                    if (!isRateBoilerplate(a)) warnings.add(formatUpsAlert(a));
                 }
-            } else if (alert.isObject()) {
+            } else if (alert.isObject() && !isRateBoilerplate(alert)) {
                 warnings.add(formatUpsAlert(alert));
             }
 
@@ -851,6 +864,12 @@ public class UpsConnector implements CarrierConnector {
                     java.util.List.of(), java.util.List.of(ex.getMessage()),
                     "UPS validateShipment parse failed: " + ex.getMessage(), response);
         }
+    }
+
+    /** 110971 "Your invoice may vary from the displayed reference rates"
+     *  rides on nearly every Rate reply; it is not a problem with the shipment. */
+    private static boolean isRateBoilerplate(com.fasterxml.jackson.databind.JsonNode a) {
+        return "110971".equals(a.path("Code").asText(""));
     }
 
     private String formatUpsAlert(com.fasterxml.jackson.databind.JsonNode a) {
@@ -3346,7 +3365,9 @@ public class UpsConnector implements CarrierConnector {
     @SuppressWarnings("unchecked")
     private void logUpsWirePayload(String op, Map<String, Object> payload, String environment) {
         try {
-            Map<String, Object> shipmentRequest = (Map<String, Object>) payload.get("ShipmentRequest");
+            // Ship and Rate bodies carry the same Shipment block under different roots.
+            Map<String, Object> shipmentRequest = (Map<String, Object>) (payload.containsKey("RateRequest")
+                    ? payload.get("RateRequest") : payload.get("ShipmentRequest"));
             Map<String, Object> shipment = shipmentRequest == null ? null
                     : (Map<String, Object>) shipmentRequest.get("Shipment");
             Object serviceCode = null;

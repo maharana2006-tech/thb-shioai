@@ -38,4 +38,33 @@ export const recipientBookService = {
    *  the same owner) returns the existing row unchanged. */
   save: (recipient: SavedRecipient) =>
     apiClient.post<ApiResponse<SavedRecipient>>('/recipients', recipient),
+
+  update: (id: number, recipient: SavedRecipient) =>
+    apiClient.put<ApiResponse<SavedRecipient>>(`/recipients/${id}`, recipient),
+
+  remove: (id: number) => apiClient.delete<ApiResponse<void>>(`/recipients/${id}`),
+
+  /** The Address book page, paged. customerNo omitted = every entry for an
+   *  admin; a client-scoped user always gets their own client's book. */
+  list: (params: { q?: string; customerNo?: string | null; page?: number; size?: number } = {}) => {
+    const query = new URLSearchParams()
+    if (params.q?.trim()) query.set('q', params.q.trim())
+    if (params.customerNo) query.set('customerNo', params.customerNo)
+    query.set('page', String(params.page ?? 0))
+    query.set('size', String(params.size ?? 25))
+    return apiClient.get<ApiResponse<RecipientPage>>(`/recipients?${query.toString()}`)
+  },
 }
+
+/** Spring's Page, as the list endpoint returns it. */
+export interface RecipientPage {
+  content: SavedRecipient[]
+  totalElements: number
+  totalPages: number
+  number: number
+  size: number
+}
+
+/** True when the server answered a save with the entry it already had. */
+export const isDuplicateSave = (message?: string | null) =>
+  !!message && message.toLowerCase().includes('already exists')

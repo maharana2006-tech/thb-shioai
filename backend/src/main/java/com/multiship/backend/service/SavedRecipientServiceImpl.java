@@ -46,16 +46,42 @@ public class SavedRecipientServiceImpl implements SavedRecipientService {
         String norm = q == null ? null : q.trim();
         // Sprint 50 Tier 0.5 PR E - Pattern A on the caller-supplied
         // customerNo filter. Scoped USER null → own tenant; foreign → 403.
-        String scoped = tenantScope.clampClientCode(customerNo);
-        List<SavedRecipient> hits = repository.search(
-                StringUtils.hasText(scoped) ? scoped : null,
-                StringUtils.hasText(norm) ? norm : null);
-        if (hits.size() > SEARCH_MAX) hits = hits.subList(0, SEARCH_MAX);
+        // A platform operator with no client picked searches the whole book,
+        // as the Address book page shows it — otherwise an address saved under
+        // a client could be listed there yet never found from a new shipment.
+        boolean all = !StringUtils.hasText(customerNo) && tenantScope.isPlatformOperator();
+        String scoped = all ? null : tenantScope.clampClientCode(customerNo);
+        // Each word must appear somewhere in the entry — see SavedRecipientSearch.
+        // Paged at the database rather than loading every match and trimming.
+        List<SavedRecipient> hits = repository.findAll(
+                SavedRecipientSearch.visibleTo(all, StringUtils.hasText(scoped) ? scoped : null)
+                        .and(SavedRecipientSearch.matching(norm)),
+                org.springframework.data.domain.PageRequest.of(0, SEARCH_MAX,
+                        org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.DESC, "updatedAt")))
+                .getContent();
         return ApiResponse.<List<SavedRecipientDTO>>builder()
                 .status("success").code(200)
                 .message(hits.isEmpty() ? "No matches." : hits.size() + " match(es).")
                 .data(hits.stream().map(SavedRecipientServiceImpl::toDto).toList())
                 .build();
+    }
+
+    @Override
+    public ApiResponse<org.springframework.data.domain.Page<SavedRecipientDTO>> list(String q, String customerNo,
+                                                                                     int page, int size) {
+        String query = q == null ? null : q.trim();
+        // A platform operator with no client picked sees the whole book; a
+        // client-scoped user is clamped to their own tenant (and the shared
+        // entries), whatever they ask for.
+        boolean all = !StringUtils.hasText(customerNo) && tenantScope.isPlatformOperator();
+        String owner = all ? null : tenantScope.clampClientCode(customerNo);
+        var pageable = org.springframework.data.domain.PageRequest.of(Math.max(0, page),
+                Math.min(Math.max(1, size), 100),
+                org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.DESC, "updatedAt"));
+        var rows = repository.findAll(
+                SavedRecipientSearch.visibleTo(all, owner).and(SavedRecipientSearch.matching(query)), pageable)
+                .map(SavedRecipientServiceImpl::toDto);
+        return success(rows, rows.getTotalElements() + " saved address(es).");
     }
 
     @Override
@@ -113,10 +139,19 @@ public class SavedRecipientServiceImpl implements SavedRecipientService {
         // USER hitting an existing row that belongs to another tenant
         // gets a 403, not a silent overwrite.
         tenantScope.requireTenantMatch(row.getOwnerCustomerNo());
+        // An edit that turns this entry into a copy of another one (same
+        // name + street + postal code, same owner) would trip the unique
+        // index and surface as a bare 500. Say which entry it collides with.
+        String newHash = dedupHash(request.getName(), request.getAddressLine1(), request.getPostalCode());
+        Optional<SavedRecipient> clash = repository.findExisting(newHash, request.getOwnerCustomerNo());
+        if (clash.isPresent() && !clash.get().getId().equals(id)) {
+            return failure(HttpStatus.CONFLICT, clash.get().getName() + " at " + clash.get().getAddressLine1()
+                    + " is already in the address book — edit that entry, or change the name, street or postal code.");
+        }
         applyDto(row, request);
         // Recompute the dedup hash — a name / street / postal edit
         // shifts the dedup identity.
-        row.setDedupHash(dedupHash(request.getName(), request.getAddressLine1(), request.getPostalCode()));
+        row.setDedupHash(newHash);
         row.setUpdatedAt(LocalDateTime.now(ZoneOffset.UTC));
         return success(toDto(repository.save(row)), "Recipient updated.");
     }

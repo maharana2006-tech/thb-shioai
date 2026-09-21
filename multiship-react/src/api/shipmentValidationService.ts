@@ -70,6 +70,31 @@ export interface ShipmentValidationResult {
    *  Drives the new secondary "Carrier check" section on the banner. */
   carrier: CarrierValidationSubResult | null
   international: boolean
+  /** Price, transit time and billable weight for the picked service. */
+  quote?: ShipmentRateQuote | null
+}
+
+export interface ShipmentRateQuote {
+  /** QUOTED · NOT_OFFERED · UNAVAILABLE · WEIGHT_ONLY (no price, weight only). */
+  status: 'QUOTED' | 'NOT_OFFERED' | 'UNAVAILABLE' | 'WEIGHT_ONLY' | string
+  carrierCode?: string | null
+  serviceCode?: string | null
+  serviceName?: string | null
+  /** What the carrier charges. */
+  carrierAmount?: number | null
+  /** What the client pays, after markup. */
+  amount?: number | null
+  currency?: string | null
+  markup?: string | null
+  transitDays?: number | null
+  estimatedDelivery?: string | null
+  billableWeight?: number | null
+  actualWeight?: number | null
+  weightUnit?: string | null
+  /** True when a box bills on its size rather than its weight. */
+  dimensional?: boolean
+  otherServices?: string[] | null
+  message?: string | null
 }
 
 /**
@@ -81,7 +106,8 @@ export interface ShipmentValidationResult {
  * accepted fields — there's no static ManualShipmentPayload interface
  * on the FE that captures the intl / DG / signature conditional spread.
  */
-export type ShipmentValidationPayload = Record<string, unknown>
+/** The Generate label request (ManualShipmentPayload) — validated as sent. */
+export type ShipmentValidationPayload = object
 
 export const shipmentValidationService = {
   validate: (payload: ShipmentValidationPayload) =>

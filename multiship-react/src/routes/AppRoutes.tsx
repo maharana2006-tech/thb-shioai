@@ -66,6 +66,7 @@ const ReportsPage = lazy(() => import('../components/ReportsPage'))
 const WebhookSubscriptionsPage = lazy(() => import('../components/WebhookSubscriptionsPage'))
 const ShippingCatalogPage = lazy(() => import('../components/ShippingCatalogPage'))
 const ShippingServiceMappingPage = lazy(() => import('../components/ShippingServiceMappingPage'))
+const AddressBookPage = lazy(() => import('../components/AddressBookPage'))
 const WarehousesPage = lazy(() => import('../components/WarehousesPage'))
 const CodeMapsPage = lazy(() => import('../components/CodeMapsPage'))
 const AuditLogPage = lazy(() => import('../components/AuditLogPage'))
@@ -146,6 +147,7 @@ export default function AppRoutes() {
                 <Route path="shipping-services" element={<Navigate to="/settings/shipping-catalog?tab=services" replace />} />
                 <Route path="packages" element={<Navigate to="/settings/shipping-catalog?tab=packages" replace />} />
                 <Route path="shipping-service-mapping" element={<ShippingServiceMappingPage />} />
+                <Route path="address-book" element={<AddressBookPage />} />
                 <Route path="importer-broker" element={<ImporterBrokerPage />} />
                 {/* Templates — shipping label / packing slip / commercial invoice.
                     Old label-templates URLs redirect for bookmark compatibility. */}

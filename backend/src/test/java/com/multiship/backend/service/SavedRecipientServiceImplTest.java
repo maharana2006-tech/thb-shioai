@@ -239,7 +239,7 @@ class SavedRecipientServiceImplTest {
         acme.setId(1L); acme.setName("Acme Warehouse"); acme.setOwnerCustomerNo("C001");
         acme.setAddressLine1("1 Way"); acme.setCity("L"); acme.setPostalCode("40209");
         acme.setCountryCode("US");
-        when(repo.search(eq("C001"), eq("acme"))).thenReturn(List.of(acme));
+        when(repo.findAll(any(org.springframework.data.jpa.domain.Specification.class), any(org.springframework.data.domain.Pageable.class))).thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(acme)));
 
         ApiResponse<List<SavedRecipientDTO>> resp = service.search("acme", "C001");
         assertEquals(1, resp.getData().size());
@@ -248,28 +248,31 @@ class SavedRecipientServiceImplTest {
 
     @Test
     void searchNullQueryTreatedAsEmpty() {
-        when(repo.search(any(), any())).thenReturn(List.of());
+        when(repo.findAll(any(org.springframework.data.jpa.domain.Specification.class), any(org.springframework.data.domain.Pageable.class))).thenReturn(new org.springframework.data.domain.PageImpl<>(List.<SavedRecipient>of()));
         ApiResponse<List<SavedRecipientDTO>> resp = service.search(null, null);
         assertEquals("success", resp.getStatus());
         assertNotNull(resp.getData());
     }
 
     @Test
-    void searchTruncatesTo25Results() {
-        java.util.List<SavedRecipient> lots = new java.util.ArrayList<>();
-        for (int i = 0; i < 40; i++) {
-            SavedRecipient r = new SavedRecipient();
-            r.setId((long) i);
-            r.setName("row " + i);
-            r.setAddressLine1("addr");
-            r.setCity("c");
-            r.setPostalCode("p");
-            r.setCountryCode("US");
-            lots.add(r);
-        }
-        when(repo.search(any(), any())).thenReturn(lots);
-        ApiResponse<List<SavedRecipientDTO>> resp = service.search(null, null);
-        assertEquals(25, resp.getData().size(), "Search cap is 25");
+    void searchAsksTheDatabaseForAtMost25NewestFirst() {
+        when(repo.findAll(any(org.springframework.data.jpa.domain.Specification.class), any(org.springframework.data.domain.Pageable.class))).thenReturn(new org.springframework.data.domain.PageImpl<>(List.<SavedRecipient>of()));
+        service.search("wacker chicago", null);
+        org.mockito.ArgumentCaptor<org.springframework.data.domain.Pageable> paging =
+                org.mockito.ArgumentCaptor.forClass(org.springframework.data.domain.Pageable.class);
+        org.mockito.Mockito.verify(repo).findAll(any(org.springframework.data.jpa.domain.Specification.class), paging.capture());
+        assertEquals(25, paging.getValue().getPageSize(), "Search cap is 25");
+        assertNotNull(paging.getValue().getSort().getOrderFor("updatedAt"));
+    }
+
+    /** Each word must match somewhere — so the text is split on spaces and commas. */
+    @Test
+    void theSearchTextIsSplitIntoWords() {
+        assertEquals(List.of("233", "wacker", "chicago", "60606"), SavedRecipientSearch.words("  233 Wacker,  Chicago 60606 "));
+        assertEquals(List.of("sw1a", "1aa"), SavedRecipientSearch.words("SW1A 1AA"));
+        assertEquals(List.of(), SavedRecipientSearch.words("   "));
+        assertEquals(List.of(), SavedRecipientSearch.words(null));
+        assertEquals(SavedRecipientSearch.MAX_WORDS, SavedRecipientSearch.words("a b c d e f g h").size());
     }
 
     @Test
@@ -287,5 +290,56 @@ class SavedRecipientServiceImplTest {
 
     private static void assertNotEquals(Object a, Object b) {
         org.junit.jupiter.api.Assertions.assertNotEquals(a, b);
+    }
+
+    /**
+     * Editing one entry into an exact copy of another (same name + street +
+     * postal code, same owner) must be refused with a message naming it —
+     * it used to hit the unique index and come back as a bare 500.
+     */
+    @Test
+    void anEditThatDuplicatesAnotherEntryIsRefusedByName() {
+        Long first = service.create(acmeRequest()).getData().getId();
+        SavedRecipientDTO other = acmeRequest();
+        other.setName("Acme Annex");
+        other.setAddressLine1("2 Annex Road");
+        Long second = service.create(other).getData().getId();
+
+        // The collision lookup finds the FIRST entry for the edited identity.
+        when(repo.findExisting(anyString(), any())).thenReturn(Optional.of(saved.get(first)));
+        ApiResponse<SavedRecipientDTO> r = service.update(second, acmeRequest());
+        assertEquals(409, r.getCode());
+        assertTrue(r.getMessage().contains("Acme Warehouse") && r.getMessage().contains("1 Warehouse Way"), r.getMessage());
+
+        // Editing an entry while keeping its own identity is not a collision.
+        ApiResponse<SavedRecipientDTO> self = service.update(first, acmeRequest());
+        assertEquals(200, self.getCode(), self.getMessage());
+    }
+
+    /** The Address book page: a platform operator with no client sees every entry. */
+    @Test
+    void theListShowsEveryEntryToAPlatformOperatorWithNoClientPicked() {
+        // A signed-in admin with no client of their own is a platform operator.
+        org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(
+                new org.springframework.security.authentication.UsernamePasswordAuthenticationToken("admin", null,
+                        List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_ADMIN"))));
+        try {
+            listAsOperator();
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.clearContext();
+        }
+    }
+
+    private void listAsOperator() {
+        when(repo.findAll(any(org.springframework.data.jpa.domain.Specification.class), any(org.springframework.data.domain.Pageable.class))).thenReturn(new org.springframework.data.domain.PageImpl<>(List.<SavedRecipient>of()));
+        assertEquals(200, service.list(null, null, 0, 25).getCode());
+        org.mockito.Mockito.clearInvocations(repo);
+
+        service.list("chicago", "DES875", 2, 500);
+        org.mockito.ArgumentCaptor<org.springframework.data.domain.Pageable> paging =
+                org.mockito.ArgumentCaptor.forClass(org.springframework.data.domain.Pageable.class);
+        org.mockito.Mockito.verify(repo).findAll(any(org.springframework.data.jpa.domain.Specification.class), paging.capture());
+        assertEquals(2, paging.getValue().getPageNumber());
+        assertEquals(100, paging.getValue().getPageSize(), "page size is capped at 100");
     }
 }

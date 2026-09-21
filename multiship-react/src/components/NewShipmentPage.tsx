@@ -3,7 +3,7 @@ import MpsProgressCard from './orders/MpsProgressCard'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { notify } from '../utils/notify'
-import { FiZap, FiArrowRight, FiArrowLeft, FiTruck, FiPackage, FiMapPin, FiHome, FiUsers, FiFileText, FiPlus, FiTrash2, FiRotateCcw, FiGlobe, FiEdit3, FiCheckCircle, FiAlertTriangle, FiSearch, FiX, FiCopy, FiClipboard, FiAlertCircle } from 'react-icons/fi'
+import { FiZap, FiArrowRight, FiArrowLeft, FiTruck, FiPackage, FiMapPin, FiHome, FiUsers, FiFileText, FiPlus, FiTrash2, FiRotateCcw, FiGlobe, FiEdit3, FiCheckCircle, FiAlertTriangle, FiSearch, FiX, FiCopy, FiClipboard, FiAlertCircle, FiBookmark } from 'react-icons/fi'
 import { ApiError } from '../api/apiClient'
 import {
   orderService,
@@ -21,7 +21,7 @@ import { shippingConfigService, type ShippingServiceItem, type PackagePreset, ty
 import { customsService } from '../api/customsService'
 import { mapCarrierErrorToFields, summarizeCarrierError } from '../utils/carrierErrorMap'
 import { type AddressValidationResponse } from '../api/addressValidationService'
-import { recipientBookService, type SavedRecipient } from '../api/recipientBookService'
+import { isDuplicateSave, recipientBookService, type SavedRecipient } from '../api/recipientBookService'
 import { clientWarehouseService, type ClientWarehouse } from '../api/warehouseService'
 import {
   clientAllowedPackagesService,
@@ -63,6 +63,7 @@ import {
 } from './NewShipmentComponents/_shared'
 import { AddressBlock } from './NewShipmentComponents/AddressBlock'
 import { CarrierAddressBanner } from './NewShipmentComponents/CarrierAddressBanner'
+import ValidationQuote from './ValidationQuote'
 
 /** Canonicalise a carrier code (ERP aliases → UPS/FEDEX/USPS). */
 const canon = (c?: string | null) => {
@@ -371,6 +372,14 @@ export default function NewShipmentPage() {
   const [recipientSearch, setRecipientSearch] = useState('')
   const [recipientSuggestions, setRecipientSuggestions] = useState<SavedRecipient[]>([])
   const [recipientDropdownOpen, setRecipientDropdownOpen] = useState(false)
+  /** Keyboard-highlighted suggestion (-1 = none). */
+  const [recipientActive, setRecipientActive] = useState(-1)
+  /** A search finished with nothing — show "No saved addresses match". */
+  const [recipientNoMatch, setRecipientNoMatch] = useState(false)
+  // Debounce + stale-response guard: typing "chicago" used to fire six
+  // requests, and a slow early one could land last and show the wrong list.
+  const recipientSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const recipientSearchSeq = useRef(0)
 
   // AI-assist per-section busy flags + pre-ship review result.
   const [pkgBusy, setPkgBusy] = useState(false)
@@ -1173,7 +1182,16 @@ export default function NewShipmentPage() {
   const applyClient = (code: string) => {
     setClientCode(code)
     const client = clients.find((c) => c.clientCode === code)
-    if (!client) return
+    if (!client) {
+      // Clearing the client used to return here and leave the previous
+      // client's company and warehouse as the shipper. Back to the default
+      // ship-from (fix-order mode keeps the order's own sender, as below).
+      if (!fixOrderNo) {
+        if (isReturn) setRecipient(defaultSender())
+        else setSender(defaultSender())
+      }
+      return
+    }
     const yourAddr = isReturn ? client.returnAddress ?? client.shipFrom : client.shipFrom
     // Always reset to defaultSender() before overlay — otherwise switching
     // from Client A (with shipFrom) to Client B (without) would leave A's
@@ -1544,95 +1562,28 @@ export default function NewShipmentPage() {
       scrollToFirstError()
       return
     }
+    // The same form rules Generate label enforces (lengths, phone digits,
+    // HS format, insured ≤ declared…) — highlighted in red, as on Generate.
+    setSubmitAttempted(true)
+    const formErrors = flattenErrors(await formik.validateForm(formValues as unknown as ShipmentFormValues))
+    if (formErrors.length > 0) {
+      const more = formErrors.length - 1
+      showToast(
+        more > 0
+          ? `${formErrors[0]} — and ${more} other field${more === 1 ? '' : 's'} highlighted in red.`
+          : formErrors[0],
+        `${formErrors.length} field${formErrors.length === 1 ? ' needs' : 's need'} attention`,
+      )
+      scrollToFirstError()
+      return
+    }
+    if (pkgServiceWarning) {
+      showToast(pkgServiceWarning, 'Incompatible package + service')
+      return
+    }
     setCarrierValidating(true)
     try {
-      // Sprint 52 — send the full form (matching the /orders/manual-label
-      // payload shape) so the backend runs packaging compatibility, markup
-      // required, customs (intl only), DG, and allowlists. Previously this
-      // button sent only recipient address fields and hit
-      // /addresses/validate/carrier — see the deep-dive in the PR body for
-      // the field-gap table.
-      const matched = accounts.find(
-        (a) => canon(a.carrierCode) === carrier
-          && (a.accountNumber || '').toLowerCase() === accountNumber.trim().toLowerCase(),
-      )
-      const cleanItems = items
-        .filter((it) => it.description.trim())
-        .map((it) => ({
-          description: it.description.trim(),
-          sku: it.sku.trim() || undefined,
-          hsCode: it.hsCode.trim() || undefined,
-          countryOfOrigin: it.countryOfOrigin.trim().toUpperCase() || undefined,
-          quantity: it.quantity ? Number(it.quantity) : null,
-          unitValue: it.unitValue ? Number(it.unitValue) : null,
-          // PR #558 — per-item weight; auto-computed from pkg weight when
-          // operator left blank (see autoItemWeight). Falls to null when
-          // pkg weight is also blank so BE fallback fires.
-          // Typed weights only. The auto-apportioned figure is shown as the
-        // placeholder for transparency but NOT posted: persisting it made an
-        // estimate look like a declared per-item weight (no "(est)" on the
-        // invoice). The backend spreads the shipment weight for the carrier.
-        weight: it.weight ? Number(it.weight) || null : null,
-        }))
-      const isCustom = packageChoice === CUSTOM_PKG
-      const payload = {
-        sender,
-        recipient,
-        isReturn,
-        // Return delivery mode — only meaningful when isReturn=true.
-        // Carrier connectors key off this: UPS ReturnService.Code 8/9,
-        // FedEx returnedShipmentDetail.returnType, etc.
-        ...(isReturn ? { returnType } : {}),
-        carrierCode: carrier,
-        accountNumber: accountNumber.trim(),
-        accountId: matched?.id ?? null,
-        serviceId: serviceId === '' ? null : Number(serviceId),
-        packagePresetId: isCustom ? null : Number(packageChoice),
-        length: isCustom ? Number(length) : null,
-        width: isCustom ? Number(width) : null,
-        height: isCustom ? Number(height) : null,
-        dimUnit,
-        weight: weight ? Number(weight) : null,
-        weightUnit,
-        clientCode: clientCode.trim() || undefined,
-        warehouseCode: warehouseCode || undefined,
-        declaredValue: declaredValue ? Number(declaredValue) : null,
-        currency,
-        // Only send the intl / customs block on actual international
-        // shipments — server also runs the sameTerritory rule and skips
-        // customs when domestic, but sending less data on domestic is
-        // just neater.
-        ...(isInternational ? {
-          items: cleanItems,
-          incoterms: incoterms || undefined,
-          reasonForExport: reasonForExport || undefined,
-          clearanceOption: clearanceOption || undefined,
-          dutiesAccount: /THIRD/.test(clearanceOption.toUpperCase()) && dutiesAccount.trim() ? dutiesAccount.trim() : undefined,
-          ftrExemption: ftrExemption || undefined,
-          aesCitation: aesCitation || undefined,
-          exportDeclarationReference: exportDeclarationReference || undefined,
-        } : {}),
-        ...(dgBlock ? { dangerousGoods: dgBlock } : {}),
-        ...(signatureOption !== 'NONE' ? { signatureOption } : {}),
-        ...(Number(insuredValue) > 0 ? {
-          insuredValue: Number(insuredValue),
-          insuredValueCurrency: currency,
-        } : {}),
-        // Label spec — mirror the generate-label payload so a green
-        // validate is a strong guarantee the label call will succeed
-        // on the same request. Guard above ensures these are non-blank
-        // when the carrier requires them.
-        ...(canon(carrier) === 'FEDEX' && labelImageType ? { labelImageType } : {}),
-        ...(canon(carrier) === 'FEDEX' && labelStockType ? { labelStockType } : {}),
-        ...(['UPS', 'DHL', 'USPS'].includes(canon(carrier)) && labelImageFormat
-          ? { labelImageFormat }
-          : {}),
-        // FDX-H1 — per-shipment pickupType. FedEx-only; skipped in
-        // Return mode (connector overrides to CONTACT_FEDEX_TO_SCHEDULE).
-        ...(canon(carrier) === 'FEDEX' && !isReturn && pickupType
-          ? { pickupType }
-          : {}),
-      }
+      const payload = buildLabelPayload()
       const res = await shipmentValidationService.validate(payload)
       const result = res.data ?? null
       setShipmentValidationResult(result)
@@ -1662,52 +1613,164 @@ export default function NewShipmentPage() {
    * (debounce-free — the endpoint caps at 25 hits and returns fast).
    * Empty / < 2 chars → clear suggestions.
    */
-  const runRecipientSearch = async (q: string) => {
+  const runRecipientSearch = (q: string) => {
     setRecipientSearch(q)
+    setRecipientActive(-1)
+    if (recipientSearchTimer.current) clearTimeout(recipientSearchTimer.current)
     if (!q || q.trim().length < 2) {
+      recipientSearchSeq.current++          // drop any answer still in flight
       setRecipientSuggestions([])
+      setRecipientNoMatch(false)
       setRecipientDropdownOpen(false)
       return
     }
-    try {
-      const hits = await recipientBookService.search(q, clientCode || null)
-      setRecipientSuggestions(hits)
-      setRecipientDropdownOpen(hits.length > 0)
-    } catch {
-      setRecipientSuggestions([])
-      setRecipientDropdownOpen(false)
+    recipientSearchTimer.current = setTimeout(async () => {
+      const seq = ++recipientSearchSeq.current
+      try {
+        const hits = await recipientBookService.search(q, clientCode || null)
+        if (seq !== recipientSearchSeq.current) return   // a newer search has started
+        setRecipientSuggestions(hits)
+        setRecipientNoMatch(hits.length === 0)
+        setRecipientDropdownOpen(true)
+      } catch {
+        if (seq !== recipientSearchSeq.current) return
+        setRecipientSuggestions([])
+        setRecipientNoMatch(false)
+        setRecipientDropdownOpen(false)
+      }
+    }, 200)
+  }
+
+  /** Arrow keys move through the suggestions, Enter picks, Escape closes. */
+  const onRecipientSearchKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    const n = recipientSuggestions.length
+    if (e.key === 'Escape') {
+      if (recipientDropdownOpen) {
+        e.preventDefault()
+        setRecipientDropdownOpen(false)
+        setRecipientActive(-1)
+      }
+      return
+    }
+    if (n === 0) return
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setRecipientDropdownOpen(true)
+      setRecipientActive((i) => (i + 1) % n)
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setRecipientDropdownOpen(true)
+      setRecipientActive((i) => (i <= 0 ? n - 1 : i - 1))
+    } else if (e.key === 'Enter' && recipientDropdownOpen && recipientActive >= 0) {
+      e.preventDefault()
+      applySavedRecipient(recipientSuggestions[recipientActive])
     }
   }
 
-  /** Apply a saved recipient — overwrites the current recipient block. */
+  /**
+   * Apply a saved recipient. It REPLACES the whole Ship to block: a field the
+   * saved address doesn't have is cleared, not kept. Merging used to leave the
+   * previous person behind — pick Jane then Marco and Marco got Jane's email,
+   * her "Suite 400" and her state, which could put the wrong contact on a label.
+   */
   const applySavedRecipient = (r: SavedRecipient) => {
-    setRecipient((cur) => {
-      // Country -> dial code is fully derived per operator ask
-      // (2026-09-12); ignore any saved phoneCountryCode and re-derive
-      // from the incoming (or current) country so a stale saved-
-      // address dial can't drift out of sync with its country.
-      const nextCountry = r.countryCode ?? cur.countryCode
-      return {
-        ...cur,
-        name: r.name ?? cur.name,
-        company: r.company ?? cur.company,
-        phone: r.phone ?? cur.phone,
-        phoneCountryCode: dialCodeFor(nextCountry) || '',
-        email: r.email ?? cur.email,
-        addressLine1: r.addressLine1 ?? cur.addressLine1,
-        addressLine2: r.addressLine2 ?? cur.addressLine2,
-        addressLine3: r.addressLine3 ?? cur.addressLine3,
-        city: r.city ?? cur.city,
-        state: r.state ?? cur.state,
-        postalCode: r.postalCode ?? cur.postalCode,
-        countryCode: nextCountry,
-        residential: r.residential ?? cur.residential,
-      }
+    const country = r.countryCode || 'US'
+    setRecipient({
+      name: r.name ?? '',
+      company: r.company ?? '',
+      phone: r.phone ?? '',
+      email: r.email ?? '',
+      addressLine1: r.addressLine1 ?? '',
+      addressLine2: r.addressLine2 ?? '',
+      addressLine3: r.addressLine3 ?? '',
+      city: r.city ?? '',
+      state: r.state ?? '',
+      postalCode: r.postalCode ?? '',
+      countryCode: country,
+      residential: r.residential ?? false,
+      // Dial code is always derived from the country (operator ask
+      // 2026-09-12), never taken from the saved row.
+      phoneCountryCode: dialCodeFor(country) || '',
     })
+    // A picked address carries its own residential flag; forget any
+    // earlier "ticked automatically" state from the previous recipient.
+    setResidentialOrigin(r.residential == null ? undefined : 'manual')
     setRecipientSearch(r.name)
     setRecipientSuggestions([])
+    setRecipientNoMatch(false)
+    setRecipientActive(-1)
     setRecipientDropdownOpen(false)
     notify.success(`Loaded ${r.name} from the address book.`)
+  }
+
+  /**
+   * Save the Ship to block to the address book — the only way an address gets
+   * there from the app. Belongs to the chosen client (or is shared when no
+   * client is picked). The server treats the same name + street + postal code
+   * as the same entry, so a repeat save offers to update it instead.
+   */
+  const [savingToBook, setSavingToBook] = useState(false)
+  const saveRecipientToBook = async () => {
+    const r = recipient
+    const missing = [
+      !r.name?.trim() && 'name',
+      !r.addressLine1?.trim() && 'street',
+      !r.city?.trim() && 'city',
+      !r.postalCode?.trim() && 'postal code',
+    ].filter(Boolean)
+    if (missing.length > 0) {
+      notify.info({ title: 'Not saved yet', body: `Fill in the ${missing.join(', ')} first.` })
+      return
+    }
+    const entry: SavedRecipient = {
+      ownerCustomerNo: clientCode || null,
+      name: r.name.trim(),
+      company: r.company?.trim() || null,
+      phone: r.phone?.trim() || null,
+      email: r.email?.trim() || null,
+      addressLine1: r.addressLine1.trim(),
+      addressLine2: r.addressLine2?.trim() || null,
+      addressLine3: r.addressLine3?.trim() || null,
+      city: r.city.trim(),
+      state: r.state?.trim() || null,
+      postalCode: r.postalCode.trim(),
+      countryCode: r.countryCode,
+      residential: r.residential ?? null,
+    }
+    const owner = clientCode ? `for ${clientCode}` : 'as a shared address (every client can use it)'
+    setSavingToBook(true)
+    try {
+      const res = await recipientBookService.save(entry)
+      const saved = res.data
+      if (!isDuplicateSave(res.message) || !saved?.id) {
+        notify.success(`Saved ${entry.name} to the address book ${owner}.`)
+        return
+      }
+      // Same person already saved: offer to bring it up to date, and say what
+      // would change so nobody overwrites a good phone number by accident.
+      const changed = (['company', 'phone', 'email', 'addressLine2', 'state', 'residential'] as const)
+        .filter((k) => (saved[k] ?? '') !== (entry[k] ?? ''))
+      if (changed.length === 0) {
+        notify.info(`${entry.name} is already in the address book, with these details.`)
+        return
+      }
+      const labels: Record<string, string> = {
+        company: 'company', phone: 'phone', email: 'email', addressLine2: 'address line 2',
+        state: 'state', residential: 'residential',
+      }
+      const ok = await notify.confirm(
+        `${entry.name} at ${entry.addressLine1} is already in the address book. `
+          + `Update its ${changed.map((k) => labels[k]).join(', ')} to what's on this form?`,
+        { title: 'Already saved', confirmLabel: 'Update it', cancelLabel: 'Keep the saved one' },
+      )
+      if (!ok) return
+      await recipientBookService.update(saved.id, entry)
+      notify.success(`Updated ${entry.name} in the address book.`)
+    } catch (e) {
+      notify.apiError(e, 'Could not save the address.')
+    } finally {
+      setSavingToBook(false)
+    }
   }
 
   /** Apply the carrier's suggested address to the recipient block. */
@@ -2028,56 +2091,12 @@ export default function NewShipmentPage() {
     }
   }
 
-  const submit = async () => {
-    // Yup + Formik gate — validate the mirrored form values before anything else.
-    setSubmitAttempted(true)
-    // PR #530 — zero shippable carriers: block early with a
-    // Settings-link toast rather than the yup / label-guard errors
-    // that would fire on downstream blank fields (carrier === '',
-    // no label defaults, etc.).
-    if (noCarriersAtAll) {
-      showToast(
-        'Add + verify a carrier account in Settings before generating a label.',
-        'No carriers connected',
-      )
-      return
-    }
-    // Required-when-null guard runs BEFORE yup so we surface a
-    // targeted toast; yup doesn't know about the label / shipping-
-    // purpose fields (they're not in the form schema).
-    if (missingLabelFields.length > 0) {
-      showToast(
-        missingLabelFields.includes('Duties payor account')
-          ? `Enter the Duties payor account (the third party's ${canon(carrier) || 'carrier'} account).`
-          : `Pick ${missingLabelFields.join(' + ')} — no saved default for this client / account.`,
-        `${missingLabelFields.length} field${missingLabelFields.length === 1 ? ' needs' : 's need'} attention`,
-      )
-      scrollToFirstError()
-      return
-    }
-    const errs = await formik.validateForm(formValues as unknown as ShipmentFormValues)
-    const msgs = flattenErrors(errs)
-    if (msgs.length > 0) {
-      const more = msgs.length - 1
-      // Lightweight toast (not a blocking modal) — the field-level red messages
-      // below each input are the primary guidance.
-      showToast(
-        more > 0
-          ? `${msgs[0]} — and ${more} other field${more === 1 ? '' : 's'} highlighted in red.`
-          : msgs[0],
-        `${msgs.length} field${msgs.length === 1 ? ' needs' : 's need'} attention`,
-      )
-      // Bring the first invalid field into view.
-      scrollToFirstError()
-      return
-    }
-
-    // Packaging ↔ service compatibility gate (carrier would otherwise 400).
-    if (pkgServiceWarning) {
-      showToast(pkgServiceWarning, 'Incompatible package + service')
-      return
-    }
-
+  /**
+   * The exact request Generate label sends. Validate sends it too, so a
+   * PASS is about the shipment that will actually be bought — every box,
+   * the reference and the importer/broker override included.
+   */
+  const buildLabelPayload = (): ManualShipmentPayload => {
     const w = Number(weight)
 
     const cleanItems: ManualShipmentItem[] = items
@@ -2207,6 +2226,60 @@ export default function NewShipmentPage() {
       } : {}),
       ...(isInternational && override ? { importer: override.importer, broker: override.broker } : {}),
     }
+    return payload
+  }
+
+  const submit = async () => {
+    // Yup + Formik gate — validate the mirrored form values before anything else.
+    setSubmitAttempted(true)
+    // PR #530 — zero shippable carriers: block early with a
+    // Settings-link toast rather than the yup / label-guard errors
+    // that would fire on downstream blank fields (carrier === '',
+    // no label defaults, etc.).
+    if (noCarriersAtAll) {
+      showToast(
+        'Add + verify a carrier account in Settings before generating a label.',
+        'No carriers connected',
+      )
+      return
+    }
+    // Required-when-null guard runs BEFORE yup so we surface a
+    // targeted toast; yup doesn't know about the label / shipping-
+    // purpose fields (they're not in the form schema).
+    if (missingLabelFields.length > 0) {
+      showToast(
+        missingLabelFields.includes('Duties payor account')
+          ? `Enter the Duties payor account (the third party's ${canon(carrier) || 'carrier'} account).`
+          : `Pick ${missingLabelFields.join(' + ')} — no saved default for this client / account.`,
+        `${missingLabelFields.length} field${missingLabelFields.length === 1 ? ' needs' : 's need'} attention`,
+      )
+      scrollToFirstError()
+      return
+    }
+    const errs = await formik.validateForm(formValues as unknown as ShipmentFormValues)
+    const msgs = flattenErrors(errs)
+    if (msgs.length > 0) {
+      const more = msgs.length - 1
+      // Lightweight toast (not a blocking modal) — the field-level red messages
+      // below each input are the primary guidance.
+      showToast(
+        more > 0
+          ? `${msgs[0]} — and ${more} other field${more === 1 ? '' : 's'} highlighted in red.`
+          : msgs[0],
+        `${msgs.length} field${msgs.length === 1 ? ' needs' : 's need'} attention`,
+      )
+      // Bring the first invalid field into view.
+      scrollToFirstError()
+      return
+    }
+
+    // Packaging ↔ service compatibility gate (carrier would otherwise 400).
+    if (pkgServiceWarning) {
+      showToast(pkgServiceWarning, 'Incompatible package + service')
+      return
+    }
+
+    const payload = buildLabelPayload()
 
     setSubmitting(true)
     setQueuedInfo(null)
@@ -2929,46 +3002,78 @@ export default function NewShipmentPage() {
                   errors={addrErrors('recipient')}
                   extraAction={
                     // Sprint 38 — address-book combobox. Type ≥ 2 chars to
-                    // search; picking a suggestion overwrites every field
-                    // in the recipient block below.
+                    // search; picking a suggestion replaces the whole Ship to
+                    // block. Keyboard: ↓/↑ to move, Enter to pick, Esc to close.
                     <div className="relative">
                       <div className="relative">
                         <input
                           type="text"
+                          role="combobox"
+                          aria-label="Search the address book by name, company, street, city, state, postal code, phone or email"
+                          aria-autocomplete="list"
+                          aria-expanded={recipientDropdownOpen}
+                          aria-controls="recipient-book-list"
+                          aria-activedescendant={recipientActive >= 0 ? `recipient-book-${recipientActive}` : undefined}
+                          title="Type any part of the address — name, street, city, ZIP, phone… Several words narrow it down, e.g. &quot;wacker chicago&quot;."
                           value={recipientSearch}
-                          onChange={(e) => void runRecipientSearch(e.target.value)}
-                          onFocus={() => recipientSuggestions.length > 0 && setRecipientDropdownOpen(true)}
-                          onBlur={() => setTimeout(() => setRecipientDropdownOpen(false), 150)}
-                          placeholder="Search address book (name, city, postal code)…"
+                          onChange={(e) => runRecipientSearch(e.target.value)}
+                          onKeyDown={onRecipientSearchKey}
+                          onFocus={() => (recipientSuggestions.length > 0 || recipientNoMatch) && setRecipientDropdownOpen(true)}
+                          onBlur={() => setTimeout(() => { setRecipientDropdownOpen(false); setRecipientActive(-1) }, 150)}
+                          placeholder="Search by name, street, ZIP, phone…"
                           className="w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 pl-8 text-[12px] outline-none focus:border-[#1f150c]"
                         />
                         <FiSearch className="pointer-events-none absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-[#6b5c42]" />
                       </div>
-                      {recipientDropdownOpen && recipientSuggestions.length > 0 ? (
-                        <ul className="absolute z-10 mt-0.5 max-h-64 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
-                          {recipientSuggestions.map((s) => (
-                            <li key={s.id}>
-                              <button
-                                type="button"
-                                onMouseDown={(e) => e.preventDefault()}
-                                onClick={() => applySavedRecipient(s)}
-                                className="flex w-full items-start justify-between gap-2 px-2.5 py-1.5 text-left text-[11.5px] hover:bg-slate-50"
-                              >
-                                <div className="min-w-0">
-                                  <p className="truncate font-semibold text-slate-950">{s.name}</p>
-                                  <p className="truncate text-[10.5px] text-slate-500">
-                                    {s.addressLine1}
-                                    {s.city ? `, ${s.city}` : ''}
-                                    {s.state ? `, ${s.state}` : ''}
-                                    {' '}{s.postalCode} {s.countryCode}
-                                  </p>
-                                </div>
+                      {recipientDropdownOpen && (recipientSuggestions.length > 0 || recipientNoMatch) ? (
+                        // Wider than the input: at the input's width names read
+                        // "ZZ Ja…" and two similar people can't be told apart.
+                        <ul
+                          id="recipient-book-list"
+                          role="listbox"
+                          aria-label="Saved addresses"
+                          className="absolute left-0 z-20 mt-0.5 max-h-72 w-[min(26rem,calc(100vw-3rem))] overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg"
+                        >
+                          {recipientSuggestions.length === 0 ? (
+                            <li className="px-3 py-2 text-[11.5px] text-slate-500" role="option" aria-disabled="true" aria-selected="false">
+                              No saved addresses match &ldquo;{recipientSearch.trim()}&rdquo;.
+                            </li>
+                          ) : recipientSuggestions.map((s, i) => (
+                            <li
+                              key={s.id}
+                              id={`recipient-book-${i}`}
+                              role="option"
+                              aria-selected={i === recipientActive}
+                              onMouseDown={(e) => { e.preventDefault(); applySavedRecipient(s) }}
+                              onMouseEnter={() => setRecipientActive(i)}
+                              className={`flex cursor-pointer items-start justify-between gap-2 px-3 py-2 text-left text-[11.5px] ${
+                                i === recipientActive ? 'bg-[#faf7f0]' : 'hover:bg-slate-50'}`}
+                            >
+                              <div className="min-w-0">
+                                <p className="truncate font-semibold text-slate-950">
+                                  {s.name}{s.company ? <span className="font-normal text-slate-500"> · {s.company}</span> : null}
+                                </p>
+                                <p className="truncate text-[10.5px] text-slate-500">
+                                  {s.addressLine1}
+                                  {s.city ? `, ${s.city}` : ''}
+                                  {s.state ? `, ${s.state}` : ''}
+                                  {' '}{s.postalCode} {s.countryCode}
+                                </p>
+                              </div>
+                              <span className="flex shrink-0 flex-col items-end gap-0.5">
+                                {/* With no client picked an admin sees every client's entries — say whose. */}
+                                {!clientCode && s.ownerCustomerNo ? (
+                                  <span className="whitespace-nowrap rounded-full bg-[#f3ecdd] px-1.5 py-0.5 text-[9.5px] font-semibold text-[#5a4526]"
+                                    title={`Saved for client ${s.ownerCustomerNo}`}>
+                                    {s.ownerCustomerNo}
+                                  </span>
+                                ) : null}
                                 {s.tag ? (
                                   <span className="whitespace-nowrap rounded-full bg-slate-100 px-1.5 py-0.5 text-[9.5px] font-semibold text-slate-500">
                                     {s.tag}
                                   </span>
                                 ) : null}
-                              </button>
+                              </span>
                             </li>
                           ))}
                         </ul>
@@ -2976,23 +3081,22 @@ export default function NewShipmentPage() {
                     </div>
                   }
                 />
-                <div className="mt-3 flex justify-end">
+                <div className="mt-3 flex flex-wrap justify-end gap-2">
                   <button
                     type="button"
-                    onClick={() => void validateShipment()}
-                    disabled={carrierValidating || !carrier || noCarriersAtAll}
-                    title={carrier
-                      ? 'Server-side pre-flight — runs all label-time guards (packaging compatibility, markup, customs, DG, allowlists) on the full form before generating the label'
-                      : 'Pick a carrier first'}
-                    data-testid="validate-shipment-btn"
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-[#1f150c] bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-[#f4eede] transition hover:bg-[#33221a] disabled:cursor-not-allowed disabled:opacity-40"
+                    onClick={() => void saveRecipientToBook()}
+                    disabled={savingToBook}
+                    title={clientCode
+                      ? `Save this Ship to address to ${clientCode}'s address book`
+                      : 'Save this Ship to address as a shared entry every client can use'}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0] disabled:opacity-50"
                   >
-                    {carrierValidating ? (
-                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#8a7959] border-t-[#f4eede]" />
+                    {savingToBook ? (
+                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#5a4526]" />
                     ) : (
-                      <FiCheckCircle className="h-3.5 w-3.5" />
+                      <FiBookmark className="h-3.5 w-3.5" />
                     )}
-                    Validate shipment
+                    Save to address book
                   </button>
                 </div>
                 {!destAllowed && destRules?.mode && recipient.countryCode ? (
@@ -3091,6 +3195,7 @@ export default function NewShipmentPage() {
                         </ul>
                       </>
                     ) : null}
+                    {shipmentValidationResult.quote ? <ValidationQuote quote={shipmentValidationResult.quote} /> : null}
                     {/* Sprint 52 PR δ — carrier subresult section. Rendered
                         below local errors/warnings so the operator sees
                         "server-side gaps first, then what the carrier
@@ -3954,7 +4059,7 @@ export default function NewShipmentPage() {
               The label is purchased immediately on the selected account.
               {isInternational ? ' Commercial invoice included for this cross-border lane.' : ''}
             </span>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <button
                 type="button"
                 onClick={() => void reviewShipmentAi()}
@@ -3974,6 +4079,24 @@ export default function NewShipmentPage() {
                 className="rounded-xl border border-[#e3d9c4] bg-white px-3.5 py-2 text-[12.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
               >
                 Cancel
+              </button>
+              {/* Validate sits right beside Generate label: check, then buy. */}
+              <button
+                type="button"
+                onClick={() => void validateShipment()}
+                disabled={carrierValidating || !carrier || noCarriersAtAll}
+                title={carrier
+                  ? 'Server-side pre-flight — runs all label-time guards (packaging compatibility, markup, customs, DG, allowlists) on the full form before generating the label'
+                  : 'Pick a carrier first'}
+                data-testid="validate-shipment-btn"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-[#1f150c] bg-white px-3.5 py-2 text-[12.5px] font-semibold text-[#1f150c] transition hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {carrierValidating ? (
+                  <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#1f150c]" />
+                ) : (
+                  <FiCheckCircle className="h-3.5 w-3.5" />
+                )}
+                Validate shipment
               </button>
               <button
                 type="button"

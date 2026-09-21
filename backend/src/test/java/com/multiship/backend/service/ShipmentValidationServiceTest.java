@@ -3,6 +3,7 @@ package com.multiship.backend.service;
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.ErrorCode;
 import com.multiship.backend.dto.ManualShipmentRequest;
+import com.multiship.backend.dto.ShipmentRequestDTO;
 import com.multiship.backend.dto.ShipmentValidationResult;
 import com.multiship.backend.model.PackagePreset;
 import com.multiship.backend.model.ShippingService;
@@ -15,6 +16,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -48,6 +50,8 @@ class ShipmentValidationServiceTest {
     private com.multiship.backend.service.fx.FxRateService fxRateService;
     private com.multiship.backend.service.intl.ExportDeclarationPolicyRegistry exportDeclarationPolicyRegistry;
 
+    private TenantScopeEnforcer tenantScope;
+
     private ShipmentValidationService service;
 
     @BeforeEach
@@ -78,12 +82,23 @@ class ShipmentValidationServiceTest {
         exportDeclarationPolicyRegistry = new com.multiship.backend.service.intl.ExportDeclarationPolicyRegistry(
                 java.util.List.of());
 
+        if (tenantScope == null) {
+            // An operator: the clamp passes the client code through untouched.
+            tenantScope = mock(TenantScopeEnforcer.class);
+            when(tenantScope.clampClientCode(org.mockito.ArgumentMatchers.any()))
+                    .thenAnswer(inv -> inv.getArgument(0));
+            // "ACC1" is a registered, active platform FEDEX account (no
+            // credentials, so the carrier hop is skipped).
+            when(carrierAccountRefRepository.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase("ACC1", "FEDEX"))
+                    .thenReturn(Optional.of(com.multiship.backend.model.CarrierAccountRef.builder()
+                            .carrierCode("FEDEX").accountNumber("ACC1").active(true).build()));
+        }
         service = new ShipmentValidationService(
                 packagingCompatibilityGuard, resolutionService,
                 shippingServiceRepository, packagePresetRepository,
                 carrierService, carrierAccountRefRepository,
                 clientRepository, clientCustomsProfileRepository,
-                fxRateService, exportDeclarationPolicyRegistry);
+                fxRateService, exportDeclarationPolicyRegistry, tenantScope);
     }
 
     /** Rebuilds {@link #service} with a registry populated by the given
@@ -98,7 +113,7 @@ class ShipmentValidationServiceTest {
                 shippingServiceRepository, packagePresetRepository,
                 carrierService, carrierAccountRefRepository,
                 clientRepository, clientCustomsProfileRepository,
-                fxRateService, exportDeclarationPolicyRegistry);
+                fxRateService, exportDeclarationPolicyRegistry, tenantScope);
     }
 
     // ─── Happy path ─────────────────────────────────────────────────────
@@ -507,8 +522,8 @@ class ShipmentValidationServiceTest {
                         .carrierCode("FEDEX").accountNumber("ACC1")
                         .currency("USD").clientId("id").clientSecret("s")
                         .active(true).build();
-        when(carrierAccountRefRepository.findPlatformAccountsByCarrier("FEDEX"))
-                .thenReturn(java.util.List.of(acc));
+        when(carrierAccountRefRepository.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase("ACC1", "FEDEX"))
+                .thenReturn(java.util.Optional.of(acc));
 
         assertEquals("EUR", service.resolveCustomsCurrency(req));
     }
@@ -522,8 +537,8 @@ class ShipmentValidationServiceTest {
                         .carrierCode("FEDEX").accountNumber("ACC1")
                         .currency("gbp").clientId("id").clientSecret("s")
                         .active(true).build();
-        when(carrierAccountRefRepository.findPlatformAccountsByCarrier("FEDEX"))
-                .thenReturn(java.util.List.of(acc));
+        when(carrierAccountRefRepository.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase("ACC1", "FEDEX"))
+                .thenReturn(java.util.Optional.of(acc));
 
         assertEquals("GBP", service.resolveCustomsCurrency(req));
     }
@@ -538,8 +553,8 @@ class ShipmentValidationServiceTest {
                 com.multiship.backend.model.CarrierAccountRef.builder()
                         .carrierCode("FEDEX").accountNumber("ACC1")
                         .clientId("id").clientSecret("s").active(true).build();
-        when(carrierAccountRefRepository.findPlatformAccountsByCarrier("FEDEX"))
-                .thenReturn(java.util.List.of(acc));
+        when(carrierAccountRefRepository.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase("ACC1", "FEDEX"))
+                .thenReturn(java.util.Optional.of(acc));
         com.multiship.backend.model.Client client =
                 com.multiship.backend.model.Client.builder()
                         .clientCode("THB001").defaultCurrency("CAD").build();
@@ -968,5 +983,325 @@ class ShipmentValidationServiceTest {
         return PackagePreset.builder()
                 .id(7L).name("My Box").kind("CUSTOM")
                 .ownerType(PackagePreset.OWNER_PLATFORM).build();
+    }
+
+    // ─── The account the label will bill ────────────────────────────────
+
+    @Test
+    void anUnregisteredTypedAccountFails() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setAccountNumber("NOPE99");
+        stubServiceAndPreset();
+        ShipmentValidationResult r = service.validate(req).getData();
+        assertEquals("FAIL", r.getOverall());
+        assertTrue(r.getLocalErrors().stream().anyMatch(e -> "accountNumber".equals(e.getField())
+                && e.getMessage().contains("NOPE99") && e.getMessage().contains("not a registered")), r.getLocalErrors().toString());
+    }
+
+    @Test
+    void aDeactivatedOrAnotherClientsAccountFails() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setClientCode("ACME");
+        stubServiceAndPreset();
+        when(carrierAccountRefRepository.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase("ACC1", "FEDEX"))
+                .thenReturn(Optional.of(com.multiship.backend.model.CarrierAccountRef.builder()
+                        .carrierCode("FEDEX").accountNumber("ACC1").customerNo("DES875").active(false).build()));
+        List<String> msgs = service.validate(req).getData().getLocalErrors().stream()
+                .map(ShipmentValidationResult.ValidationIssue::getMessage).toList();
+        assertTrue(msgs.stream().anyMatch(m -> m.contains("belongs to client DES875, not ACME")), msgs.toString());
+        assertTrue(msgs.stream().anyMatch(m -> m.contains("is deactivated")), msgs.toString());
+    }
+
+    @Test
+    void aPickedAccountIdThatNoLongerExistsFails() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setAccountId(404L);
+        stubServiceAndPreset();
+        when(carrierAccountRefRepository.findById(404L)).thenReturn(Optional.empty());
+        assertTrue(service.validate(req).getData().getLocalErrors().stream()
+                .anyMatch(e -> e.getMessage().contains("no longer exists")));
+    }
+
+    /** The carrier check runs on the picked account — never the client's default or a platform one. */
+    @Test
+    void theCarrierCheckUsesThePickedAccountNotADefault() throws Exception {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setAccountId(42L);
+        stubServiceAndPreset();
+        com.multiship.backend.model.CarrierAccountRef picked = com.multiship.backend.model.CarrierAccountRef.builder()
+                .id(42L).carrierCode("FEDEX").accountNumber("PICKED1").clientId("cid").clientSecret("sec")
+                .environment("SANDBOX").active(true).build();
+        when(carrierAccountRefRepository.findById(42L)).thenReturn(Optional.of(picked));
+        com.multiship.backend.service.carriers.CarrierConnector connector =
+                mock(com.multiship.backend.service.carriers.CarrierConnector.class);
+        when(carrierService.getCarrierConnector("FEDEX")).thenReturn(connector);
+        when(connector.getConfiguration()).thenReturn(mock(com.multiship.backend.service.carriers.CarrierConnector.CarrierConfiguration.class));
+        when(connector.getAccessToken("cid", "sec", "PICKED1", "SANDBOX")).thenReturn("tok");
+        when(carrierService.buildManualShipmentRequestDto(any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any())).thenReturn(new ShipmentRequestDTO());
+        when(connector.validateShipment(any(), org.mockito.ArgumentMatchers.eq("tok"), org.mockito.ArgumentMatchers.eq("SANDBOX")))
+                .thenReturn(new com.multiship.backend.service.carriers.CarrierConnector.ValidateShipmentResult(
+                        true, "EXACT", "SHIPMENT", List.of(), List.of(), "ok", null));
+
+        service.validate(req);
+
+        org.mockito.Mockito.verify(connector).getAccessToken("cid", "sec", "PICKED1", "SANDBOX");
+        org.mockito.Mockito.verify(carrierAccountRefRepository, org.mockito.Mockito.never()).findPlatformAccountsByCarrier(any());
+        // Bill-to on the carrier payload is the typed number ("ACC1") — the label's rule.
+        org.mockito.Mockito.verify(carrierService).buildManualShipmentRequestDto(any(), any(), any(),
+                org.mockito.ArgumentMatchers.eq("FEDEX"), org.mockito.ArgumentMatchers.eq("ACC1"),
+                any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.eq(picked), any());
+    }
+
+    // ─── Checks Generate label runs before buying ───────────────────────
+
+    private List<String> errorsOf(ManualShipmentRequest req) {
+        return service.validate(req).getData().getLocalErrors().stream()
+                .map(ShipmentValidationResult.ValidationIssue::getMessage).toList();
+    }
+
+    @Test
+    void fedexHomeDeliveryToABusinessFails() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        when(shippingServiceRepository.findById(1L)).thenReturn(Optional.of(ShippingService.builder()
+                .id(1L).carrier("FEDEX").serviceCode("GROUND_HOME_DELIVERY").name("FedEx Home Delivery").build()));
+        when(packagePresetRepository.findById(7L)).thenReturn(Optional.of(customBox()));
+        req.getRecipient().setResidential(false);
+        assertTrue(errorsOf(req).stream().anyMatch(m -> m.toLowerCase().contains("residential")), errorsOf(req).toString());
+        req.getRecipient().setResidential(true);
+        assertTrue(errorsOf(req).stream().noneMatch(m -> m.toLowerCase().contains("residential")));
+    }
+
+    @Test
+    void aReturnLabelWithoutTheCustomersEmailFails() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setIsReturn(true);
+        stubServiceAndPreset();
+        assertTrue(errorsOf(req).stream().anyMatch(m -> m.contains("Return labels need the customer's email")));
+        req.getSender().setEmail("customer@example.com");
+        assertTrue(errorsOf(req).stream().noneMatch(m -> m.contains("Return labels")));
+    }
+
+    @Test
+    void aParcelOverTheCarriersWeightLimitFails() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setWeight(new BigDecimal("200"));
+        stubServiceAndPreset();
+        List<String> errs = errorsOf(req);
+        assertTrue(errs.stream().anyMatch(m -> m.contains("150")), errs.toString());
+    }
+
+    @Test
+    void aGroundServiceToPuertoRicoFails() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.getRecipient().setCountryCode("PR");
+        req.getRecipient().setState(null);
+        req.getRecipient().setPostalCode("00901");
+        stubServiceAndPreset();
+        assertTrue(errorsOf(req).stream().anyMatch(m -> m.contains("FEDEX_GROUND does not deliver to PR")),
+                errorsOf(req).toString());
+    }
+
+    @Test
+    void aBlockingRoutingRuleFailsAndARerouteIsAWarning() {
+        RoutingRuleService routing = mock(RoutingRuleService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "routingRuleService", routing);
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setClientCode("ACME");
+        stubServiceAndPreset();
+
+        when(routing.evaluate(org.mockito.ArgumentMatchers.eq("ACME"), any())).thenReturn(
+                com.multiship.backend.dto.RoutingEvaluationResult.builder().status("MATCH")
+                        .matchedRuleName("No Alaska").blockReason("we don't ship there")
+                        .actionType(com.multiship.backend.model.RoutingRule.ActionType.BLOCK).build());
+        assertTrue(errorsOf(req).stream().anyMatch(m -> m.equals("Blocked by routing rule 'No Alaska': we don't ship there")));
+
+        when(shippingServiceRepository.findById(2L)).thenReturn(Optional.of(ShippingService.builder()
+                .id(2L).carrier("FEDEX").serviceCode("FEDEX_2_DAY").build()));
+        when(routing.evaluate(org.mockito.ArgumentMatchers.eq("ACME"), any())).thenReturn(
+                com.multiship.backend.dto.RoutingEvaluationResult.builder().status("MATCH")
+                        .matchedRuleName("Heavy goes 2Day").targetServiceId(2L)
+                        .actionType(com.multiship.backend.model.RoutingRule.ActionType.REROUTE).build());
+        ShipmentValidationResult r = service.validate(req).getData();
+        assertTrue(r.getLocalWarnings().stream().anyMatch(w -> w.getMessage().contains("will ship this with FEDEX FEDEX_2_DAY")),
+                r.getLocalWarnings().toString());
+    }
+
+    @Test
+    void aWarehouseNotAttachedToTheClientFails() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setClientCode("ACME");
+        req.setWarehouseCode("DAL");
+        stubServiceAndPreset();
+        when(resolutionService.assertWarehouse("ACME", "DAL")).thenThrow(new ShipmentResolutionException(
+                ErrorCode.WAREHOUSE_ATTACH_FORBIDDEN, "Warehouse DAL is not attached to ACME."));
+        assertTrue(errorsOf(req).contains("Warehouse DAL is not attached to ACME."));
+    }
+
+    /** The request's own field rules — Generate label enforces them with @Valid. */
+    @Test
+    void theRequestsFieldRulesAreReported() {
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "beanValidator",
+                jakarta.validation.Validation.buildDefaultValidatorFactory().getValidator());
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setLabelImageFormat("BMP");
+        stubServiceAndPreset();
+        ShipmentValidationResult r = service.validate(req).getData();
+        assertTrue(r.getLocalErrors().stream().anyMatch(e -> "labelImageFormat".equals(e.getField())),
+                r.getLocalErrors().toString());
+    }
+
+    // ─── Quote: price, transit time, billable weight ────────────────────
+
+    /** A FedEx account with live credentials whose rate reply is {@code rates}. */
+    private ManualShipmentRequest pricedRequest(List<com.multiship.backend.service.carriers.CarrierConnector.RateOption> rates)
+            throws Exception {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setAccountId(42L);
+        stubServiceAndPreset();
+        when(carrierAccountRefRepository.findById(42L)).thenReturn(Optional.of(com.multiship.backend.model.CarrierAccountRef.builder()
+                .id(42L).carrierCode("FEDEX").accountNumber("ACC1").clientId("cid").clientSecret("sec")
+                .environment("SANDBOX").active(true).build()));
+        com.multiship.backend.service.carriers.CarrierConnector connector =
+                mock(com.multiship.backend.service.carriers.CarrierConnector.class);
+        when(carrierService.getCarrierConnector("FEDEX")).thenReturn(connector);
+        when(connector.getConfiguration()).thenReturn(mock(com.multiship.backend.service.carriers.CarrierConnector.CarrierConfiguration.class));
+        when(connector.getAccessToken(any(), any(), any(), any())).thenReturn("tok");
+        when(carrierService.buildManualShipmentRequestDto(any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any())).thenReturn(new ShipmentRequestDTO());
+        when(connector.getRates(any(), any(), any())).thenReturn(rates);
+        when(connector.validateShipment(any(), any(), any())).thenReturn(
+                new com.multiship.backend.service.carriers.CarrierConnector.ValidateShipmentResult(
+                        true, "EXACT", "SHIPMENT", List.of(), List.of(), "ok", null));
+        return req;
+    }
+
+    private static com.multiship.backend.service.carriers.CarrierConnector.RateOption rate(String code, String amount, Integer days) {
+        return new com.multiship.backend.service.carriers.CarrierConnector.RateOption(
+                "FEDEX", code, null, new BigDecimal(amount), "USD", null, days);
+    }
+
+    @Test
+    void thePickedServiceIsPricedWithTheClientsMarkup() throws Exception {
+        ManualShipmentRequest req = pricedRequest(List.of(rate("FEDEX_2_DAY", "30.10", 2), rate("FEDEX_GROUND", "12.40", 4)));
+        req.setClientCode("ACME");
+        when(resolutionService.applyMarkup(org.mockito.ArgumentMatchers.eq("ACME"), any(), any())).thenAnswer(inv -> {
+            BigDecimal carrierRate = inv.getArgument(1);
+            return new com.multiship.backend.service.resolution.MarkupApplied(carrierRate,
+                    carrierRate.multiply(new BigDecimal("1.15")), "PERCENT", new BigDecimal("15"), "USD");
+        });
+
+        ShipmentValidationResult.RateQuote q = service.validate(req).getData().getQuote();
+
+        assertEquals("QUOTED", q.getStatus());
+        assertEquals(new BigDecimal("12.40"), q.getCarrierAmount());
+        assertEquals(new BigDecimal("14.26"), q.getAmount(), "12.40 + 15%");
+        assertEquals(4, q.getTransitDays());
+        assertEquals(1, q.getOtherServices().size());
+        assertTrue(q.getOtherServices().get(0).startsWith("FEDEX_2_DAY — USD 30.10 · 2 days"), q.getOtherServices().toString());
+    }
+
+    @Test
+    void aServiceTheCarrierDoesNotQuoteIsAWarning() throws Exception {
+        ManualShipmentRequest req = pricedRequest(List.of(rate("FEDEX_2_DAY", "30.10", 2)));
+        ShipmentValidationResult r = service.validate(req).getData();
+        assertEquals("NOT_OFFERED", r.getQuote().getStatus());
+        assertTrue(r.getLocalWarnings().stream().anyMatch(w -> w.getMessage().contains("did not quote")
+                && w.getMessage().contains("FEDEX_2_DAY")), r.getLocalWarnings().toString());
+    }
+
+    /** A light, big box bills on its size: 18×14×12 in = 3024 in³ / 139 = 21.76 lb, not 5. */
+    @Test
+    void aBigLightBoxBillsOnItsDimensionalWeight() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setPackagePresetId(null);
+        req.setWeight(new BigDecimal("5"));
+        req.setLength(new BigDecimal("18")); req.setWidth(new BigDecimal("14")); req.setHeight(new BigDecimal("12"));
+        req.setDimUnit("IN");
+        when(shippingServiceRepository.findById(1L)).thenReturn(Optional.of(fedexGround()));
+
+        ShipmentValidationResult.RateQuote q = service.validate(req).getData().getQuote();
+
+        assertEquals("WEIGHT_ONLY", q.getStatus(), "no credentials, so no price — but the weight is still worked out");
+        assertEquals(0, new BigDecimal("21.76").compareTo(q.getBillableWeight()), q.getBillableWeight().toString());
+        assertTrue(q.isDimensional());
+    }
+
+    // ─── PO boxes, repeat references, cutoff, insurance cost ────────────
+
+    @Test
+    void poBoxesAreRecognisedInTheUsualSpellings() {
+        for (String s : List.of("PO Box 12", "P.O. Box 7", "p o box 3", "Post Office Box 99", "POB 4", "PO BOX#5")) {
+            assertTrue(ShipmentValidationService.isPoBox(s), s);
+        }
+        for (String s : List.of("12 Boxwood Rd", "100 Poplar Ave", "Suite 400", "233 S Wacker Dr")) {
+            assertTrue(!ShipmentValidationService.isPoBox(s), s);
+        }
+    }
+
+    @Test
+    void fedexGroundToAPoBoxFailsButGroundEconomyIsFine() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.getRecipient().setAddressLine2("P.O. Box 118");
+        stubServiceAndPreset();
+        assertTrue(errorsOf(req).stream().anyMatch(m -> m.startsWith("FEDEX can't deliver to a PO box (\"P.O. Box 118\")")),
+                errorsOf(req).toString());
+
+        when(shippingServiceRepository.findById(1L)).thenReturn(Optional.of(ShippingService.builder()
+                .id(1L).carrier("FEDEX").serviceCode("SMART_POST").name("FedEx Ground Economy").build()));
+        assertTrue(errorsOf(req).stream().noneMatch(m -> m.contains("PO box")));
+    }
+
+    @Test
+    void aMilitaryAddressNeedsUsps() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.getRecipient().setCity("APO");
+        req.getRecipient().setState("AE");
+        req.getRecipient().setPostalCode("09001");
+        stubServiceAndPreset();
+        assertTrue(errorsOf(req).stream().anyMatch(m -> m.contains("only USPS delivers there")), errorsOf(req).toString());
+    }
+
+    @Test
+    void aReferenceThatAlreadyShippedIsAWarning() {
+        com.multiship.backend.repository.OrderRepository orders = mock(com.multiship.backend.repository.OrderRepository.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "orderRepository", orders);
+        com.multiship.backend.model.Order shipped = new com.multiship.backend.model.Order();
+        shipped.setOrderNo(905958);
+        shipped.setTrack("794600000001");
+        when(orders.findShippedByClientAndReference("ACME", "PO-7781")).thenReturn(Optional.of(shipped));
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setClientCode("ACME");
+        req.setReference("PO-7781");
+        stubServiceAndPreset();
+        ShipmentValidationResult r = service.validate(req).getData();
+        assertTrue(r.getLocalWarnings().stream().anyMatch(w -> w.getMessage().startsWith(
+                "Reference PO-7781 already shipped on order #905958, tracking 794600000001")), r.getLocalWarnings().toString());
+    }
+
+    @Test
+    void pastTheClientsCutoffIsAWarning() {
+        when(resolutionService.isPastCutoff(org.mockito.ArgumentMatchers.eq("ACME"), any())).thenReturn(true);
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setClientCode("ACME");
+        stubServiceAndPreset();
+        assertTrue(service.validate(req).getData().getLocalWarnings().stream()
+                .anyMatch(w -> w.getMessage().contains("past ACME's daily cutoff")));
+    }
+
+    @Test
+    void insuringAboveTheFreeAmountIsAWarning() {
+        CarrierLimitService limits = mock(CarrierLimitService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "carrierLimitService", limits);
+        when(limits.resolveLimit(any(), any(), org.mockito.ArgumentMatchers.anyBoolean())).thenReturn(
+                com.multiship.backend.model.CarrierShippingLimit.builder().freeDeclaredValue(new BigDecimal("100")).build());
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setInsuredValue(new BigDecimal("500"));
+        req.setInsuredValueCurrency("USD");
+        stubServiceAndPreset();
+        assertTrue(service.validate(req).getData().getLocalWarnings().stream().anyMatch(w -> w.getMessage()
+                .equals("FEDEX covers the first USD 100 free; insuring USD 500 adds a declared-value charge to the label.")));
+        req.setInsuredValue(new BigDecimal("80"));
+        assertTrue(service.validate(req).getData().getLocalWarnings().stream().noneMatch(w -> "insuredValue".equals(w.getField())));
     }
 }

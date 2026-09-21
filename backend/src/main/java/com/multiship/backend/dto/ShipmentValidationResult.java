@@ -105,6 +105,42 @@ public class ShipmentValidationResult {
      */
     private boolean international;
 
+    /** What the shipment will cost and how long it takes — the carrier's
+     *  rate for the picked service, the client's price after markup,
+     *  transit time and billable weight. Null when nothing could be priced. */
+    private RateQuote quote;
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class RateQuote {
+        /** QUOTED · NOT_OFFERED (the carrier doesn't offer the picked service
+         *  on this lane) · UNAVAILABLE (no price — credentials, carrier error)
+         *  · WEIGHT_ONLY (billable weight known, carrier not asked). */
+        private String status;
+        private String carrierCode;
+        private String serviceCode;
+        private String serviceName;
+        /** What the carrier charges (negotiated rate where the carrier returns one). */
+        private java.math.BigDecimal carrierAmount;
+        /** What the client pays: carrierAmount after the client's markup. */
+        private java.math.BigDecimal amount;
+        private String currency;
+        private String markup;
+        private Integer transitDays;
+        private String estimatedDelivery;
+        /** Sum over boxes of max(actual + tare, dimensional weight). */
+        private java.math.BigDecimal billableWeight;
+        private java.math.BigDecimal actualWeight;
+        private String weightUnit;
+        /** True when at least one box bills on its size rather than its weight. */
+        private boolean dimensional;
+        /** Other services the carrier quoted on this lane, cheapest first. */
+        private List<String> otherServices;
+        private String message;
+    }
+
     @Data
     // PR #542 — toBuilder=true so ShipmentValidationService can rewrite
     // matchLevel/message/etc on the returned sub-result when local
