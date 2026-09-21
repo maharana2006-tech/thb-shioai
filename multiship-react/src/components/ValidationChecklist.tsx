@@ -57,7 +57,10 @@ export default function ValidationChecklist({
   const fixCount = groups.reduce((n, g) => n + g.errors.length, 0)
   const reviewCount = groups.reduce((n, g) => n + g.warnings.length, 0)
   // Shrunk to one line while the operator works on the form ("Go to …").
-  const [compact, setCompact] = useState(false)
+  // Phones open it minimised — headline and counts — so the form stays visible.
+  const [compact, setCompact] = useState(
+    () => typeof window !== 'undefined' && !!window.matchMedia?.('(max-width: 639px)').matches,
+  )
   const [showDetails, setShowDetails] = useState(false)
   const [open, setOpen] = useState<Set<CheckGroupKey>>(
     () => new Set(groups.filter((g) => g.status === 'fail' || g.status === 'warn').map((g) => g.key)),
@@ -96,7 +99,7 @@ export default function ValidationChecklist({
             ) : null}
           </p>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 whitespace-nowrap">
           <button type="button" onClick={onRevalidate} disabled={busy}
             className="inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] px-2 py-1 text-[11.5px] font-semibold text-[#5a4526] hover:bg-[#faf7f0] disabled:opacity-50">
             <FiRefreshCw className={`h-3 w-3 ${busy ? 'animate-spin' : ''}`} /> Check again
@@ -113,7 +116,7 @@ export default function ValidationChecklist({
       </div>
 
       {compact ? (
-        <p className="text-[11.5px] text-slate-500">
+        <p className="hidden text-[11.5px] text-slate-500 sm:block">
           {fixCount ? `${fixCount} to fix` : 'Nothing to fix'}{reviewCount ? ` · ${reviewCount} to review` : ''} — the rows are hidden while you edit.
         </p>
       ) : (

@@ -1574,6 +1574,9 @@ export default function NewShipmentPage() {
     setSubmitAttempted(true)
     const formErrors = flattenErrors(await formik.validateForm(formValues as unknown as ShipmentFormValues))
     if (formErrors.length > 0) {
+      // The server check didn't run on this form: an older result would mislead.
+      setShipmentValidationResult(null)
+      setChecklistOpen(false)
       const more = formErrors.length - 1
       showToast(
         more > 0
@@ -4013,7 +4016,7 @@ export default function NewShipmentPage() {
               )}
             </div>
           ) : null}
-          <div className="flex items-center justify-between gap-3 rounded-2xl border border-[#e3d9c4] bg-white px-5 py-3 shadow-[0_18px_50px_rgba(31,21,12,0.16)]">
+          <div className="flex items-center justify-between gap-3 rounded-2xl border border-[#e3d9c4] bg-white px-3 py-2.5 shadow-[0_18px_50px_rgba(31,21,12,0.16)] sm:px-5 sm:py-3">
             <span className="hidden text-[11.5px] text-[#6b5c42] sm:block">
               {validationGate ? (
                 <span className="font-semibold text-[#5a4526]">
@@ -4032,7 +4035,8 @@ export default function NewShipmentPage() {
                 </>
               )}
             </span>
-            <div className="flex flex-wrap items-center justify-end gap-2">
+            {/* Phones: a 2 × 2 grid, so the bar stays two rows tall. */}
+            <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center sm:justify-end [&>button]:justify-center [&>button]:whitespace-nowrap max-sm:[&>button]:px-2">
               <button
                 type="button"
                 onClick={() => void reviewShipmentAi()}

@@ -8,7 +8,7 @@
  * tolerates strings alongside components). Types live in
  * {@link ./_types.ts}.
  */
-import type { ReactNode } from 'react'
+import { cloneElement, isValidElement, type ReactNode } from 'react'
 
 export const inputCls =
   'w-full rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13px] text-[#1f150c] outline-none transition placeholder:text-[#b6a684] focus:border-[#cdbf9f] focus:ring-4 focus:ring-[#f4eede] disabled:cursor-not-allowed disabled:bg-[#faf7f0] disabled:text-[#6b5c42]'
@@ -80,7 +80,9 @@ export function Field({
         {label}
         {required ? <span className="text-rose-500"> *</span> : null}
       </span>
-      {children}
+      {error && isValidElement<{ 'aria-invalid'?: boolean }>(children)
+        ? cloneElement(children, { 'aria-invalid': true })
+        : children}
       {error ? (
         <span className="ms-field-error mt-1 block text-[10.5px] font-semibold normal-case tracking-normal text-rose-600">{error}</span>
       ) : hint ? (

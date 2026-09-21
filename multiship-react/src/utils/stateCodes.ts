@@ -80,9 +80,9 @@ export const US_STATE_OPTIONS: StateOption[] = [
   { code: 'WI', label: 'Wisconsin' },
   { code: 'WY', label: 'Wyoming' },
   // Military mail (APO / FPO / DPO) — delivered by USPS only.
-  { code: 'AA', label: 'Armed Forces Americas (AA)' },
-  { code: 'AE', label: 'Armed Forces Europe (AE)' },
-  { code: 'AP', label: 'Armed Forces Pacific (AP)' },
+  { code: 'AA', label: 'Armed Forces Americas' },
+  { code: 'AE', label: 'Armed Forces Europe' },
+  { code: 'AP', label: 'Armed Forces Pacific' },
 ]
 
 /** Canadian provinces + territories. Alphabetical by label. */

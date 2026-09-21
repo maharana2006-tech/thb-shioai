@@ -367,6 +367,19 @@ public class ShipmentValidationService {
         java.util.concurrent.atomic.AtomicReference<String> rateProblem = new java.util.concurrent.atomic.AtomicReference<>();
         ShipmentValidationResult.CarrierValidationSubResult carrierResult =
                 callCarrierValidateShipment(req, adapted, pickedAccount, skipped, rates, rateProblem);
+        // A login failure reads as one, whichever carrier said it and however
+        // (UPS: HTTP 401 / 250002 "Invalid Authentication Information").
+        if (carrierResult != null && !carrierResult.isValid() && isLoginFailure(carrierResult)) {
+            carrierResult = carrierResult.toBuilder()
+                    .message("Couldn't sign in to " + carrierName(carrierResult.getCarrierCode())
+                            + " with this account's login keys — ask an admin to check them in Settings → Carrier Accounts.")
+                    .build();
+        }
+        if (rateProblem.get() != null && looksLikeLoginFailure(rateProblem.get())) {
+            rateProblem.set("No price: " + carrierName(req.getCarrierCode() == null ? null
+                    : blankTo(ShippingConfigService.canonicalCarrierFor(req.getCarrierCode()), req.getCarrierCode()))
+                    + " didn't accept this account's login keys.");
+        }
         ShipmentValidationResult.RateQuote quote = buildQuote(req, service, preset, rates.get(), rateProblem.get());
         if (quote != null && "NOT_OFFERED".equals(quote.getStatus())) {
             warnings.add(issue(ErrorCode.VALIDATION_ERROR, quote.getMessage(), "serviceId"));
@@ -1431,6 +1444,19 @@ public class ShipmentValidationService {
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────────
+
+    private static boolean isLoginFailure(ShipmentValidationResult.CarrierValidationSubResult r) {
+        if (looksLikeLoginFailure(r.getMessage())) return true;
+        return r.getErrors() != null && r.getErrors().stream().anyMatch(ShipmentValidationService::looksLikeLoginFailure);
+    }
+
+    /** Carrier replies that mean "these keys don't work", not "this shipment is wrong". */
+    static boolean looksLikeLoginFailure(String text) {
+        if (text == null) return false;
+        String t = text.toLowerCase(Locale.ROOT);
+        return t.contains("invalid authentication") || t.contains("250002") || t.contains("http 401")
+                || t.contains("not.authorized") || t.contains("token acquisition failed") || t.contains("unauthorized");
+    }
 
     /** The carrier as operators write it: FedEx, UPS, DHL, USPS. */
     static String carrierName(String code) {

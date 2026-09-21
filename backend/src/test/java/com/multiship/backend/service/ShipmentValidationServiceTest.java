@@ -1304,4 +1304,22 @@ class ShipmentValidationServiceTest {
         req.setInsuredValue(new BigDecimal("80"));
         assertTrue(service.validate(req).getData().getLocalWarnings().stream().noneMatch(w -> "insuredValue".equals(w.getField())));
     }
+
+    /** UPS's "250002: Invalid Authentication Information" is a login failure, and says so. */
+    @Test
+    void aCarrierLoginFailureIsWordedAsOne() throws Exception {
+        ManualShipmentRequest req = pricedRequest(List.of());
+        com.multiship.backend.service.carriers.CarrierConnector connector = carrierService.getCarrierConnector("FEDEX");
+        when(connector.getRates(any(), any(), any())).thenThrow(new IllegalStateException("HTTP 401 Invalid Authentication Information"));
+        when(connector.validateShipment(any(), any(), any())).thenReturn(
+                new com.multiship.backend.service.carriers.CarrierConnector.ValidateShipmentResult(false, "ERROR", "SHIPMENT",
+                        List.of(), List.of("250002: Invalid Authentication Information."),
+                        "UPS rejected the shipment: 250002: Invalid Authentication Information.", null));
+        ShipmentValidationResult r = service.validate(req).getData();
+        assertTrue(r.getCarrier().getMessage().startsWith("Couldn't sign in to FedEx with this account's login keys"), r.getCarrier().getMessage());
+        assertEquals("No price: FedEx didn't accept this account's login keys.", r.getQuote().getMessage());
+        assertTrue(r.getLocalErrors().stream().anyMatch(e -> "carrier".equals(e.getField())
+                && e.getMessage().startsWith("Couldn't sign in")), r.getLocalErrors().toString());
+        assertTrue(!ShipmentValidationService.looksLikeLoginFailure("UPS rejected the shipment: 120100: Missing or invalid shipper number"));
+    }
 }
