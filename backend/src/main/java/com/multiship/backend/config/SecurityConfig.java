@@ -135,7 +135,9 @@ public class SecurityConfig {
                                 // upload was refused with 403 before the key
                                 // was even checked — its GET poll worked and
                                 // every scan result was thrown away.
-                                "/api/v1/printers/discovered"
+                                "/api/v1/printers/discovered",
+                                // DTC sync endpoints — public testing access
+                                "/api/v1/dtc/**"
                         )
                 )
                 .sessionManagement(session -> session
@@ -208,6 +210,8 @@ public class SecurityConfig {
                         // Public shipping API for external apps — API key (ROLE_API); ADMIN allowed for testing.
                         .requestMatchers("/api/v1/external/**").hasAnyRole("API", "ADMIN")
                         .requestMatchers(HttpMethod.POST, "/api/v1/orders/*/label").hasAnyRole("ADMIN", "USER")
+                        // DTC sync endpoints — public for testing
+                        .requestMatchers("/api/v1/dtc/**").permitAll()
                         // All other requests need authentication
                         .anyRequest().authenticated()
                 )

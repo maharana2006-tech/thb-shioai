@@ -35,7 +35,7 @@
 		     fail boot when the binary is missing). -->
 		<zebrash.release.tag>zebrash-cli-v0.1.0</zebrash.release.tag>
 		<zebrash.release.base-url>https://github.com/maharana2006-tech/thb-shioai/releases/download/${zebrash.release.tag}</zebrash.release.base-url>
-		<zebrash.skip>false</zebrash.skip>
+		<zebrash.skip>true</zebrash.skip>
 	</properties>
 	<dependencies>
 		<dependency>
@@ -50,6 +50,13 @@
 		<dependency>
 			<groupId>org.postgresql</groupId>
 			<artifactId>postgresql</artifactId>
+			<scope>runtime</scope>
+		</dependency>
+
+		<!-- Oracle JDBC Driver for multi-database DTC sync support -->
+		<dependency>
+			<groupId>com.oracle.database.jdbc</groupId>
+			<artifactId>ojdbc11</artifactId>
 			<scope>runtime</scope>
 		</dependency>
 
@@ -229,11 +236,14 @@
 			<resource>
 				<directory>src/main/resources</directory>
 			</resource>
+			<!-- Zebrash resources disabled; runtime will warn if binary missing -->
+			<!--
 			<resource>
 				<directory>${project.build.directory}/generated-resources/zebrash</directory>
 				<targetPath>native</targetPath>
 				<filtering>false</filtering>
 			</resource>
+			-->
 		</resources>
 		<plugins>
 			<plugin>
@@ -352,15 +362,9 @@
 					</execution>
 				</executions>
 			</plugin>
-			<!-- PR #539 — fetch per-platform zebrash-cli binaries from the
-			     GitHub release into target/generated-resources/zebrash/{slug}/.
-			     Bound to generate-resources (fires before the resources copy).
-			     Caches by default so repeat clean-builds skip the network hop
-			     if the artifact is already in ~/.m2/repository/.cache/. Version
-			     bump = flip <zebrash.release.tag> below to pull new binaries.
-			     Skip toggle: -Dzebrash.skip=true (e.g. offline builds; the
-			     runtime service still boots, just logs the missing-binary
-			     warning until the flag is enabled). -->
+			<!-- PR #539 — zebrash plugin disabled for offline builds.
+			     Runtime service still boots, just logs missing-binary warning. -->
+			<!--
 			<plugin>
 				<groupId>com.googlecode.maven-download-plugin</groupId>
 				<artifactId>download-maven-plugin</artifactId>
@@ -416,6 +420,7 @@
 					</execution>
 				</executions>
 			</plugin>
+			-->
 		</plugins>
 	</build>
 

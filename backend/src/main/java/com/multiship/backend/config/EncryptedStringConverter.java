@@ -28,6 +28,10 @@ public class EncryptedStringConverter implements AttributeConverter<String, Stri
 
     private final CryptoService crypto;
 
+    public EncryptedStringConverter() {
+        this(null);
+    }
+
     public EncryptedStringConverter(CryptoService crypto) {
         this.crypto = crypto;
     }
@@ -35,7 +39,7 @@ public class EncryptedStringConverter implements AttributeConverter<String, Stri
     @Override
     public String convertToDatabaseColumn(String plaintext) {
         if (plaintext == null || plaintext.isEmpty()) return plaintext;
-        if (!crypto.isAvailable()) {
+        if (crypto == null || !crypto.isAvailable()) {
             // Backward compat: pass through so a dev-mode boot without key
             // doesn't corrupt data. Prod deploys MUST set the key.
             return plaintext;
@@ -56,7 +60,7 @@ public class EncryptedStringConverter implements AttributeConverter<String, Stri
             // re-save it and the write path will encrypt.
             return dbValue;
         }
-        if (!crypto.isAvailable()) {
+        if (crypto == null || !crypto.isAvailable()) {
             log.warn("Encrypted column encountered but SECRETS_ENCRYPTION_KEY is unset; returning ciphertext.");
             return null;
         }
