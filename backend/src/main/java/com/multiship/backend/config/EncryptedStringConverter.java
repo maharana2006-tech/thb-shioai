@@ -28,10 +28,6 @@ public class EncryptedStringConverter implements AttributeConverter<String, Stri
 
     private final CryptoService crypto;
 
-    public EncryptedStringConverter() {
-        this(null);
-    }
-
     public EncryptedStringConverter(CryptoService crypto) {
         this.crypto = crypto;
     }

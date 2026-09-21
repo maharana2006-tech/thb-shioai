@@ -1,7 +1,13 @@
 package com.multiship.backend.config;
 
-import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import org.hibernate.cfg.AvailableSettings;
+import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
+import org.springframework.boot.hibernate.autoconfigure.HibernateProperties;
+import org.springframework.boot.hibernate.autoconfigure.HibernateSettings;
+import org.springframework.boot.jdbc.autoconfigure.DataSourceProperties;
+import org.springframework.boot.jpa.autoconfigure.JpaProperties;
+import org.springframework.orm.jpa.hibernate.SpringBeanContainer;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -39,47 +45,57 @@ import java.util.HashMap;
 public class PostgresDataSourceConfig {
 
     /**
-     * Primary PostgreSQL DataSource.
+     * Primary PostgreSQL DataSource — built from spring.datasource.* and the
+     * spring.datasource.hikari.* pool settings exactly as Spring Boot's own
+     * auto-configuration would (it steps aside once a second DataSource
+     * exists, so this keeps the pool size, timeouts and leak detection that
+     * application.properties sets instead of hard-coding them).
      */
     @Primary
     @Bean(name = "postgresDataSource")
-    public DataSource postgresDataSource(PostgresDataSourceProperties properties) {
-        HikariConfig config = new HikariConfig();
-        config.setJdbcUrl(properties.getUrl());
-        config.setUsername(properties.getUsername());
-        config.setPassword(properties.getPassword());
-        config.setDriverClassName(properties.getDriverClassName());
-        config.setMaximumPoolSize(50);
-        config.setMinimumIdle(10);
-        config.setConnectionTimeout(10000);
-        config.setMaxLifetime(1800000);
-        config.setKeepaliveTime(300000);
-        config.setLeakDetectionThreshold(600000);
-        return new HikariDataSource(config);
+    @ConfigurationProperties("spring.datasource.hikari")
+    public HikariDataSource postgresDataSource(DataSourceProperties properties) {
+        return properties.initializeDataSourceBuilder().type(HikariDataSource.class).build();
     }
 
     /**
-     * Primary EntityManagerFactory for PostgreSQL.
+     * Primary EntityManagerFactory for PostgreSQL, with the settings Spring
+     * Boot would apply — every spring.jpa.* property, ddl-auto, and the
+     * CamelCase→snake_case naming (orderNo → order_no). Without them
+     * Hibernate maps fields to camelCase columns and ddl-auto=update starts
+     * adding those columns to the live tables.
+     *
+     * <p>Hibernate asks Spring for its AttributeConverters (SpringBeanContainer),
+     * so EncryptedStringConverter gets its CryptoService — without it, carrier
+     * secrets would be written in plain text and read back as null.
      */
     @Primary
     @Bean(name = "postgresEntityManagerFactory")
     public LocalContainerEntityManagerFactoryBean postgresEntityManagerFactory(
-            @Qualifier("postgresDataSource") DataSource dataSource) {
+            @Qualifier("postgresDataSource") DataSource dataSource,
+            JpaProperties jpaProperties,
+            HibernateProperties hibernateProperties,
+            ConfigurableListableBeanFactory beanFactory) {
 
         LocalContainerEntityManagerFactoryBean em = new LocalContainerEntityManagerFactoryBean();
         em.setDataSource(dataSource);
-        em.setPackagesToScan("com.multiship.backend.model", "com.multiship.backend.dto");
-        em.setJpaVendorAdapter(new HibernateJpaVendorAdapter());
+        em.setPackagesToScan("com.multiship.backend.model");
+        // The Oracle view entities belong to the Oracle factory only — never
+        // map (or ddl-update) them against Postgres.
+        em.setPersistenceUnitPostProcessors(pui ->
+                pui.getManagedClassNames().removeIf(name -> name.contains(".model.oracle.")));
 
-        Map<String, Object> properties = new HashMap<>();
-        properties.put("hibernate.dialect", "org.hibernate.dialect.PostgreSQLDialect");
-        properties.put("hibernate.hbm2ddl.auto", "update");
-        properties.put("hibernate.jdbc.batch_size", "50");
-        properties.put("hibernate.order_inserts", "true");
-        properties.put("hibernate.order_updates", "true");
-        properties.put("hibernate.batch_versioned_data", "true");
+        HibernateJpaVendorAdapter adapter = new HibernateJpaVendorAdapter();
+        adapter.setShowSql(jpaProperties.isShowSql());
+        if (jpaProperties.getDatabasePlatform() != null) {
+            adapter.setDatabasePlatform(jpaProperties.getDatabasePlatform());
+        }
+        em.setJpaVendorAdapter(adapter);
+
+        Map<String, Object> properties = new HashMap<>(hibernateProperties.determineHibernateProperties(
+                jpaProperties.getProperties(), new HibernateSettings().ddlAuto(() -> "none")));
+        properties.put(AvailableSettings.BEAN_CONTAINER, new SpringBeanContainer(beanFactory));
         em.setJpaPropertyMap(properties);
-
         return em;
     }
 
@@ -91,26 +107,5 @@ public class PostgresDataSourceConfig {
     public PlatformTransactionManager postgresTransactionManager(
             @Qualifier("postgresEntityManagerFactory") EntityManagerFactory entityManagerFactory) {
         return new JpaTransactionManager(entityManagerFactory);
-    }
-
-    /**
-     * PostgreSQL configuration properties.
-     */
-    @org.springframework.boot.context.properties.ConfigurationProperties(prefix = "spring.datasource")
-    public static class PostgresDataSourceProperties {
-        private String url;
-        private String username;
-        private String password;
-        private String driverClassName;
-
-        // Getters and Setters
-        public String getUrl() { return url; }
-        public void setUrl(String url) { this.url = url; }
-        public String getUsername() { return username; }
-        public void setUsername(String username) { this.username = username; }
-        public String getPassword() { return password; }
-        public void setPassword(String password) { this.password = password; }
-        public String getDriverClassName() { return driverClassName; }
-        public void setDriverClassName(String driverClassName) { this.driverClassName = driverClassName; }
     }
 }

@@ -21,6 +21,7 @@ import org.springframework.stereotype.Service;
  * scheduling across timezones, consider using Quartz or an external scheduler.
  */
 @Service
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "multiship.oracle.enabled", havingValue = "true")
 @RequiredArgsConstructor
 @EnableScheduling
 public class DtcTimedBackgroundService {

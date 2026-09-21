@@ -23,6 +23,7 @@ import java.util.HashMap;
  * This connects to Oracle NDS (192.168.3.8:1521/tb10g) to fetch DTC orders.
  */
 @Configuration
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "multiship.oracle.enabled", havingValue = "true")
 @EnableTransactionManagement
 @EnableJpaRepositories(
         basePackages = "com.multiship.backend.repository.oracle",

@@ -20,6 +20,7 @@ import java.util.Map;
  *   GET  /api/v1/dtc/pending-count     - Get pending order count in Oracle
  */
 @RestController
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "multiship.oracle.enabled", havingValue = "true")
 @RequestMapping("/api/v1/dtc")
 @RequiredArgsConstructor
 public class OracleDtcSyncController {

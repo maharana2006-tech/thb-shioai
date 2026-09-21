@@ -23,6 +23,7 @@ import java.util.List;
  *   4. Return summary (fetched, imported, skipped)
  */
 @Service
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "multiship.oracle.enabled", havingValue = "true")
 @RequiredArgsConstructor
 public class OracleDtcSyncService {
 
