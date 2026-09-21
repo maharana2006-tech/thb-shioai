@@ -1052,4 +1052,89 @@ class ShipmentValidationServiceTest {
                 org.mockito.ArgumentMatchers.eq("FEDEX"), org.mockito.ArgumentMatchers.eq("ACC1"),
                 any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.eq(picked), any());
     }
+
+    // ─── Checks Generate label runs before buying ───────────────────────
+
+    private List<String> errorsOf(ManualShipmentRequest req) {
+        return service.validate(req).getData().getLocalErrors().stream()
+                .map(ShipmentValidationResult.ValidationIssue::getMessage).toList();
+    }
+
+    @Test
+    void fedexHomeDeliveryToABusinessFails() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        when(shippingServiceRepository.findById(1L)).thenReturn(Optional.of(ShippingService.builder()
+                .id(1L).carrier("FEDEX").serviceCode("GROUND_HOME_DELIVERY").name("FedEx Home Delivery").build()));
+        when(packagePresetRepository.findById(7L)).thenReturn(Optional.of(customBox()));
+        req.getRecipient().setResidential(false);
+        assertTrue(errorsOf(req).stream().anyMatch(m -> m.toLowerCase().contains("residential")), errorsOf(req).toString());
+        req.getRecipient().setResidential(true);
+        assertTrue(errorsOf(req).stream().noneMatch(m -> m.toLowerCase().contains("residential")));
+    }
+
+    @Test
+    void aReturnLabelWithoutTheCustomersEmailFails() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setIsReturn(true);
+        stubServiceAndPreset();
+        assertTrue(errorsOf(req).stream().anyMatch(m -> m.contains("Return labels need the customer's email")));
+        req.getSender().setEmail("customer@example.com");
+        assertTrue(errorsOf(req).stream().noneMatch(m -> m.contains("Return labels")));
+    }
+
+    @Test
+    void aParcelOverTheCarriersWeightLimitFails() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setWeight(new BigDecimal("200"));
+        stubServiceAndPreset();
+        List<String> errs = errorsOf(req);
+        assertTrue(errs.stream().anyMatch(m -> m.contains("150")), errs.toString());
+    }
+
+    @Test
+    void aGroundServiceToPuertoRicoFails() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.getRecipient().setCountryCode("PR");
+        req.getRecipient().setState(null);
+        req.getRecipient().setPostalCode("00901");
+        stubServiceAndPreset();
+        assertTrue(errorsOf(req).stream().anyMatch(m -> m.contains("FEDEX_GROUND does not deliver to PR")),
+                errorsOf(req).toString());
+    }
+
+    @Test
+    void aBlockingRoutingRuleFailsAndARerouteIsAWarning() {
+        RoutingRuleService routing = mock(RoutingRuleService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "routingRuleService", routing);
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setClientCode("ACME");
+        stubServiceAndPreset();
+
+        when(routing.evaluate(org.mockito.ArgumentMatchers.eq("ACME"), any())).thenReturn(
+                com.multiship.backend.dto.RoutingEvaluationResult.builder().status("MATCH")
+                        .matchedRuleName("No Alaska").blockReason("we don't ship there")
+                        .actionType(com.multiship.backend.model.RoutingRule.ActionType.BLOCK).build());
+        assertTrue(errorsOf(req).stream().anyMatch(m -> m.equals("Blocked by routing rule 'No Alaska': we don't ship there")));
+
+        when(shippingServiceRepository.findById(2L)).thenReturn(Optional.of(ShippingService.builder()
+                .id(2L).carrier("FEDEX").serviceCode("FEDEX_2_DAY").build()));
+        when(routing.evaluate(org.mockito.ArgumentMatchers.eq("ACME"), any())).thenReturn(
+                com.multiship.backend.dto.RoutingEvaluationResult.builder().status("MATCH")
+                        .matchedRuleName("Heavy goes 2Day").targetServiceId(2L)
+                        .actionType(com.multiship.backend.model.RoutingRule.ActionType.REROUTE).build());
+        ShipmentValidationResult r = service.validate(req).getData();
+        assertTrue(r.getLocalWarnings().stream().anyMatch(w -> w.getMessage().contains("will ship this with FEDEX FEDEX_2_DAY")),
+                r.getLocalWarnings().toString());
+    }
+
+    @Test
+    void aWarehouseNotAttachedToTheClientFails() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setClientCode("ACME");
+        req.setWarehouseCode("DAL");
+        stubServiceAndPreset();
+        when(resolutionService.assertWarehouse("ACME", "DAL")).thenThrow(new ShipmentResolutionException(
+                ErrorCode.WAREHOUSE_ATTACH_FORBIDDEN, "Warehouse DAL is not attached to ACME."));
+        assertTrue(errorsOf(req).contains("Warehouse DAL is not attached to ACME."));
+    }
 }

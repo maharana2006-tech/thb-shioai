@@ -99,6 +99,22 @@ public class ShipmentValidationService {
      *  against their own client's rules, never another tenant's. */
     private final TenantScopeEnforcer tenantScope;
 
+    // ─── Generate label's own pre-purchase checks, run here too so a PASS
+    // means the label won't be refused on our side. Optional: when absent
+    // (hand-built tests) the check reports itself as skipped.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private CarrierLimitService carrierLimitService;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ShipmentSplitter shipmentSplitter;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private RoutingRuleService routingRuleService;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.config.CarrierProperties carrierProperties;
+    @Value("${packaging.validation-enabled:true}")
+    private boolean packagingValidationEnabled = true;
+    @Value("${carrier.auto-split-enabled:true}")
+    private boolean autoSplitEnabled = true;
+
     /**
      * PR A — env-configurable extension for the built-in no-postal-code
      * country list. Comma-separated ISO alpha-2 codes; unioned with
@@ -192,11 +208,22 @@ public class ShipmentValidationService {
                     "packagePresetId"));
         }
 
+        // Warehouse: must exist and be attached to this client (the label
+        // refuses otherwise), and its id scopes the service allowlist.
+        Long warehouseId = null;
+        if (hasClient && StringUtils.hasText(req.getWarehouseCode())) {
+            try {
+                warehouseId = resolutionService.assertWarehouse(clientCode, req.getWarehouseCode()).getId();
+            } catch (ShipmentResolutionException e) {
+                errors.add(issue(e.getErrorCode(), e.getMessage(), "warehouseCode"));
+            }
+        }
+
         if (hasClient) {
             if (service != null) {
                 try {
                     resolutionService.assertServiceAllowed(clientCode, service.getId(),
-                            to.getCountryCode(), null);
+                            to.getCountryCode(), warehouseId);
                 } catch (ShipmentResolutionException e) {
                     errors.add(issue(e.getErrorCode(), e.getMessage(), "serviceId"));
                 }
@@ -220,6 +247,8 @@ public class ShipmentValidationService {
             skipped.add(check("packaging_compatibility",
                     (service == null ? "no serviceId picked" : "no packagePresetId picked (custom dims)")));
         }
+
+        labelTimeChecks(req, service, preset, warehouseId, errors, warnings, skipped);
 
         // ─── Markup required (Sprint 50 Tier 1 finding #11 dry-run) ────────
         if (hasClient) {
@@ -283,6 +312,11 @@ public class ShipmentValidationService {
             checkHighValueExportDeclaration(req, warnings);
         } else {
             skipped.add(check("customs", "domestic shipment (sender/recipient in same territory)"));
+        }
+
+        if (international) {
+            checkImporterTaxId(req, errors);
+            checkCommodityLines(req, adapted, errors, warnings);
         }
 
         // ─── Dangerous goods ────────────────────────────────────────────────
@@ -834,7 +868,8 @@ public class ShipmentValidationService {
         // its default account silently. The form pre-fills the profile's
         // duties account; if that is blank too, it must be typed.
         if ("THIRD_PARTY".equals(CarrierServiceImpl.normalizeDutyPayer(req.getClearanceOption()))
-                && !StringUtils.hasText(req.getDutiesAccount())) {
+                && !StringUtils.hasText(req.getDutiesAccount())
+                && !StringUtils.hasText(customsProfile(req) == null ? null : customsProfile(req).getDutiesAccount())) {
             errors.add(issue(ErrorCode.VALIDATION_ERROR,
                     "Duties paid by a third party need the payer's carrier account number.",
                     "dutiesAccount"));
@@ -927,6 +962,189 @@ public class ShipmentValidationService {
                         + "121213 \"billing option unavailable between the selected locations\" "
                         + "on these lanes.",
                 "incoterms"));
+    }
+
+    // ─── Checks Generate label runs before buying ───────────────────────────
+
+    /**
+     * Package and carrier limits, routing rules, US-territory service
+     * coverage, FedEx Home Delivery's residential rule and the return-label
+     * email — each refused by Generate label (CarrierServiceImpl
+     * .generateManualLabel) before any carrier call. Same inputs, same
+     * rules, reported as issues instead of a failed purchase.
+     */
+    private void labelTimeChecks(ManualShipmentRequest req, ShippingService service, PackagePreset preset,
+                                 Long warehouseId, List<ValidationIssue> errors,
+                                 List<ValidationIssue> warnings, List<ValidationCheckStatus> skipped) {
+        ManualShipmentRequest.Address to = req.getRecipient();
+        ManualShipmentRequest.Address from = req.getSender();
+        String carrier = StringUtils.hasText(req.getCarrierCode())
+                ? blankTo(ShippingConfigService.canonicalCarrierFor(req.getCarrierCode()),
+                        req.getCarrierCode().trim().toUpperCase(Locale.ROOT))
+                : null;
+        String serviceCode = service != null ? service.getServiceCode() : null;
+
+        // Package + carrier limits (preset max weight / L·W·H / dim weight /
+        // girth per box; parcel caps per piece; Carrier Limits total weight).
+        if (!packagingValidationEnabled) {
+            skipped.add(check("package_limits", "packaging.validation-enabled is off"));
+        } else if (carrier != null && req.getWeight() != null) {
+            com.multiship.backend.util.PackagingValidator.Outcome outcome = preset == null
+                    ? new com.multiship.backend.util.PackagingValidator.Outcome(List.of())
+                    : com.multiship.backend.util.PackagingValidator.validateAll(preset,
+                            req.getWeight(), req.getWeightUnit(),
+                            req.getLength(), req.getWidth(), req.getHeight(), req.getDimUnit(),
+                            req.getPackages());
+            String origin = blankTo(from != null ? from.getCountryCode() : null,
+                    carrierProperties != null ? carrierProperties.getShipper().getCountryCode() : null);
+            boolean intl = to.getCountryCode() != null && origin != null
+                    && !to.getCountryCode().trim().equalsIgnoreCase(origin.trim());
+            com.multiship.backend.model.CarrierShippingLimit limit = carrierLimitService == null ? null
+                    : carrierLimitService.resolveLimit(carrier, serviceCode, intl);
+            outcome = outcome.merge(com.multiship.backend.util.PackagingValidator.validateParcelLimits(
+                    carrier, serviceCode, req.getPackages(),
+                    req.getWeight(), req.getWeightUnit(),
+                    req.getLength(), req.getWidth(), req.getHeight(), req.getDimUnit(),
+                    limit == null ? null : limit.getMaxTotalWeightLb()));
+            for (com.multiship.backend.util.PackagingValidator.Violation v : outcome.violations()) {
+                boolean hard = v.severity() == com.multiship.backend.util.PackagingValidator.Severity.HARD;
+                (hard ? errors : warnings).add(issue(ErrorCode.VALIDATION_ERROR,
+                        v.message() + (hard && v.rule() != com.multiship.backend.util.PackagingValidator.RuleType.PARCEL_LIMIT
+                                ? " Pick a larger package, or reduce the weight or dimensions." : ""),
+                        "packagePresetId"));
+            }
+            // Too many boxes / too much weight for one carrier call is not an
+            // error — the label splits it. Say so, so it isn't a surprise.
+            if (autoSplitEnabled && carrierLimitService != null && limit != null) {
+                int boxes = req.getPackages() == null || req.getPackages().isEmpty() ? 1 : req.getPackages().size();
+                BigDecimal lb = com.multiship.backend.util.UnitConverter.toPounds(req.getWeight(), req.getWeightUnit());
+                if (carrierLimitService.requiresSplit(limit, boxes, lb)) {
+                    warnings.add(issue(ErrorCode.VALIDATION_ERROR,
+                            "This is more than one " + carrier + " shipment can carry ("
+                                    + (limit.getMaxPackages() != null ? limit.getMaxPackages() + " boxes" : "")
+                                    + (limit.getMaxPackages() != null && limit.getMaxTotalWeightLb() != null ? " / " : "")
+                                    + (limit.getMaxTotalWeightLb() != null ? limit.getMaxTotalWeightLb().stripTrailingZeros().toPlainString() + " lb" : "")
+                                    + ") — the label will be split into several shipments.",
+                            "packages"));
+                }
+            }
+        }
+
+        // Routing rules — a BLOCK stops the label; a reroute changes what ships.
+        if (StringUtils.hasText(req.getClientCode()) && routingRuleService != null && carrier != null) {
+            com.multiship.backend.dto.RoutingEvaluationResult routing = routingRuleService.evaluate(req.getClientCode(),
+                    com.multiship.backend.dto.RoutingEvaluationRequest.builder()
+                            .weightLb(com.multiship.backend.util.UnitConverter.toPounds(req.getWeight(), req.getWeightUnit()))
+                            .destCountry(to.getCountryCode())
+                            .destRegion(com.multiship.backend.util.CountryRegions.regionOf(to.getCountryCode()))
+                            .currentCarrier(carrier)
+                            .currentServiceId(service != null ? service.getId() : null)
+                            .currentWarehouseId(warehouseId)
+                            .declaredValue(req.getDeclaredValue())
+                            .orderSource(req.getSource())
+                            .build());
+            if (routing != null && "MATCH".equals(routing.getStatus())) {
+                String rule = "Routing rule '" + routing.getMatchedRuleName() + "'";
+                if (routing.getActionType() == com.multiship.backend.model.RoutingRule.ActionType.BLOCK) {
+                    errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                            "Blocked by routing rule '" + routing.getMatchedRuleName() + "': "
+                                    + routing.getBlockReason(), "clientCode"));
+                } else if (routing.getTargetServiceId() != null) {
+                    ShippingService target = shippingServiceRepository.findById(routing.getTargetServiceId()).orElse(null);
+                    if (target == null) {
+                        errors.add(issue(ErrorCode.VALIDATION_ERROR, rule + " sends this shipment to service #"
+                                + routing.getTargetServiceId() + ", which no longer exists. Fix the rule.", "serviceId"));
+                    } else if (service == null || !target.getId().equals(service.getId())) {
+                        warnings.add(issue(ErrorCode.VALIDATION_ERROR, rule + " will ship this with "
+                                + target.getCarrier() + " " + target.getServiceCode() + " instead of the picked service.",
+                                "serviceId"));
+                    }
+                }
+                if (routing.getTargetWarehouseId() != null && !routing.getTargetWarehouseId().equals(warehouseId)) {
+                    try {
+                        resolutionService.assertWarehouseById(req.getClientCode(), routing.getTargetWarehouseId());
+                    } catch (ShipmentResolutionException e) {
+                        errors.add(issue(ErrorCode.VALIDATION_ERROR, rule + " ships from warehouse #"
+                                + routing.getTargetWarehouseId() + ", which "
+                                + (e.getErrorCode() == ErrorCode.WAREHOUSE_NOT_FOUND ? "no longer exists." : "is not attached to this client."),
+                                "warehouseCode"));
+                    }
+                }
+            }
+        }
+
+        // US territories: the Ground family doesn't deliver there.
+        String territory = com.multiship.backend.util.UsTerritoryNormalizer
+                .normalizeCountryCode(to.getCountryCode(), to.getState());
+        if (territory != null && carrier != null && StringUtils.hasText(serviceCode)
+                && com.multiship.backend.util.UsTerritoryNormalizer.US_TERRITORY_CODES
+                        .contains(territory.trim().toUpperCase(Locale.ROOT))
+                && !com.multiship.backend.util.UsTerritoryNormalizer
+                        .isServiceAllowedForTerritory(territory, carrier, serviceCode)) {
+            errors.add(issue(ErrorCode.VALIDATION_ERROR, carrier + " " + serviceCode + " does not deliver to "
+                    + territory.trim().toUpperCase(Locale.ROOT) + ". Pick a different service.", "serviceId"));
+        }
+
+        // FedEx Home Delivery (and friends) only deliver to residences.
+        if (StringUtils.hasText(serviceCode) && com.multiship.backend.service.carriers.ResidentialRequiredServices
+                .isInconsistent(serviceCode, to.getResidential())) {
+            errors.add(issue(ErrorCode.VALIDATION_ERROR, com.multiship.backend.service.carriers
+                    .ResidentialRequiredServices.inconsistentMessage(serviceCode), "recipient.residential"));
+        }
+
+        // A return label is emailed to the customer.
+        if (Boolean.TRUE.equals(req.getIsReturn()) && (from == null || !StringUtils.hasText(from.getEmail()))) {
+            errors.add(issue(ErrorCode.VALIDATION_ERROR, "Return labels need the customer's email on the sender "
+                    + "block, so the carrier can deliver or announce the return label.", "sender.email"));
+        }
+    }
+
+    /** The client's customs profile for the destination, or null. */
+    private com.multiship.backend.model.ClientCustomsProfile customsProfile(ManualShipmentRequest req) {
+        if (!StringUtils.hasText(req.getClientCode()) || req.getRecipient() == null
+                || !StringUtils.hasText(req.getRecipient().getCountryCode())) return null;
+        return clientCustomsProfileRepository.findByClientAndCountry(
+                req.getClientCode().trim().toUpperCase(Locale.ROOT),
+                req.getRecipient().getCountryCode().trim().toUpperCase(Locale.ROOT)).orElse(null);
+    }
+
+    /** A BUSINESS importer needs its tax/business number on the invoice. */
+    private void checkImporterTaxId(ManualShipmentRequest req, List<ValidationIssue> errors) {
+        com.multiship.backend.model.ClientCustomsProfile profile = customsProfile(req);
+        boolean overrideHasTaxId = req.getImporter() != null
+                && req.getImporter().get("taxId") instanceof String t && StringUtils.hasText(t);
+        if (profile != null && !"RECEIVER".equalsIgnoreCase(profile.getImporterType())
+                && !StringUtils.hasText(profile.getImporterTaxId()) && !overrideHasTaxId) {
+            String cc = req.getRecipient().getCountryCode().trim().toUpperCase(Locale.ROOT);
+            errors.add(issue(ErrorCode.VALIDATION_ERROR, "This shipment enters " + cc
+                    + " under a BUSINESS importer profile with no tax/business number. Add it to the "
+                    + req.getClientCode() + "/" + cc + " profile in Settings → Importer / Broker.", "importer"));
+        }
+    }
+
+    /** Too many item lines for one carrier call: the label asks how to split, or refuses. */
+    private void checkCommodityLines(ManualShipmentRequest req, ShipmentRequestDTO adapted,
+                                     List<ValidationIssue> errors, List<ValidationIssue> warnings) {
+        if (carrierLimitService == null || shipmentSplitter == null || !StringUtils.hasText(req.getCarrierCode())) return;
+        String carrier = blankTo(ShippingConfigService.canonicalCarrierFor(req.getCarrierCode()),
+                req.getCarrierCode().trim().toUpperCase(Locale.ROOT));
+        ShippingService service = req.getServiceId() == null ? null
+                : shippingServiceRepository.findById(req.getServiceId()).orElse(null);
+        com.multiship.backend.model.CarrierShippingLimit limit = carrierLimitService.resolveLimit(carrier,
+                service != null ? service.getServiceCode() : null, true,
+                Boolean.TRUE.equals(req.getIsReturn()) ? "RETURN" : "FORWARD");
+        if (limit == null) return;
+        if (req.getSplitStrategy() == null && shipmentSplitter.isOverCommodityCap(adapted, limit)) {
+            warnings.add(issue(ErrorCode.COMMODITIES_LIMIT_EXCEEDED,
+                    "More item lines than one " + carrier + " shipment allows — Generate label will ask how to split them.",
+                    "items"));
+            return;
+        }
+        try {
+            shipmentSplitter.assertCommoditiesFit(adapted, limit, req.getSplitStrategy() != null);
+        } catch (com.multiship.backend.exception.CommoditiesLimitExceededException e) {
+            errors.add(issue(ErrorCode.COMMODITIES_LIMIT_EXCEEDED, e.getMessage(), "items"));
+        }
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────────
