@@ -63,6 +63,7 @@ import {
 } from './NewShipmentComponents/_shared'
 import { AddressBlock } from './NewShipmentComponents/AddressBlock'
 import { CarrierAddressBanner } from './NewShipmentComponents/CarrierAddressBanner'
+import ValidationQuote from './ValidationQuote'
 
 /** Canonicalise a carrier code (ERP aliases → UPS/FEDEX/USPS). */
 const canon = (c?: string | null) => {
@@ -3194,6 +3195,7 @@ export default function NewShipmentPage() {
                         </ul>
                       </>
                     ) : null}
+                    {shipmentValidationResult.quote ? <ValidationQuote quote={shipmentValidationResult.quote} /> : null}
                     {/* Sprint 52 PR δ — carrier subresult section. Rendered
                         below local errors/warnings so the operator sees
                         "server-side gaps first, then what the carrier

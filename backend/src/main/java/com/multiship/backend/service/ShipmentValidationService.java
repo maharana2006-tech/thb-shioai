@@ -352,8 +352,15 @@ public class ShipmentValidationService {
         // validateAddress with the recipient block — every carrier gets
         // free address-level truth. Follow-up PR δ.1 overrides in
         // FedEx + UPS with native validate endpoints.
+        java.util.concurrent.atomic.AtomicReference<List<com.multiship.backend.service.carriers.CarrierConnector.RateOption>> rates =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<String> rateProblem = new java.util.concurrent.atomic.AtomicReference<>();
         ShipmentValidationResult.CarrierValidationSubResult carrierResult =
-                callCarrierValidateShipment(req, adapted, pickedAccount, skipped);
+                callCarrierValidateShipment(req, adapted, pickedAccount, skipped, rates, rateProblem);
+        ShipmentValidationResult.RateQuote quote = buildQuote(req, service, preset, rates.get(), rateProblem.get());
+        if (quote != null && "NOT_OFFERED".equals(quote.getStatus())) {
+            warnings.add(issue(ErrorCode.VALIDATION_ERROR, quote.getMessage(), "serviceId"));
+        }
         // PR #542 Fix 1 — suppress positive carrier verdict when local
         // validators flagged hard errors. Prior behavior: local says
         // "Recipient name is required" but carrier hop still shows
@@ -422,7 +429,9 @@ public class ShipmentValidationService {
                 warnings.size(),
                 skipped.stream().map(ValidationCheckStatus::getName).toList()
         );
-        return ok(buildResult(errors, warnings, skipped, carrierResult, international));
+        ShipmentValidationResult result = buildResult(errors, warnings, skipped, carrierResult, international);
+        result.setQuote(quote);
+        return ok(result);
     }
 
     /**
@@ -437,7 +446,9 @@ public class ShipmentValidationService {
             ManualShipmentRequest req,
             ShipmentRequestDTO adaptedRequest,
             com.multiship.backend.model.CarrierAccountRef account,
-            List<ValidationCheckStatus> skipped) {
+            List<ValidationCheckStatus> skipped,
+            java.util.concurrent.atomic.AtomicReference<List<com.multiship.backend.service.carriers.CarrierConnector.RateOption>> ratesOut,
+            java.util.concurrent.atomic.AtomicReference<String> rateProblemOut) {
         String carrierCode = req.getCarrierCode();
         if (!StringUtils.hasText(carrierCode)) {
             skipped.add(check("carrier_validate_shipment", "no carrierCode picked"));
@@ -466,6 +477,7 @@ public class ShipmentValidationService {
                 || !StringUtils.hasText(account.getClientSecret())) {
             skipped.add(check("carrier_validate_shipment",
                     "no live " + carrier + " credentials — cannot call carrier validate"));
+            rateProblemOut.set("No price: the " + carrier + " account has no live credentials.");
             return null;
         }
 
@@ -545,6 +557,7 @@ public class ShipmentValidationService {
                     account.getEnvironment());
         } catch (Exception ex) {
             log.warn("Shipment validation — {} token acquisition failed: {}", carrier, ex.getMessage());
+            rateProblemOut.set("No price: " + carrier + " refused the account's credentials.");
             return ShipmentValidationResult.CarrierValidationSubResult.builder()
                     .carrierCode(carrier)
                     .valid(false)
@@ -554,6 +567,17 @@ public class ShipmentValidationService {
                     .errors(List.of("Token acquisition failed: " + ex.getMessage()))
                     .message(carrier + " token acquisition failed")
                     .build();
+        }
+
+        // The price and transit time — the same rate call the rate picker
+        // makes, on the same request and account the label will use.
+        try {
+            List<com.multiship.backend.service.carriers.CarrierConnector.RateOption> quoted =
+                    connector.getRates(adaptedRequest, accessToken, account.getEnvironment());
+            ratesOut.set(quoted == null ? List.of() : quoted);
+        } catch (Exception ex) {
+            log.warn("Shipment validation — {} rate call failed: {}", carrier, ex.getMessage());
+            rateProblemOut.set("No price: " + carrier + " rate call failed — " + ex.getMessage());
         }
 
         com.multiship.backend.service.carriers.CarrierConnector.ValidateShipmentResult result;
@@ -1156,6 +1180,140 @@ public class ShipmentValidationService {
         } catch (com.multiship.backend.exception.CommoditiesLimitExceededException e) {
             errors.add(issue(ErrorCode.COMMODITIES_LIMIT_EXCEEDED, e.getMessage(), "items"));
         }
+    }
+
+    // ─── Quote: price, transit time, billable weight ───────────────────────
+
+    /**
+     * Price for the picked service from the carrier's rate reply, the
+     * client's price after markup, transit time, and billable weight.
+     * Billable weight is worked out here even when the carrier can't be
+     * asked, so "you'll pay for 12 lb, not 5" shows regardless.
+     */
+    ShipmentValidationResult.RateQuote buildQuote(ManualShipmentRequest req, ShippingService service,
+                                                  PackagePreset preset,
+                                                  List<com.multiship.backend.service.carriers.CarrierConnector.RateOption> rates,
+                                                  String rateProblem) {
+        String unit = StringUtils.hasText(req.getWeightUnit()) ? req.getWeightUnit().trim().toUpperCase(Locale.ROOT) : "LB";
+        BigDecimal actual = BigDecimal.ZERO;
+        BigDecimal billable = BigDecimal.ZERO;
+        boolean dimensional = false;
+        boolean anyBox = false;
+        for (Box box : boxes(req, preset, unit)) {
+            if (box.weight() == null || box.weight().signum() <= 0) continue;
+            anyBox = true;
+            PackagePreset shape = PackagePreset.builder()
+                    .length(box.length()).width(box.width()).height(box.height())
+                    .dimUnit(box.dimUnit()).weightUnit(unit)
+                    .tareWeight(preset != null ? preset.getTareWeight() : null)
+                    .flatRate(preset != null ? preset.getFlatRate() : null)
+                    .build();
+            BigDecimal b = com.multiship.backend.util.PackageMath.billableWeight(shape, box.weight());
+            BigDecimal withTare = preset != null && preset.getTareWeight() != null
+                    ? box.weight().add(preset.getTareWeight()) : box.weight();
+            if (b.compareTo(withTare) > 0) dimensional = true;
+            actual = actual.add(box.weight());
+            billable = billable.add(b);
+        }
+        String carrier = StringUtils.hasText(req.getCarrierCode())
+                ? blankTo(ShippingConfigService.canonicalCarrierFor(req.getCarrierCode()),
+                        req.getCarrierCode().trim().toUpperCase(Locale.ROOT))
+                : null;
+        String serviceCode = service != null ? service.getServiceCode() : null;
+        ShipmentValidationResult.RateQuote.RateQuoteBuilder q = ShipmentValidationResult.RateQuote.builder()
+                .carrierCode(carrier)
+                .serviceCode(serviceCode)
+                .serviceName(service != null ? service.getName() : null)
+                .billableWeight(anyBox ? billable.setScale(2, java.math.RoundingMode.HALF_UP).stripTrailingZeros() : null)
+                .actualWeight(anyBox ? actual.stripTrailingZeros() : null)
+                .weightUnit(unit)
+                .dimensional(dimensional);
+        if (!anyBox && rates == null) return null;
+
+        if (rates == null) {
+            return q.status("WEIGHT_ONLY").message(rateProblem != null ? rateProblem : "The carrier was not asked for a price.").build();
+        }
+        if (rates.isEmpty()) {
+            return q.status("UNAVAILABLE").message(carrier + " returned no rates for this lane.").build();
+        }
+        List<com.multiship.backend.service.carriers.CarrierConnector.RateOption> sorted = rates.stream()
+                .filter(r -> r.totalAmount() != null)
+                .sorted(java.util.Comparator.comparing(com.multiship.backend.service.carriers.CarrierConnector.RateOption::totalAmount))
+                .toList();
+        com.multiship.backend.service.carriers.CarrierConnector.RateOption picked = serviceCode == null ? null
+                : sorted.stream().filter(r -> serviceCode.equalsIgnoreCase(r.serviceCode())).findFirst().orElse(null);
+        List<String> others = sorted.stream()
+                .filter(r -> picked == null || !r.serviceCode().equalsIgnoreCase(picked.serviceCode()))
+                .limit(5)
+                .map(r -> blankTo(r.serviceName(), r.serviceCode()) + " — " + r.currency() + " "
+                        + r.totalAmount().setScale(2, java.math.RoundingMode.HALF_UP)
+                        + (r.transitDays() != null ? " · " + r.transitDays() + " day" + (r.transitDays() == 1 ? "" : "s") : ""))
+                .toList();
+        q.otherServices(others);
+        if (picked == null) {
+            return q.status("NOT_OFFERED").message(carrier + " did not quote "
+                    + blankTo(service != null ? service.getName() : null, serviceCode)
+                    + " for this lane — the label may be refused. "
+                    + (others.isEmpty() ? "" : "Quoted instead: " + String.join("; ", others) + "."))
+                    .build();
+        }
+        BigDecimal price = picked.totalAmount();
+        String currency = picked.currency();
+        String markup = null;
+        if (StringUtils.hasText(req.getClientCode())) {
+            try {
+                com.multiship.backend.service.resolution.MarkupApplied m =
+                        resolutionService.applyMarkup(req.getClientCode(), picked.totalAmount(), picked.currency());
+                if (m != null && m.billable() != null) {
+                    price = m.billable();
+                    currency = blankTo(m.currency(), currency);
+                    markup = m.kind() == null ? null : m.kind() + (m.value() != null ? " " + m.value().stripTrailingZeros().toPlainString() : "");
+                }
+            } catch (RuntimeException ex) {
+                // Missing markup is already reported as an error above.
+            }
+        }
+        return q.status("QUOTED")
+                .serviceName(blankTo(picked.serviceName(), service != null ? service.getName() : serviceCode))
+                .carrierAmount(picked.totalAmount().setScale(2, java.math.RoundingMode.HALF_UP))
+                .amount(price.setScale(2, java.math.RoundingMode.HALF_UP))
+                .currency(currency)
+                .markup(markup)
+                .transitDays(picked.transitDays())
+                .estimatedDelivery(picked.estimatedDelivery() != null ? picked.estimatedDelivery().toLocalDate().toString() : null)
+                .message(carrier + " quotes " + picked.currency() + " "
+                        + picked.totalAmount().setScale(2, java.math.RoundingMode.HALF_UP)
+                        + (picked.transitDays() != null ? ", " + picked.transitDays() + " business day"
+                                + (picked.transitDays() == 1 ? "" : "s") : "") + ".")
+                .build();
+    }
+
+    private record Box(BigDecimal weight, BigDecimal length, BigDecimal width, BigDecimal height, String dimUnit) { }
+
+    /** Every box the label ships: packages[] when given, else the single top-level box. */
+    private static List<Box> boxes(ManualShipmentRequest req, PackagePreset preset, String unit) {
+        String dimUnit = StringUtils.hasText(req.getDimUnit()) ? req.getDimUnit() : (preset != null ? preset.getDimUnit() : "IN");
+        if (req.getPackages() != null && !req.getPackages().isEmpty()) {
+            List<Box> out = new ArrayList<>();
+            for (com.multiship.backend.dto.PackageDetailDTO p : req.getPackages()) {
+                boolean hasDims = p.getLength() != null && p.getWidth() != null && p.getHeight() != null;
+                BigDecimal w = p.getWeight() == null ? null : "KG".equals(unit)
+                        ? com.multiship.backend.util.UnitConverter.toKilograms(p.getWeight(), blankTo(p.getWeightUnit(), unit))
+                        : com.multiship.backend.util.UnitConverter.toPounds(p.getWeight(), blankTo(p.getWeightUnit(), unit));
+                out.add(new Box(w,
+                        hasDims ? p.getLength() : (preset != null ? preset.getLength() : null),
+                        hasDims ? p.getWidth() : (preset != null ? preset.getWidth() : null),
+                        hasDims ? p.getHeight() : (preset != null ? preset.getHeight() : null),
+                        hasDims ? blankTo(p.getDimUnit(), dimUnit) : (preset != null ? preset.getDimUnit() : dimUnit)));
+            }
+            return out;
+        }
+        boolean hasDims = req.getLength() != null && req.getWidth() != null && req.getHeight() != null;
+        return List.of(new Box(req.getWeight(),
+                hasDims ? req.getLength() : (preset != null ? preset.getLength() : null),
+                hasDims ? req.getWidth() : (preset != null ? preset.getWidth() : null),
+                hasDims ? req.getHeight() : (preset != null ? preset.getHeight() : null),
+                hasDims ? dimUnit : (preset != null ? preset.getDimUnit() : dimUnit)));
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────────

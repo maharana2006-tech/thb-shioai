@@ -1150,4 +1150,80 @@ class ShipmentValidationServiceTest {
         assertTrue(r.getLocalErrors().stream().anyMatch(e -> "labelImageFormat".equals(e.getField())),
                 r.getLocalErrors().toString());
     }
+
+    // ─── Quote: price, transit time, billable weight ────────────────────
+
+    /** A FedEx account with live credentials whose rate reply is {@code rates}. */
+    private ManualShipmentRequest pricedRequest(List<com.multiship.backend.service.carriers.CarrierConnector.RateOption> rates)
+            throws Exception {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setAccountId(42L);
+        stubServiceAndPreset();
+        when(carrierAccountRefRepository.findById(42L)).thenReturn(Optional.of(com.multiship.backend.model.CarrierAccountRef.builder()
+                .id(42L).carrierCode("FEDEX").accountNumber("ACC1").clientId("cid").clientSecret("sec")
+                .environment("SANDBOX").active(true).build()));
+        com.multiship.backend.service.carriers.CarrierConnector connector =
+                mock(com.multiship.backend.service.carriers.CarrierConnector.class);
+        when(carrierService.getCarrierConnector("FEDEX")).thenReturn(connector);
+        when(connector.getConfiguration()).thenReturn(mock(com.multiship.backend.service.carriers.CarrierConnector.CarrierConfiguration.class));
+        when(connector.getAccessToken(any(), any(), any(), any())).thenReturn("tok");
+        when(carrierService.buildManualShipmentRequestDto(any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any())).thenReturn(new ShipmentRequestDTO());
+        when(connector.getRates(any(), any(), any())).thenReturn(rates);
+        when(connector.validateShipment(any(), any(), any())).thenReturn(
+                new com.multiship.backend.service.carriers.CarrierConnector.ValidateShipmentResult(
+                        true, "EXACT", "SHIPMENT", List.of(), List.of(), "ok", null));
+        return req;
+    }
+
+    private static com.multiship.backend.service.carriers.CarrierConnector.RateOption rate(String code, String amount, Integer days) {
+        return new com.multiship.backend.service.carriers.CarrierConnector.RateOption(
+                "FEDEX", code, null, new BigDecimal(amount), "USD", null, days);
+    }
+
+    @Test
+    void thePickedServiceIsPricedWithTheClientsMarkup() throws Exception {
+        ManualShipmentRequest req = pricedRequest(List.of(rate("FEDEX_2_DAY", "30.10", 2), rate("FEDEX_GROUND", "12.40", 4)));
+        req.setClientCode("ACME");
+        when(resolutionService.applyMarkup(org.mockito.ArgumentMatchers.eq("ACME"), any(), any())).thenAnswer(inv -> {
+            BigDecimal carrierRate = inv.getArgument(1);
+            return new com.multiship.backend.service.resolution.MarkupApplied(carrierRate,
+                    carrierRate.multiply(new BigDecimal("1.15")), "PERCENT", new BigDecimal("15"), "USD");
+        });
+
+        ShipmentValidationResult.RateQuote q = service.validate(req).getData().getQuote();
+
+        assertEquals("QUOTED", q.getStatus());
+        assertEquals(new BigDecimal("12.40"), q.getCarrierAmount());
+        assertEquals(new BigDecimal("14.26"), q.getAmount(), "12.40 + 15%");
+        assertEquals(4, q.getTransitDays());
+        assertEquals(1, q.getOtherServices().size());
+        assertTrue(q.getOtherServices().get(0).startsWith("FEDEX_2_DAY — USD 30.10 · 2 days"), q.getOtherServices().toString());
+    }
+
+    @Test
+    void aServiceTheCarrierDoesNotQuoteIsAWarning() throws Exception {
+        ManualShipmentRequest req = pricedRequest(List.of(rate("FEDEX_2_DAY", "30.10", 2)));
+        ShipmentValidationResult r = service.validate(req).getData();
+        assertEquals("NOT_OFFERED", r.getQuote().getStatus());
+        assertTrue(r.getLocalWarnings().stream().anyMatch(w -> w.getMessage().contains("did not quote")
+                && w.getMessage().contains("FEDEX_2_DAY")), r.getLocalWarnings().toString());
+    }
+
+    /** A light, big box bills on its size: 18×14×12 in = 3024 in³ / 139 = 21.76 lb, not 5. */
+    @Test
+    void aBigLightBoxBillsOnItsDimensionalWeight() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setPackagePresetId(null);
+        req.setWeight(new BigDecimal("5"));
+        req.setLength(new BigDecimal("18")); req.setWidth(new BigDecimal("14")); req.setHeight(new BigDecimal("12"));
+        req.setDimUnit("IN");
+        when(shippingServiceRepository.findById(1L)).thenReturn(Optional.of(fedexGround()));
+
+        ShipmentValidationResult.RateQuote q = service.validate(req).getData().getQuote();
+
+        assertEquals("WEIGHT_ONLY", q.getStatus(), "no credentials, so no price — but the weight is still worked out");
+        assertEquals(0, new BigDecimal("21.76").compareTo(q.getBillableWeight()), q.getBillableWeight().toString());
+        assertTrue(q.isDimensional());
+    }
 }
