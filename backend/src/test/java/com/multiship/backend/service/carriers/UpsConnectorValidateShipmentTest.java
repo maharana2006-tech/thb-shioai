@@ -84,6 +84,25 @@ class UpsConnectorValidateShipmentTest {
         assertEquals("ERROR", r.matchLevel());
     }
 
+    /** Validate now asks the Rating API — nothing is created at UPS. */
+    @Test
+    void aRateReplyIsReadAndTheRateDisclaimerIsNotAWarning() {
+        String ok = "{\"RateResponse\":{\"Response\":{\"ResponseStatus\":{\"Code\":\"1\",\"Description\":\"Success\"},"
+                + "\"Alert\":[{\"Code\":\"110971\",\"Description\":\"Your invoice may vary from the displayed reference rates\"}]}}}";
+        ValidateShipmentResult r = connector.parseUpsValidateShipmentResponse(ok);
+        assertTrue(r.valid());
+        assertEquals("EXACT", r.matchLevel());
+        assertTrue(r.warnings().isEmpty());
+
+        String classified = "{\"RateResponse\":{\"Response\":{\"ResponseStatus\":{\"Code\":\"1\"},"
+                + "\"Alert\":[{\"Code\":\"110971\",\"Description\":\"x\"},"
+                + "{\"Code\":\"110920\",\"Description\":\"Ship To Address Classification is changed from Commercial to Residential\"}]}}}";
+        ValidateShipmentResult c = connector.parseUpsValidateShipmentResponse(classified);
+        assertEquals("CORRECTED", c.matchLevel());
+        assertEquals(1, c.warnings().size());
+        assertTrue(c.warnings().get(0).startsWith("110920"));
+    }
+
     @Test
     void payloadBuilderFlipsRequestOptionForValidate() throws Exception {
         Method m = UpsConnector.class.getDeclaredMethod(

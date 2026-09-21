@@ -3,6 +3,7 @@ package com.multiship.backend.service;
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.ErrorCode;
 import com.multiship.backend.dto.ManualShipmentRequest;
+import com.multiship.backend.dto.ShipmentRequestDTO;
 import com.multiship.backend.dto.ShipmentValidationResult;
 import com.multiship.backend.model.PackagePreset;
 import com.multiship.backend.model.ShippingService;
@@ -15,6 +16,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -48,6 +50,8 @@ class ShipmentValidationServiceTest {
     private com.multiship.backend.service.fx.FxRateService fxRateService;
     private com.multiship.backend.service.intl.ExportDeclarationPolicyRegistry exportDeclarationPolicyRegistry;
 
+    private TenantScopeEnforcer tenantScope;
+
     private ShipmentValidationService service;
 
     @BeforeEach
@@ -78,12 +82,23 @@ class ShipmentValidationServiceTest {
         exportDeclarationPolicyRegistry = new com.multiship.backend.service.intl.ExportDeclarationPolicyRegistry(
                 java.util.List.of());
 
+        if (tenantScope == null) {
+            // An operator: the clamp passes the client code through untouched.
+            tenantScope = mock(TenantScopeEnforcer.class);
+            when(tenantScope.clampClientCode(org.mockito.ArgumentMatchers.any()))
+                    .thenAnswer(inv -> inv.getArgument(0));
+            // "ACC1" is a registered, active platform FEDEX account (no
+            // credentials, so the carrier hop is skipped).
+            when(carrierAccountRefRepository.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase("ACC1", "FEDEX"))
+                    .thenReturn(Optional.of(com.multiship.backend.model.CarrierAccountRef.builder()
+                            .carrierCode("FEDEX").accountNumber("ACC1").active(true).build()));
+        }
         service = new ShipmentValidationService(
                 packagingCompatibilityGuard, resolutionService,
                 shippingServiceRepository, packagePresetRepository,
                 carrierService, carrierAccountRefRepository,
                 clientRepository, clientCustomsProfileRepository,
-                fxRateService, exportDeclarationPolicyRegistry);
+                fxRateService, exportDeclarationPolicyRegistry, tenantScope);
     }
 
     /** Rebuilds {@link #service} with a registry populated by the given
@@ -98,7 +113,7 @@ class ShipmentValidationServiceTest {
                 shippingServiceRepository, packagePresetRepository,
                 carrierService, carrierAccountRefRepository,
                 clientRepository, clientCustomsProfileRepository,
-                fxRateService, exportDeclarationPolicyRegistry);
+                fxRateService, exportDeclarationPolicyRegistry, tenantScope);
     }
 
     // ─── Happy path ─────────────────────────────────────────────────────
@@ -507,8 +522,8 @@ class ShipmentValidationServiceTest {
                         .carrierCode("FEDEX").accountNumber("ACC1")
                         .currency("USD").clientId("id").clientSecret("s")
                         .active(true).build();
-        when(carrierAccountRefRepository.findPlatformAccountsByCarrier("FEDEX"))
-                .thenReturn(java.util.List.of(acc));
+        when(carrierAccountRefRepository.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase("ACC1", "FEDEX"))
+                .thenReturn(java.util.Optional.of(acc));
 
         assertEquals("EUR", service.resolveCustomsCurrency(req));
     }
@@ -522,8 +537,8 @@ class ShipmentValidationServiceTest {
                         .carrierCode("FEDEX").accountNumber("ACC1")
                         .currency("gbp").clientId("id").clientSecret("s")
                         .active(true).build();
-        when(carrierAccountRefRepository.findPlatformAccountsByCarrier("FEDEX"))
-                .thenReturn(java.util.List.of(acc));
+        when(carrierAccountRefRepository.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase("ACC1", "FEDEX"))
+                .thenReturn(java.util.Optional.of(acc));
 
         assertEquals("GBP", service.resolveCustomsCurrency(req));
     }
@@ -538,8 +553,8 @@ class ShipmentValidationServiceTest {
                 com.multiship.backend.model.CarrierAccountRef.builder()
                         .carrierCode("FEDEX").accountNumber("ACC1")
                         .clientId("id").clientSecret("s").active(true).build();
-        when(carrierAccountRefRepository.findPlatformAccountsByCarrier("FEDEX"))
-                .thenReturn(java.util.List.of(acc));
+        when(carrierAccountRefRepository.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase("ACC1", "FEDEX"))
+                .thenReturn(java.util.Optional.of(acc));
         com.multiship.backend.model.Client client =
                 com.multiship.backend.model.Client.builder()
                         .clientCode("THB001").defaultCurrency("CAD").build();
@@ -968,5 +983,73 @@ class ShipmentValidationServiceTest {
         return PackagePreset.builder()
                 .id(7L).name("My Box").kind("CUSTOM")
                 .ownerType(PackagePreset.OWNER_PLATFORM).build();
+    }
+
+    // ─── The account the label will bill ────────────────────────────────
+
+    @Test
+    void anUnregisteredTypedAccountFails() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setAccountNumber("NOPE99");
+        stubServiceAndPreset();
+        ShipmentValidationResult r = service.validate(req).getData();
+        assertEquals("FAIL", r.getOverall());
+        assertTrue(r.getLocalErrors().stream().anyMatch(e -> "accountNumber".equals(e.getField())
+                && e.getMessage().contains("NOPE99") && e.getMessage().contains("not a registered")), r.getLocalErrors().toString());
+    }
+
+    @Test
+    void aDeactivatedOrAnotherClientsAccountFails() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setClientCode("ACME");
+        stubServiceAndPreset();
+        when(carrierAccountRefRepository.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase("ACC1", "FEDEX"))
+                .thenReturn(Optional.of(com.multiship.backend.model.CarrierAccountRef.builder()
+                        .carrierCode("FEDEX").accountNumber("ACC1").customerNo("DES875").active(false).build()));
+        List<String> msgs = service.validate(req).getData().getLocalErrors().stream()
+                .map(ShipmentValidationResult.ValidationIssue::getMessage).toList();
+        assertTrue(msgs.stream().anyMatch(m -> m.contains("belongs to client DES875, not ACME")), msgs.toString());
+        assertTrue(msgs.stream().anyMatch(m -> m.contains("is deactivated")), msgs.toString());
+    }
+
+    @Test
+    void aPickedAccountIdThatNoLongerExistsFails() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setAccountId(404L);
+        stubServiceAndPreset();
+        when(carrierAccountRefRepository.findById(404L)).thenReturn(Optional.empty());
+        assertTrue(service.validate(req).getData().getLocalErrors().stream()
+                .anyMatch(e -> e.getMessage().contains("no longer exists")));
+    }
+
+    /** The carrier check runs on the picked account — never the client's default or a platform one. */
+    @Test
+    void theCarrierCheckUsesThePickedAccountNotADefault() throws Exception {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setAccountId(42L);
+        stubServiceAndPreset();
+        com.multiship.backend.model.CarrierAccountRef picked = com.multiship.backend.model.CarrierAccountRef.builder()
+                .id(42L).carrierCode("FEDEX").accountNumber("PICKED1").clientId("cid").clientSecret("sec")
+                .environment("SANDBOX").active(true).build();
+        when(carrierAccountRefRepository.findById(42L)).thenReturn(Optional.of(picked));
+        com.multiship.backend.service.carriers.CarrierConnector connector =
+                mock(com.multiship.backend.service.carriers.CarrierConnector.class);
+        when(carrierService.getCarrierConnector("FEDEX")).thenReturn(connector);
+        when(connector.getConfiguration()).thenReturn(mock(com.multiship.backend.service.carriers.CarrierConnector.CarrierConfiguration.class));
+        when(connector.getAccessToken("cid", "sec", "PICKED1", "SANDBOX")).thenReturn("tok");
+        when(carrierService.buildManualShipmentRequestDto(any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any())).thenReturn(new ShipmentRequestDTO());
+        when(connector.validateShipment(any(), org.mockito.ArgumentMatchers.eq("tok"), org.mockito.ArgumentMatchers.eq("SANDBOX")))
+                .thenReturn(new com.multiship.backend.service.carriers.CarrierConnector.ValidateShipmentResult(
+                        true, "EXACT", "SHIPMENT", List.of(), List.of(), "ok", null));
+
+        service.validate(req);
+
+        org.mockito.Mockito.verify(connector).getAccessToken("cid", "sec", "PICKED1", "SANDBOX");
+        org.mockito.Mockito.verify(carrierAccountRefRepository, org.mockito.Mockito.never()).findPlatformAccountsByCarrier(any());
+        // Bill-to on the carrier payload is the typed number ("ACC1") — the label's rule.
+        org.mockito.Mockito.verify(carrierService).buildManualShipmentRequestDto(any(), any(), any(),
+                org.mockito.ArgumentMatchers.eq("FEDEX"), org.mockito.ArgumentMatchers.eq("ACC1"),
+                any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.eq(picked), any());
     }
 }

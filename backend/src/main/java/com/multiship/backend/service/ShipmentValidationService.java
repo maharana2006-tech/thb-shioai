@@ -95,6 +95,9 @@ public class ShipmentValidationService {
      *  GB CDS, AU EDN, JP declaration, IN SB). Registry-lookup by
      *  shipper country ISO. */
     private final com.multiship.backend.service.intl.ExportDeclarationPolicyRegistry exportDeclarationPolicyRegistry;
+    /** Same clamp Generate label applies: a client-scoped user validates
+     *  against their own client's rules, never another tenant's. */
+    private final TenantScopeEnforcer tenantScope;
 
     /**
      * PR A — env-configurable extension for the built-in no-postal-code
@@ -116,6 +119,7 @@ public class ShipmentValidationService {
         List<ValidationIssue> warnings = new ArrayList<>();
         List<ValidationCheckStatus> skipped = new ArrayList<>();
 
+        req.setClientCode(tenantScope.clampClientCode(req.getClientCode()));
         ManualShipmentRequest.Address to = req.getRecipient();
         ManualShipmentRequest.Address from = req.getSender();
         String clientCode = req.getClientCode();
@@ -125,6 +129,11 @@ public class ShipmentValidationService {
         checkRecipientRequired(to, errors, warnings);
         checkSenderRequired(from, req, errors);
         checkShipmentRequired(req, errors);
+        // The account the label will bill — the one picked on the form, held
+        // to the same rules Generate label applies (exists, belongs to this
+        // client, active). The carrier check below runs on this same account.
+        com.multiship.backend.model.CarrierAccountRef pickedAccount = pickedAccount(req);
+        checkPickedAccount(req, pickedAccount, errors);
 
         // ─── Sprint 52 PR β — format checks (postal + state per country).
         // Fast-fail on typos like "Delaware" instead of "DE" or ZIP
@@ -299,7 +308,7 @@ public class ShipmentValidationService {
         // free address-level truth. Follow-up PR δ.1 overrides in
         // FedEx + UPS with native validate endpoints.
         ShipmentValidationResult.CarrierValidationSubResult carrierResult =
-                callCarrierValidateShipment(req, adapted, skipped);
+                callCarrierValidateShipment(req, adapted, pickedAccount, skipped);
         // PR #542 Fix 1 — suppress positive carrier verdict when local
         // validators flagged hard errors. Prior behavior: local says
         // "Recipient name is required" but carrier hop still shows
@@ -382,6 +391,7 @@ public class ShipmentValidationService {
     private ShipmentValidationResult.CarrierValidationSubResult callCarrierValidateShipment(
             ManualShipmentRequest req,
             ShipmentRequestDTO adaptedRequest,
+            com.multiship.backend.model.CarrierAccountRef account,
             List<ValidationCheckStatus> skipped) {
         String carrierCode = req.getCarrierCode();
         if (!StringUtils.hasText(carrierCode)) {
@@ -399,11 +409,15 @@ public class ShipmentValidationService {
             return null;
         }
 
-        // Credential resolution — mirror AddressValidationServiceImpl:
-        // client-default first, then any client-owned active account,
-        // then platform fallback.
-        com.multiship.backend.model.CarrierAccountRef account = resolveAccount(carrier, req.getClientCode());
-        if (account == null || !StringUtils.hasText(account.getClientId())
+        // The picked account only — never a stand-in. Checking the client's
+        // default while the label bills another account let Validate pass on
+        // account A and Generate fail (or bill) on account B.
+        if (account == null) {
+            skipped.add(check("carrier_validate_shipment",
+                    "the picked " + carrier + " account could not be used — fix the account first"));
+            return null;
+        }
+        if (!StringUtils.hasText(account.getClientId())
                 || !StringUtils.hasText(account.getClientSecret())) {
             skipped.add(check("carrier_validate_shipment",
                     "no live " + carrier + " credentials — cannot call carrier validate"));
@@ -445,7 +459,7 @@ public class ShipmentValidationService {
                 req.getSender(),
                 req.getRecipient(),
                 carrier,
-                account.getAccountNumber(),
+                StringUtils.hasText(req.getAccountNumber()) ? req.getAccountNumber().trim() : account.getAccountNumber(),
                 serviceType,
                 packageType,
                 length, width, height,
@@ -606,30 +620,50 @@ public class ShipmentValidationService {
         return out;
     }
 
-    /** 3-tier credential resolution — mirrors AddressValidationServiceImpl. */
-    private com.multiship.backend.model.CarrierAccountRef resolveAccount(String carrierCode, String customerNo) {
-        if (StringUtils.hasText(customerNo)) {
-            java.util.List<com.multiship.backend.model.CarrierAccountRef> ownedDefaults =
-                    carrierAccountRefRepository.findByCustomerNoIgnoreCaseAndClientDefaultTrue(customerNo);
-            for (com.multiship.backend.model.CarrierAccountRef ref : ownedDefaults) {
-                if (matchesCarrierWithCreds(ref, carrierCode)) return ref;
-            }
-            java.util.List<com.multiship.backend.model.CarrierAccountRef> allOwned =
-                    carrierAccountRefRepository.findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc(customerNo);
-            for (com.multiship.backend.model.CarrierAccountRef ref : allOwned) {
-                if (Boolean.FALSE.equals(ref.getActive())) continue;
-                if (matchesCarrierWithCreds(ref, carrierCode)) return ref;
-            }
+    /**
+     * The account Generate label will bill: the picked account id, else the
+     * typed number registered for this carrier. Null when neither resolves.
+     */
+    com.multiship.backend.model.CarrierAccountRef pickedAccount(ManualShipmentRequest req) {
+        if (req.getAccountId() != null) {
+            return carrierAccountRefRepository.findById(req.getAccountId()).orElse(null);
         }
-        java.util.List<com.multiship.backend.model.CarrierAccountRef> platform =
-                carrierAccountRefRepository.findPlatformAccountsByCarrier(carrierCode);
-        return platform.isEmpty() ? null : platform.get(0);
+        if (!StringUtils.hasText(req.getAccountNumber()) || !StringUtils.hasText(req.getCarrierCode())) return null;
+        String carrier = ShippingConfigService.canonicalCarrierFor(req.getCarrierCode());
+        if (!StringUtils.hasText(carrier)) carrier = req.getCarrierCode().trim().toUpperCase(Locale.ROOT);
+        return carrierAccountRefRepository
+                .findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase(req.getAccountNumber().trim(), carrier)
+                .orElse(null);
     }
 
-    private static boolean matchesCarrierWithCreds(com.multiship.backend.model.CarrierAccountRef ref, String carrierCode) {
-        return carrierCode.equalsIgnoreCase(ref.getCarrierCode())
-                && StringUtils.hasText(ref.getClientId())
-                && StringUtils.hasText(ref.getClientSecret());
+    /** The account rules Generate label enforces, reported instead of thrown. */
+    private void checkPickedAccount(ManualShipmentRequest req,
+                                    com.multiship.backend.model.CarrierAccountRef account,
+                                    List<ValidationIssue> errors) {
+        if (req.getAccountId() == null && !StringUtils.hasText(req.getAccountNumber())) return; // "required" already reported
+        if (account == null) {
+            errors.add(issue(ErrorCode.VALIDATION_ERROR, req.getAccountId() != null
+                    ? "The selected carrier account no longer exists. Refresh and pick again."
+                    : "Account " + req.getAccountNumber().trim() + " is not a registered "
+                            + (StringUtils.hasText(req.getCarrierCode()) ? req.getCarrierCode().trim().toUpperCase(Locale.ROOT) + " " : "")
+                            + "account. Add it in Settings → Carrier Accounts first.",
+                    "accountNumber"));
+            return;
+        }
+        String owner = StringUtils.hasText(account.getCustomerNo()) ? account.getCustomerNo().trim() : null;
+        if (owner != null && StringUtils.hasText(req.getClientCode())
+                && !owner.equalsIgnoreCase(req.getClientCode().trim())) {
+            errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                    "Account " + account.getAccountNumber() + " belongs to client " + owner
+                            + ", not " + req.getClientCode().trim() + ".",
+                    "accountNumber"));
+        }
+        if (Boolean.FALSE.equals(account.getActive())) {
+            errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                    "Account " + account.getAccountNumber() + " is deactivated. "
+                            + "Re-activate it in Settings → Carrier Accounts or pick another account.",
+                    "accountNumber"));
+        }
     }
 
     // ─── Field checks (comprehensive — every missing field errors) ──────────
@@ -1129,9 +1163,8 @@ public class ShipmentValidationService {
         if (StringUtils.hasText(req.getCurrency())) {
             return req.getCurrency().trim().toUpperCase(Locale.ROOT);
         }
-        if (StringUtils.hasText(req.getCarrierCode()) && StringUtils.hasText(req.getAccountNumber())) {
-            com.multiship.backend.model.CarrierAccountRef account = resolveAccount(
-                    req.getCarrierCode().trim().toUpperCase(Locale.ROOT), req.getClientCode());
+        {
+            com.multiship.backend.model.CarrierAccountRef account = pickedAccount(req);
             if (account != null && StringUtils.hasText(account.getCurrency())) {
                 return account.getCurrency().trim().toUpperCase(Locale.ROOT);
             }
