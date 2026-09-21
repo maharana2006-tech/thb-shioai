@@ -2233,10 +2233,23 @@ export default function NewShipmentPage() {
     dutiesAccount, ftrExemption, aesCitation, exportDeclarationReference, override,
   ])
   const validationStale = !!shipmentValidationResult && !!validatedRequest && formSnapshot !== validatedRequest
+  // Generate label unlocks only after this exact form passed Validate
+  // (Passed or To review). A failed check, or any edit since, locks it again.
+  const validationGate: string | null = !shipmentValidationResult
+    ? 'Validate the shipment first.'
+    : shipmentValidationResult.overall === 'FAIL'
+      ? 'Fix the issues in the shipment check, then validate again.'
+      : validationStale
+        ? 'The form changed since the check — validate again.'
+        : null
   const formSnapshotRef = useRef('')
   useEffect(() => { formSnapshotRef.current = formSnapshot }, [formSnapshot])
 
   const submit = async () => {
+    if (validationGate) {
+      showToast(validationGate, 'Validate before generating')
+      return
+    }
     // Yup + Formik gate — validate the mirrored form values before anything else.
     setSubmitAttempted(true)
     // PR #530 — zero shippable carriers: block early with a
@@ -3976,8 +3989,14 @@ export default function NewShipmentPage() {
           ) : null}
           <div className="flex items-center justify-between gap-3 rounded-2xl border border-[#e3d9c4] bg-white px-5 py-3 shadow-[0_18px_50px_rgba(31,21,12,0.16)]">
             <span className="hidden text-[11.5px] text-[#6b5c42] sm:block">
-              The label is purchased immediately on the selected account.
-              {isInternational ? ' Commercial invoice included for this cross-border lane.' : ''}
+              {validationGate ? (
+                <span className="font-semibold text-[#5a4526]">{validationGate} Generate label unlocks after a successful check.</span>
+              ) : (
+                <>
+                  The label is purchased immediately on the selected account.
+                  {isInternational ? ' Commercial invoice included for this cross-border lane.' : ''}
+                </>
+              )}
             </span>
             <div className="flex flex-wrap items-center justify-end gap-2">
               <button
@@ -4021,12 +4040,12 @@ export default function NewShipmentPage() {
               <button
                 type="button"
                 onClick={() => void submit()}
-                disabled={submitting || noCarriersAtAll || residentialConflict || returnEmailMissing}
-                title={residentialConflict
+                disabled={submitting || noCarriersAtAll || residentialConflict || returnEmailMissing || !!validationGate}
+                title={validationGate ?? (residentialConflict
                   ? 'FedEx Home Delivery requires the recipient to be marked as residential. Tick the checkbox on the recipient block, or pick a different service.'
                   : returnEmailMissing
                     ? 'Return labels need the customer email on the sender block — carriers (UPS especially) reject return labels without it (UPS error 9120145 "Missing label delivery information").'
-                    : undefined}
+                    : undefined)}
                 className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-4 py-2 text-[12.5px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4] disabled:text-white disabled:shadow-none"
               >
                 {submitting ? (
