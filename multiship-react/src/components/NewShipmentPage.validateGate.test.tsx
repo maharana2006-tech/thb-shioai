@@ -62,7 +62,7 @@ describe('NewShipmentPage — Generate label waits for Validate', () => {
     renderWithProviders(<NewShipmentPage />)
     const generate = await screen.findByRole('button', { name: /generate label/i })
     expect(generate).toBeDisabled()
-    expect(generate).toHaveAttribute('title', 'Validate the shipment first.')
+    expect(generate).toHaveAttribute('title', 'Validate the shipment first. Generate label unlocks after a successful check.')
     expect(screen.getByText(/Generate label unlocks after a successful check/)).toBeInTheDocument()
   })
 })

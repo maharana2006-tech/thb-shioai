@@ -72,7 +72,10 @@ export function Field({
   className = '',
 }: FieldProps) {
   return (
-    <label className={`block space-y-1 ${className}`} title={title}>
+    <label
+      className={`block space-y-1 ${error ? '[&_input]:!border-rose-400 [&_select]:!border-rose-400 [&_textarea]:!border-rose-400' : ''} ${className}`}
+      title={title}
+    >
       <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#6b5c42]">
         {label}
         {required ? <span className="text-rose-500"> *</span> : null}

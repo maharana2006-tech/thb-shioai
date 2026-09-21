@@ -1098,7 +1098,7 @@ class ShipmentValidationServiceTest {
         req.getRecipient().setState(null);
         req.getRecipient().setPostalCode("00901");
         stubServiceAndPreset();
-        assertTrue(errorsOf(req).stream().anyMatch(m -> m.contains("FEDEX_GROUND does not deliver to PR")),
+        assertTrue(errorsOf(req).stream().anyMatch(m -> m.contains("FedEx Ground does not deliver to PR")),
                 errorsOf(req).toString());
     }
 
@@ -1244,7 +1244,7 @@ class ShipmentValidationServiceTest {
         ManualShipmentRequest req = fullDomesticRequest();
         req.getRecipient().setAddressLine2("P.O. Box 118");
         stubServiceAndPreset();
-        assertTrue(errorsOf(req).stream().anyMatch(m -> m.startsWith("FEDEX can't deliver to a PO box (\"P.O. Box 118\")")),
+        assertTrue(errorsOf(req).stream().anyMatch(m -> m.startsWith("FedEx can't deliver to a PO box (\"P.O. Box 118\")")),
                 errorsOf(req).toString());
 
         when(shippingServiceRepository.findById(1L)).thenReturn(Optional.of(ShippingService.builder()
@@ -1300,7 +1300,7 @@ class ShipmentValidationServiceTest {
         req.setInsuredValueCurrency("USD");
         stubServiceAndPreset();
         assertTrue(service.validate(req).getData().getLocalWarnings().stream().anyMatch(w -> w.getMessage()
-                .equals("FEDEX covers the first USD 100 free; insuring USD 500 adds a declared-value charge to the label.")));
+                .equals("FedEx covers the first USD 100 free; insuring USD 500 adds a declared-value charge to the label.")));
         req.setInsuredValue(new BigDecimal("80"));
         assertTrue(service.validate(req).getData().getLocalWarnings().stream().noneMatch(w -> "insuredValue".equals(w.getField())));
     }

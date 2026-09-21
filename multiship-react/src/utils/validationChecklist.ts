@@ -18,6 +18,8 @@ export interface CheckGroup {
   errors: string[]
   warnings: string[]
   skipped: string[]
+  /** Technical detail behind the row's messages (carrier replies), shown on request. */
+  details: string[]
   status: 'fail' | 'warn' | 'pass' | 'skipped'
 }
 
@@ -33,6 +35,7 @@ const GROUPS: { key: CheckGroupKey; title: string; sectionId: string }[] = [
 export function groupOfIssue(issue: ShipmentValidationIssue): CheckGroupKey {
   const field = (issue.field ?? '').toLowerCase()
   const code = (issue.code ?? '').toLowerCase()
+  if (field === 'carrier') return 'carrier'
   if (field.startsWith('recipient') || field.startsWith('sender') || field.startsWith('warehouse')) return 'addresses'
   if (field.startsWith('items') || field.startsWith('importer') || ['incoterms', 'currency', 'dutiesaccount', 'reasonforexport'].includes(field)
     || code.startsWith('customs') || code.startsWith('dg.') || code.startsWith('commodities')) return 'customs'
@@ -65,7 +68,7 @@ const statusOf = (g: Pick<CheckGroup, 'errors' | 'warnings' | 'skipped'>, ran: b
 
 /** Sort a Validate result into the five areas of the checklist. */
 export function buildCheckGroups(result: ShipmentValidationResult): CheckGroup[] {
-  const groups = new Map<CheckGroupKey, CheckGroup>(GROUPS.map((g) => [g.key, { ...g, errors: [], warnings: [], skipped: [], status: 'pass' }]))
+  const groups = new Map<CheckGroupKey, CheckGroup>(GROUPS.map((g) => [g.key, { ...g, errors: [], warnings: [], skipped: [], details: [], status: 'pass' }]))
   for (const e of result.localErrors ?? []) groups.get(groupOfIssue(e))!.errors.push(e.message)
   for (const w of result.localWarnings ?? []) groups.get(groupOfIssue(w))!.warnings.push(w.message)
   for (const s of (result.skipped ?? []) as ShipmentValidationCheckStatus[]) {
@@ -75,18 +78,11 @@ export function buildCheckGroups(result: ShipmentValidationResult): CheckGroup[]
   const carrier = groups.get('carrier')!
   const c = result.carrier
   if (c) {
-    // Carrier errors already surface as a local error ("FEDEX: …"); move them here.
-    for (const g of groups.values()) {
-      if (g.key === 'carrier') continue
-      const mine = g.errors.filter((m) => m.startsWith(`${c.carrierCode}: `))
-      if (mine.length) {
-        g.errors = g.errors.filter((m) => !m.startsWith(`${c.carrierCode}: `))
-        carrier.errors.push(...mine.map((m) => m.slice(c.carrierCode.length + 2)))
-      }
-    }
+    // The carrier's failure is already one local error (field "carrier"): one
+    // problem, one line. Its raw reply goes under "Details".
     if (!c.valid && c.matchLevel === 'NOT_SUPPORTED') carrier.skipped.push(c.message)
     else if (!c.valid && !carrier.errors.length) carrier.errors.push(c.message)
-    carrier.errors.push(...(c.errors ?? []).filter((e) => !carrier.errors.some((x) => x.includes(e))))
+    carrier.details.push(...(c.errors ?? []).filter((e) => !carrier.errors.includes(e)))
     carrier.warnings.push(...(c.warnings ?? []))
   }
   const customsRan = result.international
@@ -97,4 +93,17 @@ export function buildCheckGroups(result: ShipmentValidationResult): CheckGroup[]
         : true
     return { ...g, status: statusOf(g, ran) }
   })
+}
+
+/** The panel's headline, counted from the rows so the numbers always agree. */
+export function checklistHeadline(groups: CheckGroup[]): string {
+  const fix = groups.reduce((n, g) => n + g.errors.length, 0)
+  const review = groups.reduce((n, g) => n + g.warnings.length, 0)
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
+  if (fix > 0) {
+    return `${plural(fix, 'issue', 'issues')} to fix before the label can be bought`
+      + (review > 0 ? ` · ${review} to review` : '')
+  }
+  if (review > 0) return `Ready to ship — ${plural(review, 'thing', 'things')} to review`
+  return 'All checks passed — ready to generate the label'
 }

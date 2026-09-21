@@ -204,7 +204,7 @@ public class ShipmentValidationService {
                 errors.add(issue(e.getErrorCode(), e.getMessage(), "recipient.countryCode"));
             }
         } else {
-            skipped.add(check("ship_to_allowlist", "ad-hoc shipment (blank clientCode) — no allowlist to enforce"));
+            skipped.add(check("ship_to_allowlist", "no client picked"));
         }
 
         // ─── Service + preset resolution + allowlist + packaging compat ─────
@@ -262,7 +262,7 @@ public class ShipmentValidationService {
             }
         } else {
             skipped.add(check("packaging_compatibility",
-                    (service == null ? "no serviceId picked" : "no packagePresetId picked (custom dims)")));
+                    (service == null ? "no service picked" : "custom box — there is no carrier box to match against the service")));
         }
 
         labelTimeChecks(req, service, preset, warehouseId, errors, warnings, skipped);
@@ -289,7 +289,7 @@ public class ShipmentValidationService {
                 }
             }
         } else {
-            skipped.add(check("markup", "ad-hoc shipment (blank clientCode) — no markup owner"));
+            skipped.add(check("markup", "no client picked"));
         }
 
         // ─── Customs / international validation ─────────────────────────────
@@ -332,7 +332,7 @@ public class ShipmentValidationService {
             // block. Per-corridor hard rules land in a follow-up PR.
             checkHighValueExportDeclaration(req, warnings);
         } else {
-            skipped.add(check("customs", "domestic shipment (sender/recipient in same territory)"));
+            skipped.add(check("customs", "domestic shipment"));
         }
 
         if (international) {
@@ -347,7 +347,7 @@ public class ShipmentValidationService {
                         .code(ve.code()).message(ve.message()).build());
             }
         } else {
-            skipped.add(check("dangerous_goods", "no DG block on the request"));
+            skipped.add(check("dangerous_goods", "no dangerous goods on this shipment"));
         }
 
         // ─── Sprint 52 PR δ — carrier-native shipment validation ───────────
@@ -402,8 +402,8 @@ public class ShipmentValidationService {
                     || "ERROR".equals(carrierResult.getMatchLevel())) {
                 errors.add(ValidationIssue.builder()
                         .code(ErrorCode.VALIDATION_ERROR.name())
-                        .message(carrierResult.getCarrierCode() + ": " + carrierResult.getMessage())
-                        .field(null)
+                        .message(carrierResult.getMessage())
+                        .field("carrier")
                         .build());
             }
         }
@@ -461,7 +461,7 @@ public class ShipmentValidationService {
             java.util.concurrent.atomic.AtomicReference<String> rateProblemOut) {
         String carrierCode = req.getCarrierCode();
         if (!StringUtils.hasText(carrierCode)) {
-            skipped.add(check("carrier_validate_shipment", "no carrierCode picked"));
+            skipped.add(check("carrier_validate_shipment", "no carrier picked"));
             return null;
         }
         String carrier = carrierCode.trim().toUpperCase(Locale.ROOT);
@@ -471,7 +471,7 @@ public class ShipmentValidationService {
             connector = carrierService.getCarrierConnector(carrier);
         } catch (Exception ex) {
             skipped.add(check("carrier_validate_shipment",
-                    "carrier " + carrier + " not configured on this instance"));
+                    carrierName(carrier) + " isn't set up on this system"));
             return null;
         }
 
@@ -480,14 +480,14 @@ public class ShipmentValidationService {
         // account A and Generate fail (or bill) on account B.
         if (account == null) {
             skipped.add(check("carrier_validate_shipment",
-                    "the picked " + carrier + " account could not be used — fix the account first"));
+                    "the picked " + carrierName(carrier) + " account can't be used — fix the account first"));
             return null;
         }
         if (!StringUtils.hasText(account.getClientId())
                 || !StringUtils.hasText(account.getClientSecret())) {
             skipped.add(check("carrier_validate_shipment",
-                    "no live " + carrier + " credentials — cannot call carrier validate"));
-            rateProblemOut.set("No price: the " + carrier + " account has no live credentials.");
+                    "the " + carrierName(carrier) + " account has no saved login keys"));
+            rateProblemOut.set("No price: the " + carrierName(carrier) + " account has no saved login keys.");
             return null;
         }
 
@@ -567,7 +567,7 @@ public class ShipmentValidationService {
                     account.getEnvironment());
         } catch (Exception ex) {
             log.warn("Shipment validation — {} token acquisition failed: {}", carrier, ex.getMessage());
-            rateProblemOut.set("No price: " + carrier + " refused the account's credentials.");
+            rateProblemOut.set("No price: " + carrierName(carrier) + " didn't accept this account's login keys.");
             return ShipmentValidationResult.CarrierValidationSubResult.builder()
                     .carrierCode(carrier)
                     .valid(false)
@@ -575,7 +575,8 @@ public class ShipmentValidationService {
                     .kind("ADDRESS_ONLY")
                     .warnings(List.of())
                     .errors(List.of("Token acquisition failed: " + ex.getMessage()))
-                    .message(carrier + " token acquisition failed")
+                    .message("Couldn't sign in to " + carrierName(carrier) + " with this account's login keys — "
+                            + "ask an admin to check them in Settings → Carrier Accounts.")
                     .build();
         }
 
@@ -1032,7 +1033,7 @@ public class ShipmentValidationService {
         // Package + carrier limits (preset max weight / L·W·H / dim weight /
         // girth per box; parcel caps per piece; Carrier Limits total weight).
         if (!packagingValidationEnabled) {
-            skipped.add(check("package_limits", "packaging.validation-enabled is off"));
+            skipped.add(check("package_limits", "package checks are switched off on this system"));
         } else if (carrier != null && req.getWeight() != null) {
             com.multiship.backend.util.PackagingValidator.Outcome outcome = preset == null
                     ? new com.multiship.backend.util.PackagingValidator.Outcome(List.of())
@@ -1126,21 +1127,23 @@ public class ShipmentValidationService {
                         .contains(territory.trim().toUpperCase(Locale.ROOT))
                 && !com.multiship.backend.util.UsTerritoryNormalizer
                         .isServiceAllowedForTerritory(territory, carrier, serviceCode)) {
-            errors.add(issue(ErrorCode.VALIDATION_ERROR, carrier + " " + serviceCode + " does not deliver to "
-                    + territory.trim().toUpperCase(Locale.ROOT) + ". Pick a different service.", "serviceId"));
+            errors.add(issue(ErrorCode.VALIDATION_ERROR, blankTo(service.getName(), carrierName(carrier) + " " + serviceCode)
+                    + " does not deliver to " + territory.trim().toUpperCase(Locale.ROOT) + ". Pick a different service.",
+                    "serviceId"));
         }
 
         // FedEx Home Delivery (and friends) only deliver to residences.
         if (StringUtils.hasText(serviceCode) && com.multiship.backend.service.carriers.ResidentialRequiredServices
                 .isInconsistent(serviceCode, to.getResidential())) {
-            errors.add(issue(ErrorCode.VALIDATION_ERROR, com.multiship.backend.service.carriers
-                    .ResidentialRequiredServices.inconsistentMessage(serviceCode), "recipient.residential"));
+            errors.add(issue(ErrorCode.VALIDATION_ERROR, blankTo(service.getName(), serviceCode)
+                    + " only delivers to homes — tick \"Residential address\" on Ship to, or pick another service.",
+                    "recipient.residential"));
         }
 
         // A return label is emailed to the customer.
         if (Boolean.TRUE.equals(req.getIsReturn()) && (from == null || !StringUtils.hasText(from.getEmail()))) {
-            errors.add(issue(ErrorCode.VALIDATION_ERROR, "Return labels need the customer's email on the sender "
-                    + "block, so the carrier can deliver or announce the return label.", "sender.email"));
+            errors.add(issue(ErrorCode.VALIDATION_ERROR, "Return labels need the customer's email (in \"Return from · "
+                    + "customer\"), so the carrier can send or announce the return label.", "sender.email"));
         }
     }
 
@@ -1367,7 +1370,7 @@ public class ShipmentValidationService {
         String[] lines = { to.getAddressLine1(), to.getAddressLine2(), to.getAddressLine3() };
         for (int i = 0; i < lines.length; i++) {
             if (isPoBox(lines[i])) {
-                errors.add(issue(ErrorCode.VALIDATION_ERROR, carrier + " can't deliver to a PO box (\"" + lines[i].trim()
+                errors.add(issue(ErrorCode.VALIDATION_ERROR, carrierName(carrier) + " can't deliver to a PO box (\"" + lines[i].trim()
                         + "\"). Give a street address, or ship with USPS"
                         + ("FEDEX".equals(carrier) ? " or FedEx Ground Economy" : "UPS".equals(carrier) ? " or UPS Ground Saver" : "")
                         + ".", "recipient.addressLine" + (i + 1)));
@@ -1421,13 +1424,23 @@ public class ShipmentValidationService {
         BigDecimal insuredUsd = "USD".equals(currency) ? req.getInsuredValue()
                 : fxRateService.convert(req.getInsuredValue(), currency, "USD").orElse(null);
         if (insuredUsd == null || insuredUsd.compareTo(limit.getFreeDeclaredValue()) <= 0) return;
-        warnings.add(issue(ErrorCode.VALIDATION_ERROR, carrier + " covers the first USD "
+        warnings.add(issue(ErrorCode.VALIDATION_ERROR, carrierName(carrier) + " covers the first USD "
                 + limit.getFreeDeclaredValue().stripTrailingZeros().toPlainString() + " free; insuring "
                 + currency + " " + req.getInsuredValue().stripTrailingZeros().toPlainString()
                 + " adds a declared-value charge to the label.", "insuredValue"));
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────────
+
+    /** The carrier as operators write it: FedEx, UPS, DHL, USPS. */
+    static String carrierName(String code) {
+        if (code == null) return "the carrier";
+        return switch (code.trim().toUpperCase(Locale.ROOT)) {
+            case "FEDEX" -> "FedEx";
+            case "STAMPS" -> "USPS (Stamps.com)";
+            default -> code.trim().toUpperCase(Locale.ROOT);
+        };
+    }
 
     /**
      * PR #534 — local helper mirroring CarrierServiceImpl.firstNonBlank.

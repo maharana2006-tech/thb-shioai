@@ -371,6 +371,7 @@ export default function NewShipmentPage() {
   /** When the check ran, and the request it checked — to say "the form changed". */
   const [validatedAt, setValidatedAt] = useState<Date | null>(null)
   const [validatedRequest, setValidatedRequest] = useState('')
+  const [checklistOpen, setChecklistOpen] = useState(false)
   // Sprint 38 — saved recipients: address-book search + save UI.
   const [recipientSearch, setRecipientSearch] = useState('')
   const [recipientSuggestions, setRecipientSuggestions] = useState<SavedRecipient[]>([])
@@ -1380,10 +1381,13 @@ export default function NewShipmentPage() {
         if (started.length > 0) return started.map(withDest)
         return isInternational && items.length > 0 ? [withDest(items[0])] : []
       })(),
+      // Boxes 2..N — a box without its own packaging uses the shipment's; when
+      // that is a custom box, this one needs its own size.
+      extraPackages: extraPackages.map((p) => ({ ...p, needsDims: !p.packageType && isCustomPkg })),
     }),
     [isInternational, isCustomPkg, clientCode, carrier, accountNumber, incoterms, reasonForExport,
       currency, sender, recipient, weight, declaredValue, insuredValue, length, width, height, items,
-      recipientTerritoryEarly],
+      recipientTerritoryEarly, extraPackages],
   )
   const formik = useFormik<ShipmentFormValues>({
     initialValues: formValues as unknown as ShipmentFormValues,
@@ -1545,11 +1549,11 @@ export default function NewShipmentPage() {
     // PR #530 — zero shippable carriers: block early with a targeted
     // link to Settings instead of the generic "pick a carrier" toast.
     if (noCarriersAtAll) {
-      notify.error('No carriers connected in this workspace. Add + verify a carrier in Settings before validating.')
+      showToast('Add and verify a carrier in Settings before validating.', 'No carriers connected')
       return
     }
     if (!carrier) {
-      notify.error('Pick a carrier first — validation is carrier-specific.')
+      showToast('Pick a carrier first — the check is carrier-specific.')
       return
     }
     // Required-when-null guard: block until every label field the
@@ -1557,7 +1561,7 @@ export default function NewShipmentPage() {
     // (Generate) so operators see the same message on both buttons.
     if (missingLabelFields.length > 0) {
       setSubmitAttempted(true)
-      notify.error(
+      showToast(
         missingLabelFields.includes('Duties payor account')
           ? `Enter the Duties payor account (the third party's ${canon(carrier) || 'carrier'} account) before validating.`
           : `Pick ${missingLabelFields.join(' + ')} before validating — the selected account has no saved default.`,
@@ -1591,6 +1595,7 @@ export default function NewShipmentPage() {
       const result = res.data ?? null
       setShipmentValidationResult(result)
       setValidatedAt(new Date())
+      setChecklistOpen(true)
       setValidatedRequest(formSnapshotRef.current)
 
       // Pre-flight is server-side; the address-only banner doesn't apply.
@@ -2242,6 +2247,23 @@ export default function NewShipmentPage() {
       : validationStale
         ? 'The form changed since the check — validate again.'
         : null
+  // Leaving with work on the form asks first; reload / closing the tab gets
+  // the browser's own "Leave site?" prompt.
+  const formHasWork = !!(recipient.name?.trim() || recipient.addressLine1?.trim() || reference.trim()
+    || items.some((it) => it.description.trim()) || extraPackages.length > 0)
+  useEffect(() => {
+    if (!formHasWork || submitting) return
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [formHasWork, submitting])
+  const leaveForm = async () => {
+    if (formHasWork && !(await notify.confirm(
+      "This shipment hasn't been created yet. Leave and lose what you've entered?",
+      { title: 'Leave this shipment?', confirmLabel: 'Leave', cancelLabel: 'Stay' },
+    ))) return
+    navigate('/orders')
+  }
   const formSnapshotRef = useRef('')
   useEffect(() => { formSnapshotRef.current = formSnapshot }, [formSnapshot])
 
@@ -2626,7 +2648,7 @@ export default function NewShipmentPage() {
               </div>
               <button
                 type="button"
-                onClick={() => navigate('/orders')}
+                onClick={() => void leaveForm()}
                 className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[12.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
               >
                 <FiArrowLeft className="h-3.5 w-3.5" />
@@ -3237,6 +3259,7 @@ export default function NewShipmentPage() {
                           if (!recipient.residential) {
                             setRecipient({ ...recipient, residential: true })
                             setResidentialOrigin('auto')
+                            notify.info('Ticked "Residential address" — FedEx Home Delivery only delivers to homes.')
                           }
                           // Already ticked → keep whatever origin already is.
                         } else if (residentialOrigin === 'auto' && recipient.residential) {
@@ -3245,6 +3268,7 @@ export default function NewShipmentPage() {
                           // (origin='manual') stay put.
                           setRecipient({ ...recipient, residential: false })
                           setResidentialOrigin(undefined)
+                          notify.info('Unticked "Residential address" — it was only ticked for FedEx Home Delivery.')
                         }
                       }}>
                         {servicesForCarrier.length === 0 ? <option value="">Carrier default</option> : null}
@@ -3491,7 +3515,7 @@ export default function NewShipmentPage() {
                   <div className="mt-2 flex items-start gap-2 rounded-lg border border-sky-300 bg-sky-50 px-3 py-2 text-[12px] text-sky-800">
                     <FiAlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                     <span>
-                      {`Shipping to ${recipientTerritory}. FedEx + UPS treat this US territory as a separate country — ${usTerritoryBannerHint(recipientTerritory)}. The wire payload will send countryCode=${recipientTerritory}.`}
+                      {`Shipping to ${recipientTerritory}. FedEx + UPS treat this US territory as a separate country — ${usTerritoryBannerHint(recipientTerritory)}. The label will show ${recipientTerritory} as the country.`}
                     </span>
                   </div>
                 ) : null}
@@ -3938,14 +3962,16 @@ export default function NewShipmentPage() {
           form cards and the action bar. */}
       {!loading ? (
         <div className="sticky bottom-4 z-30 !mt-6 space-y-2">
-          {shipmentValidationResult ? (
+          {shipmentValidationResult && checklistOpen ? (
             <ValidationChecklist
+              // A new check is a fresh panel: rows with issues open again.
+              key={validatedAt?.getTime() ?? 0}
               result={shipmentValidationResult}
               checkedAt={validatedAt}
               stale={validationStale}
               busy={carrierValidating}
               onRevalidate={() => void validateShipment()}
-              onClose={() => setShipmentValidationResult(null)}
+              onClose={() => setChecklistOpen(false)}
             />
           ) : null}
           {reviewWarnings ? (
@@ -3990,7 +4016,15 @@ export default function NewShipmentPage() {
           <div className="flex items-center justify-between gap-3 rounded-2xl border border-[#e3d9c4] bg-white px-5 py-3 shadow-[0_18px_50px_rgba(31,21,12,0.16)]">
             <span className="hidden text-[11.5px] text-[#6b5c42] sm:block">
               {validationGate ? (
-                <span className="font-semibold text-[#5a4526]">{validationGate} Generate label unlocks after a successful check.</span>
+                <span className="font-semibold text-[#5a4526]">
+                  {validationGate} Generate label unlocks after a successful check.
+                  {shipmentValidationResult && !checklistOpen ? (
+                    <button type="button" onClick={() => setChecklistOpen(true)}
+                      className="ml-1.5 font-semibold underline underline-offset-2 hover:text-[#1f150c]">
+                      Show the check
+                    </button>
+                  ) : null}
+                </span>
               ) : (
                 <>
                   The label is purchased immediately on the selected account.
@@ -4014,7 +4048,7 @@ export default function NewShipmentPage() {
               </button>
               <button
                 type="button"
-                onClick={() => navigate('/orders')}
+                onClick={() => void leaveForm()}
                 className="rounded-xl border border-[#e3d9c4] bg-white px-3.5 py-2 text-[12.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
               >
                 Cancel
@@ -4025,7 +4059,7 @@ export default function NewShipmentPage() {
                 onClick={() => void validateShipment()}
                 disabled={carrierValidating || !carrier || noCarriersAtAll}
                 title={carrier
-                  ? 'Server-side pre-flight — runs all label-time guards (packaging compatibility, markup, customs, DG, allowlists) on the full form before generating the label'
+                  ? 'Check the whole shipment — addresses, package, service and price, customs and the carrier — without buying a label.'
                   : 'Pick a carrier first'}
                 data-testid="validate-shipment-btn"
                 className="inline-flex items-center gap-1.5 rounded-xl border border-[#1f150c] bg-white px-3.5 py-2 text-[12.5px] font-semibold text-[#1f150c] transition hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40"
@@ -4041,7 +4075,7 @@ export default function NewShipmentPage() {
                 type="button"
                 onClick={() => void submit()}
                 disabled={submitting || noCarriersAtAll || residentialConflict || returnEmailMissing || !!validationGate}
-                title={validationGate ?? (residentialConflict
+                title={validationGate ? `${validationGate} Generate label unlocks after a successful check.` : (residentialConflict
                   ? 'FedEx Home Delivery requires the recipient to be marked as residential. Tick the checkbox on the recipient block, or pick a different service.'
                   : returnEmailMissing
                     ? 'Return labels need the customer email on the sender block — carriers (UPS especially) reject return labels without it (UPS error 9120145 "Missing label delivery information").'

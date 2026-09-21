@@ -79,6 +79,12 @@ const HS_DEFAULT_MIN = 6
  *  derived from the same table the rule reads, so a hint can never suggest
  *  a code the validator then rejects (the old static "6109.10" example was
  *  6 digits while CA/US demand 10). */
+/** "extraPackages[0].weight" → "Box 2" (box 1 is the shipment's own package). */
+const boxLabel = (path: string | undefined) => {
+  const m = /extraPackages\[(\d+)\]/.exec(path ?? '')
+  return m ? `Box ${Number(m[1]) + 2}` : 'Box'
+}
+
 export const hsExampleFor = (dest?: string | null): string => {
   const min = HS_MIN_DIGITS[(dest || '').toUpperCase()] ?? HS_DEFAULT_MIN
   return min >= 10 ? '6109.10.0012' : min >= 8 ? '6109.10.00' : '6109.10'
@@ -265,6 +271,25 @@ export const shipmentSchema = Yup.object({
 
   sender: addressSchema,
   recipient: addressSchema,
+
+  // Boxes 2..N — the same weight limit as box 1, and dimensions when the
+  // box has no carrier packaging of its own (a custom box needs its size).
+  extraPackages: Yup.array().of(Yup.object({
+    weight: Yup.number()
+      .transform(emptyToUndef)
+      .typeError(({ path }) => `${boxLabel(path)}: weight must be a number`)
+      .required(({ path }) => `${boxLabel(path)}: weight is required`)
+      .moreThan(0, ({ path }) => `${boxLabel(path)}: weight must be greater than 0`)
+      .max(150, ({ path }) => `${boxLabel(path)}: weight exceeds the 150 lb carrier limit`),
+    ...Object.fromEntries((['length', 'width', 'height'] as const).map((dim) => [dim,
+      Yup.number().transform(emptyToUndef).when('needsDims', {
+        is: true,
+        then: (s) => s.typeError(({ path }) => `${boxLabel(path)}: ${dim} must be a number`)
+          .required(({ path }) => `${boxLabel(path)}: ${dim} is required`)
+          .moreThan(0, ({ path }) => `${boxLabel(path)}: ${dim} must be greater than 0`),
+        otherwise: (s) => s.nullable(),
+      })])),
+  })).optional(),
 
   weight: Yup.number()
     .transform(emptyToUndef)

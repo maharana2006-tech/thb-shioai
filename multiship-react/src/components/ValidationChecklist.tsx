@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { FiAlertTriangle, FiCheckCircle, FiChevronDown, FiMinusCircle, FiRefreshCw, FiX, FiXCircle } from 'react-icons/fi'
 import type { ReactNode } from 'react'
 import type { ShipmentValidationResult } from '../api/shipmentValidationService'
-import { buildCheckGroups, type CheckGroup, type CheckGroupKey } from '../utils/validationChecklist'
+import { buildCheckGroups, checklistHeadline, type CheckGroup, type CheckGroupKey } from '../utils/validationChecklist'
 import ValidationQuote from './ValidationQuote'
 
 const TONE: Record<CheckGroup['status'], { icon: ReactNode; chip: string; label: (g: CheckGroup) => string }> = {
@@ -54,6 +54,11 @@ export default function ValidationChecklist({
   onClose: () => void
 }) {
   const groups = buildCheckGroups(result)
+  const fixCount = groups.reduce((n, g) => n + g.errors.length, 0)
+  const reviewCount = groups.reduce((n, g) => n + g.warnings.length, 0)
+  // Shrunk to one line while the operator works on the form ("Go to …").
+  const [compact, setCompact] = useState(false)
+  const [showDetails, setShowDetails] = useState(false)
   const [open, setOpen] = useState<Set<CheckGroupKey>>(
     () => new Set(groups.filter((g) => g.status === 'fail' || g.status === 'warn').map((g) => g.key)),
   )
@@ -73,14 +78,14 @@ export default function ValidationChecklist({
     <section
       data-testid="validation-checklist"
       aria-label="Shipment check"
-      className="max-h-[48vh] overflow-y-auto rounded-2xl border border-[#e3d9c4] bg-white p-3.5 shadow-[0_18px_50px_rgba(31,21,12,0.14)]"
+      className="max-h-[34vh] overflow-y-auto rounded-2xl sm:max-h-[48vh] border border-[#e3d9c4] bg-white p-3.5 shadow-[0_18px_50px_rgba(31,21,12,0.14)]"
     >
       <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-[#5a4526]">Shipment check</p>
           <p className={`mt-0.5 flex items-center gap-1.5 text-[13px] font-semibold ${headline.tone}`}>
             {headline.icon}
-            {result.message}
+            {checklistHeadline(groups)}
           </p>
           <p className="mt-0.5 text-[11px] text-slate-500">
             {checkedAt ? `Checked at ${checkedAt.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}` : null}
@@ -96,6 +101,10 @@ export default function ValidationChecklist({
             className="inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] px-2 py-1 text-[11.5px] font-semibold text-[#5a4526] hover:bg-[#faf7f0] disabled:opacity-50">
             <FiRefreshCw className={`h-3 w-3 ${busy ? 'animate-spin' : ''}`} /> Check again
           </button>
+          <button type="button" onClick={() => setCompact((c) => !c)}
+            className="rounded-lg border border-[#e3d9c4] px-2 py-1 text-[11.5px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]">
+            {compact ? 'Show details' : 'Minimise'}
+          </button>
           <button type="button" onClick={onClose} aria-label="Close the shipment check"
             className="rounded-lg p-1 text-[#6b5c42] hover:bg-[#faf7f0]">
             <FiX className="h-4 w-4" />
@@ -103,11 +112,16 @@ export default function ValidationChecklist({
         </div>
       </div>
 
+      {compact ? (
+        <p className="text-[11.5px] text-slate-500">
+          {fixCount ? `${fixCount} to fix` : 'Nothing to fix'}{reviewCount ? ` · ${reviewCount} to review` : ''} — the rows are hidden while you edit.
+        </p>
+      ) : (
       <ul className="divide-y divide-[#efe7d6] rounded-xl border border-[#efe7d6]">
         {groups.map((g) => {
           const tone = TONE[g.status]
           const isOpen = open.has(g.key)
-          const hasDetail = g.errors.length + g.warnings.length + g.skipped.length > 0
+          const hasDetail = g.errors.length + g.warnings.length + g.skipped.length + g.details.length > 0
             || (g.key === 'service' && !!result.quote)
           return (
             <li key={g.key} data-testid={`check-${g.key}`} data-status={g.status}>
@@ -133,11 +147,24 @@ export default function ValidationChecklist({
                   {g.key === 'service' && result.quote ? <ValidationQuote quote={result.quote} /> : null}
                   {g.skipped.length ? (
                     <ul className="space-y-0.5 text-slate-500">
-                      {g.skipped.map((m, i) => <li key={`s${i}`}>Not checked — {m}</li>)}
+                      {g.skipped.map((m, i) => <li key={`s${i}`}>Skipped — {m}</li>)}
                     </ul>
                   ) : null}
-                  {g.errors.length || g.warnings.length ? (
-                    <button type="button" onClick={() => goTo(g.sectionId)}
+                  {g.details.length ? (
+                    <div>
+                      <button type="button" onClick={() => setShowDetails((v) => !v)} aria-expanded={showDetails}
+                        className="text-[11px] font-semibold text-slate-500 underline-offset-2 hover:underline">
+                        {showDetails ? 'Hide details' : 'Details for an admin'}
+                      </button>
+                      {showDetails ? (
+                        <ul className="mt-0.5 list-disc space-y-0.5 pl-4 font-mono text-[10.5px] text-slate-500">
+                          {g.details.map((m, i) => <li key={`d${i}`}>{m}</li>)}
+                        </ul>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {(g.errors.length || g.warnings.length) && g.key !== 'carrier' ? (
+                    <button type="button" onClick={() => { setCompact(true); goTo(g.sectionId) }}
                       className="text-[11.5px] font-semibold text-[#5a4526] underline-offset-2 hover:underline">
                       Go to {g.title.toLowerCase()}
                     </button>
@@ -148,6 +175,7 @@ export default function ValidationChecklist({
           )
         })}
       </ul>
+      )}
     </section>
   )
 }
