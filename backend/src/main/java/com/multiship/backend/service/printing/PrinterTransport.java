@@ -32,11 +32,15 @@ public final class PrinterTransport {
     private static final int CONNECT_TIMEOUT_MS = 10_000;
     private static final Duration IPP_REQUEST_TIMEOUT = Duration.ofSeconds(120);
     private static final AtomicInteger REQUEST_IDS = new AtomicInteger(1);
+    /** RFC 8010 §3.5.1 — the delimiter that opens one job's attribute group. */
+    static final int JOB_ATTRIBUTES_TAG = 0x02;
+    static final int END_OF_ATTRIBUTES_TAG = 0x03;
 
     private PrinterTransport() {}
 
     /** Write the job to the printer's raw port. */
     public static void sendRaw(String host, int port, byte[] payload) throws IOException {
+        PrinterAddressGuard.check(host, port);
         try (Socket socket = new Socket()) {
             socket.setSoTimeout(CONNECT_TIMEOUT_MS);
             socket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MS);
@@ -50,6 +54,7 @@ public final class PrinterTransport {
     /** Send one IPP Print-Job. Throws when the connection fails or the printer refuses the job. */
     public static void sendIpp(String host, int port, String queuePath, byte[] document, String documentFormat,
                                String jobName, String user) throws IOException, InterruptedException {
+        PrinterAddressGuard.check(host, port);
         String path = normalisePath(queuePath);
         String authority = uriHost(host) + ":" + port;
         byte[] header = printJobHeader("ipp://" + authority + "/" + path, user, jobName, documentFormat,
@@ -85,6 +90,7 @@ public final class PrinterTransport {
      * @return count of pending jobs, or throw on I/O / auth / IPP-status errors.
      */
     public static int ippJobCount(String host, int port, String queuePath) throws IOException, InterruptedException {
+        PrinterAddressGuard.check(host, port);
         String path = normalisePath(queuePath);
         String authority = uriHost(host) + ":" + port;
         byte[] header = getJobsHeader("ipp://" + authority + "/" + path,
@@ -134,21 +140,27 @@ public final class PrinterTransport {
         }
     }
 
-    /** Count the number of job-attributes-tag (0x04) group markers in an
-     *  IPP response body. Each pending job produces one such group. */
+    /**
+     * Count the job groups in an IPP Get-Jobs response: one per pending job.
+     *
+     * <p>RFC 8010 §3.5.1 delimiter tags: 0x01 operation-attributes, 0x02
+     * job-attributes, 0x03 end-of-attributes, 0x04 printer-attributes, 0x05
+     * unsupported-attributes; 0x06–0x0F are reserved delimiters. This used to
+     * count 0x04 — the printer's own attribute group — so the queue always read
+     * 0 (or 1 from a printer that echoes its attributes), never the real depth.
+     */
     static int countJobGroups(byte[] body) {
         if (body == null || body.length <= 8) return 0;
         int count = 0;
-        // Skip the 8-byte IPP header (version + status + request-id).
-        // Then walk through remaining tags; 0x04 (job-attributes-tag)
-        // begins a job group.
+        // Skip the 8-byte IPP header (version + status + request-id), then
+        // walk the attribute stream tag by tag.
         int i = 8;
         while (i < body.length) {
             int tag = body[i] & 0xff;
-            if (tag == 0x04) count++;
-            if (tag == 0x03) break; // end-of-attributes
-            if (tag >= 0x00 && tag <= 0x05) {
-                // begin-attribute-group tag: no name / value bytes.
+            if (tag == JOB_ATTRIBUTES_TAG) count++;
+            if (tag == END_OF_ATTRIBUTES_TAG) break;
+            if (tag < 0x10) {
+                // A delimiter (group start): no name or value bytes follow.
                 i++;
                 continue;
             }

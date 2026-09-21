@@ -117,9 +117,15 @@ export default function OutputDestinationsPage() {
             Output Destinations
           </h2>
           <p className="mt-1 text-[12.5px] text-slate-500">
-            Route generated labels + commercial invoices per client. Every dispatch is
-            copied to the database first, then delivered to any active destination
-            (LOCAL_FS, SFTP, PRINTER).
+            Deliver generated labels + commercial invoices per client to a folder or an
+            SFTP server. Every dispatch is copied to the database first, then delivered to
+            any active destination.
+          </p>
+          {/* Printing moved to its own page: one place to route a client's
+              labels to a printer, with real ZPL and IPP. */}
+          <p className="mt-1.5 text-[12.5px] text-slate-600">
+            Printing to a network printer is set up in{' '}
+            <a href="/settings/printers" className="font-semibold text-slate-900 underline">Settings → Printers</a>.
           </p>
         </div>
         <button
@@ -419,7 +425,11 @@ function DestinationEditorDialog({
               >
                 <option value="LOCAL_FS">LOCAL_FS</option>
                 <option value="SFTP">SFTP</option>
-                <option value="PRINTER">PRINTER</option>
+                {/* Only an existing printer row keeps the option, so it can be
+                    switched off; new printers go to Settings → Printers. */}
+                {existing?.destinationType === 'PRINTER' ? (
+                  <option value="PRINTER">PRINTER (retired — use Settings → Printers)</option>
+                ) : null}
               </select>
             </label>
             <label className="flex items-center gap-2 pt-6 text-[12.5px] font-semibold text-slate-700">

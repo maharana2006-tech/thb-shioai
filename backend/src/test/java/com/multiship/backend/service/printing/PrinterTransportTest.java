@@ -24,6 +24,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** Real sockets on localhost: what a printer on port 9100 / an IPP printer actually receives. */
 class PrinterTransportTest {
 
+    // These tests stand up real sockets on 127.0.0.1, which the address
+    // guard refuses in production. Allow loopback for this class only.
+    @org.junit.jupiter.api.BeforeEach
+    void allowLoopback() { PrinterAddressGuard.setAllowLoopback(true); }
+
+    @org.junit.jupiter.api.AfterEach
+    void restoreGuard() { PrinterAddressGuard.setAllowLoopback(false); }
+
+
     @Test
     void raw9100WritesTheJobBytesUnchanged() throws Exception {
         byte[] zpl = "^XA^FO50,50^A0N,40,40^FDHello^FS^XZ".getBytes(StandardCharsets.UTF_8);
@@ -114,5 +123,71 @@ class PrinterTransportTest {
         try (ServerSocket s = new ServerSocket(0)) {
             return s.getLocalPort();
         }
+    }
+
+    // ===== queue depth: counting job groups in a Get-Jobs response =====
+
+    /** One attribute in IPP wire form: tag, name, value. */
+    private static void attr(java.io.DataOutputStream out, int tag, String name, byte[] value) throws IOException {
+        out.writeByte(tag);
+        out.writeShort(name.length());
+        out.writeBytes(name);
+        out.writeShort(value.length);
+        out.write(value);
+    }
+
+    private static byte[] getJobsResponse(int jobs, boolean withPrinterGroup) throws IOException {
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        java.io.DataOutputStream out = new java.io.DataOutputStream(bytes);
+        out.writeByte(1); out.writeByte(1);    // IPP 1.1
+        out.writeShort(0x0000);                // successful-ok
+        out.writeInt(7);                        // request id
+        out.writeByte(0x01);                    // operation-attributes
+        attr(out, 0x47, "attributes-charset", "utf-8".getBytes());
+        if (withPrinterGroup) {
+            // A printer-attributes group (0x04) — what the old code counted.
+            out.writeByte(0x04);
+            attr(out, 0x21, "queued-job-count", new byte[]{0, 0, 0, 9});
+        }
+        for (int j = 0; j < jobs; j++) {
+            out.writeByte(0x02);                // job-attributes: one per job
+            // Value bytes deliberately include 0x02 / 0x04 so a byte scan
+            // would miscount; the parser has to skip values by length.
+            attr(out, 0x21, "job-id", new byte[]{0, 0, 0x02, 0x04});
+            attr(out, 0x23, "job-state", new byte[]{0, 0, 0, 0x04});
+        }
+        out.writeByte(0x03);                    // end-of-attributes
+        return bytes.toByteArray();
+    }
+
+    @Test
+    void queueDepthCountsJobGroupsNotThePrintersOwnAttributes() throws IOException {
+        assertEquals(3, PrinterTransport.countJobGroups(getJobsResponse(3, true)),
+                "three pending jobs, and the printer-attributes group is not one of them");
+        assertEquals(0, PrinterTransport.countJobGroups(getJobsResponse(0, true)),
+                "an idle printer that echoes its own attributes still has an empty queue");
+        assertEquals(2, PrinterTransport.countJobGroups(getJobsResponse(2, false)));
+    }
+
+    // ===== the address guard =====
+
+    @Test
+    void theGuardRefusesTheServerItselfTheMetadataServiceAndServicePorts() throws IOException {
+        PrinterAddressGuard.setAllowLoopback(false);
+        assertTrue(PrinterAddressGuard.refusal("127.0.0.1", 9100).isPresent(), "loopback");
+        assertTrue(PrinterAddressGuard.refusal("localhost", 9100).isPresent(), "localhost");
+        assertTrue(PrinterAddressGuard.refusal("169.254.169.254", 80).get().contains("metadata"), "cloud metadata");
+        assertTrue(PrinterAddressGuard.refusal("0.0.0.0", 9100).isPresent(), "unspecified");
+        assertTrue(PrinterAddressGuard.refusal("192.168.1.50", 5432).get().contains("PostgreSQL"), "database port");
+        assertTrue(PrinterAddressGuard.refusal("10.0.0.9", 6379).get().contains("Redis"), "cache port");
+
+        // Real warehouse printers stay allowed: private LAN addresses, printer ports.
+        assertTrue(PrinterAddressGuard.refusal("192.168.1.50", 9100).isEmpty(), "LAN label printer");
+        assertTrue(PrinterAddressGuard.refusal("10.20.30.40", 631).isEmpty(), "LAN IPP printer");
+        assertTrue(PrinterAddressGuard.refusal("172.16.5.5", 9101).isEmpty(), "second JetDirect port");
+
+        // And a refused address is refused at connect time too, not just on save.
+        IOException e = assertThrows(IOException.class, () -> PrinterTransport.sendRaw("127.0.0.1", 9100, new byte[]{1}));
+        assertTrue(e.getMessage().contains("this server itself"), e.getMessage());
     }
 }

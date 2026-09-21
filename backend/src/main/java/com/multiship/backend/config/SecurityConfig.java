@@ -127,7 +127,15 @@ public class SecurityConfig {
                                 // Sprint 51 FE-M3 — client-side render errors
                                 // are POSTed pre-login too; the endpoint is
                                 // IP-rate-limited in the controller itself.
-                                "/api/v1/client-errors"
+                                "/api/v1/client-errors",
+                                // The LAN scan agent uploads what it found. It
+                                // authenticates with the X-Printer-Scan-Key
+                                // header, never a browser session, so it has
+                                // no XSRF cookie to send. Without this every
+                                // upload was refused with 403 before the key
+                                // was even checked — its GET poll worked and
+                                // every scan result was thrown away.
+                                "/api/v1/printers/discovered"
                         )
                 )
                 .sessionManagement(session -> session

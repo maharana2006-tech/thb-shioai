@@ -73,6 +73,7 @@ public class OutputDestinationAdminService {
 
     @Transactional
     public OutputDestinationDTO create(OutputDestinationUpsertRequest req, String actor) {
+        refuseNewPrinterDestination(req, null);
         validateHostForSsrf(req);
         validateClientExists(req);
         ClientOutputDestination entity = ClientOutputDestination.builder()
@@ -93,6 +94,7 @@ public class OutputDestinationAdminService {
 
     @Transactional
     public Optional<OutputDestinationDTO> update(Long id, OutputDestinationUpsertRequest req, String actor) {
+        refuseNewPrinterDestination(req, destinationRepository.findById(id).orElse(null));
         validateHostForSsrf(req);
         validateClientExists(req);
         return destinationRepository.findById(id).map(entity -> {
@@ -193,6 +195,26 @@ public class OutputDestinationAdminService {
         // We intentionally bypass the DB copy here — this is a test ping,
         // not a real shipment document. Call the driver directly.
         return outputDestinationService.testDispatch(dest, dest.getDocType(), p.getBytes(), ctx);
+    }
+
+    /**
+     * Printers moved to Settings → Printers, and this screen no longer takes new ones.
+     *
+     * <p>Two places routed a client's labels to a printer, shared no data, and
+     * this one was the worse of them: it sent PDF bytes to ZPL label printers,
+     * its "IPP" was a plain HTTP POST real printers reject, and it refused the
+     * private LAN addresses every warehouse printer has. Nobody had configured a
+     * destination here when it was retired. An existing printer row can still be
+     * edited — to switch it off — but nothing can be turned into one.
+     */
+    private static void refuseNewPrinterDestination(OutputDestinationUpsertRequest req, ClientOutputDestination existing) {
+        if (req == null || req.getDestinationType() != DestinationType.PRINTER) return;
+        boolean alreadyPrinter = existing != null && existing.getDestinationType() == DestinationType.PRINTER;
+        if (!alreadyPrinter) {
+            throw new IllegalArgumentException("Printers are set up in Settings → Printers now. "
+                    + "Register the printer there and assign it to the client; this screen keeps SFTP and folder "
+                    + "destinations.");
+        }
     }
 
     /**

@@ -138,6 +138,10 @@ public class PrinterService {
         }
         int port = in.port() == null ? ("IPP".equals(connection) ? 631 : 9100) : in.port();
         if (port < 1 || port > 65535) throw new PrinterValidationException("Port must be between 1 and 65535.");
+        // Never the server itself, the cloud metadata service, or a known
+        // non-printer service port — see PrinterAddressGuard.
+        var refused = PrinterAddressGuard.refusal(host, port);
+        if (refused.isPresent()) throw new PrinterValidationException(refused.get());
         String format = upper(in.format());
         if (!FORMATS.contains(format)) throw new PrinterValidationException("Format must be ZPL or PDF.");
         if ("IPP".equals(connection) && "ZPL".equals(format)) {

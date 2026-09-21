@@ -111,7 +111,7 @@ export const settingsNavItems: Array<{
     description: 'Per-carrier / per-service caps on packages, commodities, weight and free declared value. Direction-aware (FORWARD vs RETURN); edits invalidate the resolver cache immediately.',
     roles: ['ADMIN'] },
   { key: 'output-destinations', label: 'Output Destinations', to: settingsPaths.outputDestinations, iconKey: 'mapping',
-    description: 'Route generated labels + commercial invoices per client — local filesystem, SFTP upload or network printer (RAW_9100 / IPP). Every dispatch is also copied to the database.',
+    description: 'Deliver generated labels + commercial invoices per client to a folder or an SFTP server. Every dispatch is also copied to the database. Printers are set up under Printers.',
     roles: ['ADMIN'] },
   { key: 'printers', label: 'Printers', to: settingsPaths.printers, iconKey: 'mapping',
     description: 'Register network label and invoice printers, choose which printer each client prints on, and send test pages. Used by Send to printer on the Orders page.',

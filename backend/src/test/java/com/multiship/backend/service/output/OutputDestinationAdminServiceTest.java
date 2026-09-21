@@ -368,4 +368,40 @@ class OutputDestinationAdminServiceTest {
 
         assertThrows(Exception.class, () -> admin.create(req, "alice"));
     }
+
+    /**
+     * Printers moved to Settings → Printers. This screen sent PDF to ZPL label
+     * printers and faked IPP, so it no longer takes new printer destinations —
+     * but a printer row that already exists can still be edited, to switch it off.
+     */
+    @Test
+    void newPrinterDestinationsAreRefusedButAnExistingOneCanBeSwitchedOff() {
+        OutputDestinationUpsertRequest printer = OutputDestinationUpsertRequest.builder()
+                .clientCode("ACME").docType(DocType.LABEL)
+                .destinationType(DestinationType.PRINTER)
+                .config("{\"host\":\"192.168.1.50\",\"port\":9100,\"protocol\":\"RAW_9100\"}")
+                .active(true)
+                .build();
+        IllegalArgumentException e = org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalArgumentException.class, () -> admin.create(printer, "alice"));
+        org.junit.jupiter.api.Assertions.assertTrue(e.getMessage().contains("Settings → Printers"), e.getMessage());
+
+        // An SFTP row can't be turned into a printer either.
+        com.multiship.backend.model.ClientOutputDestination sftpRow = com.multiship.backend.model.ClientOutputDestination.builder()
+                .id(8L).clientCode("ACME").docType(DocType.LABEL).destinationType(DestinationType.SFTP).build();
+        org.mockito.Mockito.when(destinationRepo.findById(8L)).thenReturn(java.util.Optional.of(sftpRow));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> admin.update(8L, printer, "alice"));
+
+        // An existing printer row may still be edited (e.g. deactivated).
+        com.multiship.backend.model.ClientOutputDestination printerRow = com.multiship.backend.model.ClientOutputDestination.builder()
+                .id(9L).clientCode("ACME").docType(DocType.LABEL).destinationType(DestinationType.PRINTER).build();
+        org.mockito.Mockito.when(destinationRepo.findById(9L)).thenReturn(java.util.Optional.of(printerRow));
+        OutputDestinationUpsertRequest switchOff = OutputDestinationUpsertRequest.builder()
+                .clientCode("ACME").docType(DocType.LABEL)
+                .destinationType(DestinationType.PRINTER)
+                .config("{\"host\":\"192.168.1.50\",\"port\":9100,\"protocol\":\"RAW_9100\"}")
+                .active(false)
+                .build();
+        org.junit.jupiter.api.Assertions.assertDoesNotThrow(() -> admin.update(9L, switchOff, "alice"));
+    }
 }
