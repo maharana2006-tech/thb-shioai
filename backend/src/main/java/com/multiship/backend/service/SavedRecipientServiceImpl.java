@@ -46,11 +46,15 @@ public class SavedRecipientServiceImpl implements SavedRecipientService {
         String norm = q == null ? null : q.trim();
         // Sprint 50 Tier 0.5 PR E - Pattern A on the caller-supplied
         // customerNo filter. Scoped USER null → own tenant; foreign → 403.
-        String scoped = tenantScope.clampClientCode(customerNo);
+        // A platform operator with no client picked searches the whole book,
+        // as the Address book page shows it — otherwise an address saved under
+        // a client could be listed there yet never found from a new shipment.
+        boolean all = !StringUtils.hasText(customerNo) && tenantScope.isPlatformOperator();
+        String scoped = all ? null : tenantScope.clampClientCode(customerNo);
         // Each word must appear somewhere in the entry — see SavedRecipientSearch.
         // Paged at the database rather than loading every match and trimming.
         List<SavedRecipient> hits = repository.findAll(
-                SavedRecipientSearch.visibleTo(false, StringUtils.hasText(scoped) ? scoped : null)
+                SavedRecipientSearch.visibleTo(all, StringUtils.hasText(scoped) ? scoped : null)
                         .and(SavedRecipientSearch.matching(norm)),
                 org.springframework.data.domain.PageRequest.of(0, SEARCH_MAX,
                         org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.DESC, "updatedAt")))

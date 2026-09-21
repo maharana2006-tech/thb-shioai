@@ -3116,11 +3116,20 @@ export default function NewShipmentPage() {
                                   {' '}{s.postalCode} {s.countryCode}
                                 </p>
                               </div>
-                              {s.tag ? (
-                                <span className="whitespace-nowrap rounded-full bg-slate-100 px-1.5 py-0.5 text-[9.5px] font-semibold text-slate-500">
-                                  {s.tag}
-                                </span>
-                              ) : null}
+                              <span className="flex shrink-0 flex-col items-end gap-0.5">
+                                {/* With no client picked an admin sees every client's entries — say whose. */}
+                                {!clientCode && s.ownerCustomerNo ? (
+                                  <span className="whitespace-nowrap rounded-full bg-[#f3ecdd] px-1.5 py-0.5 text-[9.5px] font-semibold text-[#5a4526]"
+                                    title={`Saved for client ${s.ownerCustomerNo}`}>
+                                    {s.ownerCustomerNo}
+                                  </span>
+                                ) : null}
+                                {s.tag ? (
+                                  <span className="whitespace-nowrap rounded-full bg-slate-100 px-1.5 py-0.5 text-[9.5px] font-semibold text-slate-500">
+                                    {s.tag}
+                                  </span>
+                                ) : null}
+                              </span>
                             </li>
                           ))}
                         </ul>
