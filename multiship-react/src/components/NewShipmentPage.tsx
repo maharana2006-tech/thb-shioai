@@ -3154,23 +3154,6 @@ export default function NewShipmentPage() {
                     )}
                     Save to address book
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => void validateShipment()}
-                    disabled={carrierValidating || !carrier || noCarriersAtAll}
-                    title={carrier
-                      ? 'Server-side pre-flight — runs all label-time guards (packaging compatibility, markup, customs, DG, allowlists) on the full form before generating the label'
-                      : 'Pick a carrier first'}
-                    data-testid="validate-shipment-btn"
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-[#1f150c] bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-[#f4eede] transition hover:bg-[#33221a] disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    {carrierValidating ? (
-                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#8a7959] border-t-[#f4eede]" />
-                    ) : (
-                      <FiCheckCircle className="h-3.5 w-3.5" />
-                    )}
-                    Validate shipment
-                  </button>
                 </div>
                 {!destAllowed && destRules?.mode && recipient.countryCode ? (
                   <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
@@ -4131,7 +4114,7 @@ export default function NewShipmentPage() {
               The label is purchased immediately on the selected account.
               {isInternational ? ' Commercial invoice included for this cross-border lane.' : ''}
             </span>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <button
                 type="button"
                 onClick={() => void reviewShipmentAi()}
@@ -4151,6 +4134,24 @@ export default function NewShipmentPage() {
                 className="rounded-xl border border-[#e3d9c4] bg-white px-3.5 py-2 text-[12.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
               >
                 Cancel
+              </button>
+              {/* Validate sits right beside Generate label: check, then buy. */}
+              <button
+                type="button"
+                onClick={() => void validateShipment()}
+                disabled={carrierValidating || !carrier || noCarriersAtAll}
+                title={carrier
+                  ? 'Server-side pre-flight — runs all label-time guards (packaging compatibility, markup, customs, DG, allowlists) on the full form before generating the label'
+                  : 'Pick a carrier first'}
+                data-testid="validate-shipment-btn"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-[#1f150c] bg-white px-3.5 py-2 text-[12.5px] font-semibold text-[#1f150c] transition hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {carrierValidating ? (
+                  <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#1f150c]" />
+                ) : (
+                  <FiCheckCircle className="h-3.5 w-3.5" />
+                )}
+                Validate shipment
               </button>
               <button
                 type="button"
