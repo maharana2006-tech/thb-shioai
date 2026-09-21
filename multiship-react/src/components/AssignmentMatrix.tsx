@@ -241,7 +241,7 @@ function CellPopover({
   const [labels, setLabels] = useState(hasLabel)
   const [invoice, setInvoice] = useState(hasInvoice)
   const ref = useRef<HTMLDivElement>(null)
-  const invoiceAllowed = printer.format === 'PDF'
+  const invoiceAllowed = printer.format !== 'ZPL'
   const dirty = labels !== hasLabel || invoice !== hasInvoice
 
   // Click-outside close. mousedown fires before button click so the

@@ -35,7 +35,7 @@ export default function SendToPrinterDialog({
     return () => { alive = false }
   }, [])
 
-  const choices = (printers ?? []).filter((p) => docType === 'LABEL' || p.format === 'PDF')
+  const choices = (printers ?? []).filter((p) => docType === 'LABEL' || p.format !== 'ZPL')
   // A printer picked for labels may not print invoices; fall back to client routing.
   const target = destination !== 'client' && choices.some((p) => String(p.id) === destination) ? destination : 'client'
 
@@ -104,7 +104,7 @@ export default function SendToPrinterDialog({
                   : 'Ask an admin to add one in Settings → Printers.'}
               </span>
             ) : docType === 'COMMERCIAL_INVOICE' ? (
-              <span className="mt-1.5 block text-[12px] text-slate-500">Invoices print on PDF printers only; domestic orders have no invoice and are skipped.</span>
+              <span className="mt-1.5 block text-[12px] text-slate-500">Invoices print on office printers (PDF or PCL), not label printers; domestic orders have no invoice and are skipped.</span>
             ) : (
               <span className="mt-1.5 block text-[12px] text-slate-500">Orders without a label yet are skipped.</span>
             )}

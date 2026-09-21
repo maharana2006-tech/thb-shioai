@@ -46,7 +46,9 @@ public class PrinterService {
     private static final Logger log = LoggerFactory.getLogger(PrinterService.class);
 
     public static final Set<String> CONNECTIONS = Set.of("RAW_9100", "IPP");
-    public static final Set<String> FORMATS = Set.of("ZPL", "PDF");
+    /** ZPL: thermal label printers. PDF: printers that take PDF directly.
+     *  PCL: office lasers that don't — the app rasterises the page for them. */
+    public static final Set<String> FORMATS = Set.of("ZPL", "PDF", "PCL");
     public static final Set<String> PAPERS = Set.of("LABEL_4X6", "A4", "LETTER");
     public static final Set<String> DOC_TYPES = Set.of("LABEL", "COMMERCIAL_INVOICE");
     private static final Pattern HOST = Pattern.compile("^[A-Za-z0-9](?:[A-Za-z0-9.\\-:]{0,251}[A-Za-z0-9])?$");
@@ -143,15 +145,18 @@ public class PrinterService {
         var refused = PrinterAddressGuard.refusal(host, port);
         if (refused.isPresent()) throw new PrinterValidationException(refused.get());
         String format = upper(in.format());
-        if (!FORMATS.contains(format)) throw new PrinterValidationException("Format must be ZPL or PDF.");
+        if (!FORMATS.contains(format)) throw new PrinterValidationException("Format must be ZPL, PDF or PCL.");
         if ("IPP".equals(connection) && "ZPL".equals(format)) {
-            throw new PrinterValidationException("IPP printers take PDF. Use RAW_9100 for a ZPL label printer.");
+            throw new PrinterValidationException("IPP printers take PDF or PCL. Use RAW_9100 for a ZPL label printer.");
         }
         String paper = upper(in.paper());
         if (paper.isEmpty()) paper = "ZPL".equals(format) ? "LABEL_4X6" : "LETTER";
         if (!PAPERS.contains(paper)) throw new PrinterValidationException("Paper must be LABEL_4X6, A4 or LETTER.");
         if ("ZPL".equals(format) && !"LABEL_4X6".equals(paper)) {
             throw new PrinterValidationException("A ZPL printer prints 4x6 labels; set paper to LABEL_4X6.");
+        }
+        if ("PCL".equals(format) && "LABEL_4X6".equals(paper)) {
+            throw new PrinterValidationException("A PCL printer prints office paper; set paper to LETTER or A4.");
         }
         String queuePath = null;
         if ("IPP".equals(connection)) {
@@ -249,11 +254,16 @@ public class PrinterService {
         AtomicInteger counter = inFlightByPrinter.computeIfAbsent(printer.getId(), k -> new AtomicInteger());
         counter.incrementAndGet();
         try {
+            // A PCL printer gets the same PDF every caller builds, rendered to
+            // PCL here — one place, so labels, invoices and the test page all
+            // come out the same way.
+            boolean pcl = "PCL".equals(printer.getFormat());
+            byte[] body = pcl ? PclRasterizer.fromPdf(payload, printer.getPaper()) : payload;
             if ("IPP".equals(printer.getConnection())) {
-                PrinterTransport.sendIpp(printer.getHost(), printer.getPort(), printer.getQueuePath(), payload,
-                        "application/pdf", jobName, user);
+                PrinterTransport.sendIpp(printer.getHost(), printer.getPort(), printer.getQueuePath(), body,
+                        pcl ? "application/vnd.hp-PCL" : "application/pdf", jobName, user);
             } else {
-                PrinterTransport.sendRaw(printer.getHost(), printer.getPort(), payload);
+                PrinterTransport.sendRaw(printer.getHost(), printer.getPort(), body);
             }
         } finally {
             counter.decrementAndGet();
@@ -284,17 +294,117 @@ public class PrinterService {
         return new QueueDepth(inFlight, ippQueue, ippQueueError);
     }
 
+    /* ------------------------------ capabilities ------------------------------ */
+
+    /** What a printer reports about itself, and how it should be set up. */
+    public record Capabilities(String makeAndModel, List<String> formats, boolean pdf, boolean pcl, boolean zpl,
+                               String suggestedConnection, String suggestedFormat, Integer suggestedPort,
+                               String suggestedQueuePath, String summary) { }
+
+    private static final List<String> PROBE_PATHS = List.of("ipp/print", "ipp", "ipp/printer", "printers/printer");
+
+    /**
+     * Ask a printer, over IPP, which formats it prints — read-only, nothing is
+     * printed. Tried on port 631 (and the printer's own port when that is IPP)
+     * across the usual queue paths. Empty when the printer doesn't answer IPP,
+     * which older label printers commonly don't.
+     */
+    public java.util.Optional<Capabilities> probe(String host, Integer port, String queuePath) {
+        if (!StringUtils.hasText(host)) return java.util.Optional.empty();
+        List<Integer> ports = new java.util.ArrayList<>(List.of(631));
+        if (port != null && port != 631 && port != 9100) ports.add(0, port);
+        List<String> paths = new java.util.ArrayList<>(PROBE_PATHS);
+        if (StringUtils.hasText(queuePath)) paths.add(0, PrinterTransport.normalisePath(queuePath));
+        for (int p : ports) {
+            for (String path : paths) {
+                try {
+                    PrinterTransport.PrinterAttributes a = PrinterTransport.printerAttributes(host.trim(), p, path);
+                    if (a.makeAndModel() == null && a.formats().isEmpty()) continue;
+                    return java.util.Optional.of(capabilities(a, p));
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return java.util.Optional.empty();
+                } catch (java.net.ConnectException | java.net.http.HttpConnectTimeoutException noIpp) {
+                    break;   // nothing listening on this port — other paths won't answer either
+                } catch (Exception notThisPath) {
+                    // The port answered but not on this path — try the next one.
+                }
+            }
+        }
+        return java.util.Optional.empty();
+    }
+
+    static Capabilities capabilities(PrinterTransport.PrinterAttributes a, int port) {
+        String model = a.makeAndModel() == null ? "This printer" : a.makeAndModel();
+        List<String> formats = a.formats();
+        boolean pdf = formats.stream().anyMatch(f -> f.equalsIgnoreCase("application/pdf"));
+        boolean pcl = formats.stream().anyMatch(f -> {
+            String x = f.toLowerCase(java.util.Locale.ROOT);
+            return x.contains("pcl") && !x.contains("pclxl") && !x.contains("pcl-xl");
+        }) || formats.stream().anyMatch(f -> f.equalsIgnoreCase("application/vnd.hp-PCL"));
+        boolean zpl = model.toLowerCase(java.util.Locale.ROOT).contains("zebra")
+                || formats.stream().anyMatch(f -> f.toLowerCase(java.util.Locale.ROOT).contains("zpl"));
+        String connection, format, summary;
+        Integer suggestedPort;
+        String suggestedPath = null;
+        if (zpl) {
+            connection = "RAW_9100"; format = "ZPL"; suggestedPort = 9100;
+            summary = model + " is a label printer — use Network port (9100) with ZPL.";
+        } else if (pdf) {
+            connection = "IPP"; format = "PDF"; suggestedPort = port; suggestedPath = a.queuePath();
+            summary = model + " prints PDF directly — use IPP with PDF.";
+        } else if (pcl) {
+            connection = "IPP"; format = "PCL"; suggestedPort = port; suggestedPath = a.queuePath();
+            summary = model + " doesn't print PDF or ZPL, but it prints PCL — use IPP with PCL, "
+                    + "and the app will convert each page for it.";
+        } else {
+            connection = null; format = null; suggestedPort = null;
+            summary = model + " accepts " + String.join(", ", formats)
+                    + " — none of which the app can send yet. Print from the browser instead.";
+        }
+        return new Capabilities(a.makeAndModel(), formats, pdf, pcl, zpl, connection, format, suggestedPort,
+                suggestedPath, summary);
+    }
+
+    /** Null when the printer can read {@code p}'s format (or won't say); else why not. */
+    private String formatMismatch(Printer p) {
+        var caps = probe(p.getHost(), "IPP".equals(p.getConnection()) ? p.getPort() : null, p.getQueuePath());
+        if (caps.isEmpty() || caps.get().formats().isEmpty()) return null;
+        Capabilities c = caps.get();
+        boolean readable = switch (p.getFormat()) {
+            case "PDF" -> c.pdf();
+            case "PCL" -> c.pcl();
+            case "ZPL" -> c.zpl();
+            default -> true;
+        };
+        if (readable) return null;
+        String model = c.makeAndModel() == null ? "The printer" : c.makeAndModel();
+        return "Sent, but " + model + " can't read " + p.getFormat() + " — it will print the job as text. "
+                + c.summary();
+    }
+
     public record QueueDepth(int inFlight, Integer ippQueue, String ippQueueError) {}
 
-    /** Print a small test job and record the outcome on the printer. */
-    @Transactional
+    /**
+     * Print a small test job and record the outcome on the printer.
+     *
+     * <p>Deliberately not one transaction: the send can wait on a slow printer
+     * for up to two minutes, and a transaction around it held a database
+     * connection that whole time. The reads and the two saves each take their
+     * own short transaction instead.
+     */
     public Printer test(Long id, String user) {
         Printer p = get(id);
         try {
             byte[] payload = "ZPL".equals(p.getFormat()) ? testZpl(p) : testPdf(p);
             send(p, payload, "Multiship test page", user);
-            p.setLastTestOk(true);
-            p.setLastTestMessage("Test job sent (" + p.getFormat() + ", " + payload.length + " bytes).");
+            // "Sent" only means the printer took the bytes. A printer that can't
+            // read the format still takes them — then prints them as text. Ask
+            // it what it reads, and say so when the answer rules this format out.
+            String mismatch = formatMismatch(p);
+            p.setLastTestOk(mismatch == null);
+            p.setLastTestMessage(mismatch != null ? truncate(mismatch, 500)
+                    : "Test job sent (" + p.getFormat() + ", " + payload.length + " bytes).");
         } catch (Exception ex) {
             if (ex instanceof InterruptedException) Thread.currentThread().interrupt();
             p.setLastTestOk(false);

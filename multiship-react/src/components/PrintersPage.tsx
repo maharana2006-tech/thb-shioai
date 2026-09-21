@@ -17,6 +17,7 @@ import {
   printerService,
   type Printer,
   type PrinterAssignment,
+  type PrinterCapabilities,
   type PrinterConnection,
   type PrinterFormat,
   type PrinterInput,
@@ -736,7 +737,7 @@ export default function PrintersPage() {
           <AssignmentMatrix
             docType="COMMERCIAL_INVOICE"
             clients={clientRows}
-            printers={printers.filter((p) => p.active && p.format === 'PDF')}
+            printers={printers.filter((p) => p.active && p.format !== 'ZPL')}
             assignments={assignments}
             onChanged={load}
           />
@@ -874,8 +875,8 @@ function PrinterEditor({
   const setConnection = (c: PrinterConnection) => setForm((f) => ({
     ...f,
     connection: c,
-    // IPP printers take PDF; a label printer on 9100 usually takes ZPL.
-    format: c === 'IPP' ? 'PDF' : f.format,
+    // IPP printers take PDF or PCL (never ZPL); a label printer on 9100 usually takes ZPL.
+    format: c === 'IPP' && f.format === 'ZPL' ? 'PDF' : f.format,
     paper: c === 'IPP' && f.paper === 'LABEL_4X6' ? 'LETTER' : f.paper,
     queuePath: c === 'IPP' ? (f.queuePath || 'ipp/print') : f.queuePath,
   }))
@@ -883,6 +884,37 @@ function PrinterEditor({
     ...f,
     format: fmt,
     paper: fmt === 'ZPL' ? 'LABEL_4X6' : f.paper === 'LABEL_4X6' ? 'LETTER' : f.paper,
+  }))
+
+  // "Detect printer": ask the printer (IPP, read-only) what it prints, so an
+  // office laser isn't set up as a ZPL label printer — which prints the label
+  // code as pages of text — or as PDF when it only reads PCL.
+  const [detecting, setDetecting] = useState(false)
+  const [detected, setDetected] = useState<PrinterCapabilities | null | 'none'>(null)
+  const detect = async () => {
+    if (!form.host.trim()) {
+      setErrors((cur) => ({ ...cur, host: "Enter the printer's IP address or hostname first." }))
+      return
+    }
+    setDetecting(true)
+    setDetected(null)
+    try {
+      const res = await printerService.probe(form.host.trim(), form.connection === 'IPP' ? form.port : null, form.queuePath)
+      setDetected(res.data ?? 'none')
+    } catch (e) {
+      const message = e instanceof Error && e.message ? e.message : 'Could not ask the printer.'
+      setErrors((cur) => ({ ...cur, host: message }))
+    } finally {
+      setDetecting(false)
+    }
+  }
+  const applyDetected = (c: PrinterCapabilities) => setForm((f) => ({
+    ...f,
+    connection: c.suggestedConnection ?? f.connection,
+    format: c.suggestedFormat ?? f.format,
+    port: c.suggestedConnection === 'RAW_9100' ? null : (c.suggestedPort ?? f.port),
+    queuePath: c.suggestedConnection === 'IPP' ? (c.suggestedQueuePath ?? f.queuePath ?? 'ipp/print') : f.queuePath,
+    paper: c.suggestedFormat === 'ZPL' ? 'LABEL_4X6' : f.paper === 'LABEL_4X6' ? 'LETTER' : f.paper,
   }))
 
   const [errors, setErrors] = useState<{ name?: string; host?: string; port?: string; form?: string }>({})
@@ -980,15 +1012,43 @@ function PrinterEditor({
             <span className={labelCls}>Prints</span>
             <select className={input} value={form.format} onChange={(e) => setFormat(e.target.value as PrinterFormat)}>
               <option value="ZPL" disabled={form.connection === 'IPP'}>ZPL (thermal label printer)</option>
-              <option value="PDF">PDF</option>
+              <option value="PDF">PDF (printers that read PDF)</option>
+              <option value="PCL">PCL (most office laser printers)</option>
             </select>
           </label>
           <label className="col-span-2 sm:col-span-1">
             <span className={labelCls}>IP address or hostname</span>
-            <input className={fieldCls(!!errors.host, 'font-mono')} value={form.host} aria-invalid={!!errors.host}
-              onChange={(e) => { set('host', e.target.value); clearError('host') }} placeholder="192.168.1.50" />
+            <span className="flex gap-1.5">
+              <input className={fieldCls(!!errors.host, 'font-mono')} value={form.host} aria-invalid={!!errors.host}
+                onChange={(e) => { set('host', e.target.value); clearError('host'); setDetected(null) }} placeholder="192.168.1.50" />
+              <button type="button" onClick={() => void detect()} disabled={detecting}
+                title="Ask the printer which formats it prints — nothing is printed"
+                className="shrink-0 rounded-md border border-slate-300 bg-white px-2 text-[12px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+                {detecting ? 'Asking…' : 'Detect'}
+              </button>
+            </span>
             {fieldError(errors.host)}
           </label>
+          {detected ? (
+            <div className="col-span-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[12px] text-slate-700" role="status">
+              {detected === 'none' ? (
+                <span>The printer didn't answer, so its formats are unknown. If it's a label printer, choose Network port (9100) and ZPL.</span>
+              ) : (
+                <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span><span className="font-semibold">{detected.makeAndModel ?? 'This printer'}</span> — {detected.summary}</span>
+                  {detected.suggestedFormat
+                    && (detected.suggestedFormat !== form.format || detected.suggestedConnection !== form.connection) ? (
+                    <button type="button" onClick={() => applyDetected(detected)}
+                      className="font-semibold text-slate-900 underline">
+                      Use {detected.suggestedConnection === 'IPP' ? 'IPP' : 'Network port (9100)'} · {detected.suggestedFormat}
+                    </button>
+                  ) : detected.suggestedFormat ? (
+                    <span className="font-semibold text-emerald-700">These settings match.</span>
+                  ) : null}
+                </span>
+              )}
+            </div>
+          ) : null}
           <label className="col-span-2 sm:col-span-1">
             <span className={labelCls}>Port</span>
             <input className={fieldCls(!!errors.port, 'font-mono')} aria-invalid={!!errors.port} inputMode="numeric" value={form.port ?? ''}

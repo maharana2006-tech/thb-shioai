@@ -115,6 +115,79 @@ public final class PrinterTransport {
         return countJobGroups(response.body());
     }
 
+    /** What a printer says about itself: its model and the formats it can print. */
+    public record PrinterAttributes(String makeAndModel, java.util.List<String> formats, String queuePath) { }
+
+    /**
+     * IPP Get-Printer-Attributes — read-only, prints nothing. Asks for the
+     * model and document-format-supported, which is what tells an office laser
+     * (PCL only) apart from one that takes PDF, before anything is sent to it.
+     */
+    public static PrinterAttributes printerAttributes(String host, int port, String queuePath)
+            throws IOException, InterruptedException {
+        PrinterAddressGuard.check(host, port);
+        String path = normalisePath(queuePath);
+        String printerUri = "ipp://" + host + ":" + port + "/" + path;
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        DataOutputStream out = new DataOutputStream(bytes);
+        out.writeByte(1);
+        out.writeByte(1);
+        out.writeShort(0x000B);                                // Get-Printer-Attributes
+        out.writeInt(REQUEST_IDS.getAndIncrement());
+        out.writeByte(0x01);                                   // operation-attributes
+        attribute(out, 0x47, "attributes-charset", "utf-8");
+        attribute(out, 0x48, "attributes-natural-language", "en");
+        attribute(out, 0x45, "printer-uri", printerUri);
+        attribute(out, 0x44, "requested-attributes", "printer-make-and-model");
+        attribute(out, 0x44, "", "document-format-supported");  // additional value, same attribute
+        out.writeByte(END_OF_ATTRIBUTES_TAG);
+        out.flush();
+
+        HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+        HttpRequest request = HttpRequest.newBuilder(URI.create("http://" + host + ":" + port + "/" + path))
+                .timeout(Duration.ofSeconds(8))
+                .header("Content-Type", "application/ipp")
+                .POST(HttpRequest.BodyPublishers.ofByteArray(bytes.toByteArray()))
+                .build();
+        HttpResponse<byte[]> response = client.send(request, HttpResponse.BodyHandlers.ofByteArray());
+        if (response.statusCode() != 200) {
+            throw new IOException("the printer answered HTTP " + response.statusCode());
+        }
+        int status = ippStatus(response.body());
+        if (status >= 0x0100) {
+            throw new IOException("the printer refused the query (IPP status 0x" + String.format("%04x", status) + ")");
+        }
+        return parseAttributes(response.body(), path);
+    }
+
+    /** Walks a Get-Printer-Attributes response for the two attributes we asked for. */
+    static PrinterAttributes parseAttributes(byte[] body, String path) {
+        String model = null;
+        java.util.List<String> formats = new java.util.ArrayList<>();
+        String last = null;
+        int i = 8;
+        while (i < body.length) {
+            int tag = body[i] & 0xff;
+            if (tag == END_OF_ATTRIBUTES_TAG) break;
+            if (tag < 0x10) { i++; continue; }
+            if (i + 3 > body.length) break;
+            int nameLen = ((body[i + 1] & 0xff) << 8) | (body[i + 2] & 0xff);
+            int afterName = i + 3 + nameLen;
+            if (afterName + 2 > body.length) break;
+            String name = new String(body, i + 3, nameLen, java.nio.charset.StandardCharsets.UTF_8);
+            int valueLen = ((body[afterName] & 0xff) << 8) | (body[afterName + 1] & 0xff);
+            int valueStart = afterName + 2;
+            if (valueStart + valueLen > body.length) break;
+            String value = new String(body, valueStart, valueLen, java.nio.charset.StandardCharsets.UTF_8);
+            String attr = name.isEmpty() ? last : name;          // empty name = another value of the same attribute
+            if ("printer-make-and-model".equals(attr) && model == null) model = value;
+            if ("document-format-supported".equals(attr)) formats.add(value);
+            last = attr;
+            i = valueStart + valueLen;
+        }
+        return new PrinterAttributes(model, java.util.List.copyOf(formats), path);
+    }
+
     /** IPP Get-Jobs operation header — like Print-Job but with a different
      *  op code and a which-jobs = "not-completed" attribute. No body. */
     static byte[] getJobsHeader(String printerUri, int requestId) {

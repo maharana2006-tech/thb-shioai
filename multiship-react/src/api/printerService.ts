@@ -9,7 +9,9 @@ import { notify } from '../utils/notify'
  */
 
 export type PrinterConnection = 'RAW_9100' | 'IPP'
-export type PrinterFormat = 'ZPL' | 'PDF'
+/** ZPL: thermal label printers. PDF: printers that read PDF directly.
+ *  PCL: office lasers that don't — the server converts each page for them. */
+export type PrinterFormat = 'ZPL' | 'PDF' | 'PCL'
 export type PrinterPaper = 'LABEL_4X6' | 'A4' | 'LETTER'
 export type PrintDocType = 'LABEL' | 'COMMERCIAL_INVOICE'
 
@@ -44,6 +46,20 @@ export interface PrinterInput {
   active: boolean
 }
 
+/** What a printer reports about itself, and the setup the server suggests. */
+export interface PrinterCapabilities {
+  makeAndModel: string | null
+  formats: string[]
+  pdf: boolean
+  pcl: boolean
+  zpl: boolean
+  suggestedConnection: PrinterConnection | null
+  suggestedFormat: PrinterFormat | null
+  suggestedPort: number | null
+  suggestedQueuePath: string | null
+  summary: string
+}
+
 export interface PrinterAssignment {
   id: number
   /** null = the default for every client without its own printer. */
@@ -75,6 +91,13 @@ export const printerService = {
   update: (id: number, input: PrinterInput) => apiClient.put<ApiResponse<Printer>>(`/printers/${id}`, input),
   remove: (id: number) => apiClient.delete<ApiResponse<void>>(`/printers/${id}`),
   test: (id: number) => apiClient.post<ApiResponse<Printer>>(`/printers/${id}/test`, {}),
+
+  /** Ask a printer what it prints (IPP, read-only) — before saving it. data is
+   *  null when the printer doesn't answer IPP, as older label printers don't. */
+  probe: (host: string, port?: number | null, queuePath?: string | null) =>
+    apiClient.post<ApiResponse<PrinterCapabilities | null>>('/printers/probe', {
+      host, port: port ?? null, queuePath: queuePath ?? null,
+    }),
 
   listAssignments: () => apiClient.get<ApiResponse<PrinterAssignment[]>>('/printers/assignments'),
   assign: (clientCode: string | null, docType: PrintDocType, printerId: number) =>

@@ -96,6 +96,29 @@ public class PrinterController {
         return ok(p.getLastTestMessage(), p);
     }
 
+    /** What the editor sends to "Detect printer" — nothing is saved. */
+    public record ProbeRequest(String host, Integer port, String queuePath) { }
+
+    @Operation(summary = "Ask a printer what it prints, before saving it",
+            description = "IPP Get-Printer-Attributes on port 631: model and supported formats, plus the "
+                    + "connection and format the app suggests. Read-only — nothing prints. Data is null when "
+                    + "the printer doesn't answer IPP (common for older label printers).")
+    @PreAuthorize("hasRole('ADMIN')")
+    @PostMapping("/probe")
+    public ResponseEntity<ApiResponse<PrinterService.Capabilities>> probe(@RequestBody ProbeRequest req) {
+        if (req == null || req.host() == null || req.host().isBlank()) {
+            throw new PrinterService.PrinterValidationException("Enter the printer's IP address or hostname first.");
+        }
+        // The same address rules as saving: no probing the server itself or its services.
+        var refused = com.multiship.backend.service.printing.PrinterAddressGuard.refusal(
+                req.host().trim(), req.port() == null ? 631 : req.port());
+        if (refused.isPresent()) throw new PrinterService.PrinterValidationException(refused.get());
+        return printers.probe(req.host(), req.port(), req.queuePath())
+                .map(c -> ok(c.summary(), c))
+                .orElseGet(() -> ok("The printer didn't answer an IPP query, so its formats are unknown. "
+                        + "Label printers often don't — if this is one, choose Network port (9100) and ZPL.", null));
+    }
+
     @Operation(summary = "List client printer assignments (client null = default)")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @GetMapping("/assignments")
