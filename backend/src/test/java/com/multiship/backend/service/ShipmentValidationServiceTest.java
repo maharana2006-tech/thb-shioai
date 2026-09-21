@@ -1137,4 +1137,17 @@ class ShipmentValidationServiceTest {
                 ErrorCode.WAREHOUSE_ATTACH_FORBIDDEN, "Warehouse DAL is not attached to ACME."));
         assertTrue(errorsOf(req).contains("Warehouse DAL is not attached to ACME."));
     }
+
+    /** The request's own field rules — Generate label enforces them with @Valid. */
+    @Test
+    void theRequestsFieldRulesAreReported() {
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "beanValidator",
+                jakarta.validation.Validation.buildDefaultValidatorFactory().getValidator());
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setLabelImageFormat("BMP");
+        stubServiceAndPreset();
+        ShipmentValidationResult r = service.validate(req).getData();
+        assertTrue(r.getLocalErrors().stream().anyMatch(e -> "labelImageFormat".equals(e.getField())),
+                r.getLocalErrors().toString());
+    }
 }

@@ -1561,95 +1561,28 @@ export default function NewShipmentPage() {
       scrollToFirstError()
       return
     }
+    // The same form rules Generate label enforces (lengths, phone digits,
+    // HS format, insured ≤ declared…) — highlighted in red, as on Generate.
+    setSubmitAttempted(true)
+    const formErrors = flattenErrors(await formik.validateForm(formValues as unknown as ShipmentFormValues))
+    if (formErrors.length > 0) {
+      const more = formErrors.length - 1
+      showToast(
+        more > 0
+          ? `${formErrors[0]} — and ${more} other field${more === 1 ? '' : 's'} highlighted in red.`
+          : formErrors[0],
+        `${formErrors.length} field${formErrors.length === 1 ? ' needs' : 's need'} attention`,
+      )
+      scrollToFirstError()
+      return
+    }
+    if (pkgServiceWarning) {
+      showToast(pkgServiceWarning, 'Incompatible package + service')
+      return
+    }
     setCarrierValidating(true)
     try {
-      // Sprint 52 — send the full form (matching the /orders/manual-label
-      // payload shape) so the backend runs packaging compatibility, markup
-      // required, customs (intl only), DG, and allowlists. Previously this
-      // button sent only recipient address fields and hit
-      // /addresses/validate/carrier — see the deep-dive in the PR body for
-      // the field-gap table.
-      const matched = accounts.find(
-        (a) => canon(a.carrierCode) === carrier
-          && (a.accountNumber || '').toLowerCase() === accountNumber.trim().toLowerCase(),
-      )
-      const cleanItems = items
-        .filter((it) => it.description.trim())
-        .map((it) => ({
-          description: it.description.trim(),
-          sku: it.sku.trim() || undefined,
-          hsCode: it.hsCode.trim() || undefined,
-          countryOfOrigin: it.countryOfOrigin.trim().toUpperCase() || undefined,
-          quantity: it.quantity ? Number(it.quantity) : null,
-          unitValue: it.unitValue ? Number(it.unitValue) : null,
-          // PR #558 — per-item weight; auto-computed from pkg weight when
-          // operator left blank (see autoItemWeight). Falls to null when
-          // pkg weight is also blank so BE fallback fires.
-          // Typed weights only. The auto-apportioned figure is shown as the
-        // placeholder for transparency but NOT posted: persisting it made an
-        // estimate look like a declared per-item weight (no "(est)" on the
-        // invoice). The backend spreads the shipment weight for the carrier.
-        weight: it.weight ? Number(it.weight) || null : null,
-        }))
-      const isCustom = packageChoice === CUSTOM_PKG
-      const payload = {
-        sender,
-        recipient,
-        isReturn,
-        // Return delivery mode — only meaningful when isReturn=true.
-        // Carrier connectors key off this: UPS ReturnService.Code 8/9,
-        // FedEx returnedShipmentDetail.returnType, etc.
-        ...(isReturn ? { returnType } : {}),
-        carrierCode: carrier,
-        accountNumber: accountNumber.trim(),
-        accountId: matched?.id ?? null,
-        serviceId: serviceId === '' ? null : Number(serviceId),
-        packagePresetId: isCustom ? null : Number(packageChoice),
-        length: isCustom ? Number(length) : null,
-        width: isCustom ? Number(width) : null,
-        height: isCustom ? Number(height) : null,
-        dimUnit,
-        weight: weight ? Number(weight) : null,
-        weightUnit,
-        clientCode: clientCode.trim() || undefined,
-        warehouseCode: warehouseCode || undefined,
-        declaredValue: declaredValue ? Number(declaredValue) : null,
-        currency,
-        // Only send the intl / customs block on actual international
-        // shipments — server also runs the sameTerritory rule and skips
-        // customs when domestic, but sending less data on domestic is
-        // just neater.
-        ...(isInternational ? {
-          items: cleanItems,
-          incoterms: incoterms || undefined,
-          reasonForExport: reasonForExport || undefined,
-          clearanceOption: clearanceOption || undefined,
-          dutiesAccount: /THIRD/.test(clearanceOption.toUpperCase()) && dutiesAccount.trim() ? dutiesAccount.trim() : undefined,
-          ftrExemption: ftrExemption || undefined,
-          aesCitation: aesCitation || undefined,
-          exportDeclarationReference: exportDeclarationReference || undefined,
-        } : {}),
-        ...(dgBlock ? { dangerousGoods: dgBlock } : {}),
-        ...(signatureOption !== 'NONE' ? { signatureOption } : {}),
-        ...(Number(insuredValue) > 0 ? {
-          insuredValue: Number(insuredValue),
-          insuredValueCurrency: currency,
-        } : {}),
-        // Label spec — mirror the generate-label payload so a green
-        // validate is a strong guarantee the label call will succeed
-        // on the same request. Guard above ensures these are non-blank
-        // when the carrier requires them.
-        ...(canon(carrier) === 'FEDEX' && labelImageType ? { labelImageType } : {}),
-        ...(canon(carrier) === 'FEDEX' && labelStockType ? { labelStockType } : {}),
-        ...(['UPS', 'DHL', 'USPS'].includes(canon(carrier)) && labelImageFormat
-          ? { labelImageFormat }
-          : {}),
-        // FDX-H1 — per-shipment pickupType. FedEx-only; skipped in
-        // Return mode (connector overrides to CONTACT_FEDEX_TO_SCHEDULE).
-        ...(canon(carrier) === 'FEDEX' && !isReturn && pickupType
-          ? { pickupType }
-          : {}),
-      }
+      const payload = buildLabelPayload()
       const res = await shipmentValidationService.validate(payload)
       const result = res.data ?? null
       setShipmentValidationResult(result)
@@ -2157,56 +2090,12 @@ export default function NewShipmentPage() {
     }
   }
 
-  const submit = async () => {
-    // Yup + Formik gate — validate the mirrored form values before anything else.
-    setSubmitAttempted(true)
-    // PR #530 — zero shippable carriers: block early with a
-    // Settings-link toast rather than the yup / label-guard errors
-    // that would fire on downstream blank fields (carrier === '',
-    // no label defaults, etc.).
-    if (noCarriersAtAll) {
-      showToast(
-        'Add + verify a carrier account in Settings before generating a label.',
-        'No carriers connected',
-      )
-      return
-    }
-    // Required-when-null guard runs BEFORE yup so we surface a
-    // targeted toast; yup doesn't know about the label / shipping-
-    // purpose fields (they're not in the form schema).
-    if (missingLabelFields.length > 0) {
-      showToast(
-        missingLabelFields.includes('Duties payor account')
-          ? `Enter the Duties payor account (the third party's ${canon(carrier) || 'carrier'} account).`
-          : `Pick ${missingLabelFields.join(' + ')} — no saved default for this client / account.`,
-        `${missingLabelFields.length} field${missingLabelFields.length === 1 ? ' needs' : 's need'} attention`,
-      )
-      scrollToFirstError()
-      return
-    }
-    const errs = await formik.validateForm(formValues as unknown as ShipmentFormValues)
-    const msgs = flattenErrors(errs)
-    if (msgs.length > 0) {
-      const more = msgs.length - 1
-      // Lightweight toast (not a blocking modal) — the field-level red messages
-      // below each input are the primary guidance.
-      showToast(
-        more > 0
-          ? `${msgs[0]} — and ${more} other field${more === 1 ? '' : 's'} highlighted in red.`
-          : msgs[0],
-        `${msgs.length} field${msgs.length === 1 ? ' needs' : 's need'} attention`,
-      )
-      // Bring the first invalid field into view.
-      scrollToFirstError()
-      return
-    }
-
-    // Packaging ↔ service compatibility gate (carrier would otherwise 400).
-    if (pkgServiceWarning) {
-      showToast(pkgServiceWarning, 'Incompatible package + service')
-      return
-    }
-
+  /**
+   * The exact request Generate label sends. Validate sends it too, so a
+   * PASS is about the shipment that will actually be bought — every box,
+   * the reference and the importer/broker override included.
+   */
+  const buildLabelPayload = (): ManualShipmentPayload => {
     const w = Number(weight)
 
     const cleanItems: ManualShipmentItem[] = items
@@ -2336,6 +2225,60 @@ export default function NewShipmentPage() {
       } : {}),
       ...(isInternational && override ? { importer: override.importer, broker: override.broker } : {}),
     }
+    return payload
+  }
+
+  const submit = async () => {
+    // Yup + Formik gate — validate the mirrored form values before anything else.
+    setSubmitAttempted(true)
+    // PR #530 — zero shippable carriers: block early with a
+    // Settings-link toast rather than the yup / label-guard errors
+    // that would fire on downstream blank fields (carrier === '',
+    // no label defaults, etc.).
+    if (noCarriersAtAll) {
+      showToast(
+        'Add + verify a carrier account in Settings before generating a label.',
+        'No carriers connected',
+      )
+      return
+    }
+    // Required-when-null guard runs BEFORE yup so we surface a
+    // targeted toast; yup doesn't know about the label / shipping-
+    // purpose fields (they're not in the form schema).
+    if (missingLabelFields.length > 0) {
+      showToast(
+        missingLabelFields.includes('Duties payor account')
+          ? `Enter the Duties payor account (the third party's ${canon(carrier) || 'carrier'} account).`
+          : `Pick ${missingLabelFields.join(' + ')} — no saved default for this client / account.`,
+        `${missingLabelFields.length} field${missingLabelFields.length === 1 ? ' needs' : 's need'} attention`,
+      )
+      scrollToFirstError()
+      return
+    }
+    const errs = await formik.validateForm(formValues as unknown as ShipmentFormValues)
+    const msgs = flattenErrors(errs)
+    if (msgs.length > 0) {
+      const more = msgs.length - 1
+      // Lightweight toast (not a blocking modal) — the field-level red messages
+      // below each input are the primary guidance.
+      showToast(
+        more > 0
+          ? `${msgs[0]} — and ${more} other field${more === 1 ? '' : 's'} highlighted in red.`
+          : msgs[0],
+        `${msgs.length} field${msgs.length === 1 ? ' needs' : 's need'} attention`,
+      )
+      // Bring the first invalid field into view.
+      scrollToFirstError()
+      return
+    }
+
+    // Packaging ↔ service compatibility gate (carrier would otherwise 400).
+    if (pkgServiceWarning) {
+      showToast(pkgServiceWarning, 'Incompatible package + service')
+      return
+    }
+
+    const payload = buildLabelPayload()
 
     setSubmitting(true)
     setQueuedInfo(null)

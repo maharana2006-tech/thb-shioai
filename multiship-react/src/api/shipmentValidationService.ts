@@ -81,7 +81,8 @@ export interface ShipmentValidationResult {
  * accepted fields — there's no static ManualShipmentPayload interface
  * on the FE that captures the intl / DG / signature conditional spread.
  */
-export type ShipmentValidationPayload = Record<string, unknown>
+/** The Generate label request (ManualShipmentPayload) — validated as sent. */
+export type ShipmentValidationPayload = object
 
 export const shipmentValidationService = {
   validate: (payload: ShipmentValidationPayload) =>

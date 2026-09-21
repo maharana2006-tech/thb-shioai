@@ -110,6 +110,10 @@ public class ShipmentValidationService {
     private RoutingRuleService routingRuleService;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.config.CarrierProperties carrierProperties;
+    /** The request's own field rules (@Pattern / @Size on ManualShipmentRequest),
+     *  which Generate label enforces with @Valid. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private jakarta.validation.Validator beanValidator;
     @Value("${packaging.validation-enabled:true}")
     private boolean packagingValidationEnabled = true;
     @Value("${carrier.auto-split-enabled:true}")
@@ -145,6 +149,13 @@ public class ShipmentValidationService {
         checkRecipientRequired(to, errors, warnings);
         checkSenderRequired(from, req, errors);
         checkShipmentRequired(req, errors);
+        // Generate label rejects these with a 400 before anything else runs.
+        if (beanValidator != null) {
+            for (jakarta.validation.ConstraintViolation<ManualShipmentRequest> v : beanValidator.validate(req)) {
+                errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                        v.getMessage(), v.getPropertyPath().toString()));
+            }
+        }
         // The account the label will bill — the one picked on the form, held
         // to the same rules Generate label applies (exists, belongs to this
         // client, active). The carrier check below runs on this same account.
