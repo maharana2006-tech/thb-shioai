@@ -32,9 +32,31 @@ public interface DtcOrderRepository extends JpaRepository<DtcOrder, Long> {
     List<DtcOrder> findByOrderNo(Integer orderNo);
 
     /**
-     * Check if a DTC order already exists (idempotency check).
+     * Check if a DTC order already exists by batch ID only.
+     * @deprecated Use {@link #existsByBatchIdAndToteNumberAndTenantId} for composite key check
      */
+    @Deprecated(since = "2.0", forRemoval = true)
     boolean existsByBatchId(Long batchId);
+
+    /**
+     * Check if a DTC order already exists using composite key (batchId + toteNumber + tenantId).
+     * This prevents duplicates when the same batchId exists for different totes or tenants.
+     *
+     * @param batchId the batch identifier
+     * @param toteNumber the tote/carton number
+     * @param tenantId the tenant/client code
+     * @return true if order with this composite key exists, false otherwise
+     */
+    @Query("""
+        SELECT COUNT(d) > 0 FROM DtcOrder d
+        WHERE d.batchId = :batchId
+          AND d.toteNumber = :toteNumber
+          AND d.tenantId = :tenantId
+    """)
+    boolean existsByBatchIdAndToteNumberAndTenantId(
+            @Param("batchId") java.math.BigDecimal batchId,
+            @Param("toteNumber") String toteNumber,
+            @Param("tenantId") String tenantId);
 
     /**
      * Count pending DTC orders for a tenant.
