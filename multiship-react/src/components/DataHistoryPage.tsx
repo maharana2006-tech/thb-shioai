@@ -31,7 +31,7 @@ import { GridCell, DH_COLUMNS, RowIssuesIcon, RowChannelChip, bucketRowErrors, t
 import VirtualTable from './VirtualTable'
 import AnimatedHeight from './ui/AnimatedHeight'
 import BatchLabelBar from './bulk/BatchLabelBar'
-import { liveOrdersOf } from '../utils/batchLabels'
+import { labelCountsOf, liveOrdersOf, type LabelCounts } from '../utils/batchLabels'
 import { printPdfBlob } from '../utils/printPdf'
 import { orderService } from '../api/orderService'
 import SendToPrinterDialog from './workspace/SendToPrinterDialog'
@@ -967,6 +967,14 @@ export default function DataHistoryPage() {
     return () => clearInterval(t)
   }, [anyGenerating])
 
+  /** Where a batch's labels stand — counted from its rows on the batch page, else the server's counts. */
+  const labelCountsFor = (b: ImportBatchSummary): LabelCounts | null => {
+    const r = rowsById[b.id]
+    if (Array.isArray(r)) return labelCountsOf(r)
+    if (b.labelsGenerated == null) return null
+    return { generated: b.labelsGenerated ?? 0, pending: b.labelsPending ?? 0, voided: b.labelsVoided ?? 0, failed: b.labelsFailed ?? 0 }
+  }
+
   /** When the batch was last printed — from the list, or from its rows on the batch page. */
   const printedAtOf = (b: ImportBatchSummary): string | null => {
     const r = rowsById[b.id]
@@ -1053,6 +1061,7 @@ export default function DataHistoryPage() {
               <span className="text-[12px] font-semibold tabular-nums text-[#1f150c]">
                 {total} row{total === 1 ? '' : 's'}
               </span>
+              <LabelCountsLine counts={labelCountsFor(b)} />
               {invalid > 0 ? (
                 <>
                   <span
@@ -2364,4 +2373,26 @@ function formatPrinted(iso: string, withTime = false) {
   return withTime
     ? d.toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' })
     : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+}
+
+/** "18 generated · 2 pending · 1 voided · 1 failed" — only the parts that aren't zero. */
+function LabelCountsLine({ counts }: { counts: LabelCounts | null }) {
+  if (!counts) return null
+  const parts: { n: number; label: string; dot: string; text: string }[] = [
+    { n: counts.generated, label: 'generated', dot: 'bg-emerald-500', text: 'text-emerald-800' },
+    { n: counts.pending, label: 'pending', dot: 'bg-amber-400', text: 'text-amber-800' },
+    { n: counts.voided, label: 'voided', dot: 'bg-slate-400', text: 'text-slate-500' },
+    { n: counts.failed, label: 'failed', dot: 'bg-rose-500', text: 'text-rose-700' },
+  ].filter((p) => p.n > 0)
+  if (parts.length === 0) return null
+  return (
+    <span data-testid="label-counts" className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10.5px] font-semibold tabular-nums">
+      {parts.map((p) => (
+        <span key={p.label} className={`inline-flex items-center gap-1 ${p.text}`}>
+          <span className={`h-1.5 w-1.5 rounded-full ${p.dot}`} aria-hidden="true" />
+          {p.n} {p.label}
+        </span>
+      ))}
+    </span>
+  )
 }

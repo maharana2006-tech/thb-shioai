@@ -69,7 +69,7 @@ public class BulkBatchQueryService {
     /** The list columns — never rows_json, which can be megabytes per batch. */
     static final List<String> LIST_COLUMNS = List.of("id", "createdBy", "fileName", "status", "labelBatchId",
             "createdAt", "completedAt", "generationStartedAt", "note", "totalRows", "savedRows", "invalidRows",
-            "deletedAt", "deletedBy", "billingMode", "source");
+            "deletedAt", "deletedBy", "billingMode", "source", "labelsGenerated", "labelsFailed", "labelOrders", "labelsCounted");
 
     private final ImportBatchRepository repository;
     private final TenantScopeEnforcer tenantScope;
@@ -77,6 +77,10 @@ public class BulkBatchQueryService {
     /** When each batch was last printed. Optional for hand-built tests. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.service.printing.DocumentPrintLog printLog;
+    /** Live void status of the page's generated orders. Optional for hand-built tests. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.OrderTrackingRepository trackingRepository;
+    private static final com.fasterxml.jackson.databind.ObjectMapper JSON = new com.fasterxml.jackson.databind.ObjectMapper();
 
     @Transactional(readOnly = true)
     public Page<ImportBatchDTO> list(Query query, int page, int size) {
@@ -87,10 +91,12 @@ public class BulkBatchQueryService {
         Root<ImportBatch> root = cq.from(ImportBatch.class);
         cq.multiselect(LIST_COLUMNS.stream().<jakarta.persistence.criteria.Selection<?>>map(c -> root.get(c).alias(c)).toList());
         cq.where(where.and(ordered(query)).toPredicate(root, cq, cb));
-        List<ImportBatchDTO> content = entityManager.createQuery(cq)
+        List<jakarta.persistence.Tuple> tuples = entityManager.createQuery(cq)
                 .setFirstResult((int) paging.getOffset())
                 .setMaxResults(paging.getPageSize())
-                .getResultList().stream().map(BulkBatchQueryService::summaryOf).toList();
+                .getResultList();
+        List<ImportBatchDTO> content = tuples.stream().map(BulkBatchQueryService::summaryOf).toList();
+        applyLabelCounts(tuples, content);
         if (printLog != null) {
             java.util.Map<Integer, LocalDateTime> printed = printLog.lastPrintedByLabelBatch(content.stream()
                     .map(ImportBatchDTO::getLabelBatchId).filter(java.util.Objects::nonNull).toList());
@@ -121,6 +127,55 @@ public class BulkBatchQueryService {
         List<String> creators = creators(base);
         return new Summary(total, ready, byStatus.getOrDefault("IN_PROGRESS", 0L), needsFixes, doneThisWeek,
                 byStatus, creators);
+    }
+
+    /**
+     * Where each batch's labels stand, in rows: the stored generated / failed
+     * counts, less the rows of orders voided since (read live — a void from
+     * the Orders page counts too). One tracking query for the whole page.
+     */
+    void applyLabelCounts(List<jakarta.persistence.Tuple> tuples, List<ImportBatchDTO> content) {
+        List<Map<Integer, Integer>> perBatch = new ArrayList<>();
+        java.util.Set<Integer> allOrders = new java.util.HashSet<>();
+        for (jakarta.persistence.Tuple t : tuples) {
+            Map<Integer, Integer> orders = parseLabelOrders(t.get("labelOrders", String.class));
+            perBatch.add(orders);
+            allOrders.addAll(orders.keySet());
+        }
+        java.util.Set<Integer> voided = new java.util.HashSet<>();
+        if (trackingRepository != null && !allOrders.isEmpty()) {
+            for (var tr : trackingRepository.findByOrderNoIn(allOrders)) {
+                if ("VOIDED".equalsIgnoreCase(tr.getStatus())) voided.add(tr.getOrderNo());
+            }
+        }
+        for (int i = 0; i < content.size(); i++) {
+            jakarta.persistence.Tuple t = tuples.get(i);
+            ImportBatchDTO d = content.get(i);
+            if (!Boolean.TRUE.equals(t.get("labelsCounted", Boolean.class))) continue;   // rows gone — nothing to show
+            int generated = orZero(t.get("labelsGenerated", Integer.class));
+            int failed = orZero(t.get("labelsFailed", Integer.class));
+            int voidedRows = perBatch.get(i).entrySet().stream()
+                    .filter(e -> voided.contains(e.getKey())).mapToInt(Map.Entry::getValue).sum();
+            d.setLabelsGenerated(Math.max(0, generated - voidedRows));
+            d.setLabelsVoided(voidedRows);
+            d.setLabelsFailed(failed);
+            d.setLabelsPending(Math.max(0, d.getTotalRows() - generated - failed));
+        }
+    }
+
+    private static int orZero(Integer v) { return v == null ? 0 : v; }
+
+    static Map<Integer, Integer> parseLabelOrders(String json) {
+        Map<Integer, Integer> out = new java.util.HashMap<>();
+        if (!StringUtils.hasText(json)) return out;
+        try {
+            JSON.readTree(json).properties().forEach(e -> {
+                try { out.put(Integer.parseInt(e.getKey()), e.getValue().asInt()); } catch (NumberFormatException ignored) { }
+            });
+        } catch (Exception ignored) {
+            // an unreadable map just means no live-void adjustment for that batch
+        }
+        return out;
     }
 
     /** Everyone who created a batch in this view — the "Created by" filter's choices. */

@@ -156,4 +156,20 @@ public class ImportBatch {
      */
     @Column(name = "client_code", length = 50)
     private String clientCode;
+
+    /** Rows whose label was generated (or queued) — written with the rows. V81. */
+    @Column(name = "labels_generated", nullable = false)
+    private int labelsGenerated;
+
+    /** Rows the carrier rejected. */
+    @Column(name = "labels_failed", nullable = false)
+    private int labelsFailed;
+
+    /** The counts above came from the rows (false for a batch whose stored rows are gone). */
+    @Column(name = "labels_counted", nullable = false)
+    private boolean labelsCounted;
+
+    /** JSON {orderNo: rows} of the generated orders — so live voids can be counted in rows. */
+    @Column(name = "label_orders", columnDefinition = "TEXT")
+    private String labelOrders;
 }

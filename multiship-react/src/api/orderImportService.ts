@@ -166,6 +166,11 @@ export interface ImportBatchSummary {
   source?: 'BULK' | 'WMS' | string | null
   /** When anything of this batch was last printed (ISO) — list rows only. */
   lastPrintedAt?: string | null
+  /** Where the batch's labels stand, in rows (list only): live, voided since, rejected, not labelled yet. */
+  labelsGenerated?: number | null
+  labelsVoided?: number | null
+  labelsFailed?: number | null
+  labelsPending?: number | null
 }
 
 /** A saved import with its full rows (detail view). */

@@ -229,10 +229,37 @@ public class OrderImportServiceImpl implements OrderImportService {
      *  operations (historyDetail, generateLabelsForBatch, generateLabelForRow)
      *  since {@link com.multiship.backend.model.ImportBatch} carries no direct
      *  tenant column — the tenant identity lives on each row of the payload. */
-    /** Record whose batch this is (see ImportBatch.clientCode) — an edit can change it. */
+    /** Record whose batch this is and where its labels stand (ImportBatch.clientCode,
+     *  labelsGenerated / labelsFailed / labelOrders) — every write of the rows. */
     private void stampOwner(com.multiship.backend.model.ImportBatch batch, List<OrderImportRowDTO> rows) {
         String c = firstClientCode(rows);
         batch.setClientCode(StringUtils.hasText(c) ? c.trim().toUpperCase(Locale.ROOT) : null);
+        stampLabelCounts(batch, rows, importObjectMapper);
+    }
+
+    /** labelsGenerated / labelsFailed / labelOrders from the rows (also used by the USPS queue reconciler). */
+    public static void stampLabelCounts(com.multiship.backend.model.ImportBatch batch, List<OrderImportRowDTO> rows,
+                                        com.fasterxml.jackson.databind.ObjectMapper mapper) {
+        int generated = 0;
+        int failed = 0;
+        java.util.Map<Integer, Integer> orders = new java.util.TreeMap<>();
+        for (OrderImportRowDTO r : rows == null ? List.<OrderImportRowDTO>of() : rows) {
+            String st = r.getGeneratedStatus() == null ? "" : r.getGeneratedStatus().toUpperCase(Locale.ROOT);
+            if (st.equals("GENERATED") || st.equals("QUEUED_USPS")) {
+                generated++;
+                if (r.getGeneratedOrderNo() != null) orders.merge(r.getGeneratedOrderNo(), 1, Integer::sum);
+            } else if (st.equals("FAILED")) {
+                failed++;
+            }
+        }
+        batch.setLabelsGenerated(generated);
+        batch.setLabelsFailed(failed);
+        batch.setLabelsCounted(rows != null && !rows.isEmpty());
+        try {
+            batch.setLabelOrders(orders.isEmpty() || mapper == null ? null : mapper.writeValueAsString(orders));
+        } catch (Exception e) {
+            batch.setLabelOrders(null);
+        }
     }
 
     private String firstClientCode(List<OrderImportRowDTO> rows) {

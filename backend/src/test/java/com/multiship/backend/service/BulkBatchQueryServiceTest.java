@@ -43,6 +43,49 @@ class BulkBatchQueryServiceTest {
     @Test
     void theListQueryNeverSelectsTheRowsColumn() {
         assertFalse(BulkBatchQueryService.LIST_COLUMNS.contains("rowsJson"));
-        assertEquals(16, BulkBatchQueryService.LIST_COLUMNS.size());
+        assertEquals(20, BulkBatchQueryService.LIST_COLUMNS.size());
+    }
+
+    /** "18 generated · 2 pending · 1 voided": stored counts, less the rows of orders voided since. */
+    @Test
+    void labelCountsTakeLiveVoidsIntoAccountInRows() {
+        com.multiship.backend.repository.OrderTrackingRepository tracking =
+                org.mockito.Mockito.mock(com.multiship.backend.repository.OrderTrackingRepository.class);
+        com.multiship.backend.model.OrderTracking voided = new com.multiship.backend.model.OrderTracking();
+        voided.setOrderNo(5002);
+        voided.setStatus("VOIDED");
+        org.mockito.Mockito.when(tracking.findByOrderNoIn(org.mockito.ArgumentMatchers.anyCollection()))
+                .thenReturn(java.util.List.of(voided));
+        BulkBatchQueryService service = new BulkBatchQueryService(null, null, null);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "trackingRepository", tracking);
+
+        jakarta.persistence.Tuple t = org.mockito.Mockito.mock(jakarta.persistence.Tuple.class);
+        org.mockito.Mockito.when(t.get("labelOrders", String.class)).thenReturn("{\"5001\":2,\"5002\":3}");
+        org.mockito.Mockito.when(t.get("labelsGenerated", Integer.class)).thenReturn(5);
+        org.mockito.Mockito.when(t.get("labelsFailed", Integer.class)).thenReturn(1);
+        org.mockito.Mockito.when(t.get("labelsCounted", Boolean.class)).thenReturn(true);
+        ImportBatchDTO d = ImportBatchDTO.builder().id(1L).totalRows(10).build();
+
+        service.applyLabelCounts(java.util.List.of(t), java.util.List.of(d));
+
+        assertEquals(2, d.getLabelsGenerated(), "5 generated rows, 3 of them (order 5002) voided since");
+        assertEquals(3, d.getLabelsVoided());
+        assertEquals(1, d.getLabelsFailed());
+        assertEquals(4, d.getLabelsPending(), "10 rows − 5 generated − 1 failed");
+    }
+
+    @Test
+    void theStoredCountsFollowTheRows() {
+        com.multiship.backend.model.ImportBatch b = new com.multiship.backend.model.ImportBatch();
+        java.util.List<com.multiship.backend.dto.OrderImportRowDTO> rows = java.util.List.of(
+                com.multiship.backend.dto.OrderImportRowDTO.builder().rowNumber(1).generatedOrderNo(7).generatedStatus("GENERATED").build(),
+                com.multiship.backend.dto.OrderImportRowDTO.builder().rowNumber(2).generatedOrderNo(7).generatedStatus("GENERATED").build(),
+                com.multiship.backend.dto.OrderImportRowDTO.builder().rowNumber(3).generatedOrderNo(8).generatedStatus("QUEUED_USPS").build(),
+                com.multiship.backend.dto.OrderImportRowDTO.builder().rowNumber(4).generatedStatus("FAILED").build(),
+                com.multiship.backend.dto.OrderImportRowDTO.builder().rowNumber(5).build());
+        OrderImportServiceImpl.stampLabelCounts(b, rows, new com.fasterxml.jackson.databind.ObjectMapper());
+        assertEquals(3, b.getLabelsGenerated());
+        assertEquals(1, b.getLabelsFailed());
+        assertEquals(java.util.Map.of(7, 2, 8, 1), BulkBatchQueryService.parseLabelOrders(b.getLabelOrders()));
     }
 }

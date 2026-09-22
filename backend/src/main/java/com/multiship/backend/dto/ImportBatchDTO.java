@@ -47,5 +47,12 @@ public class ImportBatchDTO {
 
     /** When anything of this batch's label batch was last printed. */
     private String lastPrintedAt;
+
+    /** Where the batch's labels stand, in rows (list only): generated and still live, voided since,
+     *  rejected by the carrier, and not labelled yet. Null when not worked out. */
+    private Integer labelsGenerated;
+    private Integer labelsVoided;
+    private Integer labelsFailed;
+    private Integer labelsPending;
     private List<OrderImportRowDTO> rows;
 }
