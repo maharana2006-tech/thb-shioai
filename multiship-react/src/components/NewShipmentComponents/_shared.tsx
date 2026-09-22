@@ -99,6 +99,7 @@ export interface SectionCardProps {
   badge?: ReactNode
   note?: ReactNode
   className?: string
+  /** @deprecated headers always wrap now; kept so existing callers compile. */
   wrapHeader?: boolean
   children: ReactNode
 }
@@ -111,12 +112,12 @@ export function SectionCard({
   badge,
   note,
   className = '',
-  wrapHeader = false,
   children,
 }: SectionCardProps) {
   return (
-    <section id={id} className={`scroll-mt-24 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm ${className}`}>
-      <div className={`flex min-h-[38px] items-center justify-between gap-2 border-b border-dashed border-[#e3d9c4] pb-2 ${wrapHeader ? 'flex-wrap' : ''}`}>
+    <section id={id} className={`scroll-mt-24 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5 ${className}`}>
+      {/* Wraps when the badges don't fit (phones) instead of pushing the page wider. */}
+      <div className="flex min-h-[38px] flex-wrap items-center justify-between gap-2 border-b border-dashed border-[#e3d9c4] pb-2">
         <div className="flex items-center gap-2">
           <span className="text-[#6b5c42]">{icon}</span>
           <h3 className="font-mono text-[11px] font-bold uppercase tracking-[0.16em] text-[#6b5c42]">{title}</h3>

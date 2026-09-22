@@ -64,6 +64,7 @@ import {
 import { AddressBlock } from './NewShipmentComponents/AddressBlock'
 import { CarrierAddressBanner } from './NewShipmentComponents/CarrierAddressBanner'
 import ValidationChecklist from './ValidationChecklist'
+import { fieldLabelFor } from '../utils/fieldLabels'
 
 /** Canonicalise a carrier code (ERP aliases → UPS/FEDEX/USPS). */
 const canon = (c?: string | null) => {
@@ -1558,7 +1559,9 @@ export default function NewShipmentPage() {
       return
     }
     if (!carrier) {
-      showToast('Pick a carrier first — the check is carrier-specific.')
+      setShipmentValidationResult(null)
+      setChecklistOpen(false)
+      showToast('Pick a carrier first — the check is carrier-specific.', '1 field needs attention')
       return
     }
     // Required-when-null guard: block until every label field the
@@ -1566,10 +1569,14 @@ export default function NewShipmentPage() {
     // (Generate) so operators see the same message on both buttons.
     if (missingLabelFields.length > 0) {
       setSubmitAttempted(true)
+      // The check didn't run on this form: an older result would mislead.
+      setShipmentValidationResult(null)
+      setChecklistOpen(false)
       showToast(
         missingLabelFields.includes('Duties payor account')
           ? `Enter the Duties payor account (the third party's ${canon(carrier) || 'carrier'} account) before validating.`
           : `Pick ${missingLabelFields.join(' + ')} before validating — the selected account has no saved default.`,
+        `${missingLabelFields.length} field${missingLabelFields.length === 1 ? ' needs' : 's need'} attention`,
       )
       scrollToFirstError()
       return
@@ -2041,11 +2048,15 @@ export default function NewShipmentPage() {
   }
 
   /** Flatten a (possibly nested/array) Formik error tree into a list of messages. */
-  const flattenErrors = (node: unknown): string[] => {
+  /** Every form-rule message, named by its field ("Ship to name: Max 35 characters"). */
+  const flattenErrors = (node: unknown, path = ''): string[] => {
     if (!node) return []
-    if (typeof node === 'string') return [node]
-    if (Array.isArray(node)) return node.flatMap(flattenErrors)
-    return Object.values(node as Record<string, unknown>).flatMap(flattenErrors)
+    if (typeof node === 'string') {
+      const where = fieldLabelFor(path)
+      return [where && !/^Box \d+:/.test(node) ? `${where}: ${node.charAt(0).toLowerCase()}${node.slice(1)}` : node]
+    }
+    if (Array.isArray(node)) return node.flatMap((n, i) => flattenErrors(n, `${path}[${i}]`))
+    return Object.entries(node as Record<string, unknown>).flatMap(([k, v]) => flattenErrors(v, path ? `${path}.${k}` : k))
   }
 
   // Commodity auto-split — invoked when the operator picks a strategy
@@ -2609,7 +2620,7 @@ export default function NewShipmentPage() {
             ) : null}
 
             {/* ── Shipment / Return toggle ── */}
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-3">
                 <div className="inline-flex items-center gap-1 rounded-2xl border border-[#e3d9c4] bg-white p-1 shadow-sm">
                   {(['SHIPMENT', 'RETURN'] as const).map((m) => (
@@ -3221,7 +3232,7 @@ export default function NewShipmentPage() {
                 id="sec-service"
                 title="Account & service"
                 badge={
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center justify-end gap-2">
                     <button
                       type="button"
                       onClick={() => void recommendServiceAi()}
@@ -3437,7 +3448,7 @@ export default function NewShipmentPage() {
                 title="Package & weight"
               wrapHeader
               badge={
-                <div className="flex flex-1 items-center justify-end gap-2">
+                <div className="flex flex-1 flex-wrap items-center justify-end gap-2">
                   <button
                     type="button"
                     onClick={() => void suggestPackagingAi()}
@@ -3604,7 +3615,12 @@ export default function NewShipmentPage() {
                     box collapses to a one-line summary (click to edit). */}
                 {extraPackages.map((p, idx) => {
                   const filled = !!(p.weight && p.length && p.width && p.height)
-                  const expanded = expandedBoxes.has(idx) || !filled
+                  // Inline errors without the "Box N:" prefix the notice uses.
+                  const boxErr = (f: string) => errAt(`extraPackages[${idx}].${f}`)?.replace(/^Box \d+: /, '')
+                  const boxHasError = ['weight', 'length', 'width', 'height'].some((f) => !!boxErr(f))
+                  // A box with something to fix stays open, so the field can be seen.
+                  const expanded = expandedBoxes.has(idx) || !filled || boxHasError
+                  const needsDims = !p.packageType && isCustomPkg
                   const summary = `${p.weight || '—'} ${weightUnit.toLowerCase()} · ${p.length || '—'}×${p.width || '—'}×${p.height || '—'} ${dimUnit.toLowerCase()}`
                   return (
                   <div key={idx} className="rounded-xl border border-dashed border-[#e3d9c4] bg-[#faf7f0]/60 p-3">
@@ -3641,7 +3657,7 @@ export default function NewShipmentPage() {
                     </div>
                     {expanded ? (<>
                     <div className="grid grid-cols-2 gap-2">
-                      <Field label={`Weight (${weightUnit.toLowerCase()})`} required>
+                      <Field label={`Weight (${weightUnit.toLowerCase()})`} required error={boxErr('weight')}>
                         <input
                           className={inputCls}
                           type="number" min="0" step="0.1"
@@ -3663,7 +3679,7 @@ export default function NewShipmentPage() {
                       </Field>
                     </div>
                     <div className="mt-2 grid grid-cols-3 gap-2">
-                      <Field label={`L (${dimUnit.toLowerCase()})`}>
+                      <Field label={`L (${dimUnit.toLowerCase()})`} required={needsDims} error={boxErr('length')}>
                         <input
                           className={inputCls}
                           type="number" min="0" step="0.1"
@@ -3672,7 +3688,7 @@ export default function NewShipmentPage() {
                             cur.map((x, i) => (i === idx ? { ...x, length: e.target.value } : x)))}
                         />
                       </Field>
-                      <Field label={`W (${dimUnit.toLowerCase()})`}>
+                      <Field label={`W (${dimUnit.toLowerCase()})`} required={needsDims} error={boxErr('width')}>
                         <input
                           className={inputCls}
                           type="number" min="0" step="0.1"
@@ -3681,7 +3697,7 @@ export default function NewShipmentPage() {
                             cur.map((x, i) => (i === idx ? { ...x, width: e.target.value } : x)))}
                         />
                       </Field>
-                      <Field label={`H (${dimUnit.toLowerCase()})`}>
+                      <Field label={`H (${dimUnit.toLowerCase()})`} required={needsDims} error={boxErr('height')}>
                         <input
                           className={inputCls}
                           type="number" min="0" step="0.1"
