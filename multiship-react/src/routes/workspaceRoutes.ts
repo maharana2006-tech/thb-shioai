@@ -48,6 +48,11 @@ export const settingsPaths = {
    *  for generated labels + commercial invoices. ADMIN-only. */
   outputDestinations: '/settings/output-destinations',
   printers: '/settings/printers',
+  /** S1-S5 — protocol-agnostic external-system connection manager
+   *  (NDS Oracle today, REST/gRPC/SFTP later). Admin CRUD on the
+   *  external_system_connection table + secrets + client-login
+   *  overrides + Test-connection dial. ADMIN role only. */
+  externalSystems: '/settings/external-systems',
 } as const
 
 export const workspaceNavItems: Array<{
@@ -119,6 +124,9 @@ export const settingsNavItems: Array<{
     roles: ['ADMIN'] },
   { key: 'printers', label: 'Printers', to: settingsPaths.printers, iconKey: 'mapping',
     description: 'Register network label and invoice printers, choose which printer each client prints on, and send test pages. Used by Send to printer on the Orders page.',
+    roles: ['ADMIN'] },
+  { key: 'external-systems', label: 'External Systems', to: settingsPaths.externalSystems, iconKey: 'apiKey',
+    description: 'DB-driven connection manager for external systems (Oracle WMS today, REST/gRPC/SFTP later). Set host/port/creds/pool params + per-tenant login overrides + test the connection live.',
     roles: ['ADMIN'] },
   // ===== Hidden from the Settings menu =====
   // Routes below still resolve so direct URLs and any hard-coded links keep
