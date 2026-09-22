@@ -142,6 +142,19 @@ vi.mock('../api/apiClient', () => {
 
 // Sub-components used by the page — stubbed so we don't have to
 // wire the whole editable grid.
+const listBatches = vi.fn()
+const bulkSummary = vi.fn()
+vi.mock('../api/bulkService', () => ({
+  bulkService: {
+    listBatches: (...a: unknown[]) => listBatches(...a),
+    summary: (...a: unknown[]) => bulkSummary(...a),
+  },
+}))
+const pageOf = (content: unknown[]) => ({ data: { content, totalElements: content.length, totalPages: 1, number: 0, size: 25 } })
+const summaryOf = (over: Record<string, unknown> = {}) => ({ data: {
+  total: 0, readyToGenerate: 0, generating: 0, needsFixes: 0, completedThisWeek: 0,
+  statusCounts: { ALL: 0 }, creators: [], ...over,
+} })
 const wmsBatches = vi.fn()
 const wmsPull = vi.fn()
 vi.mock('../api/wmsService', () => ({
@@ -293,6 +306,8 @@ const rowFedex = (over: Record<string, unknown> = {}) => ({
 beforeEach(() => {
   vi.clearAllMocks()
   wmsBatches.mockResolvedValue({ data: [] })
+  listBatches.mockResolvedValue(pageOf([]))
+  bulkSummary.mockResolvedValue(summaryOf())
   listHistory.mockResolvedValue({ data: [] })
   getHistory.mockResolvedValue({ data: null })
   getMetricsMock.mockResolvedValue({
@@ -310,11 +325,6 @@ afterEach(() => {
   cleanup()
 })
 
-/** Bulk Mailer opens on Import history; the tab is still there to click. */
-async function switchToImportsView() {
-  const importsTab = await screen.findByRole('tab', { name: /Import history/i })
-  await userEvent.click(importsTab)
-}
 
 // ==================================================================
 // Test 0: sanity — page renders
@@ -513,11 +523,13 @@ describe('DataHistoryPage — normalizeCarrierCode helper contract', () => {
 
 describe('Bulk Mailer — layout', () => {
   it('opens on Import history with four tabs, no All orders, and an Import CSV / Excel button', async () => {
-    listHistory.mockResolvedValue({ data: [
+    listBatches.mockResolvedValue(pageOf([
       batchSummary({ id: 1, status: 'INITIATE', invalidRows: 0 }),
       batchSummary({ id: 2, status: 'IN_PROGRESS' }),
       batchSummary({ id: 3, status: 'DRAFT', invalidRows: 4 }),
-    ] })
+    ]))
+    // The cards come from the server's counts over the whole view.
+    bulkSummary.mockResolvedValue(summaryOf({ total: 3, readyToGenerate: 1, generating: 1, needsFixes: 1 }))
     await loadAndRender()
     const tabs = await screen.findAllByRole('tab')
     expect(tabs.map((t) => t.textContent?.replace(/(Saved batches|WMS · API|Label · invoice · statement|Deleted batches)$/, '')))
@@ -532,11 +544,13 @@ describe('Bulk Mailer — layout', () => {
   })
 
   it('shows the API batches in the same list, with Fetch from WMS for an admin', async () => {
-    wmsBatches.mockResolvedValue({ data: [batchSummary({ id: 7, fileName: 'WMS fetch 22 Sep', source: 'WMS', status: 'DRAFT', invalidRows: 1, savedRows: 3 })] })
+    listBatches.mockImplementation(async (q: { view: string }) => q.view === 'API'
+      ? pageOf([batchSummary({ id: 7, fileName: 'WMS fetch 22 Sep', source: 'WMS', status: 'DRAFT', invalidRows: 1, savedRows: 3 })])
+      : pageOf([]))
     await renderAt('/bulk/imports')
     await userEvent.click(await screen.findByRole('tab', { name: /API batches/i }))
     expect(screen.getByRole('tab', { name: /API batches/i })).toHaveAttribute('aria-selected', 'true')
-    await waitFor(() => expect(wmsBatches).toHaveBeenCalled())
+    await waitFor(() => expect(listBatches).toHaveBeenCalledWith(expect.objectContaining({ view: 'API' })))
     expect(await screen.findByTestId('batch-row-7')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Fetch from WMS/i })).toBeInTheDocument()
     // The Import button belongs to Import history only.
@@ -546,7 +560,7 @@ describe('Bulk Mailer — layout', () => {
   it('opens the Trash tab from its address', async () => {
     await renderAt('/bulk/trash')
     expect(await screen.findByRole('tab', { name: /Trash/i })).toHaveAttribute('aria-selected', 'true')
-    await waitFor(() => expect(listHistory).toHaveBeenCalledWith(true))
+    await waitFor(() => expect(listBatches).toHaveBeenCalledWith(expect.objectContaining({ view: 'TRASH' })))
   })
 
   it('opens a batch on its own page, with its header and a way back', async () => {
@@ -560,8 +574,16 @@ describe('Bulk Mailer — layout', () => {
   })
 
   it('says so when the batch is not there', async () => {
-    getHistory.mockRejectedValue(new (await import('../api/apiClient')).ApiError('Not found', 404))
+    getHistory.mockRejectedValue(new (await import('../api/apiClient')).ApiError('Not found', 404, null))
     await renderAt('/bulk/batches/999999')
     expect(await screen.findByText(/Batch #999999 isn't here/)).toBeInTheDocument()
+  })
+
+  it('sends the filters to the server and starts again at page 1', async () => {
+    await renderAt('/bulk/imports')
+    await waitFor(() => expect(listBatches).toHaveBeenCalledWith(expect.objectContaining({ view: 'FILE', page: 0, size: 25, sort: 'created', dir: 'DESC' })))
+    listBatches.mockClear()
+    await userEvent.type(screen.getByPlaceholderText(/Search file name/i), 'acme')
+    await waitFor(() => expect(listBatches).toHaveBeenCalledWith(expect.objectContaining({ q: 'acme', page: 0 })), { timeout: 2000 })
   })
 })

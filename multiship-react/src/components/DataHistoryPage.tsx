@@ -21,6 +21,7 @@ import PageSectionHeader from './workspace/PageSectionHeader'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
 import { bulkBatchPath, bulkPaths, settingsPaths } from '../routes/workspaceRoutes'
 import { wmsService } from '../api/wmsService'
+import { bulkService, type BulkSummary, type BulkView } from '../api/bulkService'
 import { AddShipViaMappingDialog, ShipViaCodesPanel } from './modals/ShipViaCodes'
 import OrderDocumentsTable from './OrderDocumentsTable'
 import DataHistoryFilterToolbar from './DataHistoryFilterToolbar'
@@ -167,9 +168,38 @@ export default function DataHistoryPage() {
     showAdvanced,
     setShowAdvanced,
     activeAdvancedCount,
-    filtered,
     clearFilters,
   } = filters
+
+  // ── Server-side list (phase 4): the page shows one page of batches, and the
+  // toolbar's filters, the sort and paging are sent to the server.
+  const [pageIndex, setPageIndex] = useState(0)
+  const [pageSize, setPageSize] = useState(25)
+  const [pageInfo, setPageInfo] = useState({ total: 0, pages: 1 })
+  const [summary, setSummary] = useState<BulkSummary | null>(null)
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedSearch(filters.search.trim()), 300)
+    return () => window.clearTimeout(t)
+  }, [filters.search])
+  const listQuery = {
+    status: filters.statusFilter === 'ALL' ? undefined : filters.statusFilter,
+    q: debouncedSearch || undefined,
+    from: filters.dateFrom || undefined,
+    to: filters.dateTo || undefined,
+    createdBy: filters.createdBy || undefined,
+    labelBatch: filters.batchPresence === 'ANY' ? undefined : filters.batchPresence,
+    minSaved: filters.minSaved ? Number(filters.minSaved) : undefined,
+    sort: filters.sortKey,
+    dir: filters.sortDir,
+  } as const
+  const listQueryKey = JSON.stringify(listQuery)
+  // A new filter starts again at page 1.
+  const [pagedQueryKey, setPagedQueryKey] = useState(listQueryKey)
+  if (pagedQueryKey !== listQueryKey) {
+    setPagedQueryKey(listQueryKey)
+    setPageIndex(0)
+  }
 
   // F5-A — soft-delete / restore / empty-Trash extracted to
   // useTrashActions. The Trash-view toggle lives here now so we can
@@ -212,13 +242,21 @@ export default function DataHistoryPage() {
   }
 
   /** File imports, API/WMS fetches, or Trash (deleted batches of either kind). */
-  const fetchBatches = () =>
-    batchPageId != null
-      // The batch page's "list" is that one batch (live or in Trash, any source).
-      ? orderImportService.getHistory(batchPageId).then((res) => ({ ...res, data: res.data ? [res.data as ImportBatchSummary] : [] }))
-      : viewTrash ? orderImportService.listHistory(true)
-      : isApiTab ? wmsService.batches()
-        : orderImportService.listHistory(false)
+  const listView: BulkView = viewTrash ? 'TRASH' : isApiTab ? 'API' : 'FILE'
+  const fetchBatches = async (): Promise<{ data: ImportBatchSummary[] }> => {
+    // The batch page's "list" is that one batch (live or in Trash, any source).
+    if (batchPageId != null) {
+      const res = await orderImportService.getHistory(batchPageId)
+      return { data: res.data ? [res.data as ImportBatchSummary] : [] }
+    }
+    const [res, sum] = await Promise.all([
+      bulkService.listBatches({ view: listView, ...listQuery, page: pageIndex, size: pageSize }),
+      bulkService.summary(listView).catch(() => null),
+    ])
+    setPageInfo({ total: res.data?.totalElements ?? 0, pages: Math.max(res.data?.totalPages ?? 1, 1) })
+    if (sum?.data) setSummary(sum.data)
+    return { data: res.data?.content ?? [] }
+  }
 
 
   /** Pull the WMS's pending shipments in as one new batch (or reopen the same one). */
@@ -246,7 +284,7 @@ export default function DataHistoryPage() {
   }
 
   const load = async () => {
-    setLoading(true)
+    if (batches.length === 0) setLoading(true)
     try {
       const res = await fetchBatches()
       setBatches(res.data ?? [])
@@ -290,7 +328,7 @@ export default function DataHistoryPage() {
     setConfirmEmpty(false)
     /* eslint-enable react-hooks/set-state-in-effect */
     // eslint-disable-next-line react-hooks/exhaustive-deps -- load/setOpenId/setConfirmEmpty are stable; switching list re-fetches
-  }, [viewTrash, isApiTab, batchPageId])
+  }, [viewTrash, isApiTab, batchPageId, listQueryKey, pageIndex, pageSize])
 
   /**
    * Auto-poll the list while any batch is IN_PROGRESS so status
@@ -1748,7 +1786,7 @@ export default function DataHistoryPage() {
                 Refresh
               </button>
             ) : null}
-            {dhView === 'imports' && viewTrash && batches.length > 0 ? (
+            {dhView === 'imports' && viewTrash && (summary?.total ?? batches.length) > 0 ? (
               confirmEmpty ? (
                 <span className="inline-flex items-center gap-1.5">
                   <button
@@ -1762,7 +1800,7 @@ export default function DataHistoryPage() {
                     ) : (
                       <FiTrash2 className="h-3.5 w-3.5" />
                     )}
-                    Delete {batches.length} forever
+                    Delete {summary?.total ?? batches.length} forever
                   </button>
                   <button
                     type="button"
@@ -1857,12 +1895,12 @@ export default function DataHistoryPage() {
         <OrderDocumentsTable />
       ) : (
       <>
-      {!viewTrash ? <BatchSummaryCards batches={batches} /> : null}
+      {!viewTrash && summary ? <BatchSummaryCards summary={summary} /> : null}
       {/* ── Advanced filter toolbar ─────────────────────────────────────── */}
       <DataHistoryFilterToolbar
         statusFilter={filters.statusFilter}
         setStatusFilter={filters.setStatusFilter}
-        statusCounts={filters.statusCounts}
+        statusCounts={summary?.statusCounts ?? {}}
         statusMetaLabel={(s) => statusMeta(s).label}
         anyFilterActive={filters.anyFilterActive}
         clearFilters={filters.clearFilters}
@@ -1880,19 +1918,19 @@ export default function DataHistoryPage() {
         showAdvanced={filters.showAdvanced}
         createdBy={filters.createdBy}
         setCreatedBy={filters.setCreatedBy}
-        creators={filters.creators}
+        creators={summary?.creators ?? []}
         batchPresence={filters.batchPresence}
         setBatchPresence={filters.setBatchPresence}
         minSaved={filters.minSaved}
         setMinSaved={filters.setMinSaved}
-        filteredCount={filters.filtered.length}
-        totalCount={batches.length}
+        filteredCount={pageInfo.total}
+        totalCount={summary?.total ?? pageInfo.total}
       />
 
       <section className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
         {loading ? (
           <p className="px-5 py-14 text-center text-sm text-[#6b5c42]">Loading…</p>
-        ) : batches.length === 0 ? (
+        ) : batches.length === 0 && (summary?.total ?? 0) === 0 ? (
           <p className="px-5 py-14 text-center text-sm text-[#6b5c42]">
             {viewTrash
               ? 'Trash is empty — no deleted imports.'
@@ -1904,7 +1942,12 @@ export default function DataHistoryPage() {
           <AdvancedDataTable<ImportBatchSummary>
             tableKey={viewTrash ? 'order-intake-imports-trash-v3' : isApiTab ? 'bulk-api-batches-v1' : 'order-intake-imports-v3'}
             columns={dhColumns}
-            data={filtered}
+            data={batches}
+            manualPagination
+            pageIndex={pageIndex}
+            pageSize={pageSize}
+            pageCount={pageInfo.pages}
+            onPaginationChange={({ pageIndex: i, pageSize: n }) => { setPageIndex(n !== pageSize ? 0 : i); setPageSize(n) }}
             onRowClick={(b) => navigate(bulkBatchPath(b.id))}
             getRowId={(b) => String(b.id)}
             initialColumnPinning={{ left: [], right: ['actions'] }}
@@ -1944,19 +1987,13 @@ const BULK_TABS: { key: BulkTab; label: string; hint: string }[] = [
   { key: 'trash', label: 'Trash', hint: 'Deleted batches' },
 ]
 
-/** At-a-glance counts over the saved batches (worked out from the list). */
-function BatchSummaryCards({ batches }: { batches: ImportBatchSummary[] }) {
-  const [weekAgo] = useState(() => Date.now() - 7 * 24 * 3600 * 1000)
-  const st = (b: ImportBatchSummary) => String(b.status ?? '').toUpperCase()
-  const ready = batches.filter((b) => st(b) === 'INITIATE' && !b.invalidRows).length
-  const generating = batches.filter((b) => st(b) === 'IN_PROGRESS').length
-  const needsFixes = batches.filter((b) => st(b) === 'DRAFT' || st(b) === 'FAILED' || (b.invalidRows ?? 0) > 0).length
-  const doneThisWeek = batches.filter((b) => st(b) === 'COMPLETE' && b.completedAt && Date.parse(b.completedAt) >= weekAgo).length
+/** At-a-glance counts over the whole view (from the server, not the current page). */
+function BatchSummaryCards({ summary }: { summary: BulkSummary }) {
   const cards: { label: string; value: number; tone: string }[] = [
-    { label: 'Ready to generate', value: ready, tone: 'text-[#1f150c]' },
-    { label: 'Generating now', value: generating, tone: 'text-sky-700' },
-    { label: 'Needs fixes', value: needsFixes, tone: needsFixes ? 'text-rose-700' : 'text-[#1f150c]' },
-    { label: 'Completed this week', value: doneThisWeek, tone: 'text-emerald-700' },
+    { label: 'Ready to generate', value: summary.readyToGenerate, tone: 'text-[#1f150c]' },
+    { label: 'Generating now', value: summary.generating, tone: 'text-sky-700' },
+    { label: 'Needs fixes', value: summary.needsFixes, tone: summary.needsFixes ? 'text-rose-700' : 'text-[#1f150c]' },
+    { label: 'Completed this week', value: summary.completedThisWeek, tone: 'text-emerald-700' },
   ]
   return (
     <div data-testid="bulk-summary" className="grid grid-cols-2 gap-2 sm:grid-cols-4">

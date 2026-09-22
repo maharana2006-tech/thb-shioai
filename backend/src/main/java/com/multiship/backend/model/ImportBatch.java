@@ -148,4 +148,12 @@ public class ImportBatch {
      */
     @Column(name = "source", length = 16)
     private String source;
+
+    /**
+     * The client these orders belong to (first row's client code, upper-case).
+     * Written whenever the rows are, so Bulk Mailer can scope and page the
+     * batch list in the database instead of parsing every batch's rows. V79.
+     */
+    @Column(name = "client_code", length = 50)
+    private String clientCode;
 }

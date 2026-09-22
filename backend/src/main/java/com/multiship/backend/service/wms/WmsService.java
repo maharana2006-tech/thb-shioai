@@ -263,6 +263,10 @@ public class WmsService {
             batch.setInvalidRows(invalid);
             batch.setBillingMode("AUTO");
             batch.setContentHash(contentHash);
+            // Whose orders these are — lets Bulk Mailer scope the list in the database.
+            rows.stream().map(OrderImportRowDTO::getClientCode)
+                    .filter(c -> c != null && !c.isBlank()).findFirst()
+                    .ifPresent(c -> batch.setClientCode(c.trim().toUpperCase(java.util.Locale.ROOT)));
             return importBatchRepository.save(batch).getId();
         } catch (Exception e) {
             log.warn("WMS pull: could not record the fetch batch: {}", e.getMessage());

@@ -220,6 +220,12 @@ public class OrderImportServiceImpl implements OrderImportService {
      *  operations (historyDetail, generateLabelsForBatch, generateLabelForRow)
      *  since {@link com.multiship.backend.model.ImportBatch} carries no direct
      *  tenant column — the tenant identity lives on each row of the payload. */
+    /** Record whose batch this is (see ImportBatch.clientCode) — an edit can change it. */
+    private void stampOwner(com.multiship.backend.model.ImportBatch batch, List<OrderImportRowDTO> rows) {
+        String c = firstClientCode(rows);
+        batch.setClientCode(StringUtils.hasText(c) ? c.trim().toUpperCase(Locale.ROOT) : null);
+    }
+
     private String firstClientCode(List<OrderImportRowDTO> rows) {
         if (rows == null) return null;
         for (OrderImportRowDTO r : rows) {
@@ -2563,6 +2569,7 @@ public class OrderImportServiceImpl implements OrderImportService {
             batch.setSavedRows(saved);
             batch.setInvalidRows(invalid);
             batch.setContentHash(contentHash);
+            stampOwner(batch, safe);
             try {
                 batch.setRowsJson(importObjectMapper != null
                         ? importObjectMapper.writeValueAsString(safe) : "[]");
@@ -3210,6 +3217,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (labelBatchId != null) batch.setLabelBatchId(labelBatchId);
         // Persist generation results to ImportBatchRow so they survive a page refresh
         persistGenerationResults(id, rows);
+        stampOwner(batch, rows);
         try {
             if (importObjectMapper != null) batch.setRowsJson(importObjectMapper.writeValueAsString(rows));
         } catch (Exception ex) {
@@ -3796,6 +3804,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (labelBatchId != null) batch.setLabelBatchId(labelBatchId);
         // Persist generation results to ImportBatchRow so they survive a page refresh
         persistGenerationResults(id, rows);
+        stampOwner(batch, rows);
         try {
             if (importObjectMapper != null) batch.setRowsJson(importObjectMapper.writeValueAsString(rows));
         } catch (Exception ex) {
@@ -4060,8 +4069,10 @@ public class OrderImportServiceImpl implements OrderImportService {
             } catch (Exception ex) {
                 log.warn("Import batch {} error updating import_batch_row on edit: {}", id, ex.getMessage());
             }
+            stampOwner(batch, rows);
         } else {
             // For CSV/manual batches, save to rowsJson
+            stampOwner(batch, rows);
             try {
                 if (importObjectMapper != null) batch.setRowsJson(importObjectMapper.writeValueAsString(rows));
             } catch (Exception ex) {

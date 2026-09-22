@@ -12,7 +12,8 @@ import java.util.List;
 import java.util.Optional;
 
 @Repository
-public interface ImportBatchRepository extends JpaRepository<ImportBatch, Long> {
+public interface ImportBatchRepository extends JpaRepository<ImportBatch, Long>,
+        org.springframework.data.jpa.repository.JpaSpecificationExecutor<ImportBatch> {
 
     /** Newest imports first for the Data History list. */
     List<ImportBatch> findAllByOrderByIdDesc();
