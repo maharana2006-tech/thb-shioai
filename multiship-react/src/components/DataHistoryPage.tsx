@@ -1328,6 +1328,27 @@ export default function DataHistoryPage() {
   const dhColumns = useMemo<ColumnDef<ImportBatchSummary, unknown>[]>(
     () => [
       {
+        id: 'labelBatch',
+        header: 'Batch',
+        enableSorting: false,
+        size: 110,
+        accessorFn: (b) => b.labelBatchId ?? '',
+        cell: ({ row }) => {
+          const b = row.original
+          return b.labelBatchId != null ? (
+            <span
+              title="Label batch — the number every label of this import was generated under; find its orders together on the Orders page"
+              className="inline-flex items-center gap-1 rounded-full bg-[#412d15] px-2 py-0.5 font-mono text-[10px] font-bold text-[#f4eede]"
+            >
+              <FiZap className="h-2.5 w-2.5" /> {b.labelBatchId}
+            </span>
+          ) : (
+            <span className="text-[10.5px] text-[#b6a684]" title="A label batch number is assigned when the first label is generated">No batch yet</span>
+          )
+        },
+        meta: { headerLabel: 'Batch', exportValue: (b: ImportBatchSummary) => b.labelBatchId == null ? '' : String(b.labelBatchId) },
+      },
+      {
         id: 'serial',
         header: 'Serial no.',
         enableSorting: false,
@@ -1393,27 +1414,6 @@ export default function DataHistoryPage() {
           )
         },
         meta: { headerLabel: 'Date', exportValue: (b: ImportBatchSummary) => b.createdAt ?? '' },
-      },
-      {
-        id: 'labelBatch',
-        header: 'Batch',
-        enableSorting: false,
-        size: 110,
-        accessorFn: (b) => b.labelBatchId ?? '',
-        cell: ({ row }) => {
-          const b = row.original
-          return b.labelBatchId != null ? (
-            <span
-              title="Label batch — the number every label of this import was generated under; find its orders together on the Orders page"
-              className="inline-flex items-center gap-1 rounded-full bg-[#412d15] px-2 py-0.5 font-mono text-[10px] font-bold text-[#f4eede]"
-            >
-              <FiZap className="h-2.5 w-2.5" /> {b.labelBatchId}
-            </span>
-          ) : (
-            <span className="text-[10.5px] text-[#b6a684]" title="A label batch number is assigned when the first label is generated">No batch yet</span>
-          )
-        },
-        meta: { headerLabel: 'Batch', exportValue: (b: ImportBatchSummary) => b.labelBatchId == null ? '' : String(b.labelBatchId) },
       },
       {
         id: 'status',
@@ -2191,7 +2191,7 @@ export default function DataHistoryPage() {
           </p>
         ) : (
           <AdvancedDataTable<ImportBatchSummary>
-            tableKey={viewTrash ? 'order-intake-imports-trash-v5' : isApiTab ? 'bulk-api-batches-v3' : 'order-intake-imports-v5'}
+            tableKey={viewTrash ? 'order-intake-imports-trash-v6' : isApiTab ? 'bulk-api-batches-v4' : 'order-intake-imports-v6'}
             columns={dhColumns}
             data={batches}
             manualPagination
@@ -2202,6 +2202,7 @@ export default function DataHistoryPage() {
             onRowClick={(b) => navigate(bulkBatchPath(b.id))}
             getRowId={(b) => String(b.id)}
             initialColumnPinning={{ left: [], right: [] }}
+            initialHiddenColumns={['serial']}
             caption={viewTrash ? 'Trash — deleted batches · click a batch to open it'
               : isApiTab ? 'Batches from the WMS and the API · each fetch is one batch · click a batch to open it'
                 : 'Saved imports · click a batch to open it'}
