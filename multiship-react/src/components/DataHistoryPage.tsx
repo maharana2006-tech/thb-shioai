@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   FiAlertCircle,
+  FiDownloadCloud,
   FiArrowLeft,
   FiFileText,
   FiHome,
@@ -18,8 +19,9 @@ import {
 import type { ColumnDef } from '@tanstack/react-table'
 import PageSectionHeader from './workspace/PageSectionHeader'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
-import ApiBatchList from './ApiBatchList'
-import { bulkPaths } from '../routes/workspaceRoutes'
+import { bulkPaths, settingsPaths } from '../routes/workspaceRoutes'
+import { wmsService } from '../api/wmsService'
+import { AddShipViaMappingDialog, ShipViaCodesPanel } from './modals/ShipViaCodes'
 import OrderDocumentsTable from './OrderDocumentsTable'
 import DataHistoryFilterToolbar from './DataHistoryFilterToolbar'
 import { GridCell, DH_COLUMNS, RowIssuesIcon, RowChannelChip, bucketRowErrors, type DhColumn } from './batchGrid'
@@ -88,6 +90,13 @@ export default function DataHistoryPage() {
    *  Now hidden for TENANT so the read-only intent is visible upfront. */
   const { role } = useAppSession()
   const canWrite = normalizeRole(role) !== 'TENANT'
+  /** Pulling from the WMS is admin-only on the server. */
+  const canPullWms = normalizeRole(role) === 'ADMIN'
+  const [fetchingWms, setFetchingWms] = useState(false)
+  /** The unmapped ship via code being mapped, and the batch to re-check afterwards. */
+  const [mapping, setMapping] = useState<{ code: string; clientCode: string | null; batchId: number } | null>(null)
+  /** Bumped after a mapping is added, so the ship-via panel re-reads its codes. */
+  const [codesTick, setCodesTick] = useState(0)
   const [batches, setBatches] = useState<ImportBatchSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [openId, setOpenId] = useState<number | null>(null)
@@ -140,7 +149,9 @@ export default function DataHistoryPage() {
   // Bulk Mailer tab from the URL (/bulk/:tab): imports (default) · api · documents · trash.
   const { tab } = useParams<{ tab?: string }>()
   const bulkTab: BulkTab = BULK_TABS.some((t) => t.key === tab) ? (tab as BulkTab) : 'imports'
-  const dhView: 'imports' | 'api' | 'docs' = bulkTab === 'api' ? 'api' : bulkTab === 'documents' ? 'docs' : 'imports'
+  const dhView: 'imports' | 'docs' = bulkTab === 'documents' ? 'docs' : 'imports'
+  /** Import history and API batches are the same list — only where the batches come from differs. */
+  const isApiTab = bulkTab === 'api'
   const [searchParams, setSearchParams] = useSearchParams()
 
   // F5-A — advanced filter + sort + pagination state extracted to
@@ -192,13 +203,47 @@ export default function DataHistoryPage() {
       })
   }
 
+  /** File imports, API/WMS fetches, or Trash (deleted batches of either kind). */
+  const fetchBatches = () =>
+    viewTrash ? orderImportService.listHistory(true)
+      : isApiTab ? wmsService.batches()
+        : orderImportService.listHistory(false)
+
   /** The batch the importer just saved into — shown open when the list first renders. */
   const [highlightedId, setHighlightedId] = useState<number | null>(null)
+
+  /** Pull the WMS's pending shipments in as one new batch (or reopen the same one). */
+  const fetchFromWms = async () => {
+    setFetchingWms(true)
+    try {
+      const r = (await wmsService.pull()).data
+      if (r && !r.configured) {
+        notify.info('The WMS link is not set up on the server.')
+      } else if (r) {
+        if (r.imported > 0) {
+          notify.success(`WMS: ${r.imported} shipment(s) imported as a new batch${r.failed ? ` · ${r.failed} skipped` : ''}.`)
+        } else if (r.importBatchId != null) {
+          notify.info('These shipments were already fetched — opening the existing batch.')
+        } else {
+          notify.info('The WMS has no pending shipments to fetch.')
+        }
+        if (r.importBatchId != null) {
+          setHighlightedId(r.importBatchId)
+          ensureRows(r.importBatchId)
+          await load()
+        }
+      }
+    } catch (e) {
+      notify.apiError(e, 'Could not reach the WMS.')
+    } finally {
+      setFetchingWms(false)
+    }
+  }
 
   const load = async () => {
     setLoading(true)
     try {
-      const res = await orderImportService.listHistory(viewTrash)
+      const res = await fetchBatches()
       setBatches(res.data ?? [])
       // ?highlight=<id> (from the importer): open the batch the orders went to.
       const highlightId = Number(searchParams.get('highlight')) || null
@@ -210,7 +255,7 @@ export default function DataHistoryPage() {
     } catch (e) {
       // Keep whatever is already listed: wiping it rendered the "no imports
       // yet" empty state on a transient 502, which reads as data loss.
-      notify.apiError(e, viewTrash ? 'Could not load Trash.' : 'Could not load import history.')
+      notify.apiError(e, viewTrash ? 'Could not load Trash.' : isApiTab ? 'Could not load the API batches.' : 'Could not load import history.')
     } finally {
       setLoading(false)
     }
@@ -224,7 +269,7 @@ export default function DataHistoryPage() {
    */
   const reloadQuiet = async () => {
     try {
-      const res = await orderImportService.listHistory(viewTrash)
+      const res = await fetchBatches()
       setBatches(res.data ?? [])
     } catch {
       // ignore transient failures during background polling
@@ -232,12 +277,12 @@ export default function DataHistoryPage() {
   }
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount + when switching between live/Trash views
     void load()
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount + when switching list (file / API / Trash)
     setOpenId(null)
     setConfirmEmpty(false)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- load/setOpenId/setConfirmEmpty are stable; only viewTrash toggle re-fetches
-  }, [viewTrash])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load/setOpenId/setConfirmEmpty are stable; switching list re-fetches
+  }, [viewTrash, isApiTab])
 
   /**
    * Auto-poll the list while any batch is IN_PROGRESS so status
@@ -805,7 +850,7 @@ export default function DataHistoryPage() {
         accessorFn: (b) => b.fileName ?? '',
         cell: ({ row }) => {
           const b = row.original
-          const isWms = (b.source || '').toUpperCase() === 'WMS'
+          const apiSource = ['WMS', 'API'].includes((b.source || '').toUpperCase()) ? (b.source || '').toUpperCase() : null
           return (
             <span className="block min-w-0">
               <span className="flex items-center gap-1.5">
@@ -813,12 +858,12 @@ export default function DataHistoryPage() {
                 <span className="truncate text-[13.5px] font-semibold text-[#1f150c]" title={b.fileName || undefined}>
                   {b.fileName || 'Untitled import'}
                 </span>
-                {isWms ? (
+                {apiSource ? (
                   <span
-                    title="Pulled in by Fetch from WMS — orders are PENDING and labelled in the Shipments workspace"
+                    title={apiSource === 'WMS' ? 'Pulled in by Fetch from WMS' : 'Sent in through the external API'}
                     className="inline-flex shrink-0 items-center rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-emerald-700 ring-1 ring-emerald-200"
                   >
-                    WMS
+                    {apiSource}
                   </span>
                 ) : null}
               </span>
@@ -975,14 +1020,12 @@ export default function DataHistoryPage() {
         cell: ({ row }) => {
           const b = row.original
           const st = (b.status || '').toUpperCase()
-          // WMS fetches are a read-only record — their orders are already
-          // created (PENDING) and labelled in the Shipments workspace, so the
-          // batch-level Generate/Retry flow doesn't apply.
-          const isWms = (b.source || '').toUpperCase() === 'WMS'
+          // WMS/API batches are labelled here exactly like file imports (their
+          // orders are stamped source = API); there is no other place to label them.
           // A Draft (saved with errors via "Proceed with errors") can label its valid
           // rows now; the rows with errors are skipped until they are fixed.
           // CANCELLED leaves orders not yet labelled — Retry sends them (it had no button).
-          const canGenerate = canWrite && !isWms && (st === 'INITIATE' || st === 'PARTIAL_COMPLETE' || st === 'FAILED'
+          const canGenerate = canWrite && (st === 'INITIATE' || st === 'PARTIAL_COMPLETE' || st === 'FAILED'
             || st === 'CANCELLED' || (st === 'DRAFT' && b.savedRows > 0))
           const isRetry = st === 'PARTIAL_COMPLETE' || st === 'FAILED' || st === 'CANCELLED'
           // busy renders the progress bar. Include server-side IN_PROGRESS
@@ -1294,6 +1337,19 @@ export default function DataHistoryPage() {
                       : 'Click any cell to edit; it saves and re-validates on blur. Scroll right for more columns.'}
               </p>
             </div>
+            {['WMS', 'API'].includes((b.source || '').toUpperCase()) ? (
+              // The WMS sends the client's own ship via codes; these are the ones
+              // that resolve to a carrier service.
+              <ShipViaCodesPanel
+                clientCode={(() => {
+                  const codes = Array.from(new Set(rows.map((r) => (r.clientCode ?? '').trim().toUpperCase()).filter(Boolean)))
+                  return codes.length === 1 ? codes[0] : null
+                })()}
+                canEdit={canWrite}
+                onOpenMapping={() => navigate(settingsPaths.shippingServiceMapping)}
+                reloadKey={codesTick}
+              />
+            ) : null}
             <VirtualTable
               rows={visible}
               rowKey={(r) => r.rowNumber}
@@ -1317,7 +1373,7 @@ export default function DataHistoryPage() {
                     const ok = (r.errors?.length ?? 0) === 0
                     const orderReady = !brokenOrders.has(orderKey(r))
                     const gen = (r.generatedStatus ?? '').toUpperCase()
-                    const rowIsWms = (b.source || '').toUpperCase() === 'WMS'
+                    const rowIsWms = ['WMS', 'API'].includes((b.source || '').toUpperCase())
                     const generated = gen === 'GENERATED'
                     // A row that passed validation but was rejected by the carrier
                     // is FAILED, not "Ready" — surface that so it shows Retry (which
@@ -1377,19 +1433,41 @@ export default function DataHistoryPage() {
                         </td>
                         {DH_COLUMNS.map((c) => {
                           const raw = (r as unknown as Record<string, unknown>)[c.key]
+                          // An API/WMS order shows the client's own ship via code (its
+                          // resolved carrier service in the tooltip), and an unmapped
+                          // code can be mapped right here.
+                          const showShipVia = c.key === 'serviceType' && rowIsWms && !!r.shipViaCode
+                          const unmapped = c.key === 'serviceType' && rowIsWms
+                            ? (byField.serviceType ?? []).map((m) => m.match(UNMAPPED_SHIP_VIA)).find(Boolean)
+                            : null
                           return (
                             <td key={c.key} className="border-b border-[#f2ecdf] px-1 py-1 align-top">
-                              <div className={c.w}>
+                              <div className={c.w} title={showShipVia ? (r.shipViaNote ?? undefined) : undefined}>
                                 <GridCell
-                                  value={raw == null ? '' : String(raw)}
+                                  value={showShipVia ? String(r.shipViaCode) : raw == null ? '' : String(raw)}
                                   // Locked when labelled, while the import is generating
-                                  // (the run would overwrite the edit) and in Trash.
-                                  readOnly={generated || viewTrash || (b.status || '').toUpperCase() === 'IN_PROGRESS'}
+                                  // (the run would overwrite the edit) and in Trash. An API
+                                  // order's reference is the sender's, not ours to change.
+                                  readOnly={generated || viewTrash || (b.status || '').toUpperCase() === 'IN_PROGRESS'
+                                    || (rowIsWms && c.key === 'orderRef')}
                                   bad={(byField[c.key]?.length ?? 0) > 0}
                                   errors={byField[c.key]}
                                   mono={c.mono}
                                   onCommit={(v) => void commitCell(b.id, r, c, v)}
                                 />
+                                {unmapped && canWrite && !generated && !viewTrash ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => setMapping({
+                                      code: unmapped[1],
+                                      clientCode: (r.clientCode ?? '').trim().toUpperCase() || null,
+                                      batchId: b.id,
+                                    })}
+                                    className="mt-0.5 block w-full truncate rounded border border-[#e3d9c4] bg-white px-1 py-0.5 text-[9px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]"
+                                  >
+                                    Map {unmapped[1]}…
+                                  </button>
+                                ) : null}
                               </div>
                             </td>
                           )
@@ -1429,13 +1507,6 @@ export default function DataHistoryPage() {
                               ) : (
                                 <span className="text-[9.5px] text-[#6b5c42]">—</span>
                               )}
-                            </span>
-                          ) : rowIsWms ? (
-                            <span
-                              className="text-[9.5px] text-[#6b5c42]"
-                              title="Imported from WMS as a PENDING order — generate the label in the Shipments workspace"
-                            >
-                              {r.generatedOrderNo ? `Order #${r.generatedOrderNo} · label in Shipments` : 'Label in Shipments'}
                             </span>
                           ) : !canWrite ? (
                             <span className="text-[9.5px] text-[#b6a684]">Read-only view</span>
@@ -1489,8 +1560,24 @@ export default function DataHistoryPage() {
     )
   }
 
+  const mappingDialog = mapping ? (
+    <AddShipViaMappingDialog
+      code={mapping.code}
+      clientCode={mapping.clientCode}
+      onClose={() => setMapping(null)}
+      onSaved={() => {
+        const batchId = mapping.batchId
+        setMapping(null)
+        setCodesTick((t) => t + 1)
+        // The server re-validates the batch, so rows that failed on this code clear.
+        void validateAll(batchId)
+      }}
+    />
+  ) : null
+
   return (
     <div className="space-y-4 pb-24">
+      {mappingDialog}
       <PageSectionHeader
         eyebrow="Operations"
         title="Bulk Mailer"
@@ -1571,6 +1658,20 @@ export default function DataHistoryPage() {
               <FiArrowLeft className="h-3.5 w-3.5" />
               Orders
             </button>
+            {canPullWms && isApiTab ? (
+              <button
+                type="button"
+                onClick={() => void fetchFromWms()}
+                disabled={fetchingWms}
+                title="Pull the WMS's current pending shipments in as a new batch"
+                className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[13.5px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:opacity-60"
+              >
+                {fetchingWms
+                  ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
+                  : <FiDownloadCloud className="h-3.5 w-3.5" />}
+                {fetchingWms ? 'Fetching…' : 'Fetch from WMS'}
+              </button>
+            ) : null}
             {canWrite && bulkTab === 'imports' ? (
               <button
                 type="button"
@@ -1617,13 +1718,11 @@ export default function DataHistoryPage() {
         })}
       </div>
 
-      {dhView === 'api' ? (
-        <ApiBatchList />
-      ) : dhView === 'docs' ? (
+      {dhView === 'docs' ? (
         <OrderDocumentsTable />
       ) : (
       <>
-      {bulkTab === 'imports' ? <BatchSummaryCards batches={batches} /> : null}
+      {!viewTrash ? <BatchSummaryCards batches={batches} /> : null}
       {/* ── Advanced filter toolbar ─────────────────────────────────────── */}
       <DataHistoryFilterToolbar
         statusFilter={filters.statusFilter}
@@ -1662,11 +1761,13 @@ export default function DataHistoryPage() {
           <p className="px-5 py-14 text-center text-sm text-[#6b5c42]">
             {viewTrash
               ? 'Trash is empty — no deleted imports.'
-              : 'No saved imports yet. Use Import CSV / Excel to add your first file — saved orders show up here.'}
+              : isApiTab
+                ? (canPullWms ? 'No API batches yet. Use Fetch from WMS to pull the pending shipments in.' : 'No API batches yet. An admin can use Fetch from WMS to pull the pending shipments in.')
+                : 'No saved imports yet. Use Import CSV / Excel to add your first file — saved orders show up here.'}
           </p>
         ) : (
           <AdvancedDataTable<ImportBatchSummary>
-            tableKey={viewTrash ? 'order-intake-imports-trash-v3' : 'order-intake-imports-v3'}
+            tableKey={viewTrash ? 'order-intake-imports-trash-v3' : isApiTab ? 'bulk-api-batches-v1' : 'order-intake-imports-v3'}
             columns={dhColumns}
             data={filtered}
             renderExpanded={renderBatchExpanded}
@@ -1674,7 +1775,9 @@ export default function DataHistoryPage() {
             initialExpandedId={highlightedId != null ? String(highlightedId) : null}
             getRowId={(b) => String(b.id)}
             initialColumnPinning={{ left: [], right: ['actions'] }}
-            caption={viewTrash ? 'Trash — deleted imports · click a row to view its rows' : 'Saved imports · click a row to view & edit its rows'}
+            caption={viewTrash ? 'Trash — deleted batches · click a row to view its rows'
+              : isApiTab ? 'Batches from the WMS and the API · each fetch is one batch · click a row to view & edit its rows'
+                : 'Saved imports · click a row to view & edit its rows'}
             emptyState={
               <div className="px-5 py-10 text-center">
                 <p className="text-sm text-[#6b5c42]">No imports match your filters.</p>
@@ -1791,3 +1894,6 @@ function BatchSummaryCards({ batches }: { batches: ImportBatchSummary[] }) {
     </div>
   )
 }
+
+/** A row's serviceType error for a ship via code with no carrier service mapped. */
+const UNMAPPED_SHIP_VIA = /serviceType '([^']+)' is (?:not mapped|mapped, but not)/

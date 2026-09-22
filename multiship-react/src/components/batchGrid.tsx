@@ -67,7 +67,7 @@ export function RowIssuesIcon({
 /**
  * Shared primitives for the import/API batch spreadsheet grid — the editable
  * cell, the column model, and the error→field bucketing. Extracted so both
- * the Import-history view (DataHistoryPage) and the API section (ApiBatchList)
+ * the Bulk Mailer batch list (DataHistoryPage — Import history and API batches)
  * can reuse them without a circular import.
  */
 

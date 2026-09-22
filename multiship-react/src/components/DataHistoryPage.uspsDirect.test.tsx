@@ -142,8 +142,14 @@ vi.mock('../api/apiClient', () => {
 
 // Sub-components used by the page — stubbed so we don't have to
 // wire the whole editable grid.
-vi.mock('./ApiBatchList', () => ({
-  default: () => <div data-testid="api-batches-stub" />,
+const wmsBatches = vi.fn()
+const wmsPull = vi.fn()
+vi.mock('../api/wmsService', () => ({
+  wmsService: { batches: (...a: unknown[]) => wmsBatches(...a), pull: (...a: unknown[]) => wmsPull(...a) },
+}))
+vi.mock('./modals/ShipViaCodes', () => ({
+  ShipViaCodesPanel: () => <div data-testid="ship-via-panel" />,
+  AddShipViaMappingDialog: () => null,
 }))
 vi.mock('./OrderDocumentsTable', () => ({
   default: () => <div data-testid="documents-stub" />,
@@ -283,6 +289,7 @@ const rowFedex = (over: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  wmsBatches.mockResolvedValue({ data: [] })
   listHistory.mockResolvedValue({ data: [] })
   getHistory.mockResolvedValue({ data: null })
   getMetricsMock.mockResolvedValue({
@@ -521,11 +528,14 @@ describe('Bulk Mailer — layout', () => {
     expect(summary).toHaveTextContent('Needs fixes1')
   })
 
-  it('shows the API batches in their own tab', async () => {
+  it('shows the API batches in the same list, with Fetch from WMS for an admin', async () => {
+    wmsBatches.mockResolvedValue({ data: [batchSummary({ id: 7, fileName: 'WMS fetch 22 Sep', source: 'WMS', status: 'DRAFT', invalidRows: 1, savedRows: 3 })] })
     await renderAt('/bulk/imports')
     await userEvent.click(await screen.findByRole('tab', { name: /API batches/i }))
-    expect(await screen.findByTestId('api-batches-stub')).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: /API batches/i })).toHaveAttribute('aria-selected', 'true')
+    await waitFor(() => expect(wmsBatches).toHaveBeenCalled())
+    expect(await screen.findByTestId('batch-row-7')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Fetch from WMS/i })).toBeInTheDocument()
     // The Import button belongs to Import history only.
     expect(screen.queryByRole('button', { name: /Import CSV \/ Excel/i })).toBeNull()
   })

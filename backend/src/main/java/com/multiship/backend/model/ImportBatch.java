@@ -142,10 +142,9 @@ public class ImportBatch {
     /**
      * Where this batch's rows came from:
      *   BULK (or null) — a CSV/XLSX file the operator uploaded.
-     *   WMS            — a "Fetch from WMS" pull. Its orders are already created
-     *                    (PENDING, labelled later in the Shipments workspace), so
-     *                    the batch is a read-only record of the fetch and the
-     *                    Generate/Retry actions are hidden for it.
+     *   WMS / API      — a "Fetch from WMS" pull (or an API delivery). Its rows
+     *                    live in import_batch_row and are labelled from Bulk
+     *                    Mailer like a file's; generated orders get source = API.
      */
     @Column(name = "source", length = 16)
     private String source;

@@ -157,9 +157,9 @@ export interface ImportBatchSummary {
   deletedBy?: string | null
   /** Bill-to account mode: 'AUTO' (cascade) or 'PLATFORM' (house account). */
   billingMode?: 'AUTO' | 'PLATFORM' | string | null
-  /** Origin of the rows: 'BULK' (uploaded file) or 'WMS' (Fetch from WMS).
-   *  WMS batches are a read-only record of a fetch — labels are generated in
-   *  the Shipments workspace, so Generate/Retry are hidden for them. */
+  /** Origin of the rows: 'BULK' (uploaded file), 'WMS' (Fetch from WMS) or
+   *  'API'. Every kind is validated, edited and labelled in Bulk Mailer; the
+   *  orders of a WMS/API batch are stamped source = API. */
   source?: 'BULK' | 'WMS' | string | null
 }
 
