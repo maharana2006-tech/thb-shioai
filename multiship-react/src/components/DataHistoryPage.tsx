@@ -28,6 +28,7 @@ import DataHistoryFilterToolbar from './DataHistoryFilterToolbar'
 import { GridCell, DH_COLUMNS, RowIssuesIcon, RowChannelChip, bucketRowErrors, type DhColumn } from './batchGrid'
 import VirtualTable from './VirtualTable'
 import AnimatedHeight from './ui/AnimatedHeight'
+import { BTN_GHOST_SM } from './ui/buttons'
 import { notify } from '../utils/notify'
 import { ApiError } from '../api/apiClient'
 import {
@@ -1038,20 +1039,20 @@ export default function DataHistoryPage() {
                 ) : null
               ) : (
                 <>
-                  {/* Validate All button - validate all rows and update errors */}
+                  {/* Validate all — re-checks every row; a quiet secondary button beside Generate. */}
                   <button
                     type="button"
                     onClick={() => void validateAll(b.id)}
                     disabled={validatingId === b.id || (b.status || '').toUpperCase() === 'IN_PROGRESS'}
                     title="Validate all rows in this batch and update their errors/warnings"
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-3 py-2 text-[12px] font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300"
+                    className={BTN_GHOST_SM}
                   >
                     {validatingId === b.id ? (
-                      <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#e3d9c4] border-t-[#5a4526]" />
                     ) : (
-                      <FiSearch className="h-3.5 w-3.5" />
+                      <FiSearch className="h-3 w-3" />
                     )}
-                    {validatingId === b.id ? 'Validating...' : 'Validate All'}
+                    {validatingId === b.id ? 'Validating…' : 'Validate all'}
                   </button>
                   {/* Keep the button mounted while THIS batch is generating — the
                       click optimistically flips status to IN_PROGRESS, which isn't
@@ -1396,21 +1397,21 @@ export default function DataHistoryPage() {
                   </button>
                 ))}
               </div>
-              {/* Validate All button - validate all rows and update errors */}
+              {/* Validate all — re-checks every row; a quiet secondary button beside Generate. */}
               {!viewTrash ? (
                 <button
                   type="button"
                   onClick={() => void validateAll(b.id)}
                   disabled={validatingId === b.id || (b.status || '').toUpperCase() === 'IN_PROGRESS'}
                   title="Validate all rows in this batch and update their errors/warnings"
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-[10.5px] font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300"
+                  className={BTN_GHOST_SM}
                 >
                   {validatingId === b.id ? (
-                    <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                    <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#e3d9c4] border-t-[#5a4526]" />
                   ) : (
                     <FiSearch className="h-3 w-3" />
                   )}
-                  {validatingId === b.id ? 'Validating...' : 'Validate All'}
+                  {validatingId === b.id ? 'Validating…' : 'Validate all'}
                 </button>
               ) : null}
               <p className="text-[10.5px] text-[#b6a684]">
