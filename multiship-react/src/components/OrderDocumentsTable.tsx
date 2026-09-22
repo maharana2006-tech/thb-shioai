@@ -11,7 +11,8 @@ import { notify } from '../utils/notify'
  * statement (carrier cost / markup / billable). The "everything for this
  * shipment in one place" view.
  */
-export default function OrderDocumentsTable() {
+/** onLoaded fires after each load settles — Bulk Mailer holds its tab's height until then. */
+export default function OrderDocumentsTable({ onLoaded }: { onLoaded?: () => void } = {}) {
   const [rows, setRows] = useState<OrderDocumentRow[]>([])
   const [loading, setLoading] = useState(true)
   const [busyKey, setBusyKey] = useState<string | null>(null)
@@ -26,9 +27,10 @@ export default function OrderDocumentsTable() {
       notify.apiError(e, 'Could not load the documents table.')
     } finally {
       setLoading(false)
+      onLoaded?.()
     }
   }
-  // eslint-disable-next-line react-hooks/set-state-in-effect -- initial fetch on mount; the sync setLoading(true) drives the spinner and cannot be derived at render
+  // eslint-disable-next-line react-hooks/set-state-in-effect, react-hooks/exhaustive-deps -- initial fetch on mount; the sync setLoading(true) drives the spinner and cannot be derived at render
   useEffect(() => { void load() }, [])
 
   const saveBlob = (blob: Blob, filename: string) => {

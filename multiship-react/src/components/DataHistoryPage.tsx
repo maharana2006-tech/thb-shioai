@@ -159,10 +159,13 @@ export default function DataHistoryPage() {
   const isApiTab = bulkTab === 'api'
   // Which way the content slides in: from the right for a tab further along, from the left for one before.
   const [tabMotion, setTabMotion] = useState<{ tab: BulkTab; dir: 1 | -1 }>({ tab: bulkTab, dir: 1 })
+  /** The Documents table has loaded (for this visit to the tab). */
+  const [docsLoadedFor, setDocsLoadedFor] = useState<BulkTab | null>(null)
   if (tabMotion.tab !== bulkTab) {
     const from = BULK_TABS.findIndex((t) => t.key === tabMotion.tab)
     const to = BULK_TABS.findIndex((t) => t.key === bulkTab)
     setTabMotion({ tab: bulkTab, dir: to >= from ? 1 : -1 })
+    setDocsLoadedFor(null)
   }
   const [searchParams] = useSearchParams()
 
@@ -274,6 +277,8 @@ export default function DataHistoryPage() {
   const [loadedView, setLoadedView] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const viewKey = batchPageId != null ? `batch:${batchPageId}` : listView
+  /** The tab shows its real content — the panel's height may settle. */
+  const tabReady = dhView === 'docs' ? docsLoadedFor === 'documents' : loadedView === viewKey
   const applyFetch = (seq: number, view: string, r: Awaited<ReturnType<typeof fetchBatches>>) => {
     if (!latest.isLatest(seq)) return false
     setBatches(r.data)
@@ -1787,7 +1792,40 @@ export default function DataHistoryPage() {
         title="Bulk Mailer"
         description="Import orders in bulk, fix what needs it, and buy their labels — from a file or from the API."
         actions={
-          <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => navigate('/orders')}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+          >
+            <FiArrowLeft className="h-3.5 w-3.5" />
+            Orders
+          </button>
+        }
+      />
+
+      {/* PR-G4 — always-visible USPS queue depth pill (audit U2). Self-
+          hides when the queue is empty (i.e. USPS_PROVIDER != USPS_DIRECT
+          on this platform, or USPS_DIRECT with no backlog). Non-admin
+          users see nothing because the admin metrics endpoint 403s. */}
+      <div data-testid="usps-queue-badge-slot">
+        <BulkLabelQueueBadge />
+      </div>
+
+      {/* Bulk Mailer tabs — each one is its own address (/bulk/:tab). */}
+      <BulkTabBar active={bulkTab} onSelect={(t) => navigate(`/bulk/${t}`)} />
+
+      {/* The panel's height glides between tabs (and from skeleton to list) so
+          nothing below it jumps. */}
+      <AnimatedHeight holdKey={bulkTab} ready={tabReady}>
+      <div
+        key={bulkTab}
+        role="tabpanel"
+        aria-label={BULK_TABS.find((t) => t.key === bulkTab)?.label}
+        className={`space-y-4 ${tabMotion.dir > 0 ? 'bulk-tab-in-right' : 'bulk-tab-in-left'}`}
+      >
+      {/* This tab's own actions — they arrive with the tab instead of reshaping the header. */}
+      {dhView === 'imports' ? (
+        <div className="flex min-h-[38px] flex-wrap items-center justify-end gap-2">
             {dhView === 'imports' ? (
               <button
                 type="button"
@@ -1854,14 +1892,7 @@ export default function DataHistoryPage() {
                 </button>
               )
             ) : null}
-            <button
-              type="button"
-              onClick={() => navigate('/orders')}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
-            >
-              <FiArrowLeft className="h-3.5 w-3.5" />
-              Orders
-            </button>
+
             {canPullWms && isApiTab ? (
               <button
                 type="button"
@@ -1886,36 +1917,14 @@ export default function DataHistoryPage() {
                 Import CSV / Excel
               </button>
             ) : null}
-          </div>
-        }
-      />
-
-      {/* PR-G4 — always-visible USPS queue depth pill (audit U2). Self-
-          hides when the queue is empty (i.e. USPS_PROVIDER != USPS_DIRECT
-          on this platform, or USPS_DIRECT with no backlog). Non-admin
-          users see nothing because the admin metrics endpoint 403s. */}
-      <div data-testid="usps-queue-badge-slot">
-        <BulkLabelQueueBadge />
-      </div>
-
-      {/* Bulk Mailer tabs — each one is its own address (/bulk/:tab). */}
-      <BulkTabBar active={bulkTab} onSelect={(t) => navigate(`/bulk/${t}`)} />
-
-      {/* The panel's height glides between tabs (and from skeleton to list) so
-          nothing below it jumps. */}
-      <AnimatedHeight>
-      <div
-        key={bulkTab}
-        role="tabpanel"
-        aria-label={BULK_TABS.find((t) => t.key === bulkTab)?.label}
-        className={`space-y-4 ${tabMotion.dir > 0 ? 'bulk-tab-in-right' : 'bulk-tab-in-left'}`}
-      >
+        </div>
+      ) : null}
       {dhView === 'docs' ? (
-        <OrderDocumentsTable />
+        <OrderDocumentsTable onLoaded={() => setDocsLoadedFor(tabMotion.tab)} />
       ) : loadedView !== viewKey ? (
         <BatchListSkeleton withCards={!viewTrash} />
       ) : (
-      <>
+      <div className="bulk-fade-in space-y-4">
       {!viewTrash && summary ? <BatchSummaryCards summary={summary} /> : null}
       {/* ── Advanced filter toolbar ─────────────────────────────────────── */}
       <DataHistoryFilterToolbar
@@ -1995,7 +2004,7 @@ export default function DataHistoryPage() {
       </section>
 
       {labelModal}
-      </>
+      </div>
       )}
       </div>
       </AnimatedHeight>
