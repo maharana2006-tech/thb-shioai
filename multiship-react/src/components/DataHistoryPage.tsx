@@ -276,6 +276,34 @@ export default function DataHistoryPage() {
       setBatchPrintBusy(null)
     }
   }
+  /** Void every live label of a batch from the list — the batch page's Void all, one click away. */
+  const voidBatchLabels = async (b: ImportBatchSummary) => {
+    const n = liveCountOf(b)
+    if (n === 0 || batchPrintBusy === b.id) return
+    const ok = await notify.confirm(
+      `The carriers will cancel every live label of batch #${b.id} (${b.fileName || 'this import'}) — the orders can't ship on them any more. This can't be undone.`,
+      { title: `Void all labels of batch #${b.id}?`, confirmLabel: 'Void them', cancelLabel: 'Keep them', danger: true },
+    )
+    if (!ok) return
+    setBatchPrintBusy(b.id)
+    try {
+      const res = (await orderImportService.voidBatchLabels(b.id, [])).data
+      if (!res || res.orders.length === 0) notify.info('There were no live labels left to void.')
+      else if (res.refused === 0) notify.success(`${res.voided} label${res.voided === 1 ? '' : 's'} of batch #${b.id} voided.`)
+      else {
+        const refusals = res.orders.filter((o) => !o.voided).slice(0, 3).map((o) => `#${o.orderNo}: ${o.message}`).join(' · ')
+        notify.info({ title: `${res.voided} voided, ${res.refused} refused by the carrier`,
+          body: refusals + (res.refused > 3 ? ` · and ${res.refused - 3} more` : '') })
+      }
+      setRowsById((m) => { const next = { ...m }; delete next[b.id]; return next })   // stale rows
+      void reloadQuiet()
+    } catch (e) {
+      notify.apiError(e, 'Could not void the labels.')
+    } finally {
+      setBatchPrintBusy(null)
+    }
+  }
+
   const sendBatchToPrinter = async (b: ImportBatchSummary) => {
     setBatchPrintBusy(b.id)
     try {
@@ -1298,6 +1326,20 @@ export default function DataHistoryPage() {
                       >
                         <FiSend className="h-3.5 w-3.5" />
                       </button>
+                      {canWrite ? (
+                        <button
+                          type="button"
+                          onClick={() => void voidBatchLabels(b)}
+                          disabled={batchPrintBusy === b.id || liveCountOf(b) === 0 || st === 'IN_PROGRESS'}
+                          title={st === 'IN_PROGRESS' ? 'Not while the batch is generating'
+                            : liveCountOf(b) === 0 ? 'No live labels to void'
+                              : `Void every live label of this batch (${liveCountOf(b)}) with the carriers`}
+                          aria-label="Void batch labels"
+                          className="inline-flex items-center justify-center rounded-xl border border-[#e3d9c4] bg-white p-2 text-rose-700 transition enabled:hover:border-rose-300 enabled:hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          <FiSlash className="h-3.5 w-3.5" />
+                        </button>
+                      ) : null}
                     </>
                   ) : null}
                   {canWrite ? (
