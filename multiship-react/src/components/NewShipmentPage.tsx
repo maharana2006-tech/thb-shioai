@@ -199,6 +199,11 @@ export default function NewShipmentPage() {
 
   const [sender, setSender] = useState<ManualShipmentAddress>(defaultSender())
   const [recipient, setRecipient] = useState<ManualShipmentAddress>(blankAddress())
+  /** V76 — internal per-order ops note (500 char, multi-line). Placed
+   *  under the Ship From section for lack of a better home; the data
+   *  attaches to the order as a whole. Not sent to any external
+   *  surface (label / carrier / webhook) — internal ops only. */
+  const [note, setNote] = useState<string>('')
   /**
    * Origin of the recipient.residential flag — 'auto' when we ticked
    * it because the operator picked a service that requires residential
@@ -2138,6 +2143,9 @@ export default function NewShipmentPage() {
       // .returnType (PRINT_RETURN_LABEL / EMAIL_LABEL), etc.
       ...(isReturn ? { returnType } : {}),
       reference: reference.trim() || undefined,
+      // V76 — internal per-order ops note; omit when blank so the
+      // wire only carries populated fields.
+      ...(note.trim() ? { note: note.trim() } : {}),
       carrierCode: carrier,
       accountNumber: accountNumber.trim(),
       accountId: matched?.id ?? null,
@@ -2999,6 +3007,30 @@ export default function NewShipmentPage() {
                 className="xl:row-span-2"
               >
                 <AddressBlock value={sender} onChange={(patch) => { setSender((s) => ({ ...s, ...patch })); Object.keys(patch).forEach((k) => clearFixKey(`sender.${k}`)) }} withEmail={isReturn} errors={addrErrors('sender')} />
+
+                {/* V76 — internal per-order ops note. Not printed on
+                    labels / commercial invoice; not on external API;
+                    just a home for driver instructions, pickup hints,
+                    handling flags. Surfaced in /orders list as an
+                    icon-popover on the row. */}
+                <div className="mt-4">
+                  <label className="block">
+                    <span className="mb-1 flex items-center justify-between text-[11px] font-bold uppercase tracking-[0.14em] text-[#6b5c42]">
+                      <span>Internal note (optional)</span>
+                      <span className={`normal-case tracking-normal ${note.length > 450 ? 'text-amber-600' : 'text-[#b6a684]'}`}>
+                        {note.length}/500
+                      </span>
+                    </span>
+                    <textarea
+                      rows={3}
+                      maxLength={500}
+                      value={note}
+                      onChange={(e) => setNote(e.target.value)}
+                      placeholder="Driver instructions, pickup hints, handling flags… (not printed on labels)"
+                      className="w-full resize-y rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13px] text-[#1f150c] outline-none transition placeholder:text-[#b6a684] focus:border-[#cdbf9f] focus:ring-4 focus:ring-[#f4eede]"
+                    />
+                  </label>
+                </div>
               </SectionCard>
               <SectionCard
                 icon={<FiMapPin className="h-3.5 w-3.5" />}

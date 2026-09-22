@@ -27,6 +27,9 @@ export interface OrderDetails {
   batchId?: number | null
   /** Boxes in the shipment (null / 1 for single-box orders). */
   packageCount?: number | null
+  /** V76 — internal per-order ops note (500 char). Null / empty
+   *  hides the row-icon in the orders list. */
+  note?: string | null
 }
 
 export interface ShippingDetails {
@@ -569,6 +572,10 @@ export interface ManualShipmentPayload {
   declaredValue?: number | null
   goodsDescription?: string
   reference?: string
+  /** V76 — internal per-order ops note (500 char, multi-line).
+   *  Not printed on labels / commercial invoice; not on external
+   *  API; surfaced in /orders list as an icon-popover. */
+  note?: string
   // International (cross-border) only:
   items?: ManualShipmentItem[]
   incoterms?: string
@@ -820,6 +827,16 @@ export const orderService = {
    *  invoice availability, and the billing-statement figures. */
   getDocuments: (limit = 200) =>
     apiClient.get<ApiResponse<OrderDocumentRow[]>>(`/orders/documents?limit=${limit}`),
+
+  /**
+   * V76 — edit the internal per-order ops note. Passing null / empty
+   * string clears the note. Server enforces 500-char cap.
+   */
+  updateNote: (orderNo: number, note: string | null) =>
+    apiClient.patch<ApiResponse<{ orderDetails: OrderDetails }>>(
+      `/orders/${orderNo}/note`,
+      { note: note ?? null },
+    ),
 
   /**
    * THE order list: one server-side paginated, sorted, filtered endpoint

@@ -169,6 +169,13 @@ public class Order {
     @Column(name = "is_return")
     private String isReturn;
 
+    /** V76 — internal per-order ops note (driver instructions / pickup
+     *  hints / handling flags). 500-char cap. Deliberately INTERNAL:
+     *  not on external API / label / webhook. Rendered on /orders/new
+     *  under Ship From and via an icon-popover in the orders list. */
+    @Column(name = "note", length = 500)
+    private String note;
+
     /** External order id from the source WMS (source = WMS). Used to make the
      *  WMS pull idempotent — an order already pulled is skipped on re-pull.
      *  Null for non-WMS orders. */

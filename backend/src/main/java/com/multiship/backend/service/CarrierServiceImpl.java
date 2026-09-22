@@ -1838,6 +1838,12 @@ public class CarrierServiceImpl implements CarrierService {
         // payload (source MANUAL) for a BULK order and used to reclassify it.
         order.setSource(firstNonBlank(order.getSource(), req.getSource(), "MANUAL"));
         order.setOrderChannel(resolveOrderChannel(req, to));
+        // V76 — internal per-order ops note. Trimmed + truncated at the
+        // DB column cap so an over-long paste doesn't 500 on flush.
+        if (req.getNote() != null) {
+            String n = req.getNote().trim();
+            order.setNote(n.isEmpty() ? null : truncate(n, 500));
+        }
         order.setCustomerRef(truncate(firstNonBlank(req.getReference(), order.getCustomerRef()), 80));
         order.setCustNo(firstNonBlank(req.getClientCode(), order.getCustNo(), "MANUAL"));
         order.setTenantId(StringUtils.hasText(req.getClientCode()) ? req.getClientCode().trim() : order.getTenantId());
