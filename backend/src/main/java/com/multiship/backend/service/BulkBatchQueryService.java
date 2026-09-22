@@ -156,6 +156,7 @@ public class BulkBatchQueryService {
             int failed = orZero(t.get("labelsFailed", Integer.class));
             int voidedRows = perBatch.get(i).entrySet().stream()
                     .filter(e -> voided.contains(e.getKey())).mapToInt(Map.Entry::getValue).sum();
+            d.setLiveOrders((int) perBatch.get(i).keySet().stream().filter(o -> !voided.contains(o)).count());
             d.setLabelsGenerated(Math.max(0, generated - voidedRows));
             d.setLabelsVoided(voidedRows);
             d.setLabelsFailed(failed);

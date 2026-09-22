@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { FiArrowLeft, FiArrowRight, FiCheckCircle } from 'react-icons/fi'
-import PageSectionHeader from './workspace/PageSectionHeader'
 import OrderImportModal from './modals/OrderImportModal'
 import { bulkBatchPath, bulkPaths } from '../routes/workspaceRoutes'
 
@@ -19,11 +18,9 @@ export default function BulkImportPage() {
 
   return (
     <div className="space-y-4 pb-24">
-      <PageSectionHeader
-        eyebrow="Bulk Mailer"
-        title="Import orders from CSV or Excel"
-        description="Upload a file, fix the rows that need it, and save. Saved orders land in Import history, where you generate their labels."
-        actions={
+      <div className="flex items-center justify-between gap-3 px-1 pt-1">
+        <p className="text-[12.5px] text-slate-500">Upload a file, fix the rows that need it, and save — saved orders land in Import history, where you generate their labels.</p>
+        {
           <button
             type="button"
             onClick={() => toHistory(null)}
@@ -33,7 +30,7 @@ export default function BulkImportPage() {
             Back to import history
           </button>
         }
-      />
+      </div>
 
       {savedBatchId !== null ? (
         <div

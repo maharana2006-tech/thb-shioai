@@ -230,7 +230,9 @@ export default function DataHistoryPage() {
   const reloadRef = useRef<() => void>(() => {})
   const trash = useTrashActions({
     batches, setBatches, openId, setOpenId,
-    onMoved: batchPageId != null ? () => reloadRef.current() : undefined,
+    onMoved: batchPageId != null
+      ? () => reloadRef.current()
+      : (id) => { setBatches((list) => list.filter((b) => b.id !== id)); void reloadQuiet() },
     viewTrash: batchPageId != null ? !!batches.find((b) => b.id === batchPageId)?.deletedAt : bulkTab === 'trash',
   })
   const {
@@ -249,6 +251,14 @@ export default function DataHistoryPage() {
     if (!batchPageId && tab && !BULK_TABS.some((t) => t.key === tab)) navigate(bulkPaths.imports, { replace: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab])
+
+  /** Restore, then hold Generate for a moment: it lands exactly where Restore was, under the cursor. */
+  const [justRestoredId, setJustRestoredId] = useState<number | null>(null)
+  const restoreBatch = async (id: number, fileName?: string | null) => {
+    await handleRestore(id, fileName)
+    setJustRestoredId(id)
+    window.setTimeout(() => setJustRestoredId((cur) => (cur === id ? null : cur)), 1500)
+  }
 
   /** Print / send a whole batch from the list: its live labels, looked up on demand. */
   const [batchPrintBusy, setBatchPrintBusy] = useState<number | null>(null)
@@ -1015,8 +1025,8 @@ export default function DataHistoryPage() {
   /** Live labels of a batch, when its rows are loaded (the batch page); the server enforces the rule either way. */
   const liveCountOf = (b: ImportBatchSummary) => {
     const r = rowsById[b.id]
-    // The list carries the server's live count (rows); the batch page counts its loaded rows (orders).
-    return Array.isArray(r) ? liveOrdersOf(r).length : (b.labelsGenerated ?? 0)
+    // Orders, not rows — the batch page counts its loaded rows, the list uses the server's figure.
+    return Array.isArray(r) ? liveOrdersOf(r).length : (b.liveOrders ?? b.labelsGenerated ?? 0)
   }
 
   // Status, rows and actions of a batch — shared by the table's cells and the batch page.
@@ -1136,7 +1146,7 @@ export default function DataHistoryPage() {
                 canWrite ? (
                   <button
                     type="button"
-                    onClick={() => void handleRestore(b.id, b.fileName)}
+                    onClick={() => void restoreBatch(b.id, b.fileName)}
                     disabled={trashBusyId === b.id}
                     title="Restore this import from Trash"
                     className="inline-flex items-center gap-1.5 rounded-xl border border-[#412d15] bg-white px-3 py-2 text-[12px] font-semibold text-[#412d15] transition hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-50"
@@ -1173,7 +1183,7 @@ export default function DataHistoryPage() {
                       in canGenerate's set, so without `|| busy` the whole control
                       (and its spinner) would unmount the instant you click and the
                       loader would never show. */}
-                  {(canGenerate || busy) ? (
+                  {(batchPageId != null || busy) && (canGenerate || busy) ? (
                     <>
                       <span
                         title="Which carrier account this batch bills to. Platform bills the house account and rebills the client with markup."
@@ -1277,7 +1287,7 @@ export default function DataHistoryPage() {
                               <button
                                 type="button"
                                 onClick={() => void cancelGeneration(b.id)}
-                                disabled={cancellingId === b.id || cancelRequested.has(b.id) || !!progress?.cancelling}
+                                disabled={justRestoredId === b.id || (cancellingId === b.id || cancelRequested.has(b.id) || !!progress?.cancelling)}
                                 title="Stop workers from picking up more orders. Already-in-flight carrier calls run to completion."
                                 className="inline-flex items-center gap-1.5 rounded-xl border border-rose-300 bg-rose-50 px-2.5 py-1.5 text-[11px] font-semibold text-rose-800 transition hover:bg-rose-100 disabled:opacity-40"
                               >
@@ -1425,6 +1435,8 @@ export default function DataHistoryPage() {
                 ) : null}
               </span>
               <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-[#6b5c42]">
+                <span className="font-mono">Import #{b.id}</span>
+                <span aria-hidden="true">·</span>
                 <span>{b.createdBy || '—'}</span>
               </span>
             </span>
@@ -1498,7 +1510,6 @@ export default function DataHistoryPage() {
   const renderBatchExpanded = (b: ImportBatchSummary) => {
     const rows = rowsById[b.id]
     const list = Array.isArray(rows) ? rows : []
-    console.log('renderBatchExpanded called for batch', b.id, 'rows:', rows, 'list.length:', list.length)
     const filter = gridFilter[b.id] ?? 'all'
     const needsAttention = (r: (typeof list)[number]) =>
       (r.errors?.length ?? 0) > 0 || (r.generatedStatus ?? '').toUpperCase() === 'FAILED'
@@ -1533,7 +1544,11 @@ export default function DataHistoryPage() {
         {rows === 'loading' || rows === undefined ? (
           <p className="py-4 text-center text-[12px] text-[#6b5c42]">Loading rows…</p>
         ) : rows.length === 0 ? (
-          <p className="py-4 text-center text-[12px] text-[#6b5c42]">No rows stored for this import.</p>
+          <p className="px-4 py-4 text-center text-[12px] text-[#6b5c42]">
+            {['WMS', 'API'].includes((b.source || '').toUpperCase())
+              ? "This fetch's rows are no longer stored — it was pulled before rows were kept. Fetch from WMS again for a fresh batch."
+              : 'No rows stored for this import.'}
+          </p>
         ) : (
           <>
             {/* PR-G4 — MPS progress cards for USPS rows in this batch
@@ -1647,7 +1662,7 @@ export default function DataHistoryPage() {
               empty={<p className="py-6 text-center text-[11px] text-[#6b5c42]">No rows match this filter.</p>}
               head={
                 <thead className="sticky top-0 z-30">
-                  <tr className="bg-[#faf7f0] text-[8.5px] uppercase tracking-[0.1em] text-[#6b5c42]">
+                  <tr className="bg-[#faf7f0] text-[10.5px] font-semibold text-[#6b5c42]">
                     <th className="sticky left-0 z-20 border-b border-[#e3d9c4] bg-[#faf7f0] px-2 py-1.5 text-left font-bold"
                       style={{ width: ROW_COL_W, minWidth: ROW_COL_W, maxWidth: ROW_COL_W }}>
                       <span className="flex items-center gap-1.5">
@@ -2019,7 +2034,7 @@ export default function DataHistoryPage() {
                 </div>
                 <div className="flex flex-wrap items-start gap-4">
                   {renderStatusCell(b)}
-                  <div className="w-[120px]">{renderRowsCell(b)}</div>
+                  <div className="min-w-[120px]">{renderRowsCell(b)}</div>
                 </div>
               </div>
               <div className="mt-3 border-t border-dashed border-[#e3d9c4] pt-3">{renderActionsCell(b)}</div>
@@ -2311,6 +2326,9 @@ const UNMAPPED_SHIP_VIA = /serviceType '([^']+)' is (?:not mapped|mapped, but no
  * with a transform — no re-layout), and the arrow / Home / End keys move
  * between tabs as a tablist should.
  */
+export /** Set by an arrow-key move; the next tab bar to mount focuses its active tab. */
+let focusTabOnMount = false
+
 export function BulkTabBar({ active, onSelect }: { active: BulkTab; onSelect: (tab: BulkTab) => void }) {
   const listRef = useRef<HTMLDivElement>(null)
   const pillRef = useRef<HTMLSpanElement>(null)
@@ -2341,9 +2359,16 @@ export function BulkTabBar({ active, onSelect }: { active: BulkTab; onSelect: (t
         : e.key === 'Home' ? 0 : e.key === 'End' ? BULK_TABS.length - 1 : null
     if (next == null) return
     e.preventDefault()
+    // The page is rebuilt on the address change; the new tab bar puts focus back (see below).
+    focusTabOnMount = true
     onSelect(BULK_TABS[next].key)
-    listRef.current?.querySelector<HTMLElement>(`[data-tab="${BULK_TABS[next].key}"]`)?.focus()
   }
+
+  useLayoutEffect(() => {
+    if (!focusTabOnMount) return
+    focusTabOnMount = false
+    listRef.current?.querySelector<HTMLElement>(`[data-tab="${active}"]`)?.focus()
+  }, [active])
 
   return (
     <div

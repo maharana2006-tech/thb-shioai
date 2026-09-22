@@ -171,6 +171,8 @@ export interface ImportBatchSummary {
   labelsVoided?: number | null
   labelsFailed?: number | null
   labelsPending?: number | null
+  /** Orders whose label can still ship — what Void / Delete act on (list only). */
+  liveOrders?: number | null
 }
 
 /** A saved import with its full rows (detail view). */

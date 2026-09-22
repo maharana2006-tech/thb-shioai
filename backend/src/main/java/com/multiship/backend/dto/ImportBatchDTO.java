@@ -54,5 +54,7 @@ public class ImportBatchDTO {
     private Integer labelsVoided;
     private Integer labelsFailed;
     private Integer labelsPending;
+    /** Orders whose label can still ship (generated, not voided) — what Void / Delete act on. */
+    private Integer liveOrders;
     private List<OrderImportRowDTO> rows;
 }

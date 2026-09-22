@@ -33,7 +33,7 @@ export default function WorkspaceLayout() {
   const togglePin = () => setPinned((cur) => !cur)
 
   return (
-    <div className="relative min-h-screen bg-[var(--color-background)] text-[var(--color-text)]">
+    <div className="relative min-h-screen overflow-x-clip bg-[var(--color-background)] text-[var(--color-text)]">
       {/* whisper-subtle signature texture behind every page (hidden in print) */}
       <div className="fixed inset-0 print:hidden">
         <BrandBackdrop variant="light" />

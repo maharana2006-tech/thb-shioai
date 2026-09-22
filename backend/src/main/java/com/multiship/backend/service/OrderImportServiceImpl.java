@@ -3624,7 +3624,6 @@ public class OrderImportServiceImpl implements OrderImportService {
                 && ("GENERATED".equalsIgnoreCase(r.getGeneratedStatus()) || "QUEUED_USPS".equalsIgnoreCase(r.getGeneratedStatus()))).count();
         int failed = (int) rows.stream().filter(r -> "FAILED".equalsIgnoreCase(r.getGeneratedStatus())).count();
         batch.setStatus(deriveGenerationStatus(total, generated, failed, invalid));
-        stampCompletionIfTerminal(batch);
         stampOwner(batch, rows);
         batch = importBatchRepository.save(batch);
 
