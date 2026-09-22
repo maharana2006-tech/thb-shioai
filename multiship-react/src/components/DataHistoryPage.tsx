@@ -1022,6 +1022,55 @@ export default function DataHistoryPage() {
     return fromRows ?? b.lastPrintedAt ?? null
   }
 
+  /** A batch whose labels can be generated (or retried) now. */
+  const canGenerateBatch = (b: ImportBatchSummary) => {
+    const st = (b.status || '').toUpperCase()
+    return canWrite && (st === 'INITIATE' || st === 'PARTIAL_COMPLETE' || st === 'FAILED'
+      || st === 'CANCELLED' || (st === 'DRAFT' && b.savedRows > 0))
+  }
+  const isRetryBatch = (b: ImportBatchSummary) => ['PARTIAL_COMPLETE', 'FAILED', 'CANCELLED'].includes((b.status || '').toUpperCase())
+
+  // ── Ticked batches in the list: Bills to and Generate act on all of them at once.
+  const [pickedBatches, setPickedBatches] = useState<number[]>([])
+  const pickedSet = new Set(pickedBatches)
+  const pickable = batches.filter(canGenerateBatch)
+  const allPicked = pickable.length > 0 && pickable.every((b) => pickedSet.has(b.id))
+  const togglePickBatch = (id: number) => setPickedBatches((cur) => cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id])
+  const togglePickAll = () => setPickedBatches(allPicked ? [] : pickable.map((b) => b.id))
+  const [bulkRunning, setBulkRunning] = useState<{ done: number; total: number } | null>(null)
+  const pickedLive = batches.filter((b) => pickedSet.has(b.id) && canGenerateBatch(b))
+  const pickedBilling: 'AUTO' | 'PLATFORM' | 'MIXED' =
+    pickedLive.length === 0 ? 'AUTO'
+      : pickedLive.every((b) => b.billingMode === 'PLATFORM') ? 'PLATFORM'
+        : pickedLive.every((b) => b.billingMode !== 'PLATFORM') ? 'AUTO' : 'MIXED'
+  /** Bills to, for every ticked batch. */
+  const setBillingForPicked = async (mode: 'AUTO' | 'PLATFORM') => {
+    for (const b of pickedLive) await setBilling(b.id, mode)
+  }
+  /** Generate (or retry) every ticked batch, one after another, after one confirmation. */
+  const generatePicked = async () => {
+    if (pickedLive.length === 0 || bulkRunning) return
+    const rows = pickedLive.reduce((n, b) => n + b.savedRows, 0)
+    const platform = pickedLive.filter((b) => b.billingMode === 'PLATFORM').length
+    const ok = await notify.confirm(
+      `Labels will be bought for ${pickedLive.length} batch${pickedLive.length === 1 ? '' : 'es'} (${rows} rows)`
+        + (platform ? ` — ${platform} of them billed to the platform account` : '') + '. Batches with failed rows are retried, not re-bought.',
+      { title: `Generate labels for ${pickedLive.length} batch${pickedLive.length === 1 ? '' : 'es'}?`, confirmLabel: 'Generate labels', cancelLabel: 'Not now', danger: platform > 0 },
+    )
+    if (!ok) return
+    setBulkRunning({ done: 0, total: pickedLive.length })
+    try {
+      for (const b of pickedLive) {
+        await generate(b.id, isRetryBatch(b))
+        setBulkRunning((r) => (r ? { ...r, done: r.done + 1 } : r))
+      }
+    } finally {
+      setBulkRunning(null)
+      setPickedBatches([])
+      void reloadQuiet()
+    }
+  }
+
   /** Live labels of a batch, when its rows are loaded (the batch page); the server enforces the rule either way. */
   const liveCountOf = (b: ImportBatchSummary) => {
     const r = rowsById[b.id]
@@ -1129,8 +1178,7 @@ export default function DataHistoryPage() {
           // A Draft (saved with errors via "Proceed with errors") can label its valid
           // rows now; the rows with errors are skipped until they are fixed.
           // CANCELLED leaves orders not yet labelled — Retry sends them (it had no button).
-          const canGenerate = canWrite && (st === 'INITIATE' || st === 'PARTIAL_COMPLETE' || st === 'FAILED'
-            || st === 'CANCELLED' || (st === 'DRAFT' && b.savedRows > 0))
+          const canGenerate = canGenerateBatch(b)
           const isRetry = st === 'PARTIAL_COMPLETE' || st === 'FAILED' || st === 'CANCELLED'
           // busy renders the progress bar. Include server-side IN_PROGRESS
           // (2026-09-12 fix) so operators watching a batch started in
@@ -1380,6 +1428,39 @@ export default function DataHistoryPage() {
   const dhColumns = useMemo<ColumnDef<ImportBatchSummary, unknown>[]>(
     () => [
       {
+        id: 'pick',
+        header: () => (
+          <input
+            type="checkbox"
+            aria-label="Tick every batch that can generate"
+            checked={allPicked}
+            disabled={pickable.length === 0}
+            onChange={togglePickAll}
+            onPointerDown={(e) => e.stopPropagation()}
+            className="h-3.5 w-3.5 accent-[#1f150c] disabled:opacity-30"
+          />
+        ),
+        enableSorting: false,
+        enableResizing: false,
+        size: 36,
+        cell: ({ row }) => {
+          const b = row.original
+          const can = canGenerateBatch(b) && !viewTrash
+          return (
+            <input
+              type="checkbox"
+              aria-label={`Tick batch #${b.id}`}
+              checked={pickedSet.has(b.id)}
+              disabled={!can}
+              onChange={() => togglePickBatch(b.id)}
+              title={can ? 'Tick to bill or generate this batch with the others' : 'Nothing to generate in this batch'}
+              className="h-3.5 w-3.5 accent-[#1f150c] disabled:opacity-25"
+            />
+          )
+        },
+        meta: { headerLabel: 'Tick', exportValue: () => '' },
+      },
+      {
         id: 'labelBatch',
         header: 'Batch',
         enableSorting: false,
@@ -1503,7 +1584,9 @@ export default function DataHistoryPage() {
     // adding them here would defeat memoization by giving dhColumns a new
     // identity every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [canWrite, viewTrash, trashBusyId, confirmGenId, billingSavingId, generatingId, genProgressById, nowTick, cancellingId, cancelRequested, validatingId],
+    [canWrite, viewTrash, trashBusyId, confirmGenId, billingSavingId, generatingId, genProgressById, nowTick, cancellingId, cancelRequested, validatingId,
+      // the tick column reads which batches are ticked and which can be
+      pickedBatches, batches],
   )
 
   /** Expanded content for a batch row — the all-columns editable grid. */
@@ -2232,6 +2315,44 @@ export default function DataHistoryPage() {
         totalCount={summary?.total ?? pageInfo.total}
       />
 
+      {pickedBatches.length > 0 && batchPageId == null && !viewTrash ? (
+        <div data-testid="batch-pick-bar" className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[#412d15] bg-[#fcfaf5] px-4 py-2.5">
+          <span className="flex flex-wrap items-center gap-2 text-[12px] text-[#5a4526]">
+            <span className="font-semibold text-[#1f150c]">{pickedLive.length} batch{pickedLive.length === 1 ? '' : 'es'} ticked</span>
+            <span>· {pickedLive.reduce((n, b) => n + b.savedRows, 0)} rows to label</span>
+            <button type="button" onClick={() => setPickedBatches([])} className="inline-flex items-center gap-0.5 font-semibold hover:underline">
+              <FiX className="h-3 w-3" /> Clear
+            </button>
+          </span>
+          <span className="flex flex-wrap items-center gap-2">
+            <label className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11px] font-semibold text-[#5a4526]">
+              <FiHome className="h-3.5 w-3.5" />
+              <span className="text-[9.5px] uppercase tracking-[0.08em] text-[#b6a684]">Bills to</span>
+              <select
+                value={pickedBilling === 'MIXED' ? '' : pickedBilling}
+                onChange={(e) => { if (e.target.value) void setBillingForPicked(e.target.value as 'AUTO' | 'PLATFORM') }}
+                disabled={!!bulkRunning || billingSavingId != null}
+                className="bg-transparent text-[12px] font-semibold text-[#1f150c] outline-none"
+              >
+                {pickedBilling === 'MIXED' ? <option value="">Mixed — pick one</option> : null}
+                <option value="AUTO">Client account</option>
+                <option value="PLATFORM">Platform account</option>
+              </select>
+            </label>
+            <button
+              type="button"
+              onClick={() => void generatePicked()}
+              disabled={pickedLive.length === 0 || !!bulkRunning}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[12.5px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
+            >
+              {bulkRunning
+                ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
+                : <FiZap className="h-3.5 w-3.5" />}
+              {bulkRunning ? `Generating ${bulkRunning.done + 1} of ${bulkRunning.total}…` : `Generate labels (${pickedLive.length})`}
+            </button>
+          </span>
+        </div>
+      ) : null}
       <section
         aria-busy={refreshing}
         className={`rounded-2xl border border-slate-200 bg-white p-3 shadow-sm transition-opacity duration-200 ${refreshing && !loading ? 'opacity-60' : ''}`}
@@ -2248,7 +2369,7 @@ export default function DataHistoryPage() {
           </p>
         ) : (
           <AdvancedDataTable<ImportBatchSummary>
-            tableKey={viewTrash ? 'order-intake-imports-trash-v7' : isApiTab ? 'bulk-api-batches-v5' : 'order-intake-imports-v7'}
+            tableKey={viewTrash ? 'order-intake-imports-trash-v8' : isApiTab ? 'bulk-api-batches-v6' : 'order-intake-imports-v8'}
             columns={dhColumns}
             data={batches}
             manualPagination
