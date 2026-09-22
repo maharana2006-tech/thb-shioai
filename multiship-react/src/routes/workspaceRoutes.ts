@@ -19,6 +19,9 @@ export const bulkPaths = {
   importFile: '/bulk/import',
 } as const
 
+/** One batch's page: its rows, fixes and label actions. */
+export const bulkBatchPath = (id: number) => `/bulk/batches/${id}`
+
 export type WorkspaceRouteKey = keyof typeof workspacePaths
 
 /** Settings sub-pages (the master-data hub). */

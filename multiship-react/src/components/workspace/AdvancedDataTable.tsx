@@ -102,6 +102,8 @@ export interface AdvancedDataTableProps<T> {
   onRowExpand?: (row: T) => void
   /** Row (by getRowId) to show expanded when the table first renders. */
   initialExpandedId?: string | null
+  /** Clicking a row (outside its buttons and links) — e.g. to open its own page. */
+  onRowClick?: (row: T) => void
   /** Stable row identity (e.g. the record id). Without it rows are keyed by position,
    *  so removing a row moves an open expansion onto the next record. */
   getRowId?: (row: T, index: number) => string
@@ -348,6 +350,7 @@ export default function AdvancedDataTable<T>({
   renderExpanded,
   onRowExpand,
   initialExpandedId = null,
+  onRowClick,
   getRowId,
   initialHiddenColumns,
   initialColumnPinning,
@@ -1059,7 +1062,7 @@ export default function AdvancedDataTable<T>({
               {visibleRows.map((row) => (
                 <Fragment key={row.id}>
                 <tr
-                  className={`align-top ${renderExpanded ? 'cursor-pointer hover:bg-slate-50/60' : ''} ${
+                  className={`align-top ${renderExpanded || onRowClick ? 'cursor-pointer hover:bg-slate-50/60' : ''} ${
                     renderExpanded && expandedId === row.id ? 'bg-slate-50' : ''
                   }`}
                   onClick={
@@ -1074,7 +1077,12 @@ export default function AdvancedDataTable<T>({
                           // loader calls setState, which warns "update while rendering").
                           if (willOpen) onRowExpand?.(row.original)
                         }
-                      : undefined
+                      : onRowClick
+                        ? (e) => {
+                            if ((e.target as HTMLElement).closest('button, a, input, select, textarea, label')) return
+                            onRowClick(row.original)
+                          }
+                        : undefined
                   }
                 >
                   {row.getVisibleCells().map((cell) => {

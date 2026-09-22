@@ -24,6 +24,9 @@ export interface UseTrashActionsOptions {
   setOpenId: (id: number | null) => void
   /** When given, the Trash view is controlled by the caller (e.g. the URL tab). */
   viewTrash?: boolean
+  /** Called after a delete / restore instead of dropping the batch from the list —
+   *  e.g. a single-batch page re-reads the batch to show its new state. */
+  onMoved?: (id: number) => void
 }
 
 export interface UseTrashActionsResult {
@@ -48,6 +51,7 @@ export function useTrashActions({
   openId,
   setOpenId,
   viewTrash: controlledViewTrash,
+  onMoved,
 }: UseTrashActionsOptions): UseTrashActionsResult {
   // Silence the unused-arg warning — batches is accepted for symmetry
   // with parent state and to make the hook API self-documenting even
@@ -81,7 +85,8 @@ export function useTrashActions({
     setTrashBusyId(id)
     try {
       await orderImportService.deleteBatch(id)
-      setBatches((list) => list.filter((b) => b.id !== id))
+      if (onMoved) onMoved(id)
+      else setBatches((list) => list.filter((b) => b.id !== id))
       if (openId === id) setOpenId(null)
       notify.success(
         `"${fileName || `Import #${id}`}" moved to Trash · restore it from Trash anytime.`,
@@ -102,7 +107,8 @@ export function useTrashActions({
     setTrashBusyId(id)
     try {
       await orderImportService.restoreBatch(id, allowDuplicate)
-      setBatches((list) => list.filter((b) => b.id !== id))
+      if (onMoved) onMoved(id)
+      else setBatches((list) => list.filter((b) => b.id !== id))
       if (openId === id) setOpenId(null)
       notify.success(`"${fileName || `Import #${id}`}" restored.`)
     } catch (e) {

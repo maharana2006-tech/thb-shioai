@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { FiArrowLeft, FiArrowRight, FiCheckCircle } from 'react-icons/fi'
 import PageSectionHeader from './workspace/PageSectionHeader'
 import OrderImportModal from './modals/OrderImportModal'
-import { bulkPaths } from '../routes/workspaceRoutes'
+import { bulkBatchPath, bulkPaths } from '../routes/workspaceRoutes'
 
 /**
  * Bulk Mailer → Import CSV / Excel: the importer on its own page (Upload →
@@ -15,7 +15,7 @@ export default function BulkImportPage() {
   const navigate = useNavigate()
   const [savedBatchId, setSavedBatchId] = useState<number | null>(null)
   const toHistory = (batchId: number | null) =>
-    navigate(batchId ? `${bulkPaths.imports}?highlight=${batchId}` : bulkPaths.imports)
+    navigate(batchId ? bulkBatchPath(batchId) : bulkPaths.imports)
 
   return (
     <div className="space-y-4 pb-24">
@@ -49,7 +49,7 @@ export default function BulkImportPage() {
             onClick={() => toHistory(savedBatchId)}
             className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[12.5px] font-semibold text-[#f4eede] hover:bg-[#412d15]"
           >
-            Open it in Import history
+            Open batch #{savedBatchId}
             <FiArrowRight className="h-3.5 w-3.5" />
           </button>
         </div>

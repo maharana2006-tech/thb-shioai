@@ -196,6 +196,7 @@ export default function AppRoutes() {
             {/* Bulk Mailer — opens on Import history; the tab is in the URL. */}
             <Route path={workspacePaths.bulk} element={<Navigate to={bulkPaths.imports} replace />} />
             <Route path={bulkPaths.importFile} element={<BulkImportPage />} />
+            <Route path="/bulk/batches/:batchId" element={<DataHistoryPage />} />
             <Route path="/bulk/:tab" element={<DataHistoryPage />} />
             {/* Old "Order History" address — bookmarks and links keep working. */}
             <Route path="/orders/history" element={<Navigate to={bulkPaths.imports} replace />} />

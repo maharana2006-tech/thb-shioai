@@ -19,7 +19,7 @@ import {
 import type { ColumnDef } from '@tanstack/react-table'
 import PageSectionHeader from './workspace/PageSectionHeader'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
-import { bulkPaths, settingsPaths } from '../routes/workspaceRoutes'
+import { bulkBatchPath, bulkPaths, settingsPaths } from '../routes/workspaceRoutes'
 import { wmsService } from '../api/wmsService'
 import { AddShipViaMappingDialog, ShipViaCodesPanel } from './modals/ShipViaCodes'
 import OrderDocumentsTable from './OrderDocumentsTable'
@@ -147,12 +147,14 @@ export default function DataHistoryPage() {
   // Bulk / Manual / API / WMS), "import" (inline CSV/Excel upload + validation),
   // and "imports" (history of bulk import batches).
   // Bulk Mailer tab from the URL (/bulk/:tab): imports (default) · api · documents · trash.
-  const { tab } = useParams<{ tab?: string }>()
+  const { tab, batchId: batchIdParam } = useParams<{ tab?: string; batchId?: string }>()
+  /** /bulk/batches/:id — one batch on its own page. */
+  const batchPageId = batchIdParam ? Number(batchIdParam) || null : null
   const bulkTab: BulkTab = BULK_TABS.some((t) => t.key === tab) ? (tab as BulkTab) : 'imports'
   const dhView: 'imports' | 'docs' = bulkTab === 'documents' ? 'docs' : 'imports'
   /** Import history and API batches are the same list — only where the batches come from differs. */
   const isApiTab = bulkTab === 'api'
-  const [searchParams, setSearchParams] = useSearchParams()
+  const [searchParams] = useSearchParams()
 
   // F5-A — advanced filter + sort + pagination state extracted to
   // useHistoryFilters (see hooks/useHistoryFilters.ts). Behavior is
@@ -172,7 +174,13 @@ export default function DataHistoryPage() {
   // F5-A — soft-delete / restore / empty-Trash extracted to
   // useTrashActions. The Trash-view toggle lives here now so we can
   // reload independently when the operator flips between live and Trash.
-  const trash = useTrashActions({ batches, setBatches, openId, setOpenId, viewTrash: bulkTab === 'trash' })
+  // The batch page re-reads its batch after a delete / restore (load is declared below).
+  const reloadRef = useRef<() => void>(() => {})
+  const trash = useTrashActions({
+    batches, setBatches, openId, setOpenId,
+    onMoved: batchPageId != null ? () => reloadRef.current() : undefined,
+    viewTrash: batchPageId != null ? !!batches.find((b) => b.id === batchPageId)?.deletedAt : bulkTab === 'trash',
+  })
   const {
     viewTrash,
     trashBusyId,
@@ -186,7 +194,7 @@ export default function DataHistoryPage() {
 
 
   useEffect(() => {
-    if (tab && !BULK_TABS.some((t) => t.key === tab)) navigate(bulkPaths.imports, { replace: true })
+    if (!batchPageId && tab && !BULK_TABS.some((t) => t.key === tab)) navigate(bulkPaths.imports, { replace: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab])
 
@@ -205,12 +213,13 @@ export default function DataHistoryPage() {
 
   /** File imports, API/WMS fetches, or Trash (deleted batches of either kind). */
   const fetchBatches = () =>
-    viewTrash ? orderImportService.listHistory(true)
+    batchPageId != null
+      // The batch page's "list" is that one batch (live or in Trash, any source).
+      ? orderImportService.getHistory(batchPageId).then((res) => ({ ...res, data: res.data ? [res.data as ImportBatchSummary] : [] }))
+      : viewTrash ? orderImportService.listHistory(true)
       : isApiTab ? wmsService.batches()
         : orderImportService.listHistory(false)
 
-  /** The batch the importer just saved into — shown open when the list first renders. */
-  const [highlightedId, setHighlightedId] = useState<number | null>(null)
 
   /** Pull the WMS's pending shipments in as one new batch (or reopen the same one). */
   const fetchFromWms = async () => {
@@ -227,11 +236,7 @@ export default function DataHistoryPage() {
         } else {
           notify.info('The WMS has no pending shipments to fetch.')
         }
-        if (r.importBatchId != null) {
-          setHighlightedId(r.importBatchId)
-          ensureRows(r.importBatchId)
-          await load()
-        }
+        if (r.importBatchId != null) navigate(bulkBatchPath(r.importBatchId))
       }
     } catch (e) {
       notify.apiError(e, 'Could not reach the WMS.')
@@ -245,17 +250,17 @@ export default function DataHistoryPage() {
     try {
       const res = await fetchBatches()
       setBatches(res.data ?? [])
-      // ?highlight=<id> (from the importer): open the batch the orders went to.
+      if (batchPageId != null) ensureRows(batchPageId)
+      // Old ?highlight=<id> links: open that batch's page.
       const highlightId = Number(searchParams.get('highlight')) || null
-      if (highlightId && (res.data ?? []).some((b) => b.id === highlightId)) {
-        setHighlightedId(highlightId)
-        ensureRows(highlightId)
-        setSearchParams((sp) => { sp.delete('highlight'); return sp }, { replace: true })
-      }
+      if (highlightId) navigate(bulkBatchPath(highlightId), { replace: true })
     } catch (e) {
       // Keep whatever is already listed: wiping it rendered the "no imports
       // yet" empty state on a transient 502, which reads as data loss.
-      notify.apiError(e, viewTrash ? 'Could not load Trash.' : isApiTab ? 'Could not load the API batches.' : 'Could not load import history.')
+      // A missing batch gets the page's own "isn't here" message, not an error notice.
+      if (batchPageId != null && e instanceof ApiError && (e.status === 404 || e.status === 403)) return
+      notify.apiError(e, batchPageId != null ? 'Could not load this batch.'
+        : viewTrash ? 'Could not load Trash.' : isApiTab ? 'Could not load the API batches.' : 'Could not load import history.')
     } finally {
       setLoading(false)
     }
@@ -276,13 +281,16 @@ export default function DataHistoryPage() {
     }
   }
 
+  useEffect(() => { reloadRef.current = () => { void load() } })
+
   useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect -- data fetch on mount + when switching list (file / API / Trash / one batch) */
     void load()
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount + when switching list (file / API / Trash)
     setOpenId(null)
     setConfirmEmpty(false)
+    /* eslint-enable react-hooks/set-state-in-effect */
     // eslint-disable-next-line react-hooks/exhaustive-deps -- load/setOpenId/setConfirmEmpty are stable; switching list re-fetches
-  }, [viewTrash, isApiTab])
+  }, [viewTrash, isApiTab, batchPageId])
 
   /**
    * Auto-poll the list while any batch is IN_PROGRESS so status
@@ -830,94 +838,8 @@ export default function DataHistoryPage() {
     return () => clearInterval(t)
   }, [anyGenerating])
 
-  // Columns for the Import-history table (reorder/resize via AdvancedDataTable).
-  const dhColumns = useMemo<ColumnDef<ImportBatchSummary, unknown>[]>(
-    () => [
-      {
-        id: 'serial',
-        header: 'Serial no.',
-        enableSorting: false,
-        size: 70,
-        accessorFn: (b) => b.id,
-        cell: ({ row }) => <span className="font-mono text-[13px] font-bold text-[#1f150c]">#{row.original.id}</span>,
-        meta: { headerLabel: 'Serial no.' },
-      },
-      {
-        id: 'file',
-        header: 'File',
-        enableSorting: false,
-        size: 240,
-        accessorFn: (b) => b.fileName ?? '',
-        cell: ({ row }) => {
-          const b = row.original
-          const apiSource = ['WMS', 'API'].includes((b.source || '').toUpperCase()) ? (b.source || '').toUpperCase() : null
-          return (
-            <span className="block min-w-0">
-              <span className="flex items-center gap-1.5">
-                <FiFileText className="h-3.5 w-3.5 shrink-0 text-[#b6a684]" />
-                <span className="truncate text-[13.5px] font-semibold text-[#1f150c]" title={b.fileName || undefined}>
-                  {b.fileName || 'Untitled import'}
-                </span>
-                {apiSource ? (
-                  <span
-                    title={apiSource === 'WMS' ? 'Pulled in by Fetch from WMS' : 'Sent in through the external API'}
-                    className="inline-flex shrink-0 items-center rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-emerald-700 ring-1 ring-emerald-200"
-                  >
-                    {apiSource}
-                  </span>
-                ) : null}
-              </span>
-              <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-[#6b5c42]">
-                <span>{b.createdBy || '—'}</span>
-                {b.labelBatchId != null ? (
-                  <span
-                    title="Label batch — find these orders together in All Orders"
-                    className="inline-flex items-center gap-1 rounded-full bg-[#412d15] px-2 py-0.5 font-mono text-[9.5px] font-bold uppercase tracking-[0.08em] text-[#f4eede]"
-                  >
-                    <FiZap className="h-2.5 w-2.5" /> Batch {b.labelBatchId}
-                  </span>
-                ) : (
-                  <span className="font-mono text-[9.5px] uppercase tracking-[0.08em] text-[#b6a684]">No batch yet</span>
-                )}
-              </span>
-            </span>
-          )
-        },
-        meta: { headerLabel: 'File' },
-      },
-      {
-        id: 'created',
-        header: 'Date',
-        enableSorting: false,
-        size: 150,
-        accessorFn: (b) => b.createdAt ?? '',
-        cell: ({ row }) => {
-          const iso = row.original.createdAt
-          const d = iso ? new Date(iso) : null
-          const valid = d && !Number.isNaN(d.getTime())
-          return (
-            <span className="flex flex-col gap-0.5" title={valid ? d!.toLocaleString() : undefined}>
-              <span className="text-[12px] font-semibold text-[#3f3527]">
-                {valid ? d!.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}
-              </span>
-              {valid ? (
-                <span className="text-[11px] tabular-nums text-[#6b5c42]">
-                  {d!.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
-                </span>
-              ) : null}
-            </span>
-          )
-        },
-        meta: { headerLabel: 'Date', exportValue: (b: ImportBatchSummary) => b.createdAt ?? '' },
-      },
-      {
-        id: 'status',
-        header: 'Status',
-        enableSorting: false,
-        size: 130,
-        accessorFn: (b) => b.status ?? '',
-        cell: ({ row }) => {
-          const b = row.original
+  // Status, rows and actions of a batch — shared by the table's cells and the batch page.
+  const renderStatusCell = (b: ImportBatchSummary) => {
           const s = statusMeta(b.status)
           // Completion caption (2026-09-12) — only rendered when the
           // batch has landed a terminal state at least once; retries
@@ -969,17 +891,9 @@ export default function DataHistoryPage() {
               ) : null}
             </span>
           )
-        },
-        meta: { headerLabel: 'Status' },
-      },
-      {
-        id: 'rows',
-        header: 'Rows',
-        enableSorting: false,
-        size: 120,
-        accessorFn: (b) => b.totalRows,
-        cell: ({ row }) => {
-          const b = row.original
+  }
+
+  const renderRowsCell = (b: ImportBatchSummary) => {
           const total = b.totalRows || 0
           const invalid = b.invalidRows || 0
           // Errors are the only thing worth a second line: a clean import is just its size.
@@ -1009,16 +923,9 @@ export default function DataHistoryPage() {
               ) : null}
             </span>
           )
-        },
-        meta: { headerLabel: 'Rows' },
-      },
-      {
-        id: 'actions',
-        header: 'Actions',
-        enableSorting: false,
-        size: 400,
-        cell: ({ row }) => {
-          const b = row.original
+  }
+
+  const renderActionsCell = (b: ImportBatchSummary) => {
           const st = (b.status || '').toUpperCase()
           // WMS/API batches are labelled here exactly like file imports (their
           // orders are stamped source = API); there is no other place to label them.
@@ -1226,7 +1133,112 @@ export default function DataHistoryPage() {
               )}
             </div>
           )
+  }
+
+  // Columns for the Import-history table (reorder/resize via AdvancedDataTable).
+  const dhColumns = useMemo<ColumnDef<ImportBatchSummary, unknown>[]>(
+    () => [
+      {
+        id: 'serial',
+        header: 'Serial no.',
+        enableSorting: false,
+        size: 70,
+        accessorFn: (b) => b.id,
+        cell: ({ row }) => <span className="font-mono text-[13px] font-bold text-[#1f150c]">#{row.original.id}</span>,
+        meta: { headerLabel: 'Serial no.' },
+      },
+      {
+        id: 'file',
+        header: 'File',
+        enableSorting: false,
+        size: 240,
+        accessorFn: (b) => b.fileName ?? '',
+        cell: ({ row }) => {
+          const b = row.original
+          const apiSource = ['WMS', 'API'].includes((b.source || '').toUpperCase()) ? (b.source || '').toUpperCase() : null
+          return (
+            <span className="block min-w-0">
+              <span className="flex items-center gap-1.5">
+                <FiFileText className="h-3.5 w-3.5 shrink-0 text-[#b6a684]" />
+                <span className="truncate text-[13.5px] font-semibold text-[#1f150c]" title={b.fileName || undefined}>
+                  {b.fileName || 'Untitled import'}
+                </span>
+                {apiSource ? (
+                  <span
+                    title={apiSource === 'WMS' ? 'Pulled in by Fetch from WMS' : 'Sent in through the external API'}
+                    className="inline-flex shrink-0 items-center rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-emerald-700 ring-1 ring-emerald-200"
+                  >
+                    {apiSource}
+                  </span>
+                ) : null}
+              </span>
+              <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-[#6b5c42]">
+                <span>{b.createdBy || '—'}</span>
+                {b.labelBatchId != null ? (
+                  <span
+                    title="Label batch — find these orders together in All Orders"
+                    className="inline-flex items-center gap-1 rounded-full bg-[#412d15] px-2 py-0.5 font-mono text-[9.5px] font-bold uppercase tracking-[0.08em] text-[#f4eede]"
+                  >
+                    <FiZap className="h-2.5 w-2.5" /> Batch {b.labelBatchId}
+                  </span>
+                ) : (
+                  <span className="font-mono text-[9.5px] uppercase tracking-[0.08em] text-[#b6a684]">No batch yet</span>
+                )}
+              </span>
+            </span>
+          )
         },
+        meta: { headerLabel: 'File' },
+      },
+      {
+        id: 'created',
+        header: 'Date',
+        enableSorting: false,
+        size: 150,
+        accessorFn: (b) => b.createdAt ?? '',
+        cell: ({ row }) => {
+          const iso = row.original.createdAt
+          const d = iso ? new Date(iso) : null
+          const valid = d && !Number.isNaN(d.getTime())
+          return (
+            <span className="flex flex-col gap-0.5" title={valid ? d!.toLocaleString() : undefined}>
+              <span className="text-[12px] font-semibold text-[#3f3527]">
+                {valid ? d!.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}
+              </span>
+              {valid ? (
+                <span className="text-[11px] tabular-nums text-[#6b5c42]">
+                  {d!.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              ) : null}
+            </span>
+          )
+        },
+        meta: { headerLabel: 'Date', exportValue: (b: ImportBatchSummary) => b.createdAt ?? '' },
+      },
+      {
+        id: 'status',
+        header: 'Status',
+        enableSorting: false,
+        size: 130,
+        accessorFn: (b) => b.status ?? '',
+        cell: ({ row }) => renderStatusCell(row.original),
+        meta: { headerLabel: 'Status' },
+      },
+      {
+        id: 'rows',
+        header: 'Rows',
+        enableSorting: false,
+        size: 120,
+        accessorFn: (b) => b.totalRows,
+        cell: ({ row }) => renderRowsCell(row.original),
+        meta: { headerLabel: 'Rows' },
+      },
+      {
+        id: 'actions',
+        header: 'Actions',
+        enableSorting: false,
+        size: 400,
+        cell: ({ row }) => renderActionsCell(row.original),
         // Buttons have no CSV value — keep the column out of the export.
         meta: { headerLabel: 'Actions', exportable: false },
       },
@@ -1575,6 +1587,129 @@ export default function DataHistoryPage() {
     />
   ) : null
 
+  const labelModal = showLabelModal && labelModalOrderNo ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setShowLabelModal(false)}
+        >
+          <div
+            className="relative w-full max-w-4xl rounded-lg bg-white shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-[#e3d9c4] px-6 py-4">
+              <h2 className="text-lg font-semibold text-[#1f150c]">Order #{labelModalOrderNo} - Label Preview</h2>
+              <button
+                type="button"
+                onClick={() => setShowLabelModal(false)}
+                className="rounded-full p-1 text-[#6b5c42] hover:bg-[#f2ecdf]"
+                title="Close"
+              >
+                <FiX className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Content - PDF Viewer */}
+            <div className="h-[70vh] overflow-auto bg-[#f9f6f0]">
+              <iframe
+                src={`/api/v1/orders/${labelModalOrderNo}/label/pdf`}
+                className="h-full w-full border-0"
+                title={`Label for order ${labelModalOrderNo}`}
+              />
+            </div>
+
+            {/* Footer - Action Buttons */}
+            <div className="flex items-center justify-end gap-2 border-t border-[#e3d9c4] px-6 py-3">
+              <button
+                type="button"
+                onClick={() => window.open(`/api/v1/orders/${labelModalOrderNo}/label/pdf`, '_blank')}
+                className="inline-flex items-center gap-1 rounded-lg px-3 py-2 text-[12px] font-semibold text-[#1f150c] hover:bg-[#f2ecdf]"
+              >
+                📥 Download
+              </button>
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="inline-flex items-center gap-1 rounded-lg px-3 py-2 text-[12px] font-semibold text-[#1f150c] hover:bg-[#f2ecdf]"
+              >
+                🖨️ Print
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowLabelModal(false)}
+                className="inline-flex items-center gap-1 rounded-lg bg-[#1f150c] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#412d15]"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+  ) : null
+
+  // ── /bulk/batches/:id — one batch on its own page ───────────────────────
+  if (batchPageId != null) {
+    const b = batches.find((x) => x.id === batchPageId)
+    const src = (b?.source || '').toUpperCase()
+    const back = b?.deletedAt
+      ? { to: bulkPaths.trash, label: 'Trash' }
+      : src === 'WMS' || src === 'API'
+        ? { to: bulkPaths.api, label: 'API batches' }
+        : { to: bulkPaths.imports, label: 'Import history' }
+    return (
+      <div className="space-y-4 pb-24">
+        {mappingDialog}
+        <nav aria-label="Breadcrumb" className="flex flex-wrap items-center gap-1.5 text-[12px] text-[#6b5c42]">
+          <button type="button" onClick={() => navigate(back.to)} className="inline-flex items-center gap-1 font-semibold text-[#5a4526] hover:underline">
+            <FiArrowLeft className="h-3.5 w-3.5" /> Bulk Mailer · {back.label}
+          </button>
+          <span aria-hidden="true">/</span>
+          <span>Batch #{batchPageId}</span>
+        </nav>
+        {loading && !b ? (
+          <p className="rounded-2xl border border-[#e3d9c4] bg-white px-5 py-14 text-center text-sm text-[#6b5c42]">Loading…</p>
+        ) : !b ? (
+          <div className="rounded-2xl border border-[#e3d9c4] bg-white px-5 py-12 text-center">
+            <p className="text-sm font-semibold text-[#1f150c]">Batch #{batchPageId} isn't here.</p>
+            <p className="mt-1 text-[12.5px] text-[#6b5c42]">It may have been deleted, or it belongs to a client you can't see.</p>
+            <div className="mt-4 flex justify-center gap-2">
+              <button type="button" onClick={() => navigate(bulkPaths.imports)} className="rounded-xl border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12.5px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]">Import history</button>
+              <button type="button" onClick={() => navigate(bulkPaths.trash)} className="rounded-xl border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12.5px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]">Trash</button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <section data-testid="batch-page-header" className="rounded-2xl border border-[#e3d9c4] bg-white p-4 shadow-sm sm:p-5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-[#8a7a5a]">
+                    Batch #{b.id}{src === 'WMS' || src === 'API' ? ` · ${src}` : ' · File import'}{b.deletedAt ? ' · In Trash' : ''}
+                  </p>
+                  <h1 className="mt-0.5 truncate text-[18px] font-semibold text-[#1f150c]" title={b.fileName || undefined}>
+                    {b.fileName || 'Untitled import'}
+                  </h1>
+                  <p className="mt-0.5 text-[12px] text-[#6b5c42]">
+                    {b.createdAt ? new Date(b.createdAt).toLocaleString() : '—'}
+                    {b.createdBy ? ` · by ${b.createdBy}` : ''}
+                    {b.labelBatchId ? ` · label batch ${b.labelBatchId}` : ''}
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-start gap-4">
+                  {renderStatusCell(b)}
+                  <div className="w-[120px]">{renderRowsCell(b)}</div>
+                </div>
+              </div>
+              <div className="mt-3 border-t border-dashed border-[#e3d9c4] pt-3">{renderActionsCell(b)}</div>
+            </section>
+            <section className="rounded-2xl border border-[#e3d9c4] bg-white shadow-sm">
+              {renderBatchExpanded(b)}
+            </section>
+          </>
+        )}
+        {labelModal}
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-4 pb-24">
       {mappingDialog}
@@ -1770,14 +1905,12 @@ export default function DataHistoryPage() {
             tableKey={viewTrash ? 'order-intake-imports-trash-v3' : isApiTab ? 'bulk-api-batches-v1' : 'order-intake-imports-v3'}
             columns={dhColumns}
             data={filtered}
-            renderExpanded={renderBatchExpanded}
-            onRowExpand={(b) => ensureRows(b.id)}
-            initialExpandedId={highlightedId != null ? String(highlightedId) : null}
+            onRowClick={(b) => navigate(bulkBatchPath(b.id))}
             getRowId={(b) => String(b.id)}
             initialColumnPinning={{ left: [], right: ['actions'] }}
-            caption={viewTrash ? 'Trash — deleted batches · click a row to view its rows'
-              : isApiTab ? 'Batches from the WMS and the API · each fetch is one batch · click a row to view & edit its rows'
-                : 'Saved imports · click a row to view & edit its rows'}
+            caption={viewTrash ? 'Trash — deleted batches · click a batch to open it'
+              : isApiTab ? 'Batches from the WMS and the API · each fetch is one batch · click a batch to open it'
+                : 'Saved imports · click a batch to open it'}
             emptyState={
               <div className="px-5 py-10 text-center">
                 <p className="text-sm text-[#6b5c42]">No imports match your filters.</p>
@@ -1794,65 +1927,7 @@ export default function DataHistoryPage() {
         )}
       </section>
 
-      {/* Label Preview Modal */}
-      {showLabelModal && labelModalOrderNo ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-          onClick={() => setShowLabelModal(false)}
-        >
-          <div
-            className="relative w-full max-w-4xl rounded-lg bg-white shadow-lg"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div className="flex items-center justify-between border-b border-[#e3d9c4] px-6 py-4">
-              <h2 className="text-lg font-semibold text-[#1f150c]">Order #{labelModalOrderNo} - Label Preview</h2>
-              <button
-                type="button"
-                onClick={() => setShowLabelModal(false)}
-                className="rounded-full p-1 text-[#6b5c42] hover:bg-[#f2ecdf]"
-                title="Close"
-              >
-                <FiX className="h-5 w-5" />
-              </button>
-            </div>
-
-            {/* Content - PDF Viewer */}
-            <div className="h-[70vh] overflow-auto bg-[#f9f6f0]">
-              <iframe
-                src={`/api/v1/orders/${labelModalOrderNo}/label/pdf`}
-                className="h-full w-full border-0"
-                title={`Label for order ${labelModalOrderNo}`}
-              />
-            </div>
-
-            {/* Footer - Action Buttons */}
-            <div className="flex items-center justify-end gap-2 border-t border-[#e3d9c4] px-6 py-3">
-              <button
-                type="button"
-                onClick={() => window.open(`/api/v1/orders/${labelModalOrderNo}/label/pdf`, '_blank')}
-                className="inline-flex items-center gap-1 rounded-lg px-3 py-2 text-[12px] font-semibold text-[#1f150c] hover:bg-[#f2ecdf]"
-              >
-                📥 Download
-              </button>
-              <button
-                type="button"
-                onClick={() => window.print()}
-                className="inline-flex items-center gap-1 rounded-lg px-3 py-2 text-[12px] font-semibold text-[#1f150c] hover:bg-[#f2ecdf]"
-              >
-                🖨️ Print
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowLabelModal(false)}
-                className="inline-flex items-center gap-1 rounded-lg bg-[#1f150c] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#412d15]"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {labelModal}
       </>
       )}
     </div>

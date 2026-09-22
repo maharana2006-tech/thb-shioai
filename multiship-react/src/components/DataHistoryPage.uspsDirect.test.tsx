@@ -227,7 +227,10 @@ async function renderAt(path: string) {
   return render(
     <Provider store={store}>
       <MemoryRouter initialEntries={[path]}>
-        <Routes><Route path="/bulk/:tab" element={<DataHistoryPage />} /></Routes>
+        <Routes>
+          <Route path="/bulk/batches/:batchId" element={<DataHistoryPage />} />
+          <Route path="/bulk/:tab" element={<DataHistoryPage />} />
+        </Routes>
       </MemoryRouter>
     </Provider>,
   )
@@ -383,8 +386,8 @@ describe('DataHistoryPage — MpsProgressCard renders inside USPS batches (audit
       },
     })
 
-    await loadAndRender()
-    await switchToImportsView()
+    // The rows (and the MPS cards) live on the batch's own page.
+    await renderAt('/bulk/batches/100')
 
     // Auto-expand fires from the stub, which triggers ensureRows →
     // getHistory. Wait for the MPS section to appear.
@@ -413,12 +416,12 @@ describe('DataHistoryPage — MpsProgressCard renders inside USPS batches (audit
       },
     })
 
-    await loadAndRender()
-    await switchToImportsView()
+    // The rows (and the MPS cards) live on the batch's own page.
+    await renderAt('/bulk/batches/200')
 
-    // Wait for the batch to auto-expand (advanced-data-table-stub mounts).
+    // Wait for the batch page to show the batch.
     await waitFor(() => {
-      expect(screen.getByTestId('advanced-data-table-stub')).toBeInTheDocument()
+      expect(screen.getByTestId('batch-page-header')).toBeInTheDocument()
     })
     // Give the auto-expand a beat to trigger getHistory.
     await act(async () => {
@@ -441,8 +444,8 @@ describe('DataHistoryPage — MpsProgressCard renders inside USPS batches (audit
       },
     })
 
-    await loadAndRender()
-    await switchToImportsView()
+    // The rows (and the MPS cards) live on the batch's own page.
+    await renderAt('/bulk/batches/300')
 
     await waitFor(
       () => {
@@ -467,11 +470,11 @@ describe('DataHistoryPage — MpsProgressCard renders inside USPS batches (audit
       },
     })
 
-    await loadAndRender()
-    await switchToImportsView()
+    // The rows (and the MPS cards) live on the batch's own page.
+    await renderAt('/bulk/batches/400')
 
     await waitFor(() => {
-      expect(screen.getByTestId('advanced-data-table-stub')).toBeInTheDocument()
+      expect(screen.getByTestId('batch-page-header')).toBeInTheDocument()
     })
     await act(async () => {
       await Promise.resolve()
@@ -544,5 +547,21 @@ describe('Bulk Mailer — layout', () => {
     await renderAt('/bulk/trash')
     expect(await screen.findByRole('tab', { name: /Trash/i })).toHaveAttribute('aria-selected', 'true')
     await waitFor(() => expect(listHistory).toHaveBeenCalledWith(true))
+  })
+
+  it('opens a batch on its own page, with its header and a way back', async () => {
+    getHistory.mockResolvedValue({ data: { ...batchSummary({ id: 121, fileName: 'acme_sept.csv', status: 'INITIATE' }), rows: [] } })
+    await renderAt('/bulk/batches/121')
+    const header = await screen.findByTestId('batch-page-header')
+    expect(header).toHaveTextContent('Batch #121')
+    expect(header).toHaveTextContent('acme_sept.csv')
+    expect(screen.getByRole('button', { name: /Bulk Mailer · Import history/i })).toBeInTheDocument()
+    expect(getHistory).toHaveBeenCalledWith(121)
+  })
+
+  it('says so when the batch is not there', async () => {
+    getHistory.mockRejectedValue(new (await import('../api/apiClient')).ApiError('Not found', 404))
+    await renderAt('/bulk/batches/999999')
+    expect(await screen.findByText(/Batch #999999 isn't here/)).toBeInTheDocument()
   })
 })
