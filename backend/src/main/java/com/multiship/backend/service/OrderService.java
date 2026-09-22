@@ -15,6 +15,13 @@ public interface OrderService {
 
     ApiResponse<OrderResponseDTO> getOrderWithTracking(Integer orderNo);
 
+    /**
+     * V76 — edit the internal per-order ops note. Passing null clears
+     * the note. Returns the updated OrderResponseDTO (via the same
+     * mapper as getOrderWithTracking).
+     */
+    ApiResponse<OrderResponseDTO> updateOrderNote(Integer orderNo, String note);
+
     ApiResponse<OrderWithLinesDTO> getOrderWithLines(Integer orderNo);
 
     ApiResponse<Map<String, Object>> getDashboardStats();

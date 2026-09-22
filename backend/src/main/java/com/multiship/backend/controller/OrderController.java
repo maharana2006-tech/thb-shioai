@@ -449,6 +449,36 @@ public class OrderController {
         return ResponseEntity.status(response.getCode()).body(response);
     }
 
+    /**
+     * V76 — edit the internal per-order ops note post-creation.
+     * ADMIN/USER can PATCH; TENANT scoped by the same order-access
+     * check as GET (owns the row → can edit its own note). 500-char
+     * cap enforced at the DB column + here to fail fast with a
+     * friendly message. Sending null / blank clears the note.
+     */
+    @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
+    @org.springframework.web.bind.annotation.PatchMapping("/{orderNo}/note")
+    public ResponseEntity<ApiResponse<OrderResponseDTO>> updateOrderNote(
+            @PathVariable Integer orderNo,
+            @RequestBody java.util.Map<String, String> body) {
+        String raw = body == null ? null : body.get("note");
+        String note;
+        if (raw == null) {
+            note = null;
+        } else {
+            String trimmed = raw.trim();
+            note = trimmed.isEmpty() ? null : trimmed;
+            if (note != null && note.length() > 500) {
+                return ResponseEntity.badRequest().body(ApiResponse.<OrderResponseDTO>builder()
+                        .status("ERROR").code(400).timestamp(java.time.LocalDateTime.now())
+                        .message("Note must be at most 500 characters.")
+                        .errorCode("BAD_REQUEST").build());
+            }
+        }
+        ApiResponse<OrderResponseDTO> response = orderService.updateOrderNote(orderNo, note);
+        return ResponseEntity.status(response.getCode()).body(response);
+    }
+
     @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
     @GetMapping("/{orderNo}/details")
     public ResponseEntity<ApiResponse<Map<String, Object>>> getOrderWithLinesAndCarrier(

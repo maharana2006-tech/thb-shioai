@@ -650,6 +650,30 @@ public class OrderServiceImpl implements OrderService {
     }
 
     @Override
+    @org.springframework.transaction.annotation.Transactional
+    public ApiResponse<OrderResponseDTO> updateOrderNote(Integer orderNo, String note) {
+        // Tenant guard — same pattern as getOrderWithTracking.
+        Optional<Order> found = orderRepository.findByOrderNo(orderNo);
+        if (found.isEmpty()) {
+            return ApiResponse.<OrderResponseDTO>builder()
+                    .status("ERROR").code(404)
+                    .errorCode(ErrorCode.ORDER_NOT_FOUND.name())
+                    .message("Order not found").timestamp(LocalDateTime.now())
+                    .build();
+        }
+        Order order = found.get();
+        tenantScope.requireTenantMatch(resolveTenantKey(order));
+        // Truncate at the DB column cap (500) as a belt-and-braces on top
+        // of the @Size validator on the DTO + the controller's 400 check.
+        String clean = note == null ? null : (note.length() > 500 ? note.substring(0, 500) : note);
+        order.setNote(clean);
+        orderRepository.save(order);
+        // Return the fresh list-shape via the same mapper so the FE can
+        // re-render the row without a follow-up GET.
+        return getOrderWithTracking(orderNo);
+    }
+
+    @Override
     public ApiResponse<OrderWithLinesDTO> getOrderWithLines(Integer orderNo) {
         Optional<Order> order = orderRepository.findOrderWithLines(orderNo);
 
@@ -845,6 +869,10 @@ public class OrderServiceImpl implements OrderService {
                         .channel(row.length > 21 ? (String) row[21] : null)
                         .refOrderNumber(row.length > 22 ? (String) row[22] : null)
                         .packageCount(row.length > 23 && row[23] != null ? ((Number) row[23]).intValue() : null)
+                        // note — V76 column index 25 (see the two queries in
+                        // OrderRepository that share this mapper). Null / blank
+                        // hides the FE row-icon popover.
+                        .note(row.length > 25 ? (String) row[25] : null)
                         .build())
                 .shippingDetails(OrderResponseDTO.ShippingDetails.builder()
                         .city((String) row[4])

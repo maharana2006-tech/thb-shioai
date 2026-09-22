@@ -73,6 +73,13 @@ public class ManualShipmentRequest {
      *  classified from the recipient (residential flag, then company presence). */
     private String channel;
 
+    /** V76 — internal per-order ops note (max 500 char, multi-line).
+     *  Rendered on /orders/new under Ship From and as icon-popover in
+     *  the orders list. Deliberately internal: not threaded into
+     *  external API DTOs, labels, or webhooks. */
+    @jakarta.validation.constraints.Size(max = 500, message = "Note must be at most 500 characters.")
+    private String note;
+
     /**
      * Optional ship-from warehouse code (must be attached to
      * {@link #clientCode}). When set, its address wins over the {@link #sender}

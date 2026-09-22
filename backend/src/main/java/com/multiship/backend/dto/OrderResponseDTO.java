@@ -55,6 +55,10 @@ public class OrderResponseDTO {
         private Integer packageCount;
         /** Id shared by every order generated from the same CSV/XLSX import upload. Null for non-import orders. */
         private Integer batchId;
+        /** V76 — internal per-order ops note (500 char, multi-line). Null
+         *  or empty when the operator didn't add one. Rendered as a
+         *  note-icon on the orders list with click-to-expand popover. */
+        private String note;
     }
 
     @Data
