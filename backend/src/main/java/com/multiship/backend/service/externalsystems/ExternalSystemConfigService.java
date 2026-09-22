@@ -90,30 +90,33 @@ public class ExternalSystemConfigService {
     // ─────────────────────────── secrets ────────────────────────────
 
     /**
-     * Decrypted secret value. Empty when the row doesn't exist. Never
-     * logs the plaintext.
+     * Secret value (decrypted if encryption is available, otherwise plain text).
+     * Empty when the row doesn't exist. Never logs the plaintext.
+     *
+     * When SECRETS_ENCRYPTION_KEY is not set, secrets are stored/retrieved as plain text
+     * for development convenience. This is NOT recommended for production.
      */
     public Optional<String> getSecret(Long connectionId, String secretKey) {
         if (connectionId == null || secretKey == null || secretKey.isBlank()) {
             return Optional.empty();
         }
-        if (!crypto.isAvailable()) {
-            // Refuse to lie: without the key we can't decrypt, so callers
-            // must know their secret is currently unreadable rather than
-            // getting a false "not configured" signal.
-            throw new ExternalSystemException(
-                    ExternalSystemException.Kind.SECRET_UNAVAILABLE,
-                    /* connectionName */ null,
-                    "Encryption key unavailable (SECRETS_ENCRYPTION_KEY unset). Cannot decrypt external-system secrets.");
-        }
         return secretRepo.findByConnectionIdAndSecretKey(connectionId, secretKey)
                 .map(ExternalSystemSecret::getEncryptedValue)
-                .map(crypto::decrypt);
+                .map(value -> {
+                    // If crypto is available, decrypt; otherwise treat as plain text
+                    if (crypto.isAvailable()) {
+                        return crypto.decrypt(value);
+                    }
+                    return value;  // Plain text fallback
+                });
     }
 
     /**
-     * Upsert an encrypted secret. Passing null / blank throws — use
-     * {@link #deleteSecret} to remove.
+     * Upsert a secret (encrypted if key is available, otherwise stored as plain text).
+     * Passing null / blank throws — use {@link #deleteSecret} to remove.
+     *
+     * When SECRETS_ENCRYPTION_KEY is not set, secrets are stored as plain text
+     * for development convenience. This is NOT recommended for production.
      */
     @Transactional
     public void putSecret(Long connectionId, String secretKey, String plaintext, String actor) {
@@ -124,13 +127,9 @@ public class ExternalSystemConfigService {
             throw new IllegalArgumentException(
                     "Secret value required (use deleteSecret to remove).");
         }
-        if (!crypto.isAvailable()) {
-            throw new ExternalSystemException(
-                    ExternalSystemException.Kind.SECRET_UNAVAILABLE,
-                    /* connectionName */ null,
-                    "Encryption key unavailable — cannot store external-system secrets.");
-        }
-        String encrypted = crypto.encrypt(plaintext);
+        // Encrypt if key is available; otherwise store as plain text
+        String storedValue = crypto.isAvailable() ? crypto.encrypt(plaintext) : plaintext;
+
         ExternalSystemSecret row = secretRepo.findByConnectionIdAndSecretKey(connectionId, secretKey)
                 .orElseGet(() -> {
                     ExternalSystemSecret fresh = new ExternalSystemSecret();
@@ -138,12 +137,12 @@ public class ExternalSystemConfigService {
                     fresh.setSecretKey(secretKey);
                     return fresh;
                 });
-        row.setEncryptedValue(encrypted);
+        row.setEncryptedValue(storedValue);
         row.setUpdatedAt(LocalDateTime.now(ZoneOffset.UTC));
         row.setUpdatedBy(actor);
         secretRepo.save(row);
-        log.info("external-system-secret: stored connectionId={} key={} actor={}",
-                connectionId, secretKey, actor);
+        log.info("external-system-secret: stored connectionId={} key={} actor={} encrypted={}",
+                connectionId, secretKey, actor, crypto.isAvailable());
     }
 
     @Transactional
@@ -159,25 +158,23 @@ public class ExternalSystemConfigService {
     // ─────────────────────── client-login overrides ─────────────────
 
     /**
-     * Per-tenant credential override. Returns decrypted {username,
-     * password} when a row exists; empty otherwise (caller falls back
-     * to the connector's default rule).
+     * Per-tenant credential override. Returns {username, password} when a row exists;
+     * empty otherwise (caller falls back to the connector's default rule).
+     *
+     * Password is decrypted if encryption is available, otherwise treated as plain text.
      */
     public Optional<ConnectorSecretAccess.ClientLogin> getClientOverride(
             Long connectionId, String clientCode) {
         if (connectionId == null || clientCode == null || clientCode.isBlank()) {
             return Optional.empty();
         }
-        if (!crypto.isAvailable()) {
-            throw new ExternalSystemException(
-                    ExternalSystemException.Kind.SECRET_UNAVAILABLE,
-                    /* connectionName */ null,
-                    "Encryption key unavailable — cannot decrypt client-login overrides.");
-        }
         return overrideRepo.findByConnectionIdAndClientCode(connectionId, clientCode)
-                .map(o -> new ConnectorSecretAccess.ClientLogin(
-                        o.getUsername(),
-                        crypto.decrypt(o.getEncryptedPassword())));
+                .map(o -> {
+                    String password = crypto.isAvailable()
+                            ? crypto.decrypt(o.getEncryptedPassword())
+                            : o.getEncryptedPassword();  // Plain text fallback
+                    return new ConnectorSecretAccess.ClientLogin(o.getUsername(), password);
+                });
     }
 
     @Transactional
@@ -194,12 +191,11 @@ public class ExternalSystemConfigService {
             throw new IllegalArgumentException(
                     "password required (use deleteClientOverride to remove).");
         }
-        if (!crypto.isAvailable()) {
-            throw new ExternalSystemException(
-                    ExternalSystemException.Kind.SECRET_UNAVAILABLE,
-                    /* connectionName */ null,
-                    "Encryption key unavailable — cannot store client-login overrides.");
-        }
+        // Encrypt if key is available; otherwise store as plain text
+        String storedPassword = crypto.isAvailable()
+                ? crypto.encrypt(plaintextPassword)
+                : plaintextPassword;
+
         ExternalSystemClientLoginOverride row = overrideRepo
                 .findByConnectionIdAndClientCode(connectionId, clientCode)
                 .orElseGet(() -> {
@@ -209,12 +205,12 @@ public class ExternalSystemConfigService {
                     return fresh;
                 });
         row.setUsername(username);
-        row.setEncryptedPassword(crypto.encrypt(plaintextPassword));
+        row.setEncryptedPassword(storedPassword);
         row.setUpdatedAt(LocalDateTime.now(ZoneOffset.UTC));
         row.setUpdatedBy(actor);
         overrideRepo.save(row);
-        log.info("external-system-client-override: stored connectionId={} client={} actor={}",
-                connectionId, clientCode, actor);
+        log.info("external-system-client-override: stored connectionId={} client={} actor={} encrypted={}",
+                connectionId, clientCode, actor, crypto.isAvailable());
     }
 
     @Transactional
