@@ -1271,6 +1271,18 @@ export default function DataHistoryPage() {
                             Cancel
                           </button>
                         </>
+                      ) : busy && batchPageId == null ? (
+                        <button
+                          type="button"
+                          onClick={() => void cancelGeneration(b.id)}
+                          disabled={cancellingId === b.id || cancelRequested.has(b.id) || !!progress?.cancelling}
+                          title="Stop this run — labels already bought stay; queued rows are skipped"
+                          className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[#5a4526] transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-amber-200 border-t-amber-600" />
+                          {cancellingId === b.id || cancelRequested.has(b.id) || progress?.cancelling ? 'Cancelling…'
+                            : progress && progress.total > 0 ? `${progress.done} of ${progress.total} · Cancel` : 'Cancel'}
+                        </button>
                       ) : busy ? (
                         // Live progress while generating: a real X-of-N bar once
                         // the first poll lands, an indeterminate shimmer until then.
@@ -1335,7 +1347,7 @@ export default function DataHistoryPage() {
                               <button
                                 type="button"
                                 onClick={() => void cancelGeneration(b.id)}
-                                disabled={justRestoredId === b.id || (cancellingId === b.id || cancelRequested.has(b.id) || !!progress?.cancelling)}
+                                disabled={cancellingId === b.id || cancelRequested.has(b.id) || !!progress?.cancelling}
                                 title="Stop workers from picking up more orders. Already-in-flight carrier calls run to completion."
                                 className="inline-flex items-center gap-1.5 rounded-xl border border-rose-300 bg-rose-50 px-2.5 py-1.5 text-[11px] font-semibold text-rose-800 transition hover:bg-rose-100 disabled:opacity-40"
                               >
@@ -1349,6 +1361,7 @@ export default function DataHistoryPage() {
                         <button
                           type="button"
                           onClick={() => (platform ? setConfirmGenId(b.id) : void generate(b.id, isRetry))}
+                          disabled={justRestoredId === b.id}
                           title={st === 'DRAFT'
                             ? 'Generate labels for the valid rows — rows with errors are skipped until you fix them'
                             : isRetry ? 'Retry generating labels — only rows that FAILED or are un-generated will be re-sent' : 'Generate carrier labels for this saved import'}
@@ -2419,20 +2432,33 @@ const BULK_TABS: { key: BulkTab; label: string; hint: string }[] = [
   { key: 'trash', label: 'Trash', hint: 'Deleted batches' },
 ]
 
-/** At-a-glance counts over the whole view (from the server, not the current page). */
+/** At-a-glance counts over the whole view (from the server, not the current page).
+ *  Each card carries one colour that means something: sky = ready to act,
+ *  amber = in motion, rose = needs a hand, green = done. */
 function BatchSummaryCards({ summary }: { summary: BulkSummary }) {
-  const cards: { label: string; value: number; tone: string }[] = [
-    { label: 'Ready to generate', value: summary.readyToGenerate, tone: 'text-[#1f150c]' },
-    { label: 'Generating now', value: summary.generating, tone: 'text-sky-700' },
-    { label: 'Needs fixes', value: summary.needsFixes, tone: summary.needsFixes ? 'text-rose-700' : 'text-[#1f150c]' },
-    { label: 'Completed this week', value: summary.completedThisWeek, tone: 'text-emerald-700' },
+  const cards: { label: string; value: number; hint: string; icon: React.ReactNode; bar: string; disc: string; num: string }[] = [
+    { label: 'Ready to generate', value: summary.readyToGenerate, hint: 'valid, not labelled yet',
+      icon: <FiZap className="h-4 w-4" />, bar: 'bg-sky-500', disc: 'bg-sky-50 text-sky-700 ring-sky-100', num: 'text-sky-800' },
+    { label: 'Generating now', value: summary.generating, hint: 'labels being bought',
+      icon: <FiRefreshCw className={`h-4 w-4 ${summary.generating ? 'animate-spin [animation-duration:2.4s]' : ''}`} />, bar: 'bg-amber-400', disc: 'bg-amber-50 text-amber-700 ring-amber-100', num: 'text-amber-800' },
+    { label: 'Needs fixes', value: summary.needsFixes, hint: 'rows with errors or rejected',
+      icon: <FiAlertCircle className="h-4 w-4" />, bar: 'bg-rose-500', disc: 'bg-rose-50 text-rose-700 ring-rose-100', num: summary.needsFixes ? 'text-rose-700' : 'text-[#1f150c]' },
+    { label: 'Completed this week', value: summary.completedThisWeek, hint: 'every label generated',
+      icon: <FiCheckCircle className="h-4 w-4" />, bar: 'bg-emerald-500', disc: 'bg-emerald-50 text-emerald-700 ring-emerald-100', num: 'text-emerald-800' },
   ]
   return (
-    <div data-testid="bulk-summary" className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+    <div data-testid="bulk-summary" className="grid grid-cols-2 gap-3 sm:grid-cols-4">
       {cards.map((c) => (
-        <div key={c.label} className="rounded-xl border border-[#efe7d6] bg-[#fcfaf5] px-3 py-2.5">
-          <p className="text-[11.5px] font-semibold text-[#6b5c42]">{c.label}</p>
-          <p className={`text-[20px] font-semibold tabular-nums ${c.tone}`}>{c.value}</p>
+        <div key={c.label} className="relative overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white px-4 py-3 shadow-sm">
+          <span className={`absolute inset-y-0 left-0 w-1 ${c.bar}`} aria-hidden="true" />
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-[11.5px] font-semibold text-[#6b5c42]">{c.label}</p>
+              <p className={`mt-0.5 text-[24px] font-semibold leading-none tabular-nums ${c.num}`}>{c.value}</p>
+              <p className="mt-1.5 truncate text-[10.5px] text-[#b6a684]">{c.hint}</p>
+            </div>
+            <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full ring-1 ${c.disc}`} aria-hidden="true">{c.icon}</span>
+          </div>
         </div>
       ))}
     </div>
