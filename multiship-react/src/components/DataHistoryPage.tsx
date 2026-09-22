@@ -1237,7 +1237,7 @@ export default function DataHistoryPage() {
                     <>
                       <span
                         title="Which carrier account this batch bills to. Platform bills the house account and rebills the client with markup."
-                        className={`${confirming || busy ? 'hidden' : 'inline-flex'} items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-[11px] font-semibold ${
+                        className={`${confirming || busy || !SHOW_BILLS_TO ? 'hidden' : 'inline-flex'} items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-[11px] font-semibold ${
                           platform ? 'border-[#412d15] bg-[#412d15]/5 text-[#412d15]' : 'border-[#e3d9c4] bg-white text-[#5a4526]'
                         }`}
                       >
@@ -2350,7 +2350,7 @@ export default function DataHistoryPage() {
             </button>
           </span>
           <span className="flex flex-wrap items-center gap-2">
-            <label className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11px] font-semibold text-[#5a4526]">
+            <label className={`${SHOW_BILLS_TO ? 'inline-flex' : 'hidden'} items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11px] font-semibold text-[#5a4526]`}>
               <FiHome className="h-3.5 w-3.5" />
               <span className="text-[9.5px] uppercase tracking-[0.08em] text-[#b6a684]">Bills to</span>
               <select
@@ -2435,6 +2435,11 @@ export default function DataHistoryPage() {
 }
 
 export type BulkTab = 'imports' | 'api' | 'documents' | 'trash'
+
+/** The "Bills to" control (client vs platform account) — hidden for now at the
+ *  client's request; billing stays as each batch has it (client account by
+ *  default). Flip to true to bring it back on the batch page and the bar. */
+const SHOW_BILLS_TO = false
 
 /** Bulk Mailer tabs, in order. Import history is the landing tab. */
 const BULK_TABS: { key: BulkTab; label: string; hint: string; dot: string }[] = [
