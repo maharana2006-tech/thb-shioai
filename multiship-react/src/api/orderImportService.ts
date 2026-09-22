@@ -361,6 +361,14 @@ export const orderImportService = {
     apiClient.delete<ApiResponse<string>>(`/orders/import/history/${id}/generate`),
 
   /**
+   * Void labels with their carriers — the given rows, or every generated row
+   * of the batch when none are given. Each order is reported on its own; a
+   * carrier refusal is a refusal, not a success.
+   */
+  voidBatchLabels: (id: number, rowNumbers: number[] = []) =>
+    apiClient.post<ApiResponse<BatchVoidResult>>(`/orders/import/history/${id}/void`, { rowNumbers }),
+
+  /**
    * Validate all rows in a batch and update their errors/warnings
    */
   validateAllRows: (id: number) =>
@@ -476,4 +484,18 @@ export const orderImportService = {
     // Revoke after a short delay so the download tab has time to fire.
     window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
   },
+}
+
+/** One order's answer to a batch void. */
+export interface OrderVoidOutcome {
+  orderNo: number
+  rowNumbers: number[]
+  voided: boolean
+  message: string
+}
+
+export interface BatchVoidResult {
+  voided: number
+  refused: number
+  orders: OrderVoidOutcome[]
 }

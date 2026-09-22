@@ -28,6 +28,8 @@ import DataHistoryFilterToolbar from './DataHistoryFilterToolbar'
 import { GridCell, DH_COLUMNS, RowIssuesIcon, RowChannelChip, bucketRowErrors, type DhColumn } from './batchGrid'
 import VirtualTable from './VirtualTable'
 import AnimatedHeight from './ui/AnimatedHeight'
+import BatchLabelBar from './bulk/BatchLabelBar'
+import { liveOrdersOf } from '../utils/batchLabels'
 import { BTN_GHOST_SM } from './ui/buttons'
 import { notify } from '../utils/notify'
 import { ApiError } from '../api/apiClient'
@@ -140,6 +142,8 @@ export default function DataHistoryPage() {
   const [confirmGenId, setConfirmGenId] = useState<number | null>(null)
   // Per-batch row filter for the expanded grid — a 1,000-order batch is 2,484 rows.
   const [gridFilter, setGridFilter] = useState<Record<number, 'all' | 'failed' | 'pending'>>({})
+  /** Ticked rows (row numbers) per batch — for print / send / void. */
+  const [pickedRows, setPickedRows] = useState<Record<number, number[]>>({})
   const [genRowKey, setGenRowKey] = useState<string | null>(null)
   // Inline correction: the cell being saved (rowKey), for a per-cell spinner.
   const [savingCell, setSavingCell] = useState<string | null>(null)
@@ -240,6 +244,13 @@ export default function DataHistoryPage() {
     if (!batchPageId && tab && !BULK_TABS.some((t) => t.key === tab)) navigate(bulkPaths.imports, { replace: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab])
+
+  /** Re-read a batch's rows (after a void) and its header counts. */
+  const reloadRows = (id: number) => {
+    orderImportService.getHistory(id)
+      .then((res) => setRowsById((m) => ({ ...m, [id]: res.data?.rows ?? [] })))
+      .catch((e) => notify.apiError(e, 'Could not reload the rows.'))
+  }
 
   /** Lazy-load a batch's rows when its row is expanded. */
   const ensureRows = (id: number) => {
@@ -913,6 +924,12 @@ export default function DataHistoryPage() {
     return () => clearInterval(t)
   }, [anyGenerating])
 
+  /** Live labels of a batch, when its rows are loaded (the batch page); the server enforces the rule either way. */
+  const liveCountOf = (id: number) => {
+    const r = rowsById[id]
+    return Array.isArray(r) ? liveOrdersOf(r).length : 0
+  }
+
   // Status, rows and actions of a batch — shared by the table's cells and the batch page.
   const renderStatusCell = (b: ImportBatchSummary) => {
           const s = statusMeta(b.status)
@@ -1193,8 +1210,10 @@ export default function DataHistoryPage() {
                     <button
                       type="button"
                       onClick={() => void handleDelete(b.id, b.fileName)}
-                      disabled={trashBusyId === b.id || st === 'IN_PROGRESS'}
-                      title={st === 'IN_PROGRESS' ? 'Wait for the label run to finish (or cancel it) before moving this import to Trash' : 'Move this import to Trash (recoverable)'}
+                      disabled={trashBusyId === b.id || st === 'IN_PROGRESS' || liveCountOf(b.id) > 0}
+                      title={st === 'IN_PROGRESS' ? 'Wait for the label run to finish (or cancel it) before moving this import to Trash'
+                        : liveCountOf(b.id) > 0 ? `${liveCountOf(b.id)} label${liveCountOf(b.id) === 1 ? ' is' : 's are'} still live — void ${liveCountOf(b.id) === 1 ? 'it' : 'them'} first, then this import can be deleted`
+                          : 'Move this import to Trash (recoverable)'}
                       aria-label="Delete import"
                       className="inline-flex items-center justify-center rounded-xl border border-[#e3d9c4] bg-white p-2 text-[#6b5c42] transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-50"
                     >
@@ -1342,6 +1361,26 @@ export default function DataHistoryPage() {
     // other line has errors can't be labelled on its own either.
     const orderKey = (r: (typeof list)[number]) => (r.orderRef ?? '').trim() || `__row_${r.rowNumber}`
     const brokenOrders = new Set(list.filter((r) => (r.errors?.length ?? 0) > 0).map(orderKey))
+    // Rows whose label is live can be ticked for print / send / void.
+    const isLive = (r: (typeof list)[number]) => r.generatedOrderNo != null && (r.generatedStatus ?? '').toUpperCase() === 'GENERATED'
+    const picked = pickedRows[b.id] ?? []
+    const pickedSet = new Set(picked)
+    const visibleLive = visible.filter(isLive)
+    const allVisiblePicked = visibleLive.length > 0 && visibleLive.every((r) => pickedSet.has(r.rowNumber))
+    const togglePick = (rowNumber: number) => setPickedRows((m) => {
+      const cur = new Set(m[b.id] ?? [])
+      if (cur.has(rowNumber)) cur.delete(rowNumber)
+      else cur.add(rowNumber)
+      return { ...m, [b.id]: Array.from(cur) }
+    })
+    const togglePickVisible = () => setPickedRows((m) => {
+      const cur = new Set(m[b.id] ?? [])
+      for (const r of visibleLive) {
+        if (allVisiblePicked) cur.delete(r.rowNumber)
+        else cur.add(r.rowNumber)
+      }
+      return { ...m, [b.id]: Array.from(cur) }
+    })
     return (
       <div className="border-t border-dashed border-[#eee6d6] bg-[#faf7f0]/50 px-5 py-3">
         {rows === 'loading' || rows === undefined ? (
@@ -1438,10 +1477,22 @@ export default function DataHistoryPage() {
                 reloadKey={codesTick}
               />
             ) : null}
+            <BatchLabelBar
+              batchId={b.id}
+              rows={list}
+              picked={picked}
+              onPickAllLive={() => setPickedRows((m) => ({ ...m, [b.id]: list.filter(isLive).map((r) => r.rowNumber) }))}
+              onClearPick={() => setPickedRows((m) => ({ ...m, [b.id]: [] }))}
+              onChanged={() => { reloadRows(b.id); void reloadQuiet() }}
+              canWrite={canWrite}
+              canManagePrinters={canPullWms}
+              locked={viewTrash || (b.status || '').toUpperCase() === 'IN_PROGRESS'}
+              onOpenPrinterSettings={() => navigate(settingsPaths.printers)}
+            />
             <VirtualTable
               rows={visible}
               rowKey={(r) => r.rowNumber}
-              colCount={DH_COLUMNS.length + 2}
+              colCount={DH_COLUMNS.length + 3}
               maxHeight="70vh"
               className="rounded-xl border border-[#e3d9c4] bg-white"
               tableClassName="w-full border-collapse text-[11px] text-[#3f3527]"
@@ -1449,7 +1500,22 @@ export default function DataHistoryPage() {
               head={
                 <thead className="sticky top-0 z-30">
                   <tr className="bg-[#faf7f0] text-[8.5px] uppercase tracking-[0.1em] text-[#6b5c42]">
-                    <th className="sticky left-0 z-20 border-b border-r border-[#e3d9c4] bg-[#faf7f0] px-2 py-1.5 text-left font-bold">Row</th>
+                    <th className="sticky left-0 z-20 border-b border-[#e3d9c4] bg-[#faf7f0] px-2 py-1.5 text-left font-bold"
+                      style={{ width: ROW_COL_W, minWidth: ROW_COL_W, maxWidth: ROW_COL_W }}>
+                      <span className="flex items-center gap-1.5">
+                        <input
+                          type="checkbox"
+                          aria-label="Tick every live label shown"
+                          checked={allVisiblePicked}
+                          disabled={visibleLive.length === 0}
+                          onChange={togglePickVisible}
+                          className="h-3.5 w-3.5 accent-[#1f150c] disabled:opacity-30"
+                        />
+                        Row · Label
+                      </span>
+                    </th>
+                    <th className="sticky z-20 border-b border-r border-[#e3d9c4] bg-[#faf7f0] px-2 py-1.5 text-left font-bold"
+                      style={{ left: ROW_COL_W, width: ORDER_COL_W, minWidth: ORDER_COL_W }}>Order · Batch</th>
                     {DH_COLUMNS.map((c) => (
                       <th key={c.key} className="whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1.5 text-left font-bold">{c.key}</th>
                     ))}
@@ -1480,15 +1546,29 @@ export default function DataHistoryPage() {
                     return (
                       <Fragment key={r.rowNumber}>
                       <tr ref={measureRef} data-index={index} className={ok ? 'bg-white' : 'bg-rose-50/40'}>
-                        <td className={`sticky left-0 z-10 whitespace-nowrap border-b border-r border-[#e3d9c4] px-2 py-1 ${ok ? 'bg-white' : 'bg-rose-50'}`}>
-                          <div className="flex items-center gap-1.5">
+                        <td className={`sticky left-0 z-10 whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1 ${pickedSet.has(r.rowNumber) ? 'bg-[#faf3e3]' : ok ? 'bg-white' : 'bg-rose-50'}`}
+                          style={{ width: ROW_COL_W, minWidth: ROW_COL_W, maxWidth: ROW_COL_W }}>
+                          <div className="flex items-center gap-1.5 overflow-hidden">
+                            <input
+                              type="checkbox"
+                              aria-label={`Tick row ${r.rowNumber}`}
+                              checked={pickedSet.has(r.rowNumber)}
+                              disabled={!isLive(r)}
+                              onChange={() => togglePick(r.rowNumber)}
+                              title={isLive(r) ? 'Tick to print, send or void this label' : 'Only rows with a live label can be ticked'}
+                              className="h-3.5 w-3.5 shrink-0 accent-[#1f150c] disabled:opacity-25"
+                            />
                             <span className="font-mono text-[10px] font-bold text-[#6b5c42]">{r.rowNumber}</span>
                             {generated ? (
                               <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-800">Generated</span>
+                            ) : gen === 'VOIDED' ? (
+                              <span title="This label was voided with the carrier — it can't ship" className="cursor-help rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-semibold text-slate-500 line-through decoration-slate-400">Voided</span>
+                            ) : gen === 'QUEUED_USPS' ? (
+                              <span title="Queued for USPS — the label is being made" className="cursor-help rounded-full bg-sky-100 px-1.5 py-0.5 text-[9px] font-semibold text-sky-800">Queued</span>
                             ) : failed ? (
                               <span title={r.generatedMessage || 'The carrier rejected this shipment'} className="cursor-help rounded-full bg-rose-100 px-1.5 py-0.5 text-[9px] font-semibold text-rose-800">Failed</span>
                             ) : ok && orderReady ? (
-                              <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-800">Ready</span>
+                              <span title="Valid — its label hasn't been generated yet" className="cursor-help rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800">Pending</span>
                             ) : ok ? (
                               <span
                                 title={`This line is fine, but another line of order ${r.orderRef ?? ''} needs fixes`}
@@ -1518,6 +1598,19 @@ export default function DataHistoryPage() {
                               />
                             ) : null}
                           </div>
+                        </td>
+                        <td className={`sticky z-10 whitespace-nowrap border-b border-r border-[#e3d9c4] px-2 py-1 ${pickedSet.has(r.rowNumber) ? 'bg-[#faf3e3]' : ok ? 'bg-white' : 'bg-rose-50'}`}
+                          style={{ left: ROW_COL_W, width: ORDER_COL_W, minWidth: ORDER_COL_W }}>
+                          {r.generatedOrderNo != null && (generated || gen === 'VOIDED' || gen === 'QUEUED_USPS') ? (
+                            <span className="flex flex-col leading-tight">
+                              <a href={`/label/${r.generatedOrderNo}`} className={`font-mono text-[10px] font-semibold underline-offset-2 hover:underline ${gen === 'VOIDED' ? 'text-slate-400 line-through' : 'text-[#1f150c]'}`}>
+                                #{r.generatedOrderNo}
+                              </a>
+                              <span className="font-mono text-[9.5px] text-[#8a7a5a]">{r.batchId != null ? `Batch ${r.batchId}` : 'Batch —'}</span>
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-[#b6a684]">—</span>
+                          )}
                         </td>
                         {DH_COLUMNS.map((c) => {
                           const raw = (r as unknown as Record<string, unknown>)[c.key]
@@ -1596,6 +1689,8 @@ export default function DataHistoryPage() {
                                 <span className="text-[9.5px] text-[#6b5c42]">—</span>
                               )}
                             </span>
+                          ) : gen === 'VOIDED' ? (
+                            <span className="text-[9.5px] text-slate-500" title="Voided with the carrier">Voided</span>
                           ) : !canWrite ? (
                             <span className="text-[9.5px] text-[#b6a684]">Read-only view</span>
                           ) : orderReady && (ok || failed) ? (
@@ -2157,3 +2252,7 @@ function BatchListSkeleton({ withCards }: { withCards: boolean }) {
     </div>
   )
 }
+
+/** Widths of the two columns pinned at the left of a batch's rows grid. */
+const ROW_COL_W = 196
+const ORDER_COL_W = 104
