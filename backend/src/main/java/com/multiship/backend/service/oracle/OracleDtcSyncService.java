@@ -2,7 +2,7 @@ package com.multiship.backend.service.oracle;
 
 import com.multiship.backend.model.DtcOrder;
 import com.multiship.backend.model.oracle.OracleDtcOrder;
-import com.multiship.backend.repository.oracle.OracleDtcOrderRepository;
+import com.multiship.backend.repository.oracle.OracleDtcOrderRepositoryImpl;
 import com.multiship.backend.repository.DtcOrderRepository;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -17,7 +17,10 @@ import java.util.List;
  * Fetches pending DTC orders from Oracle NDS and syncs them to PostgreSQL.
  *
  * Flow:
- *   1. Fetch pending orders from Oracle TB_SHIPX_DTC_UVW
+ *   1. Fetch pending orders from Oracle view (TB_SHIPX_DTC_UVW_TEST or TB_SHIPX_DTC_UVW)
+ *      View name is configured via oracle.dtc.view-name property
+ *      Development: application.properties (TB_SHIPX_DTC_UVW_TEST)
+ *      Production: application-prod.properties (TB_SHIPX_DTC_UVW)
  *   2. Transform Oracle model to PostgreSQL DtcOrder model
  *   3. Bulk insert/update into PostgreSQL (handles duplicates)
  *   4. Return summary (fetched, imported, skipped)
@@ -29,18 +32,19 @@ public class OracleDtcSyncService {
 
     private static final Logger log = LoggerFactory.getLogger(OracleDtcSyncService.class);
 
-    private final OracleDtcOrderRepository oracleDtcOrderRepository;
+    private final OracleDtcOrderRepositoryImpl oracleDtcOrderRepository;
     private final DtcOrderRepository dtcOrderRepository;
 
     /**
      * Fetch pending DTC orders from Oracle and sync to PostgreSQL.
+     * Uses the view configured in application properties (dev or prod).
      *
      * @param tenantId filter by tenant (empty = all tenants)
      * @return sync result with counts
      */
     @Transactional(value = "oracleTransactionManager", readOnly = true)
     public OracleSyncResult syncPendingDtcOrders(String tenantId) {
-        log.info("Starting DTC order sync from Oracle (tenant={})",
+        log.info("Starting DTC order sync from Oracle (tenant={}, view configured in properties)",
                 tenantId == null || tenantId.isEmpty() ? "ALL" : tenantId);
 
         List<OracleDtcOrder> oracleOrders;
@@ -71,7 +75,7 @@ public class OracleDtcSyncService {
 
     /**
      * Sync fetched Oracle orders to PostgreSQL.
-     * Handles duplicate prevention via batch_id uniqueness.
+     * Handles duplicate prevention via composite key (batchId + toteNumber + tenantId).
      */
     @Transactional(value = "postgresTransactionManager")
     private OracleSyncResult syncOrdersToPostgres(List<OracleDtcOrder> oracleOrders) {
@@ -81,10 +85,17 @@ public class OracleDtcSyncService {
 
         for (OracleDtcOrder oracleOrder : oracleOrders) {
             try {
-                // Check if order already exists (idempotent)
-                if (dtcOrderRepository.existsByBatchId(oracleOrder.getBatchId())) {
-                    log.debug("DTC Order batch={} already exists in PostgreSQL, skipping",
-                            oracleOrder.getBatchId());
+                // Check if order already exists using composite key (idempotent)
+                // Composite key: batchId + toteNumber + tenantId
+                // This prevents duplicates when the same batchId exists for different totes or tenants
+                if (dtcOrderRepository.existsByBatchIdAndToteNumberAndTenantId(
+                        oracleOrder.getBatchId(),
+                        oracleOrder.getToteNumber(),
+                        oracleOrder.getTenantId())) {
+                    log.debug("DTC Order (batch={}, tote={}, tenant={}) already exists in PostgreSQL, skipping",
+                            oracleOrder.getBatchId(),
+                            oracleOrder.getToteNumber(),
+                            oracleOrder.getTenantId());
                     skipped++;
                     continue;
                 }
@@ -101,14 +112,17 @@ public class OracleDtcSyncService {
                 }
 
             } catch (Exception e) {
-                log.error("Failed to import Oracle DTC order batch={}: {}",
-                        oracleOrder.getBatchId(), e.getMessage());
+                log.error("Failed to import Oracle DTC order (batch={}, tote={}, tenant={}): {}",
+                        oracleOrder.getBatchId(),
+                        oracleOrder.getToteNumber(),
+                        oracleOrder.getTenantId(),
+                        e.getMessage());
                 failed++;
             }
         }
 
         String message = String.format(
-                "DTC Sync: imported=%d, skipped=%d, failed=%d",
+                "DTC Sync: imported=%d, skipped=%d, failed=%d (composite key: batchId+toteNumber+tenantId)",
                 imported, skipped, failed);
         log.info(message);
 
@@ -122,24 +136,30 @@ public class OracleDtcSyncService {
 
     /**
      * Transform Oracle DTC order to PostgreSQL DtcOrder model.
+     * Maps all columns from Oracle view to PostgreSQL entity.
      */
     private DtcOrder transformOracleToPostgres(OracleDtcOrder oracleOrder) {
         DtcOrder dtcOrder = new DtcOrder();
 
-        // Identifiers
+        // ═══════════════════════════ Primary Keys ═══════════════════════════
         dtcOrder.setBatchId(oracleOrder.getBatchId());
-        dtcOrder.setToteNumber(oracleOrder.getToteNumber());
+
+        // ═══════════════════════════ Order Information ═══════════════════════════
         dtcOrder.setOrderNo(oracleOrder.getOrderNo());
         dtcOrder.setOrderSuffix(oracleOrder.getOrderSuffix());
+        dtcOrder.setOrderStatus(oracleOrder.getOrderStatus());
 
-        // Tenant/Customer
-        dtcOrder.setTenantId(oracleOrder.getTenantId());
+        // ═══════════════════════════ Customer Information ═══════════════════════════
         dtcOrder.setCustNo(oracleOrder.getCustNo());
+        dtcOrder.setCustPo(oracleOrder.getCustPo());
+        dtcOrder.setTenantId(oracleOrder.getTenantId());
 
-        // Shipping method
+        // ═══════════════════════════ Shipping Method & Terms ═══════════════════════════
         dtcOrder.setShipViaCode(oracleOrder.getShipViaCode());
+        dtcOrder.setShipVia(oracleOrder.getShipVia());
+        dtcOrder.setTermsCode(oracleOrder.getTermsCode());
 
-        // Ship-to address
+        // ═══════════════════════════ Ship-to Address ═══════════════════════════
         dtcOrder.setShipName(oracleOrder.getShipName());
         dtcOrder.setShipAttn(oracleOrder.getShipAttn());
         dtcOrder.setShipAddr1(oracleOrder.getShipAddr1());
@@ -149,22 +169,29 @@ public class OracleDtcSyncService {
         dtcOrder.setShipToState(oracleOrder.getShipToState());
         dtcOrder.setShipToZip(oracleOrder.getShipToZip());
         dtcOrder.setShipToCountryCode(oracleOrder.getShipToCountryCode());
+        dtcOrder.setCountryName(oracleOrder.getCountryName());
+
+        // ═══════════════════════════ Contact Information ═══════════════════════════
         dtcOrder.setPhone(oracleOrder.getPhone());
         dtcOrder.setEmail(oracleOrder.getEmail());
 
-        // Package details
+        // ═══════════════════════════ Package & Shipment Details ═══════════════════════════
         dtcOrder.setWeight(oracleOrder.getWeight());
         dtcOrder.setUnitValue(oracleOrder.getUnitValue());
         dtcOrder.setPrice(oracleOrder.getPrice());
+        dtcOrder.setFreightCost(oracleOrder.getFreightCost());
         dtcOrder.setGoodsDesc(oracleOrder.getGoodsDesc());
-
-        // Shipping details
-        dtcOrder.setThirdPartyAccount(oracleOrder.getThirdPartyAccount());
         dtcOrder.setIntlYn(oracleOrder.getIntlYn());
-        dtcOrder.setLocation(oracleOrder.getLocation());
 
-        // Additional fields
-        dtcOrder.setCustPo(oracleOrder.getCustPo());
+        // ═══════════════════════════ Warehouse & Logistics ═══════════════════════════
+        dtcOrder.setToteNumber(oracleOrder.getToteNumber());
+        dtcOrder.setLocation(oracleOrder.getLocation());
+        dtcOrder.setTrack(oracleOrder.getTrack());
+        dtcOrder.setThirdPartyAccount(oracleOrder.getThirdPartyAccount());
+
+        // ═══════════════════════════ Fulfillment & Shipping Dates ═══════════════════════════
+        dtcOrder.setShipDate(oracleOrder.getShipDate());
+        dtcOrder.setFfSchemaSubstr(oracleOrder.getFfSchemaSubstr());
 
         return dtcOrder;
     }
