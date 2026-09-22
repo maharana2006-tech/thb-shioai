@@ -92,6 +92,11 @@ export function useTrashActions({
         `"${fileName || `Import #${id}`}" moved to Trash · restore it from Trash anytime.`,
       )
     } catch (e) {
+      // "Still has live labels" is the rule working, not something going wrong.
+      if (e instanceof ApiError && e.status === 409) {
+        notify.info({ title: "Can't delete this import yet", body: e.message })
+        return
+      }
       notify.apiError(e, 'Could not delete import.')
     } finally {
       setTrashBusyId(null)

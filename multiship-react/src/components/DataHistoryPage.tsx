@@ -985,9 +985,10 @@ export default function DataHistoryPage() {
   }
 
   /** Live labels of a batch, when its rows are loaded (the batch page); the server enforces the rule either way. */
-  const liveCountOf = (id: number) => {
-    const r = rowsById[id]
-    return Array.isArray(r) ? liveOrdersOf(r).length : 0
+  const liveCountOf = (b: ImportBatchSummary) => {
+    const r = rowsById[b.id]
+    // The list carries the server's live count (rows); the batch page counts its loaded rows (orders).
+    return Array.isArray(r) ? liveOrdersOf(r).length : (b.labelsGenerated ?? 0)
   }
 
   // Status, rows and actions of a batch — shared by the table's cells and the batch page.
@@ -1303,12 +1304,12 @@ export default function DataHistoryPage() {
                     <button
                       type="button"
                       onClick={() => void handleDelete(b.id, b.fileName)}
-                      disabled={trashBusyId === b.id || st === 'IN_PROGRESS' || liveCountOf(b.id) > 0}
+                      disabled={trashBusyId === b.id || st === 'IN_PROGRESS' || liveCountOf(b) > 0}
                       title={st === 'IN_PROGRESS' ? 'Wait for the label run to finish (or cancel it) before moving this import to Trash'
-                        : liveCountOf(b.id) > 0 ? `${liveCountOf(b.id)} label${liveCountOf(b.id) === 1 ? ' is' : 's are'} still live — void ${liveCountOf(b.id) === 1 ? 'it' : 'them'} first, then this import can be deleted`
+                        : liveCountOf(b) > 0 ? `${liveCountOf(b)} label${liveCountOf(b) === 1 ? ' is' : 's are'} still live — void ${liveCountOf(b) === 1 ? 'it' : 'them'} first, then this import can be deleted`
                           : 'Move this import to Trash (recoverable)'}
                       aria-label="Delete import"
-                      className="inline-flex items-center justify-center rounded-xl border border-[#e3d9c4] bg-white p-2 text-[#6b5c42] transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="inline-flex items-center justify-center rounded-xl border border-[#e3d9c4] bg-white p-2 text-[#6b5c42] transition enabled:hover:border-rose-300 enabled:hover:bg-rose-50 enabled:hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {trashBusyId === b.id ? (
                         <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-rose-300/40 border-t-rose-500" />
@@ -1407,7 +1408,7 @@ export default function DataHistoryPage() {
         id: 'status',
         header: 'Status',
         enableSorting: false,
-        size: 130,
+        size: 160,
         accessorFn: (b) => b.status ?? '',
         cell: ({ row }) => renderStatusCell(row.original),
         meta: { headerLabel: 'Status' },
@@ -1416,7 +1417,7 @@ export default function DataHistoryPage() {
         id: 'rows',
         header: 'Rows',
         enableSorting: false,
-        size: 120,
+        size: 190,
         accessorFn: (b) => b.totalRows,
         cell: ({ row }) => renderRowsCell(row.original),
         meta: { headerLabel: 'Rows' },
@@ -2179,7 +2180,7 @@ export default function DataHistoryPage() {
           </p>
         ) : (
           <AdvancedDataTable<ImportBatchSummary>
-            tableKey={viewTrash ? 'order-intake-imports-trash-v3' : isApiTab ? 'bulk-api-batches-v1' : 'order-intake-imports-v3'}
+            tableKey={viewTrash ? 'order-intake-imports-trash-v4' : isApiTab ? 'bulk-api-batches-v2' : 'order-intake-imports-v4'}
             columns={dhColumns}
             data={batches}
             manualPagination
@@ -2189,7 +2190,7 @@ export default function DataHistoryPage() {
             onPaginationChange={({ pageIndex: i, pageSize: n }) => { setPageIndex(n !== pageSize ? 0 : i); setPageSize(n) }}
             onRowClick={(b) => navigate(bulkBatchPath(b.id))}
             getRowId={(b) => String(b.id)}
-            initialColumnPinning={{ left: [], right: ['actions'] }}
+            initialColumnPinning={{ left: [], right: [] }}
             caption={viewTrash ? 'Trash — deleted batches · click a batch to open it'
               : isApiTab ? 'Batches from the WMS and the API · each fetch is one batch · click a batch to open it'
                 : 'Saved imports · click a batch to open it'}
@@ -2386,9 +2387,10 @@ function LabelCountsLine({ counts }: { counts: LabelCounts | null }) {
   ].filter((p) => p.n > 0)
   if (parts.length === 0) return null
   return (
-    <span data-testid="label-counts" className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10.5px] font-semibold tabular-nums">
-      {parts.map((p) => (
+    <span data-testid="label-counts" className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 whitespace-nowrap text-[10.5px] font-semibold tabular-nums">
+      {parts.map((p, i) => (
         <span key={p.label} className={`inline-flex items-center gap-1 ${p.text}`}>
+          {i > 0 ? <span className="text-[#b6a684]" aria-hidden="true">·</span> : null}
           <span className={`h-1.5 w-1.5 rounded-full ${p.dot}`} aria-hidden="true" />
           {p.n} {p.label}
         </span>

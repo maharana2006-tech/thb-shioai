@@ -89,7 +89,7 @@ export default function BatchLabelBar({
     if (n === 0 || voiding) return
     const ok = await notify.confirm(
       `The carrier${n === 1 ? '' : 's'} will cancel ${n === 1 ? 'this label' : `these ${n} labels`} — the order${n === 1 ? '' : 's'} can't ship on ${n === 1 ? 'it' : 'them'} any more. This can't be undone.`,
-      { title: `Void ${n} label${n === 1 ? '' : 's'}?`, confirmLabel: `Void ${n} label${n === 1 ? '' : 's'}`, cancelLabel: 'Keep them' },
+      { title: `Void ${n} label${n === 1 ? '' : 's'}?`, confirmLabel: `Void ${n} label${n === 1 ? '' : 's'}`, cancelLabel: 'Keep them', danger: true },
     )
     if (!ok) return
     setVoiding(true)

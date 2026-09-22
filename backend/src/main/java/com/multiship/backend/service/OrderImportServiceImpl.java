@@ -3617,10 +3617,18 @@ public class OrderImportServiceImpl implements OrderImportService {
         batch.setTotalRows(total);
         batch.setSavedRows(total - invalid);
         batch.setInvalidRows(invalid);
-        batch.setStatus(invalid > 0 ? "DRAFT" : "INITIATE");
+        // Re-validating rows must not forget the labels already made: a batch with
+        // 15 of 16 rows labelled read "Saved · not generated" and offered Generate
+        // again (buying the same labels twice). Derive the status from the rows.
+        int generated = (int) rows.stream().filter(r -> r.getGeneratedStatus() != null
+                && ("GENERATED".equalsIgnoreCase(r.getGeneratedStatus()) || "QUEUED_USPS".equalsIgnoreCase(r.getGeneratedStatus()))).count();
+        int failed = (int) rows.stream().filter(r -> "FAILED".equalsIgnoreCase(r.getGeneratedStatus())).count();
+        batch.setStatus(deriveGenerationStatus(total, generated, failed, invalid));
+        stampCompletionIfTerminal(batch);
+        stampOwner(batch, rows);
         batch = importBatchRepository.save(batch);
 
-        log.info("Batch {} validated: {} rows, {} valid, {} invalid", id, total, total - invalid, invalid);
+        log.info("Batch {} validated: {} rows, {} valid, {} invalid → {}", id, total, total - invalid, invalid, batch.getStatus());
         return toBatchDTO(batch, rows);
     }
 
