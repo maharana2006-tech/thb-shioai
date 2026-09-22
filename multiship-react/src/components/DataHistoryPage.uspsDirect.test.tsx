@@ -586,4 +586,48 @@ describe('Bulk Mailer — layout', () => {
     await userEvent.type(screen.getByPlaceholderText(/Search file name/i), 'acme')
     await waitFor(() => expect(listBatches).toHaveBeenCalledWith(expect.objectContaining({ q: 'acme', page: 0 })), { timeout: 2000 })
   })
+
+})
+
+describe('Bulk Mailer — tab transitions', () => {
+  it('slides the new tab in from the side you moved towards', async () => {
+    await renderAt('/bulk/imports')
+    await userEvent.click(await screen.findByRole('tab', { name: /Documents/i }))
+    expect(screen.getByRole('tabpanel')).toHaveClass('bulk-tab-in-right')
+    await userEvent.click(screen.getByRole('tab', { name: /API batches/i }))
+    expect(screen.getByRole('tabpanel')).toHaveClass('bulk-tab-in-left')
+  })
+
+  it('moves between tabs with the arrow keys, and only the chosen tab is in the tab order', async () => {
+    await renderAt('/bulk/imports')
+    const imports = await screen.findByRole('tab', { name: /Import history/i })
+    expect(imports).toHaveAttribute('tabindex', '0')
+    expect(screen.getByRole('tab', { name: /API batches/i })).toHaveAttribute('tabindex', '-1')
+    imports.focus()
+    await userEvent.keyboard('{ArrowRight}')
+    expect(screen.getByRole('tab', { name: /API batches/i })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: /API batches/i })).toHaveFocus()
+    await userEvent.keyboard('{End}')
+    expect(screen.getByRole('tab', { name: /Trash/i })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('shows a skeleton, not the last tab\'s batches, and ignores a late answer for a tab already left', async () => {
+    let answerApi: (v: unknown) => void = () => {}
+    listBatches.mockImplementation((q: { view: string }) => q.view === 'API'
+      ? new Promise((resolve) => { answerApi = resolve })
+      : Promise.resolve(pageOf(q.view === 'TRASH' ? [batchSummary({ id: 55, fileName: 'deleted.csv' })] : [batchSummary({ id: 1 })])))
+    await renderAt('/bulk/imports')
+    expect(await screen.findByTestId('batch-row-1')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('tab', { name: /API batches/i }))
+    expect(screen.getByTestId('batch-list-skeleton')).toBeInTheDocument()
+    expect(screen.queryByTestId('batch-row-1')).toBeNull()
+
+    await userEvent.click(screen.getByRole('tab', { name: /Trash/i }))
+    expect(await screen.findByTestId('batch-row-55')).toBeInTheDocument()
+    // The API answer finally arrives — it must not replace Trash.
+    await act(async () => { answerApi(pageOf([batchSummary({ id: 7, source: 'WMS' })])) })
+    expect(screen.getByTestId('batch-row-55')).toBeInTheDocument()
+    expect(screen.queryByTestId('batch-row-7')).toBeNull()
+  })
 })

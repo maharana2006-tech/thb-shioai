@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   FiAlertCircle,
@@ -38,6 +38,7 @@ import { useAppSession } from '../hooks/useAppSession'
 import { useEventStream } from '../hooks/useEventStream'
 import { useHistoryFilters } from '../hooks/useHistoryFilters'
 import { useTrashActions } from '../hooks/useTrashActions'
+import { useLatestRequest } from '../hooks/useLatestRequest'
 import { normalizeRole } from '../utils/roles'
 // PR-G4 — USPS_DIRECT UX (audit U2 + U3). Badge surfaces queue depth
 // at the top of Data History so ops see rate-limit pressure without
@@ -155,6 +156,13 @@ export default function DataHistoryPage() {
   const dhView: 'imports' | 'docs' = bulkTab === 'documents' ? 'docs' : 'imports'
   /** Import history and API batches are the same list — only where the batches come from differs. */
   const isApiTab = bulkTab === 'api'
+  // Which way the content slides in: from the right for a tab further along, from the left for one before.
+  const [tabMotion, setTabMotion] = useState<{ tab: BulkTab; dir: 1 | -1 }>({ tab: bulkTab, dir: 1 })
+  if (tabMotion.tab !== bulkTab) {
+    const from = BULK_TABS.findIndex((t) => t.key === tabMotion.tab)
+    const to = BULK_TABS.findIndex((t) => t.key === bulkTab)
+    setTabMotion({ tab: bulkTab, dir: to >= from ? 1 : -1 })
+  }
   const [searchParams] = useSearchParams()
 
   // F5-A — advanced filter + sort + pagination state extracted to
@@ -243,7 +251,7 @@ export default function DataHistoryPage() {
 
   /** File imports, API/WMS fetches, or Trash (deleted batches of either kind). */
   const listView: BulkView = viewTrash ? 'TRASH' : isApiTab ? 'API' : 'FILE'
-  const fetchBatches = async (): Promise<{ data: ImportBatchSummary[] }> => {
+  const fetchBatches = async (): Promise<{ data: ImportBatchSummary[]; page?: { total: number; pages: number }; summary?: BulkSummary | null }> => {
     // The batch page's "list" is that one batch (live or in Trash, any source).
     if (batchPageId != null) {
       const res = await orderImportService.getHistory(batchPageId)
@@ -253,9 +261,25 @@ export default function DataHistoryPage() {
       bulkService.listBatches({ view: listView, ...listQuery, page: pageIndex, size: pageSize }),
       bulkService.summary(listView).catch(() => null),
     ])
-    setPageInfo({ total: res.data?.totalElements ?? 0, pages: Math.max(res.data?.totalPages ?? 1, 1) })
-    if (sum?.data) setSummary(sum.data)
-    return { data: res.data?.content ?? [] }
+    return {
+      data: res.data?.content ?? [],
+      page: { total: res.data?.totalElements ?? 0, pages: Math.max(res.data?.totalPages ?? 1, 1) },
+      summary: sum?.data ?? null,
+    }
+  }
+  /** Each fetch is numbered; a slower answer for a list the operator has already left is dropped. */
+  const latest = useLatestRequest()
+  /** Which list the shown batches belong to — until the new tab's answer lands, its skeleton shows. */
+  const [loadedView, setLoadedView] = useState<string | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
+  const viewKey = batchPageId != null ? `batch:${batchPageId}` : listView
+  const applyFetch = (seq: number, view: string, r: Awaited<ReturnType<typeof fetchBatches>>) => {
+    if (!latest.isLatest(seq)) return false
+    setBatches(r.data)
+    if (r.page) setPageInfo(r.page)
+    if (r.summary) setSummary(r.summary)
+    setLoadedView(view)
+    return true
   }
 
 
@@ -284,10 +308,12 @@ export default function DataHistoryPage() {
   }
 
   const load = async () => {
+    const seq = latest.begin()
+    const view = viewKey
     if (batches.length === 0) setLoading(true)
+    setRefreshing(true)
     try {
-      const res = await fetchBatches()
-      setBatches(res.data ?? [])
+      if (!applyFetch(seq, view, await fetchBatches())) return
       if (batchPageId != null) ensureRows(batchPageId)
       // Old ?highlight=<id> links: open that batch's page.
       const highlightId = Number(searchParams.get('highlight')) || null
@@ -300,7 +326,10 @@ export default function DataHistoryPage() {
       notify.apiError(e, batchPageId != null ? 'Could not load this batch.'
         : viewTrash ? 'Could not load Trash.' : isApiTab ? 'Could not load the API batches.' : 'Could not load import history.')
     } finally {
-      setLoading(false)
+      if (latest.isLatest(seq)) {
+        setLoading(false)
+        setRefreshing(false)
+      }
     }
   }
 
@@ -311,9 +340,10 @@ export default function DataHistoryPage() {
    * blow up the operator's view; the next poll will retry.
    */
   const reloadQuiet = async () => {
+    const seq = latest.begin()
+    const view = viewKey
     try {
-      const res = await fetchBatches()
-      setBatches(res.data ?? [])
+      applyFetch(seq, view, await fetchBatches())
     } catch {
       // ignore transient failures during background polling
     }
@@ -1868,31 +1898,18 @@ export default function DataHistoryPage() {
       </div>
 
       {/* Bulk Mailer tabs — each one is its own address (/bulk/:tab). */}
-      <div role="tablist" aria-label="Bulk Mailer" className="flex flex-wrap items-center gap-1 rounded-xl border border-[#e3d9c4] bg-[#f4eede]/60 p-1">
-        {BULK_TABS.map((t) => {
-          const active = bulkTab === t.key
-          return (
-            <button
-              key={t.key}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              onClick={() => navigate(`/bulk/${t.key}`)}
-              className={`inline-flex items-baseline gap-1.5 rounded-lg px-3.5 py-2 text-[13px] font-semibold transition ${
-                active ? 'bg-white text-[#1f150c] shadow-sm ring-1 ring-[#e3d9c4]' : 'text-[#6b5c42] hover:bg-white/70'
-              }`}
-            >
-              {t.label}
-              <span className={`hidden text-[9.5px] font-medium uppercase tracking-[0.06em] sm:inline ${active ? 'text-[#8a7a5a]' : 'text-[#b6a684]'}`}>
-                {t.hint}
-              </span>
-            </button>
-          )
-        })}
-      </div>
+      <BulkTabBar active={bulkTab} onSelect={(t) => navigate(`/bulk/${t}`)} />
 
+      <div
+        key={bulkTab}
+        role="tabpanel"
+        aria-label={BULK_TABS.find((t) => t.key === bulkTab)?.label}
+        className={`space-y-4 ${tabMotion.dir > 0 ? 'bulk-tab-in-right' : 'bulk-tab-in-left'}`}
+      >
       {dhView === 'docs' ? (
         <OrderDocumentsTable />
+      ) : loadedView !== viewKey ? (
+        <BatchListSkeleton withCards={!viewTrash} />
       ) : (
       <>
       {!viewTrash && summary ? <BatchSummaryCards summary={summary} /> : null}
@@ -1927,7 +1944,10 @@ export default function DataHistoryPage() {
         totalCount={summary?.total ?? pageInfo.total}
       />
 
-      <section className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+      <section
+        aria-busy={refreshing}
+        className={`rounded-2xl border border-slate-200 bg-white p-3 shadow-sm transition-opacity duration-200 ${refreshing && !loading ? 'opacity-60' : ''}`}
+      >
         {loading ? (
           <p className="px-5 py-14 text-center text-sm text-[#6b5c42]">Loading…</p>
         ) : batches.length === 0 && (summary?.total ?? 0) === 0 ? (
@@ -1973,11 +1993,12 @@ export default function DataHistoryPage() {
       {labelModal}
       </>
       )}
+      </div>
     </div>
   )
 }
 
-type BulkTab = 'imports' | 'api' | 'documents' | 'trash'
+export type BulkTab = 'imports' | 'api' | 'documents' | 'trash'
 
 /** Bulk Mailer tabs, in order. Import history is the landing tab. */
 const BULK_TABS: { key: BulkTab; label: string; hint: string }[] = [
@@ -2009,3 +2030,107 @@ function BatchSummaryCards({ summary }: { summary: BulkSummary }) {
 
 /** A row's serviceType error for a ship via code with no carrier service mapped. */
 const UNMAPPED_SHIP_VIA = /serviceType '([^']+)' is (?:not mapped|mapped, but not)/
+
+/**
+ * The Bulk Mailer tabs. A single highlight slides to the chosen tab (moved
+ * with a transform — no re-layout), and the arrow / Home / End keys move
+ * between tabs as a tablist should.
+ */
+export function BulkTabBar({ active, onSelect }: { active: BulkTab; onSelect: (tab: BulkTab) => void }) {
+  const listRef = useRef<HTMLDivElement>(null)
+  const pillRef = useRef<HTMLSpanElement>(null)
+
+  useLayoutEffect(() => {
+    const list = listRef.current
+    const pill = pillRef.current
+    if (!list || !pill) return
+    const place = () => {
+      const tab = list.querySelector<HTMLElement>(`[data-tab="${active}"]`)
+      if (!tab) return
+      pill.style.width = `${tab.offsetWidth}px`
+      pill.style.height = `${tab.offsetHeight}px`
+      pill.style.transform = `translate(${tab.offsetLeft}px, ${tab.offsetTop}px)`
+    }
+    place()
+    // Animate only moves, not the first placement.
+    const raf = requestAnimationFrame(() => { pill.dataset.ready = 'true' })
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(place) : null
+    ro?.observe(list)
+    return () => { cancelAnimationFrame(raf); ro?.disconnect() }
+  }, [active])
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    const i = BULK_TABS.findIndex((t) => t.key === active)
+    const next = e.key === 'ArrowRight' ? (i + 1) % BULK_TABS.length
+      : e.key === 'ArrowLeft' ? (i - 1 + BULK_TABS.length) % BULK_TABS.length
+        : e.key === 'Home' ? 0 : e.key === 'End' ? BULK_TABS.length - 1 : null
+    if (next == null) return
+    e.preventDefault()
+    onSelect(BULK_TABS[next].key)
+    listRef.current?.querySelector<HTMLElement>(`[data-tab="${BULK_TABS[next].key}"]`)?.focus()
+  }
+
+  return (
+    <div
+      ref={listRef}
+      role="tablist"
+      aria-label="Bulk Mailer"
+      onKeyDown={onKeyDown}
+      className="relative flex flex-wrap items-center gap-1 rounded-xl border border-[#e3d9c4] bg-[#f4eede]/60 p-1"
+    >
+      <span
+        ref={pillRef}
+        aria-hidden="true"
+        className="bulk-tab-pill pointer-events-none absolute left-0 top-0 rounded-lg bg-white shadow-sm ring-1 ring-[#e3d9c4]"
+      />
+      {BULK_TABS.map((t) => {
+        const selected = active === t.key
+        return (
+          <button
+            key={t.key}
+            type="button"
+            role="tab"
+            data-tab={t.key}
+            aria-selected={selected}
+            tabIndex={selected ? 0 : -1}
+            onClick={() => onSelect(t.key)}
+            className={`relative z-[1] inline-flex items-baseline gap-1.5 rounded-lg px-3.5 py-2 text-[13px] font-semibold outline-none transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-[#412d15]/40 ${
+              selected ? 'text-[#1f150c]' : 'text-[#6b5c42] hover:text-[#1f150c]'
+            }`}
+          >
+            {t.label}
+            <span className={`hidden text-[9.5px] font-medium uppercase tracking-[0.06em] transition-colors duration-200 sm:inline ${selected ? 'text-[#8a7a5a]' : 'text-[#b6a684]'}`}>
+              {t.hint}
+            </span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/** What a tab shows while its first answer is on the way — the shape of the list, not a bare "Loading…". */
+function BatchListSkeleton({ withCards }: { withCards: boolean }) {
+  return (
+    <div data-testid="batch-list-skeleton" aria-busy="true" aria-label="Loading batches" className="space-y-4">
+      {withCards ? (
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="h-[66px] animate-pulse rounded-xl border border-[#efe7d6] bg-[#f6f1e6]" />
+          ))}
+        </div>
+      ) : null}
+      <div className="h-[44px] animate-pulse rounded-xl bg-[#f6f1e6]" />
+      <div className="space-y-2 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+        {[0, 1, 2, 3, 4].map((i) => (
+          <div key={i} className="flex items-center gap-3 px-2 py-2">
+            <div className="h-3 w-10 animate-pulse rounded bg-[#efe7d6]" />
+            <div className="h-3 flex-1 animate-pulse rounded bg-[#f2ecdf]" />
+            <div className="h-5 w-20 animate-pulse rounded-full bg-[#efe7d6]" />
+            <div className="h-7 w-28 animate-pulse rounded-lg bg-[#f2ecdf]" />
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
