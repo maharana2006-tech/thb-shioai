@@ -6,6 +6,8 @@ interface PageSectionHeaderProps {
   title: string
   description: string
   actions?: ReactNode
+  /** A small icon badge before the title, in the app's espresso. */
+  icon?: ReactNode
 }
 
 /**
@@ -13,12 +15,17 @@ interface PageSectionHeaderProps {
  * Section context lives in the topbar breadcrumb, so no eyebrow here.
  */
 export default function PageSectionHeader(props: PageSectionHeaderProps) {
-  const { title, description, actions } = props
+  const { title, description, actions, icon } = props
 
   return (
     <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3 px-1 pt-1">
       <div className="min-w-0">
-        <h2 className="text-xl font-semibold tracking-tight text-[#1f150c]">{title}</h2>
+        <h2 className="flex items-center gap-2.5 text-xl font-semibold tracking-tight text-[#1f150c]">
+          {icon ? (
+            <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#1f150c] text-[#f4eede] shadow-sm" aria-hidden="true">{icon}</span>
+          ) : null}
+          {title}
+        </h2>
         <p className="mt-1 max-w-2xl text-[13px] leading-5 text-slate-500">{description}</p>
       </div>
 

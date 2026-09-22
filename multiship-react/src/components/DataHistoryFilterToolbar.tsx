@@ -170,7 +170,9 @@ export default function DataHistoryFilterToolbar({
           </label>
           {/* Created-date range — first-class, not buried in the Filters panel. */}
           <div className="flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5">
-            <FiCalendar className="h-3.5 w-3.5 shrink-0 text-[#b6a684]" />
+            <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-sky-50 text-sky-600" aria-hidden="true">
+              <FiCalendar className="h-3 w-3" />
+            </span>
             <span className="hidden font-mono text-[9px] font-bold uppercase tracking-[0.14em] text-[#b6a684] sm:inline">
               Created
             </span>
@@ -279,7 +281,7 @@ export default function DataHistoryFilterToolbar({
 
         {/* Result summary */}
         <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-[#6b5c42]">
-          <FiFilter className="h-3 w-3 text-[#b6a684]" />
+          <FiFilter className="h-3 w-3 text-[#412d15]" />
           <span className="font-semibold text-[#5a4526]">{filteredCount}</span>
           <span>
             of {totalCount} {totalCount === 1 ? 'import' : 'imports'} shown

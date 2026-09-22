@@ -1215,7 +1215,9 @@ export default function DataHistoryPage() {
                     onClick={() => void validateAll(b.id)}
                     disabled={validatingId === b.id || (b.status || '').toUpperCase() === 'IN_PROGRESS'}
                     title="Validate all rows in this batch and update their errors/warnings"
-                    className={BTN_GHOST_SM}
+                    className={batchPageId == null
+                      ? 'inline-flex items-center justify-center rounded-xl border border-emerald-100 bg-emerald-50 p-2 text-emerald-700 transition hover:border-emerald-200 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-40'
+                      : BTN_GHOST_SM}
                   >
                     {validatingId === b.id ? (
                       <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-emerald-100 border-t-emerald-600" />
@@ -1381,7 +1383,7 @@ export default function DataHistoryPage() {
                         disabled={batchPrintBusy === b.id}
                         title="Print every live label of this batch"
                         aria-label="Print batch labels"
-                        className="inline-flex items-center justify-center rounded-xl border border-[#e3d9c4] bg-white p-2 text-[#412d15] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:opacity-50"
+                        className="inline-flex items-center justify-center rounded-xl border border-[#e3d9c4] bg-[#faf7f0] p-2 text-[#412d15] transition hover:border-[#cdbf9f] hover:bg-[#f0e9d8] disabled:opacity-50"
                       >
                         {batchPrintBusy === b.id
                           ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#e3d9c4] border-t-[#5a4526]" />
@@ -1393,7 +1395,7 @@ export default function DataHistoryPage() {
                         disabled={batchPrintBusy === b.id}
                         title="Send every live label of this batch to a network printer"
                         aria-label="Send batch to printer"
-                        className="inline-flex items-center justify-center rounded-xl border border-[#e3d9c4] bg-white p-2 text-emerald-700 transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:opacity-50"
+                        className="inline-flex items-center justify-center rounded-xl border border-emerald-100 bg-emerald-50 p-2 text-emerald-700 transition hover:border-emerald-200 hover:bg-emerald-100 disabled:opacity-50"
                       >
                         <FiSend className="h-3.5 w-3.5" />
                       </button>
@@ -1406,7 +1408,7 @@ export default function DataHistoryPage() {
                             : liveCountOf(b) === 0 ? 'No live labels to void'
                               : `Void every live label of this batch (${liveCountOf(b)}) with the carriers`}
                           aria-label="Void batch labels"
-                          className="inline-flex items-center justify-center rounded-xl border border-[#e3d9c4] bg-white p-2 text-rose-700 transition enabled:hover:border-rose-300 enabled:hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-40"
+                          className="inline-flex items-center justify-center rounded-xl border border-rose-100 bg-rose-50 p-2 text-rose-700 transition enabled:hover:border-rose-300 enabled:hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           <FiSlash className="h-3.5 w-3.5" />
                         </button>
@@ -1515,7 +1517,9 @@ export default function DataHistoryPage() {
           return (
             <span className="block min-w-0">
               <span className="flex items-center gap-1.5">
-                <FiFileText className="h-3.5 w-3.5 shrink-0 text-[#b6a684]" />
+                <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-sky-50 text-sky-600 ring-1 ring-sky-100" aria-hidden="true">
+                  <FiFileText className="h-3.5 w-3.5" />
+                </span>
                 <span className="truncate text-[13.5px] font-semibold text-[#1f150c]" title={b.fileName || undefined}>
                   {b.fileName || 'Untitled import'}
                 </span>
@@ -1531,7 +1535,14 @@ export default function DataHistoryPage() {
               <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-[#6b5c42]">
                 <span className="font-mono">Import #{b.id}</span>
                 <span aria-hidden="true">·</span>
-                <span>{b.createdBy || '—'}</span>
+                {b.createdBy ? (
+                  <span className="inline-flex items-center gap-1" title={`Imported by ${b.createdBy}`}>
+                    <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-[#412d15] text-[8px] font-bold uppercase text-[#f4eede]" aria-hidden="true">
+                      {b.createdBy.slice(0, 1)}
+                    </span>
+                    {b.createdBy}
+                  </span>
+                ) : <span>—</span>}
               </span>
             </span>
           )
@@ -2160,6 +2171,7 @@ export default function DataHistoryPage() {
       {sendBatchDialog}
       <PageSectionHeader
         eyebrow="Operations"
+        icon={<FiUpload className="h-4 w-4" />}
         title="Bulk Mailer"
         description="Import orders in bulk, fix what needs it, and buy their labels — from a file or from the API."
         actions={
@@ -2425,11 +2437,11 @@ export default function DataHistoryPage() {
 export type BulkTab = 'imports' | 'api' | 'documents' | 'trash'
 
 /** Bulk Mailer tabs, in order. Import history is the landing tab. */
-const BULK_TABS: { key: BulkTab; label: string; hint: string }[] = [
-  { key: 'imports', label: 'Import history', hint: 'Saved batches' },
-  { key: 'api', label: 'API batches', hint: 'WMS · API' },
-  { key: 'documents', label: 'Documents', hint: 'Label · invoice · statement' },
-  { key: 'trash', label: 'Trash', hint: 'Deleted batches' },
+const BULK_TABS: { key: BulkTab; label: string; hint: string; dot: string }[] = [
+  { key: 'imports', label: 'Import history', hint: 'Saved batches', dot: 'bg-[#412d15]' },
+  { key: 'api', label: 'API batches', hint: 'WMS · API', dot: 'bg-violet-500' },
+  { key: 'documents', label: 'Documents', hint: 'Label · invoice · statement', dot: 'bg-sky-500' },
+  { key: 'trash', label: 'Trash', hint: 'Deleted batches', dot: 'bg-rose-400' },
 ]
 
 /** At-a-glance counts over the whole view (from the server, not the current page).
@@ -2545,6 +2557,7 @@ export function BulkTabBar({ active, onSelect }: { active: BulkTab; onSelect: (t
               selected ? 'text-[#1f150c]' : 'text-[#6b5c42] hover:text-[#1f150c]'
             }`}
           >
+            <span className={`h-2 w-2 shrink-0 self-center rounded-full ${t.dot} ${selected ? '' : 'opacity-60'}`} aria-hidden="true" />
             {t.label}
             <span className={`hidden text-[9.5px] font-medium uppercase tracking-[0.06em] transition-colors duration-200 sm:inline ${selected ? 'text-[#8a7a5a]' : 'text-[#b6a684]'}`}>
               {t.hint}
