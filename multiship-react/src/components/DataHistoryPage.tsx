@@ -2,12 +2,12 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   FiAlertCircle,
+  FiCheckCircle,
   FiDownloadCloud,
   FiArrowLeft,
   FiFileText,
   FiHome,
   FiRefreshCw,
-  FiSearch,
   FiSliders,
   FiTrash2,
   FiUpload,
@@ -1048,9 +1048,10 @@ export default function DataHistoryPage() {
                     className={BTN_GHOST_SM}
                   >
                     {validatingId === b.id ? (
-                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#e3d9c4] border-t-[#5a4526]" />
+                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-emerald-100 border-t-emerald-600" />
                     ) : (
-                      <FiSearch className="h-3 w-3" />
+                      // A green check: "check every row and confirm it's ready".
+                      <FiCheckCircle className="h-3.5 w-3.5 text-emerald-600" aria-hidden="true" />
                     )}
                     {validatingId === b.id ? 'Validating…' : 'Validate all'}
                   </button>
@@ -1407,9 +1408,9 @@ export default function DataHistoryPage() {
                   className={BTN_GHOST_SM}
                 >
                   {validatingId === b.id ? (
-                    <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#e3d9c4] border-t-[#5a4526]" />
+                    <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-emerald-100 border-t-emerald-600" />
                   ) : (
-                    <FiSearch className="h-3 w-3" />
+                    <FiCheckCircle className="h-3.5 w-3.5 text-emerald-600" aria-hidden="true" />
                   )}
                   {validatingId === b.id ? 'Validating…' : 'Validate all'}
                 </button>
