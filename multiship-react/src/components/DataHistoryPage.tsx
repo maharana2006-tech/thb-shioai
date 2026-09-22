@@ -27,6 +27,7 @@ import OrderDocumentsTable from './OrderDocumentsTable'
 import DataHistoryFilterToolbar from './DataHistoryFilterToolbar'
 import { GridCell, DH_COLUMNS, RowIssuesIcon, RowChannelChip, bucketRowErrors, type DhColumn } from './batchGrid'
 import VirtualTable from './VirtualTable'
+import AnimatedHeight from './ui/AnimatedHeight'
 import { notify } from '../utils/notify'
 import { ApiError } from '../api/apiClient'
 import {
@@ -1900,6 +1901,9 @@ export default function DataHistoryPage() {
       {/* Bulk Mailer tabs — each one is its own address (/bulk/:tab). */}
       <BulkTabBar active={bulkTab} onSelect={(t) => navigate(`/bulk/${t}`)} />
 
+      {/* The panel's height glides between tabs (and from skeleton to list) so
+          nothing below it jumps. */}
+      <AnimatedHeight>
       <div
         key={bulkTab}
         role="tabpanel"
@@ -1994,6 +1998,7 @@ export default function DataHistoryPage() {
       </>
       )}
       </div>
+      </AnimatedHeight>
     </div>
   )
 }
@@ -2120,7 +2125,14 @@ function BatchListSkeleton({ withCards }: { withCards: boolean }) {
           ))}
         </div>
       ) : null}
-      <div className="h-[44px] animate-pulse rounded-xl bg-[#f6f1e6]" />
+      <div className="space-y-2 rounded-2xl border border-[#efe7d6] bg-white p-3">
+        <div className="flex flex-wrap gap-1.5">
+          {[72, 64, 88, 96, 80].map((w, i) => (
+            <div key={i} className="h-7 animate-pulse rounded-full bg-[#f2ecdf]" style={{ width: w }} />
+          ))}
+        </div>
+        <div className="h-9 animate-pulse rounded-xl bg-[#f6f1e6]" />
+      </div>
       <div className="space-y-2 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
         {[0, 1, 2, 3, 4].map((i) => (
           <div key={i} className="flex items-center gap-3 px-2 py-2">
