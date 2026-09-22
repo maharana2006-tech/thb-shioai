@@ -9,6 +9,17 @@
  * {@link useHistoryFilters}, wired through props.
  */
 import { FiCalendar, FiFilter, FiSearch, FiX } from 'react-icons/fi'
+
+/** Each status chip in the colour its pill in the table uses; "All" in the app's espresso. */
+const CHIP_TONE: Record<string, { dot: string; active: string; count: string }> = {
+  ALL: { dot: 'bg-[#1f150c]', active: 'border-[#1f150c] bg-[#1f150c] text-[#f4eede]', count: 'bg-[#f4eede]/25 text-[#f4eede]' },
+  DRAFT: { dot: 'bg-orange-500', active: 'border-orange-200 bg-orange-50 text-orange-800', count: 'bg-white text-orange-700 ring-1 ring-orange-200' },
+  COMPLETE: { dot: 'bg-emerald-500', active: 'border-emerald-200 bg-emerald-50 text-emerald-800', count: 'bg-white text-emerald-700 ring-1 ring-emerald-200' },
+  PARTIAL_COMPLETE: { dot: 'bg-amber-400', active: 'border-amber-200 bg-amber-50 text-amber-800', count: 'bg-white text-amber-700 ring-1 ring-amber-200' },
+  IN_PROGRESS: { dot: 'bg-sky-500', active: 'border-sky-200 bg-sky-50 text-sky-800', count: 'bg-white text-sky-700 ring-1 ring-sky-200' },
+  INITIATE: { dot: 'bg-slate-400', active: 'border-slate-300 bg-slate-100 text-slate-700', count: 'bg-white text-slate-600 ring-1 ring-slate-300' },
+  FAILED: { dot: 'bg-rose-500', active: 'border-rose-200 bg-rose-50 text-rose-800', count: 'bg-white text-rose-700 ring-1 ring-rose-200' },
+}
 import type {
   BatchPresenceKey,
   HistorySortKey,
@@ -109,23 +120,23 @@ export default function DataHistoryFilterToolbar({
             {STATUS_CHIPS.map((s) => {
               const active = statusFilter === s.key
               const n = statusCounts[s.key] ?? 0
+              const tone = CHIP_TONE[s.key]
               return (
                 <button
                   key={s.key}
                   type="button"
                   onClick={() => setStatusFilter(s.key)}
-                  className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[12px] font-semibold transition ${
-                    active
-                      ? 'bg-[#1f150c] text-[#f4eede]'
-                      : 'bg-[#faf7f0] text-[#5a4526] hover:bg-[#f0e9d8]'
+                  aria-pressed={active}
+                  className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-[12px] font-semibold transition ${
+                    active ? tone.active : n === 0 ? 'border-transparent bg-[#faf7f0] text-[#a1906d] hover:bg-[#f0e9d8]' : 'border-transparent bg-[#faf7f0] text-[#5a4526] hover:bg-[#f0e9d8]'
                   }`}
                 >
+                  {/* The status's own colour, the same one its pill in the table uses. */}
+                  <span className={`h-2 w-2 rounded-full ${tone.dot} ${!active && n === 0 ? 'opacity-40' : ''}`} aria-hidden="true" />
                   {s.label}
                   <span
-                    className={`inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9.5px] font-bold ${
-                      active
-                        ? 'bg-[#f4eede]/25 text-[#f4eede]'
-                        : 'bg-white text-[#6b5c42] ring-1 ring-[#e3d9c4]'
+                    className={`inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9.5px] font-bold tabular-nums ${
+                      active ? tone.count : 'bg-white text-[#6b5c42] ring-1 ring-[#e3d9c4]'
                     }`}
                   >
                     {n}
@@ -148,7 +159,7 @@ export default function DataHistoryFilterToolbar({
         {/* Search + date range + sort */}
         <div className="grid gap-2.5 lg:grid-cols-[minmax(0,1fr)_auto_auto_auto]">
           <label className="relative block">
-            <FiSearch className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#b6a684]" />
+            <FiSearch className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#8a7a5a]" />
             <input
               type="search"
               value={search}
