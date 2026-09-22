@@ -68,6 +68,30 @@ class ExternalSystemConfigServiceTest {
         assertEquals("admin", saved.getUpdatedBy());
     }
 
+    // ─── S4 helper: getDefaultNdsConnection ────────────────────────
+
+    @Test
+    void getDefaultNdsConnectionLooksUpByWellKnownName() {
+        ExternalSystemConnection seed = new ExternalSystemConnection();
+        seed.setId(42L);
+        seed.setName("nds-default");
+        seed.setSystemType("NDS_ORACLE");
+        seed.setActive(false);
+        when(connectionRepo.findByName("nds-default")).thenReturn(Optional.of(seed));
+
+        Optional<ExternalSystemConnection> got = svc.getDefaultNdsConnection();
+        assertTrue(got.isPresent());
+        assertEquals("nds-default", got.get().getName());
+        assertEquals("NDS_ORACLE", got.get().getSystemType());
+        verify(connectionRepo).findByName("nds-default");
+    }
+
+    @Test
+    void getDefaultNdsConnectionEmptyWhenNoSeedRow() {
+        when(connectionRepo.findByName("nds-default")).thenReturn(Optional.empty());
+        assertTrue(svc.getDefaultNdsConnection().isEmpty());
+    }
+
     // ─── secrets ────────────────────────────────────────────────────
 
     @Test
