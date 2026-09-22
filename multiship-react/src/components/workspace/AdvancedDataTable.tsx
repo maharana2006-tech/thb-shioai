@@ -33,6 +33,8 @@ import { CSS } from '@dnd-kit/utilities'
 import {
   FiChevronDown,
   FiChevronUp,
+  FiChevronLeft,
+  FiChevronRight,
   FiColumns,
   FiDownload,
   FiRotateCcw,
@@ -100,6 +102,10 @@ export interface AdvancedDataTableProps<T> {
   /** Fired when a row is expanded (not collapsed) — lets the parent lazy-load
    *  the expanded content's data. */
   onRowExpand?: (row: T) => void
+  /** Row (by getRowId) to show expanded when the table first renders. */
+  initialExpandedId?: string | null
+  /** Clicking a row (outside its buttons and links) — e.g. to open its own page. */
+  onRowClick?: (row: T) => void
   /** Stable row identity (e.g. the record id). Without it rows are keyed by position,
    *  so removing a row moves an open expansion onto the next record. */
   getRowId?: (row: T, index: number) => string
@@ -323,8 +329,8 @@ function SortableHeader<T>({
         <div
           onMouseDown={header.getResizeHandler()}
           onTouchStart={header.getResizeHandler()}
-          className={`absolute right-0 top-0 h-full w-1.5 cursor-col-resize select-none touch-none hover:bg-sky-400/60 ${
-            header.column.getIsResizing() ? 'bg-sky-500' : 'bg-transparent'
+          className={`absolute right-0 top-0 h-full w-1.5 cursor-col-resize select-none touch-none hover:bg-[#cdbf9f] ${
+            header.column.getIsResizing() ? 'bg-[#412d15]' : 'bg-transparent'
           }`}
           aria-hidden
         />
@@ -345,6 +351,8 @@ export default function AdvancedDataTable<T>({
   emptyState,
   renderExpanded,
   onRowExpand,
+  initialExpandedId = null,
+  onRowClick,
   getRowId,
   initialHiddenColumns,
   initialColumnPinning,
@@ -377,7 +385,7 @@ export default function AdvancedDataTable<T>({
   const persisted = useMemo(() => loadLayout(tableKey), [tableKey])
 
   // Which row's expansion sub-row is open (id), when renderExpanded is set.
-  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [expandedId, setExpandedId] = useState<string | null>(initialExpandedId)
   const [internalSorting, setInternalSorting] = useState<SortingState>([])
   const [internalPageIndex, setInternalPageIndex] = useState(0)
   const [internalPageSize, setInternalPageSize] = useState(initialPageSize)
@@ -666,8 +674,8 @@ export default function AdvancedDataTable<T>({
       {/* ===== compacted single-line toolbar ===== */}
       <div className="flex flex-wrap items-center gap-2">
         {search ? (
-          <label className="flex min-w-[220px] flex-1 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5">
-            <FiSearch className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+          <label className="flex min-w-[220px] flex-1 items-center gap-2 rounded-lg border border-[#e3d9c4] bg-[#fcfaf5] px-3 py-1.5 transition focus-within:border-[#412d15]">
+            <FiSearch className="h-3.5 w-3.5 shrink-0 text-[#b6a684]" />
             <input
               value={search.value}
               onChange={(e) => search.onChange(e.target.value)}
@@ -689,7 +697,7 @@ export default function AdvancedDataTable<T>({
             type="button"
             onClick={() => setOpenMenu((cur) => (cur === 'columns' ? null : 'columns'))}
             aria-expanded={openMenu === 'columns'}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-600 transition hover:bg-slate-50"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
             title="Show/hide + pin columns"
           >
             <FiColumns className="h-3.5 w-3.5" />
@@ -739,7 +747,7 @@ export default function AdvancedDataTable<T>({
 
             const hasDraft = draftColumnOrder != null
             return (
-              <div className="absolute right-0 z-20 mt-1.5 w-72 rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
+              <div className="absolute right-0 z-20 mt-1.5 w-72 rounded-xl border border-[#e3d9c4] bg-white p-2 shadow-[0_12px_32px_rgba(31,21,12,0.12)]">
                 {orderedIds.map((id, idx) => {
                   const col = idToCol.get(id)
                   if (!col) return null
@@ -854,14 +862,14 @@ export default function AdvancedDataTable<T>({
             type="button"
             onClick={() => setOpenMenu((cur) => (cur === 'density' ? null : 'density'))}
             aria-expanded={openMenu === 'density'}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-600 transition hover:bg-slate-50"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
             title="Row density"
           >
             <FiSliders className="h-3.5 w-3.5" />
             Density
           </button>
           {openMenu === 'density' ? (
-            <div className="absolute right-0 z-20 mt-1.5 w-44 rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
+            <div className="absolute right-0 z-20 mt-1.5 w-44 rounded-xl border border-[#e3d9c4] bg-white p-2 shadow-[0_12px_32px_rgba(31,21,12,0.12)]">
               {(['compact', 'comfortable'] as const).map((d) => (
                 <button
                   key={d}
@@ -888,14 +896,14 @@ export default function AdvancedDataTable<T>({
             type="button"
             onClick={() => setOpenMenu((cur) => (cur === 'export' ? null : 'export'))}
             aria-expanded={openMenu === 'export'}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-600 transition hover:bg-slate-50"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
             title="Export the current view"
           >
             <FiDownload className="h-3.5 w-3.5" />
             Export
           </button>
           {openMenu === 'export' ? (
-            <div className="absolute right-0 z-20 mt-1.5 w-56 rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
+            <div className="absolute right-0 z-20 mt-1.5 w-56 rounded-xl border border-[#e3d9c4] bg-white p-2 shadow-[0_12px_32px_rgba(31,21,12,0.12)]">
               <button
                 type="button"
                 onClick={runExport}
@@ -914,12 +922,12 @@ export default function AdvancedDataTable<T>({
         {toolbarActions}
 
         {/* Pagination controls */}
-        <div className="ml-auto flex items-center gap-2 text-[12px] text-slate-600">
+        <div className="ml-auto flex items-center gap-2 text-[12px] text-[#5a4526]">
           <select
             value={pageSize}
             onChange={(e) => table.setPageSize(Number(e.target.value))}
             aria-label="Rows per page"
-            className="rounded-xl border border-slate-200 bg-white px-2 py-1 text-[12px] outline-none transition focus:border-[#412d15]"
+            className="rounded-lg border border-[#e3d9c4] bg-white px-2 py-1.5 text-[12px] font-semibold text-[#5a4526] outline-none transition hover:bg-[#faf7f0] focus:border-[#412d15]"
           >
             {[10, 25, 50, 100].map((n) => (
               <option key={n} value={n}>
@@ -932,20 +940,22 @@ export default function AdvancedDataTable<T>({
               type="button"
               onClick={() => table.previousPage()}
               disabled={!table.getCanPreviousPage()}
-              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[12px] transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+              aria-label="Previous page"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#5a4526] transition hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40"
             >
-              ‹
+              <FiChevronLeft className="h-3.5 w-3.5" />
             </button>
-            <span className="tabular-nums text-[11.5px]">
-              {pageCount === 0 ? 0 : pageIndex + 1} / {pageCount}
+            <span className="min-w-[3.5rem] text-center text-[11.5px] font-semibold tabular-nums">
+              {pageCount === 0 ? 0 : pageIndex + 1} of {pageCount}
             </span>
             <button
               type="button"
               onClick={() => table.nextPage()}
               disabled={!table.getCanNextPage()}
-              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[12px] transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+              aria-label="Next page"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#5a4526] transition hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40"
             >
-              ›
+              <FiChevronRight className="h-3.5 w-3.5" />
             </button>
           </div>
         </div>
@@ -966,7 +976,7 @@ export default function AdvancedDataTable<T>({
             // that used explicit text-[12px] / text-[12.5px] were also
             // sweep-bumped one step (13 / 13.5) in the same commit;
             // anything not swept still inherits this base.
-            className="text-[14.5px] text-slate-700"
+            className="text-[14.5px] text-[#3f3527]"
             // `width: 100%` + `min-width: totalSize` = the table fills the
             // container when there's extra room (percentages in <colgroup>
             // scale all columns proportionally); overflows and scrolls when
@@ -981,7 +991,7 @@ export default function AdvancedDataTable<T>({
                 />
               ))}
             </colgroup>
-            <thead className="sticky top-0 z-10 border-b border-dashed border-slate-300 bg-white text-left font-mono text-[14.5px] font-bold uppercase tracking-[0.18em] text-slate-400 shadow-[0_1px_0_0_rgba(148,163,184,0.2)]">
+            <thead className="sticky top-0 z-10 bg-[#faf7f0] text-left text-[11.5px] font-semibold text-[#6b5c42] shadow-[inset_0_-1px_0_0_#e3d9c4]">
               {table.getHeaderGroups().map((group) => (
                 <SortableContext
                   key={group.id}
@@ -1011,11 +1021,11 @@ export default function AdvancedDataTable<T>({
                                 {flexRender(header.column.columnDef.header, header.getContext())}
                                 {canSort ? (
                                   sortDir === 'asc' ? (
-                                    <FiChevronUp className="h-3 w-3 text-slate-400" />
+                                    <FiChevronUp className="h-3 w-3 text-[#412d15]" />
                                   ) : sortDir === 'desc' ? (
-                                    <FiChevronDown className="h-3 w-3 text-slate-400" />
+                                    <FiChevronDown className="h-3 w-3 text-[#412d15]" />
                                   ) : (
-                                    <FiChevronDown className="h-3 w-3 text-slate-200" />
+                                    <FiChevronDown className="h-3 w-3 text-[#dcd4c4]" />
                                   )
                                 ) : null}
                               </span>
@@ -1046,7 +1056,7 @@ export default function AdvancedDataTable<T>({
                 <tr>
                   <td
                     colSpan={visibleColumnCount}
-                    className={`${densityRowClass[density]} text-center text-[12px] text-slate-400`}
+                    className={`${densityRowClass[density]} text-center text-[12px] text-[#8a7a5a]`}
                   >
                     {emptyState}
                   </td>
@@ -1056,8 +1066,8 @@ export default function AdvancedDataTable<T>({
               {visibleRows.map((row) => (
                 <Fragment key={row.id}>
                 <tr
-                  className={`align-top ${renderExpanded ? 'cursor-pointer hover:bg-slate-50/60' : ''} ${
-                    renderExpanded && expandedId === row.id ? 'bg-slate-50' : ''
+                  className={`align-top border-b border-[#f2ecdf] last:border-b-0 ${renderExpanded || onRowClick ? 'cursor-pointer hover:bg-[#fcfaf5]' : ''} ${
+                    renderExpanded && expandedId === row.id ? 'bg-[#faf7f0]' : ''
                   }`}
                   onClick={
                     renderExpanded
@@ -1071,7 +1081,12 @@ export default function AdvancedDataTable<T>({
                           // loader calls setState, which warns "update while rendering").
                           if (willOpen) onRowExpand?.(row.original)
                         }
-                      : undefined
+                      : onRowClick
+                        ? (e) => {
+                            if ((e.target as HTMLElement).closest('button, a, input, select, textarea, label')) return
+                            onRowClick(row.original)
+                          }
+                        : undefined
                   }
                 >
                   {row.getVisibleCells().map((cell) => {
@@ -1088,7 +1103,7 @@ export default function AdvancedDataTable<T>({
                     return (
                       <td
                         key={cell.id}
-                        className={`${densityRowClass[density]} ${editable && !isEditing ? 'cursor-pointer transition-colors hover:bg-slate-50/70' : ''} ${isEditing ? 'bg-sky-50/40 ring-1 ring-inset ring-sky-300' : ''}`}
+                        className={`${densityRowClass[density]} ${editable && !isEditing ? 'cursor-pointer transition-colors hover:bg-[#faf7f0]' : ''} ${isEditing ? 'bg-[#fcfaf5] ring-1 ring-inset ring-[#cdbf9f]' : ''}`}
                         style={pinned}
                         onClick={() => {
                           if (!editable || isEditing) return
@@ -1129,8 +1144,8 @@ export default function AdvancedDataTable<T>({
         </DndContext>
       </div>
 
-      <p className="mt-2 text-[10.5px] tabular-nums text-slate-400">
-        Table key: <span className="font-mono">{tableKey}</span> · Showing {visibleRows.length} of {totalRows} row{totalRows === 1 ? '' : 's'}
+      <p className="mt-2 text-right text-[10.5px] tabular-nums text-[#b6a684]">
+        Showing {visibleRows.length} of {totalRows} row{totalRows === 1 ? '' : 's'}
       </p>
     </div>
   )

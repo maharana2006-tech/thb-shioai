@@ -127,6 +127,10 @@ public class OrderController {
     // PR-Printer-R7c — resolves per (client, carrier) invoice copies.
     // Optional so the dispatch keeps working if the service isn't
     // wired (defensive; production always has it).
+    /** Remembers what was printed (Bulk Mailer shows it). Optional for hand-built tests. */
+    @Autowired(required = false)
+    private com.multiship.backend.service.printing.DocumentPrintLog documentPrintLog;
+
     @Autowired(required = false)
     private com.multiship.backend.service.InvoiceCopiesService invoiceCopiesService;
 
@@ -1528,6 +1532,7 @@ public class OrderController {
                 org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
         java.util.List<byte[]> parts = new java.util.ArrayList<>(orderNos.size());
         java.util.List<Integer> skipped = new java.util.ArrayList<>();
+        java.util.List<Integer> included = new java.util.ArrayList<>();
         boolean labels = docType.equals("LABEL");
         for (Integer orderNo : orderNos) {
             // The per-order check the single-document endpoints apply, so a bulk
@@ -1545,11 +1550,13 @@ public class OrderController {
                     ResponseEntity<byte[]> pdf = labelled ? getLabelPdf(orderNo, null, true) : null;
                     if (pdf != null && pdf.getStatusCode().is2xxSuccessful() && pdf.getBody() != null && pdf.getBody().length > 0) {
                         parts.add(pdf.getBody());
+                        included.add(orderNo);
                     } else {
                         skipped.add(orderNo);
                     }
                 } else {
                     parts.add(commercialInvoiceService.render(orderNo));
+                    included.add(orderNo);
                 }
             } catch (IllegalArgumentException | IllegalStateException notPrintable) {
                 // Not found, or no customs data (domestic) — nothing to print for it.
@@ -1573,6 +1580,10 @@ public class OrderController {
                     .build();
         }
         byte[] merged = parts.size() == 1 ? parts.get(0) : pdfMerger.mergeToOne(parts);
+        if (documentPrintLog != null) {
+            documentPrintLog.record(included, docType, com.multiship.backend.service.printing.DocumentPrintLog.BROWSER,
+                    null, auth == null ? null : auth.getName());
+        }
         return ResponseEntity.ok()
                 .header("Content-Disposition", "inline; filename="
                         + (labels ? "labels-" : "commercial-invoices-") + parts.size() + ".pdf")
@@ -1679,6 +1690,7 @@ public class OrderController {
             java.util.List<byte[]> pdfParts = new java.util.ArrayList<>();
             StringBuilder zplJob = new StringBuilder();
             int documents = 0;
+            java.util.List<Integer> onThisPrinter = new java.util.ArrayList<>();
             for (Integer orderNo : e.getValue()) {
                 byte[] pdf = null;
                 String zplText = null;
@@ -1703,7 +1715,9 @@ public class OrderController {
                 if (zplText != null && !zplText.isBlank()) {
                     zplJob.append(zplText.strip()).append('\n');
                     documents++;
+                    onThisPrinter.add(orderNo);
                 } else if (pdf != null && pdf.length > 0) {
+                    onThisPrinter.add(orderNo);
                     // PR-Printer-R7c — INVOICE branch multiplies by the
                     // configured per (client, carrier) copies rule.
                     // LABEL always prints once. Copies value is bounded
@@ -1733,6 +1747,10 @@ public class OrderController {
                         : (documents == 1 ? " invoice" : " invoices"));
                 try {
                     printerService.send(printer, payload, "Multiship " + what, user);
+                    if (documentPrintLog != null) {
+                        documentPrintLog.record(onThisPrinter, docType,
+                                com.multiship.backend.service.printing.DocumentPrintLog.PRINTER, printer.getName(), user);
+                    }
                     r.put("ok", true);
                     r.put("message", "Sent " + what + " (" + printer.getFormat() + ", " + Math.max(1, payload.length / 1024) + " KB).");
                     sent += documents;

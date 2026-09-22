@@ -204,7 +204,7 @@ describe('ClientsPage · sort + pagination · positive', () => {
 
     await waitFor(() => {
       // "1 / 3" appears in the header pagination cluster (see AdvancedDataTable).
-      expect(screen.getByText(/^\s*1\s*\/\s*3\s*$/)).toBeTruthy()
+      expect(screen.getByText(/^\s*1 of 3\s*$/)).toBeTruthy()
     })
   })
 
@@ -260,7 +260,7 @@ describe('ClientsPage · sort + pagination · positive', () => {
     const user = userEvent.setup()
     // Next button label is a right-chevron (›) rendered as text content of a button.
     const buttons = screen.getAllByRole('button')
-    const next = buttons.find((b) => b.textContent?.trim() === '›')
+    const next = buttons.find((b) => b.getAttribute('aria-label') === 'Next page')
     expect(next).toBeTruthy()
     await user.click(next!)
 
@@ -278,7 +278,7 @@ describe('ClientsPage · sort + pagination · positive', () => {
 
     const user = userEvent.setup()
     const buttons = screen.getAllByRole('button')
-    const next = buttons.find((b) => b.textContent?.trim() === '›')
+    const next = buttons.find((b) => b.getAttribute('aria-label') === 'Next page')
     await user.click(next!)
 
     await waitFor(() => {
@@ -286,7 +286,7 @@ describe('ClientsPage · sort + pagination · positive', () => {
     })
 
     // Prev is the left-chevron button.
-    const prev = screen.getAllByRole('button').find((b) => b.textContent?.trim() === '‹')
+    const prev = screen.getAllByRole('button').find((b) => b.getAttribute('aria-label') === 'Previous page')
     expect(prev).toBeTruthy()
     await user.click(prev!)
 
@@ -320,7 +320,7 @@ describe('ClientsPage · sort + pagination · positive', () => {
 
     const user = userEvent.setup()
     // Advance to page 2 first so we can prove the reset.
-    const next = screen.getAllByRole('button').find((b) => b.textContent?.trim() === '›')
+    const next = screen.getAllByRole('button').find((b) => b.getAttribute('aria-label') === 'Next page')
     await user.click(next!)
     await waitFor(() => {
       expect(lastListParams().page).toBe(1)
@@ -351,9 +351,9 @@ describe('ClientsPage · sort + pagination · negative / edge', () => {
 
     await waitFor(() => {
       // "1 / 1" indicator confirms pagination cluster rendered.
-      expect(screen.getByText(/^\s*1\s*\/\s*1\s*$/)).toBeTruthy()
+      expect(screen.getByText(/^\s*1 of 1\s*$/)).toBeTruthy()
     })
-    const prev = screen.getAllByRole('button').find((b) => b.textContent?.trim() === '‹')
+    const prev = screen.getAllByRole('button').find((b) => b.getAttribute('aria-label') === 'Previous page')
     expect(prev).toBeTruthy()
     expect((prev as HTMLButtonElement).disabled).toBe(true)
   })
@@ -366,9 +366,9 @@ describe('ClientsPage · sort + pagination · negative / edge', () => {
     await waitForFirstFetch()
 
     await waitFor(() => {
-      expect(screen.getByText(/^\s*1\s*\/\s*1\s*$/)).toBeTruthy()
+      expect(screen.getByText(/^\s*1 of 1\s*$/)).toBeTruthy()
     })
-    const next = screen.getAllByRole('button').find((b) => b.textContent?.trim() === '›')
+    const next = screen.getAllByRole('button').find((b) => b.getAttribute('aria-label') === 'Next page')
     expect(next).toBeTruthy()
     expect((next as HTMLButtonElement).disabled).toBe(true)
   })
@@ -384,7 +384,7 @@ describe('ClientsPage · sort + pagination · negative / edge', () => {
     // ClientsPage clamps totalPages via Math.max(…, 1); the AdvancedDataTable
     // then renders "1 / 1" instead of "0 / 0".
     await waitFor(() => {
-      expect(screen.getByText(/^\s*1\s*\/\s*1\s*$/)).toBeTruthy()
+      expect(screen.getByText(/^\s*1 of 1\s*$/)).toBeTruthy()
     })
     // Empty-state text lands in the body.
     expect(screen.getByText(/no clients registered yet/i)).toBeTruthy()
@@ -415,7 +415,7 @@ describe('ClientsPage · sort + pagination · negative / edge', () => {
 
     const user = userEvent.setup()
     // Advance to page 2 first.
-    const next = screen.getAllByRole('button').find((b) => b.textContent?.trim() === '›')
+    const next = screen.getAllByRole('button').find((b) => b.getAttribute('aria-label') === 'Next page')
     await user.click(next!)
     await waitFor(() => expect(lastListParams().page).toBe(1))
 
@@ -448,7 +448,7 @@ describe('ClientsPage · sort + pagination · cross-cutting', () => {
     await waitForFirstFetch()
 
     await waitFor(() => {
-      expect(screen.getByText(/^\s*1\s*\/\s*2\s*$/)).toBeTruthy()
+      expect(screen.getByText(/^\s*1 of 2\s*$/)).toBeTruthy()
     })
     // Sortable Code header is present regardless of role.
     expect(screen.getAllByText('Code').length).toBeGreaterThan(0)
@@ -469,13 +469,12 @@ describe('ClientsPage · sort + pagination · cross-cutting', () => {
     await waitForFirstFetch()
 
     await waitFor(() => {
-      expect(screen.getByText(/^\s*1\s*\/\s*2\s*$/)).toBeTruthy()
+      expect(screen.getByText(/^\s*1 of 2\s*$/)).toBeTruthy()
     })
     // Prev + Next chevron buttons exist inside the toolbar.
     const buttons = within(container).getAllByRole('button')
     const chevrons = buttons.filter((b) => {
-      const t = b.textContent?.trim()
-      return t === '‹' || t === '›'
+      return b.getAttribute('aria-label') === 'Previous page' || b.getAttribute('aria-label') === 'Next page'
     })
     expect(chevrons.length).toBe(2)
   })

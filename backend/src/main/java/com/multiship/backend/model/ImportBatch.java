@@ -142,11 +142,34 @@ public class ImportBatch {
     /**
      * Where this batch's rows came from:
      *   BULK (or null) — a CSV/XLSX file the operator uploaded.
-     *   WMS            — a "Fetch from WMS" pull. Its orders are already created
-     *                    (PENDING, labelled later in the Shipments workspace), so
-     *                    the batch is a read-only record of the fetch and the
-     *                    Generate/Retry actions are hidden for it.
+     *   WMS / API      — a "Fetch from WMS" pull (or an API delivery). Its rows
+     *                    live in import_batch_row and are labelled from Bulk
+     *                    Mailer like a file's; generated orders get source = API.
      */
     @Column(name = "source", length = 16)
     private String source;
+
+    /**
+     * The client these orders belong to (first row's client code, upper-case).
+     * Written whenever the rows are, so Bulk Mailer can scope and page the
+     * batch list in the database instead of parsing every batch's rows. V79.
+     */
+    @Column(name = "client_code", length = 50)
+    private String clientCode;
+
+    /** Rows whose label was generated (or queued) — written with the rows. V81. */
+    @Column(name = "labels_generated", nullable = false)
+    private int labelsGenerated;
+
+    /** Rows the carrier rejected. */
+    @Column(name = "labels_failed", nullable = false)
+    private int labelsFailed;
+
+    /** The counts above came from the rows (false for a batch whose stored rows are gone). */
+    @Column(name = "labels_counted", nullable = false)
+    private boolean labelsCounted;
+
+    /** JSON {orderNo: rows} of the generated orders — so live voids can be counted in rows. */
+    @Column(name = "label_orders", columnDefinition = "TEXT")
+    private String labelOrders;
 }

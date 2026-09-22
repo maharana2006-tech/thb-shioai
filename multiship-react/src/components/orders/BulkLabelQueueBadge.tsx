@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { FiClock } from 'react-icons/fi'
 import {
   uspsLabelQueueService,
@@ -42,11 +42,20 @@ export interface BulkLabelQueueBadgeProps {
   refreshMs?: number
 }
 
+/** The last metrics seen, per scope — shown straight away when the badge remounts
+ *  (the workspace remounts its page on every address change), so it doesn't
+ *  blink out and shove the page around while it refetches. */
+const lastMetrics = new Map<string, UspsLabelQueueMetrics | null>()
+
 export default function BulkLabelQueueBadge({
   tenantCode,
   refreshMs = 30_000,
 }: BulkLabelQueueBadgeProps) {
-  const [metrics, setMetrics] = useState<UspsLabelQueueMetrics | null>(null)
+  const [metrics, setMetricsState] = useState<UspsLabelQueueMetrics | null>(() => lastMetrics.get(tenantCode ?? '') ?? null)
+  const setMetrics = useCallback((m: UspsLabelQueueMetrics | null) => {
+    lastMetrics.set(tenantCode ?? '', m)
+    setMetricsState(m)
+  }, [tenantCode])
 
   useEffect(() => {
     let cancelled = false
@@ -81,7 +90,7 @@ export default function BulkLabelQueueBadge({
     return () => {
       cancelled = true
     }
-  }, [tenantCode, refreshMs])
+  }, [tenantCode, refreshMs, setMetrics])
 
   // Nothing to show: pre-first-fetch, error state, or empty queue.
   if (metrics == null) return null

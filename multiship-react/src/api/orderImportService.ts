@@ -61,7 +61,10 @@ export interface OrderImportRow {
    *  FAILED = carrier or downstream failure (see generatedMessage). */
   generatedOrderNo?: number | null
   generatedTrackingNumber?: string | null
-  generatedStatus?: 'GENERATED' | 'FAILED' | null
+  /** GENERATED · FAILED · QUEUED_USPS · VOIDED (read live) · SAVED / NEEDS_FIX before generation. */
+  generatedStatus?: 'GENERATED' | 'FAILED' | 'QUEUED_USPS' | 'VOIDED' | string | null
+  /** When this row's order's documents were last printed (ISO). */
+  lastPrintedAt?: string | null
   generatedMessage?: string | null
   /** Label URL endpoint for retrieving the generated label PDF.
    *  Populated after successful label generation. Format: /api/v1/orders/{orderNo}/label/pdf */
@@ -157,10 +160,17 @@ export interface ImportBatchSummary {
   deletedBy?: string | null
   /** Bill-to account mode: 'AUTO' (cascade) or 'PLATFORM' (house account). */
   billingMode?: 'AUTO' | 'PLATFORM' | string | null
-  /** Origin of the rows: 'BULK' (uploaded file) or 'WMS' (Fetch from WMS).
-   *  WMS batches are a read-only record of a fetch — labels are generated in
-   *  the Shipments workspace, so Generate/Retry are hidden for them. */
+  /** Origin of the rows: 'BULK' (uploaded file), 'WMS' (Fetch from WMS) or
+   *  'API'. Every kind is validated, edited and labelled in Bulk Mailer; the
+   *  orders of a WMS/API batch are stamped source = API. */
   source?: 'BULK' | 'WMS' | string | null
+  /** When anything of this batch was last printed (ISO) — list rows only. */
+  lastPrintedAt?: string | null
+  /** Where the batch's labels stand, in rows (list only): live, voided since, rejected, not labelled yet. */
+  labelsGenerated?: number | null
+  labelsVoided?: number | null
+  labelsFailed?: number | null
+  labelsPending?: number | null
 }
 
 /** A saved import with its full rows (detail view). */
@@ -361,6 +371,14 @@ export const orderImportService = {
     apiClient.delete<ApiResponse<string>>(`/orders/import/history/${id}/generate`),
 
   /**
+   * Void labels with their carriers — the given rows, or every generated row
+   * of the batch when none are given. Each order is reported on its own; a
+   * carrier refusal is a refusal, not a success.
+   */
+  voidBatchLabels: (id: number, rowNumbers: number[] = []) =>
+    apiClient.post<ApiResponse<BatchVoidResult>>(`/orders/import/history/${id}/void`, { rowNumbers }),
+
+  /**
    * Validate all rows in a batch and update their errors/warnings
    */
   validateAllRows: (id: number) =>
@@ -476,4 +494,18 @@ export const orderImportService = {
     // Revoke after a short delay so the download tab has time to fire.
     window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
   },
+}
+
+/** One order's answer to a batch void. */
+export interface OrderVoidOutcome {
+  orderNo: number
+  rowNumbers: number[]
+  voided: boolean
+  message: string
+}
+
+export interface BatchVoidResult {
+  voided: number
+  refused: number
+  orders: OrderVoidOutcome[]
 }

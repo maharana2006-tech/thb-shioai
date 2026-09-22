@@ -97,8 +97,9 @@ public class WmsController {
     }
 
     @Operation(summary = "Pull shippable orders from the WMS",
-            description = "Fetches the WMS's current shippable orders and imports each new one as a " +
-                    "PENDING order (source = WMS). Idempotent — orders already imported are skipped.")
+            description = "Fetches the WMS's current shippable orders into one import batch (source = WMS), " +
+                    "validated and labelled from Bulk Mailer like a file import. A fetch of the same " +
+                    "orders reuses the existing batch.")
     @PreAuthorize("hasRole('ADMIN')")
     @PostMapping("/pull")
     public ResponseEntity<ApiResponse<WmsPullResultDTO>> pull(

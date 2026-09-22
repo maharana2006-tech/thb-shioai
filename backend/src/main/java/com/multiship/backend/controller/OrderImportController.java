@@ -264,12 +264,41 @@ public class OrderImportController {
     public ResponseEntity<ApiResponse<Integer>> emptyTrash(
             @AuthenticationPrincipal UserDetails userDetails) {
         String username = userDetails == null ? "unknown" : userDetails.getUsername();
-        int purged = orderImportService.purgeTrash(username);
+        var result = orderImportService.purgeTrashChecked(username);
+        int purged = result.purged();
+        int kept = result.keptWithLiveLabels();
+        String msg = (purged == 1 ? "1 import permanently deleted." : purged + " imports permanently deleted.")
+                + (kept > 0 ? " Kept " + kept + (kept == 1 ? " import that still has" : " imports that still have")
+                        + " live labels — void them first." : "");
         return ResponseEntity.ok(ApiResponse.<Integer>builder()
                 .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
-                .message(purged == 1 ? "1 import permanently deleted."
-                        : purged + " imports permanently deleted.")
+                .message(msg)
                 .data(purged).build());
+    }
+
+    /** Body of POST /history/{id}/void — the rows to void; empty = every generated row. */
+    public record VoidBatchRequest(java.util.List<Integer> rowNumbers) { }
+
+    @Operation(summary = "Void a batch's labels with their carriers",
+            description = "Voids the labels of the given rows (or every generated row when none are given). "
+                    + "Each order is voided once and reported on its own — a carrier refusal is not a success.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PostMapping("/history/{id}/void")
+    public ResponseEntity<ApiResponse<OrderImportService.BatchVoidResult>> voidBatch(
+            @org.springframework.web.bind.annotation.PathVariable Long id,
+            @org.springframework.web.bind.annotation.RequestBody(required = false) VoidBatchRequest body) {
+        var result = orderImportService.voidBatchLabels(id, body == null ? null : body.rowNumbers());
+        if (result == null) {
+            return ResponseEntity.status(404).body(ApiResponse.<OrderImportService.BatchVoidResult>builder()
+                    .status("ERROR").code(404).timestamp(java.time.LocalDateTime.now())
+                    .message("Import #" + id + " not found.").build());
+        }
+        String msg = result.orders().isEmpty() ? "No live labels to void."
+                : result.voided() + " voided" + (result.refused() > 0 ? ", " + result.refused() + " refused by the carrier" : "") + ".";
+        return ResponseEntity.ok(ApiResponse.<OrderImportService.BatchVoidResult>builder()
+                .status(result.refused() > 0 ? "PARTIAL" : "SUCCESS").code(200)
+                .timestamp(java.time.LocalDateTime.now())
+                .message(msg).data(result).build());
     }
 
     @Operation(summary = "One saved import with its rows")

@@ -22,6 +22,11 @@ export interface UseTrashActionsOptions {
   setBatches: React.Dispatch<React.SetStateAction<ImportBatchSummary[]>>
   openId: number | null
   setOpenId: (id: number | null) => void
+  /** When given, the Trash view is controlled by the caller (e.g. the URL tab). */
+  viewTrash?: boolean
+  /** Called after a delete / restore instead of dropping the batch from the list —
+   *  e.g. a single-batch page re-reads the batch to show its new state. */
+  onMoved?: (id: number) => void
 }
 
 export interface UseTrashActionsResult {
@@ -45,13 +50,16 @@ export function useTrashActions({
   setBatches,
   openId,
   setOpenId,
+  viewTrash: controlledViewTrash,
+  onMoved,
 }: UseTrashActionsOptions): UseTrashActionsResult {
   // Silence the unused-arg warning — batches is accepted for symmetry
   // with parent state and to make the hook API self-documenting even
   // though the current implementation only mutates through setBatches.
   void _batches
 
-  const [viewTrash, setViewTrash] = useState(false)
+  const [ownViewTrash, setViewTrash] = useState(false)
+  const viewTrash = controlledViewTrash ?? ownViewTrash
   const [trashBusyId, setTrashBusyId] = useState<number | null>(null)
   const [confirmEmpty, setConfirmEmpty] = useState(false)
   const [emptying, setEmptying] = useState(false)
@@ -77,12 +85,18 @@ export function useTrashActions({
     setTrashBusyId(id)
     try {
       await orderImportService.deleteBatch(id)
-      setBatches((list) => list.filter((b) => b.id !== id))
+      if (onMoved) onMoved(id)
+      else setBatches((list) => list.filter((b) => b.id !== id))
       if (openId === id) setOpenId(null)
       notify.success(
         `"${fileName || `Import #${id}`}" moved to Trash · restore it from Trash anytime.`,
       )
     } catch (e) {
+      // "Still has live labels" is the rule working, not something going wrong.
+      if (e instanceof ApiError && e.status === 409) {
+        notify.info({ title: "Can't delete this import yet", body: e.message })
+        return
+      }
       notify.apiError(e, 'Could not delete import.')
     } finally {
       setTrashBusyId(null)
@@ -98,7 +112,8 @@ export function useTrashActions({
     setTrashBusyId(id)
     try {
       await orderImportService.restoreBatch(id, allowDuplicate)
-      setBatches((list) => list.filter((b) => b.id !== id))
+      if (onMoved) onMoved(id)
+      else setBatches((list) => list.filter((b) => b.id !== id))
       if (openId === id) setOpenId(null)
       notify.success(`"${fileName || `Import #${id}`}" restored.`)
     } catch (e) {

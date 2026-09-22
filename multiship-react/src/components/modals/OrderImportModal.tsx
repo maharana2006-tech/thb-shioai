@@ -91,7 +91,8 @@ export interface OrderImportModalProps {
    *  of as a popup. Used by the Order Intake page's "Import" tab. */
   inline?: boolean
   /** Called after the batch is saved / generated so the host can refresh the history view. */
-  onImported?: () => void
+  /** Orders were saved to Import history — into this batch, when known. */
+  onImported?: (batchId: number | null) => void
 }
 
 export default function OrderImportModal({ onClose, inline = false, onImported }: OrderImportModalProps) {
@@ -283,7 +284,7 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
         setLastSave({ message: res.message ?? 'Saved to Import history.', batchId: res.data.lastSavedBatchId ?? null })
         dismissDupToast()
         notify.success(res.message ?? 'Saved to Import history.')
-        onImported?.()
+        onImported?.(res.data.lastSavedBatchId ?? null)
       } else {
         setError(res.message ?? 'Save failed.')
         notify.error(res.message ?? 'Save failed.')

@@ -189,6 +189,7 @@ public class UspsQueueImportRowReconciler {
 
         try {
             batch.setRowsJson(objectMapper.writeValueAsString(rows));
+            com.multiship.backend.service.OrderImportServiceImpl.stampLabelCounts(batch, rows, objectMapper);
             importBatchRepository.save(batch);
             log.info("USPS queue reconciler: import batch {} - flipped {} row(s) for order={} -> {}",
                     event.importBatchId(), flipped.size(), event.orderNo(), event.terminalStatus());

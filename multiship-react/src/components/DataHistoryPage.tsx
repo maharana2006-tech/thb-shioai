@@ -1,14 +1,18 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   FiAlertCircle,
+  FiPrinter,
+  FiSend,
+  FiCheckCircle,
+  FiDownloadCloud,
   FiArrowLeft,
   FiFileText,
   FiHome,
   FiRefreshCw,
-  FiSearch,
   FiSliders,
   FiTrash2,
+  FiUpload,
   FiRotateCcw,
   FiSlash,
   FiX,
@@ -17,12 +21,21 @@ import {
 import type { ColumnDef } from '@tanstack/react-table'
 import PageSectionHeader from './workspace/PageSectionHeader'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
-import AllOrdersHistory from './AllOrdersHistory'
-import OrderImportModal from './modals/OrderImportModal'
+import { bulkBatchPath, bulkPaths, settingsPaths } from '../routes/workspaceRoutes'
+import { wmsService } from '../api/wmsService'
+import { bulkService, type BulkSummary, type BulkView } from '../api/bulkService'
+import { AddShipViaMappingDialog, ShipViaCodesPanel } from './modals/ShipViaCodes'
 import OrderDocumentsTable from './OrderDocumentsTable'
 import DataHistoryFilterToolbar from './DataHistoryFilterToolbar'
 import { GridCell, DH_COLUMNS, RowIssuesIcon, RowChannelChip, bucketRowErrors, type DhColumn } from './batchGrid'
 import VirtualTable from './VirtualTable'
+import AnimatedHeight from './ui/AnimatedHeight'
+import BatchLabelBar from './bulk/BatchLabelBar'
+import { labelCountsOf, liveOrdersOf, type LabelCounts } from '../utils/batchLabels'
+import { printPdfBlob } from '../utils/printPdf'
+import { orderService } from '../api/orderService'
+import SendToPrinterDialog from './workspace/SendToPrinterDialog'
+import { BTN_GHOST_SM } from './ui/buttons'
 import { notify } from '../utils/notify'
 import { ApiError } from '../api/apiClient'
 import {
@@ -34,6 +47,7 @@ import { useAppSession } from '../hooks/useAppSession'
 import { useEventStream } from '../hooks/useEventStream'
 import { useHistoryFilters } from '../hooks/useHistoryFilters'
 import { useTrashActions } from '../hooks/useTrashActions'
+import { useLatestRequest } from '../hooks/useLatestRequest'
 import { normalizeRole } from '../utils/roles'
 // PR-G4 — USPS_DIRECT UX (audit U2 + U3). Badge surfaces queue depth
 // at the top of Data History so ops see rate-limit pressure without
@@ -87,6 +101,13 @@ export default function DataHistoryPage() {
    *  Now hidden for TENANT so the read-only intent is visible upfront. */
   const { role } = useAppSession()
   const canWrite = normalizeRole(role) !== 'TENANT'
+  /** Pulling from the WMS is admin-only on the server. */
+  const canPullWms = normalizeRole(role) === 'ADMIN'
+  const [fetchingWms, setFetchingWms] = useState(false)
+  /** The unmapped ship via code being mapped, and the batch to re-check afterwards. */
+  const [mapping, setMapping] = useState<{ code: string; clientCode: string | null; batchId: number } | null>(null)
+  /** Bumped after a mapping is added, so the ship-via panel re-reads its codes. */
+  const [codesTick, setCodesTick] = useState(0)
   const [batches, setBatches] = useState<ImportBatchSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [openId, setOpenId] = useState<number | null>(null)
@@ -126,6 +147,8 @@ export default function DataHistoryPage() {
   const [confirmGenId, setConfirmGenId] = useState<number | null>(null)
   // Per-batch row filter for the expanded grid — a 1,000-order batch is 2,484 rows.
   const [gridFilter, setGridFilter] = useState<Record<number, 'all' | 'failed' | 'pending'>>({})
+  /** Ticked rows (row numbers) per batch — for print / send / void. */
+  const [pickedRows, setPickedRows] = useState<Record<number, number[]>>({})
   const [genRowKey, setGenRowKey] = useState<string | null>(null)
   // Inline correction: the cell being saved (rowKey), for a per-cell spinner.
   const [savingCell, setSavingCell] = useState<string | null>(null)
@@ -136,7 +159,25 @@ export default function DataHistoryPage() {
   // Order Intake has three views: "orders" (unified per-order list across
   // Bulk / Manual / API / WMS), "import" (inline CSV/Excel upload + validation),
   // and "imports" (history of bulk import batches).
-  const [dhView, setDhView] = useState<'orders' | 'import' | 'imports' | 'docs'>('orders')
+  // Bulk Mailer tab from the URL (/bulk/:tab): imports (default) · api · documents · trash.
+  const { tab, batchId: batchIdParam } = useParams<{ tab?: string; batchId?: string }>()
+  /** /bulk/batches/:id — one batch on its own page. */
+  const batchPageId = batchIdParam ? Number(batchIdParam) || null : null
+  const bulkTab: BulkTab = BULK_TABS.some((t) => t.key === tab) ? (tab as BulkTab) : 'imports'
+  const dhView: 'imports' | 'docs' = bulkTab === 'documents' ? 'docs' : 'imports'
+  /** Import history and API batches are the same list — only where the batches come from differs. */
+  const isApiTab = bulkTab === 'api'
+  // Which way the content slides in: from the right for a tab further along, from the left for one before.
+  const [tabMotion, setTabMotion] = useState<{ tab: BulkTab; dir: 1 | -1 }>({ tab: bulkTab, dir: 1 })
+  /** The Documents table has loaded (for this visit to the tab). */
+  const [docsLoadedFor, setDocsLoadedFor] = useState<BulkTab | null>(null)
+  if (tabMotion.tab !== bulkTab) {
+    const from = BULK_TABS.findIndex((t) => t.key === tabMotion.tab)
+    const to = BULK_TABS.findIndex((t) => t.key === bulkTab)
+    setTabMotion({ tab: bulkTab, dir: to >= from ? 1 : -1 })
+    setDocsLoadedFor(null)
+  }
+  const [searchParams] = useSearchParams()
 
   // F5-A — advanced filter + sort + pagination state extracted to
   // useHistoryFilters (see hooks/useHistoryFilters.ts). Behavior is
@@ -149,17 +190,51 @@ export default function DataHistoryPage() {
     showAdvanced,
     setShowAdvanced,
     activeAdvancedCount,
-    filtered,
     clearFilters,
   } = filters
+
+  // ── Server-side list (phase 4): the page shows one page of batches, and the
+  // toolbar's filters, the sort and paging are sent to the server.
+  const [pageIndex, setPageIndex] = useState(0)
+  const [pageSize, setPageSize] = useState(25)
+  const [pageInfo, setPageInfo] = useState({ total: 0, pages: 1 })
+  const [summary, setSummary] = useState<BulkSummary | null>(null)
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedSearch(filters.search.trim()), 300)
+    return () => window.clearTimeout(t)
+  }, [filters.search])
+  const listQuery = {
+    status: filters.statusFilter === 'ALL' ? undefined : filters.statusFilter,
+    q: debouncedSearch || undefined,
+    from: filters.dateFrom || undefined,
+    to: filters.dateTo || undefined,
+    createdBy: filters.createdBy || undefined,
+    labelBatch: filters.batchPresence === 'ANY' ? undefined : filters.batchPresence,
+    minSaved: filters.minSaved ? Number(filters.minSaved) : undefined,
+    sort: filters.sortKey,
+    dir: filters.sortDir,
+  } as const
+  const listQueryKey = JSON.stringify(listQuery)
+  // A new filter starts again at page 1.
+  const [pagedQueryKey, setPagedQueryKey] = useState(listQueryKey)
+  if (pagedQueryKey !== listQueryKey) {
+    setPagedQueryKey(listQueryKey)
+    setPageIndex(0)
+  }
 
   // F5-A — soft-delete / restore / empty-Trash extracted to
   // useTrashActions. The Trash-view toggle lives here now so we can
   // reload independently when the operator flips between live and Trash.
-  const trash = useTrashActions({ batches, setBatches, openId, setOpenId })
+  // The batch page re-reads its batch after a delete / restore (load is declared below).
+  const reloadRef = useRef<() => void>(() => {})
+  const trash = useTrashActions({
+    batches, setBatches, openId, setOpenId,
+    onMoved: batchPageId != null ? () => reloadRef.current() : undefined,
+    viewTrash: batchPageId != null ? !!batches.find((b) => b.id === batchPageId)?.deletedAt : bulkTab === 'trash',
+  })
   const {
     viewTrash,
-    setViewTrash,
     trashBusyId,
     confirmEmpty,
     setConfirmEmpty,
@@ -170,17 +245,180 @@ export default function DataHistoryPage() {
   } = trash
 
 
-  const load = async () => {
-    setLoading(true)
+  useEffect(() => {
+    if (!batchPageId && tab && !BULK_TABS.some((t) => t.key === tab)) navigate(bulkPaths.imports, { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab])
+
+  /** Print / send a whole batch from the list: its live labels, looked up on demand. */
+  const [batchPrintBusy, setBatchPrintBusy] = useState<number | null>(null)
+  const [sendBatch, setSendBatch] = useState<number[] | null>(null)
+  const liveOrdersOfBatch = async (b: ImportBatchSummary): Promise<number[]> => {
+    const cached = rowsById[b.id]
+    const rows = Array.isArray(cached) ? cached : (await orderImportService.getHistory(b.id)).data?.rows ?? []
+    const live = liveOrdersOf(rows)
+    if (live.length === 0) notify.info('This batch has no live labels to print.')
+    return live
+  }
+  const printBatchLabels = async (b: ImportBatchSummary) => {
+    setBatchPrintBusy(b.id)
     try {
-      const res = await orderImportService.listHistory(viewTrash)
-      setBatches(res.data ?? [])
+      const live = await liveOrdersOfBatch(b)
+      if (live.length === 0) return
+      const res = await orderService.printDocuments(live.slice(0, 500), 'LABEL')
+      printPdfBlob(res.blob)
+      notify.success(`Opening ${res.included} label${res.included === 1 ? '' : 's'} of batch #${b.id} in the print dialog`
+        + (live.length > 500 ? ' — the first 500; open the batch to print the rest.' : '.'))
+      void reloadQuiet()
+    } catch (e) {
+      notify.apiError(e, 'Could not print this batch.')
+    } finally {
+      setBatchPrintBusy(null)
+    }
+  }
+  /** Void every live label of a batch from the list — the batch page's Void all, one click away. */
+  const voidBatchLabels = async (b: ImportBatchSummary) => {
+    const n = liveCountOf(b)
+    if (n === 0 || batchPrintBusy === b.id) return
+    const ok = await notify.confirm(
+      `The carriers will cancel every live label of batch #${b.id} (${b.fileName || 'this import'}) — the orders can't ship on them any more. This can't be undone.`,
+      { title: `Void all labels of batch #${b.id}?`, confirmLabel: 'Void them', cancelLabel: 'Keep them', danger: true },
+    )
+    if (!ok) return
+    setBatchPrintBusy(b.id)
+    try {
+      const res = (await orderImportService.voidBatchLabels(b.id, [])).data
+      if (!res || res.orders.length === 0) notify.info('There were no live labels left to void.')
+      else if (res.refused === 0) notify.success(`${res.voided} label${res.voided === 1 ? '' : 's'} of batch #${b.id} voided.`)
+      else {
+        const refusals = res.orders.filter((o) => !o.voided).slice(0, 3).map((o) => `#${o.orderNo}: ${o.message}`).join(' · ')
+        notify.info({ title: `${res.voided} voided, ${res.refused} refused by the carrier`,
+          body: refusals + (res.refused > 3 ? ` · and ${res.refused - 3} more` : '') })
+      }
+      setRowsById((m) => { const next = { ...m }; delete next[b.id]; return next })   // stale rows
+      void reloadQuiet()
+    } catch (e) {
+      notify.apiError(e, 'Could not void the labels.')
+    } finally {
+      setBatchPrintBusy(null)
+    }
+  }
+
+  const sendBatchToPrinter = async (b: ImportBatchSummary) => {
+    setBatchPrintBusy(b.id)
+    try {
+      const live = await liveOrdersOfBatch(b)
+      if (live.length > 0) setSendBatch(live.slice(0, 500))
+    } catch (e) {
+      notify.apiError(e, 'Could not read this batch.')
+    } finally {
+      setBatchPrintBusy(null)
+    }
+  }
+
+  /** Re-read a batch's rows (after a void) and its header counts. */
+  const reloadRows = (id: number) => {
+    orderImportService.getHistory(id)
+      .then((res) => setRowsById((m) => ({ ...m, [id]: res.data?.rows ?? [] })))
+      .catch((e) => notify.apiError(e, 'Could not reload the rows.'))
+  }
+
+  /** Lazy-load a batch's rows when its row is expanded. */
+  const ensureRows = (id: number) => {
+    if (rowsById[id]) return
+    setRowsById((m) => ({ ...m, [id]: 'loading' }))
+    orderImportService
+      .getHistory(id)
+      .then((res) => setRowsById((m) => ({ ...m, [id]: res.data?.rows ?? [] })))
+      .catch((e) => {
+        notify.apiError(e, 'Could not load import rows.')
+        setRowsById((m) => ({ ...m, [id]: [] }))
+      })
+  }
+
+  /** File imports, API/WMS fetches, or Trash (deleted batches of either kind). */
+  const listView: BulkView = viewTrash ? 'TRASH' : isApiTab ? 'API' : 'FILE'
+  const fetchBatches = async (): Promise<{ data: ImportBatchSummary[]; page?: { total: number; pages: number }; summary?: BulkSummary | null }> => {
+    // The batch page's "list" is that one batch (live or in Trash, any source).
+    if (batchPageId != null) {
+      const res = await orderImportService.getHistory(batchPageId)
+      return { data: res.data ? [res.data as ImportBatchSummary] : [] }
+    }
+    const [res, sum] = await Promise.all([
+      bulkService.listBatches({ view: listView, ...listQuery, page: pageIndex, size: pageSize }),
+      bulkService.summary(listView).catch(() => null),
+    ])
+    return {
+      data: res.data?.content ?? [],
+      page: { total: res.data?.totalElements ?? 0, pages: Math.max(res.data?.totalPages ?? 1, 1) },
+      summary: sum?.data ?? null,
+    }
+  }
+  /** Each fetch is numbered; a slower answer for a list the operator has already left is dropped. */
+  const latest = useLatestRequest()
+  /** Which list the shown batches belong to — until the new tab's answer lands, its skeleton shows. */
+  const [loadedView, setLoadedView] = useState<string | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
+  const viewKey = batchPageId != null ? `batch:${batchPageId}` : listView
+  /** The tab shows its real content — the panel's height may settle. */
+  const tabReady = dhView === 'docs' ? docsLoadedFor === 'documents' : loadedView === viewKey
+  const applyFetch = (seq: number, view: string, r: Awaited<ReturnType<typeof fetchBatches>>) => {
+    if (!latest.isLatest(seq)) return false
+    setBatches(r.data)
+    if (r.page) setPageInfo(r.page)
+    if (r.summary) setSummary(r.summary)
+    setLoadedView(view)
+    return true
+  }
+
+
+  /** Pull the WMS's pending shipments in as one new batch (or reopen the same one). */
+  const fetchFromWms = async () => {
+    setFetchingWms(true)
+    try {
+      const r = (await wmsService.pull()).data
+      if (r && !r.configured) {
+        notify.info('The WMS link is not set up on the server.')
+      } else if (r) {
+        if (r.imported > 0) {
+          notify.success(`WMS: ${r.imported} shipment(s) imported as a new batch${r.failed ? ` · ${r.failed} skipped` : ''}.`)
+        } else if (r.importBatchId != null) {
+          notify.info('These shipments were already fetched — opening the existing batch.')
+        } else {
+          notify.info('The WMS has no pending shipments to fetch.')
+        }
+        if (r.importBatchId != null) navigate(bulkBatchPath(r.importBatchId))
+      }
+    } catch (e) {
+      notify.apiError(e, 'Could not reach the WMS.')
+    } finally {
+      setFetchingWms(false)
+    }
+  }
+
+  const load = async () => {
+    const seq = latest.begin()
+    const view = viewKey
+    if (batches.length === 0) setLoading(true)
+    setRefreshing(true)
+    try {
+      if (!applyFetch(seq, view, await fetchBatches())) return
+      if (batchPageId != null) ensureRows(batchPageId)
+      // Old ?highlight=<id> links: open that batch's page.
+      const highlightId = Number(searchParams.get('highlight')) || null
+      if (highlightId) navigate(bulkBatchPath(highlightId), { replace: true })
     } catch (e) {
       // Keep whatever is already listed: wiping it rendered the "no imports
       // yet" empty state on a transient 502, which reads as data loss.
-      notify.apiError(e, viewTrash ? 'Could not load Trash.' : 'Could not load import history.')
+      // A missing batch gets the page's own "isn't here" message, not an error notice.
+      if (batchPageId != null && e instanceof ApiError && (e.status === 404 || e.status === 403)) return
+      notify.apiError(e, batchPageId != null ? 'Could not load this batch.'
+        : viewTrash ? 'Could not load Trash.' : isApiTab ? 'Could not load the API batches.' : 'Could not load import history.')
     } finally {
-      setLoading(false)
+      if (latest.isLatest(seq)) {
+        setLoading(false)
+        setRefreshing(false)
+      }
     }
   }
 
@@ -191,21 +429,25 @@ export default function DataHistoryPage() {
    * blow up the operator's view; the next poll will retry.
    */
   const reloadQuiet = async () => {
+    const seq = latest.begin()
+    const view = viewKey
     try {
-      const res = await orderImportService.listHistory(viewTrash)
-      setBatches(res.data ?? [])
+      applyFetch(seq, view, await fetchBatches())
     } catch {
       // ignore transient failures during background polling
     }
   }
 
+  useEffect(() => { reloadRef.current = () => { void load() } })
+
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount + when switching between live/Trash views
+    /* eslint-disable react-hooks/set-state-in-effect -- data fetch on mount + when switching list (file / API / Trash / one batch) */
     void load()
     setOpenId(null)
     setConfirmEmpty(false)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- load/setOpenId/setConfirmEmpty are stable; only viewTrash toggle re-fetches
-  }, [viewTrash])
+    /* eslint-enable react-hooks/set-state-in-effect */
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load/setOpenId/setConfirmEmpty are stable; switching list re-fetches
+  }, [viewTrash, isApiTab, batchPageId, listQueryKey, pageIndex, pageSize])
 
   /**
    * Auto-poll the list while any batch is IN_PROGRESS so status
@@ -753,107 +995,32 @@ export default function DataHistoryPage() {
     return () => clearInterval(t)
   }, [anyGenerating])
 
-  /** Lazy-load a batch's rows when its row is expanded. */
-  const ensureRows = (id: number) => {
-    if (rowsById[id]) return
-    setRowsById((m) => ({ ...m, [id]: 'loading' }))
-    orderImportService
-      .getHistory(id)
-      .then((res) => setRowsById((m) => ({ ...m, [id]: res.data?.rows ?? [] })))
-      .catch((e) => {
-        notify.apiError(e, 'Could not load import rows.')
-        setRowsById((m) => ({ ...m, [id]: [] }))
-      })
+  /** Where a batch's labels stand — counted from its rows on the batch page, else the server's counts. */
+  const labelCountsFor = (b: ImportBatchSummary): LabelCounts | null => {
+    const r = rowsById[b.id]
+    if (Array.isArray(r)) return labelCountsOf(r)
+    if (b.labelsGenerated == null) return null
+    return { generated: b.labelsGenerated ?? 0, pending: b.labelsPending ?? 0, voided: b.labelsVoided ?? 0, failed: b.labelsFailed ?? 0 }
   }
 
-  // Columns for the Import-history table (reorder/resize via AdvancedDataTable).
-  const dhColumns = useMemo<ColumnDef<ImportBatchSummary, unknown>[]>(
-    () => [
-      {
-        id: 'serial',
-        header: 'Serial no.',
-        enableSorting: false,
-        size: 70,
-        accessorFn: (b) => b.id,
-        cell: ({ row }) => <span className="font-mono text-[13px] font-bold text-[#1f150c]">#{row.original.id}</span>,
-        meta: { headerLabel: 'Serial no.' },
-      },
-      {
-        id: 'file',
-        header: 'File',
-        enableSorting: false,
-        size: 240,
-        accessorFn: (b) => b.fileName ?? '',
-        cell: ({ row }) => {
-          const b = row.original
-          const isWms = (b.source || '').toUpperCase() === 'WMS'
-          return (
-            <span className="block min-w-0">
-              <span className="flex items-center gap-1.5">
-                <FiFileText className="h-3.5 w-3.5 shrink-0 text-[#b6a684]" />
-                <span className="truncate text-[13.5px] font-semibold text-[#1f150c]" title={b.fileName || undefined}>
-                  {b.fileName || 'Untitled import'}
-                </span>
-                {isWms ? (
-                  <span
-                    title="Pulled in by Fetch from WMS — orders are PENDING and labelled in the Shipments workspace"
-                    className="inline-flex shrink-0 items-center rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-emerald-700 ring-1 ring-emerald-200"
-                  >
-                    WMS
-                  </span>
-                ) : null}
-              </span>
-              <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-[#6b5c42]">
-                <span>{b.createdBy || '—'}</span>
-                {b.labelBatchId != null ? (
-                  <span
-                    title="Label batch — find these orders together in All Orders"
-                    className="inline-flex items-center gap-1 rounded-full bg-[#412d15] px-2 py-0.5 font-mono text-[9.5px] font-bold uppercase tracking-[0.08em] text-[#f4eede]"
-                  >
-                    <FiZap className="h-2.5 w-2.5" /> Batch {b.labelBatchId}
-                  </span>
-                ) : (
-                  <span className="font-mono text-[9.5px] uppercase tracking-[0.08em] text-[#b6a684]">No batch yet</span>
-                )}
-              </span>
-            </span>
-          )
-        },
-        meta: { headerLabel: 'File' },
-      },
-      {
-        id: 'created',
-        header: 'Date',
-        enableSorting: false,
-        size: 150,
-        accessorFn: (b) => b.createdAt ?? '',
-        cell: ({ row }) => {
-          const iso = row.original.createdAt
-          const d = iso ? new Date(iso) : null
-          const valid = d && !Number.isNaN(d.getTime())
-          return (
-            <span className="flex flex-col gap-0.5" title={valid ? d!.toLocaleString() : undefined}>
-              <span className="text-[12px] font-semibold text-[#3f3527]">
-                {valid ? d!.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}
-              </span>
-              {valid ? (
-                <span className="text-[11px] tabular-nums text-[#6b5c42]">
-                  {d!.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
-                </span>
-              ) : null}
-            </span>
-          )
-        },
-        meta: { headerLabel: 'Date', exportValue: (b: ImportBatchSummary) => b.createdAt ?? '' },
-      },
-      {
-        id: 'status',
-        header: 'Status',
-        enableSorting: false,
-        size: 130,
-        accessorFn: (b) => b.status ?? '',
-        cell: ({ row }) => {
-          const b = row.original
+  /** When the batch was last printed — from the list, or from its rows on the batch page. */
+  const printedAtOf = (b: ImportBatchSummary): string | null => {
+    const r = rowsById[b.id]
+    const fromRows = Array.isArray(r)
+      ? r.map((x) => x.lastPrintedAt).filter((x): x is string => !!x).sort().pop() ?? null
+      : null
+    return fromRows ?? b.lastPrintedAt ?? null
+  }
+
+  /** Live labels of a batch, when its rows are loaded (the batch page); the server enforces the rule either way. */
+  const liveCountOf = (b: ImportBatchSummary) => {
+    const r = rowsById[b.id]
+    // The list carries the server's live count (rows); the batch page counts its loaded rows (orders).
+    return Array.isArray(r) ? liveOrdersOf(r).length : (b.labelsGenerated ?? 0)
+  }
+
+  // Status, rows and actions of a batch — shared by the table's cells and the batch page.
+  const renderStatusCell = (b: ImportBatchSummary) => {
           const s = statusMeta(b.status)
           // Completion caption (2026-09-12) — only rendered when the
           // batch has landed a terminal state at least once; retries
@@ -903,19 +1070,16 @@ export default function DataHistoryPage() {
                   {b.note}
                 </span>
               ) : null}
+              {printedAtOf(b) ? (
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700" title={`Last printed ${formatPrinted(printedAtOf(b)!, true)}`}>
+                  <FiPrinter className="h-3 w-3" aria-hidden="true" /> Printed {formatPrinted(printedAtOf(b)!)}
+                </span>
+              ) : null}
             </span>
           )
-        },
-        meta: { headerLabel: 'Status' },
-      },
-      {
-        id: 'rows',
-        header: 'Rows',
-        enableSorting: false,
-        size: 120,
-        accessorFn: (b) => b.totalRows,
-        cell: ({ row }) => {
-          const b = row.original
+  }
+
+  const renderRowsCell = (b: ImportBatchSummary) => {
           const total = b.totalRows || 0
           const invalid = b.invalidRows || 0
           // Errors are the only thing worth a second line: a clean import is just its size.
@@ -926,6 +1090,7 @@ export default function DataHistoryPage() {
               <span className="text-[12px] font-semibold tabular-nums text-[#1f150c]">
                 {total} row{total === 1 ? '' : 's'}
               </span>
+              <LabelCountsLine counts={labelCountsFor(b)} />
               {invalid > 0 ? (
                 <>
                   <span
@@ -945,25 +1110,16 @@ export default function DataHistoryPage() {
               ) : null}
             </span>
           )
-        },
-        meta: { headerLabel: 'Rows' },
-      },
-      {
-        id: 'actions',
-        header: 'Actions',
-        enableSorting: false,
-        size: 400,
-        cell: ({ row }) => {
-          const b = row.original
+  }
+
+  const renderActionsCell = (b: ImportBatchSummary) => {
           const st = (b.status || '').toUpperCase()
-          // WMS fetches are a read-only record — their orders are already
-          // created (PENDING) and labelled in the Shipments workspace, so the
-          // batch-level Generate/Retry flow doesn't apply.
-          const isWms = (b.source || '').toUpperCase() === 'WMS'
+          // WMS/API batches are labelled here exactly like file imports (their
+          // orders are stamped source = API); there is no other place to label them.
           // A Draft (saved with errors via "Proceed with errors") can label its valid
           // rows now; the rows with errors are skipped until they are fixed.
           // CANCELLED leaves orders not yet labelled — Retry sends them (it had no button).
-          const canGenerate = canWrite && !isWms && (st === 'INITIATE' || st === 'PARTIAL_COMPLETE' || st === 'FAILED'
+          const canGenerate = canWrite && (st === 'INITIATE' || st === 'PARTIAL_COMPLETE' || st === 'FAILED'
             || st === 'CANCELLED' || (st === 'DRAFT' && b.savedRows > 0))
           const isRetry = st === 'PARTIAL_COMPLETE' || st === 'FAILED' || st === 'CANCELLED'
           // busy renders the progress bar. Include server-side IN_PROGRESS
@@ -975,7 +1131,7 @@ export default function DataHistoryPage() {
           const platform = b.billingMode === 'PLATFORM'
           const confirming = confirmGenId === b.id
           return (
-            <div className="flex items-center justify-end gap-1.5">
+            <div className="flex items-center justify-end gap-1.5 [&_button]:whitespace-nowrap">
               {viewTrash ? (
                 canWrite ? (
                   <button
@@ -995,20 +1151,22 @@ export default function DataHistoryPage() {
                 ) : null
               ) : (
                 <>
-                  {/* Validate All button - validate all rows and update errors */}
+                  {/* Validate all — re-checks every row; a quiet secondary button beside Generate. */}
                   <button
                     type="button"
                     onClick={() => void validateAll(b.id)}
                     disabled={validatingId === b.id || (b.status || '').toUpperCase() === 'IN_PROGRESS'}
                     title="Validate all rows in this batch and update their errors/warnings"
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-3 py-2 text-[12px] font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300"
+                    className={BTN_GHOST_SM}
                   >
                     {validatingId === b.id ? (
-                      <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-emerald-100 border-t-emerald-600" />
                     ) : (
-                      <FiSearch className="h-3.5 w-3.5" />
+                      // A green check: "check every row and confirm it's ready".
+                      <FiCheckCircle className="h-3.5 w-3.5 text-emerald-600" aria-hidden="true" />
                     )}
-                    {validatingId === b.id ? 'Validating...' : 'Validate All'}
+                    {/* In the list the check icon alone (tooltip); the batch page spells it out. */}
+                    <span className={batchPageId == null ? 'sr-only' : ''}>{validatingId === b.id ? 'Validating…' : 'Validate all'}</span>
                   </button>
                   {/* Keep the button mounted while THIS batch is generating — the
                       click optimistically flips status to IN_PROGRESS, which isn't
@@ -1144,14 +1302,56 @@ export default function DataHistoryPage() {
                       )}
                     </>
                   ) : null}
+                  {batchPageId == null && !viewTrash && b.labelBatchId != null ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => void printBatchLabels(b)}
+                        disabled={batchPrintBusy === b.id}
+                        title="Print every live label of this batch"
+                        aria-label="Print batch labels"
+                        className="inline-flex items-center justify-center rounded-xl border border-[#e3d9c4] bg-white p-2 text-[#412d15] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:opacity-50"
+                      >
+                        {batchPrintBusy === b.id
+                          ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#e3d9c4] border-t-[#5a4526]" />
+                          : <FiPrinter className="h-3.5 w-3.5" />}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void sendBatchToPrinter(b)}
+                        disabled={batchPrintBusy === b.id}
+                        title="Send every live label of this batch to a network printer"
+                        aria-label="Send batch to printer"
+                        className="inline-flex items-center justify-center rounded-xl border border-[#e3d9c4] bg-white p-2 text-emerald-700 transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:opacity-50"
+                      >
+                        <FiSend className="h-3.5 w-3.5" />
+                      </button>
+                      {canWrite ? (
+                        <button
+                          type="button"
+                          onClick={() => void voidBatchLabels(b)}
+                          disabled={batchPrintBusy === b.id || liveCountOf(b) === 0 || st === 'IN_PROGRESS'}
+                          title={st === 'IN_PROGRESS' ? 'Not while the batch is generating'
+                            : liveCountOf(b) === 0 ? 'No live labels to void'
+                              : `Void every live label of this batch (${liveCountOf(b)}) with the carriers`}
+                          aria-label="Void batch labels"
+                          className="inline-flex items-center justify-center rounded-xl border border-[#e3d9c4] bg-white p-2 text-rose-700 transition enabled:hover:border-rose-300 enabled:hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          <FiSlash className="h-3.5 w-3.5" />
+                        </button>
+                      ) : null}
+                    </>
+                  ) : null}
                   {canWrite ? (
                     <button
                       type="button"
                       onClick={() => void handleDelete(b.id, b.fileName)}
-                      disabled={trashBusyId === b.id || st === 'IN_PROGRESS'}
-                      title={st === 'IN_PROGRESS' ? 'Wait for the label run to finish (or cancel it) before moving this import to Trash' : 'Move this import to Trash (recoverable)'}
+                      disabled={trashBusyId === b.id || st === 'IN_PROGRESS' || liveCountOf(b) > 0}
+                      title={st === 'IN_PROGRESS' ? 'Wait for the label run to finish (or cancel it) before moving this import to Trash'
+                        : liveCountOf(b) > 0 ? `${liveCountOf(b)} label${liveCountOf(b) === 1 ? ' is' : 's are'} still live — void ${liveCountOf(b) === 1 ? 'it' : 'them'} first, then this import can be deleted`
+                          : 'Move this import to Trash (recoverable)'}
                       aria-label="Delete import"
-                      className="inline-flex items-center justify-center rounded-xl border border-[#e3d9c4] bg-white p-2 text-[#6b5c42] transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="inline-flex items-center justify-center rounded-xl border border-[#e3d9c4] bg-white p-2 text-[#6b5c42] transition enabled:hover:border-rose-300 enabled:hover:bg-rose-50 enabled:hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {trashBusyId === b.id ? (
                         <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-rose-300/40 border-t-rose-500" />
@@ -1164,7 +1364,123 @@ export default function DataHistoryPage() {
               )}
             </div>
           )
+  }
+
+  // Columns for the Import-history table (reorder/resize via AdvancedDataTable).
+  const dhColumns = useMemo<ColumnDef<ImportBatchSummary, unknown>[]>(
+    () => [
+      {
+        id: 'labelBatch',
+        header: 'Batch',
+        enableSorting: false,
+        size: 110,
+        accessorFn: (b) => b.labelBatchId ?? '',
+        cell: ({ row }) => {
+          const b = row.original
+          return b.labelBatchId != null ? (
+            <span
+              title="Label batch — the number every label of this import was generated under; find its orders together on the Orders page"
+              className="inline-flex items-center gap-1 rounded-full bg-[#412d15] px-2 py-0.5 font-mono text-[10px] font-bold text-[#f4eede]"
+            >
+              <FiZap className="h-2.5 w-2.5" /> {b.labelBatchId}
+            </span>
+          ) : (
+            <span className="text-[10.5px] text-[#b6a684]" title="A label batch number is assigned when the first label is generated">No batch yet</span>
+          )
         },
+        meta: { headerLabel: 'Batch', exportValue: (b: ImportBatchSummary) => b.labelBatchId == null ? '' : String(b.labelBatchId) },
+      },
+      {
+        id: 'serial',
+        header: 'Serial no.',
+        enableSorting: false,
+        size: 70,
+        accessorFn: (b) => b.id,
+        cell: ({ row }) => <span className="font-mono text-[13px] font-bold text-[#1f150c]">#{row.original.id}</span>,
+        meta: { headerLabel: 'Serial no.' },
+      },
+      {
+        id: 'file',
+        header: 'File',
+        enableSorting: false,
+        size: 240,
+        accessorFn: (b) => b.fileName ?? '',
+        cell: ({ row }) => {
+          const b = row.original
+          const apiSource = ['WMS', 'API'].includes((b.source || '').toUpperCase()) ? (b.source || '').toUpperCase() : null
+          return (
+            <span className="block min-w-0">
+              <span className="flex items-center gap-1.5">
+                <FiFileText className="h-3.5 w-3.5 shrink-0 text-[#b6a684]" />
+                <span className="truncate text-[13.5px] font-semibold text-[#1f150c]" title={b.fileName || undefined}>
+                  {b.fileName || 'Untitled import'}
+                </span>
+                {apiSource ? (
+                  <span
+                    title={apiSource === 'WMS' ? 'Pulled in by Fetch from WMS' : 'Sent in through the external API'}
+                    className="inline-flex shrink-0 items-center rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-emerald-700 ring-1 ring-emerald-200"
+                  >
+                    {apiSource}
+                  </span>
+                ) : null}
+              </span>
+              <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-[#6b5c42]">
+                <span>{b.createdBy || '—'}</span>
+              </span>
+            </span>
+          )
+        },
+        meta: { headerLabel: 'File' },
+      },
+      {
+        id: 'created',
+        header: 'Date',
+        enableSorting: false,
+        size: 150,
+        accessorFn: (b) => b.createdAt ?? '',
+        cell: ({ row }) => {
+          const iso = row.original.createdAt
+          const d = iso ? new Date(iso) : null
+          const valid = d && !Number.isNaN(d.getTime())
+          return (
+            <span className="flex flex-col gap-0.5" title={valid ? d!.toLocaleString() : undefined}>
+              <span className="text-[12px] font-semibold text-[#3f3527]">
+                {valid ? d!.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}
+              </span>
+              {valid ? (
+                <span className="text-[11px] tabular-nums text-[#6b5c42]">
+                  {d!.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              ) : null}
+            </span>
+          )
+        },
+        meta: { headerLabel: 'Date', exportValue: (b: ImportBatchSummary) => b.createdAt ?? '' },
+      },
+      {
+        id: 'status',
+        header: 'Status',
+        enableSorting: false,
+        size: 160,
+        accessorFn: (b) => b.status ?? '',
+        cell: ({ row }) => renderStatusCell(row.original),
+        meta: { headerLabel: 'Status' },
+      },
+      {
+        id: 'rows',
+        header: 'Rows',
+        enableSorting: false,
+        size: 190,
+        accessorFn: (b) => b.totalRows,
+        cell: ({ row }) => renderRowsCell(row.original),
+        meta: { headerLabel: 'Rows' },
+      },
+      {
+        id: 'actions',
+        header: 'Actions',
+        enableSorting: false,
+        size: 470,
+        cell: ({ row }) => renderActionsCell(row.original),
         // Buttons have no CSV value — keep the column out of the export.
         meta: { headerLabel: 'Actions', exportable: false },
       },
@@ -1192,6 +1508,26 @@ export default function DataHistoryPage() {
     // other line has errors can't be labelled on its own either.
     const orderKey = (r: (typeof list)[number]) => (r.orderRef ?? '').trim() || `__row_${r.rowNumber}`
     const brokenOrders = new Set(list.filter((r) => (r.errors?.length ?? 0) > 0).map(orderKey))
+    // Rows whose label is live can be ticked for print / send / void.
+    const isLive = (r: (typeof list)[number]) => r.generatedOrderNo != null && (r.generatedStatus ?? '').toUpperCase() === 'GENERATED'
+    const picked = pickedRows[b.id] ?? []
+    const pickedSet = new Set(picked)
+    const visibleLive = visible.filter(isLive)
+    const allVisiblePicked = visibleLive.length > 0 && visibleLive.every((r) => pickedSet.has(r.rowNumber))
+    const togglePick = (rowNumber: number) => setPickedRows((m) => {
+      const cur = new Set(m[b.id] ?? [])
+      if (cur.has(rowNumber)) cur.delete(rowNumber)
+      else cur.add(rowNumber)
+      return { ...m, [b.id]: Array.from(cur) }
+    })
+    const togglePickVisible = () => setPickedRows((m) => {
+      const cur = new Set(m[b.id] ?? [])
+      for (const r of visibleLive) {
+        if (allVisiblePicked) cur.delete(r.rowNumber)
+        else cur.add(r.rowNumber)
+      }
+      return { ...m, [b.id]: Array.from(cur) }
+    })
     return (
       <div className="border-t border-dashed border-[#eee6d6] bg-[#faf7f0]/50 px-5 py-3">
         {rows === 'loading' || rows === undefined ? (
@@ -1248,21 +1584,21 @@ export default function DataHistoryPage() {
                   </button>
                 ))}
               </div>
-              {/* Validate All button - validate all rows and update errors */}
+              {/* Validate all — re-checks every row; a quiet secondary button beside Generate. */}
               {!viewTrash ? (
                 <button
                   type="button"
                   onClick={() => void validateAll(b.id)}
                   disabled={validatingId === b.id || (b.status || '').toUpperCase() === 'IN_PROGRESS'}
                   title="Validate all rows in this batch and update their errors/warnings"
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-[10.5px] font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300"
+                  className={BTN_GHOST_SM}
                 >
                   {validatingId === b.id ? (
-                    <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                    <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-emerald-100 border-t-emerald-600" />
                   ) : (
-                    <FiSearch className="h-3 w-3" />
+                    <FiCheckCircle className="h-3.5 w-3.5 text-emerald-600" aria-hidden="true" />
                   )}
-                  {validatingId === b.id ? 'Validating...' : 'Validate All'}
+                  {validatingId === b.id ? 'Validating…' : 'Validate all'}
                 </button>
               ) : null}
               <p className="text-[10.5px] text-[#b6a684]">
@@ -1275,10 +1611,36 @@ export default function DataHistoryPage() {
                       : 'Click any cell to edit; it saves and re-validates on blur. Scroll right for more columns.'}
               </p>
             </div>
+            {['WMS', 'API'].includes((b.source || '').toUpperCase()) ? (
+              // The WMS sends the client's own ship via codes; these are the ones
+              // that resolve to a carrier service.
+              <ShipViaCodesPanel
+                clientCode={(() => {
+                  const codes = Array.from(new Set(rows.map((r) => (r.clientCode ?? '').trim().toUpperCase()).filter(Boolean)))
+                  return codes.length === 1 ? codes[0] : null
+                })()}
+                canEdit={canWrite}
+                onOpenMapping={() => navigate(settingsPaths.shippingServiceMapping)}
+                reloadKey={codesTick}
+              />
+            ) : null}
+            <BatchLabelBar
+              batchId={b.id}
+              rows={list}
+              picked={picked}
+              onPickAllLive={() => setPickedRows((m) => ({ ...m, [b.id]: list.filter(isLive).map((r) => r.rowNumber) }))}
+              onClearPick={() => setPickedRows((m) => ({ ...m, [b.id]: [] }))}
+              onChanged={() => { reloadRows(b.id); void reloadQuiet() }}
+              onPrinted={() => reloadRows(b.id)}
+              canWrite={canWrite}
+              canManagePrinters={canPullWms}
+              locked={viewTrash || (b.status || '').toUpperCase() === 'IN_PROGRESS'}
+              onOpenPrinterSettings={() => navigate(settingsPaths.printers)}
+            />
             <VirtualTable
               rows={visible}
               rowKey={(r) => r.rowNumber}
-              colCount={DH_COLUMNS.length + 2}
+              colCount={DH_COLUMNS.length + 3}
               maxHeight="70vh"
               className="rounded-xl border border-[#e3d9c4] bg-white"
               tableClassName="w-full border-collapse text-[11px] text-[#3f3527]"
@@ -1286,7 +1648,22 @@ export default function DataHistoryPage() {
               head={
                 <thead className="sticky top-0 z-30">
                   <tr className="bg-[#faf7f0] text-[8.5px] uppercase tracking-[0.1em] text-[#6b5c42]">
-                    <th className="sticky left-0 z-20 border-b border-r border-[#e3d9c4] bg-[#faf7f0] px-2 py-1.5 text-left font-bold">Row</th>
+                    <th className="sticky left-0 z-20 border-b border-[#e3d9c4] bg-[#faf7f0] px-2 py-1.5 text-left font-bold"
+                      style={{ width: ROW_COL_W, minWidth: ROW_COL_W, maxWidth: ROW_COL_W }}>
+                      <span className="flex items-center gap-1.5">
+                        <input
+                          type="checkbox"
+                          aria-label="Tick every live label shown"
+                          checked={allVisiblePicked}
+                          disabled={visibleLive.length === 0}
+                          onChange={togglePickVisible}
+                          className="h-3.5 w-3.5 accent-[#1f150c] disabled:opacity-30"
+                        />
+                        Row · Label
+                      </span>
+                    </th>
+                    <th className="sticky z-20 border-b border-r border-[#e3d9c4] bg-[#faf7f0] px-2 py-1.5 text-left font-bold"
+                      style={{ left: ROW_COL_W, width: ORDER_COL_W, minWidth: ORDER_COL_W }}>Order · Batch</th>
                     {DH_COLUMNS.map((c) => (
                       <th key={c.key} className="whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1.5 text-left font-bold">{c.key}</th>
                     ))}
@@ -1298,7 +1675,7 @@ export default function DataHistoryPage() {
                     const ok = (r.errors?.length ?? 0) === 0
                     const orderReady = !brokenOrders.has(orderKey(r))
                     const gen = (r.generatedStatus ?? '').toUpperCase()
-                    const rowIsWms = (b.source || '').toUpperCase() === 'WMS'
+                    const rowIsWms = ['WMS', 'API'].includes((b.source || '').toUpperCase())
                     const generated = gen === 'GENERATED'
                     // A row that passed validation but was rejected by the carrier
                     // is FAILED, not "Ready" — surface that so it shows Retry (which
@@ -1317,15 +1694,29 @@ export default function DataHistoryPage() {
                     return (
                       <Fragment key={r.rowNumber}>
                       <tr ref={measureRef} data-index={index} className={ok ? 'bg-white' : 'bg-rose-50/40'}>
-                        <td className={`sticky left-0 z-10 whitespace-nowrap border-b border-r border-[#e3d9c4] px-2 py-1 ${ok ? 'bg-white' : 'bg-rose-50'}`}>
-                          <div className="flex items-center gap-1.5">
+                        <td className={`sticky left-0 z-10 whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1 ${pickedSet.has(r.rowNumber) ? 'bg-[#faf3e3]' : ok ? 'bg-white' : 'bg-rose-50'}`}
+                          style={{ width: ROW_COL_W, minWidth: ROW_COL_W, maxWidth: ROW_COL_W }}>
+                          <div className="flex items-center gap-1.5 overflow-hidden">
+                            <input
+                              type="checkbox"
+                              aria-label={`Tick row ${r.rowNumber}`}
+                              checked={pickedSet.has(r.rowNumber)}
+                              disabled={!isLive(r)}
+                              onChange={() => togglePick(r.rowNumber)}
+                              title={isLive(r) ? 'Tick to print, send or void this label' : 'Only rows with a live label can be ticked'}
+                              className="h-3.5 w-3.5 shrink-0 accent-[#1f150c] disabled:opacity-25"
+                            />
                             <span className="font-mono text-[10px] font-bold text-[#6b5c42]">{r.rowNumber}</span>
                             {generated ? (
                               <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-800">Generated</span>
+                            ) : gen === 'VOIDED' ? (
+                              <span title="This label was voided with the carrier — it can't ship" className="cursor-help rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-semibold text-slate-500 line-through decoration-slate-400">Voided</span>
+                            ) : gen === 'QUEUED_USPS' ? (
+                              <span title="Queued for USPS — the label is being made" className="cursor-help rounded-full bg-sky-100 px-1.5 py-0.5 text-[9px] font-semibold text-sky-800">Queued</span>
                             ) : failed ? (
                               <span title={r.generatedMessage || 'The carrier rejected this shipment'} className="cursor-help rounded-full bg-rose-100 px-1.5 py-0.5 text-[9px] font-semibold text-rose-800">Failed</span>
                             ) : ok && orderReady ? (
-                              <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-800">Ready</span>
+                              <span title="Valid — its label hasn't been generated yet" className="cursor-help rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800">Pending</span>
                             ) : ok ? (
                               <span
                                 title={`This line is fine, but another line of order ${r.orderRef ?? ''} needs fixes`}
@@ -1356,21 +1747,61 @@ export default function DataHistoryPage() {
                             ) : null}
                           </div>
                         </td>
+                        <td className={`sticky z-10 whitespace-nowrap border-b border-r border-[#e3d9c4] px-2 py-1 ${pickedSet.has(r.rowNumber) ? 'bg-[#faf3e3]' : ok ? 'bg-white' : 'bg-rose-50'}`}
+                          style={{ left: ROW_COL_W, width: ORDER_COL_W, minWidth: ORDER_COL_W }}>
+                          {r.generatedOrderNo != null && (generated || gen === 'VOIDED' || gen === 'QUEUED_USPS') ? (
+                            <span className="flex flex-col leading-tight">
+                              <a href={`/label/${r.generatedOrderNo}`} className={`font-mono text-[10px] font-semibold underline-offset-2 hover:underline ${gen === 'VOIDED' ? 'text-slate-400 line-through' : 'text-[#1f150c]'}`}>
+                                #{r.generatedOrderNo}
+                              </a>
+                              <span className="font-mono text-[9.5px] text-[#8a7a5a]">{r.batchId != null ? `Batch ${r.batchId}` : 'Batch —'}</span>
+                              {r.lastPrintedAt ? (
+                                <span className="inline-flex items-center gap-0.5 text-[9px] font-semibold text-emerald-700" title={`Last printed ${formatPrinted(r.lastPrintedAt, true)}`}>
+                                  <FiPrinter className="h-2.5 w-2.5" aria-hidden="true" /> Printed {formatPrinted(r.lastPrintedAt)}
+                                </span>
+                              ) : null}
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-[#b6a684]">—</span>
+                          )}
+                        </td>
                         {DH_COLUMNS.map((c) => {
                           const raw = (r as unknown as Record<string, unknown>)[c.key]
+                          // An API/WMS order shows the client's own ship via code (its
+                          // resolved carrier service in the tooltip), and an unmapped
+                          // code can be mapped right here.
+                          const showShipVia = c.key === 'serviceType' && rowIsWms && !!r.shipViaCode
+                          const unmapped = c.key === 'serviceType' && rowIsWms
+                            ? (byField.serviceType ?? []).map((m) => m.match(UNMAPPED_SHIP_VIA)).find(Boolean)
+                            : null
                           return (
                             <td key={c.key} className="border-b border-[#f2ecdf] px-1 py-1 align-top">
-                              <div className={c.w}>
+                              <div className={c.w} title={showShipVia ? (r.shipViaNote ?? undefined) : undefined}>
                                 <GridCell
-                                  value={raw == null ? '' : String(raw)}
+                                  value={showShipVia ? String(r.shipViaCode) : raw == null ? '' : String(raw)}
                                   // Locked when labelled, while the import is generating
-                                  // (the run would overwrite the edit) and in Trash.
-                                  readOnly={generated || viewTrash || (b.status || '').toUpperCase() === 'IN_PROGRESS'}
+                                  // (the run would overwrite the edit) and in Trash. An API
+                                  // order's reference is the sender's, not ours to change.
+                                  readOnly={generated || viewTrash || (b.status || '').toUpperCase() === 'IN_PROGRESS'
+                                    || (rowIsWms && c.key === 'orderRef')}
                                   bad={(byField[c.key]?.length ?? 0) > 0}
                                   errors={byField[c.key]}
                                   mono={c.mono}
                                   onCommit={(v) => void commitCell(b.id, r, c, v)}
                                 />
+                                {unmapped && canWrite && !generated && !viewTrash ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => setMapping({
+                                      code: unmapped[1],
+                                      clientCode: (r.clientCode ?? '').trim().toUpperCase() || null,
+                                      batchId: b.id,
+                                    })}
+                                    className="mt-0.5 block w-full truncate rounded border border-[#e3d9c4] bg-white px-1 py-0.5 text-[9px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]"
+                                  >
+                                    Map {unmapped[1]}…
+                                  </button>
+                                ) : null}
                               </div>
                             </td>
                           )
@@ -1411,13 +1842,8 @@ export default function DataHistoryPage() {
                                 <span className="text-[9.5px] text-[#6b5c42]">—</span>
                               )}
                             </span>
-                          ) : rowIsWms ? (
-                            <span
-                              className="text-[9.5px] text-[#6b5c42]"
-                              title="Imported from WMS as a PENDING order — generate the label in the Shipments workspace"
-                            >
-                              {r.generatedOrderNo ? `Order #${r.generatedOrderNo} · label in Shipments` : 'Label in Shipments'}
-                            </span>
+                          ) : gen === 'VOIDED' ? (
+                            <span className="text-[9.5px] text-slate-500" title="Voided with the carrier">Voided</span>
                           ) : !canWrite ? (
                             <span className="text-[9.5px] text-[#b6a684]">Read-only view</span>
                           ) : orderReady && (ok || failed) ? (
@@ -1470,230 +1896,22 @@ export default function DataHistoryPage() {
     )
   }
 
-  return (
-    <div className="space-y-4 pb-24">
-      <PageSectionHeader
-        eyebrow="Operations"
-        title="Order History"
-        description="Every order in one place — Bulk, Manual, API, and WMS — plus the CSV/Excel importer and saved import history."
-        actions={
-          <div className="flex flex-wrap items-center gap-2">
-            {dhView === 'imports' ? (
-              <button
-                type="button"
-                onClick={() => setShowAdvanced((v) => !v)}
-                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[13.5px] font-semibold transition ${
-                  showAdvanced || activeAdvancedCount > 0
-                    ? 'border-[#412d15] bg-[#412d15] text-[#f4eede]'
-                    : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
-                }`}
-              >
-                <FiSliders className="h-3.5 w-3.5" />
-                Advanced
-                {activeAdvancedCount > 0 ? (
-                  <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[#f4eede] px-1 text-[9.5px] font-bold text-[#412d15]">
-                    {activeAdvancedCount}
-                  </span>
-                ) : null}
-              </button>
-            ) : null}
-            {dhView === 'imports' ? (
-              <button
-                type="button"
-                onClick={() => void load()}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
-              >
-                <FiRefreshCw className="h-3.5 w-3.5" />
-                Refresh
-              </button>
-            ) : null}
-            {dhView === 'imports' && viewTrash && batches.length > 0 ? (
-              confirmEmpty ? (
-                <span className="inline-flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => void handleEmptyTrash()}
-                    disabled={emptying}
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-3 py-2 text-[13.5px] font-semibold text-white shadow-sm transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {emptying ? (
-                      <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-                    ) : (
-                      <FiTrash2 className="h-3.5 w-3.5" />
-                    )}
-                    Delete {batches.length} forever
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setConfirmEmpty(false)}
-                    disabled={emptying}
-                    className="inline-flex items-center rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
-                  >
-                    Cancel
-                  </button>
-                </span>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setConfirmEmpty(true)}
-                  title="Permanently delete everything in Trash"
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-white px-3 py-2 text-[13.5px] font-semibold text-rose-600 transition hover:border-rose-300 hover:bg-rose-50"
-                >
-                  <FiTrash2 className="h-3.5 w-3.5" />
-                  Empty Trash
-                </button>
-              )
-            ) : null}
-            {dhView === 'imports' ? (
-              <button
-                type="button"
-                onClick={() => setViewTrash((v) => !v)}
-                title={viewTrash ? 'Back to live imports' : 'View deleted imports (Trash)'}
-                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[13.5px] font-semibold transition ${
-                  viewTrash
-                    ? 'border-[#412d15] bg-[#412d15] text-[#f4eede]'
-                    : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
-                }`}
-              >
-                {viewTrash ? <FiArrowLeft className="h-3.5 w-3.5" /> : <FiTrash2 className="h-3.5 w-3.5" />}
-                {viewTrash ? 'Back to imports' : 'Trash'}
-              </button>
-            ) : null}
-            <button
-              type="button"
-              onClick={() => navigate('/orders')}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[13.5px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15]"
-            >
-              <FiArrowLeft className="h-3.5 w-3.5" />
-              Back to orders
-            </button>
-          </div>
-        }
-      />
+  const mappingDialog = mapping ? (
+    <AddShipViaMappingDialog
+      code={mapping.code}
+      clientCode={mapping.clientCode}
+      onClose={() => setMapping(null)}
+      onSaved={() => {
+        const batchId = mapping.batchId
+        setMapping(null)
+        setCodesTick((t) => t + 1)
+        // The server re-validates the batch, so rows that failed on this code clear.
+        void validateAll(batchId)
+      }}
+    />
+  ) : null
 
-      {/* PR-G4 — always-visible USPS queue depth pill (audit U2). Self-
-          hides when the queue is empty (i.e. USPS_PROVIDER != USPS_DIRECT
-          on this platform, or USPS_DIRECT with no backlog). Non-admin
-          users see nothing because the admin metrics endpoint 403s. */}
-      <div data-testid="usps-queue-badge-slot">
-        <BulkLabelQueueBadge />
-      </div>
-
-      {/* View tabs — Imports (bulk batches) vs All orders (every source) */}
-      <div className="flex flex-wrap items-center gap-1.5">
-        {([
-          { key: 'orders', label: 'All orders', hint: 'Bulk · Manual · API · WMS' },
-          { key: 'import', label: 'Import CSV/Excel', hint: 'Upload & validate' },
-          { key: 'imports', label: 'Import history', hint: 'Saved batches' },
-          { key: 'docs', label: 'Documents', hint: 'Tracking · label · invoice · statement' },
-        ] as { key: 'orders' | 'import' | 'imports' | 'docs'; label: string; hint: string }[]).map((t) => {
-          const active = dhView === t.key
-          return (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => setDhView(t.key)}
-              className={`inline-flex items-baseline gap-1.5 rounded-xl px-3.5 py-2 text-[13.5px] font-semibold transition ${
-                active
-                  ? 'bg-[#1f150c] text-[#f4eede]'
-                  : 'border border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
-              }`}
-            >
-              {t.label}
-              <span className={`text-[9.5px] font-medium uppercase tracking-[0.06em] ${active ? 'text-[#cdbf9f]' : 'text-[#b6a684]'}`}>
-                {t.hint}
-              </span>
-            </button>
-          )
-        })}
-      </div>
-
-      {dhView === 'orders' ? (
-        <AllOrdersHistory />
-      ) : dhView === 'docs' ? (
-        <OrderDocumentsTable />
-      ) : dhView === 'import' ? (
-        <OrderImportModal
-          inline
-          onImported={() => {
-            // Called after the importer's Save writes valid orders to Import
-            // history (uploads wait in staging until then) — refresh the list
-            // quietly WITHOUT switching views, so the operator isn't yanked out
-            // of fixing the remaining rows. The saved step says which import
-            // the orders went to.
-            void load()
-          }}
-        />
-      ) : (
-      <>
-      {/* ── Advanced filter toolbar ─────────────────────────────────────── */}
-      <DataHistoryFilterToolbar
-        statusFilter={filters.statusFilter}
-        setStatusFilter={filters.setStatusFilter}
-        statusCounts={filters.statusCounts}
-        statusMetaLabel={(s) => statusMeta(s).label}
-        anyFilterActive={filters.anyFilterActive}
-        clearFilters={filters.clearFilters}
-        search={filters.search}
-        setSearch={filters.setSearch}
-        dateFrom={filters.dateFrom}
-        setDateFrom={filters.setDateFrom}
-        dateTo={filters.dateTo}
-        setDateTo={filters.setDateTo}
-        dateFilterActive={filters.dateFilterActive}
-        sortKey={filters.sortKey}
-        setSortKey={filters.setSortKey}
-        sortDir={filters.sortDir}
-        setSortDir={filters.setSortDir}
-        showAdvanced={filters.showAdvanced}
-        createdBy={filters.createdBy}
-        setCreatedBy={filters.setCreatedBy}
-        creators={filters.creators}
-        batchPresence={filters.batchPresence}
-        setBatchPresence={filters.setBatchPresence}
-        minSaved={filters.minSaved}
-        setMinSaved={filters.setMinSaved}
-        filteredCount={filters.filtered.length}
-        totalCount={batches.length}
-      />
-
-      <section className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
-        {loading ? (
-          <p className="px-5 py-14 text-center text-sm text-[#6b5c42]">Loading…</p>
-        ) : batches.length === 0 ? (
-          <p className="px-5 py-14 text-center text-sm text-[#6b5c42]">
-            {viewTrash
-              ? 'Trash is empty — no deleted imports.'
-              : 'No saved imports yet. Import a CSV/Excel from the Import CSV/Excel tab, then click Save.'}
-          </p>
-        ) : (
-          <AdvancedDataTable<ImportBatchSummary>
-            tableKey={viewTrash ? 'order-intake-imports-trash-v3' : 'order-intake-imports-v3'}
-            columns={dhColumns}
-            data={filtered}
-            renderExpanded={renderBatchExpanded}
-            onRowExpand={(b) => ensureRows(b.id)}
-            getRowId={(b) => String(b.id)}
-            initialColumnPinning={{ left: [], right: ['actions'] }}
-            caption={viewTrash ? 'Trash — deleted imports · click a row to view its rows' : 'Saved imports · click a row to view & edit its rows'}
-            emptyState={
-              <div className="px-5 py-10 text-center">
-                <p className="text-sm text-[#6b5c42]">No imports match your filters.</p>
-                <button
-                  type="button"
-                  onClick={clearFilters}
-                  className="mt-3 inline-flex items-center gap-1 rounded-xl border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
-                >
-                  <FiX className="h-3.5 w-3.5" /> Clear filters
-                </button>
-              </div>
-            }
-          />
-        )}
-      </section>
-
-      {/* Label Preview Modal */}
-      {showLabelModal && labelModalOrderNo ? (
+  const labelModal = showLabelModal && labelModalOrderNo ? (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
           onClick={() => setShowLabelModal(false)}
@@ -1750,10 +1968,487 @@ export default function DataHistoryPage() {
             </div>
           </div>
         </div>
+  ) : null
+
+  // ── /bulk/batches/:id — one batch on its own page ───────────────────────
+  if (batchPageId != null) {
+    const b = batches.find((x) => x.id === batchPageId)
+    const src = (b?.source || '').toUpperCase()
+    const back = b?.deletedAt
+      ? { to: bulkPaths.trash, label: 'Trash' }
+      : src === 'WMS' || src === 'API'
+        ? { to: bulkPaths.api, label: 'API batches' }
+        : { to: bulkPaths.imports, label: 'Import history' }
+    return (
+      <div className="space-y-4 pb-24">
+        {mappingDialog}
+        <nav aria-label="Breadcrumb" className="flex flex-wrap items-center gap-1.5 text-[12px] text-[#6b5c42]">
+          <button type="button" onClick={() => navigate(back.to)} className="inline-flex items-center gap-1 font-semibold text-[#5a4526] hover:underline">
+            <FiArrowLeft className="h-3.5 w-3.5" /> Bulk Mailer · {back.label}
+          </button>
+          <span aria-hidden="true">/</span>
+          <span>Batch #{batchPageId}</span>
+        </nav>
+        {loading && !b ? (
+          <p className="rounded-2xl border border-[#e3d9c4] bg-white px-5 py-14 text-center text-sm text-[#6b5c42]">Loading…</p>
+        ) : !b ? (
+          <div className="rounded-2xl border border-[#e3d9c4] bg-white px-5 py-12 text-center">
+            <p className="text-sm font-semibold text-[#1f150c]">Batch #{batchPageId} isn't here.</p>
+            <p className="mt-1 text-[12.5px] text-[#6b5c42]">It may have been deleted, or it belongs to a client you can't see.</p>
+            <div className="mt-4 flex justify-center gap-2">
+              <button type="button" onClick={() => navigate(bulkPaths.imports)} className="rounded-xl border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12.5px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]">Import history</button>
+              <button type="button" onClick={() => navigate(bulkPaths.trash)} className="rounded-xl border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12.5px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]">Trash</button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <section data-testid="batch-page-header" className="rounded-2xl border border-[#e3d9c4] bg-white p-4 shadow-sm sm:p-5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-[#8a7a5a]">
+                    Batch #{b.id}{src === 'WMS' || src === 'API' ? ` · ${src}` : ' · File import'}{b.deletedAt ? ' · In Trash' : ''}
+                  </p>
+                  <h1 className="mt-0.5 truncate text-[18px] font-semibold text-[#1f150c]" title={b.fileName || undefined}>
+                    {b.fileName || 'Untitled import'}
+                  </h1>
+                  <p className="mt-0.5 text-[12px] text-[#6b5c42]">
+                    {b.createdAt ? new Date(b.createdAt).toLocaleString() : '—'}
+                    {b.createdBy ? ` · by ${b.createdBy}` : ''}
+                    {b.labelBatchId ? ` · label batch ${b.labelBatchId}` : ''}
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-start gap-4">
+                  {renderStatusCell(b)}
+                  <div className="w-[120px]">{renderRowsCell(b)}</div>
+                </div>
+              </div>
+              <div className="mt-3 border-t border-dashed border-[#e3d9c4] pt-3">{renderActionsCell(b)}</div>
+            </section>
+            <section className="rounded-2xl border border-[#e3d9c4] bg-white shadow-sm">
+              {renderBatchExpanded(b)}
+            </section>
+          </>
+        )}
+        {labelModal}
+      </div>
+    )
+  }
+
+  const sendBatchDialog = sendBatch ? (
+    <SendToPrinterDialog
+      orderNumbers={sendBatch}
+      canManagePrinters={canPullWms}
+      onClose={() => { setSendBatch(null); void reloadQuiet() }}
+      onOpenSettings={() => { setSendBatch(null); navigate(settingsPaths.printers) }}
+    />
+  ) : null
+
+  return (
+    <div className="space-y-4 pb-24">
+      {mappingDialog}
+      {sendBatchDialog}
+      <PageSectionHeader
+        eyebrow="Operations"
+        title="Bulk Mailer"
+        description="Import orders in bulk, fix what needs it, and buy their labels — from a file or from the API."
+        actions={
+          <button
+            type="button"
+            onClick={() => navigate('/orders')}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+          >
+            <FiArrowLeft className="h-3.5 w-3.5" />
+            Orders
+          </button>
+        }
+      />
+
+      {/* PR-G4 — always-visible USPS queue depth pill (audit U2). Self-
+          hides when the queue is empty (i.e. USPS_PROVIDER != USPS_DIRECT
+          on this platform, or USPS_DIRECT with no backlog). Non-admin
+          users see nothing because the admin metrics endpoint 403s. */}
+      <div data-testid="usps-queue-badge-slot">
+        <BulkLabelQueueBadge />
+      </div>
+
+      {/* Bulk Mailer tabs — each one is its own address (/bulk/:tab). */}
+      <BulkTabBar active={bulkTab} onSelect={(t) => navigate(`/bulk/${t}`)} />
+
+      {/* The panel's height glides between tabs (and from skeleton to list) so
+          nothing below it jumps. */}
+      <AnimatedHeight holdKey={bulkTab} ready={tabReady}>
+      <div
+        key={bulkTab}
+        role="tabpanel"
+        aria-label={BULK_TABS.find((t) => t.key === bulkTab)?.label}
+        className={`space-y-4 ${tabMotion.dir > 0 ? 'bulk-tab-in-right' : 'bulk-tab-in-left'}`}
+      >
+      {/* This tab's own actions — they arrive with the tab instead of reshaping the header. */}
+      {dhView === 'imports' ? (
+        <div className="flex min-h-[38px] flex-wrap items-center justify-end gap-2">
+            {dhView === 'imports' ? (
+              <button
+                type="button"
+                onClick={() => setShowAdvanced((v) => !v)}
+                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[13.5px] font-semibold transition ${
+                  showAdvanced || activeAdvancedCount > 0
+                    ? 'border-[#412d15] bg-[#412d15] text-[#f4eede]'
+                    : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
+                }`}
+              >
+                <FiSliders className="h-3.5 w-3.5" />
+                Advanced
+                {activeAdvancedCount > 0 ? (
+                  <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[#f4eede] px-1 text-[9.5px] font-bold text-[#412d15]">
+                    {activeAdvancedCount}
+                  </span>
+                ) : null}
+              </button>
+            ) : null}
+            {dhView === 'imports' ? (
+              <button
+                type="button"
+                onClick={() => void load()}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+              >
+                <FiRefreshCw className="h-3.5 w-3.5" />
+                Refresh
+              </button>
+            ) : null}
+            {dhView === 'imports' && viewTrash && (summary?.total ?? batches.length) > 0 ? (
+              confirmEmpty ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => void handleEmptyTrash()}
+                    disabled={emptying}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-3 py-2 text-[13.5px] font-semibold text-white shadow-sm transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {emptying ? (
+                      <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                    ) : (
+                      <FiTrash2 className="h-3.5 w-3.5" />
+                    )}
+                    Delete {summary?.total ?? batches.length} forever
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmEmpty(false)}
+                    disabled={emptying}
+                    className="inline-flex items-center rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
+                  >
+                    Cancel
+                  </button>
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmEmpty(true)}
+                  title="Permanently delete everything in Trash"
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-white px-3 py-2 text-[13.5px] font-semibold text-rose-600 transition hover:border-rose-300 hover:bg-rose-50"
+                >
+                  <FiTrash2 className="h-3.5 w-3.5" />
+                  Empty Trash
+                </button>
+              )
+            ) : null}
+
+            {canPullWms && isApiTab ? (
+              <button
+                type="button"
+                onClick={() => void fetchFromWms()}
+                disabled={fetchingWms}
+                title="Pull the WMS's current pending shipments in as a new batch"
+                className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[13.5px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:opacity-60"
+              >
+                {fetchingWms
+                  ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
+                  : <FiDownloadCloud className="h-3.5 w-3.5" />}
+                {fetchingWms ? 'Fetching…' : 'Fetch from WMS'}
+              </button>
+            ) : null}
+            {canWrite && bulkTab === 'imports' ? (
+              <button
+                type="button"
+                onClick={() => navigate(bulkPaths.importFile)}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[13.5px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15]"
+              >
+                <FiUpload className="h-3.5 w-3.5" />
+                Import CSV / Excel
+              </button>
+            ) : null}
+        </div>
       ) : null}
-      </>
+      {dhView === 'docs' ? (
+        <OrderDocumentsTable onLoaded={() => setDocsLoadedFor(tabMotion.tab)} />
+      ) : loadedView !== viewKey ? (
+        <BatchListSkeleton withCards={!viewTrash} />
+      ) : (
+      <div className="bulk-fade-in space-y-4">
+      {!viewTrash && summary ? <BatchSummaryCards summary={summary} /> : null}
+      {/* ── Advanced filter toolbar ─────────────────────────────────────── */}
+      <DataHistoryFilterToolbar
+        statusFilter={filters.statusFilter}
+        setStatusFilter={filters.setStatusFilter}
+        statusCounts={summary?.statusCounts ?? {}}
+        statusMetaLabel={(s) => statusMeta(s).label}
+        anyFilterActive={filters.anyFilterActive}
+        clearFilters={filters.clearFilters}
+        search={filters.search}
+        setSearch={filters.setSearch}
+        dateFrom={filters.dateFrom}
+        setDateFrom={filters.setDateFrom}
+        dateTo={filters.dateTo}
+        setDateTo={filters.setDateTo}
+        dateFilterActive={filters.dateFilterActive}
+        sortKey={filters.sortKey}
+        setSortKey={filters.setSortKey}
+        sortDir={filters.sortDir}
+        setSortDir={filters.setSortDir}
+        showAdvanced={filters.showAdvanced}
+        createdBy={filters.createdBy}
+        setCreatedBy={filters.setCreatedBy}
+        creators={summary?.creators ?? []}
+        batchPresence={filters.batchPresence}
+        setBatchPresence={filters.setBatchPresence}
+        minSaved={filters.minSaved}
+        setMinSaved={filters.setMinSaved}
+        filteredCount={pageInfo.total}
+        totalCount={summary?.total ?? pageInfo.total}
+      />
+
+      <section
+        aria-busy={refreshing}
+        className={`rounded-2xl border border-slate-200 bg-white p-3 shadow-sm transition-opacity duration-200 ${refreshing && !loading ? 'opacity-60' : ''}`}
+      >
+        {loading ? (
+          <p className="px-5 py-14 text-center text-sm text-[#6b5c42]">Loading…</p>
+        ) : batches.length === 0 && (summary?.total ?? 0) === 0 ? (
+          <p className="px-5 py-14 text-center text-sm text-[#6b5c42]">
+            {viewTrash
+              ? 'Trash is empty — no deleted imports.'
+              : isApiTab
+                ? (canPullWms ? 'No API batches yet. Use Fetch from WMS to pull the pending shipments in.' : 'No API batches yet. An admin can use Fetch from WMS to pull the pending shipments in.')
+                : 'No saved imports yet. Use Import CSV / Excel to add your first file — saved orders show up here.'}
+          </p>
+        ) : (
+          <AdvancedDataTable<ImportBatchSummary>
+            tableKey={viewTrash ? 'order-intake-imports-trash-v6' : isApiTab ? 'bulk-api-batches-v4' : 'order-intake-imports-v6'}
+            columns={dhColumns}
+            data={batches}
+            manualPagination
+            pageIndex={pageIndex}
+            pageSize={pageSize}
+            pageCount={pageInfo.pages}
+            onPaginationChange={({ pageIndex: i, pageSize: n }) => { setPageIndex(n !== pageSize ? 0 : i); setPageSize(n) }}
+            onRowClick={(b) => navigate(bulkBatchPath(b.id))}
+            getRowId={(b) => String(b.id)}
+            initialColumnPinning={{ left: [], right: [] }}
+            initialHiddenColumns={['serial']}
+            caption={viewTrash ? 'Trash — deleted batches · click a batch to open it'
+              : isApiTab ? 'Batches from the WMS and the API · each fetch is one batch · click a batch to open it'
+                : 'Saved imports · click a batch to open it'}
+            emptyState={
+              <div className="px-5 py-10 text-center">
+                <p className="text-sm text-[#6b5c42]">No imports match your filters.</p>
+                <button
+                  type="button"
+                  onClick={clearFilters}
+                  className="mt-3 inline-flex items-center gap-1 rounded-xl border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
+                >
+                  <FiX className="h-3.5 w-3.5" /> Clear filters
+                </button>
+              </div>
+            }
+          />
+        )}
+      </section>
+
+      {labelModal}
+      </div>
       )}
+      </div>
+      </AnimatedHeight>
     </div>
   )
 }
 
+export type BulkTab = 'imports' | 'api' | 'documents' | 'trash'
+
+/** Bulk Mailer tabs, in order. Import history is the landing tab. */
+const BULK_TABS: { key: BulkTab; label: string; hint: string }[] = [
+  { key: 'imports', label: 'Import history', hint: 'Saved batches' },
+  { key: 'api', label: 'API batches', hint: 'WMS · API' },
+  { key: 'documents', label: 'Documents', hint: 'Label · invoice · statement' },
+  { key: 'trash', label: 'Trash', hint: 'Deleted batches' },
+]
+
+/** At-a-glance counts over the whole view (from the server, not the current page). */
+function BatchSummaryCards({ summary }: { summary: BulkSummary }) {
+  const cards: { label: string; value: number; tone: string }[] = [
+    { label: 'Ready to generate', value: summary.readyToGenerate, tone: 'text-[#1f150c]' },
+    { label: 'Generating now', value: summary.generating, tone: 'text-sky-700' },
+    { label: 'Needs fixes', value: summary.needsFixes, tone: summary.needsFixes ? 'text-rose-700' : 'text-[#1f150c]' },
+    { label: 'Completed this week', value: summary.completedThisWeek, tone: 'text-emerald-700' },
+  ]
+  return (
+    <div data-testid="bulk-summary" className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      {cards.map((c) => (
+        <div key={c.label} className="rounded-xl border border-[#efe7d6] bg-[#fcfaf5] px-3 py-2.5">
+          <p className="text-[11.5px] font-semibold text-[#6b5c42]">{c.label}</p>
+          <p className={`text-[20px] font-semibold tabular-nums ${c.tone}`}>{c.value}</p>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** A row's serviceType error for a ship via code with no carrier service mapped. */
+const UNMAPPED_SHIP_VIA = /serviceType '([^']+)' is (?:not mapped|mapped, but not)/
+
+/**
+ * The Bulk Mailer tabs. A single highlight slides to the chosen tab (moved
+ * with a transform — no re-layout), and the arrow / Home / End keys move
+ * between tabs as a tablist should.
+ */
+export function BulkTabBar({ active, onSelect }: { active: BulkTab; onSelect: (tab: BulkTab) => void }) {
+  const listRef = useRef<HTMLDivElement>(null)
+  const pillRef = useRef<HTMLSpanElement>(null)
+
+  useLayoutEffect(() => {
+    const list = listRef.current
+    const pill = pillRef.current
+    if (!list || !pill) return
+    const place = () => {
+      const tab = list.querySelector<HTMLElement>(`[data-tab="${active}"]`)
+      if (!tab) return
+      pill.style.width = `${tab.offsetWidth}px`
+      pill.style.height = `${tab.offsetHeight}px`
+      pill.style.transform = `translate(${tab.offsetLeft}px, ${tab.offsetTop}px)`
+    }
+    place()
+    // Animate only moves, not the first placement.
+    const raf = requestAnimationFrame(() => { pill.dataset.ready = 'true' })
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(place) : null
+    ro?.observe(list)
+    return () => { cancelAnimationFrame(raf); ro?.disconnect() }
+  }, [active])
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    const i = BULK_TABS.findIndex((t) => t.key === active)
+    const next = e.key === 'ArrowRight' ? (i + 1) % BULK_TABS.length
+      : e.key === 'ArrowLeft' ? (i - 1 + BULK_TABS.length) % BULK_TABS.length
+        : e.key === 'Home' ? 0 : e.key === 'End' ? BULK_TABS.length - 1 : null
+    if (next == null) return
+    e.preventDefault()
+    onSelect(BULK_TABS[next].key)
+    listRef.current?.querySelector<HTMLElement>(`[data-tab="${BULK_TABS[next].key}"]`)?.focus()
+  }
+
+  return (
+    <div
+      ref={listRef}
+      role="tablist"
+      aria-label="Bulk Mailer"
+      onKeyDown={onKeyDown}
+      className="relative flex flex-wrap items-center gap-1 rounded-xl border border-[#e3d9c4] bg-[#f4eede]/60 p-1"
+    >
+      <span
+        ref={pillRef}
+        aria-hidden="true"
+        className="bulk-tab-pill pointer-events-none absolute left-0 top-0 rounded-lg bg-white shadow-sm ring-1 ring-[#e3d9c4]"
+      />
+      {BULK_TABS.map((t) => {
+        const selected = active === t.key
+        return (
+          <button
+            key={t.key}
+            type="button"
+            role="tab"
+            data-tab={t.key}
+            aria-selected={selected}
+            tabIndex={selected ? 0 : -1}
+            onClick={() => onSelect(t.key)}
+            className={`relative z-[1] inline-flex items-baseline gap-1.5 rounded-lg px-3.5 py-2 text-[13px] font-semibold outline-none transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-[#412d15]/40 ${
+              selected ? 'text-[#1f150c]' : 'text-[#6b5c42] hover:text-[#1f150c]'
+            }`}
+          >
+            {t.label}
+            <span className={`hidden text-[9.5px] font-medium uppercase tracking-[0.06em] transition-colors duration-200 sm:inline ${selected ? 'text-[#8a7a5a]' : 'text-[#b6a684]'}`}>
+              {t.hint}
+            </span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/** What a tab shows while its first answer is on the way — the shape of the list, not a bare "Loading…". */
+function BatchListSkeleton({ withCards }: { withCards: boolean }) {
+  return (
+    <div data-testid="batch-list-skeleton" aria-busy="true" aria-label="Loading batches" className="space-y-4">
+      {withCards ? (
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="h-[66px] animate-pulse rounded-xl border border-[#efe7d6] bg-[#f6f1e6]" />
+          ))}
+        </div>
+      ) : null}
+      <div className="space-y-2 rounded-2xl border border-[#efe7d6] bg-white p-3">
+        <div className="flex flex-wrap gap-1.5">
+          {[72, 64, 88, 96, 80].map((w, i) => (
+            <div key={i} className="h-7 animate-pulse rounded-full bg-[#f2ecdf]" style={{ width: w }} />
+          ))}
+        </div>
+        <div className="h-9 animate-pulse rounded-xl bg-[#f6f1e6]" />
+      </div>
+      <div className="space-y-2 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+        {[0, 1, 2, 3, 4].map((i) => (
+          <div key={i} className="flex items-center gap-3 px-2 py-2">
+            <div className="h-3 w-10 animate-pulse rounded bg-[#efe7d6]" />
+            <div className="h-3 flex-1 animate-pulse rounded bg-[#f2ecdf]" />
+            <div className="h-5 w-20 animate-pulse rounded-full bg-[#efe7d6]" />
+            <div className="h-7 w-28 animate-pulse rounded-lg bg-[#f2ecdf]" />
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/** Widths of the two columns pinned at the left of a batch's rows grid. */
+const ROW_COL_W = 196
+const ORDER_COL_W = 104
+
+/** "22 Sep" (or with the time, for a tooltip). */
+function formatPrinted(iso: string, withTime = false) {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return withTime
+    ? d.toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' })
+    : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+}
+
+/** "18 generated · 2 pending · 1 voided · 1 failed" — only the parts that aren't zero. */
+function LabelCountsLine({ counts }: { counts: LabelCounts | null }) {
+  if (!counts) return null
+  const parts: { n: number; label: string; dot: string; text: string }[] = [
+    { n: counts.generated, label: 'generated', dot: 'bg-emerald-500', text: 'text-emerald-800' },
+    { n: counts.pending, label: 'pending', dot: 'bg-amber-400', text: 'text-amber-800' },
+    { n: counts.voided, label: 'voided', dot: 'bg-slate-400', text: 'text-slate-500' },
+    { n: counts.failed, label: 'failed', dot: 'bg-rose-500', text: 'text-rose-700' },
+  ].filter((p) => p.n > 0)
+  if (parts.length === 0) return null
+  return (
+    <span data-testid="label-counts" className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 whitespace-nowrap text-[10.5px] font-semibold tabular-nums">
+      {parts.map((p, i) => (
+        <span key={p.label} className={`inline-flex items-center gap-1 ${p.text}`}>
+          {i > 0 ? <span className="text-[#b6a684]" aria-hidden="true">·</span> : null}
+          <span className={`h-1.5 w-1.5 rounded-full ${p.dot}`} aria-hidden="true" />
+          {p.n} {p.label}
+        </span>
+      ))}
+    </span>
+  )
+}

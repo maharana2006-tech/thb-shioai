@@ -48,6 +48,7 @@ import SendToPrinterDialog from './workspace/SendToPrinterDialog'
 import { useAppSession } from '../hooks/useAppSession'
 import { normalizeRole } from '../utils/roles'
 import { settingsPaths } from '../routes/workspaceRoutes'
+import { printPdfBlob as printPdfBlobUtil } from '../utils/printPdf'
 // Bundle audit #434 follow-up: modals are only rendered behind
 // `xxxOpen ?` guards, so React.lazy defers each chunk fetch until an
 // operator actually opens the modal. Fallback is null — the modal
@@ -1012,39 +1013,8 @@ export default function OrdersWorkspace() {
    * Called by the per-row print-label + commercial-invoice icons
    * (2026-09-13 operator ask).
    */
-  const printPdfBlob = useCallback((blob: Blob) => {
-    const url = URL.createObjectURL(blob)
-    const iframe = document.createElement('iframe')
-    iframe.style.position = 'fixed'
-    iframe.style.right = '0'
-    iframe.style.bottom = '0'
-    iframe.style.width = '0'
-    iframe.style.height = '0'
-    iframe.style.border = 'none'
-    iframe.src = url
-    iframe.onload = () => {
-      // Small delay so the PDF viewer has a chance to paint before we
-      // pop the printer picker on top of it.
-      setTimeout(() => {
-        try {
-          iframe.contentWindow?.focus()
-          iframe.contentWindow?.print()
-        } catch {
-          // Some browsers block cross-origin-ish print calls on blob:
-          // URLs — fall back to a plain new-tab open. Operator prints
-          // via Ctrl+P from there.
-          window.open(url, '_blank', 'noopener')
-        }
-        // Cleanup after 60s — long enough that the printer picker's
-        // "Cancel" or "Print" click has resolved the print job.
-        setTimeout(() => {
-          try { document.body.removeChild(iframe) } catch { /* already removed */ }
-          URL.revokeObjectURL(url)
-        }, 60_000)
-      }, 150)
-    }
-    document.body.appendChild(iframe)
-  }, [])
+  // Shared with Bulk Mailer (utils/printPdf).
+  const printPdfBlob = useCallback((blob: Blob) => printPdfBlobUtil(blob), [])
 
   /** Fetch + print the label PDF for one order. */
   // Bulk print from the selection bar: every selected order's label (or invoice)
@@ -2073,11 +2043,11 @@ export default function OrdersWorkspace() {
               Split across warehouses
             </button>
             <button type="button"
-                    onClick={() => navigate('/orders/history')}
+                    onClick={() => navigate('/bulk/imports')}
                     className={BTN_GHOST_SM}
-                    title="Order History — all orders (Bulk/Manual/API/WMS), the CSV/Excel importer, and import history">
+                    title="Bulk Mailer — import history, the CSV/Excel importer, API batches and documents">
               <FiDatabase className="h-3 w-3" />
-              Order History
+              Bulk Mailer
             </button>
             <button type="button" onClick={() => navigate('/orders/new')} className={BTN_PRIMARY_SM}>
               <FiPlus className="h-3 w-3" />

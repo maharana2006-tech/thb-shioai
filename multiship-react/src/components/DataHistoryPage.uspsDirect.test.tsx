@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, cleanup, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { BrowserRouter } from 'react-router-dom'
+import { BrowserRouter, MemoryRouter, Route, Routes } from 'react-router-dom'
 import { Provider } from 'react-redux'
 import { combineReducers, configureStore } from '@reduxjs/toolkit'
 import { useEffect } from 'react'
@@ -142,8 +142,27 @@ vi.mock('../api/apiClient', () => {
 
 // Sub-components used by the page — stubbed so we don't have to
 // wire the whole editable grid.
-vi.mock('./AllOrdersHistory', () => ({
-  default: () => <div data-testid="all-orders-stub" />,
+const listBatches = vi.fn()
+const bulkSummary = vi.fn()
+vi.mock('../api/bulkService', () => ({
+  bulkService: {
+    listBatches: (...a: unknown[]) => listBatches(...a),
+    summary: (...a: unknown[]) => bulkSummary(...a),
+  },
+}))
+const pageOf = (content: unknown[]) => ({ data: { content, totalElements: content.length, totalPages: 1, number: 0, size: 25 } })
+const summaryOf = (over: Record<string, unknown> = {}) => ({ data: {
+  total: 0, readyToGenerate: 0, generating: 0, needsFixes: 0, completedThisWeek: 0,
+  statusCounts: { ALL: 0 }, creators: [], ...over,
+} })
+const wmsBatches = vi.fn()
+const wmsPull = vi.fn()
+vi.mock('../api/wmsService', () => ({
+  wmsService: { batches: (...a: unknown[]) => wmsBatches(...a), pull: (...a: unknown[]) => wmsPull(...a) },
+}))
+vi.mock('./modals/ShipViaCodes', () => ({
+  ShipViaCodesPanel: () => <div data-testid="ship-via-panel" />,
+  AddShipViaMappingDialog: () => null,
 }))
 vi.mock('./OrderDocumentsTable', () => ({
   default: () => <div data-testid="documents-stub" />,
@@ -211,6 +230,25 @@ vi.mock('./batchGrid', () => ({
 
 // ---------- Test harness ----------
 
+/** Renders the page under its real route, starting at {@code path}. */
+async function renderAt(path: string) {
+  const { default: DataHistoryPage } = await import('./DataHistoryPage')
+  const store = configureStore({
+    reducer: combineReducers({ carriers: carrierReducer, orders: orderReducer }),
+    middleware: (getDefaultMiddleware) => getDefaultMiddleware({ serializableCheck: false }),
+  })
+  return render(
+    <Provider store={store}>
+      <MemoryRouter initialEntries={[path]}>
+        <Routes>
+          <Route path="/bulk/batches/:batchId" element={<DataHistoryPage />} />
+          <Route path="/bulk/:tab" element={<DataHistoryPage />} />
+        </Routes>
+      </MemoryRouter>
+    </Provider>,
+  )
+}
+
 async function loadAndRender() {
   const { default: DataHistoryPage } = await import('./DataHistoryPage')
   const store = configureStore({
@@ -267,6 +305,9 @@ const rowFedex = (over: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  wmsBatches.mockResolvedValue({ data: [] })
+  listBatches.mockResolvedValue(pageOf([]))
+  bulkSummary.mockResolvedValue(summaryOf())
   listHistory.mockResolvedValue({ data: [] })
   getHistory.mockResolvedValue({ data: null })
   getMetricsMock.mockResolvedValue({
@@ -284,10 +325,6 @@ afterEach(() => {
   cleanup()
 })
 
-async function switchToImportsView() {
-  const importsTab = await screen.findByRole('button', { name: /Import history/i })
-  await userEvent.click(importsTab)
-}
 
 // ==================================================================
 // Test 0: sanity — page renders
@@ -334,7 +371,7 @@ describe('DataHistoryPage — BulkLabelQueueBadge mount (audit U2)', () => {
   it('renders the slot BEFORE the Import history tab (top-of-page placement)', async () => {
     await loadAndRender()
     const slot = await waitFor(() => screen.getByTestId('usps-queue-badge-slot'))
-    const importsTab = screen.getByRole('button', { name: /Import history/i })
+    const importsTab = screen.getByRole('tab', { name: /Import history/i })
     const pos = slot.compareDocumentPosition(importsTab)
     expect(pos & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
@@ -359,8 +396,8 @@ describe('DataHistoryPage — MpsProgressCard renders inside USPS batches (audit
       },
     })
 
-    await loadAndRender()
-    await switchToImportsView()
+    // The rows (and the MPS cards) live on the batch's own page.
+    await renderAt('/bulk/batches/100')
 
     // Auto-expand fires from the stub, which triggers ensureRows →
     // getHistory. Wait for the MPS section to appear.
@@ -389,12 +426,12 @@ describe('DataHistoryPage — MpsProgressCard renders inside USPS batches (audit
       },
     })
 
-    await loadAndRender()
-    await switchToImportsView()
+    // The rows (and the MPS cards) live on the batch's own page.
+    await renderAt('/bulk/batches/200')
 
-    // Wait for the batch to auto-expand (advanced-data-table-stub mounts).
+    // Wait for the batch page to show the batch.
     await waitFor(() => {
-      expect(screen.getByTestId('advanced-data-table-stub')).toBeInTheDocument()
+      expect(screen.getByTestId('batch-page-header')).toBeInTheDocument()
     })
     // Give the auto-expand a beat to trigger getHistory.
     await act(async () => {
@@ -417,8 +454,8 @@ describe('DataHistoryPage — MpsProgressCard renders inside USPS batches (audit
       },
     })
 
-    await loadAndRender()
-    await switchToImportsView()
+    // The rows (and the MPS cards) live on the batch's own page.
+    await renderAt('/bulk/batches/300')
 
     await waitFor(
       () => {
@@ -443,11 +480,11 @@ describe('DataHistoryPage — MpsProgressCard renders inside USPS batches (audit
       },
     })
 
-    await loadAndRender()
-    await switchToImportsView()
+    // The rows (and the MPS cards) live on the batch's own page.
+    await renderAt('/bulk/batches/400')
 
     await waitFor(() => {
-      expect(screen.getByTestId('advanced-data-table-stub')).toBeInTheDocument()
+      expect(screen.getByTestId('batch-page-header')).toBeInTheDocument()
     })
     await act(async () => {
       await Promise.resolve()
@@ -477,5 +514,120 @@ describe('DataHistoryPage — normalizeCarrierCode helper contract', () => {
     expect(mod.normalizeCarrierCode('FEDEX')).not.toBe('usps')
     expect(mod.normalizeCarrierCode('UPS')).not.toBe('usps')
     expect(mod.normalizeCarrierCode('DHL')).not.toBe('usps')
+  })
+})
+
+// ==================================================================
+// Bulk Mailer layout
+// ==================================================================
+
+describe('Bulk Mailer — layout', () => {
+  it('opens on Import history with four tabs, no All orders, and an Import CSV / Excel button', async () => {
+    listBatches.mockResolvedValue(pageOf([
+      batchSummary({ id: 1, status: 'INITIATE', invalidRows: 0 }),
+      batchSummary({ id: 2, status: 'IN_PROGRESS' }),
+      batchSummary({ id: 3, status: 'DRAFT', invalidRows: 4 }),
+    ]))
+    // The cards come from the server's counts over the whole view.
+    bulkSummary.mockResolvedValue(summaryOf({ total: 3, readyToGenerate: 1, generating: 1, needsFixes: 1 }))
+    await loadAndRender()
+    const tabs = await screen.findAllByRole('tab')
+    expect(tabs.map((t) => t.textContent?.replace(/(Saved batches|WMS · API|Label · invoice · statement|Deleted batches)$/, '')))
+      .toEqual(['Import history', 'API batches', 'Documents', 'Trash'])
+    expect(screen.getByRole('tab', { name: /Import history/i })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.queryByText(/All orders/i)).toBeNull()
+    expect(screen.getByRole('button', { name: /Import CSV \/ Excel/i })).toBeInTheDocument()
+    const summary = await screen.findByTestId('bulk-summary')
+    expect(summary).toHaveTextContent('Ready to generate1')
+    expect(summary).toHaveTextContent('Generating now1')
+    expect(summary).toHaveTextContent('Needs fixes1')
+  })
+
+  it('shows the API batches in the same list, with Fetch from WMS for an admin', async () => {
+    listBatches.mockImplementation(async (q: { view: string }) => q.view === 'API'
+      ? pageOf([batchSummary({ id: 7, fileName: 'WMS fetch 22 Sep', source: 'WMS', status: 'DRAFT', invalidRows: 1, savedRows: 3 })])
+      : pageOf([]))
+    await renderAt('/bulk/imports')
+    await userEvent.click(await screen.findByRole('tab', { name: /API batches/i }))
+    expect(screen.getByRole('tab', { name: /API batches/i })).toHaveAttribute('aria-selected', 'true')
+    await waitFor(() => expect(listBatches).toHaveBeenCalledWith(expect.objectContaining({ view: 'API' })))
+    expect(await screen.findByTestId('batch-row-7')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Fetch from WMS/i })).toBeInTheDocument()
+    // The Import button belongs to Import history only.
+    expect(screen.queryByRole('button', { name: /Import CSV \/ Excel/i })).toBeNull()
+  })
+
+  it('opens the Trash tab from its address', async () => {
+    await renderAt('/bulk/trash')
+    expect(await screen.findByRole('tab', { name: /Trash/i })).toHaveAttribute('aria-selected', 'true')
+    await waitFor(() => expect(listBatches).toHaveBeenCalledWith(expect.objectContaining({ view: 'TRASH' })))
+  })
+
+  it('opens a batch on its own page, with its header and a way back', async () => {
+    getHistory.mockResolvedValue({ data: { ...batchSummary({ id: 121, fileName: 'acme_sept.csv', status: 'INITIATE' }), rows: [] } })
+    await renderAt('/bulk/batches/121')
+    const header = await screen.findByTestId('batch-page-header')
+    expect(header).toHaveTextContent('Batch #121')
+    expect(header).toHaveTextContent('acme_sept.csv')
+    expect(screen.getByRole('button', { name: /Bulk Mailer · Import history/i })).toBeInTheDocument()
+    expect(getHistory).toHaveBeenCalledWith(121)
+  })
+
+  it('says so when the batch is not there', async () => {
+    getHistory.mockRejectedValue(new (await import('../api/apiClient')).ApiError('Not found', 404, null))
+    await renderAt('/bulk/batches/999999')
+    expect(await screen.findByText(/Batch #999999 isn't here/)).toBeInTheDocument()
+  })
+
+  it('sends the filters to the server and starts again at page 1', async () => {
+    await renderAt('/bulk/imports')
+    await waitFor(() => expect(listBatches).toHaveBeenCalledWith(expect.objectContaining({ view: 'FILE', page: 0, size: 25, sort: 'created', dir: 'DESC' })))
+    listBatches.mockClear()
+    await userEvent.type(screen.getByPlaceholderText(/Search file name/i), 'acme')
+    await waitFor(() => expect(listBatches).toHaveBeenCalledWith(expect.objectContaining({ q: 'acme', page: 0 })), { timeout: 2000 })
+  })
+
+})
+
+describe('Bulk Mailer — tab transitions', () => {
+  it('slides the new tab in from the side you moved towards', async () => {
+    await renderAt('/bulk/imports')
+    await userEvent.click(await screen.findByRole('tab', { name: /Documents/i }))
+    expect(screen.getByRole('tabpanel')).toHaveClass('bulk-tab-in-right')
+    await userEvent.click(screen.getByRole('tab', { name: /API batches/i }))
+    expect(screen.getByRole('tabpanel')).toHaveClass('bulk-tab-in-left')
+  })
+
+  it('moves between tabs with the arrow keys, and only the chosen tab is in the tab order', async () => {
+    await renderAt('/bulk/imports')
+    const imports = await screen.findByRole('tab', { name: /Import history/i })
+    expect(imports).toHaveAttribute('tabindex', '0')
+    expect(screen.getByRole('tab', { name: /API batches/i })).toHaveAttribute('tabindex', '-1')
+    imports.focus()
+    await userEvent.keyboard('{ArrowRight}')
+    expect(screen.getByRole('tab', { name: /API batches/i })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: /API batches/i })).toHaveFocus()
+    await userEvent.keyboard('{End}')
+    expect(screen.getByRole('tab', { name: /Trash/i })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('shows a skeleton, not the last tab\'s batches, and ignores a late answer for a tab already left', async () => {
+    let answerApi: (v: unknown) => void = () => {}
+    listBatches.mockImplementation((q: { view: string }) => q.view === 'API'
+      ? new Promise((resolve) => { answerApi = resolve })
+      : Promise.resolve(pageOf(q.view === 'TRASH' ? [batchSummary({ id: 55, fileName: 'deleted.csv' })] : [batchSummary({ id: 1 })])))
+    await renderAt('/bulk/imports')
+    expect(await screen.findByTestId('batch-row-1')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('tab', { name: /API batches/i }))
+    expect(screen.getByTestId('batch-list-skeleton')).toBeInTheDocument()
+    expect(screen.queryByTestId('batch-row-1')).toBeNull()
+
+    await userEvent.click(screen.getByRole('tab', { name: /Trash/i }))
+    expect(await screen.findByTestId('batch-row-55')).toBeInTheDocument()
+    // The API answer finally arrives — it must not replace Trash.
+    await act(async () => { answerApi(pageOf([batchSummary({ id: 7, source: 'WMS' })])) })
+    expect(screen.getByTestId('batch-row-55')).toBeInTheDocument()
+    expect(screen.queryByTestId('batch-row-7')).toBeNull()
   })
 })
