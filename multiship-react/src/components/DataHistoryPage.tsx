@@ -1189,7 +1189,7 @@ export default function DataHistoryPage() {
           const platform = b.billingMode === 'PLATFORM'
           const confirming = confirmGenId === b.id
           return (
-            <div className="flex items-center justify-end gap-1.5 [&_button]:whitespace-nowrap">
+            <div className={`flex items-center gap-1.5 [&_button]:whitespace-nowrap ${batchPageId != null ? 'justify-end' : 'justify-start'}`}>
               {viewTrash ? (
                 canWrite ? (
                   <button
@@ -1572,7 +1572,7 @@ export default function DataHistoryPage() {
         id: 'actions',
         header: 'Actions',
         enableSorting: false,
-        size: 250,
+        size: 210,
         cell: ({ row }) => renderActionsCell(row.original),
         // Buttons have no CSV value — keep the column out of the export.
         meta: { headerLabel: 'Actions', exportable: false },
