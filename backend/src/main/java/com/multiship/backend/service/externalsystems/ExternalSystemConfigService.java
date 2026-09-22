@@ -53,6 +53,15 @@ public class ExternalSystemConfigService {
         return connectionRepo.findById(id);
     }
 
+    /**
+     * S4 helper — the well-known "nds-default" seed row (V78 migration).
+     * The FE highlights it on {@code /settings/external-systems};
+     * legacy DTC-sync wiring looks it up by name at boot.
+     */
+    public Optional<ExternalSystemConnection> getDefaultNdsConnection() {
+        return findByName("nds-default");
+    }
+
     @Transactional
     public ExternalSystemConnection saveConnection(ExternalSystemConnection c, String actor) {
         if (c.getName() == null || c.getName().isBlank()) {

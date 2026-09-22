@@ -1,9 +1,9 @@
 package com.multiship.backend.config;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.multiship.backend.service.externalsystems.ExternalSystemRegistry;
+import com.multiship.backend.service.externalsystems.LoginContext;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
@@ -19,9 +19,32 @@ import java.util.Map;
 import java.util.HashMap;
 
 /**
- * Secondary Oracle NDS DataSource Configuration.
- * This connects to Oracle NDS (192.168.3.8:1521/tb10g) to fetch DTC orders.
+ * S4 — Oracle NDS JPA plumbing for the legacy DTC-sync path.
+ *
+ * <p><b>What changed vs the pre-S4 version:</b>
+ * <ul>
+ *   <li>DataSource used to be built from {@code spring.datasource.oracle.*}
+ *       properties. Those are DELETED — this bean now sources its
+ *       DataSource from the S1 {@link ExternalSystemRegistry},
+ *       specifically the well-known {@code nds-default} row (seeded
+ *       by V78, edited by admin via {@code /settings/external-systems}).</li>
+ *   <li>Same activation gate as before ({@code multiship.oracle.enabled=true}) —
+ *       when false, this whole config is skipped and no Oracle beans exist,
+ *       matching pre-S4 default-off behaviour.</li>
+ *   <li>When enabled but the framework row is inactive / missing password,
+ *       the registry throws with a clear message pointing operators at
+ *       {@code /settings/external-systems}. Cleaner than the old
+ *       "empty URL" boot failure.</li>
+ * </ul>
+ *
+ * <p><b>Roadmap:</b> the JPA path itself (repo interface, entity, EMF
+ * bootstrap) is unchanged so existing DTC-sync behaviour is preserved.
+ * Full rewrite to a JdbcTemplate-based repo — freeing us from the EMF
+ * bootstrap that requires a DataSource at Spring-context startup — is
+ * scheduled as S4b when we have runtime evidence the framework path is
+ * healthy.
  */
+@Slf4j
 @Configuration
 @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "multiship.oracle.enabled", havingValue = "true")
 @EnableTransactionManagement
@@ -33,26 +56,40 @@ import java.util.HashMap;
 public class OracleDataSourceConfig {
 
     /**
-     * Secondary Oracle DataSource for NDS.
+     * Connection name of the well-known NDS row (V78 seed). If ops
+     * needs multiple NDS servers in parallel, this becomes a property.
      */
-    @Bean(name = "oracleDataSource")
-    public DataSource oracleDataSource(OracleDataSourceProperties properties) {
-        HikariConfig config = new HikariConfig();
-        config.setJdbcUrl(properties.getUrl());
-        config.setUsername(properties.getUsername());
-        config.setPassword(properties.getPassword());
-        config.setDriverClassName(properties.getDriverClassName());
-        config.setMaximumPoolSize(properties.getMaxPoolSize());
-        config.setMinimumIdle(5);
-        config.setConnectionTimeout(properties.getConnectionTimeout());
-        config.setMaxLifetime(1800000);
-        config.setLeakDetectionThreshold(300000);
-        return new HikariDataSource(config);
-    }
+    public static final String NDS_CONNECTION_NAME = "nds-default";
 
     /**
-     * EntityManagerFactory for Oracle (read-only).
+     * Registry-backed Oracle DataSource. Fetched from
+     * {@code registry.connect("nds-default", PRODUCTION)}. Throws
+     * during context startup if the framework row is missing / inactive
+     * / missing password — the operator fix is
+     * {@code /settings/external-systems}.
      */
+    @Bean(name = "oracleDataSource")
+    public DataSource oracleDataSource(ExternalSystemRegistry registry) {
+        try {
+            Object handle = registry.connect(NDS_CONNECTION_NAME,
+                    LoginContext.withProfile("PRODUCTION"));
+            if (!(handle instanceof DataSource ds)) {
+                throw new IllegalStateException(
+                        "ExternalSystemRegistry returned non-DataSource handle for '"
+                                + NDS_CONNECTION_NAME + "': " + handle.getClass().getName());
+            }
+            log.info("nds-oracle-datasource: bound to external-systems row '{}' (PRODUCTION login)",
+                    NDS_CONNECTION_NAME);
+            return ds;
+        } catch (Exception e) {
+            log.error("nds-oracle-datasource: FAILED to bind to '{}': {}. "
+                            + "Fix at /settings/external-systems (set active=true + productionPassword secret) "
+                            + "or disable DTC sync via multiship.oracle.enabled=false.",
+                    NDS_CONNECTION_NAME, e.getMessage());
+            throw e;
+        }
+    }
+
     @Bean(name = "oracleEntityManagerFactory")
     public LocalContainerEntityManagerFactoryBean oracleEntityManagerFactory(
             @Qualifier("oracleDataSource") DataSource dataSource) {
@@ -62,52 +99,22 @@ public class OracleDataSourceConfig {
         em.setPackagesToScan("com.multiship.backend.model.oracle");
 
         HibernateJpaVendorAdapter adapter = new HibernateJpaVendorAdapter();
-        adapter.setGenerateDdl(false);  // Read-only, no DDL generation
+        adapter.setGenerateDdl(false);  // Read-only
         em.setJpaVendorAdapter(adapter);
 
         Map<String, Object> properties = new HashMap<>();
         properties.put("hibernate.dialect", "org.hibernate.dialect.OracleDialect");
         properties.put("hibernate.jdbc.batch_size", "20");
         properties.put("hibernate.default_batch_fetch_size", "16");
-        properties.put("hibernate.hbm2ddl.auto", "none");  // No schema updates
+        properties.put("hibernate.hbm2ddl.auto", "none");
         em.setJpaPropertyMap(properties);
 
         return em;
     }
 
-    /**
-     * TransactionManager for Oracle (read-only operations).
-     */
     @Bean(name = "oracleTransactionManager")
     public PlatformTransactionManager oracleTransactionManager(
             @Qualifier("oracleEntityManagerFactory") EntityManagerFactory entityManagerFactory) {
         return new JpaTransactionManager(entityManagerFactory);
-    }
-
-    /**
-     * Oracle configuration properties.
-     */
-    @ConfigurationProperties(prefix = "spring.datasource.oracle")
-    public static class OracleDataSourceProperties {
-        private String url;
-        private String username;
-        private String password;
-        private String driverClassName;
-        private Integer maxPoolSize = 10;
-        private Integer connectionTimeout = 10000;
-
-        // Getters and Setters
-        public String getUrl() { return url; }
-        public void setUrl(String url) { this.url = url; }
-        public String getUsername() { return username; }
-        public void setUsername(String username) { this.username = username; }
-        public String getPassword() { return password; }
-        public void setPassword(String password) { this.password = password; }
-        public String getDriverClassName() { return driverClassName; }
-        public void setDriverClassName(String driverClassName) { this.driverClassName = driverClassName; }
-        public Integer getMaxPoolSize() { return maxPoolSize; }
-        public void setMaxPoolSize(Integer maxPoolSize) { this.maxPoolSize = maxPoolSize; }
-        public Integer getConnectionTimeout() { return connectionTimeout; }
-        public void setConnectionTimeout(Integer connectionTimeout) { this.connectionTimeout = connectionTimeout; }
     }
 }
