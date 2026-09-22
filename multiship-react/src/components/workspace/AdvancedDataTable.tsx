@@ -100,6 +100,8 @@ export interface AdvancedDataTableProps<T> {
   /** Fired when a row is expanded (not collapsed) — lets the parent lazy-load
    *  the expanded content's data. */
   onRowExpand?: (row: T) => void
+  /** Row (by getRowId) to show expanded when the table first renders. */
+  initialExpandedId?: string | null
   /** Stable row identity (e.g. the record id). Without it rows are keyed by position,
    *  so removing a row moves an open expansion onto the next record. */
   getRowId?: (row: T, index: number) => string
@@ -345,6 +347,7 @@ export default function AdvancedDataTable<T>({
   emptyState,
   renderExpanded,
   onRowExpand,
+  initialExpandedId = null,
   getRowId,
   initialHiddenColumns,
   initialColumnPinning,
@@ -377,7 +380,7 @@ export default function AdvancedDataTable<T>({
   const persisted = useMemo(() => loadLayout(tableKey), [tableKey])
 
   // Which row's expansion sub-row is open (id), when renderExpanded is set.
-  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [expandedId, setExpandedId] = useState<string | null>(initialExpandedId)
   const [internalSorting, setInternalSorting] = useState<SortingState>([])
   const [internalPageIndex, setInternalPageIndex] = useState(0)
   const [internalPageSize, setInternalPageSize] = useState(initialPageSize)

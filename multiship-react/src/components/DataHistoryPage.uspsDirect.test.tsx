@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, cleanup, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { BrowserRouter } from 'react-router-dom'
+import { BrowserRouter, MemoryRouter, Route, Routes } from 'react-router-dom'
 import { Provider } from 'react-redux'
 import { combineReducers, configureStore } from '@reduxjs/toolkit'
 import { useEffect } from 'react'
@@ -142,8 +142,8 @@ vi.mock('../api/apiClient', () => {
 
 // Sub-components used by the page — stubbed so we don't have to
 // wire the whole editable grid.
-vi.mock('./AllOrdersHistory', () => ({
-  default: () => <div data-testid="all-orders-stub" />,
+vi.mock('./ApiBatchList', () => ({
+  default: () => <div data-testid="api-batches-stub" />,
 }))
 vi.mock('./OrderDocumentsTable', () => ({
   default: () => <div data-testid="documents-stub" />,
@@ -210,6 +210,22 @@ vi.mock('./batchGrid', () => ({
 }))
 
 // ---------- Test harness ----------
+
+/** Renders the page under its real route, starting at {@code path}. */
+async function renderAt(path: string) {
+  const { default: DataHistoryPage } = await import('./DataHistoryPage')
+  const store = configureStore({
+    reducer: combineReducers({ carriers: carrierReducer, orders: orderReducer }),
+    middleware: (getDefaultMiddleware) => getDefaultMiddleware({ serializableCheck: false }),
+  })
+  return render(
+    <Provider store={store}>
+      <MemoryRouter initialEntries={[path]}>
+        <Routes><Route path="/bulk/:tab" element={<DataHistoryPage />} /></Routes>
+      </MemoryRouter>
+    </Provider>,
+  )
+}
 
 async function loadAndRender() {
   const { default: DataHistoryPage } = await import('./DataHistoryPage')
@@ -284,8 +300,9 @@ afterEach(() => {
   cleanup()
 })
 
+/** Bulk Mailer opens on Import history; the tab is still there to click. */
 async function switchToImportsView() {
-  const importsTab = await screen.findByRole('button', { name: /Import history/i })
+  const importsTab = await screen.findByRole('tab', { name: /Import history/i })
   await userEvent.click(importsTab)
 }
 
@@ -334,7 +351,7 @@ describe('DataHistoryPage — BulkLabelQueueBadge mount (audit U2)', () => {
   it('renders the slot BEFORE the Import history tab (top-of-page placement)', async () => {
     await loadAndRender()
     const slot = await waitFor(() => screen.getByTestId('usps-queue-badge-slot'))
-    const importsTab = screen.getByRole('button', { name: /Import history/i })
+    const importsTab = screen.getByRole('tab', { name: /Import history/i })
     const pos = slot.compareDocumentPosition(importsTab)
     expect(pos & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
@@ -477,5 +494,45 @@ describe('DataHistoryPage — normalizeCarrierCode helper contract', () => {
     expect(mod.normalizeCarrierCode('FEDEX')).not.toBe('usps')
     expect(mod.normalizeCarrierCode('UPS')).not.toBe('usps')
     expect(mod.normalizeCarrierCode('DHL')).not.toBe('usps')
+  })
+})
+
+// ==================================================================
+// Bulk Mailer layout
+// ==================================================================
+
+describe('Bulk Mailer — layout', () => {
+  it('opens on Import history with four tabs, no All orders, and an Import CSV / Excel button', async () => {
+    listHistory.mockResolvedValue({ data: [
+      batchSummary({ id: 1, status: 'INITIATE', invalidRows: 0 }),
+      batchSummary({ id: 2, status: 'IN_PROGRESS' }),
+      batchSummary({ id: 3, status: 'DRAFT', invalidRows: 4 }),
+    ] })
+    await loadAndRender()
+    const tabs = await screen.findAllByRole('tab')
+    expect(tabs.map((t) => t.textContent?.replace(/(Saved batches|WMS · API|Label · invoice · statement|Deleted batches)$/, '')))
+      .toEqual(['Import history', 'API batches', 'Documents', 'Trash'])
+    expect(screen.getByRole('tab', { name: /Import history/i })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.queryByText(/All orders/i)).toBeNull()
+    expect(screen.getByRole('button', { name: /Import CSV \/ Excel/i })).toBeInTheDocument()
+    const summary = await screen.findByTestId('bulk-summary')
+    expect(summary).toHaveTextContent('Ready to generate1')
+    expect(summary).toHaveTextContent('Generating now1')
+    expect(summary).toHaveTextContent('Needs fixes1')
+  })
+
+  it('shows the API batches in their own tab', async () => {
+    await renderAt('/bulk/imports')
+    await userEvent.click(await screen.findByRole('tab', { name: /API batches/i }))
+    expect(await screen.findByTestId('api-batches-stub')).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /API batches/i })).toHaveAttribute('aria-selected', 'true')
+    // The Import button belongs to Import history only.
+    expect(screen.queryByRole('button', { name: /Import CSV \/ Excel/i })).toBeNull()
+  })
+
+  it('opens the Trash tab from its address', async () => {
+    await renderAt('/bulk/trash')
+    expect(await screen.findByRole('tab', { name: /Trash/i })).toHaveAttribute('aria-selected', 'true')
+    await waitFor(() => expect(listHistory).toHaveBeenCalledWith(true))
   })
 })

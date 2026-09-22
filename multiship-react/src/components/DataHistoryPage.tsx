@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   FiAlertCircle,
   FiArrowLeft,
@@ -9,6 +9,7 @@ import {
   FiSearch,
   FiSliders,
   FiTrash2,
+  FiUpload,
   FiRotateCcw,
   FiSlash,
   FiX,
@@ -17,8 +18,8 @@ import {
 import type { ColumnDef } from '@tanstack/react-table'
 import PageSectionHeader from './workspace/PageSectionHeader'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
-import AllOrdersHistory from './AllOrdersHistory'
-import OrderImportModal from './modals/OrderImportModal'
+import ApiBatchList from './ApiBatchList'
+import { bulkPaths } from '../routes/workspaceRoutes'
 import OrderDocumentsTable from './OrderDocumentsTable'
 import DataHistoryFilterToolbar from './DataHistoryFilterToolbar'
 import { GridCell, DH_COLUMNS, RowIssuesIcon, RowChannelChip, bucketRowErrors, type DhColumn } from './batchGrid'
@@ -136,7 +137,11 @@ export default function DataHistoryPage() {
   // Order Intake has three views: "orders" (unified per-order list across
   // Bulk / Manual / API / WMS), "import" (inline CSV/Excel upload + validation),
   // and "imports" (history of bulk import batches).
-  const [dhView, setDhView] = useState<'orders' | 'import' | 'imports' | 'docs'>('orders')
+  // Bulk Mailer tab from the URL (/bulk/:tab): imports (default) · api · documents · trash.
+  const { tab } = useParams<{ tab?: string }>()
+  const bulkTab: BulkTab = BULK_TABS.some((t) => t.key === tab) ? (tab as BulkTab) : 'imports'
+  const dhView: 'imports' | 'api' | 'docs' = bulkTab === 'api' ? 'api' : bulkTab === 'documents' ? 'docs' : 'imports'
+  const [searchParams, setSearchParams] = useSearchParams()
 
   // F5-A — advanced filter + sort + pagination state extracted to
   // useHistoryFilters (see hooks/useHistoryFilters.ts). Behavior is
@@ -156,10 +161,9 @@ export default function DataHistoryPage() {
   // F5-A — soft-delete / restore / empty-Trash extracted to
   // useTrashActions. The Trash-view toggle lives here now so we can
   // reload independently when the operator flips between live and Trash.
-  const trash = useTrashActions({ batches, setBatches, openId, setOpenId })
+  const trash = useTrashActions({ batches, setBatches, openId, setOpenId, viewTrash: bulkTab === 'trash' })
   const {
     viewTrash,
-    setViewTrash,
     trashBusyId,
     confirmEmpty,
     setConfirmEmpty,
@@ -170,11 +174,39 @@ export default function DataHistoryPage() {
   } = trash
 
 
+  useEffect(() => {
+    if (tab && !BULK_TABS.some((t) => t.key === tab)) navigate(bulkPaths.imports, { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab])
+
+  /** Lazy-load a batch's rows when its row is expanded. */
+  const ensureRows = (id: number) => {
+    if (rowsById[id]) return
+    setRowsById((m) => ({ ...m, [id]: 'loading' }))
+    orderImportService
+      .getHistory(id)
+      .then((res) => setRowsById((m) => ({ ...m, [id]: res.data?.rows ?? [] })))
+      .catch((e) => {
+        notify.apiError(e, 'Could not load import rows.')
+        setRowsById((m) => ({ ...m, [id]: [] }))
+      })
+  }
+
+  /** The batch the importer just saved into — shown open when the list first renders. */
+  const [highlightedId, setHighlightedId] = useState<number | null>(null)
+
   const load = async () => {
     setLoading(true)
     try {
       const res = await orderImportService.listHistory(viewTrash)
       setBatches(res.data ?? [])
+      // ?highlight=<id> (from the importer): open the batch the orders went to.
+      const highlightId = Number(searchParams.get('highlight')) || null
+      if (highlightId && (res.data ?? []).some((b) => b.id === highlightId)) {
+        setHighlightedId(highlightId)
+        ensureRows(highlightId)
+        setSearchParams((sp) => { sp.delete('highlight'); return sp }, { replace: true })
+      }
     } catch (e) {
       // Keep whatever is already listed: wiping it rendered the "no imports
       // yet" empty state on a transient 502, which reads as data loss.
@@ -752,19 +784,6 @@ export default function DataHistoryPage() {
     const t = setInterval(() => setNowTick(Date.now()), 1000)
     return () => clearInterval(t)
   }, [anyGenerating])
-
-  /** Lazy-load a batch's rows when its row is expanded. */
-  const ensureRows = (id: number) => {
-    if (rowsById[id]) return
-    setRowsById((m) => ({ ...m, [id]: 'loading' }))
-    orderImportService
-      .getHistory(id)
-      .then((res) => setRowsById((m) => ({ ...m, [id]: res.data?.rows ?? [] })))
-      .catch((e) => {
-        notify.apiError(e, 'Could not load import rows.')
-        setRowsById((m) => ({ ...m, [id]: [] }))
-      })
-  }
 
   // Columns for the Import-history table (reorder/resize via AdvancedDataTable).
   const dhColumns = useMemo<ColumnDef<ImportBatchSummary, unknown>[]>(
@@ -1474,8 +1493,8 @@ export default function DataHistoryPage() {
     <div className="space-y-4 pb-24">
       <PageSectionHeader
         eyebrow="Operations"
-        title="Order History"
-        description="Every order in one place — Bulk, Manual, API, and WMS — plus the CSV/Excel importer and saved import history."
+        title="Bulk Mailer"
+        description="Import orders in bulk, fix what needs it, and buy their labels — from a file or from the API."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             {dhView === 'imports' ? (
@@ -1544,29 +1563,24 @@ export default function DataHistoryPage() {
                 </button>
               )
             ) : null}
-            {dhView === 'imports' ? (
-              <button
-                type="button"
-                onClick={() => setViewTrash((v) => !v)}
-                title={viewTrash ? 'Back to live imports' : 'View deleted imports (Trash)'}
-                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[13.5px] font-semibold transition ${
-                  viewTrash
-                    ? 'border-[#412d15] bg-[#412d15] text-[#f4eede]'
-                    : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
-                }`}
-              >
-                {viewTrash ? <FiArrowLeft className="h-3.5 w-3.5" /> : <FiTrash2 className="h-3.5 w-3.5" />}
-                {viewTrash ? 'Back to imports' : 'Trash'}
-              </button>
-            ) : null}
             <button
               type="button"
               onClick={() => navigate('/orders')}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[13.5px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15]"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
             >
               <FiArrowLeft className="h-3.5 w-3.5" />
-              Back to orders
+              Orders
             </button>
+            {canWrite && bulkTab === 'imports' ? (
+              <button
+                type="button"
+                onClick={() => navigate(bulkPaths.importFile)}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[13.5px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15]"
+              >
+                <FiUpload className="h-3.5 w-3.5" />
+                Import CSV / Excel
+              </button>
+            ) : null}
           </div>
         }
       />
@@ -1579,28 +1593,23 @@ export default function DataHistoryPage() {
         <BulkLabelQueueBadge />
       </div>
 
-      {/* View tabs — Imports (bulk batches) vs All orders (every source) */}
-      <div className="flex flex-wrap items-center gap-1.5">
-        {([
-          { key: 'orders', label: 'All orders', hint: 'Bulk · Manual · API · WMS' },
-          { key: 'import', label: 'Import CSV/Excel', hint: 'Upload & validate' },
-          { key: 'imports', label: 'Import history', hint: 'Saved batches' },
-          { key: 'docs', label: 'Documents', hint: 'Tracking · label · invoice · statement' },
-        ] as { key: 'orders' | 'import' | 'imports' | 'docs'; label: string; hint: string }[]).map((t) => {
-          const active = dhView === t.key
+      {/* Bulk Mailer tabs — each one is its own address (/bulk/:tab). */}
+      <div role="tablist" aria-label="Bulk Mailer" className="flex flex-wrap items-center gap-1 rounded-xl border border-[#e3d9c4] bg-[#f4eede]/60 p-1">
+        {BULK_TABS.map((t) => {
+          const active = bulkTab === t.key
           return (
             <button
               key={t.key}
               type="button"
-              onClick={() => setDhView(t.key)}
-              className={`inline-flex items-baseline gap-1.5 rounded-xl px-3.5 py-2 text-[13.5px] font-semibold transition ${
-                active
-                  ? 'bg-[#1f150c] text-[#f4eede]'
-                  : 'border border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
+              role="tab"
+              aria-selected={active}
+              onClick={() => navigate(`/bulk/${t.key}`)}
+              className={`inline-flex items-baseline gap-1.5 rounded-lg px-3.5 py-2 text-[13px] font-semibold transition ${
+                active ? 'bg-white text-[#1f150c] shadow-sm ring-1 ring-[#e3d9c4]' : 'text-[#6b5c42] hover:bg-white/70'
               }`}
             >
               {t.label}
-              <span className={`text-[9.5px] font-medium uppercase tracking-[0.06em] ${active ? 'text-[#cdbf9f]' : 'text-[#b6a684]'}`}>
+              <span className={`hidden text-[9.5px] font-medium uppercase tracking-[0.06em] sm:inline ${active ? 'text-[#8a7a5a]' : 'text-[#b6a684]'}`}>
                 {t.hint}
               </span>
             </button>
@@ -1608,24 +1617,13 @@ export default function DataHistoryPage() {
         })}
       </div>
 
-      {dhView === 'orders' ? (
-        <AllOrdersHistory />
+      {dhView === 'api' ? (
+        <ApiBatchList />
       ) : dhView === 'docs' ? (
         <OrderDocumentsTable />
-      ) : dhView === 'import' ? (
-        <OrderImportModal
-          inline
-          onImported={() => {
-            // Called after the importer's Save writes valid orders to Import
-            // history (uploads wait in staging until then) — refresh the list
-            // quietly WITHOUT switching views, so the operator isn't yanked out
-            // of fixing the remaining rows. The saved step says which import
-            // the orders went to.
-            void load()
-          }}
-        />
       ) : (
       <>
+      {bulkTab === 'imports' ? <BatchSummaryCards batches={batches} /> : null}
       {/* ── Advanced filter toolbar ─────────────────────────────────────── */}
       <DataHistoryFilterToolbar
         statusFilter={filters.statusFilter}
@@ -1664,7 +1662,7 @@ export default function DataHistoryPage() {
           <p className="px-5 py-14 text-center text-sm text-[#6b5c42]">
             {viewTrash
               ? 'Trash is empty — no deleted imports.'
-              : 'No saved imports yet. Import a CSV/Excel from the Import CSV/Excel tab, then click Save.'}
+              : 'No saved imports yet. Use Import CSV / Excel to add your first file — saved orders show up here.'}
           </p>
         ) : (
           <AdvancedDataTable<ImportBatchSummary>
@@ -1673,6 +1671,7 @@ export default function DataHistoryPage() {
             data={filtered}
             renderExpanded={renderBatchExpanded}
             onRowExpand={(b) => ensureRows(b.id)}
+            initialExpandedId={highlightedId != null ? String(highlightedId) : null}
             getRowId={(b) => String(b.id)}
             initialColumnPinning={{ left: [], right: ['actions'] }}
             caption={viewTrash ? 'Trash — deleted imports · click a row to view its rows' : 'Saved imports · click a row to view & edit its rows'}
@@ -1757,3 +1756,38 @@ export default function DataHistoryPage() {
   )
 }
 
+type BulkTab = 'imports' | 'api' | 'documents' | 'trash'
+
+/** Bulk Mailer tabs, in order. Import history is the landing tab. */
+const BULK_TABS: { key: BulkTab; label: string; hint: string }[] = [
+  { key: 'imports', label: 'Import history', hint: 'Saved batches' },
+  { key: 'api', label: 'API batches', hint: 'WMS · API' },
+  { key: 'documents', label: 'Documents', hint: 'Label · invoice · statement' },
+  { key: 'trash', label: 'Trash', hint: 'Deleted batches' },
+]
+
+/** At-a-glance counts over the saved batches (worked out from the list). */
+function BatchSummaryCards({ batches }: { batches: ImportBatchSummary[] }) {
+  const [weekAgo] = useState(() => Date.now() - 7 * 24 * 3600 * 1000)
+  const st = (b: ImportBatchSummary) => String(b.status ?? '').toUpperCase()
+  const ready = batches.filter((b) => st(b) === 'INITIATE' && !b.invalidRows).length
+  const generating = batches.filter((b) => st(b) === 'IN_PROGRESS').length
+  const needsFixes = batches.filter((b) => st(b) === 'DRAFT' || st(b) === 'FAILED' || (b.invalidRows ?? 0) > 0).length
+  const doneThisWeek = batches.filter((b) => st(b) === 'COMPLETE' && b.completedAt && Date.parse(b.completedAt) >= weekAgo).length
+  const cards: { label: string; value: number; tone: string }[] = [
+    { label: 'Ready to generate', value: ready, tone: 'text-[#1f150c]' },
+    { label: 'Generating now', value: generating, tone: 'text-sky-700' },
+    { label: 'Needs fixes', value: needsFixes, tone: needsFixes ? 'text-rose-700' : 'text-[#1f150c]' },
+    { label: 'Completed this week', value: doneThisWeek, tone: 'text-emerald-700' },
+  ]
+  return (
+    <div data-testid="bulk-summary" className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      {cards.map((c) => (
+        <div key={c.label} className="rounded-xl border border-[#efe7d6] bg-[#fcfaf5] px-3 py-2.5">
+          <p className="text-[11.5px] font-semibold text-[#6b5c42]">{c.label}</p>
+          <p className={`text-[20px] font-semibold tabular-nums ${c.tone}`}>{c.value}</p>
+        </div>
+      ))}
+    </div>
+  )
+}

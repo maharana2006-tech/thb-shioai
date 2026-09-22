@@ -22,6 +22,8 @@ export interface UseTrashActionsOptions {
   setBatches: React.Dispatch<React.SetStateAction<ImportBatchSummary[]>>
   openId: number | null
   setOpenId: (id: number | null) => void
+  /** When given, the Trash view is controlled by the caller (e.g. the URL tab). */
+  viewTrash?: boolean
 }
 
 export interface UseTrashActionsResult {
@@ -45,13 +47,15 @@ export function useTrashActions({
   setBatches,
   openId,
   setOpenId,
+  viewTrash: controlledViewTrash,
 }: UseTrashActionsOptions): UseTrashActionsResult {
   // Silence the unused-arg warning — batches is accepted for symmetry
   // with parent state and to make the hook API self-documenting even
   // though the current implementation only mutates through setBatches.
   void _batches
 
-  const [viewTrash, setViewTrash] = useState(false)
+  const [ownViewTrash, setViewTrash] = useState(false)
+  const viewTrash = controlledViewTrash ?? ownViewTrash
   const [trashBusyId, setTrashBusyId] = useState<number | null>(null)
   const [confirmEmpty, setConfirmEmpty] = useState(false)
   const [emptying, setEmptying] = useState(false)

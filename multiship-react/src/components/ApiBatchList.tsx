@@ -45,6 +45,7 @@ export default function ApiBatchList() {
   const { role } = useAppSession()
   // Same audience as Settings → Shipping Service Mapping.
   const canMapShipVia = normalizeRole(role) !== 'TENANT'
+  const canPullWms = normalizeRole(role) === 'ADMIN'
   /** The unmapped code being mapped, and the batch to re-check afterwards. */
   const [mapping, setMapping] = useState<{ code: string; clientCode: string | null; batchId: number } | null>(null)
   const [codesTick, setCodesTick] = useState(0)
@@ -371,6 +372,8 @@ export default function ApiBatchList() {
             : `${batches.length} ${batches.length === 1 ? 'batch' : 'batches'} · each fetch is one batch — open to edit & generate`}
         </p>
         <div className="flex items-center gap-2">
+          {/* Pulling from the WMS is admin-only on the server — don't offer it to others. */}
+          {canPullWms ? (
           <button
             type="button"
             onClick={() => void fetchFromWms()}
@@ -385,6 +388,7 @@ export default function ApiBatchList() {
             )}
             {fetching ? 'Fetching…' : 'Fetch from WMS'}
           </button>
+          ) : null}
           <button type="button" onClick={() => void load()} className={BTN_GHOST}>
             <FiRefreshCw className="h-3.5 w-3.5" />
             Refresh
@@ -394,7 +398,7 @@ export default function ApiBatchList() {
 
       {loading ? null : batches.length === 0 ? (
         <p className="rounded-2xl border border-dashed border-[#e3d9c4] bg-white px-5 py-14 text-center text-sm text-[#6b5c42]">
-          No API batches yet. Use <span className="font-semibold text-[#5a4526]">Fetch from WMS</span> to pull the
+          No API batches yet. {canPullWms ? 'Use ' : 'An admin can use '}<span className="font-semibold text-[#5a4526]">Fetch from WMS</span> to pull the
           warehouse&rsquo;s current shippable orders in as a batch.
         </p>
       ) : (

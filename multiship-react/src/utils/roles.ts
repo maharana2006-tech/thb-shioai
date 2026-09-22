@@ -21,9 +21,9 @@ export const normalizeRole = (value?: string | null): UserRole => {
 export const getNavKeysForRole = (role: UserRole): WorkspaceRouteKey[] => {
   switch (role) {
     case 'ADMIN':
-      return ['dashboard', 'orders', 'settings']
+      return ['dashboard', 'orders', 'bulk', 'settings']
     case 'USER':
-      return ['dashboard', 'orders', 'settings']
+      return ['dashboard', 'orders', 'bulk', 'settings']
     case 'TENANT':
       return ['orders']
   }

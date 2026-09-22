@@ -42,7 +42,7 @@ import OrdersPage from '../pages/OrdersPage'
 import ProtectedRoute from './ProtectedRoute'
 import AnonymousRoute from './AnonymousRoute'
 import RequireRole from './RequireRole'
-import { settingsPaths, workspacePaths } from './workspaceRoutes'
+import { bulkPaths, settingsPaths, workspacePaths } from './workspaceRoutes'
 
 /** /orders/:orderNo → /label/:orderNo (numeric segment only; /orders/new etc. are static routes). */
 function OrderNoRedirect() {
@@ -90,6 +90,7 @@ const UspsDirectDashboardPage = lazy(() => import('../pages/UspsDirectDashboardP
 // Lazy — one-shot flows (bulky but not on every page load).
 const NewShipmentPage = lazy(() => import('../components/NewShipmentPage'))
 const DataHistoryPage = lazy(() => import('../components/DataHistoryPage'))
+const BulkImportPage = lazy(() => import('../components/BulkImportPage'))
 
 // Sprint 51 User↔Client linkage re-audit items #1 + #2 — public
 // invite-accept + email-verify pages. Both live OUTSIDE
@@ -188,7 +189,12 @@ export default function AppRoutes() {
 
             <Route path={workspacePaths.orders} element={<OrdersPage />} />
             <Route path="/orders/new" element={<NewShipmentPage />} />
-            <Route path="/orders/history" element={<DataHistoryPage />} />
+            {/* Bulk Mailer — opens on Import history; the tab is in the URL. */}
+            <Route path={workspacePaths.bulk} element={<Navigate to={bulkPaths.imports} replace />} />
+            <Route path={bulkPaths.importFile} element={<BulkImportPage />} />
+            <Route path="/bulk/:tab" element={<DataHistoryPage />} />
+            {/* Old "Order History" address — bookmarks and links keep working. */}
+            <Route path="/orders/history" element={<Navigate to={bulkPaths.imports} replace />} />
 
             <Route path="/label/:orderNo" element={<LabelDocumentPage />} />
             {/* /orders/900213 is what people type; the order's page lives at /label/:orderNo. */}

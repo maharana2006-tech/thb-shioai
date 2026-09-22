@@ -4,7 +4,19 @@ import { getNavKeysForRole, type UserRole } from '../utils/roles'
 export const workspacePaths = {
   dashboard: '/dashboard',
   orders: '/orders',
+  /** Bulk Mailer — imported batches (file + API), the importer, documents. */
+  bulk: '/bulk',
   settings: '/settings',
+} as const
+
+/** Bulk Mailer tabs and pages. The tab lives in the URL, so Back and links land on it. */
+export const bulkPaths = {
+  imports: '/bulk/imports',
+  api: '/bulk/api',
+  documents: '/bulk/documents',
+  trash: '/bulk/trash',
+  /** The CSV / Excel importer — its own page, reached from Import history. */
+  importFile: '/bulk/import',
 } as const
 
 export type WorkspaceRouteKey = keyof typeof workspacePaths
@@ -57,6 +69,7 @@ export const workspaceNavItems: Array<{
 }> = [
   { key: 'dashboard', label: 'Dashboard', to: workspacePaths.dashboard },
   { key: 'orders', label: 'Orders', to: workspacePaths.orders },
+  { key: 'bulk', label: 'Bulk Mailer', to: bulkPaths.imports },
   { key: 'settings', label: 'Settings', to: settingsPaths.clients },
 ]
 
@@ -155,6 +168,10 @@ export const resolveWorkspaceRouteKey = (pathname: string): WorkspaceRouteKey | 
     return 'orders'
   }
 
+  if (pathname === workspacePaths.bulk || pathname.startsWith('/bulk/') || pathname === '/orders/history') {
+    return 'bulk'
+  }
+
   if (
     pathname.startsWith('/settings') ||
     pathname === '/clients' ||
@@ -179,6 +196,12 @@ export const resolveBreadcrumb = (
   }
   if (pathname === workspacePaths.orders || pathname === '/track-orders' || pathname.startsWith('/label/')) {
     return { section: 'Operations', label: 'Shipment & Label', iconKey: 'orders' }
+  }
+  if (pathname === bulkPaths.importFile) {
+    return { section: 'Bulk Mailer', label: 'Import CSV / Excel', iconKey: 'bulk' }
+  }
+  if (pathname === workspacePaths.bulk || pathname.startsWith('/bulk/')) {
+    return { section: 'Operations', label: 'Bulk Mailer', iconKey: 'bulk' }
   }
   if (pathname.startsWith('/settings') || pathname === '/clients' || pathname === '/carrier') {
     const sub = settingsNavItems.find((i) => i.to === pathname)

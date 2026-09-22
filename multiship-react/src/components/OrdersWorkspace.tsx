@@ -2073,11 +2073,11 @@ export default function OrdersWorkspace() {
               Split across warehouses
             </button>
             <button type="button"
-                    onClick={() => navigate('/orders/history')}
+                    onClick={() => navigate('/bulk/imports')}
                     className={BTN_GHOST_SM}
-                    title="Order History — all orders (Bulk/Manual/API/WMS), the CSV/Excel importer, and import history">
+                    title="Bulk Mailer — import history, the CSV/Excel importer, API batches and documents">
               <FiDatabase className="h-3 w-3" />
-              Order History
+              Bulk Mailer
             </button>
             <button type="button" onClick={() => navigate('/orders/new')} className={BTN_PRIMARY_SM}>
               <FiPlus className="h-3 w-3" />

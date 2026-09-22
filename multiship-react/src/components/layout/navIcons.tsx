@@ -7,6 +7,14 @@ export const navIcons: Record<string, ReactNode> = {
       <path d="M3 3h6v6H3V3Zm8 0h6v4h-6V3ZM3 11h4v6H3v-6Zm6 0h8v6H9v-6Z" />
     </svg>
   ),
+  // Stacked parcels with an arrow in — orders arriving in bulk.
+  bulk: (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-[18px] w-[18px]" aria-hidden="true">
+      <path d="M3 11.5h14v5H3v-5Z" strokeLinejoin="round" />
+      <path d="M5 8.5h10v3H5v-3Z" strokeLinejoin="round" />
+      <path d="M10 2.5v4m0 0-1.75-1.75M10 6.5l1.75-1.75" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
   orders: (
     <svg viewBox="0 0 20 20" fill="currentColor" className="h-[18px] w-[18px]" aria-hidden="true">
       <path d="M4 4h12v3H4V4Zm0 4.5h12V16H4V8.5Zm2 1.5v1.5h4V10H6Z" />
