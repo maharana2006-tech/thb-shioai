@@ -1413,7 +1413,7 @@ export default function DataHistoryPage() {
         id: 'file',
         header: 'File',
         enableSorting: false,
-        size: 240,
+        size: 230,
         accessorFn: (b) => b.fileName ?? '',
         cell: ({ row }) => {
           const b = row.original
@@ -1491,7 +1491,7 @@ export default function DataHistoryPage() {
         id: 'actions',
         header: 'Actions',
         enableSorting: false,
-        size: 470,
+        size: 250,
         cell: ({ row }) => renderActionsCell(row.original),
         // Buttons have no CSV value — keep the column out of the export.
         meta: { headerLabel: 'Actions', exportable: false },
@@ -2248,7 +2248,7 @@ export default function DataHistoryPage() {
           </p>
         ) : (
           <AdvancedDataTable<ImportBatchSummary>
-            tableKey={viewTrash ? 'order-intake-imports-trash-v6' : isApiTab ? 'bulk-api-batches-v4' : 'order-intake-imports-v6'}
+            tableKey={viewTrash ? 'order-intake-imports-trash-v7' : isApiTab ? 'bulk-api-batches-v5' : 'order-intake-imports-v7'}
             columns={dhColumns}
             data={batches}
             manualPagination
