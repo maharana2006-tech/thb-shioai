@@ -47,10 +47,10 @@ import java.util.Set;
 public class NdsShipmentLookupService {
 
     /** ISO-3166-1 alpha-2 codes for US territories treated as international. */
-    static final Set<String> US_TERRITORY_CODES = Set.of("PR", "VI", "GU", "AS", "MP", "UM");
+    public static final Set<String> US_TERRITORY_CODES = Set.of("PR", "VI", "GU", "AS", "MP", "UM");
 
     /** Ops-provided default when no notify email is present on the order. */
-    static final String DEFAULT_NOTIFY_EMAIL = "support@thbred.com";
+    public static final String DEFAULT_NOTIFY_EMAIL = "support@thbred.com";
 
     private final NdsShipmentLookupRepository repository;
     private final ClientShipviaCodeMapRepository clientShipviaRepo;
