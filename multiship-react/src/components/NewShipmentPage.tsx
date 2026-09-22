@@ -53,6 +53,12 @@ import { dialCodeFor, postalCodeOptionalFor } from '../utils/countryFormats'
 import { shipperFieldsFrom, recipientFieldsFrom } from '../utils/shipmentAddressFields'
 import { compatiblePresetIds } from '../utils/servicePackageCompatibility'
 import { shipmentValidationService, type ShipmentValidationResult } from '../api/shipmentValidationService'
+import {
+  ndsShipmentService,
+  type NdsShipmentPrefill,
+  type NdsPrefillStatus,
+  type NdsMessage,
+} from '../api/ndsShipmentService'
 import { SHIPPING_PURPOSES, clearanceOptionsForCarrier, FTR_EXEMPTIONS, EEI_THRESHOLD_USD } from '../utils/customsOptions'
 import { isServiceAllowedForUsTerritory, usTerritoryBannerHint, isUpsDdpDisallowedForTerritory } from '../utils/usTerritoryServices'
 import {
@@ -269,6 +275,18 @@ export default function NewShipmentPage() {
    *  and what the importer's duplicate guard matches on. */
   const [reference, setReference] = useState('')
   const [clientCode, setClientCode] = useState('')
+  // NDS Shipment prefill (PR #735 backend / PR2 FE): operator scans
+  // .X<containerId> or .Y<batchId>; response prefills client + recipient
+  // + packages + notify + international items. Banner colours mirror
+  // the response's Status enum.
+  const [ndsScan, setNdsScan] = useState('')
+  const [ndsLoading, setNdsLoading] = useState(false)
+  const [ndsBanner, setNdsBanner] = useState<
+    { status: NdsPrefillStatus; messages: NdsMessage[]; text?: string } | null
+  >(null)
+  /** Tracks phone/email fields the backend flagged as `defaulted` so a
+   *  later sender-side fill can override the fallback value. */
+  const senderFallbackPendingRef = useRef<{ phone: boolean; email: boolean } | null>(null)
   // Sprint 35 — signature at delivery + insured value beyond the
   // carrier's free tier. Signature is a per-shipment enum; insured
   // value is a separate money amount from declared/customs value.
@@ -1258,6 +1276,124 @@ export default function NewShipmentPage() {
     }
   }
 
+  /**
+   * Apply a fresh NDS prefill response into the form. Client comes first
+   * so `applyClient` can kick off warehouse/sender loading; the rest of
+   * the fields flip synchronously off the response.
+   *
+   * <p>Phone / notify email flagged as `defaulted` by the backend are
+   * kept for now, but {@link senderFallbackPendingRef} is set so the
+   * sender-fallback effect can supersede them once the shipper block
+   * finishes loading — matches the operator ask "use shipper details
+   * for missing NDS values."
+   */
+  const applyNdsPrefill = (p: NdsShipmentPrefill) => {
+    if (p.clientCode) applyClient(p.clientCode)
+    const r = p.recipient
+    if (r) {
+      const country = (r.countryCd || 'US').toUpperCase()
+      setRecipient({
+        name: r.name ?? '',
+        company: r.attn ?? '',
+        phone: r.phone ?? '',
+        email: '',
+        addressLine1: r.addr1 ?? '',
+        addressLine2: [r.addr2, r.addr3].filter(Boolean).join(', '),
+        city: r.city ?? '',
+        state: r.state ?? '',
+        postalCode: r.zip ?? '',
+        countryCode: country,
+        phoneCountryCode: dialCodeFor(country) || '',
+      })
+    }
+    if (p.shipMethod?.mappedServiceId != null) {
+      setServiceId(p.shipMethod.mappedServiceId)
+    }
+    if (p.packages.length > 0) {
+      const first = p.packages[0]
+      if (first.weight != null) setWeight(String(first.weight))
+      if (first.length != null) setLength(String(first.length))
+      if (first.width != null) setWidth(String(first.width))
+      if (first.height != null) setHeight(String(first.height))
+      setExtraPackages(
+        p.packages.slice(1).map((pk) => ({
+          weight: pk.weight != null ? String(pk.weight) : '',
+          length: pk.length != null ? String(pk.length) : '',
+          width: pk.width != null ? String(pk.width) : '',
+          height: pk.height != null ? String(pk.height) : '',
+          packageType: '',
+          declaredValue: '',
+        })),
+      )
+    }
+    if (p.international?.items?.length) {
+      setItems(
+        p.international.items.map((it) => ({
+          description: it.description ?? '',
+          sku: it.itemNo ?? '',
+          hsCode: it.harmonizeCode ?? '',
+          countryOfOrigin: it.countryOfOrigin ?? '',
+          quantity: String(it.qtyShipped ?? 1),
+          unitValue: it.unitPrice != null ? String(it.unitPrice) : '',
+          boxSeq: '1',
+          weight: '',
+        })),
+      )
+    }
+    if (p.notifyBlock?.sendTo) {
+      setRecipient((prev) => ({ ...prev, email: p.notifyBlock!.sendTo ?? '' }))
+    }
+    if (p.orders.length > 0 && p.orders[0].orderNo != null) {
+      setReference(String(p.orders[0].orderNo))
+    }
+    senderFallbackPendingRef.current = {
+      phone: !!r?.phoneDefaulted,
+      email: !!p.notifyBlock?.emailDefaulted,
+    }
+  }
+
+  /**
+   * Trigger a lookup for the current scan value. Runs on Enter — matches
+   * USB scanners that auto-append CR/LF. Maps HTTP status → banner text:
+   * 404 = "not found", 422 = "bad format", 503 = "NDS unavailable".
+   */
+  const onScanSubmit = async () => {
+    const raw = ndsScan.trim()
+    if (!raw) return
+    setNdsLoading(true)
+    setNdsBanner(null)
+    try {
+      const prefill = await ndsShipmentService.lookup(raw)
+      applyNdsPrefill(prefill)
+      setNdsBanner({ status: prefill.status, messages: prefill.messages ?? [] })
+    } catch (err) {
+      const httpStatus = (err as ApiError)?.status
+      if (httpStatus === 404) {
+        setNdsBanner({
+          status: 'BLOCKED',
+          messages: [],
+          text: 'No NDS record matched the scanned value.',
+        })
+      } else if (httpStatus === 422) {
+        setNdsBanner({
+          status: 'BLOCKED',
+          messages: [],
+          text: (err as ApiError)?.message ?? 'Scan format invalid — use .X<containerId> or .Y<batchId>.',
+        })
+      } else if (httpStatus === 503) {
+        setNdsBanner({
+          status: 'WARNING',
+          messages: [],
+          text: 'NDS is unavailable right now. Try again in a moment.',
+        })
+      } else {
+        notify.apiError(err, 'NDS lookup failed.')
+      }
+    } finally {
+      setNdsLoading(false)
+    }
+  }
+
   /** Toggle Shipment ⇆ Return. A return is the swapped shipment, so flip the two parties. */
   const switchMode = (next: 'SHIPMENT' | 'RETURN') => {
     if (next === mode) return
@@ -1269,6 +1405,32 @@ export default function NewShipmentPage() {
     if (next === 'RETURN') setReasonForExport('RETURN')
     setMode(next)
   }
+
+  // Sender-fallback for NDS-defaulted phone / notify-email: once the
+  // shipper block has been filled (by applyClient's warehouse overlay),
+  // supersede the backend fallback with the operator's shipper values.
+  // Fires exactly once per prefill — clears the ref when both slots
+  // are handled or the shipper values remain empty for this render.
+  useEffect(() => {
+    const pending = senderFallbackPendingRef.current
+    if (!pending) return
+    let mutated = false
+    const senderPhone = sender.phone?.trim()
+    const senderEmail = sender.email?.trim()
+    if (pending.phone && senderPhone) {
+      setRecipient((prev) => ({ ...prev, phone: senderPhone }))
+      pending.phone = false
+      mutated = true
+    }
+    if (pending.email && senderEmail) {
+      setRecipient((prev) => ({ ...prev, email: senderEmail }))
+      pending.email = false
+      mutated = true
+    }
+    if (mutated && !pending.phone && !pending.email) {
+      senderFallbackPendingRef.current = null
+    }
+  }, [sender.phone, sender.email])
 
   const isCustomPkg = packageChoice === CUSTOM_PKG
 
@@ -2764,6 +2926,25 @@ export default function NewShipmentPage() {
                 className="flex flex-wrap items-end gap-3 [&>*]:min-w-[160px] [&>*]:flex-1"
                 title="Choosing a client fills its ship-from and auto-selects its default carrier account. Reason & currency remember your last choice."
               >
+                {/* NDS scan — .X<containerId> or .Y<batchId>. Enter fires the
+                    lookup; matches USB scanners that auto-append CR/LF. Fills
+                    client + recipient + packages + notify + CI items. */}
+                <Field label="Scan (NDS)">
+                  <input
+                    className={inputCls}
+                    value={ndsScan}
+                    onChange={(e) => setNdsScan(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        onScanSubmit()
+                      }
+                    }}
+                    placeholder=".X<containerId> or .Y<batchId>"
+                    disabled={ndsLoading}
+                    aria-busy={ndsLoading}
+                  />
+                </Field>
                 {/* Client stays REQUIRED (validation under the field) — dev's
                     layout change and this branch's required-client rule merge. */}
                 <Field label="Client" required error={errAt('clientCode')}>
@@ -3007,6 +3188,49 @@ export default function NewShipmentPage() {
                   </Field>
                 ) : null}
               </div>
+              {/* NDS lookup result banner. Color-coded by status; lists the
+                  backend `messages` verbatim so operators see WARNING/BLOCKED
+                  reasons (HLD ship method, unmapped shipvia, missing weight). */}
+              {ndsBanner ? (
+                <div
+                  role="status"
+                  className={`mt-3 rounded-md border px-3 py-2 text-xs ${
+                    ndsBanner.status === 'OK'
+                      ? 'border-emerald-300 bg-emerald-50 text-emerald-900'
+                      : ndsBanner.status === 'WARNING'
+                      ? 'border-amber-300 bg-amber-50 text-amber-900'
+                      : 'border-rose-300 bg-rose-50 text-rose-900'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1">
+                      <div className="font-medium">
+                        NDS lookup {ndsBanner.status === 'OK'
+                          ? 'succeeded'
+                          : ndsBanner.status === 'WARNING'
+                          ? 'succeeded with warnings'
+                          : 'blocked'}
+                      </div>
+                      {ndsBanner.text ? <div className="mt-0.5">{ndsBanner.text}</div> : null}
+                      {ndsBanner.messages.length > 0 ? (
+                        <ul className="mt-1 list-inside list-disc space-y-0.5">
+                          {ndsBanner.messages.map((m, i) => (
+                            <li key={i}>{m.text}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                    <button
+                      type="button"
+                      className="text-current opacity-60 hover:opacity-100"
+                      onClick={() => setNdsBanner(null)}
+                      aria-label="Dismiss NDS lookup result"
+                    >
+                      <FiX className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              ) : null}
             </SectionCard>
 
             {/* ── Addresses + Carrier + Package (compact 3-col band) ── */}
