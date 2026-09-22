@@ -98,6 +98,24 @@ public interface OrderImportService {
      */
     int purgeTrash(String requestedBy);
 
+    /** Empty Trash, keeping any batch that still has live labels (they must be voided first). */
+    PurgeResult purgeTrashChecked(String requestedBy);
+
+    /** Outcome of Empty Trash: deleted for good, and kept because labels are still live. */
+    record PurgeResult(int purged, int keptWithLiveLabels) { }
+
+    /**
+     * Void the labels of a batch's generated rows with their carriers — the
+     * given rows, or every generated row when {@code rowNumbers} is empty.
+     * Rows that share an order are voided once. Each order's own outcome is
+     * reported, refusals included.
+     */
+    BatchVoidResult voidBatchLabels(Long id, java.util.List<Integer> rowNumbers);
+
+    record BatchVoidResult(int voided, int refused, java.util.List<OrderVoidOutcome> orders) { }
+
+    record OrderVoidOutcome(Integer orderNo, java.util.List<Integer> rowNumbers, boolean voided, String message) { }
+
     /**
      * Set a batch's bill-to account mode: "AUTO" (cascade) or "PLATFORM"
      * (house account). Persisted so the choice survives reloads. Returns the

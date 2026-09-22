@@ -139,6 +139,11 @@ public class OrderImportServiceImpl implements OrderImportService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.repository.OrderTrackingRepository orderTrackingRepository;
 
+    /** Voids a batch's labels with their carriers (Bulk Mailer). Optional for hand-built tests. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private VoidService voidService;
+
     /**
      * SSE event bus — same publish pattern as BulkLabelServiceImpl.
      * Fire-and-forget; null when Redis is disabled. Publish sites are
@@ -2682,11 +2687,22 @@ public class OrderImportServiceImpl implements OrderImportService {
             throw new ImportBatchStateException(409, "Import #" + id + " is generating labels right now — wait for the run"
                     + " to finish (or cancel it) before moving it to Trash.");
         }
+        if (b.getDeletedAt() == null) {
+            // A batch whose labels can still ship stays — there is no override,
+            // for anyone. Voiding them (Bulk Mailer → Void) makes it deletable.
+            int live = liveLabelOrders(parseBatchRows(b)).size();
+            if (live > 0) {
+                throw new ImportBatchStateException(409, "Import #" + id + " has " + live + " live label"
+                        + (live == 1 ? "" : "s") + " — void " + (live == 1 ? "it" : "them")
+                        + " first, then it can be deleted.", "IMPORT_HAS_LIVE_LABELS");
+            }
+        }
         if (b.getDeletedAt() == null) {              // idempotent: skip if already trashed
             b.setDeletedAt(java.time.LocalDateTime.now());
             b.setDeletedBy(requestedBy);
             b = importBatchRepository.save(b);
             log.info("Import batch {} soft-deleted by {}", id, requestedBy);
+            logBatchEvent("IMPORT_DELETED", b, "Moved to Trash");
         }
         return toBatchDTO(b, parseBatchRows(b));
     }
@@ -2729,13 +2745,19 @@ public class OrderImportServiceImpl implements OrderImportService {
             b.setDeletedBy(null);
             b = importBatchRepository.save(b);
             log.info("Import batch {} restored from Trash", id);
+            logBatchEvent("IMPORT_RESTORED", b, "Restored from Trash");
         }
         return toBatchDTO(b, parseBatchRows(b));
     }
 
     @Override
     public int purgeTrash(String requestedBy) {
-        if (importBatchRepository == null) return 0;
+        return purgeTrashChecked(requestedBy).purged();
+    }
+
+    @Override
+    public PurgeResult purgeTrashChecked(String requestedBy) {
+        if (importBatchRepository == null) return new PurgeResult(0, 0);
         // Only purge batches this tenant may see — reuse the same scope filter
         // as the Trash list so a scoped USER can never wipe another tenant's
         // deleted imports.
@@ -2750,11 +2772,117 @@ public class OrderImportServiceImpl implements OrderImportService {
                             return owner != null && scope.get().equalsIgnoreCase(owner.trim());
                         })
                         .toList();
-        if (!toPurge.isEmpty()) {
-            importBatchRepository.deleteAll(toPurge);
-            log.info("Trash emptied by {} — {} batch(es) permanently deleted", requestedBy, toPurge.size());
+        // Batches that still have live labels are kept — the same rule as Delete.
+        java.util.List<com.multiship.backend.model.ImportBatch> kept = toPurge.stream()
+                .filter(b -> !liveLabelOrders(parseBatchRows(b)).isEmpty()).toList();
+        java.util.List<com.multiship.backend.model.ImportBatch> gone = toPurge.stream()
+                .filter(b -> !kept.contains(b)).toList();
+        if (!gone.isEmpty()) {
+            importBatchRepository.deleteAll(gone);
+            log.info("Trash emptied by {} — {} batch(es) permanently deleted, {} kept (live labels)",
+                    requestedBy, gone.size(), kept.size());
+            for (com.multiship.backend.model.ImportBatch b : gone) logBatchEvent("IMPORT_PURGED", b, "Permanently deleted (Empty Trash)");
         }
-        return toPurge.size();
+        return new PurgeResult(gone.size(), kept.size());
+    }
+
+    // ─── Live label status, void, delete rules (Bulk Mailer) ────────────────
+
+    /** Import rows whose label was generated (or is queued to be) — each order once. */
+    private static java.util.Map<Integer, java.util.List<Integer>> labelledOrders(List<OrderImportRowDTO> rows) {
+        java.util.Map<Integer, java.util.List<Integer>> byOrder = new java.util.LinkedHashMap<>();
+        if (rows == null) return byOrder;
+        for (OrderImportRowDTO r : rows) {
+            String st = r.getGeneratedStatus() == null ? "" : r.getGeneratedStatus().toUpperCase(Locale.ROOT);
+            if (r.getGeneratedOrderNo() != null && (st.equals("GENERATED") || st.equals("QUEUED_USPS"))) {
+                byOrder.computeIfAbsent(r.getGeneratedOrderNo(), k -> new java.util.ArrayList<>()).add(r.getRowNumber());
+            }
+        }
+        return byOrder;
+    }
+
+    /** Of these orders, the ones whose label has been voided (read live from the order's tracking). */
+    private java.util.Set<Integer> voidedOrders(java.util.Collection<Integer> orderNos) {
+        if (orderTrackingRepository == null || orderNos == null || orderNos.isEmpty()) return java.util.Set.of();
+        java.util.Set<Integer> out = new java.util.HashSet<>();
+        for (com.multiship.backend.model.OrderTracking t : orderTrackingRepository.findByOrderNoIn(orderNos)) {
+            if ("VOIDED".equalsIgnoreCase(t.getStatus())) out.add(t.getOrderNo());
+        }
+        return out;
+    }
+
+    /** Orders of these rows whose label can still ship (generated / queued, not voided). */
+    private java.util.Set<Integer> liveLabelOrders(List<OrderImportRowDTO> rows) {
+        java.util.Set<Integer> live = new java.util.LinkedHashSet<>(labelledOrders(rows).keySet());
+        live.removeAll(voidedOrders(live));
+        return live;
+    }
+
+    /**
+     * The import row's generation status is frozen when the label is made; a
+     * later void (from here or the Orders page) lives on the order. Show the
+     * truth: a voided order's rows read VOIDED, with no label link.
+     */
+    private void applyLiveLabelStatus(List<OrderImportRowDTO> rows) {
+        java.util.Map<Integer, java.util.List<Integer>> labelled = labelledOrders(rows);
+        java.util.Set<Integer> voided = voidedOrders(labelled.keySet());
+        if (voided.isEmpty()) return;
+        for (OrderImportRowDTO r : rows) {
+            if (r.getGeneratedOrderNo() != null && voided.contains(r.getGeneratedOrderNo())) {
+                r.setGeneratedStatus("VOIDED");
+                r.setLabelUrl(null);
+            }
+        }
+    }
+
+    @Override
+    public BatchVoidResult voidBatchLabels(Long id, java.util.List<Integer> rowNumbers) {
+        if (importBatchRepository == null || id == null) return null;
+        com.multiship.backend.model.ImportBatch b = importBatchRepository.findById(id).orElse(null);
+        if (b == null) return null;
+        List<OrderImportRowDTO> rows = parseBatchRows(b);
+        requireMatch(firstClientCode(rows));
+        if (isGenerating(b)) {
+            throw new ImportBatchStateException(409, "Import #" + id + " is generating labels right now — wait for the"
+                    + " run to finish before voiding.");
+        }
+        if (voidService == null) throw new ImportBatchStateException(503, "Voiding isn't available on this server.");
+        java.util.Set<Integer> wanted = rowNumbers == null ? java.util.Set.of() : new java.util.HashSet<>(rowNumbers);
+        java.util.Map<Integer, java.util.List<Integer>> byOrder = new java.util.LinkedHashMap<>();
+        labelledOrders(rows).forEach((orderNo, rowNos) -> {
+            if (wanted.isEmpty() || rowNos.stream().anyMatch(wanted::contains)) byOrder.put(orderNo, rowNos);
+        });
+        java.util.Set<Integer> alreadyVoided = voidedOrders(byOrder.keySet());
+        java.util.List<OrderVoidOutcome> outcomes = new java.util.ArrayList<>();
+        int voided = 0;
+        int refused = 0;
+        for (var e : byOrder.entrySet()) {
+            if (alreadyVoided.contains(e.getKey())) continue;          // nothing left to void
+            String message;
+            boolean ok;
+            try {
+                var res = voidService.voidLabel(e.getKey());
+                var data = res == null ? null : res.getData();
+                ok = data != null && data.isVoided();
+                message = data != null && StringUtils.hasText(data.getMessage()) ? data.getMessage()
+                        : res != null && StringUtils.hasText(res.getMessage()) ? res.getMessage()
+                        : ok ? "Voided." : "The carrier didn't void this label.";
+            } catch (Exception ex) {
+                ok = false;
+                message = ex.getMessage() == null ? "Void failed." : ex.getMessage();
+            }
+            if (ok) voided++; else refused++;
+            outcomes.add(new OrderVoidOutcome(e.getKey(), e.getValue(), ok, message));
+        }
+        log.info("Import batch {}: void requested for {} order(s) — {} voided, {} refused", id, outcomes.size(), voided, refused);
+        return new BatchVoidResult(voided, refused, outcomes);
+    }
+
+    /** Logs page entry for a batch-level action (delete, restore, purge). */
+    private void logBatchEvent(String action, com.multiship.backend.model.ImportBatch b, String notes) {
+        if (auditService == null || b == null) return;
+        auditService.logEvent(AuditService.CAT_ACTIVITY, AuditService.SEV_INFO, action,
+                "IMPORT_BATCH", b.getId(), b.getFileName(), null, notes, b.getClientCode(), null);
     }
 
     @Override
@@ -2770,6 +2898,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         // Throws AccessDeniedException (→ 403) for a scoped USER whose
         // tenant doesn't own this batch. Silent for operators.
         requireMatch(firstClientCode(parsedRows));
+        applyLiveLabelStatus(parsedRows);
         return com.multiship.backend.dto.ImportBatchDTO.builder()
                 .id(b.getId())
                 .createdBy(b.getCreatedBy())
