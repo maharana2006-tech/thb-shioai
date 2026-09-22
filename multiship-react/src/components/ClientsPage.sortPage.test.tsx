@@ -474,7 +474,6 @@ describe('ClientsPage · sort + pagination · cross-cutting', () => {
     // Prev + Next chevron buttons exist inside the toolbar.
     const buttons = within(container).getAllByRole('button')
     const chevrons = buttons.filter((b) => {
-      const t = b.textContent?.trim()
       return b.getAttribute('aria-label') === 'Previous page' || b.getAttribute('aria-label') === 'Next page'
     })
     expect(chevrons.length).toBe(2)
