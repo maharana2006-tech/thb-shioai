@@ -25,6 +25,7 @@ export default function BatchLabelBar({
   onPickAllLive,
   onClearPick,
   onChanged,
+  onPrinted,
   canWrite,
   canManagePrinters,
   locked,
@@ -38,6 +39,8 @@ export default function BatchLabelBar({
   onClearPick: () => void
   /** Labels were voided — reload the rows. */
   onChanged: () => void
+  /** Something was printed or sent — reload so the rows say so. */
+  onPrinted?: () => void
   canWrite: boolean
   canManagePrinters: boolean
   /** Generating, or in Trash — no voiding. */
@@ -68,6 +71,7 @@ export default function BatchLabelBar({
     try {
       const res = await orderService.printDocuments(target, docType)
       printPdfBlob(res.blob)
+      onPrinted?.()
       const what = docType === 'LABEL' ? 'label' : 'commercial invoice'
       notify.success(`Opening ${res.included} ${what}${res.included === 1 ? '' : 's'} in the print dialog`
         + (res.skipped > 0 ? ` · ${res.skipped} skipped (${docType === 'LABEL' ? 'no label' : 'domestic — no invoice'})` : '') + '.')
@@ -163,7 +167,7 @@ export default function BatchLabelBar({
         <SendToPrinterDialog
           orderNumbers={target}
           canManagePrinters={canManagePrinters}
-          onClose={() => setSendOpen(false)}
+          onClose={() => { setSendOpen(false); onPrinted?.() }}
           onOpenSettings={() => { setSendOpen(false); onOpenPrinterSettings() }}
         />
       ) : null}

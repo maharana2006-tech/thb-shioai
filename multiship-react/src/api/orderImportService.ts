@@ -61,7 +61,10 @@ export interface OrderImportRow {
    *  FAILED = carrier or downstream failure (see generatedMessage). */
   generatedOrderNo?: number | null
   generatedTrackingNumber?: string | null
-  generatedStatus?: 'GENERATED' | 'FAILED' | null
+  /** GENERATED · FAILED · QUEUED_USPS · VOIDED (read live) · SAVED / NEEDS_FIX before generation. */
+  generatedStatus?: 'GENERATED' | 'FAILED' | 'QUEUED_USPS' | 'VOIDED' | string | null
+  /** When this row's order's documents were last printed (ISO). */
+  lastPrintedAt?: string | null
   generatedMessage?: string | null
   /** Label URL endpoint for retrieving the generated label PDF.
    *  Populated after successful label generation. Format: /api/v1/orders/{orderNo}/label/pdf */
@@ -161,6 +164,8 @@ export interface ImportBatchSummary {
    *  'API'. Every kind is validated, edited and labelled in Bulk Mailer; the
    *  orders of a WMS/API batch are stamped source = API. */
   source?: 'BULK' | 'WMS' | string | null
+  /** When anything of this batch was last printed (ISO) — list rows only. */
+  lastPrintedAt?: string | null
 }
 
 /** A saved import with its full rows (detail view). */

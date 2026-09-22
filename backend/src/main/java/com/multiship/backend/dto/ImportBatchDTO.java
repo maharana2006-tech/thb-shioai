@@ -44,5 +44,8 @@ public class ImportBatchDTO {
     private String billingMode;
     /** Origin of the rows: BULK (uploaded file) or WMS (Fetch from WMS). Null = BULK. */
     private String source;
+
+    /** When anything of this batch's label batch was last printed. */
+    private String lastPrintedAt;
     private List<OrderImportRowDTO> rows;
 }

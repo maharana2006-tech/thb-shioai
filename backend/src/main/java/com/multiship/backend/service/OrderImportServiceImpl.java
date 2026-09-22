@@ -139,6 +139,10 @@ public class OrderImportServiceImpl implements OrderImportService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.repository.OrderTrackingRepository orderTrackingRepository;
 
+    /** What was printed, and when (Bulk Mailer shows it). Optional for hand-built tests. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.printing.DocumentPrintLog documentPrintLog;
+
     /** Voids a batch's labels with their carriers (Bulk Mailer). Optional for hand-built tests. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     @org.springframework.context.annotation.Lazy
@@ -2825,6 +2829,13 @@ public class OrderImportServiceImpl implements OrderImportService {
      */
     private void applyLiveLabelStatus(List<OrderImportRowDTO> rows) {
         java.util.Map<Integer, java.util.List<Integer>> labelled = labelledOrders(rows);
+        if (documentPrintLog != null && !labelled.isEmpty()) {
+            java.util.Map<Integer, java.time.LocalDateTime> printed = documentPrintLog.lastPrintedByOrder(labelled.keySet());
+            for (OrderImportRowDTO r : rows) {
+                java.time.LocalDateTime at = r.getGeneratedOrderNo() == null ? null : printed.get(r.getGeneratedOrderNo());
+                r.setLastPrintedAt(at == null ? null : at.toString());
+            }
+        }
         java.util.Set<Integer> voided = voidedOrders(labelled.keySet());
         if (voided.isEmpty()) return;
         for (OrderImportRowDTO r : rows) {

@@ -150,6 +150,9 @@ public class OrderImportRowDTO {
     private String generatedTrackingNumber;
     /** GENERATED | FAILED. Present only after a commit call. */
     private String generatedStatus;
+
+    /** When this row's order's documents were last printed (print dialog or network printer). Read live. */
+    private String lastPrintedAt;
     /** Carrier's failure message when {@code generatedStatus=FAILED}. */
     private String generatedMessage;
     /** Shared id stamped on every order generated from this same file upload. Null until commit. */

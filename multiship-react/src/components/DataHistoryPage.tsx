@@ -2,6 +2,8 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   FiAlertCircle,
+  FiPrinter,
+  FiSend,
   FiCheckCircle,
   FiDownloadCloud,
   FiArrowLeft,
@@ -30,6 +32,9 @@ import VirtualTable from './VirtualTable'
 import AnimatedHeight from './ui/AnimatedHeight'
 import BatchLabelBar from './bulk/BatchLabelBar'
 import { liveOrdersOf } from '../utils/batchLabels'
+import { printPdfBlob } from '../utils/printPdf'
+import { orderService } from '../api/orderService'
+import SendToPrinterDialog from './workspace/SendToPrinterDialog'
 import { BTN_GHOST_SM } from './ui/buttons'
 import { notify } from '../utils/notify'
 import { ApiError } from '../api/apiClient'
@@ -244,6 +249,44 @@ export default function DataHistoryPage() {
     if (!batchPageId && tab && !BULK_TABS.some((t) => t.key === tab)) navigate(bulkPaths.imports, { replace: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab])
+
+  /** Print / send a whole batch from the list: its live labels, looked up on demand. */
+  const [batchPrintBusy, setBatchPrintBusy] = useState<number | null>(null)
+  const [sendBatch, setSendBatch] = useState<number[] | null>(null)
+  const liveOrdersOfBatch = async (b: ImportBatchSummary): Promise<number[]> => {
+    const cached = rowsById[b.id]
+    const rows = Array.isArray(cached) ? cached : (await orderImportService.getHistory(b.id)).data?.rows ?? []
+    const live = liveOrdersOf(rows)
+    if (live.length === 0) notify.info('This batch has no live labels to print.')
+    return live
+  }
+  const printBatchLabels = async (b: ImportBatchSummary) => {
+    setBatchPrintBusy(b.id)
+    try {
+      const live = await liveOrdersOfBatch(b)
+      if (live.length === 0) return
+      const res = await orderService.printDocuments(live.slice(0, 500), 'LABEL')
+      printPdfBlob(res.blob)
+      notify.success(`Opening ${res.included} label${res.included === 1 ? '' : 's'} of batch #${b.id} in the print dialog`
+        + (live.length > 500 ? ' — the first 500; open the batch to print the rest.' : '.'))
+      void reloadQuiet()
+    } catch (e) {
+      notify.apiError(e, 'Could not print this batch.')
+    } finally {
+      setBatchPrintBusy(null)
+    }
+  }
+  const sendBatchToPrinter = async (b: ImportBatchSummary) => {
+    setBatchPrintBusy(b.id)
+    try {
+      const live = await liveOrdersOfBatch(b)
+      if (live.length > 0) setSendBatch(live.slice(0, 500))
+    } catch (e) {
+      notify.apiError(e, 'Could not read this batch.')
+    } finally {
+      setBatchPrintBusy(null)
+    }
+  }
 
   /** Re-read a batch's rows (after a void) and its header counts. */
   const reloadRows = (id: number) => {
@@ -924,6 +967,15 @@ export default function DataHistoryPage() {
     return () => clearInterval(t)
   }, [anyGenerating])
 
+  /** When the batch was last printed — from the list, or from its rows on the batch page. */
+  const printedAtOf = (b: ImportBatchSummary): string | null => {
+    const r = rowsById[b.id]
+    const fromRows = Array.isArray(r)
+      ? r.map((x) => x.lastPrintedAt).filter((x): x is string => !!x).sort().pop() ?? null
+      : null
+    return fromRows ?? b.lastPrintedAt ?? null
+  }
+
   /** Live labels of a batch, when its rows are loaded (the batch page); the server enforces the rule either way. */
   const liveCountOf = (id: number) => {
     const r = rowsById[id]
@@ -981,6 +1033,11 @@ export default function DataHistoryPage() {
                   {b.note}
                 </span>
               ) : null}
+              {printedAtOf(b) ? (
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700" title={`Last printed ${formatPrinted(printedAtOf(b)!, true)}`}>
+                  <FiPrinter className="h-3 w-3" aria-hidden="true" /> Printed {formatPrinted(printedAtOf(b)!)}
+                </span>
+              ) : null}
             </span>
           )
   }
@@ -1036,7 +1093,7 @@ export default function DataHistoryPage() {
           const platform = b.billingMode === 'PLATFORM'
           const confirming = confirmGenId === b.id
           return (
-            <div className="flex items-center justify-end gap-1.5">
+            <div className="flex items-center justify-end gap-1.5 [&_button]:whitespace-nowrap">
               {viewTrash ? (
                 canWrite ? (
                   <button
@@ -1070,7 +1127,8 @@ export default function DataHistoryPage() {
                       // A green check: "check every row and confirm it's ready".
                       <FiCheckCircle className="h-3.5 w-3.5 text-emerald-600" aria-hidden="true" />
                     )}
-                    {validatingId === b.id ? 'Validating…' : 'Validate all'}
+                    {/* In the list the check icon alone (tooltip); the batch page spells it out. */}
+                    <span className={batchPageId == null ? 'sr-only' : ''}>{validatingId === b.id ? 'Validating…' : 'Validate all'}</span>
                   </button>
                   {/* Keep the button mounted while THIS batch is generating — the
                       click optimistically flips status to IN_PROGRESS, which isn't
@@ -1206,6 +1264,32 @@ export default function DataHistoryPage() {
                       )}
                     </>
                   ) : null}
+                  {batchPageId == null && !viewTrash && b.labelBatchId != null ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => void printBatchLabels(b)}
+                        disabled={batchPrintBusy === b.id}
+                        title="Print every live label of this batch"
+                        aria-label="Print batch labels"
+                        className="inline-flex items-center justify-center rounded-xl border border-[#e3d9c4] bg-white p-2 text-[#412d15] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:opacity-50"
+                      >
+                        {batchPrintBusy === b.id
+                          ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#e3d9c4] border-t-[#5a4526]" />
+                          : <FiPrinter className="h-3.5 w-3.5" />}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void sendBatchToPrinter(b)}
+                        disabled={batchPrintBusy === b.id}
+                        title="Send every live label of this batch to a network printer"
+                        aria-label="Send batch to printer"
+                        className="inline-flex items-center justify-center rounded-xl border border-[#e3d9c4] bg-white p-2 text-emerald-700 transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:opacity-50"
+                      >
+                        <FiSend className="h-3.5 w-3.5" />
+                      </button>
+                    </>
+                  ) : null}
                   {canWrite ? (
                     <button
                       type="button"
@@ -1332,7 +1416,7 @@ export default function DataHistoryPage() {
         id: 'actions',
         header: 'Actions',
         enableSorting: false,
-        size: 400,
+        size: 470,
         cell: ({ row }) => renderActionsCell(row.original),
         // Buttons have no CSV value — keep the column out of the export.
         meta: { headerLabel: 'Actions', exportable: false },
@@ -1484,6 +1568,7 @@ export default function DataHistoryPage() {
               onPickAllLive={() => setPickedRows((m) => ({ ...m, [b.id]: list.filter(isLive).map((r) => r.rowNumber) }))}
               onClearPick={() => setPickedRows((m) => ({ ...m, [b.id]: [] }))}
               onChanged={() => { reloadRows(b.id); void reloadQuiet() }}
+              onPrinted={() => reloadRows(b.id)}
               canWrite={canWrite}
               canManagePrinters={canPullWms}
               locked={viewTrash || (b.status || '').toUpperCase() === 'IN_PROGRESS'}
@@ -1607,6 +1692,11 @@ export default function DataHistoryPage() {
                                 #{r.generatedOrderNo}
                               </a>
                               <span className="font-mono text-[9.5px] text-[#8a7a5a]">{r.batchId != null ? `Batch ${r.batchId}` : 'Batch —'}</span>
+                              {r.lastPrintedAt ? (
+                                <span className="inline-flex items-center gap-0.5 text-[9px] font-semibold text-emerald-700" title={`Last printed ${formatPrinted(r.lastPrintedAt, true)}`}>
+                                  <FiPrinter className="h-2.5 w-2.5" aria-hidden="true" /> Printed {formatPrinted(r.lastPrintedAt)}
+                                </span>
+                              ) : null}
                             </span>
                           ) : (
                             <span className="text-[10px] text-[#b6a684]">—</span>
@@ -1881,9 +1971,19 @@ export default function DataHistoryPage() {
     )
   }
 
+  const sendBatchDialog = sendBatch ? (
+    <SendToPrinterDialog
+      orderNumbers={sendBatch}
+      canManagePrinters={canPullWms}
+      onClose={() => { setSendBatch(null); void reloadQuiet() }}
+      onOpenSettings={() => { setSendBatch(null); navigate(settingsPaths.printers) }}
+    />
+  ) : null
+
   return (
     <div className="space-y-4 pb-24">
       {mappingDialog}
+      {sendBatchDialog}
       <PageSectionHeader
         eyebrow="Operations"
         title="Bulk Mailer"
@@ -2256,3 +2356,12 @@ function BatchListSkeleton({ withCards }: { withCards: boolean }) {
 /** Widths of the two columns pinned at the left of a batch's rows grid. */
 const ROW_COL_W = 196
 const ORDER_COL_W = 104
+
+/** "22 Sep" (or with the time, for a tooltip). */
+function formatPrinted(iso: string, withTime = false) {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return withTime
+    ? d.toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' })
+    : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+}

@@ -175,4 +175,15 @@ class BulkBatchLabelRulesTest {
         assertEquals(409, assertThrows(OrderImportServiceImpl.ImportBatchStateException.class,
                 () -> service.voidBatchLabels(32L, List.of())).getStatus());
     }
+
+    @Test
+    void batchRowsSayWhenTheirOrderWasLastPrinted() throws Exception {
+        com.multiship.backend.service.printing.DocumentPrintLog printLog = mock(com.multiship.backend.service.printing.DocumentPrintLog.class);
+        ReflectionTestUtils.setField(service, "documentPrintLog", printLog);
+        batch(40, "COMPLETE", List.of(row(1, 9301, "GENERATED"), row(2, 9302, "GENERATED")));
+        when(printLog.lastPrintedByOrder(anyCollection())).thenReturn(java.util.Map.of(9301, LocalDateTime.of(2026, 9, 22, 11, 30)));
+        var rows = service.historyDetail(40L).getRows();
+        assertEquals("2026-09-22T11:30", rows.get(0).getLastPrintedAt());
+        assertEquals(null, rows.get(1).getLastPrintedAt());
+    }
 }

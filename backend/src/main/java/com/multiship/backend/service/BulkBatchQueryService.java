@@ -74,6 +74,9 @@ public class BulkBatchQueryService {
     private final ImportBatchRepository repository;
     private final TenantScopeEnforcer tenantScope;
     private final jakarta.persistence.EntityManager entityManager;
+    /** When each batch was last printed. Optional for hand-built tests. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.printing.DocumentPrintLog printLog;
 
     @Transactional(readOnly = true)
     public Page<ImportBatchDTO> list(Query query, int page, int size) {
@@ -88,6 +91,14 @@ public class BulkBatchQueryService {
                 .setFirstResult((int) paging.getOffset())
                 .setMaxResults(paging.getPageSize())
                 .getResultList().stream().map(BulkBatchQueryService::summaryOf).toList();
+        if (printLog != null) {
+            java.util.Map<Integer, LocalDateTime> printed = printLog.lastPrintedByLabelBatch(content.stream()
+                    .map(ImportBatchDTO::getLabelBatchId).filter(java.util.Objects::nonNull).toList());
+            for (ImportBatchDTO d : content) {
+                LocalDateTime at = d.getLabelBatchId() == null ? null : printed.get(d.getLabelBatchId());
+                d.setLastPrintedAt(at == null ? null : at.toString());
+            }
+        }
         return new org.springframework.data.domain.PageImpl<>(content, paging, repository.count(where));
     }
 
