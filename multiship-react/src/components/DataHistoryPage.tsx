@@ -1593,16 +1593,20 @@ export default function DataHistoryPage() {
         meta: { headerLabel: 'Actions', exportable: false },
       },
     ],
-    // Running-elapsed captions are handled inside <RunningElapsed/> which
-    // ticks its own state — nowTick no longer belongs in this dep list.
-    // Handlers (cancelGeneration/generate/handleDelete/handleRestore/setBilling)
-    // are re-created every render but close over their own state correctly —
-    // adding them here would defeat memoization by giving dhColumns a new
-    // identity every render.
+    // Deps reference the memoized DERIVATIONS of batches / pickedBatches
+    // (pickedSet / pickable / allPicked) instead of the raw arrays. Those
+    // memos keep stable identity until their real inputs change, so
+    // dhColumns no longer invalidates on every batch-list refresh — that
+    // was rebuilding the entire column def + all 25×7 inline cell
+    // renderers on every reloadQuiet() tick, blocking first paint.
+    // Running-elapsed captions live in <RunningElapsed/>; handlers
+    // (cancelGeneration/generate/handleDelete/handleRestore/setBilling)
+    // are re-created every render but close over their own state
+    // correctly, so we intentionally leave them out.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [canWrite, viewTrash, trashBusyId, confirmGenId, billingSavingId, generatingId, genProgressById, cancellingId, cancelRequested, validatingId,
-      // the tick column reads which batches are ticked and which can be
-      pickedBatches, batches],
+      // Tick-column state: memoized derivations, not the raw arrays.
+      pickedSet, pickable, allPicked],
   )
 
   /** Expanded content for a batch row — the all-columns editable grid. */
