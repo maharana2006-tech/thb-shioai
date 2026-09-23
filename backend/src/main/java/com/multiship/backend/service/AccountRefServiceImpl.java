@@ -295,7 +295,7 @@ public class AccountRefServiceImpl implements AccountRefService {
         // still work through the ADMIN branch.
         request.setCustomerNo(clamp(request.getCustomerNo()));
 
-        // V82 (2026-09-23) — match on (accountNumber, carrierCode, customerNo)
+        // V85 (2026-09-23) — match on (accountNumber, carrierCode, customerNo)
         // so two clients can each own their own copy of the same physical
         // carrier account. The old (accountNumber, carrierCode)-only lookup
         // matched Client A's row when Client B added the same account,

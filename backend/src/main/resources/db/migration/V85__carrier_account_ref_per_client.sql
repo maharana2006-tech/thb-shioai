@@ -1,4 +1,12 @@
--- V82 — allow multiple clients to share the same (account_number, carrier_code).
+-- V85 — allow multiple clients to share the same (account_number, carrier_code).
+--
+-- Was V82 in PR #739; renumbered to V85 to resolve a Flyway
+-- version collision with V82__dtc_orders_expanded_columns.sql
+-- (landed in the same window via the Oracle DTC merge fix commit
+-- f85fe768). Anyone who ran this as V82 must
+-- `delete from flyway_schema_history where version = '82'
+-- and script = 'V82__carrier_account_ref_per_client.sql'`
+-- on their DB and restart so the new V85 slot applies cleanly.
 --
 -- Prior state: unique constraint `uk_account_ref_number_carrier` on
 -- (account_number, carrier_code). This treated a carrier account as

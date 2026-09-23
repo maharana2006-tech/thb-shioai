@@ -224,11 +224,11 @@ class AccountRefServiceImplTest {
 
     @Test
     void upsertAccount_sameAccountNumberOnDifferentClient_createsNewRow() {
-        // V82 (2026-09-23) — the old "natural-key hijack rejected" scenario
+        // V85 (2026-09-23) — the old "natural-key hijack rejected" scenario
         // can no longer happen: the lookup is scoped to (account, carrier,
         // customerNo), so ACME can't reach OTHER's row. Instead, ACME's
         // upsert creates a fresh row alongside OTHER's — proving the
-        // per-client-shared-account behavior V82 was written to enable.
+        // per-client-shared-account behavior V85 was written to enable.
         AccountRefUpsertRequest req = AccountRefUpsertRequest.builder()
                 .accountNumber("A12345")
                 .carrierCode("UPS")

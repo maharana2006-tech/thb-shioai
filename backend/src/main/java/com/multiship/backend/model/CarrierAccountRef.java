@@ -26,10 +26,10 @@ import java.time.LocalDateTime;
  * PR2026-09-23 — natural key changed from (account_number, carrier_code)
  * to (account_number, carrier_code, customer_no) so multiple clients can
  * share the same physical carrier account. The constraint is enforced
- * via two partial unique indexes in V82 (one when customer_no is set,
+ * via two partial unique indexes in V85 (one when customer_no is set,
  * one when it's NULL for platform accounts) — Hibernate doesn't render
  * partial indexes, so we omit the @UniqueConstraint annotation and let
- * the migration own it. See V82__carrier_account_ref_per_client.sql.
+ * the migration own it. See V85__carrier_account_ref_per_client.sql.
  */
 @Entity
 @Table(name = "carrier_account_ref")
