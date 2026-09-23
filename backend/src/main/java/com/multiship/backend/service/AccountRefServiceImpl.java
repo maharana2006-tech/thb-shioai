@@ -295,12 +295,22 @@ public class AccountRefServiceImpl implements AccountRefService {
         // still work through the ADMIN branch.
         request.setCustomerNo(clamp(request.getCustomerNo()));
 
-        // Match strictly on (accountNumber, carrierCode) — the table's unique
-        // constraint. An account_number-only fallback would let, e.g., adding
-        // a FedEx account overwrite an existing UPS row that happens to share
-        // the number, silently reassigning the row across carriers.
-        CarrierAccountRef account = carrierAccountRefRepository
-                .findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase(accountNumber, carrierCode)
+        // V82 (2026-09-23) — match on (accountNumber, carrierCode, customerNo)
+        // so two clients can each own their own copy of the same physical
+        // carrier account. The old (accountNumber, carrierCode)-only lookup
+        // matched Client A's row when Client B added the same account,
+        // silently reassigning ownership. Now they get distinct rows.
+        // Platform rows (customerNo blank/null) still resolve uniquely via
+        // the IsNull variant + the partial unique index in V82.
+        String lookupCustomerNo = StringUtils.hasText(request.getCustomerNo())
+                ? request.getCustomerNo().trim() : null;
+        CarrierAccountRef account = (lookupCustomerNo == null
+                ? carrierAccountRefRepository
+                        .findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCaseAndCustomerNoIsNull(
+                                accountNumber, carrierCode)
+                : carrierAccountRefRepository
+                        .findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCaseAndCustomerNoIgnoreCase(
+                                accountNumber, carrierCode, lookupCustomerNo))
                 .orElseGet(CarrierAccountRef::new);
 
         boolean isNewAccount = account.getId() == null;

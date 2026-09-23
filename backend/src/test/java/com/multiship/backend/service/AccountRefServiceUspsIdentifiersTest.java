@@ -88,7 +88,7 @@ class AccountRefServiceUspsIdentifiersTest {
                 .uspsDirectCrid("CRID-98765")
                 .uspsDirectMid("MID-abcDEF-12")
                 .build();
-        when(accountRepo.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase("USPS-A-01", "USPS"))
+        when(accountRepo.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCaseAndCustomerNoIgnoreCase("USPS-A-01", "USPS", "ACME"))
                 .thenReturn(Optional.empty());
         when(accountRepo.save(any(CarrierAccountRef.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
@@ -122,7 +122,7 @@ class AccountRefServiceUspsIdentifiersTest {
         existing.setUspsDirectAccountNumber("PA-EXIST");
         existing.setUspsDirectCrid("CRID-EXIST");
         existing.setUspsDirectMid("MID-EXIST");
-        when(accountRepo.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase("USPS-A-01", "USPS"))
+        when(accountRepo.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCaseAndCustomerNoIgnoreCase("USPS-A-01", "USPS", "ACME"))
                 .thenReturn(Optional.of(existing));
         when(accountRepo.save(any(CarrierAccountRef.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
@@ -155,7 +155,7 @@ class AccountRefServiceUspsIdentifiersTest {
         existing.setUspsDirectAccountNumber("PA-EXIST");
         existing.setUspsDirectCrid("CRID-EXIST");
         existing.setUspsDirectMid("MID-EXIST");
-        when(accountRepo.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase("USPS-A-01", "USPS"))
+        when(accountRepo.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCaseAndCustomerNoIgnoreCase("USPS-A-01", "USPS", "ACME"))
                 .thenReturn(Optional.of(existing));
         when(accountRepo.save(any(CarrierAccountRef.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
@@ -189,7 +189,7 @@ class AccountRefServiceUspsIdentifiersTest {
         existing.setUspsDirectAccountNumber("PA-EXIST");
         existing.setUspsDirectCrid("CRID-EXIST");
         existing.setUspsDirectMid("MID-EXIST");
-        when(accountRepo.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase("USPS-A-01", "USPS"))
+        when(accountRepo.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCaseAndCustomerNoIgnoreCase("USPS-A-01", "USPS", "ACME"))
                 .thenReturn(Optional.of(existing));
         when(accountRepo.save(any(CarrierAccountRef.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
@@ -220,7 +220,7 @@ class AccountRefServiceUspsIdentifiersTest {
         existing.setCustomerNo("ACME");
         existing.setClientId("cid-old");
         existing.setClientSecret("csec-old");
-        when(accountRepo.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase("USPS-A-01", "USPS"))
+        when(accountRepo.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCaseAndCustomerNoIgnoreCase("USPS-A-01", "USPS", "ACME"))
                 .thenReturn(Optional.of(existing));
         when(accountRepo.save(any(CarrierAccountRef.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
@@ -253,7 +253,7 @@ class AccountRefServiceUspsIdentifiersTest {
         existing.setUspsDirectAccountNumber("PA-42");
         existing.setUspsDirectCrid("CRID-42");
         existing.setUspsDirectMid("MID-42");
-        when(accountRepo.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase("USPS-A-01", "USPS"))
+        when(accountRepo.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCaseAndCustomerNoIgnoreCase("USPS-A-01", "USPS", "ACME"))
                 .thenReturn(Optional.of(existing));
         when(accountRepo.save(any(CarrierAccountRef.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
@@ -284,7 +284,7 @@ class AccountRefServiceUspsIdentifiersTest {
         existing.setClientId("cid");
         existing.setClientSecret("csec");
         // uspsDirect* deliberately left null.
-        when(accountRepo.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase("USPS-A-01", "USPS"))
+        when(accountRepo.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCaseAndCustomerNoIgnoreCase("USPS-A-01", "USPS", "ACME"))
                 .thenReturn(Optional.of(existing));
         when(accountRepo.save(any(CarrierAccountRef.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
