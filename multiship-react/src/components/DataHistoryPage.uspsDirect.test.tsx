@@ -573,6 +573,26 @@ describe('Bulk Mailer — layout', () => {
     await waitFor(() => expect(listBatches).toHaveBeenCalledWith(expect.objectContaining({ view: 'TRASH' })))
   })
 
+  it('Empty Trash re-reads the list and says which imports were kept', async () => {
+    const kept = batchSummary({ id: 119, deletedAt: '2026-09-15T15:37:42Z', deletedBy: 'e2etester', labelsGenerated: 5, liveOrders: 5 })
+    listBatches.mockImplementation(async (q: { view: string }) => q.view === 'TRASH' ? pageOf([kept]) : pageOf([]))
+    bulkSummary.mockResolvedValue(summaryOf({ total: 1 }))
+    const { orderImportService } = await import('../api/orderImportService')
+    const emptyTrash = orderImportService.emptyTrash as ReturnType<typeof vi.fn>
+    emptyTrash.mockResolvedValue({ data: 2, message: '2 imports permanently deleted. Kept 1 import that still has live labels — void them first.' })
+    await renderAt('/bulk/trash')
+    expect(await screen.findByTestId('batch-row-119')).toBeInTheDocument()
+    const before = listBatches.mock.calls.length
+    await userEvent.click(screen.getByRole('button', { name: /^Empty Trash$/i }))
+    await userEvent.click(screen.getByRole('button', { name: /Delete 1 forever/i }))
+    await waitFor(() => expect(emptyTrash).toHaveBeenCalledTimes(1))
+    // Re-read, not blanked: the kept import is still listed without a refresh.
+    await waitFor(() => expect(listBatches.mock.calls.length).toBeGreaterThan(before))
+    expect(screen.getByTestId('batch-row-119')).toBeInTheDocument()
+    expect(notifyInfo).toHaveBeenCalledWith(expect.objectContaining({ body: expect.stringMatching(/Kept 1 import/) }))
+    expect(notifySuccess).not.toHaveBeenCalled()
+  })
+
   it('an armed Empty Trash disarms on Escape without deleting anything', async () => {
     listBatches.mockImplementation(async (q: { view: string }) => q.view === 'TRASH'
       ? pageOf([batchSummary({ id: 123, deletedAt: '2026-09-23T18:25:03Z', deletedBy: 'e2etester' })])

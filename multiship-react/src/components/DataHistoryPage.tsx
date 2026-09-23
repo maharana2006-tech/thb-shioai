@@ -232,6 +232,7 @@ export default function DataHistoryPage() {
     onMoved: batchPageId != null
       ? () => reloadRef.current()
       : (id) => { setBatches((list) => list.filter((b) => b.id !== id)); void reloadQuiet() },
+    onEmptied: () => reloadRef.current(),
   })
   const {
     trashBusyId,

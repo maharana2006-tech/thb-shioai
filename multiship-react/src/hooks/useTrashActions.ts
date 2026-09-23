@@ -22,6 +22,8 @@ export interface UseTrashActionsOptions {
   /** Called after a delete / restore instead of dropping the batch from the list —
    *  e.g. a single-batch page re-reads the batch to show its new state. */
   onMoved?: (id: number) => void
+  /** Called after Empty Trash — re-read the list: imports with live labels are kept. */
+  onEmptied?: () => void
 }
 
 export interface UseTrashActionsResult {
@@ -41,18 +43,27 @@ export interface UseTrashActionsResult {
 export function useTrashActions({
   setBatches,
   onMoved,
+  onEmptied,
 }: UseTrashActionsOptions): UseTrashActionsResult {
   const [trashBusyId, setTrashBusyId] = useState<number | null>(null)
   const [confirmEmpty, setConfirmEmpty] = useState(false)
   const [emptying, setEmptying] = useState(false)
 
-  /** PERMANENTLY delete every batch currently in Trash. */
+  /** PERMANENTLY delete every batch in Trash that has no live labels; the rest stay. */
   const handleEmptyTrash = async () => {
     setEmptying(true)
     try {
       const res = await orderImportService.emptyTrash()
-      setBatches([])
-      notify.success(res.message ?? 'Trash emptied.')
+      // The server keeps trashed imports whose labels are still live, so the list is
+      // re-read rather than blanked — blanking it showed an empty Trash that came
+      // back on refresh.
+      if (onEmptied) onEmptied()
+      else setBatches([])
+      const msg = res.message ?? 'Trash emptied.'
+      // ponytail: the "kept N" count only travels in the message text; parse it
+      // until the endpoint returns {purged, kept}.
+      if (/Kept \d+/.test(msg)) notify.info({ title: 'Some imports stay in Trash', body: msg })
+      else notify.success(msg)
     } catch (e) {
       notify.apiError(e, 'Could not empty Trash.')
     } finally {
