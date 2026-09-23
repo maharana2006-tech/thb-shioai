@@ -1115,9 +1115,12 @@ export default function AdvancedDataTable<T>({
         </DndContext>
       </div>
 
-      <p className="mt-2 text-right text-[10.5px] tabular-nums text-[#b6a684]">
-        Showing {visibleRows.length} of {totalRows} row{totalRows === 1 ? '' : 's'}
-      </p>
+      {/* Server-paged tables get one page as their data, so this would always read "N of N". */}
+      {manualPagination ? null : (
+        <p className="mt-2 text-right text-[10.5px] tabular-nums text-[#b6a684]">
+          Showing {visibleRows.length} of {totalRows} row{totalRows === 1 ? '' : 's'}
+        </p>
+      )}
     </div>
   )
 }
