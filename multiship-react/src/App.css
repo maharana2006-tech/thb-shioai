@@ -325,10 +325,13 @@ textarea {
 }
 @keyframes bulk-fade-in { from { opacity: 0; } to { opacity: 1; } }
 .bulk-fade-in { animation: bulk-fade-in 220ms ease-out both; }
+/* A popover opening: a short rise and fade, from its top-right corner. */
+@keyframes bulk-pop-in { from { opacity: 0; transform: translateY(-4px) scale(0.985); } to { opacity: 1; transform: none; } }
+.bulk-pop-in { transform-origin: top left; animation: bulk-pop-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
 .bulk-tab-in-right { animation: bulk-tab-in-right 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
 .bulk-tab-in-left { animation: bulk-tab-in-left 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
 @media (prefers-reduced-motion: reduce) {
   .bulk-tab-pill[data-ready='true'] { transition: none; }
-  .bulk-tab-in-right, .bulk-tab-in-left, .bulk-fade-in { animation: none; }
+  .bulk-tab-in-right, .bulk-tab-in-left, .bulk-fade-in, .bulk-pop-in { animation: none; }
   .animated-height { transition: none !important; }
 }

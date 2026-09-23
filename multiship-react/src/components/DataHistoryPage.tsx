@@ -24,7 +24,7 @@ import { wmsService } from '../api/wmsService'
 import { bulkService, type BulkSummary, type BulkView } from '../api/bulkService'
 import { AddShipViaMappingDialog, ShipViaCodesPanel } from './modals/ShipViaCodes'
 import OrderDocumentsTable from './OrderDocumentsTable'
-import DataHistoryFilterToolbar from './DataHistoryFilterToolbar'
+import DataHistoryFilterToolbar, { BulkFilterChips } from './DataHistoryFilterToolbar'
 import { GridCell, DH_COLUMNS, RowIssuesIcon, RowChannelChip, bucketRowErrors, type DhColumn } from './batchGrid'
 import VirtualTable from './VirtualTable'
 import AnimatedHeight from './ui/AnimatedHeight'
@@ -2363,6 +2363,24 @@ export default function DataHistoryPage() {
             data={batches}
             search={{ value: filters.search, onChange: filters.setSearch, placeholder: 'Search file name, batch #, or user…' }}
             filterToggle={filterMenu}
+            filterPanel={
+              <BulkFilterChips
+                statusFilter={filters.statusFilter}
+                setStatusFilter={filters.setStatusFilter}
+                statusMetaLabel={(s) => statusMeta(s).label}
+                dateFrom={filters.dateFrom}
+                setDateFrom={filters.setDateFrom}
+                dateTo={filters.dateTo}
+                setDateTo={filters.setDateTo}
+                createdBy={filters.createdBy}
+                setCreatedBy={filters.setCreatedBy}
+                batchPresence={filters.batchPresence}
+                setBatchPresence={filters.setBatchPresence}
+                minSaved={filters.minSaved}
+                setMinSaved={filters.setMinSaved}
+                clearFilters={filters.clearFilters}
+              />
+            }
             toolbarActions={listActions}
             manualPagination
             pageIndex={pageIndex}
