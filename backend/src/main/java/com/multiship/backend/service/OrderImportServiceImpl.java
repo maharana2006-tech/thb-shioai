@@ -1577,6 +1577,10 @@ public class OrderImportServiceImpl implements OrderImportService {
                 if (!StringUtils.hasText(ref)) continue;
                 List<OrderImportRowDTO> mine = byKey.remove(ref.trim().toUpperCase(Locale.ROOT));
                 if (mine == null) continue;
+                // The rows' own order is not a duplicate of itself: a labelled row
+                // re-validated (an edit, Validate all) matched its own live order.
+                if (mine.stream().anyMatch(m -> m.getGeneratedOrderNo() != null
+                        && String.valueOf(m.getGeneratedOrderNo()).equals(String.valueOf(orderNo)))) continue;
                 String msg = "reference " + ref.trim() + " already has a labelled order (#" + orderNo
                         + ") — generating again creates a duplicate shipment";
                 for (OrderImportRowDTO m : mine) {
