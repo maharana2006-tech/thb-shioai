@@ -583,6 +583,16 @@ describe('Bulk Mailer — layout', () => {
     expect(getHistory).toHaveBeenCalledWith(121)
   })
 
+  it('a trashed batch says when and by whom it was trashed', async () => {
+    getHistory.mockResolvedValue({ data: { ...batchSummary({ id: 123, fileName: 'trashtest.csv', status: 'INITIATE',
+      deletedAt: new Date(Date.now() - 5 * 60_000).toISOString(), deletedBy: 'e2etester' }), rows: [] } })
+    await renderAt('/bulk/batches/123')
+    const header = await screen.findByTestId('batch-page-header')
+    expect(header).toHaveTextContent('In Trash')
+    expect(header).toHaveTextContent(/Trashed 5m ago by e2etester/)
+    expect(screen.getByRole('button', { name: /Bulk Mailer · Trash/i })).toBeInTheDocument()
+  })
+
   it('says so when the batch is not there', async () => {
     getHistory.mockRejectedValue(new (await import('../api/apiClient')).ApiError('Not found', 404, null))
     await renderAt('/bulk/batches/999999')

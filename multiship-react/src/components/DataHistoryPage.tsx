@@ -1120,6 +1120,13 @@ export default function DataHistoryPage() {
                   <FiPrinter className="h-3 w-3" aria-hidden="true" /> Printed {formatPrinted(printedAtOf(b)!)}
                 </span>
               ) : null}
+              {b.deletedAt ? (
+                // Trash showed the import's created date only — when it was
+                // trashed, and by whom, is what decides whether to restore it.
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-rose-700" title={`Trashed ${new Date(b.deletedAt).toLocaleString()}`}>
+                  <FiTrash2 className="h-3 w-3" aria-hidden="true" /> Trashed {relativeTime(b.deletedAt) ?? formatPrinted(b.deletedAt)}{b.deletedBy ? ` by ${b.deletedBy}` : ''}
+                </span>
+              ) : null}
             </span>
           )
   }
