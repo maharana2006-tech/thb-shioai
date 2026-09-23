@@ -1826,7 +1826,7 @@ export default function DataHistoryPage() {
                     {gridCols.map((c) => (
                       <th key={c.key} className="whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1.5 text-left font-bold" title={c.key}>{c.label ?? c.key}</th>
                     ))}
-                    <th className="whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1.5 text-left font-bold">Label</th>
+                    <th className="whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1.5 text-left font-bold">Tracking · Label</th>
                   </tr>
                 </thead>
               }
@@ -1967,38 +1967,31 @@ export default function DataHistoryPage() {
                         })}
                         <td className="whitespace-nowrap border-b border-[#f2ecdf] px-2 py-1">
                           {generated ? (
-                            <span className="inline-flex flex-col gap-0.5">
-                              {/* Order number first — masked sandbox tracking (1ZXXXX…) is
-                                  identical on every UPS row, so it alone cannot say which
-                                  rows share an order. */}
-                              {r.generatedOrderNo ? (
-                                <div className="flex items-center gap-1">
-                                  <a
-                                    href={`/label/${r.generatedOrderNo}`}
-                                    className="font-mono text-[10px] font-semibold text-[#1f150c] underline-offset-2 hover:underline"
-                                    title="Open this order"
-                                  >
-                                    #{r.generatedOrderNo}
-                                  </a>
-                                  {r.labelUrl && r.generatedOrderNo ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setLabelModalOrderNo(r.generatedOrderNo ?? null)
-                                        setShowLabelModal(true)
-                                      }}
-                                      className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-semibold text-white bg-blue-600 hover:bg-blue-700 transition"
-                                      title="View the generated label PDF"
-                                    >
-                                      📄 View
-                                    </button>
-                                  ) : null}
-                                </div>
+                            /* The order number sits in the pinned column; here, the tracking
+                               number and a quiet way to see the label. */
+                            <span className="inline-flex items-center gap-1.5">
+                              {r.labelUrl && r.generatedOrderNo ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setLabelModalOrderNo(r.generatedOrderNo ?? null)
+                                    setShowLabelModal(true)
+                                  }}
+                                  className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-[#e3d9c4] bg-white text-[#412d15] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+                                  title="View the label PDF"
+                                  aria-label={`View the label of order ${r.generatedOrderNo}`}
+                                >
+                                  <FiFileText className="h-3 w-3" />
+                                </button>
                               ) : null}
                               {r.generatedTrackingNumber ? (
-                                <span className="font-mono text-[9.5px] text-[#6b5c42]">{r.generatedTrackingNumber}</span>
+                                <span className="font-mono text-[10px] text-[#3f3527]" title="Tracking number">{r.generatedTrackingNumber}</span>
+                              ) : r.generatedOrderNo ? (
+                                <a href={`/label/${r.generatedOrderNo}`} className="font-mono text-[10px] font-semibold text-[#412d15] underline-offset-2 hover:underline" title="Open this order">
+                                  #{r.generatedOrderNo}
+                                </a>
                               ) : (
-                                <span className="text-[9.5px] text-[#6b5c42]">—</span>
+                                <span className="text-[10px] text-[#b6a684]">—</span>
                               )}
                             </span>
                           ) : gen === 'VOIDED' ? (
@@ -2006,23 +1999,29 @@ export default function DataHistoryPage() {
                           ) : !canWrite ? (
                             <span className="text-[9.5px] text-[#b6a684]">Read-only view</span>
                           ) : orderReady && (ok || failed) ? (
-                            <div className="flex flex-col gap-0.5">
+                            <div className="flex flex-col items-start gap-0.5">
                               <button
                                 type="button"
                                 onClick={() => void generateRow(b.id, r.rowNumber)}
                                 disabled={rowBusy || viewTrash || (b.status || '').toUpperCase() === 'IN_PROGRESS'}
-                                className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-semibold text-[#f4eede] transition disabled:cursor-not-allowed disabled:bg-[#dcd4c4] ${failed ? 'bg-rose-700 hover:bg-rose-800' : 'bg-[#1f150c] hover:bg-[#412d15]'}`}
+                                className={`inline-flex items-center gap-1 whitespace-nowrap rounded-lg border px-2 py-1 text-[10px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                                  failed
+                                    ? 'border-rose-200 bg-white text-rose-700 hover:border-rose-300 hover:bg-rose-50'
+                                    : 'border-[#1f150c] bg-[#1f150c] text-[#f4eede] hover:bg-[#412d15]'
+                                }`}
                                 title={failed ? 'Retry — re-sends this same order to the carrier (no duplicate order is created)' : 'Generate a carrier label for this row'}
                               >
                                 {rowBusy ? (
-                                  <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
+                                  <span className={`inline-block h-3 w-3 animate-spin rounded-full border-2 ${failed ? 'border-rose-100 border-t-rose-600' : 'border-[#f4eede]/40 border-t-[#f4eede]'}`} />
+                                ) : failed ? (
+                                  <FiRotateCcw className="h-3 w-3" />
                                 ) : (
                                   <FiZap className="h-3 w-3" />
                                 )}
-                                {rowBusy ? 'Generating…' : failed ? 'Retry label' : 'Generate label'}
+                                {rowBusy ? 'Generating…' : failed ? 'Retry' : 'Generate'}
                               </button>
                               {failed && r.generatedMessage ? (
-                                <span title={r.generatedMessage} className="max-w-[220px] truncate text-[9px] text-rose-700">{r.generatedMessage}</span>
+                                <span title={r.generatedMessage} className="max-w-[200px] truncate text-[9.5px] text-rose-700">{r.generatedMessage}</span>
                               ) : null}
                             </div>
                           ) : (
