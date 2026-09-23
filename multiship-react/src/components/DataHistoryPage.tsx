@@ -2262,7 +2262,6 @@ export default function DataHistoryPage() {
       statusFilter={filters.statusFilter}
       setStatusFilter={filters.setStatusFilter}
       statusCounts={summary?.statusCounts ?? {}}
-      anyFilterActive={filters.anyFilterActive}
       clearFilters={filters.clearFilters}
       dateFrom={filters.dateFrom}
       setDateFrom={filters.setDateFrom}

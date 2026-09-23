@@ -1,24 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { ColumnDef, SortingState } from '@tanstack/react-table'
-import {
-  FiCalendar,
-  FiCheck,
-  FiChevronRight,
-  FiDownload,
-  FiFileText,
-  FiFilter,
-  FiLoader,
-  FiRefreshCw,
-  FiSlash,
-  FiTruck,
-  FiX,
-} from 'react-icons/fi'
+import { FiCalendar, FiDownload, FiFileText, FiLoader, FiRefreshCw, FiSlash, FiTruck, FiX } from 'react-icons/fi'
 import { orderService, type DocumentFacets, type DocumentsQuery, type OrderDocumentRow } from '../api/orderService'
 import { notify } from '../utils/notify'
 import { useLatestRequest } from '../hooks/useLatestRequest'
-import { useDismissable } from '../hooks/useDismissable'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
+import {
+  CHIP_BTN, CHIP_OFF, CHIP_ON, Check, CountBadge, FIELD_INPUT, FIELD_LABEL, FilterChips, FilterPopover,
+  OPTION, OPTION_ON, type FilterChip, type RailItem,
+} from './ui/FilterPopover'
 
 /**
  * The unified Documents table — one row per labelled order carrying every
@@ -85,14 +76,6 @@ const money = (v: number | null | undefined, ccy?: string | null) =>
 
 const DOC_BTN =
   'inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[10.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40'
-const OPTION = 'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition hover:bg-[#faf7f0]'
-const OPTION_ON = 'bg-[#f4eede]/70 hover:bg-[#f4eede]'
-const CHIP_BTN = 'inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11.5px] font-semibold transition'
-const CHIP_OFF = 'border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
-const CHIP_ON = 'border-[#1f150c] bg-[#1f150c] text-[#f4eede]'
-const FIELD_INPUT = 'w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12.5px] text-[#1f150c] outline-none transition focus:border-[#412d15] focus:ring-4 focus:ring-[#f0e9d8]'
-const FIELD_LABEL = 'mb-1.5 block text-[10.5px] font-semibold uppercase tracking-[0.08em] text-[#b6a684]'
-const POPOVER_W = 520
 
 /** onLoaded fires after each load settles — Bulk Mailer holds its tab's height until then. */
 export default function OrderDocumentsTable({ onLoaded }: { onLoaded?: () => void } = {}) {
@@ -305,7 +288,7 @@ export default function OrderDocumentsTable({ onLoaded }: { onLoaded?: () => voi
     },
   ], [busyKey, download])
 
-  const chips: { key: string; label: string; value: string; clear: () => void }[] = []
+  const chips: FilterChip[] = []
   if (filters.status !== 'ANY') chips.push({ key: 'status', label: 'Status', value: filters.status === 'LIVE' ? 'Live' : 'Voided', clear: () => setFilters((f) => ({ ...f, status: 'ANY' })) })
   if (filters.carrier) chips.push({ key: 'carrier', label: 'Carrier', value: filters.carrier, clear: () => setFilters((f) => ({ ...f, carrier: '' })) })
   if (filters.invoice !== 'ANY') chips.push({ key: 'invoice', label: 'Invoice', value: filters.invoice === 'YES' ? 'With invoice' : 'No invoice', clear: () => setFilters((f) => ({ ...f, invoice: 'ANY' })) })
@@ -331,22 +314,7 @@ export default function OrderDocumentsTable({ onLoaded }: { onLoaded?: () => voi
             clearFilters={clearFilters}
           />
         }
-        filterPanel={chips.length > 0 ? (
-          <div data-testid="documents-filter-chips" className="mt-2 flex flex-wrap items-center gap-1.5">
-            {chips.map((c) => (
-              <span key={c.key} className="inline-flex items-center gap-1 rounded-full border border-[#e3d9c4] bg-[#fcfaf5] py-0.5 pl-2.5 pr-1 text-[11.5px] text-[#5a4526]">
-                <span className="text-[#a1906d]">{c.label}</span>
-                <span className="font-semibold text-[#1f150c]">{c.value}</span>
-                <button type="button" onClick={c.clear} aria-label={`Remove ${c.label} filter`} className="ml-0.5 rounded-full p-0.5 text-[#a1906d] transition hover:bg-[#f0e9d8] hover:text-rose-700">
-                  <FiX className="h-3 w-3" />
-                </button>
-              </span>
-            ))}
-            {chips.length > 1 ? (
-              <button type="button" onClick={clearFilters} className="text-[11.5px] font-semibold text-[#6b5c42] underline-offset-2 hover:text-rose-700 hover:underline">Clear all</button>
-            ) : null}
-          </div>
-        ) : null}
+        filterPanel={<FilterChips chips={chips} clearFilters={clearFilters} testId="documents-filter-chips" />}
         toolbarActions={
           <button
             type="button"
@@ -469,28 +437,8 @@ function DocumentsFilterMenu({
   shown: number
   clearFilters: () => void
 }) {
-  const [open, setOpen] = useState(false)
-  const [field, setField] = useState<Field>('status')
-  const [shift, setShift] = useState(0)
-  const ref = useDismissable(open, useCallback(() => setOpen(false), []))
-  const toggle = () => {
-    const rect = ref.current?.getBoundingClientRect()
-    if (rect && typeof window !== 'undefined') {
-      const vw = window.visualViewport?.width ?? window.innerWidth
-      const width = Math.min(POPOVER_W, vw - 32)
-      const overflow = rect.left + width - (vw - 16)
-      setShift(overflow > 0 ? -Math.min(overflow, Math.max(rect.left - 16, 0)) : 0)
-    }
-    setOpen((v) => !v)
-  }
-  const lit = open || activeCount > 0
   const dateActive = !!(filters.from || filters.to)
-  const check = <FiCheck className="ml-auto h-3.5 w-3.5 shrink-0 text-[#1f150c]" aria-hidden="true" />
-  const count = (n: number | undefined) => (
-    <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-[#6b5c42] ring-1 ring-[#e3d9c4]">{n ?? '–'}</span>
-  )
-
-  const rail: { key: Field; label: string; icon: React.ReactNode; value: string; active: boolean }[] = [
+  const rail: RailItem<Field>[] = [
     { key: 'status', label: 'Status', icon: <FiSlash className="h-3.5 w-3.5" />,
       value: filters.status === 'ANY' ? 'Any' : filters.status === 'LIVE' ? 'Live' : 'Voided', active: filters.status !== 'ANY' },
     { key: 'carrier', label: 'Carrier', icon: <FiTruck className="h-3.5 w-3.5" />,
@@ -502,52 +450,16 @@ function DocumentsFilterMenu({
   ]
 
   return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        onClick={toggle}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[12px] font-semibold transition ${
-          lit ? 'border-[#412d15] bg-[#412d15] text-[#f4eede]' : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
-        }`}
-      >
-        <FiFilter className="h-3.5 w-3.5" />
-        Filters
-        {activeCount > 0 ? (
-          <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[#f4eede] px-1 text-[9.5px] font-bold text-[#412d15]">{activeCount}</span>
-        ) : null}
-      </button>
-      {open ? (
-        <div
-          role="dialog"
-          aria-label="Filters"
-          style={{ left: shift, width: `min(${POPOVER_W}px, calc(100vw - 2rem))` }}
-          className="bulk-pop-in absolute z-30 mt-1.5 overflow-hidden rounded-xl border border-[#e3d9c4] bg-white text-[#1f150c] shadow-[0_18px_44px_rgba(31,21,12,0.16)]"
-        >
-          <div className="flex">
-            <nav aria-label="Filter by" className="w-[8.25rem] shrink-0 border-r border-[#f2ecdf] bg-[#fcfaf5] p-1.5 sm:w-[10.5rem]">
-              {rail.map((r) => {
-                const on = field === r.key
-                return (
-                  <button
-                    key={r.key}
-                    type="button"
-                    onClick={() => setField(r.key)}
-                    aria-current={on ? 'true' : undefined}
-                    className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition ${on ? 'bg-white shadow-sm ring-1 ring-[#e3d9c4]' : 'hover:bg-[#f4eede]/60'}`}
-                  >
-                    <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${r.active ? 'bg-[#1f150c] text-[#f4eede]' : 'bg-[#f4eede] text-[#6b5c42]'}`} aria-hidden="true">{r.icon}</span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-[11.5px] font-semibold leading-tight text-[#1f150c]">{r.label}</span>
-                      <span className={`hidden truncate text-[10.5px] leading-tight sm:block ${r.active ? 'font-semibold text-[#412d15]' : 'text-[#a1906d]'}`}>{r.value}</span>
-                    </span>
-                    <FiChevronRight className={`h-3 w-3 shrink-0 ${on ? 'text-[#412d15]' : 'text-[#dcd4c4]'}`} aria-hidden="true" />
-                  </button>
-                )
-              })}
-            </nav>
-            <div className="min-h-[15rem] flex-1 p-2.5">
+    <FilterPopover<Field>
+      rail={rail}
+      initialField="status"
+      activeCount={activeCount}
+      shown={shown}
+      total={facets?.total}
+      clearFilters={clearFilters}
+    >
+      {(field) => (
+        <>
               {field === 'status' ? (
                 <ul className="space-y-0.5">
                   {([
@@ -564,8 +476,8 @@ function DocumentsFilterMenu({
                             <span className="block text-[12.5px] font-semibold leading-tight">{label}</span>
                             <span className="block text-[10.5px] leading-tight text-[#a1906d]">{hint}</span>
                           </span>
-                          {count(n)}
-                          {on ? check : null}
+                          <CountBadge n={n} />
+                          {on ? <Check /> : null}
                         </button>
                       </li>
                     )
@@ -577,8 +489,8 @@ function DocumentsFilterMenu({
                   <li>
                     <button type="button" onClick={() => setFilters((f) => ({ ...f, carrier: '' }))} aria-pressed={!filters.carrier} className={`${OPTION} ${!filters.carrier ? OPTION_ON : ''}`}>
                       <span className="text-[12.5px] font-semibold">Any carrier</span>
-                      {count(facets?.total)}
-                      {!filters.carrier ? check : null}
+                      <CountBadge n={facets?.total} />
+                      {!filters.carrier ? <Check /> : null}
                     </button>
                   </li>
                   {(facets?.carriers ?? []).map((c) => {
@@ -588,8 +500,8 @@ function DocumentsFilterMenu({
                         <button type="button" onClick={() => setFilters((f) => ({ ...f, carrier: c.carrier }))} aria-pressed={on} className={`${OPTION} ${on ? OPTION_ON : ''}`}>
                           <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[#f4eede] text-[#6b5c42]" aria-hidden="true"><FiTruck className="h-3 w-3" /></span>
                           <span className="text-[12.5px] font-semibold">{c.carrier}</span>
-                          {count(c.count)}
-                          {on ? check : null}
+                          <CountBadge n={c.count} />
+                          {on ? <Check /> : null}
                         </button>
                       </li>
                     )
@@ -613,8 +525,8 @@ function DocumentsFilterMenu({
                             <span className="block text-[12.5px] font-semibold leading-tight">{label}</span>
                             <span className="block text-[10.5px] leading-tight text-[#a1906d]">{hint}</span>
                           </span>
-                          {count(n)}
-                          {on ? check : null}
+                          <CountBadge n={n} />
+                          {on ? <Check /> : null}
                         </button>
                       </li>
                     )
@@ -650,21 +562,8 @@ function DocumentsFilterMenu({
                   </div>
                 </div>
               ) : null}
-            </div>
-          </div>
-          <div className="flex items-center justify-between gap-2 border-t border-[#f2ecdf] bg-[#fcfaf5] px-3 py-2 text-[11.5px] text-[#6b5c42]">
-            <span aria-live="polite"><span className="font-semibold text-[#1f150c]">{shown}</span> of {facets?.total ?? '–'} shown</span>
-            <span className="flex items-center gap-1.5">
-              {activeCount > 0 ? (
-                <button type="button" onClick={clearFilters} className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11.5px] font-semibold text-[#6b5c42] transition hover:bg-rose-50 hover:text-rose-700">
-                  <FiX className="h-3.5 w-3.5" /> Clear all
-                </button>
-              ) : null}
-              <button type="button" onClick={() => setOpen(false)} className="rounded-lg bg-[#1f150c] px-3 py-1 text-[11.5px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15]">Done</button>
-            </span>
-          </div>
-        </div>
-      ) : null}
-    </div>
+        </>
+      )}
+    </FilterPopover>
   )
 }
