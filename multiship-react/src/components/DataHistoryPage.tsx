@@ -25,7 +25,7 @@ import { bulkService, type BulkSummary, type BulkView } from '../api/bulkService
 import { AddShipViaMappingDialog, ShipViaCodesPanel } from './modals/ShipViaCodes'
 import OrderDocumentsTable from './OrderDocumentsTable'
 import DataHistoryFilterToolbar, { BulkFilterChips } from './DataHistoryFilterToolbar'
-import { GridCell, DH_COLUMNS, RowIssuesIcon, RowChannelChip, bucketRowErrors, type DhColumn } from './batchGrid'
+import { GridCell, DH_COLUMNS, DH_KEY_COLUMN_KEYS, RowIssuesIcon, RowChannelChip, bucketRowErrors, type DhColumn } from './batchGrid'
 import VirtualTable from './VirtualTable'
 import AnimatedHeight from './ui/AnimatedHeight'
 import BatchLabelBar from './bulk/BatchLabelBar'
@@ -170,6 +170,15 @@ export default function DataHistoryPage() {
   const [confirmGenId, setConfirmGenId] = useState<number | null>(null)
   // Per-batch row filter for the expanded grid — a 1,000-order batch is 2,484 rows.
   const [gridFilter, setGridFilter] = useState<Record<number, 'all' | 'failed' | 'pending'>>({})
+  // The grid shows the Orders page's columns by default; every imported field on request.
+  const [allGridCols, setAllGridCols] = useState<boolean>(() => {
+    try { return window.localStorage.getItem(GRID_COLUMNS_KEY) === 'all' } catch { return false }
+  })
+  const gridCols = allGridCols ? DH_COLUMNS : DH_COLUMNS.filter((c) => DH_KEY_COLUMN_KEYS.has(c.key))
+  const setGridColumns = (all: boolean) => {
+    setAllGridCols(all)
+    try { window.localStorage.setItem(GRID_COLUMNS_KEY, all ? 'all' : 'key') } catch { /* per-viewer convenience only */ }
+  }
   /** Ticked rows (row numbers) per batch — for print / send / void. */
   const [pickedRows, setPickedRows] = useState<Record<number, number[]>>({})
   const [genRowKey, setGenRowKey] = useState<string | null>(null)
@@ -1739,6 +1748,25 @@ export default function DataHistoryPage() {
                   </button>
                 ))}
               </div>
+              <div className="inline-flex shrink-0 overflow-hidden rounded-lg border border-[#e3d9c4]" role="group" aria-label="Columns">
+                {([
+                  [false, 'Key columns'],
+                  [true, `All columns · ${DH_COLUMNS.length}`],
+                ] as const).map(([all, label]) => (
+                  <button
+                    key={String(all)}
+                    type="button"
+                    aria-pressed={allGridCols === all}
+                    onClick={() => setGridColumns(all)}
+                    title={all ? 'Every field of the import — scroll right' : "The columns the Orders page shows"}
+                    className={`px-2.5 py-1.5 text-[11px] font-semibold transition ${
+                      allGridCols === all ? 'bg-[#f4eede] text-[#1f150c]' : 'bg-white text-[#5a4526] hover:bg-[#faf7f0]'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
               {/* Print / send / void — on the same line, at the right. Hidden when nothing is live. */}
               <BatchLabelBar
                 bare
@@ -1771,7 +1799,7 @@ export default function DataHistoryPage() {
             <VirtualTable
               rows={visible}
               rowKey={(r) => r.rowNumber}
-              colCount={DH_COLUMNS.length + 3}
+              colCount={gridCols.length + 3}
               maxHeight="calc(100vh - 300px)"
               className="rounded-xl border border-[#e3d9c4] bg-white"
               tableClassName="w-full border-collapse text-[11px] text-[#3f3527]"
@@ -1795,8 +1823,8 @@ export default function DataHistoryPage() {
                     </th>
                     <th className="sticky z-20 border-b border-r border-[#e3d9c4] bg-[#faf7f0] px-2 py-1.5 text-left font-bold"
                       style={{ left: ROW_COL_W, width: ORDER_COL_W, minWidth: ORDER_COL_W }}>Order · Batch</th>
-                    {DH_COLUMNS.map((c) => (
-                      <th key={c.key} className="whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1.5 text-left font-bold">{c.key}</th>
+                    {gridCols.map((c) => (
+                      <th key={c.key} className="whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1.5 text-left font-bold" title={c.key}>{c.label ?? c.key}</th>
                     ))}
                     <th className="whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1.5 text-left font-bold">Label</th>
                   </tr>
@@ -1896,7 +1924,7 @@ export default function DataHistoryPage() {
                             <span className="text-[10px] text-[#b6a684]">—</span>
                           )}
                         </td>
-                        {DH_COLUMNS.map((c) => {
+                        {gridCols.map((c) => {
                           const raw = (r as unknown as Record<string, unknown>)[c.key]
                           // An API/WMS order shows the client's own ship via code (its
                           // resolved carrier service in the tooltip), and an unmapped
@@ -2615,6 +2643,9 @@ function BatchListSkeleton() {
     </div>
   )
 }
+
+/** Where the grid's column choice is remembered (per browser). */
+const GRID_COLUMNS_KEY = 'bulk-grid-columns:v1'
 
 /** Widths of the two columns pinned at the left of a batch's rows grid. */
 const ROW_COL_W = 196

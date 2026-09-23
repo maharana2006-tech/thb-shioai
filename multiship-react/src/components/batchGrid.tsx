@@ -105,27 +105,35 @@ export function bucketRowErrors(errors: string[]): {
 /** Column model for the batch spreadsheet grid — every import field, in
  *  template order. `numeric`/`upper` shape how an edited value is written
  *  back; `w` is the cell input min-width. */
-export type DhColumn = { key: string; mono?: boolean; upper?: boolean; numeric?: boolean; w: string }
+export type DhColumn = { key: string; label?: string; mono?: boolean; upper?: boolean; numeric?: boolean; w: string }
+
+/** The columns the grid shows by default — the same things the Orders page
+ *  shows for an order (reference, customer, recipient, destination, carrier,
+ *  service, account, weight). Everything else sits behind "All columns". */
+export const DH_KEY_COLUMN_KEYS: ReadonlySet<string> = new Set([
+  'orderRef', 'clientCode', 'recipientName', 'city', 'state', 'countryCode',
+  'carrierCode', 'serviceType', 'accountNumber', 'weight',
+])
 export const DH_COLUMNS: DhColumn[] = [
-  { key: 'orderRef', mono: true, w: 'w-24' },
-  { key: 'clientCode', mono: true, upper: true, w: 'w-24' },
+  { key: 'orderRef', label: 'Ref order #', mono: true, w: 'w-24' },
+  { key: 'clientCode', label: 'Customer', mono: true, upper: true, w: 'w-24' },
   { key: 'billTo', mono: true, upper: true, w: 'w-24' },
   { key: 'warehouseCode', mono: true, upper: true, w: 'w-24' },
-  { key: 'recipientName', w: 'w-40' },
+  { key: 'recipientName', label: 'Recipient', w: 'w-36' },
   { key: 'recipientCompany', w: 'w-40' },
   { key: 'recipientPhone', w: 'w-28' },
   { key: 'recipientEmail', w: 'w-44' },
   { key: 'addressLine1', w: 'w-48' },
   { key: 'addressLine2', w: 'w-40' },
-  { key: 'city', w: 'w-32' },
-  { key: 'state', mono: true, upper: true, w: 'w-16' },
+  { key: 'city', label: 'City', w: 'w-28' },
+  { key: 'state', label: 'State', mono: true, upper: true, w: 'w-16' },
   { key: 'postalCode', mono: true, w: 'w-24' },
-  { key: 'countryCode', mono: true, upper: true, w: 'w-16' },
-  { key: 'carrierCode', mono: true, upper: true, w: 'w-24' },
-  { key: 'accountNumber', mono: true, w: 'w-32' },
-  { key: 'serviceType', mono: true, w: 'w-28' },
+  { key: 'countryCode', label: 'Country', mono: true, upper: true, w: 'w-16' },
+  { key: 'carrierCode', label: 'Carrier', mono: true, upper: true, w: 'w-24' },
+  { key: 'accountNumber', label: 'Account', mono: true, w: 'w-24' },
+  { key: 'serviceType', label: 'Service', mono: true, w: 'w-28' },
   { key: 'packageType', mono: true, w: 'w-24' },
-  { key: 'weight', numeric: true, w: 'w-16' },
+  { key: 'weight', label: 'Weight', numeric: true, w: 'w-16' },
   { key: 'weightUnit', mono: true, upper: true, w: 'w-16' },
   { key: 'length', numeric: true, w: 'w-14' },
   { key: 'width', numeric: true, w: 'w-14' },
