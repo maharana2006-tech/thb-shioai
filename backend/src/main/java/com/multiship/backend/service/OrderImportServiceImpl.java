@@ -3944,6 +3944,10 @@ public class OrderImportServiceImpl implements OrderImportService {
                 throw new DuplicateShipmentException(duplicateSummary(dup));
             }
         }
+        // This row's run starts now — paired with the completedAt stamped below.
+        // Left alone, "took" measured from the last full run's start (50h 24m).
+        batch.setGenerationStartedAt(java.time.LocalDateTime.now());
+        batch.setCompletedAt(null);
         OrderImportRowDTO done = group.stream()
                 .filter(r -> "GENERATED".equalsIgnoreCase(r.getGeneratedStatus()) && r.getGeneratedOrderNo() != null)
                 .findFirst().orElse(null);

@@ -14,6 +14,8 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -27,12 +29,14 @@ class OrderImportServiceImplBatchPageTest {
 
     private OrderImportServiceImpl service;
     private ImportBatchRepository importBatchRepository;
+    private CarrierService carrierService;
 
     private final com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
     @BeforeEach
     void setUp() {
-        service = new OrderImportServiceImpl(mock(CarrierService.class));
+        carrierService = mock(CarrierService.class);
+        service = new OrderImportServiceImpl(carrierService);
         importBatchRepository = mock(ImportBatchRepository.class);
         ReflectionTestUtils.setField(service, "importBatchRepository", importBatchRepository);
         ReflectionTestUtils.setField(service, "importObjectMapper", mapper);
@@ -102,5 +106,29 @@ class OrderImportServiceImplBatchPageTest {
 
         assertEquals(lastRun.plusSeconds(3), batch.getCompletedAt(), "an edit is not a label run");
         assertEquals(lastRun.plusSeconds(3).toString(), dto.getCompletedAt());
+    }
+
+    // ── Fix: Retry on one row stamped completedAt but kept the last full
+    //    run's generationStartedAt, so the header read "took 4m 14s". ────────
+
+    @Test
+    void retryingOneRowStartsItsOwnRunClock() throws Exception {
+        LocalDateTime lastRun = LocalDateTime.of(2026, 9, 23, 17, 27, 20);
+        ImportBatch batch = savedBatch("PARTIAL_COMPLETE",
+                List.of(shipRow(1, 906976, "GENERATED"), shipRow(13, 7003, "FAILED")));
+        batch.setGenerationStartedAt(lastRun);
+        batch.setCompletedAt(lastRun.plusSeconds(3));
+        when(carrierService.generateManualLabel(any(), any(), any())).thenReturn(
+                com.multiship.backend.dto.ApiResponse.<com.multiship.backend.dto.LabelGenerationResponse>builder()
+                        .status("success").code(200).message("ok")
+                        .data(com.multiship.backend.dto.LabelGenerationResponse.builder()
+                                .orderNo(7003L).trackingNumber("9400-TN-7003").status("GENERATED").build())
+                        .build());
+
+        service.generateLabelForRow(121L, 13, "alice", false);
+
+        assertTrue(batch.getGenerationStartedAt().isAfter(lastRun), "the row's retry starts its own run clock");
+        assertNotNull(batch.getCompletedAt());
+        assertFalse(batch.getCompletedAt().isBefore(batch.getGenerationStartedAt()), "took = completed - started, never negative");
     }
 }
