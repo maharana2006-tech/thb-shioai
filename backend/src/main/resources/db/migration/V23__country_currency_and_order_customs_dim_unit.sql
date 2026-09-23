@@ -46,7 +46,15 @@ BEGIN
     -- Seed all ~250 ISO 3166-1 alpha-2 → ISO 4217 mappings.
     -- INSERT ... ON CONFLICT DO NOTHING makes the seed idempotent — re-running
     -- the migration on an env that already has data is a no-op per row.
-    INSERT INTO country_currency (country_code, currency_code) VALUES
+    --
+    -- created_at/updated_at are supplied explicitly (rather than relying on a
+    -- table-level DEFAULT) because on an env where Hibernate's ddl-auto=update
+    -- already materialised this table from the @Entity mapping before Flyway
+    -- ran, the columns exist as NOT NULL with no DB-level default — @CreationTimestamp
+    -- / @UpdateTimestamp are Hibernate-side only, not SQL DEFAULT clauses.
+    INSERT INTO country_currency (country_code, currency_code, created_at, updated_at)
+    SELECT country_code, currency_code, NOW(), NOW()
+    FROM (VALUES
         -- A
         ('AD', 'EUR'), ('AE', 'AED'), ('AF', 'AFN'), ('AG', 'XCD'), ('AI', 'XCD'),
         ('AL', 'ALL'), ('AM', 'AMD'), ('AO', 'AOA'), ('AQ', 'USD'), ('AR', 'ARS'),
@@ -136,6 +144,7 @@ BEGIN
         ('YE', 'YER'), ('YT', 'EUR'),
         -- Z
         ('ZA', 'ZAR'), ('ZM', 'ZMW'), ('ZW', 'ZWG')
+    ) AS seed(country_code, currency_code)
     ON CONFLICT (country_code) DO NOTHING;
 END $$;
 
