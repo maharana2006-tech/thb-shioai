@@ -4164,8 +4164,9 @@ public class OrderImportServiceImpl implements OrderImportService {
         batch.setTotalRows(total);
         batch.setSavedRows(readyRowCount(rows));
         batch.setInvalidRows(invalid);
+        // Only re-derived here — an edit is not a label run, so the last run's
+        // completedAt stands (it read "completed just now" after every edit).
         batch.setStatus(deriveGenerationStatus(total, generated, failed, invalid));
-        stampCompletionIfTerminal(batch);
 
         // Save rows back to appropriate storage
         if (isWmsOrApi && importBatchRowRepository != null) {
