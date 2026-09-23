@@ -30,6 +30,7 @@ export default function BatchLabelBar({
   canManagePrinters,
   locked,
   onOpenPrinterSettings,
+  bare = false,
 }: {
   batchId: number
   rows: OrderImportRow[]
@@ -46,6 +47,8 @@ export default function BatchLabelBar({
   /** Generating, or in Trash — no voiding. */
   locked: boolean
   onOpenPrinterSettings: () => void
+  /** No box of its own — it sits inside another toolbar, taking the space left. */
+  bare?: boolean
 }) {
   const [printing, setPrinting] = useState<'LABEL' | 'COMMERCIAL_INVOICE' | null>(null)
   const [sendOpen, setSendOpen] = useState(false)
@@ -122,7 +125,9 @@ export default function BatchLabelBar({
   return (
     <div
       data-testid="batch-label-bar"
-      className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2"
+      className={bare
+        ? 'flex flex-1 flex-wrap items-center justify-between gap-2'
+        : 'mb-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2'}
     >
       <span className="flex flex-wrap items-center gap-2 text-[11.5px] text-[#6b5c42]">
         {scoped ? (
@@ -137,7 +142,7 @@ export default function BatchLabelBar({
           <>
             <span><span className="font-semibold text-[#1f150c]">{allLive.length}</span> live label{allLive.length === 1 ? '' : 's'} in this batch</span>
             <button type="button" onClick={onPickAllLive} className="font-semibold text-[#5a4526] hover:underline">Tick them all</button>
-            <span className="text-[#b6a684]">· or tick rows to act on just those</span>
+            <span className="hidden text-[#b6a684] xl:inline">· or tick rows to act on just those</span>
           </>
         )}
       </span>

@@ -1638,7 +1638,7 @@ export default function DataHistoryPage() {
       return { ...m, [b.id]: Array.from(cur) }
     })
     return (
-      <div className="border-t border-dashed border-[#eee6d6] bg-[#faf7f0]/50 px-5 py-3">
+      <div className="px-3 py-2.5">
         {rows === 'loading' || rows === undefined ? (
           <p className="py-4 text-center text-[12px] text-[#6b5c42]">Loading rows…</p>
         ) : rows.length === 0 ? (
@@ -1677,8 +1677,8 @@ export default function DataHistoryPage() {
                 </div>
               )
             })()}
-            <div className="mb-1.5 flex flex-wrap items-center gap-2">
-              <div className="inline-flex overflow-hidden rounded-lg border border-[#e3d9c4]" role="group" aria-label="Show rows">
+            <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-2">
+              <div className="inline-flex shrink-0 overflow-hidden rounded-lg border border-[#e3d9c4]" role="group" aria-label="Show rows">
                 {([
                   ['all', `All ${list.length}`],
                   ['failed', `Needs attention ${list.filter(needsAttention).length}`],
@@ -1689,7 +1689,7 @@ export default function DataHistoryPage() {
                     type="button"
                     aria-pressed={filter === k}
                     onClick={() => setGridFilter((m) => ({ ...m, [b.id]: k }))}
-                    className={`px-2.5 py-1 text-[10.5px] font-semibold transition ${
+                    className={`px-2.5 py-1.5 text-[11px] font-semibold transition ${
                       filter === k ? 'bg-[#1f150c] text-[#f4eede]' : 'bg-white text-[#5a4526] hover:bg-[#faf7f0]'
                     }`}
                   >
@@ -1697,32 +1697,21 @@ export default function DataHistoryPage() {
                   </button>
                 ))}
               </div>
-              {/* Validate all — re-checks every row; a quiet secondary button beside Generate. */}
-              {!viewTrash ? (
-                <button
-                  type="button"
-                  onClick={() => void validateAll(b.id)}
-                  disabled={validatingId === b.id || (b.status || '').toUpperCase() === 'IN_PROGRESS'}
-                  title="Validate all rows in this batch and update their errors/warnings"
-                  className={BTN_GHOST_SM}
-                >
-                  {validatingId === b.id ? (
-                    <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-emerald-100 border-t-emerald-600" />
-                  ) : (
-                    <FiCheckCircle className="h-3.5 w-3.5 text-emerald-600" aria-hidden="true" />
-                  )}
-                  {validatingId === b.id ? 'Validating…' : 'Validate all'}
-                </button>
-              ) : null}
-              <p className="text-[10.5px] text-[#b6a684]">
-                {viewTrash
-                  ? 'Read-only in Trash — restore this import to edit rows or generate labels.'
-                  : (b.status || '').toUpperCase() === 'IN_PROGRESS'
-                    ? 'Locked while labels are generating — editing opens again when the run finishes.'
-                    : !canWrite
-                      ? 'Read-only view. Scroll right for more columns.'
-                      : 'Click any cell to edit; it saves and re-validates on blur. Scroll right for more columns.'}
-              </p>
+              {/* Print / send / void — on the same line, at the right. Hidden when nothing is live. */}
+              <BatchLabelBar
+                bare
+                batchId={b.id}
+                rows={list}
+                picked={picked}
+                onPickAllLive={() => setPickedRows((m) => ({ ...m, [b.id]: list.filter(isLive).map((r) => r.rowNumber) }))}
+                onClearPick={() => setPickedRows((m) => ({ ...m, [b.id]: [] }))}
+                onChanged={() => { reloadRows(b.id); void reloadQuiet() }}
+                onPrinted={() => reloadRows(b.id)}
+                canWrite={canWrite}
+                canManagePrinters={canPullWms}
+                locked={viewTrash || (b.status || '').toUpperCase() === 'IN_PROGRESS'}
+                onOpenPrinterSettings={() => navigate(settingsPaths.printers)}
+              />
             </div>
             {['WMS', 'API'].includes((b.source || '').toUpperCase()) ? (
               // The WMS sends the client's own ship via codes; these are the ones
@@ -1737,24 +1726,11 @@ export default function DataHistoryPage() {
                 reloadKey={codesTick}
               />
             ) : null}
-            <BatchLabelBar
-              batchId={b.id}
-              rows={list}
-              picked={picked}
-              onPickAllLive={() => setPickedRows((m) => ({ ...m, [b.id]: list.filter(isLive).map((r) => r.rowNumber) }))}
-              onClearPick={() => setPickedRows((m) => ({ ...m, [b.id]: [] }))}
-              onChanged={() => { reloadRows(b.id); void reloadQuiet() }}
-              onPrinted={() => reloadRows(b.id)}
-              canWrite={canWrite}
-              canManagePrinters={canPullWms}
-              locked={viewTrash || (b.status || '').toUpperCase() === 'IN_PROGRESS'}
-              onOpenPrinterSettings={() => navigate(settingsPaths.printers)}
-            />
             <VirtualTable
               rows={visible}
               rowKey={(r) => r.rowNumber}
               colCount={DH_COLUMNS.length + 3}
-              maxHeight="70vh"
+              maxHeight="calc(100vh - 300px)"
               className="rounded-xl border border-[#e3d9c4] bg-white"
               tableClassName="w-full border-collapse text-[11px] text-[#3f3527]"
               empty={<p className="py-6 text-center text-[11px] text-[#6b5c42]">No rows match this filter.</p>}
@@ -2003,6 +1979,15 @@ export default function DataHistoryPage() {
                     )
               }}
             />
+            <p className="mt-1.5 text-[10.5px] text-[#b6a684]">
+              {viewTrash
+                ? 'Read-only in Trash — restore this import to edit rows or generate labels.'
+                : (b.status || '').toUpperCase() === 'IN_PROGRESS'
+                  ? 'Locked while labels are generating — editing opens again when the run finishes.'
+                  : !canWrite
+                    ? 'Read-only view. Scroll right for more columns.'
+                    : 'Click any cell to edit; it saves and re-validates on blur. Scroll right for more columns.'}
+            </p>
           </>
         )}
       </div>
@@ -2093,19 +2078,15 @@ export default function DataHistoryPage() {
         ? { to: bulkPaths.api, label: 'API batches' }
         : { to: bulkPaths.imports, label: 'Import history' }
     return (
-      <div className="space-y-4 pb-24">
+      <div className="space-y-3 pb-8">
         {mappingDialog}
-        <nav aria-label="Breadcrumb" className="flex flex-wrap items-center gap-1.5 text-[12px] text-[#6b5c42]">
-          <button type="button" onClick={() => navigate(back.to)} className="inline-flex items-center gap-1 font-semibold text-[#5a4526] hover:underline">
-            <FiArrowLeft className="h-3.5 w-3.5" /> Bulk Mailer · {back.label}
-          </button>
-          <span aria-hidden="true">/</span>
-          <span>Batch #{batchPageId}</span>
-        </nav>
         {loading && !b ? (
           <p className="rounded-2xl border border-[#e3d9c4] bg-white px-5 py-14 text-center text-sm text-[#6b5c42]">Loading…</p>
         ) : !b ? (
           <div className="rounded-2xl border border-[#e3d9c4] bg-white px-5 py-12 text-center">
+            <button type="button" onClick={() => navigate(back.to)} className="mb-3 inline-flex items-center gap-1 text-[12px] font-semibold text-[#5a4526] hover:underline">
+              <FiArrowLeft className="h-3.5 w-3.5" /> Bulk Mailer · {back.label}
+            </button>
             <p className="text-sm font-semibold text-[#1f150c]">Batch #{batchPageId} isn't here.</p>
             <p className="mt-1 text-[12.5px] text-[#6b5c42]">It may have been deleted, or it belongs to a client you can't see.</p>
             <div className="mt-4 flex justify-center gap-2">
@@ -2115,27 +2096,34 @@ export default function DataHistoryPage() {
           </div>
         ) : (
           <>
-            <section data-testid="batch-page-header" className="rounded-2xl border border-[#e3d9c4] bg-white p-4 shadow-sm sm:p-5">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-[#8a7a5a]">
-                    Batch #{b.id}{src === 'WMS' || src === 'API' ? ` · ${src}` : ' · File import'}{b.deletedAt ? ' · In Trash' : ''}
-                  </p>
-                  <h1 className="mt-0.5 truncate text-[18px] font-semibold text-[#1f150c]" title={b.fileName || undefined}>
-                    {b.fileName || 'Untitled import'}
-                  </h1>
-                  <p className="mt-0.5 text-[12px] text-[#6b5c42]">
-                    {b.createdAt ? new Date(b.createdAt).toLocaleString() : '—'}
-                    {b.createdBy ? ` · by ${b.createdBy}` : ''}
-                    {b.labelBatchId ? ` · label batch ${b.labelBatchId}` : ''}
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-start gap-4">
-                  {renderStatusCell(b)}
-                  <div className="min-w-[120px]">{renderRowsCell(b)}</div>
-                </div>
+            {/* One bar: the way back, the batch, its status and counts, and its actions. */}
+            <section data-testid="batch-page-header" className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl border border-[#e3d9c4] bg-white px-3 py-2.5 shadow-sm">
+              <button
+                type="button"
+                onClick={() => navigate(back.to)}
+                aria-label={`Bulk Mailer · ${back.label}`}
+                title={`Back to ${back.label}`}
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+              >
+                <FiArrowLeft className="h-3.5 w-3.5" />
+              </button>
+              <div className="min-w-0 flex-1">
+                <h1 className="flex min-w-0 items-baseline gap-2 text-[15px] font-semibold text-[#1f150c]">
+                  <span className="truncate" title={b.fileName || undefined}>{b.fileName || 'Untitled import'}</span>
+                  <span className="shrink-0 rounded-md bg-[#f4eede] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[#412d15]">Batch #{b.id}</span>
+                </h1>
+                <p className="mt-0.5 truncate text-[11px] text-[#6b5c42]">
+                  {src === 'WMS' || src === 'API' ? src : 'File import'}{b.deletedAt ? ' · In Trash' : ''}
+                  {b.createdAt ? ` · ${new Date(b.createdAt).toLocaleString()}` : ''}
+                  {b.createdBy ? ` · by ${b.createdBy}` : ''}
+                  {b.labelBatchId ? ` · label batch ${b.labelBatchId}` : ''}
+                </p>
               </div>
-              <div className="mt-3 border-t border-dashed border-[#e3d9c4] pt-3">{renderActionsCell(b)}</div>
+              <div className="flex flex-wrap items-center gap-4">
+                {renderStatusCell(b)}
+                <div className="min-w-[120px]">{renderRowsCell(b)}</div>
+              </div>
+              {renderActionsCell(b)}
             </section>
             <section className="rounded-2xl border border-[#e3d9c4] bg-white shadow-sm">
               {renderBatchExpanded(b)}
