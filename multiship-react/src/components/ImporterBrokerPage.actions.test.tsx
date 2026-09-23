@@ -270,13 +270,9 @@ describe('ImporterBrokerPage — Export CSV', () => {
     // via the onExport prop.
     await waitFor(() => expect(screen.getByRole('button', { name: /Export/i })).toBeInTheDocument())
 
-    // Click Export button — opens the menu with "CSV — current view" item.
+    // Export is one button; clicking it triggers onExport.
     await act(async () => {
       await userEvent.click(screen.getByRole('button', { name: /Export/i }))
-    })
-    // Now click the CSV menu item to trigger onExport.
-    await act(async () => {
-      await userEvent.click(await screen.findByRole('button', { name: /CSV.*current view/i }))
     })
 
     await waitFor(() => expect(exportCsvMock).toHaveBeenCalledTimes(1))
@@ -296,9 +292,6 @@ describe('ImporterBrokerPage — Export CSV', () => {
 
     await act(async () => {
       await userEvent.click(screen.getByRole('button', { name: /Export/i }))
-    })
-    await act(async () => {
-      await userEvent.click(await screen.findByRole('button', { name: /CSV.*current view/i }))
     })
 
     await waitFor(() =>

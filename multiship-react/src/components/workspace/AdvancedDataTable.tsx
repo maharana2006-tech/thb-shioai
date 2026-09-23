@@ -381,7 +381,7 @@ export default function AdvancedDataTable<T>({
     () => persisted?.columnPinning ?? { left: [], right: [] },
   )
   const [density, setDensity] = useState<Density>(persisted?.density ?? initialDensity)
-  const [openMenu, setOpenMenu] = useState<null | 'columns' | 'density' | 'export'>(null)
+  const [openMenu, setOpenMenu] = useState<null | 'columns' | 'density'>(null)
   /**
    * Column-reorder draft (2026-09-14 operator ask). The Columns menu
    * lets the operator move columns up/down with arrow buttons; changes
@@ -429,7 +429,6 @@ export default function AdvancedDataTable<T>({
     setOpenMenu(null)
   })
   const densityMenuRef = useDismissable(openMenu === 'density', () => setOpenMenu(null))
-  const exportMenuRef = useDismissable(openMenu === 'export', () => setOpenMenu(null))
 
   /**
    * Select column is a fixed viewport gutter (2026-09-14 operator ask):
@@ -517,18 +516,10 @@ export default function AdvancedDataTable<T>({
   const visibleColumnCount = table.getVisibleLeafColumns().length
 
   const runExport = () => {
-    if (onExport) {
-      // Server-side export: parent owns fetching every filtered row and
-      // triggering the download. Close the menu immediately so the user gets
-      // feedback while the fetch runs.
-      setOpenMenu(null)
-      void onExport()
-      return
-    }
-    const matrix = exportRowValues(table)
+    // Server-side export: the parent fetches every filtered row and downloads it.
+    if (onExport) { void onExport(); return }
     const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-    downloadCsv(`${csvFilename || tableKey}-${stamp}.csv`, matrix)
-    setOpenMenu(null)
+    downloadCsv(`${csvFilename || tableKey}-${stamp}.csv`, exportRowValues(table))
   }
 
   const resetLayout = () => {
@@ -861,34 +852,15 @@ export default function AdvancedDataTable<T>({
           ) : null}
         </div>
 
-        {/* Export menu */}
-        <div ref={exportMenuRef} className="relative">
-          <button
-            type="button"
-            onClick={() => setOpenMenu((cur) => (cur === 'export' ? null : 'export'))}
-            aria-expanded={openMenu === 'export'}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
-            title="Export the current view"
-          >
-            <FiDownload className="h-3.5 w-3.5" />
-            Export
-          </button>
-          {openMenu === 'export' ? (
-            <div className="absolute right-0 z-20 mt-1.5 w-56 rounded-xl border border-[#e3d9c4] bg-white p-2 shadow-[0_12px_32px_rgba(31,21,12,0.12)]">
-              <button
-                type="button"
-                onClick={runExport}
-                className="w-full rounded-lg px-2 py-1.5 text-left text-[12.5px] text-slate-700 transition hover:bg-slate-50"
-              >
-                CSV — current view
-                <span className="ml-1 text-[10.5px] text-slate-400">(visible columns · filtered rows)</span>
-              </button>
-              <p className="mt-1 px-2 py-1 text-[10.5px] text-slate-400">
-                Full-record + Excel exports arrive in a later phase.
-              </p>
-            </div>
-          ) : null}
-        </div>
+        <button
+          type="button"
+          onClick={runExport}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+          title="Export the current view as CSV — visible columns, filtered rows"
+        >
+          <FiDownload className="h-3.5 w-3.5" />
+          Export
+        </button>
 
         {toolbarActions}
 
