@@ -30,26 +30,24 @@ import type {
   HistoryStatusKey,
 } from '../hooks/useHistoryFilters'
 
-/** Each status in the colour its pill in the table uses. */
-const STATUS_DOT: Record<string, string> = {
-  ALL: 'bg-[#1f150c]',
-  DRAFT: 'bg-orange-500',
-  COMPLETE: 'bg-emerald-500',
-  PARTIAL_COMPLETE: 'bg-amber-400',
-  IN_PROGRESS: 'bg-sky-500',
-  INITIATE: 'bg-slate-400',
-  FAILED: 'bg-rose-500',
+/** Every import status: its label, the filter hint, the table pill's classes and the filter dot. */
+export const BATCH_STATUS: Record<string, { label: string; hint: string; cls: string; dot: string }> = {
+  DRAFT: { label: 'Draft', hint: 'Saved with rows still to fix', cls: 'bg-orange-50 text-orange-700 ring-orange-200', dot: 'bg-orange-500' },
+  INITIATE: { label: 'Saved · not generated', hint: 'Valid, no labels bought yet', cls: 'bg-slate-100 text-slate-600 ring-slate-200', dot: 'bg-slate-400' },
+  IN_PROGRESS: { label: 'In progress', hint: 'Labels being bought now', cls: 'bg-sky-50 text-sky-700 ring-sky-200', dot: 'bg-sky-500' },
+  PARTIAL_COMPLETE: { label: 'Partial complete', hint: 'Some rows failed', cls: 'bg-amber-50 text-amber-700 ring-amber-200', dot: 'bg-amber-400' },
+  COMPLETE: { label: 'Complete', hint: 'Every label generated', cls: 'bg-emerald-50 text-emerald-700 ring-emerald-200', dot: 'bg-emerald-500' },
+  FAILED: { label: 'Failed', hint: 'The run did not finish', cls: 'bg-rose-50 text-rose-700 ring-rose-200', dot: 'bg-rose-500' },
+  CANCELLED: { label: 'Cancelled', hint: 'Stopped by an operator', cls: 'bg-amber-50 text-amber-700 ring-amber-200', dot: 'bg-amber-400' },
 }
+/** Label + pill classes for any status string, unknown ones included. */
+export const statusMeta = (status?: string | null) =>
+  BATCH_STATUS[(status || '').toUpperCase()] ?? { label: status || '—', cls: 'bg-slate-100 text-slate-500 ring-slate-200' }
 
-const STATUS_OPTIONS: { key: HistoryStatusKey; label: string; hint: string }[] = [
-  { key: 'ALL', label: 'Any status', hint: 'Every import' },
-  { key: 'DRAFT', label: 'Draft', hint: 'Saved with rows still to fix' },
-  { key: 'INITIATE', label: 'Saved · not generated', hint: 'Valid, no labels bought yet' },
-  { key: 'IN_PROGRESS', label: 'In progress', hint: 'Labels being bought now' },
-  { key: 'PARTIAL_COMPLETE', label: 'Partial complete', hint: 'Some rows failed' },
-  { key: 'COMPLETE', label: 'Complete', hint: 'Every label generated' },
-  { key: 'FAILED', label: 'Failed', hint: 'The run did not finish' },
-]
+/** The status filter's choices, in order. */
+const ANY_STATUS = { label: 'Any status', hint: 'Every import', dot: 'bg-[#1f150c]' }
+const STATUS_OPTIONS: HistoryStatusKey[] = ['ALL', 'DRAFT', 'INITIATE', 'IN_PROGRESS', 'PARTIAL_COMPLETE', 'COMPLETE', 'FAILED']
+const statusOption = (k: HistoryStatusKey) => (k === 'ALL' ? ANY_STATUS : BATCH_STATUS[k])
 
 const SORT_OPTIONS: { key: HistorySortKey; label: string; asc: string; desc: string }[] = [
   { key: 'created', label: 'Date created', asc: 'Oldest first', desc: 'Newest first' },
@@ -110,7 +108,6 @@ export interface DataHistoryFilterToolbarProps {
   statusFilter: HistoryStatusKey
   setStatusFilter: (v: HistoryStatusKey) => void
   statusCounts: Record<string, number>
-  statusMetaLabel: (status?: string | null) => string
 
   // Clear-all
   anyFilterActive: boolean
@@ -145,7 +142,7 @@ export interface DataHistoryFilterToolbarProps {
 
 export default function DataHistoryFilterToolbar(props: DataHistoryFilterToolbarProps) {
   const {
-    statusFilter, setStatusFilter, statusCounts, statusMetaLabel,
+    statusFilter, setStatusFilter, statusCounts,
     anyFilterActive, clearFilters,
     dateFrom, setDateFrom, dateTo, setDateTo, dateFilterActive,
     sortKey, setSortKey, sortDir, setSortDir,
@@ -183,7 +180,7 @@ export default function DataHistoryFilterToolbar(props: DataHistoryFilterToolbar
   /** The rail: each field with what it is set to. */
   const rail: { key: Field; label: string; icon: React.ReactNode; value: string; active: boolean }[] = [
     { key: 'status', label: 'Status', icon: <FiTag className="h-3.5 w-3.5" />,
-      value: statusFilter === 'ALL' ? 'Any' : statusMetaLabel(statusFilter), active: statusFilter !== 'ALL' },
+      value: statusFilter === 'ALL' ? 'Any' : BATCH_STATUS[statusFilter].label, active: statusFilter !== 'ALL' },
     { key: 'created', label: 'Created', icon: <FiCalendar className="h-3.5 w-3.5" />,
       value: dateFilterActive ? rangeLabel(dateFrom, dateTo) : 'Any time', active: dateFilterActive },
     { key: 'createdBy', label: 'Created by', icon: <FiUser className="h-3.5 w-3.5" />,
@@ -268,13 +265,14 @@ export default function DataHistoryFilterToolbar(props: DataHistoryFilterToolbar
             <div ref={paneRef} className="max-h-[21rem] min-h-[19rem] flex-1 overflow-y-auto p-2.5">
               {field === 'status' ? (
                 <ul className="space-y-0.5">
-                  {STATUS_OPTIONS.map((s) => {
-                    const on = statusFilter === s.key
-                    const n = s.key === 'ALL' ? (statusCounts.ALL ?? totalCount) : (statusCounts[s.key] ?? 0)
+                  {STATUS_OPTIONS.map((key) => {
+                    const s = statusOption(key)
+                    const on = statusFilter === key
+                    const n = key === 'ALL' ? (statusCounts.ALL ?? totalCount) : (statusCounts[key] ?? 0)
                     return (
-                      <li key={s.key}>
-                        <button type="button" onClick={() => setStatusFilter(s.key)} aria-pressed={on} className={`${OPTION} ${on ? OPTION_ON : ''}`}>
-                          <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${STATUS_DOT[s.key]} ${n === 0 && !on ? 'opacity-40' : ''}`} aria-hidden="true" />
+                      <li key={key}>
+                        <button type="button" onClick={() => setStatusFilter(key)} aria-pressed={on} className={`${OPTION} ${on ? OPTION_ON : ''}`}>
+                          <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${s.dot} ${n === 0 && !on ? 'opacity-40' : ''}`} aria-hidden="true" />
                           <span className="min-w-0 flex-1">
                             <span className={`block text-[12.5px] font-semibold leading-tight ${n === 0 && !on ? 'text-[#a1906d]' : 'text-[#1f150c]'}`}>{s.label}</span>
                             <span className="block text-[10.5px] leading-tight text-[#a1906d]">{s.hint}</span>
@@ -458,17 +456,17 @@ export default function DataHistoryFilterToolbar(props: DataHistoryFilterToolbar
 
 /** The applied filters as chips under the toolbar — each one removable. Nothing when none apply. */
 export function BulkFilterChips({
-  statusFilter, setStatusFilter, statusMetaLabel,
+  statusFilter, setStatusFilter,
   dateFrom, setDateFrom, dateTo, setDateTo,
   createdBy, setCreatedBy,
   batchPresence, setBatchPresence,
   minSaved, setMinSaved,
   clearFilters,
 }: Pick<DataHistoryFilterToolbarProps,
-  'statusFilter' | 'setStatusFilter' | 'statusMetaLabel' | 'dateFrom' | 'setDateFrom' | 'dateTo' | 'setDateTo'
+  'statusFilter' | 'setStatusFilter' | 'dateFrom' | 'setDateFrom' | 'dateTo' | 'setDateTo'
   | 'createdBy' | 'setCreatedBy' | 'batchPresence' | 'setBatchPresence' | 'minSaved' | 'setMinSaved' | 'clearFilters'>) {
   const chips: { key: string; label: string; value: string; clear: () => void }[] = []
-  if (statusFilter !== 'ALL') chips.push({ key: 'status', label: 'Status', value: statusMetaLabel(statusFilter), clear: () => setStatusFilter('ALL') })
+  if (statusFilter !== 'ALL') chips.push({ key: 'status', label: 'Status', value: BATCH_STATUS[statusFilter].label, clear: () => setStatusFilter('ALL') })
   if (dateFrom || dateTo) chips.push({ key: 'created', label: 'Created', value: rangeLabel(dateFrom, dateTo), clear: () => { setDateFrom(''); setDateTo('') } })
   if (createdBy) chips.push({ key: 'by', label: 'By', value: createdBy, clear: () => setCreatedBy('') })
   if (batchPresence !== 'ANY') chips.push({ key: 'batch', label: 'Batch', value: BATCH_OPTIONS.find((b) => b.key === batchPresence)?.label ?? batchPresence, clear: () => setBatchPresence('ANY') })

@@ -24,7 +24,7 @@ import { wmsService } from '../api/wmsService'
 import { bulkService, type BulkSummary, type BulkView } from '../api/bulkService'
 import { AddShipViaMappingDialog, ShipViaCodesPanel } from './modals/ShipViaCodes'
 import OrderDocumentsTable from './OrderDocumentsTable'
-import DataHistoryFilterToolbar, { BulkFilterChips } from './DataHistoryFilterToolbar'
+import DataHistoryFilterToolbar, { BulkFilterChips, statusMeta } from './DataHistoryFilterToolbar'
 import { GridCell, DH_COLUMNS, DH_KEY_COLUMN_KEYS, RowIssuesIcon, RowChannelChip, bucketRowErrors, type DhColumn } from './batchGrid'
 import VirtualTable from './VirtualTable'
 import AnimatedHeight from './ui/AnimatedHeight'
@@ -987,30 +987,6 @@ export default function DataHistoryPage() {
       notify.apiError(e, 'Save failed.')
     } finally {
       setSavingCell(null)
-    }
-  }
-
-  /** Map an import status to a friendly label + pill classes. */
-  const statusMeta = (status?: string | null): { label: string; cls: string } => {
-    switch ((status || '').toUpperCase()) {
-      case 'COMPLETE':
-        return { label: 'Complete', cls: 'bg-emerald-50 text-emerald-700 ring-emerald-200' }
-      case 'PARTIAL_COMPLETE':
-        return { label: 'Partial complete', cls: 'bg-amber-50 text-amber-700 ring-amber-200' }
-      case 'FAILED':
-        return { label: 'Failed', cls: 'bg-rose-50 text-rose-700 ring-rose-200' }
-      case 'IN_PROGRESS':
-        return { label: 'In progress', cls: 'bg-sky-50 text-sky-700 ring-sky-200' }
-      case 'CANCELLED':
-        // Import I-3 — operator cancelled during the run. Amber ring to
-        // match the CANCELLED status style used on the bulk-labels modal.
-        return { label: 'Cancelled', cls: 'bg-amber-50 text-amber-700 ring-amber-200' }
-      case 'INITIATE':
-        return { label: 'Saved · not generated', cls: 'bg-slate-100 text-slate-600 ring-slate-200' }
-      case 'DRAFT':
-        return { label: 'Draft', cls: 'bg-orange-50 text-orange-700 ring-orange-200' }
-      default:
-        return { label: status || '—', cls: 'bg-slate-100 text-slate-500 ring-slate-200' }
     }
   }
 
@@ -2286,7 +2262,6 @@ export default function DataHistoryPage() {
       statusFilter={filters.statusFilter}
       setStatusFilter={filters.setStatusFilter}
       statusCounts={summary?.statusCounts ?? {}}
-      statusMetaLabel={(s) => statusMeta(s).label}
       anyFilterActive={filters.anyFilterActive}
       clearFilters={filters.clearFilters}
       dateFrom={filters.dateFrom}
@@ -2415,8 +2390,7 @@ export default function DataHistoryPage() {
               <BulkFilterChips
                 statusFilter={filters.statusFilter}
                 setStatusFilter={filters.setStatusFilter}
-                statusMetaLabel={(s) => statusMeta(s).label}
-                dateFrom={filters.dateFrom}
+                          dateFrom={filters.dateFrom}
                 setDateFrom={filters.setDateFrom}
                 dateTo={filters.dateTo}
                 setDateTo={filters.setDateTo}
