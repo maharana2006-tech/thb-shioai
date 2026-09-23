@@ -1,3 +1,12 @@
+/**
+ * Filter-popover primitives shared across data pages. Intentionally
+ * co-locates shared class-name constants (`OPTION`, `CHIP_ON`, etc.),
+ * date-formatting helpers (`isoDay`, `rangeLabel`), and small utility
+ * components — every consumer imports the whole set from one place, and
+ * a file-split would fragment the primitives without benefit. Fast
+ * Refresh disabled file-wide since the rule fires per-export.
+ */
+/* eslint-disable react-refresh/only-export-components -- shared helpers + components in one primitives file */
 import { useCallback, useRef, useState, type ReactNode } from 'react'
 import { FiCheck, FiChevronRight, FiFilter, FiX } from 'react-icons/fi'
 import { useDismissable } from '../../hooks/useDismissable'
