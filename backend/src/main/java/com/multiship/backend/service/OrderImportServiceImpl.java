@@ -2807,18 +2807,16 @@ public class OrderImportServiceImpl implements OrderImportService {
                             return owner != null && scope.get().equalsIgnoreCase(owner.trim());
                         })
                         .toList();
-        // Batches that still have live labels are kept — the same rule as Delete.
-        java.util.List<com.multiship.backend.model.ImportBatch> kept = toPurge.stream()
-                .filter(b -> !liveLabelOrders(parseBatchRows(b)).isEmpty()).toList();
-        java.util.List<com.multiship.backend.model.ImportBatch> gone = toPurge.stream()
-                .filter(b -> !kept.contains(b)).toList();
+        // Everything in Trash goes, live labels or not: the orders and their labels
+        // live on in the orders table, only the import record is dropped. (Kept
+        // batches used to come back on refresh, which read as a failed delete.)
+        java.util.List<com.multiship.backend.model.ImportBatch> gone = toPurge;
         if (!gone.isEmpty()) {
             importBatchRepository.deleteAll(gone);
-            log.info("Trash emptied by {} — {} batch(es) permanently deleted, {} kept (live labels)",
-                    requestedBy, gone.size(), kept.size());
+            log.info("Trash emptied by {} — {} batch(es) permanently deleted", requestedBy, gone.size());
             for (com.multiship.backend.model.ImportBatch b : gone) logBatchEvent("IMPORT_PURGED", b, "Permanently deleted (Empty Trash)");
         }
-        return new PurgeResult(gone.size(), kept.size());
+        return new PurgeResult(gone.size(), 0);
     }
 
     // ─── Live label status, void, delete rules (Bulk Mailer) ────────────────

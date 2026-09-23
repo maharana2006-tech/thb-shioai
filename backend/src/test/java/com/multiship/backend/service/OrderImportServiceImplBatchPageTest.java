@@ -152,4 +152,23 @@ class OrderImportServiceImplBatchPageTest {
             assertEquals(null, dto.getRows().get(1).getLastPrintedAt(), "row 13 never was");
         }
     }
+
+    // ── Product call (2026-09-23): what is in Trash can be deleted directly —
+    //    Empty Trash no longer keeps imports whose labels are still live. ────
+
+    @Test
+    void emptyTrashPurgesTrashedImportsEvenWithLiveLabels() throws Exception {
+        ImportBatch trashed = new ImportBatch();
+        trashed.setId(119L);
+        trashed.setSource("BULK");
+        trashed.setDeletedAt(LocalDateTime.of(2026, 9, 15, 15, 37));
+        trashed.setRowsJson(mapper.writeValueAsString(List.of(shipRow(1, 906976, "GENERATED"))));
+        when(importBatchRepository.findAllByDeletedAtIsNotNullOrderByIdDesc()).thenReturn(List.of(trashed));
+
+        var result = service.purgeTrashChecked("e2etester");
+
+        assertEquals(1, result.purged(), "a trashed import with a live label is purged too");
+        assertEquals(0, result.keptWithLiveLabels());
+        org.mockito.Mockito.verify(importBatchRepository).deleteAll(List.of(trashed));
+    }
 }
