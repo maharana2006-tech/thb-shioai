@@ -48,6 +48,7 @@ import { useEventStream } from '../hooks/useEventStream'
 import { useHistoryFilters } from '../hooks/useHistoryFilters'
 import { useTrashActions } from '../hooks/useTrashActions'
 import { useLatestRequest } from '../hooks/useLatestRequest'
+import { useDismissable } from '../hooks/useDismissable'
 import { normalizeRole } from '../utils/roles'
 // PR-G4 — USPS_DIRECT UX (audit U2 + U3). Badge surfaces queue depth
 // at the top of Data History so ops see rate-limit pressure without
@@ -241,6 +242,9 @@ export default function DataHistoryPage() {
     handleDelete,
     handleRestore,
   } = trash
+  // An armed "Delete N forever" stays armed until clicked — Escape and a click
+  // elsewhere disarm it, like every other popover.
+  const emptyConfirmRef = useDismissable(confirmEmpty, useCallback(() => setConfirmEmpty(false), [setConfirmEmpty]))
 
 
   useEffect(() => {
@@ -2112,7 +2116,7 @@ export default function DataHistoryPage() {
       </button>
       {viewTrash && (summary?.total ?? batches.length) > 0 ? (
         confirmEmpty ? (
-          <span className="inline-flex items-center gap-1.5">
+          <div ref={emptyConfirmRef} className="inline-flex items-center gap-1.5">
             <button
               type="button"
               onClick={() => void handleEmptyTrash()}
@@ -2134,7 +2138,7 @@ export default function DataHistoryPage() {
             >
               Cancel
             </button>
-          </span>
+          </div>
         ) : (
           <button
             type="button"

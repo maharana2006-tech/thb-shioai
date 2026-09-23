@@ -573,6 +573,21 @@ describe('Bulk Mailer — layout', () => {
     await waitFor(() => expect(listBatches).toHaveBeenCalledWith(expect.objectContaining({ view: 'TRASH' })))
   })
 
+  it('an armed Empty Trash disarms on Escape without deleting anything', async () => {
+    listBatches.mockImplementation(async (q: { view: string }) => q.view === 'TRASH'
+      ? pageOf([batchSummary({ id: 123, deletedAt: '2026-09-23T18:25:03Z', deletedBy: 'e2etester' })])
+      : pageOf([]))
+    bulkSummary.mockResolvedValue(summaryOf({ total: 1 }))
+    const { orderImportService } = await import('../api/orderImportService')
+    await renderAt('/bulk/trash')
+    await userEvent.click(await screen.findByRole('button', { name: /^Empty Trash$/i }))
+    expect(screen.getByRole('button', { name: /Delete 1 forever/i })).toBeInTheDocument()
+    await userEvent.keyboard('{Escape}')
+    expect(screen.queryByRole('button', { name: /Delete 1 forever/i })).toBeNull()
+    expect(screen.getByRole('button', { name: /^Empty Trash$/i })).toBeInTheDocument()
+    expect(orderImportService.emptyTrash).not.toHaveBeenCalled()
+  })
+
   it('opens a batch on its own page, with its header and a way back', async () => {
     getHistory.mockResolvedValue({ data: { ...batchSummary({ id: 121, fileName: 'acme_sept.csv', status: 'INITIATE' }), rows: [] } })
     await renderAt('/bulk/batches/121')
