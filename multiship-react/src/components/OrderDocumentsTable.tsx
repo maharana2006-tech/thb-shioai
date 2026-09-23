@@ -7,8 +7,8 @@ import { notify } from '../utils/notify'
 import { useLatestRequest } from '../hooks/useLatestRequest'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
 import {
-  CHIP_BTN, CHIP_OFF, CHIP_ON, Check, CountBadge, FIELD_INPUT, FIELD_LABEL, FilterChips, FilterPopover,
-  OPTION, OPTION_ON, type FilterChip, type RailItem,
+  Check, CountBadge, DateRangeField, FilterChips, FilterPopover, OPTION, OPTION_ON, rangeLabel,
+  type FilterChip, type RailItem,
 } from './ui/FilterPopover'
 
 /**
@@ -38,29 +38,6 @@ const NO_FILTERS: Filters = { status: 'ANY', carrier: '', invoice: 'ANY', from: 
 const SORT_KEY: Record<string, NonNullable<DocumentsQuery['sort']>> = {
   order: 'order', recipient: 'recipient', destination: 'destination', carrier: 'carrier', billed: 'billed', generated: 'generated',
 }
-
-const isoDay = (d: Date) => {
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
-const daysAgo = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n); return isoDay(d) }
-const monthStart = () => { const d = new Date(); d.setDate(1); return isoDay(d) }
-const DATE_PRESETS: { label: string; from: () => string; to: () => string }[] = [
-  { label: 'Today', from: () => daysAgo(0), to: () => daysAgo(0) },
-  { label: 'Last 7 days', from: () => daysAgo(6), to: () => daysAgo(0) },
-  { label: 'Last 30 days', from: () => daysAgo(29), to: () => daysAgo(0) },
-  { label: 'This month', from: monthStart, to: () => daysAgo(0) },
-]
-const shortDay = (iso: string) => {
-  const d = new Date(`${iso}T00:00:00`)
-  if (Number.isNaN(d.getTime())) return iso
-  const sameYear = d.getFullYear() === new Date().getFullYear()
-  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', ...(sameYear ? {} : { year: 'numeric' }) })
-}
-const rangeLabel = (from: string, to: string) =>
-  from && to ? (from === to ? shortDay(from) : `${shortDay(from)} – ${shortDay(to)}`) : from ? `from ${shortDay(from)}` : `until ${shortDay(to)}`
 
 const saveBlob = (blob: Blob, filename: string) => {
   const url = URL.createObjectURL(blob)
@@ -534,33 +511,7 @@ function DocumentsFilterMenu({
                 </ul>
               ) : null}
               {field === 'generated' ? (
-                <div className="space-y-3">
-                  <div>
-                    <p className={FIELD_LABEL}>Quick pick</p>
-                    <div className="flex flex-wrap gap-1.5">
-                      <button type="button" onClick={() => setFilters((f) => ({ ...f, from: '', to: '' }))} className={`${CHIP_BTN} ${!dateActive ? CHIP_ON : CHIP_OFF}`}>Any time</button>
-                      {DATE_PRESETS.map((p) => {
-                        const on = filters.from === p.from() && filters.to === p.to()
-                        return (
-                          <button key={p.label} type="button" onClick={() => setFilters((f) => ({ ...f, from: p.from(), to: p.to() }))} className={`${CHIP_BTN} ${on ? CHIP_ON : CHIP_OFF}`}>{p.label}</button>
-                        )
-                      })}
-                    </div>
-                  </div>
-                  <div>
-                    <p className={FIELD_LABEL}>Custom range</p>
-                    <div className="grid grid-cols-2 gap-2">
-                      <label className="block">
-                        <span className="mb-1 block text-[11px] text-[#6b5c42]">From</span>
-                        <input type="date" value={filters.from} max={filters.to || undefined} onChange={(e) => setFilters((f) => ({ ...f, from: e.target.value }))} aria-label="Generated from" className={FIELD_INPUT} />
-                      </label>
-                      <label className="block">
-                        <span className="mb-1 block text-[11px] text-[#6b5c42]">To</span>
-                        <input type="date" value={filters.to} min={filters.from || undefined} onChange={(e) => setFilters((f) => ({ ...f, to: e.target.value }))} aria-label="Generated to" className={FIELD_INPUT} />
-                      </label>
-                    </div>
-                  </div>
-                </div>
+                <DateRangeField from={filters.from} to={filters.to} onChange={(from, to) => setFilters((f) => ({ ...f, from, to }))} label="Generated" />
               ) : null}
         </>
       )}

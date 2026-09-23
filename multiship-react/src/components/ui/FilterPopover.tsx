@@ -27,6 +27,70 @@ export const CountBadge = ({ n }: { n: number | undefined }) => (
   <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-[#6b5c42] ring-1 ring-[#e3d9c4]">{n ?? '–'}</span>
 )
 
+// ── Dates ──
+/** YYYY-MM-DD in local time. */
+export const isoDay = (d: Date) => new Intl.DateTimeFormat('en-CA').format(d)
+const daysAgo = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n); return isoDay(d) }
+const monthStart = () => { const d = new Date(); d.setDate(1); return isoDay(d) }
+const DATE_PRESETS: { label: string; from: () => string; to: () => string }[] = [
+  { label: 'Today', from: () => daysAgo(0), to: () => daysAgo(0) },
+  { label: 'Last 7 days', from: () => daysAgo(6), to: () => daysAgo(0) },
+  { label: 'Last 30 days', from: () => daysAgo(29), to: () => daysAgo(0) },
+  { label: 'This month', from: monthStart, to: () => daysAgo(0) },
+]
+/** "21 Sep" / "21 Sep 2025" for a chip. */
+const shortDay = (iso: string) => {
+  const d = new Date(`${iso}T00:00:00`)
+  if (Number.isNaN(d.getTime())) return iso
+  const sameYear = d.getFullYear() === new Date().getFullYear()
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', ...(sameYear ? {} : { year: 'numeric' }) })
+}
+/** "21 Sep – 23 Sep", "from 21 Sep" or "until 23 Sep". */
+export const rangeLabel = (from: string, to: string) =>
+  from && to ? (from === to ? shortDay(from) : `${shortDay(from)} – ${shortDay(to)}`) : from ? `from ${shortDay(from)}` : `until ${shortDay(to)}`
+
+/** The date-range editor: quick picks, then a custom from / to. */
+export function DateRangeField({ from, to, onChange, label }: {
+  from: string
+  to: string
+  onChange: (from: string, to: string) => void
+  /** Names the range for screen readers: "Created from", "Generated to". */
+  label: string
+}) {
+  const active = !!(from || to)
+  return (
+    <div className="space-y-3">
+      <div>
+        <p className={FIELD_LABEL}>Quick pick</p>
+        <div className="flex flex-wrap gap-1.5">
+          <button type="button" onClick={() => onChange('', '')} className={`${CHIP_BTN} ${!active ? CHIP_ON : CHIP_OFF}`}>Any time</button>
+          {DATE_PRESETS.map((p) => {
+            const on = from === p.from() && to === p.to()
+            return (
+              <button key={p.label} type="button" onClick={() => onChange(p.from(), p.to())} className={`${CHIP_BTN} ${on ? CHIP_ON : CHIP_OFF}`}>
+                {p.label}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+      <div>
+        <p className={FIELD_LABEL}>Custom range</p>
+        <div className="grid grid-cols-2 gap-2">
+          <label className="block">
+            <span className="mb-1 block text-[11px] text-[#6b5c42]">From</span>
+            <input type="date" value={from} max={to || undefined} onChange={(e) => onChange(e.target.value, to)} aria-label={`${label} from`} className={FIELD_INPUT} />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[11px] text-[#6b5c42]">To</span>
+            <input type="date" value={to} min={from || undefined} onChange={(e) => onChange(from, e.target.value)} aria-label={`${label} to`} className={FIELD_INPUT} />
+          </label>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 /** The popover's width when the screen allows it. */
 const POPOVER_W = 592
 

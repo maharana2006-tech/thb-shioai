@@ -2,8 +2,8 @@
 import { useMemo, useState } from 'react'
 import { FiArrowDown, FiArrowUp, FiCalendar, FiHash, FiLayers, FiSearch, FiTag, FiUser } from 'react-icons/fi'
 import {
-  CHIP_BTN, CHIP_OFF, CHIP_ON, Check, CountBadge, FIELD_INPUT, FIELD_LABEL, FilterChips, FilterPopover,
-  OPTION, OPTION_ON, type FilterChip, type RailItem,
+  CHIP_BTN, CHIP_OFF, CHIP_ON, Check, CountBadge, DateRangeField, FIELD_INPUT, FIELD_LABEL, FilterChips,
+  FilterPopover, OPTION, OPTION_ON, rangeLabel, type FilterChip, type RailItem,
 } from './ui/FilterPopover'
 import type {
   BatchPresenceKey,
@@ -47,33 +47,6 @@ const BATCH_OPTIONS: { key: BatchPresenceKey; label: string; hint: string }[] = 
 const ROW_PRESETS = [1, 10, 50, 100, 500]
 
 type Field = 'status' | 'created' | 'createdBy' | 'labelBatch' | 'rows' | 'sort'
-
-/** YYYY-MM-DD in local time. */
-const isoDay = (d: Date) => {
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
-const daysAgo = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n); return isoDay(d) }
-const monthStart = () => { const d = new Date(); d.setDate(1); return isoDay(d) }
-
-const DATE_PRESETS: { label: string; from: () => string; to: () => string }[] = [
-  { label: 'Today', from: () => daysAgo(0), to: () => daysAgo(0) },
-  { label: 'Last 7 days', from: () => daysAgo(6), to: () => daysAgo(0) },
-  { label: 'Last 30 days', from: () => daysAgo(29), to: () => daysAgo(0) },
-  { label: 'This month', from: monthStart, to: () => daysAgo(0) },
-]
-
-/** "21 Sep" / "21 Sep 2025" for a chip. */
-const shortDay = (iso: string) => {
-  const d = new Date(`${iso}T00:00:00`)
-  if (Number.isNaN(d.getTime())) return iso
-  const sameYear = d.getFullYear() === new Date().getFullYear()
-  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', ...(sameYear ? {} : { year: 'numeric' }) })
-}
-const rangeLabel = (from: string, to: string) =>
-  from && to ? (from === to ? shortDay(from) : `${shortDay(from)} – ${shortDay(to)}`) : from ? `from ${shortDay(from)}` : `until ${shortDay(to)}`
 
 export interface DataHistoryFilterToolbarProps {
   // Status
@@ -185,38 +158,7 @@ export default function DataHistoryFilterToolbar(props: DataHistoryFilterToolbar
               ) : null}
 
               {field === 'created' ? (
-                <div className="space-y-3">
-                  <div>
-                    <p className={FIELD_LABEL}>Quick pick</p>
-                    <div className="flex flex-wrap gap-1.5">
-                      <button type="button" onClick={() => { setDateFrom(''); setDateTo('') }} className={`${CHIP_BTN} ${!dateFilterActive ? CHIP_ON : CHIP_OFF}`}>Any time</button>
-                      {DATE_PRESETS.map((p) => {
-                        const on = dateFrom === p.from() && dateTo === p.to()
-                        return (
-                          <button key={p.label} type="button" onClick={() => { setDateFrom(p.from()); setDateTo(p.to()) }} className={`${CHIP_BTN} ${on ? CHIP_ON : CHIP_OFF}`}>
-                            {p.label}
-                          </button>
-                        )
-                      })}
-                    </div>
-                  </div>
-                  <div>
-                    <p className={FIELD_LABEL}>Custom range</p>
-                    <div className="grid grid-cols-2 gap-2">
-                      <label className="block">
-                        <span className="mb-1 block text-[11px] text-[#6b5c42]">From</span>
-                        <input type="date" value={dateFrom} max={dateTo || undefined} onChange={(e) => setDateFrom(e.target.value)} aria-label="Created from" className={FIELD_INPUT} />
-                      </label>
-                      <label className="block">
-                        <span className="mb-1 block text-[11px] text-[#6b5c42]">To</span>
-                        <input type="date" value={dateTo} min={dateFrom || undefined} onChange={(e) => setDateTo(e.target.value)} aria-label="Created to" className={FIELD_INPUT} />
-                      </label>
-                    </div>
-                    <p className="mt-2 text-[11px] text-[#a1906d]">
-                      {dateFilterActive ? `Showing imports created ${rangeLabel(dateFrom, dateTo)}.` : 'Leave both empty for any date.'}
-                    </p>
-                  </div>
-                </div>
+                <DateRangeField from={dateFrom} to={dateTo} onChange={(f, t) => { setDateFrom(f); setDateTo(t) }} label="Created" />
               ) : null}
 
               {field === 'createdBy' ? (
