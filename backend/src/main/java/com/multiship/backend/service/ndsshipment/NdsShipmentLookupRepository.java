@@ -168,11 +168,11 @@ public class NdsShipmentLookupRepository {
                 SELECT CONTAINER_ID,
                        ORDER_NO,
                        ORDER_SUFFIX,
-                       BILLABLE_WEIGHT_LB,
-                       LENGTH_IN,
-                       WIDTH_IN,
-                       HEIGHT_IN,
-                       PACKAGE_TYPE_CD
+                       GROSS_WT,
+                       LENGTH,
+                       WIDTH,
+                       HEIGHT,
+                       CONTAINER_TYPE
                   FROM OE_SHIP_CONTAINER
                  WHERE ORDER_NO     = :orderNo
                    AND ORDER_SUFFIX = :orderSuffix
@@ -186,11 +186,11 @@ public class NdsShipmentLookupRepository {
                         rs.getString("CONTAINER_ID"),
                         rs.getString("ORDER_NO"),
                         rs.getString("ORDER_SUFFIX"),
-                        rs.getBigDecimal("BILLABLE_WEIGHT_LB"),
-                        rs.getBigDecimal("LENGTH_IN"),
-                        rs.getBigDecimal("WIDTH_IN"),
-                        rs.getBigDecimal("HEIGHT_IN"),
-                        rs.getString("PACKAGE_TYPE_CD")));
+                        rs.getBigDecimal("GROSS_WT"),
+                        rs.getBigDecimal("LENGTH"),
+                        rs.getBigDecimal("WIDTH"),
+                        rs.getBigDecimal("HEIGHT"),
+                        rs.getString("CONTAINER_TYPE")));
     }
 
     /** SHIPVIA description looked up per client. */
@@ -198,14 +198,14 @@ public class NdsShipmentLookupRepository {
 
     public Optional<ShipMethod> findShipMethod(String clientCode, String shipviaCd) {
         String sql = """
-                SELECT SHIPVIA_CD, DESCRIPTION
+                SELECT SHIPVIA_CD, SHIPVIA_DESC
                   FROM SHIPVIA
                  WHERE SHIPVIA_CD = :shipviaCd
                 """;
         MapSqlParameterSource p = new MapSqlParameterSource("shipviaCd", shipviaCd);
         try {
             return Optional.of(templates.forClient(clientCode).queryForObject(sql, p, (rs, i) ->
-                    new ShipMethod(rs.getString("SHIPVIA_CD"), rs.getString("DESCRIPTION"))));
+                    new ShipMethod(rs.getString("SHIPVIA_CD"), rs.getString("SHIPVIA_DESC"))));
         } catch (EmptyResultDataAccessException empty) {
             return Optional.empty();
         }
@@ -216,18 +216,18 @@ public class NdsShipmentLookupRepository {
 
     public List<NotifyEmail> findNotifyEmails(String clientCode, String orderNo, String orderSuffix) {
         String sql = """
-                SELECT EMAIL, EMAIL_LABEL
+                SELECT SEND_TO, SEND_TYPE
                   FROM OE_SEND_TO
                  WHERE ORDER_NO     = :orderNo
                    AND ORDER_SUFFIX = :orderSuffix
-                   AND EMAIL IS NOT NULL
-                 ORDER BY EMAIL
+                   AND SEND_TO IS NOT NULL
+                 ORDER BY SEND_TO
                 """;
         MapSqlParameterSource p = new MapSqlParameterSource()
                 .addValue("orderNo", orderNo)
                 .addValue("orderSuffix", orderSuffix);
         return templates.forClient(clientCode).query(sql, p, (rs, i) ->
-                new NotifyEmail(rs.getString("EMAIL"), rs.getString("EMAIL_LABEL")));
+                new NotifyEmail(rs.getString("SEND_TO"), rs.getString("SEND_TYPE")));
     }
 
     /** Commercial-invoice / customs line item for international shipments. */
@@ -345,11 +345,11 @@ public class NdsShipmentLookupRepository {
                 SELECT CONTAINER_ID,
                        ORDER_NO,
                        ORDER_SUFFIX,
-                       BILLABLE_WEIGHT_LB,
-                       LENGTH_IN,
-                       WIDTH_IN,
-                       HEIGHT_IN,
-                       PACKAGE_TYPE_CD
+                       GROSS_WT,
+                       LENGTH,
+                       WIDTH,
+                       HEIGHT,
+                       CONTAINER_TYPE
                   FROM OE_SHIP_CONTAINER
                  WHERE CONTAINER_ID IN (:containerIds)
                  ORDER BY CONTAINER_ID
@@ -360,10 +360,10 @@ public class NdsShipmentLookupRepository {
                         rs.getString("CONTAINER_ID"),
                         rs.getString("ORDER_NO"),
                         rs.getString("ORDER_SUFFIX"),
-                        rs.getBigDecimal("BILLABLE_WEIGHT_LB"),
-                        rs.getBigDecimal("LENGTH_IN"),
-                        rs.getBigDecimal("WIDTH_IN"),
-                        rs.getBigDecimal("HEIGHT_IN"),
-                        rs.getString("PACKAGE_TYPE_CD")));
+                        rs.getBigDecimal("GROSS_WT"),
+                        rs.getBigDecimal("LENGTH"),
+                        rs.getBigDecimal("WIDTH"),
+                        rs.getBigDecimal("HEIGHT"),
+                        rs.getString("CONTAINER_TYPE")));
     }
 }

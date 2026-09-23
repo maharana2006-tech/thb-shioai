@@ -13,8 +13,10 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Stream;
 
 /**
  * Business orchestrator for the NDS Shipment prefill feature.
@@ -225,12 +227,12 @@ public class NdsShipmentLookupService {
         for (NdsShipmentLookupRepository.ContainerRow c : containers) {
             boolean isScanned = scannedContainer != null && scannedContainer.equals(c.containerId());
             BigDecimal weight = c.billableWeightLb();
-            String weightSource = weight != null ? "OE_SHIP_CONTAINER.BILLABLE_WEIGHT_LB" : null;
+            String weightSource = weight != null ? "OE_SHIP_CONTAINER.GROSS_WT" : null;
             packages.add(new NdsShipmentPrefill.Package(
                     seq++,
                     c.containerId(),
-                    List.of(safeParseLong(c.containerId())).stream().filter(v -> v != null).toList(),
-                    List.of(parseIntOrNull(c.orderNo())).stream().filter(v -> v != null).toList(),
+                    Stream.of(safeParseLong(c.containerId())).filter(Objects::nonNull).toList(),
+                    Stream.of(parseIntOrNull(c.orderNo())).filter(Objects::nonNull).toList(),
                     parseIntOrNull(c.orderSuffix()),
                     weight,
                     weightSource,

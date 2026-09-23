@@ -226,8 +226,8 @@ class NdsShipmentLookupOracleIT extends AbstractIntegrationTest {
 
     @Test
     void notifyEmailFromNdsWhenPresent() {
-        jdbc.update("INSERT INTO OE_SEND_TO (ORDER_NO, ORDER_SUFFIX, EMAIL, EMAIL_LABEL) "
-                + "VALUES (?, ?, ?, ?)", "123456", "1", "ops@acme.example", "PRIMARY");
+        jdbc.update("INSERT INTO OE_SEND_TO (ORDER_NO, ORDER_SUFFIX, SEND_TO, SEND_TYPE) "
+                + "VALUES (?, ?, ?, ?)", "123456", "1", "ops@acme.example", "E");
         NdsShipmentPrefill p = service.lookup(".X77777").orElseThrow();
         assertFalse(p.notifyBlock().emailDefaulted());
         assertEquals("ops@acme.example", p.notifyBlock().sendTo());
@@ -257,7 +257,7 @@ class NdsShipmentLookupOracleIT extends AbstractIntegrationTest {
                 "1 Anvil Way", "Tucson", "AZ", "85701",
                 "US", "6165551212", "wile@acme.example", "P80",
                 "N", "N", "PO-100", "SHIP", "DAP", "USD");
-        jdbc.update("INSERT INTO SHIPVIA (SHIPVIA_CD, DESCRIPTION) VALUES (?, ?)",
+        jdbc.update("INSERT INTO SHIPVIA (SHIPVIA_CD, SHIPVIA_DESC) VALUES (?, ?)",
                 "P80", "UPS Ground");
         seedContainer(client, orderNo, suffix, containerId, 2.5);
     }
@@ -266,9 +266,9 @@ class NdsShipmentLookupOracleIT extends AbstractIntegrationTest {
                                String containerId, double weight) {
         jdbc.update(
                 "INSERT INTO OE_SHIP_CONTAINER (CONTAINER_ID, ORDER_NO, ORDER_SUFFIX, "
-                        + "BILLABLE_WEIGHT_LB, LENGTH_IN, WIDTH_IN, HEIGHT_IN, PACKAGE_TYPE_CD) "
+                        + "GROSS_WT, LENGTH, WIDTH, HEIGHT, CONTAINER_TYPE) "
                         + "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                containerId, orderNo, suffix, weight, 12.0, 6.0, 4.0, "BOX");
+                containerId, orderNo, suffix, weight, 12, 6, 4, "BOX");
     }
 
     private static ClientShipviaCodeMap newClientMap(String client, String erpCode, long serviceId) {
