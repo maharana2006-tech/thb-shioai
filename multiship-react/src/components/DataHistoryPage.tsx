@@ -183,11 +183,8 @@ export default function DataHistoryPage() {
   }
   const [searchParams] = useSearchParams()
 
-  // F5-A — advanced filter + sort + pagination state extracted to
-  // useHistoryFilters (see hooks/useHistoryFilters.ts). Behavior is
-  // preserved 1:1 including the DRAFT/IN_PROGRESS-first status tiebreaker
-  // and the reset-to-page-1 effect on filter change.
-  const filters = useHistoryFilters(batches)
+  // What the toolbar set; the server applies it (listQuery below).
+  const filters = useHistoryFilters()
   const { clearFilters } = filters
 
   // ── Server-side list (phase 4): the page shows one page of batches, and the
