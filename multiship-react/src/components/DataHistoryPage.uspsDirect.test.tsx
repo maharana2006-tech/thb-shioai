@@ -185,6 +185,10 @@ function AdvancedDataTableStub<T extends { id?: number | string }>(props: {
   data?: T[]
   renderExpanded?: (row: T) => React.ReactNode
   onRowExpand?: (row: T) => void
+  search?: { value: string; onChange: (v: string) => void; placeholder?: string }
+  filterToggle?: React.ReactNode
+  toolbarActions?: React.ReactNode
+  emptyState?: React.ReactNode
 }) {
   const rows = props.data ?? []
   // Fire onRowExpand once per row on mount so ensureRows populates
@@ -196,6 +200,12 @@ function AdvancedDataTableStub<T extends { id?: number | string }>(props: {
   }, [rows.length])
   return (
     <div data-testid="advanced-data-table-stub">
+      {props.search ? (
+        <input value={props.search.value} onChange={(e) => props.search?.onChange(e.target.value)} placeholder={props.search.placeholder} />
+      ) : null}
+      {props.filterToggle}
+      {props.toolbarActions}
+      {rows.length === 0 ? props.emptyState : null}
       {rows.map((row, i) => (
         <div
           key={String(row.id ?? i)}
@@ -209,11 +219,6 @@ function AdvancedDataTableStub<T extends { id?: number | string }>(props: {
 }
 vi.mock('./workspace/AdvancedDataTable', () => ({
   default: AdvancedDataTableStub,
-}))
-vi.mock('./workspace/PageSectionHeader', () => ({
-  default: ({ actions }: { actions?: React.ReactNode }) => (
-    <div data-testid="page-header-stub">{actions}</div>
-  ),
 }))
 vi.mock('./VirtualTable', () => ({
   default: ({ empty }: { empty?: React.ReactNode }) => (
@@ -334,7 +339,7 @@ describe('DataHistoryPage — mounts', () => {
   it('renders without crashing', async () => {
     await loadAndRender()
     await waitFor(() => {
-      expect(screen.getByTestId('page-header-stub')).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: /Bulk Mailer/i })).toBeInTheDocument()
     })
   })
 })
@@ -368,11 +373,14 @@ describe('DataHistoryPage — BulkLabelQueueBadge mount (audit U2)', () => {
     expect(screen.getByTestId('usps-queue-badge').textContent).toContain('7')
   })
 
-  it('renders the slot BEFORE the Import history tab (top-of-page placement)', async () => {
+  it('renders the slot in the header row, before the tab panel (top-of-page placement)', async () => {
     await loadAndRender()
     const slot = await waitFor(() => screen.getByTestId('usps-queue-badge-slot'))
-    const importsTab = screen.getByRole('tab', { name: /Import history/i })
-    const pos = slot.compareDocumentPosition(importsTab)
+    // The pill shares the one header line with the tabs (inside the tablist, at its right end)…
+    expect(screen.getByRole('tablist', { name: 'Bulk Mailer' })).toContainElement(slot)
+    // …and everything the tab shows comes after it.
+    const panel = screen.getByRole('tabpanel')
+    const pos = slot.compareDocumentPosition(panel)
     expect(pos & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })
@@ -536,11 +544,13 @@ describe('Bulk Mailer — layout', () => {
       .toEqual(['Import history', 'API batches', 'Documents', 'Trash'])
     expect(screen.getByRole('tab', { name: /Import history/i })).toHaveAttribute('aria-selected', 'true')
     expect(screen.queryByText(/All orders/i)).toBeNull()
-    expect(screen.getByRole('button', { name: /Import CSV \/ Excel/i })).toBeInTheDocument()
-    const summary = await screen.findByTestId('bulk-summary')
-    expect(summary).toHaveTextContent('Ready to generate1')
-    expect(summary).toHaveTextContent('Generating now1')
-    expect(summary).toHaveTextContent('Needs fixes1')
+    expect(await screen.findByRole('button', { name: /Import CSV \/ Excel/i })).toBeInTheDocument()
+    // No summary cards: the list gets the screen, the filters sit behind one button.
+    expect(screen.queryByTestId('bulk-summary')).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: /^Filters/i }))
+    const dialog = screen.getByRole('dialog', { name: 'Filters' })
+    expect(dialog).toHaveTextContent('Saved · not generated')
+    expect(dialog).toHaveTextContent('3 of 3 imports shown')
   })
 
   it('shows the API batches in the same list, with Fetch from WMS for an admin', async () => {
@@ -552,7 +562,7 @@ describe('Bulk Mailer — layout', () => {
     expect(screen.getByRole('tab', { name: /API batches/i })).toHaveAttribute('aria-selected', 'true')
     await waitFor(() => expect(listBatches).toHaveBeenCalledWith(expect.objectContaining({ view: 'API' })))
     expect(await screen.findByTestId('batch-row-7')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Fetch from WMS/i })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /Fetch from WMS/i })).toBeInTheDocument()
     // The Import button belongs to Import history only.
     expect(screen.queryByRole('button', { name: /Import CSV \/ Excel/i })).toBeNull()
   })

@@ -1,14 +1,16 @@
 /**
- * F5-A — advanced filter toolbar for the imports view of
- * DataHistoryPage, extracted from the monolithic component so the
- * ~170-line JSX block that renders status chips, search, date range,
- * sort controls, and the collapsible advanced panel lives in its own
- * file.
- *
- * <p>Pure presentational: all state comes from
- * {@link useHistoryFilters}, wired through props.
+ * The Bulk Mailer's filters, behind one button. Status, created range, sort
+ * and the finer filters (creator, label batch, minimum rows) all live in a
+ * popover so the list keeps the screen; the button wears a count of what is
+ * active. Pure presentational: all state comes from {@link useHistoryFilters}.
  */
-import { FiCalendar, FiFilter, FiSearch, FiX } from 'react-icons/fi'
+import { useEffect, useRef, useState } from 'react'
+import { FiCalendar, FiFilter, FiX } from 'react-icons/fi'
+import type {
+  BatchPresenceKey,
+  HistorySortKey,
+  HistoryStatusKey,
+} from '../hooks/useHistoryFilters'
 
 /** Each status chip in the colour its pill in the table uses; "All" in the app's espresso. */
 const CHIP_TONE: Record<string, { dot: string; active: string; count: string }> = {
@@ -20,11 +22,6 @@ const CHIP_TONE: Record<string, { dot: string; active: string; count: string }> 
   INITIATE: { dot: 'bg-slate-400', active: 'border-slate-300 bg-slate-100 text-slate-700', count: 'bg-white text-slate-600 ring-1 ring-slate-300' },
   FAILED: { dot: 'bg-rose-500', active: 'border-rose-200 bg-rose-50 text-rose-800', count: 'bg-white text-rose-700 ring-1 ring-rose-200' },
 }
-import type {
-  BatchPresenceKey,
-  HistorySortKey,
-  HistoryStatusKey,
-} from '../hooks/useHistoryFilters'
 
 interface StatusChip {
   key: HistoryStatusKey
@@ -41,6 +38,9 @@ const STATUS_CHIPS: StatusChip[] = [
   { key: 'FAILED', label: 'Failed' },
 ]
 
+const FIELD = 'w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] text-[#1f150c] outline-none transition focus:border-[#cdbf9f]'
+const FIELD_LABEL = 'mb-1 block text-[10px] font-semibold uppercase tracking-[0.08em] text-[#b6a684]'
+
 export interface DataHistoryFilterToolbarProps {
   // Status chips
   statusFilter: HistoryStatusKey
@@ -52,9 +52,7 @@ export interface DataHistoryFilterToolbarProps {
   anyFilterActive: boolean
   clearFilters: () => void
 
-  // Search + date range
-  search: string
-  setSearch: (v: string) => void
+  // Date range
   dateFrom: string
   setDateFrom: (v: string) => void
   dateTo: string
@@ -67,8 +65,7 @@ export interface DataHistoryFilterToolbarProps {
   sortDir: 'ASC' | 'DESC'
   setSortDir: (v: (prev: 'ASC' | 'DESC') => 'ASC' | 'DESC') => void
 
-  // Advanced panel
-  showAdvanced: boolean
+  // The finer filters
   createdBy: string
   setCreatedBy: (v: string) => void
   creators: string[]
@@ -89,8 +86,6 @@ export default function DataHistoryFilterToolbar({
   statusMetaLabel,
   anyFilterActive,
   clearFilters,
-  search,
-  setSearch,
   dateFrom,
   setDateFrom,
   dateTo,
@@ -100,7 +95,6 @@ export default function DataHistoryFilterToolbar({
   setSortKey,
   sortDir,
   setSortDir,
-  showAdvanced,
   createdBy,
   setCreatedBy,
   creators,
@@ -111,185 +105,205 @@ export default function DataHistoryFilterToolbar({
   filteredCount,
   totalCount,
 }: DataHistoryFilterToolbarProps) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const clickAway = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    const escape = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', clickAway)
+    document.addEventListener('keydown', escape)
+    return () => {
+      document.removeEventListener('mousedown', clickAway)
+      document.removeEventListener('keydown', escape)
+    }
+  }, [open])
+
+  // What the button counts: the search box is visible on its own, so not that.
+  const activeCount = (statusFilter !== 'ALL' ? 1 : 0) + (dateFilterActive ? 1 : 0)
+    + (createdBy ? 1 : 0) + (batchPresence !== 'ANY' ? 1 : 0) + (minSaved ? 1 : 0)
+  const lit = open || activeCount > 0
+
   return (
-    <section className="rounded-2xl border border-[#e3d9c4] bg-white p-4 shadow-sm">
-      {/* Status chips + clear */}
-      <div className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex flex-wrap gap-1.5">
-            {STATUS_CHIPS.map((s) => {
-              const active = statusFilter === s.key
-              const n = statusCounts[s.key] ?? 0
-              const tone = CHIP_TONE[s.key]
-              return (
-                <button
-                  key={s.key}
-                  type="button"
-                  onClick={() => setStatusFilter(s.key)}
-                  aria-pressed={active}
-                  className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-[12px] font-semibold transition ${
-                    active ? tone.active : n === 0 ? 'border-transparent bg-[#faf7f0] text-[#a1906d] hover:bg-[#f0e9d8]' : 'border-transparent bg-[#faf7f0] text-[#5a4526] hover:bg-[#f0e9d8]'
-                  }`}
-                >
-                  {/* The status's own colour, the same one its pill in the table uses. */}
-                  <span className={`h-2 w-2 rounded-full ${tone.dot} ${!active && n === 0 ? 'opacity-40' : ''}`} aria-hidden="true" />
-                  {s.label}
-                  <span
-                    className={`inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9.5px] font-bold tabular-nums ${
-                      active ? tone.count : 'bg-white text-[#6b5c42] ring-1 ring-[#e3d9c4]'
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        title="Status, date, sort and more"
+        className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[12px] font-semibold transition ${
+          lit ? 'border-[#412d15] bg-[#412d15] text-[#f4eede]' : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
+        }`}
+      >
+        <FiFilter className="h-3.5 w-3.5" />
+        Filters
+        {statusFilter !== 'ALL' ? (
+          <span className="hidden max-w-[10rem] truncate font-medium opacity-80 sm:inline">· {statusMetaLabel(statusFilter)}</span>
+        ) : null}
+        {activeCount > 0 ? (
+          <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[#f4eede] px-1 text-[9.5px] font-bold text-[#412d15]">
+            {activeCount}
+          </span>
+        ) : null}
+      </button>
+
+      {open ? (
+        <div
+          role="dialog"
+          aria-label="Filters"
+          className="absolute right-0 z-30 mt-1.5 w-[min(40rem,calc(100vw-2rem))] space-y-3 rounded-xl border border-[#e3d9c4] bg-white p-3 shadow-[0_12px_32px_rgba(31,21,12,0.14)]"
+        >
+          {/* Status */}
+          <div>
+            <span className={FIELD_LABEL}>Status</span>
+            <div className="flex flex-wrap gap-1.5">
+              {STATUS_CHIPS.map((s) => {
+                const active = statusFilter === s.key
+                const n = statusCounts[s.key] ?? 0
+                const tone = CHIP_TONE[s.key]
+                return (
+                  <button
+                    key={s.key}
+                    type="button"
+                    onClick={() => setStatusFilter(s.key)}
+                    aria-pressed={active}
+                    className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11.5px] font-semibold transition ${
+                      active ? tone.active : n === 0 ? 'border-transparent bg-[#faf7f0] text-[#a1906d] hover:bg-[#f0e9d8]' : 'border-transparent bg-[#faf7f0] text-[#5a4526] hover:bg-[#f0e9d8]'
                     }`}
                   >
-                    {n}
-                  </span>
+                    {/* The status's own colour, the same one its pill in the table uses. */}
+                    <span className={`h-2 w-2 rounded-full ${tone.dot} ${!active && n === 0 ? 'opacity-40' : ''}`} aria-hidden="true" />
+                    {s.label}
+                    <span
+                      className={`inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9.5px] font-bold tabular-nums ${
+                        active ? tone.count : 'bg-white text-[#6b5c42] ring-1 ring-[#e3d9c4]'
+                      }`}
+                    >
+                      {n}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Created range + sort */}
+          <div className="grid gap-2.5 sm:grid-cols-[auto_minmax(0,1fr)]">
+            <div>
+              <span className={FIELD_LABEL}>Created</span>
+              <div className="flex items-center gap-1.5">
+                <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-sky-50 text-sky-600" aria-hidden="true">
+                  <FiCalendar className="h-3 w-3" />
+                </span>
+                <input
+                  type="date"
+                  value={dateFrom}
+                  max={dateTo || undefined}
+                  onChange={(e) => setDateFrom(e.target.value)}
+                  aria-label="Created from"
+                  className="rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[12px] text-[#1f150c] outline-none transition focus:border-[#cdbf9f]"
+                />
+                <span className="text-[11px] text-[#b6a684]">to</span>
+                <input
+                  type="date"
+                  value={dateTo}
+                  min={dateFrom || undefined}
+                  onChange={(e) => setDateTo(e.target.value)}
+                  aria-label="Created to"
+                  className="rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[12px] text-[#1f150c] outline-none transition focus:border-[#cdbf9f]"
+                />
+                {dateFilterActive ? (
+                  <button
+                    type="button"
+                    onClick={() => { setDateFrom(''); setDateTo('') }}
+                    title="Clear the date range"
+                    aria-label="Clear date range"
+                    className="rounded-lg p-1 text-[#b6a684] transition hover:bg-[#faf7f0] hover:text-rose-700"
+                  >
+                    <FiX className="h-3.5 w-3.5" />
+                  </button>
+                ) : null}
+              </div>
+            </div>
+            <div>
+              <span className={FIELD_LABEL}>Sort</span>
+              <div className="flex items-center gap-1.5">
+                <select
+                  value={sortKey}
+                  onChange={(e) => setSortKey(e.target.value as HistorySortKey)}
+                  aria-label="Sort by"
+                  className={FIELD}
+                >
+                  <option value="created">Date created</option>
+                  <option value="fileName">File name</option>
+                  <option value="savedRows">Rows</option>
+                  <option value="status">Status</option>
+                  <option value="labelBatch">Batch #</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={() => setSortDir((d) => (d === 'ASC' ? 'DESC' : 'ASC'))}
+                  title="Toggle sort direction"
+                  className="shrink-0 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
+                >
+                  {sortDir === 'ASC' ? 'Ascending ↑' : 'Descending ↓'}
                 </button>
-              )
-            })}
+              </div>
+            </div>
           </div>
-          {anyFilterActive ? (
-            <button
-              type="button"
-              onClick={clearFilters}
-              className="inline-flex items-center gap-1 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[#6b5c42] transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700"
-            >
-              <FiX className="h-3.5 w-3.5" /> Clear filters
-            </button>
-          ) : null}
-        </div>
 
-        {/* Search + date range + sort */}
-        <div className="grid gap-2.5 lg:grid-cols-[minmax(0,1fr)_auto_auto_auto]">
-          <label className="relative block">
-            <FiSearch className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#8a7a5a]" />
-            <input
-              type="search"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search file name, batch #, or user…"
-              className="w-full rounded-xl border border-[#e3d9c4] bg-[#faf7f0] py-2 pl-9 pr-3 text-[13px] text-[#1f150c] outline-none transition placeholder:text-[#b6a684] focus:border-[#cdbf9f] focus:bg-white focus:ring-4 focus:ring-[#f0e9d8]"
-            />
-          </label>
-          {/* Created-date range — first-class, not buried in the Filters panel. */}
-          <div className="flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5">
-            <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-sky-50 text-sky-600" aria-hidden="true">
-              <FiCalendar className="h-3 w-3" />
-            </span>
-            <span className="hidden font-mono text-[9px] font-bold uppercase tracking-[0.14em] text-[#b6a684] sm:inline">
-              Created
-            </span>
-            <input
-              type="date"
-              value={dateFrom}
-              max={dateTo || undefined}
-              onChange={(e) => setDateFrom(e.target.value)}
-              aria-label="Created from"
-              className="rounded-lg border border-[#e3d9c4] bg-[#faf7f0] px-2 py-1 text-[12px] text-[#1f150c] outline-none transition focus:border-[#cdbf9f] focus:bg-white"
-            />
-            <span className="text-[11px] text-[#b6a684]">to</span>
-            <input
-              type="date"
-              value={dateTo}
-              min={dateFrom || undefined}
-              onChange={(e) => setDateTo(e.target.value)}
-              aria-label="Created to"
-              className="rounded-lg border border-[#e3d9c4] bg-[#faf7f0] px-2 py-1 text-[12px] text-[#1f150c] outline-none transition focus:border-[#cdbf9f] focus:bg-white"
-            />
-            {dateFilterActive ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setDateFrom('')
-                  setDateTo('')
-                }}
-                title="Clear the date range"
-                aria-label="Clear date range"
-                className="rounded-lg p-1 text-[#b6a684] transition hover:bg-[#faf7f0] hover:text-rose-700"
-              >
-                <FiX className="h-3.5 w-3.5" />
-              </button>
-            ) : null}
-          </div>
-          <select
-            value={sortKey}
-            onChange={(e) => setSortKey(e.target.value as HistorySortKey)}
-            className="rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13px] font-semibold text-[#5a4526] outline-none transition focus:border-[#cdbf9f] focus:ring-4 focus:ring-[#f0e9d8]"
-          >
-            <option value="created">Sort: Date created</option>
-            <option value="fileName">Sort: File name</option>
-            <option value="savedRows">Sort: Rows</option>
-            <option value="status">Sort: Status</option>
-            <option value="labelBatch">Sort: Batch #</option>
-          </select>
-          <button
-            type="button"
-            onClick={() => setSortDir((d) => (d === 'ASC' ? 'DESC' : 'ASC'))}
-            title="Toggle sort direction"
-            className="rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
-          >
-            {sortDir === 'ASC' ? 'Ascending ↑' : 'Descending ↓'}
-          </button>
-        </div>
-
-        {/* Advanced panel */}
-        {showAdvanced ? (
-          <div className="grid gap-2.5 rounded-xl border border-dashed border-[#e3d9c4] bg-[#faf7f0]/60 p-3 sm:grid-cols-2 lg:grid-cols-3">
+          {/* The finer filters */}
+          <div className="grid gap-2.5 sm:grid-cols-3">
             <label className="block">
-              <span className="mb-1 block font-mono text-[9px] font-bold uppercase tracking-[0.14em] text-[#b6a684]">
-                Created by
-              </span>
-              <select
-                value={createdBy}
-                onChange={(e) => setCreatedBy(e.target.value)}
-                className="w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] text-[#1f150c] outline-none focus:border-[#cdbf9f]"
-              >
+              <span className={FIELD_LABEL}>Created by</span>
+              <select value={createdBy} onChange={(e) => setCreatedBy(e.target.value)} className={FIELD}>
                 <option value="">Anyone</option>
                 {creators.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
+                  <option key={c} value={c}>{c}</option>
                 ))}
               </select>
             </label>
             <label className="block">
-              <span className="mb-1 block font-mono text-[9px] font-bold uppercase tracking-[0.14em] text-[#b6a684]">
-                Label batch
-              </span>
-              <select
-                value={batchPresence}
-                onChange={(e) => setBatchPresence(e.target.value as BatchPresenceKey)}
-                className="w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] text-[#1f150c] outline-none focus:border-[#cdbf9f]"
-              >
+              <span className={FIELD_LABEL}>Label batch</span>
+              <select value={batchPresence} onChange={(e) => setBatchPresence(e.target.value as BatchPresenceKey)} className={FIELD}>
                 <option value="ANY">Any</option>
                 <option value="HAS">Has a batch</option>
                 <option value="NONE">No batch yet</option>
               </select>
             </label>
             <label className="block">
-              <span className="mb-1 block font-mono text-[9px] font-bold uppercase tracking-[0.14em] text-[#b6a684]">
-                Min rows saved
-              </span>
+              <span className={FIELD_LABEL}>Min rows saved</span>
               <input
                 type="number"
                 min={0}
                 value={minSaved}
                 onChange={(e) => setMinSaved(e.target.value)}
                 placeholder="0"
-                className="w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] text-[#1f150c] outline-none focus:border-[#cdbf9f]"
+                className={FIELD}
               />
             </label>
           </div>
-        ) : null}
 
-        {/* Result summary */}
-        <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-[#6b5c42]">
-          <FiFilter className="h-3 w-3 text-[#412d15]" />
-          <span className="font-semibold text-[#5a4526]">{filteredCount}</span>
-          <span>
-            of {totalCount} {totalCount === 1 ? 'import' : 'imports'} shown
-          </span>
-          {statusFilter !== 'ALL' ? <span className="text-[#cdbf9f]">·</span> : null}
-          {statusFilter !== 'ALL' ? <span>{statusMetaLabel(statusFilter)}</span> : null}
+          {/* Result summary + clear */}
+          <div className="flex items-center justify-between gap-2 border-t border-[#f2ecdf] pt-2.5 text-[11px] text-[#6b5c42]">
+            <span>
+              <span className="font-semibold text-[#5a4526]">{filteredCount}</span> of {totalCount} {totalCount === 1 ? 'import' : 'imports'} shown
+            </span>
+            {anyFilterActive ? (
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11.5px] font-semibold text-[#6b5c42] transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700"
+              >
+                <FiX className="h-3.5 w-3.5" /> Clear filters
+              </button>
+            ) : null}
+          </div>
         </div>
-      </div>
-    </section>
+      ) : null}
+    </div>
   )
 }

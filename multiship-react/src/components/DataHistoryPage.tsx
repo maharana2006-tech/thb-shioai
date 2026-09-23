@@ -10,7 +10,6 @@ import {
   FiFileText,
   FiHome,
   FiRefreshCw,
-  FiSliders,
   FiTrash2,
   FiUpload,
   FiRotateCcw,
@@ -19,7 +18,6 @@ import {
   FiZap,
 } from 'react-icons/fi'
 import type { ColumnDef } from '@tanstack/react-table'
-import PageSectionHeader from './workspace/PageSectionHeader'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
 import { bulkBatchPath, bulkPaths, settingsPaths } from '../routes/workspaceRoutes'
 import { wmsService } from '../api/wmsService'
@@ -184,14 +182,7 @@ export default function DataHistoryPage() {
   // preserved 1:1 including the DRAFT/IN_PROGRESS-first status tiebreaker
   // and the reset-to-page-1 effect on filter change.
   const filters = useHistoryFilters(batches)
-  // These four flow into `dhColumns` deps + the header Advanced button;
-  // the rest of the filter API is passed straight to the toolbar below.
-  const {
-    showAdvanced,
-    setShowAdvanced,
-    activeAdvancedCount,
-    clearFilters,
-  } = filters
+  const { clearFilters } = filters
 
   // ── Server-side list (phase 4): the page shows one page of batches, and the
   // toolbar's filters, the sort and paging are sent to the server.
@@ -2165,37 +2156,148 @@ export default function DataHistoryPage() {
     />
   ) : null
 
-  return (
-    <div className="space-y-4 pb-24">
-      {mappingDialog}
-      {sendBatchDialog}
-      <PageSectionHeader
-        eyebrow="Operations"
-        icon={<FiUpload className="h-4 w-4" />}
-        title="Bulk Mailer"
-        description="Import orders in bulk, fix what needs it, and buy their labels — from a file or from the API."
-        actions={
+  /** This tab's own buttons, in the table's toolbar: refresh, then the one action the tab is for. */
+  const listActions = dhView === 'imports' ? (
+    <>
+      <button
+        type="button"
+        onClick={() => void load()}
+        aria-label="Refresh"
+        title="Refresh the list"
+        className="inline-flex h-[30px] w-[30px] items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+      >
+        <FiRefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+      </button>
+      {viewTrash && (summary?.total ?? batches.length) > 0 ? (
+        confirmEmpty ? (
+          <span className="inline-flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => void handleEmptyTrash()}
+              disabled={emptying}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-2.5 py-1.5 text-[12px] font-semibold text-white shadow-sm transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {emptying ? (
+                <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+              ) : (
+                <FiTrash2 className="h-3.5 w-3.5" />
+              )}
+              Delete {summary?.total ?? batches.length} forever
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmEmpty(false)}
+              disabled={emptying}
+              className="inline-flex items-center rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
+            >
+              Cancel
+            </button>
+          </span>
+        ) : (
           <button
             type="button"
-            onClick={() => navigate('/orders')}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+            onClick={() => setConfirmEmpty(true)}
+            title="Permanently delete everything in Trash"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-2.5 py-1.5 text-[12px] font-semibold text-rose-600 transition hover:border-rose-300 hover:bg-rose-50"
           >
-            <FiArrowLeft className="h-3.5 w-3.5" />
-            Orders
+            <FiTrash2 className="h-3.5 w-3.5" />
+            Empty Trash
           </button>
-        }
-      />
+        )
+      ) : null}
+      {canPullWms && isApiTab ? (
+        <button
+          type="button"
+          onClick={() => void fetchFromWms()}
+          disabled={fetchingWms}
+          title="Pull the WMS's current pending shipments in as a new batch"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:opacity-60"
+        >
+          {fetchingWms
+            ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
+            : <FiDownloadCloud className="h-3.5 w-3.5" />}
+          {fetchingWms ? 'Fetching…' : 'Fetch from WMS'}
+        </button>
+      ) : null}
+      {canWrite && bulkTab === 'imports' ? (
+        <button
+          type="button"
+          onClick={() => navigate(bulkPaths.importFile)}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15]"
+        >
+          <FiUpload className="h-3.5 w-3.5" />
+          Import CSV / Excel
+        </button>
+      ) : null}
+    </>
+  ) : null
 
-      {/* PR-G4 — always-visible USPS queue depth pill (audit U2). Self-
-          hides when the queue is empty (i.e. USPS_PROVIDER != USPS_DIRECT
-          on this platform, or USPS_DIRECT with no backlog). Non-admin
-          users see nothing because the admin metrics endpoint 403s. */}
-      <div data-testid="usps-queue-badge-slot">
-        <BulkLabelQueueBadge />
+  /** Every filter behind one button, in the table's toolbar. */
+  const filterMenu = (
+    <DataHistoryFilterToolbar
+      statusFilter={filters.statusFilter}
+      setStatusFilter={filters.setStatusFilter}
+      statusCounts={summary?.statusCounts ?? {}}
+      statusMetaLabel={(s) => statusMeta(s).label}
+      anyFilterActive={filters.anyFilterActive}
+      clearFilters={filters.clearFilters}
+      dateFrom={filters.dateFrom}
+      setDateFrom={filters.setDateFrom}
+      dateTo={filters.dateTo}
+      setDateTo={filters.setDateTo}
+      dateFilterActive={filters.dateFilterActive}
+      sortKey={filters.sortKey}
+      setSortKey={filters.setSortKey}
+      sortDir={filters.sortDir}
+      setSortDir={filters.setSortDir}
+      createdBy={filters.createdBy}
+      setCreatedBy={filters.setCreatedBy}
+      creators={summary?.creators ?? []}
+      batchPresence={filters.batchPresence}
+      setBatchPresence={filters.setBatchPresence}
+      minSaved={filters.minSaved}
+      setMinSaved={filters.setMinSaved}
+      filteredCount={pageInfo.total}
+      totalCount={summary?.total ?? pageInfo.total}
+    />
+  )
+
+  return (
+    <div className="space-y-3 pb-8">
+      {mappingDialog}
+      {sendBatchDialog}
+      {/* One line: the title, the tabs, the USPS queue pill, Trash (an icon), back to Orders. */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-1 pt-1">
+        <h2
+          className="flex items-center gap-2 text-[17px] font-semibold tracking-tight text-[#1f150c]"
+          title="Import orders in bulk, fix what needs it, and buy their labels — from a file or from the API."
+        >
+          <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#1f150c] text-[#f4eede] shadow-sm" aria-hidden="true">
+            <FiUpload className="h-3.5 w-3.5" />
+          </span>
+          Bulk Mailer
+        </h2>
+        {/* Bulk Mailer tabs — each one is its own address (/bulk/:tab). */}
+        <BulkTabBar
+          active={bulkTab}
+          onSelect={(t) => navigate(`/bulk/${t}`)}
+          trailing={
+            /* PR-G4 — USPS queue depth pill (audit U2). Self-hides when the queue is
+               empty; non-admin users see nothing because the metrics endpoint 403s. */
+            <div data-testid="usps-queue-badge-slot">
+              <BulkLabelQueueBadge />
+            </div>
+          }
+        />
+        <button
+          type="button"
+          onClick={() => navigate('/orders')}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+        >
+          <FiArrowLeft className="h-3.5 w-3.5" />
+          Orders
+        </button>
       </div>
-
-      {/* Bulk Mailer tabs — each one is its own address (/bulk/:tab). */}
-      <BulkTabBar active={bulkTab} onSelect={(t) => navigate(`/bulk/${t}`)} />
 
       {/* The panel's height glides between tabs (and from skeleton to list) so
           nothing below it jumps. */}
@@ -2204,142 +2306,14 @@ export default function DataHistoryPage() {
         key={bulkTab}
         role="tabpanel"
         aria-label={BULK_TABS.find((t) => t.key === bulkTab)?.label}
-        className={`space-y-4 ${tabMotion.dir > 0 ? 'bulk-tab-in-right' : 'bulk-tab-in-left'}`}
+        className={`space-y-3 ${tabMotion.dir > 0 ? 'bulk-tab-in-right' : 'bulk-tab-in-left'}`}
       >
-      {/* This tab's own actions — they arrive with the tab instead of reshaping the header. */}
-      {dhView === 'imports' ? (
-        <div className="flex min-h-[38px] flex-wrap items-center justify-end gap-2">
-            {dhView === 'imports' ? (
-              <button
-                type="button"
-                onClick={() => setShowAdvanced((v) => !v)}
-                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[13.5px] font-semibold transition ${
-                  showAdvanced || activeAdvancedCount > 0
-                    ? 'border-[#412d15] bg-[#412d15] text-[#f4eede]'
-                    : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
-                }`}
-              >
-                <FiSliders className="h-3.5 w-3.5" />
-                Advanced
-                {activeAdvancedCount > 0 ? (
-                  <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[#f4eede] px-1 text-[9.5px] font-bold text-[#412d15]">
-                    {activeAdvancedCount}
-                  </span>
-                ) : null}
-              </button>
-            ) : null}
-            {dhView === 'imports' ? (
-              <button
-                type="button"
-                onClick={() => void load()}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
-              >
-                <FiRefreshCw className="h-3.5 w-3.5" />
-                Refresh
-              </button>
-            ) : null}
-            {dhView === 'imports' && viewTrash && (summary?.total ?? batches.length) > 0 ? (
-              confirmEmpty ? (
-                <span className="inline-flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => void handleEmptyTrash()}
-                    disabled={emptying}
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-3 py-2 text-[13.5px] font-semibold text-white shadow-sm transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {emptying ? (
-                      <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-                    ) : (
-                      <FiTrash2 className="h-3.5 w-3.5" />
-                    )}
-                    Delete {summary?.total ?? batches.length} forever
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setConfirmEmpty(false)}
-                    disabled={emptying}
-                    className="inline-flex items-center rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
-                  >
-                    Cancel
-                  </button>
-                </span>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setConfirmEmpty(true)}
-                  title="Permanently delete everything in Trash"
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-white px-3 py-2 text-[13.5px] font-semibold text-rose-600 transition hover:border-rose-300 hover:bg-rose-50"
-                >
-                  <FiTrash2 className="h-3.5 w-3.5" />
-                  Empty Trash
-                </button>
-              )
-            ) : null}
-
-            {canPullWms && isApiTab ? (
-              <button
-                type="button"
-                onClick={() => void fetchFromWms()}
-                disabled={fetchingWms}
-                title="Pull the WMS's current pending shipments in as a new batch"
-                className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[13.5px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:opacity-60"
-              >
-                {fetchingWms
-                  ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
-                  : <FiDownloadCloud className="h-3.5 w-3.5" />}
-                {fetchingWms ? 'Fetching…' : 'Fetch from WMS'}
-              </button>
-            ) : null}
-            {canWrite && bulkTab === 'imports' ? (
-              <button
-                type="button"
-                onClick={() => navigate(bulkPaths.importFile)}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[13.5px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15]"
-              >
-                <FiUpload className="h-3.5 w-3.5" />
-                Import CSV / Excel
-              </button>
-            ) : null}
-        </div>
-      ) : null}
       {dhView === 'docs' ? (
         <OrderDocumentsTable onLoaded={() => setDocsLoadedFor(tabMotion.tab)} />
       ) : loadedView !== viewKey ? (
-        <BatchListSkeleton withCards={!viewTrash} />
+        <BatchListSkeleton />
       ) : (
-      <div className="bulk-fade-in space-y-4">
-      {!viewTrash && summary ? <BatchSummaryCards summary={summary} /> : null}
-      {/* ── Advanced filter toolbar ─────────────────────────────────────── */}
-      <DataHistoryFilterToolbar
-        statusFilter={filters.statusFilter}
-        setStatusFilter={filters.setStatusFilter}
-        statusCounts={summary?.statusCounts ?? {}}
-        statusMetaLabel={(s) => statusMeta(s).label}
-        anyFilterActive={filters.anyFilterActive}
-        clearFilters={filters.clearFilters}
-        search={filters.search}
-        setSearch={filters.setSearch}
-        dateFrom={filters.dateFrom}
-        setDateFrom={filters.setDateFrom}
-        dateTo={filters.dateTo}
-        setDateTo={filters.setDateTo}
-        dateFilterActive={filters.dateFilterActive}
-        sortKey={filters.sortKey}
-        setSortKey={filters.setSortKey}
-        sortDir={filters.sortDir}
-        setSortDir={filters.setSortDir}
-        showAdvanced={filters.showAdvanced}
-        createdBy={filters.createdBy}
-        setCreatedBy={filters.setCreatedBy}
-        creators={summary?.creators ?? []}
-        batchPresence={filters.batchPresence}
-        setBatchPresence={filters.setBatchPresence}
-        minSaved={filters.minSaved}
-        setMinSaved={filters.setMinSaved}
-        filteredCount={pageInfo.total}
-        totalCount={summary?.total ?? pageInfo.total}
-      />
-
+      <div className="bulk-fade-in space-y-3">
       {pickedBatches.length > 0 && batchPageId == null && !viewTrash ? (
         <div data-testid="batch-pick-bar" className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[#412d15] bg-[#fcfaf5] px-4 py-2.5">
           <span className="flex flex-wrap items-center gap-2 text-[12px] text-[#5a4526]">
@@ -2382,21 +2356,14 @@ export default function DataHistoryPage() {
         aria-busy={refreshing}
         className={`rounded-2xl border border-slate-200 bg-white p-3 shadow-sm transition-opacity duration-200 ${refreshing && !loading ? 'opacity-60' : ''}`}
       >
-        {loading ? (
-          <p className="px-5 py-14 text-center text-sm text-[#6b5c42]">Loading…</p>
-        ) : batches.length === 0 && (summary?.total ?? 0) === 0 ? (
-          <p className="px-5 py-14 text-center text-sm text-[#6b5c42]">
-            {viewTrash
-              ? 'Trash is empty — no deleted imports.'
-              : isApiTab
-                ? (canPullWms ? 'No API batches yet. Use Fetch from WMS to pull the pending shipments in.' : 'No API batches yet. An admin can use Fetch from WMS to pull the pending shipments in.')
-                : 'No saved imports yet. Use Import CSV / Excel to add your first file — saved orders show up here.'}
-          </p>
-        ) : (
+        {(
           <AdvancedDataTable<ImportBatchSummary>
             tableKey={viewTrash ? 'order-intake-imports-trash-v8' : isApiTab ? 'bulk-api-batches-v6' : 'order-intake-imports-v8'}
             columns={dhColumns}
             data={batches}
+            search={{ value: filters.search, onChange: filters.setSearch, placeholder: 'Search file name, batch #, or user…' }}
+            filterToggle={filterMenu}
+            toolbarActions={listActions}
             manualPagination
             pageIndex={pageIndex}
             pageSize={pageSize}
@@ -2410,16 +2377,26 @@ export default function DataHistoryPage() {
               : isApiTab ? 'Batches from the WMS and the API · each fetch is one batch · click a batch to open it'
                 : 'Saved imports · click a batch to open it'}
             emptyState={
-              <div className="px-5 py-10 text-center">
-                <p className="text-sm text-[#6b5c42]">No imports match your filters.</p>
-                <button
-                  type="button"
-                  onClick={clearFilters}
-                  className="mt-3 inline-flex items-center gap-1 rounded-xl border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
-                >
-                  <FiX className="h-3.5 w-3.5" /> Clear filters
-                </button>
-              </div>
+              (summary?.total ?? 0) === 0 && !filters.anyFilterActive ? (
+                <p className="px-5 py-10 text-center text-sm text-[#6b5c42]">
+                  {viewTrash
+                    ? 'Trash is empty — no deleted imports.'
+                    : isApiTab
+                      ? (canPullWms ? 'No API batches yet. Use Fetch from WMS to pull the pending shipments in.' : 'No API batches yet. An admin can use Fetch from WMS to pull the pending shipments in.')
+                      : 'No saved imports yet. Use Import CSV / Excel to add your first file — saved orders show up here.'}
+                </p>
+              ) : (
+                <div className="px-5 py-10 text-center">
+                  <p className="text-sm text-[#6b5c42]">No imports match your filters.</p>
+                  <button
+                    type="button"
+                    onClick={clearFilters}
+                    className="mt-3 inline-flex items-center gap-1 rounded-xl border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
+                  >
+                    <FiX className="h-3.5 w-3.5" /> Clear filters
+                  </button>
+                </div>
+              )
             }
           />
         )}
@@ -2449,39 +2426,6 @@ const BULK_TABS: { key: BulkTab; label: string; hint: string; dot: string }[] = 
   { key: 'trash', label: 'Trash', hint: 'Deleted batches', dot: 'bg-rose-400' },
 ]
 
-/** At-a-glance counts over the whole view (from the server, not the current page).
- *  Each card carries one colour that means something: sky = ready to act,
- *  amber = in motion, rose = needs a hand, green = done. */
-function BatchSummaryCards({ summary }: { summary: BulkSummary }) {
-  const cards: { label: string; value: number; hint: string; icon: React.ReactNode; bar: string; disc: string; num: string }[] = [
-    { label: 'Ready to generate', value: summary.readyToGenerate, hint: 'valid, not labelled yet',
-      icon: <FiZap className="h-4 w-4" />, bar: 'bg-sky-500', disc: 'bg-sky-50 text-sky-700 ring-sky-100', num: 'text-sky-800' },
-    { label: 'Generating now', value: summary.generating, hint: 'labels being bought',
-      icon: <FiRefreshCw className={`h-4 w-4 ${summary.generating ? 'animate-spin [animation-duration:2.4s]' : ''}`} />, bar: 'bg-amber-400', disc: 'bg-amber-50 text-amber-700 ring-amber-100', num: 'text-amber-800' },
-    { label: 'Needs fixes', value: summary.needsFixes, hint: 'rows with errors or rejected',
-      icon: <FiAlertCircle className="h-4 w-4" />, bar: 'bg-rose-500', disc: 'bg-rose-50 text-rose-700 ring-rose-100', num: summary.needsFixes ? 'text-rose-700' : 'text-[#1f150c]' },
-    { label: 'Completed this week', value: summary.completedThisWeek, hint: 'every label generated',
-      icon: <FiCheckCircle className="h-4 w-4" />, bar: 'bg-emerald-500', disc: 'bg-emerald-50 text-emerald-700 ring-emerald-100', num: 'text-emerald-800' },
-  ]
-  return (
-    <div data-testid="bulk-summary" className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-      {cards.map((c) => (
-        <div key={c.label} className="relative overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white px-4 py-3 shadow-sm">
-          <span className={`absolute inset-y-0 left-0 w-1 ${c.bar}`} aria-hidden="true" />
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0">
-              <p className="text-[11.5px] font-semibold text-[#6b5c42]">{c.label}</p>
-              <p className={`mt-0.5 text-[24px] font-semibold leading-none tabular-nums ${c.num}`}>{c.value}</p>
-              <p className="mt-1.5 truncate text-[10.5px] text-[#b6a684]">{c.hint}</p>
-            </div>
-            <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full ring-1 ${c.disc}`} aria-hidden="true">{c.icon}</span>
-          </div>
-        </div>
-      ))}
-    </div>
-  )
-}
-
 /** A row's serviceType error for a ship via code with no carrier service mapped. */
 const UNMAPPED_SHIP_VIA = /serviceType '([^']+)' is (?:not mapped|mapped, but not)/
 
@@ -2493,7 +2437,7 @@ const UNMAPPED_SHIP_VIA = /serviceType '([^']+)' is (?:not mapped|mapped, but no
 export /** Set by an arrow-key move; the next tab bar to mount focuses its active tab. */
 let focusTabOnMount = false
 
-export function BulkTabBar({ active, onSelect }: { active: BulkTab; onSelect: (tab: BulkTab) => void }) {
+export function BulkTabBar({ active, onSelect, trailing }: { active: BulkTab; onSelect: (tab: BulkTab) => void; trailing?: React.ReactNode }) {
   const listRef = useRef<HTMLDivElement>(null)
   const pillRef = useRef<HTMLSpanElement>(null)
 
@@ -2503,7 +2447,9 @@ export function BulkTabBar({ active, onSelect }: { active: BulkTab; onSelect: (t
     if (!list || !pill) return
     const place = () => {
       const tab = list.querySelector<HTMLElement>(`[data-tab="${active}"]`)
-      if (!tab) return
+      // Trash sits outside the pill group — the highlight steps aside.
+      pill.style.opacity = tab && tab.dataset.group === 'pill' ? '1' : '0'
+      if (!tab || tab.dataset.group !== 'pill') return
       pill.style.width = `${tab.offsetWidth}px`
       pill.style.height = `${tab.offsetHeight}px`
       pill.style.transform = `translate(${tab.offsetLeft}px, ${tab.offsetTop}px)`
@@ -2534,66 +2480,81 @@ export function BulkTabBar({ active, onSelect }: { active: BulkTab; onSelect: (t
     listRef.current?.querySelector<HTMLElement>(`[data-tab="${active}"]`)?.focus()
   }, [active])
 
+  const trashTab = BULK_TABS.find((t) => t.key === 'trash')!
+  const trashSelected = active === 'trash'
   return (
     <div
       ref={listRef}
       role="tablist"
       aria-label="Bulk Mailer"
       onKeyDown={onKeyDown}
-      className="relative flex flex-wrap items-center gap-1 rounded-xl border border-[#e3d9c4] bg-[#f4eede]/60 p-1"
+      // On a phone the tabs take their own line under the title; wider, they share it.
+      className="order-last flex w-full flex-wrap items-center gap-2 sm:order-none sm:w-auto sm:flex-1"
     >
-      <span
-        ref={pillRef}
-        aria-hidden="true"
-        className="bulk-tab-pill pointer-events-none absolute left-0 top-0 rounded-lg bg-white shadow-sm ring-1 ring-[#e3d9c4]"
-      />
-      {BULK_TABS.map((t) => {
-        const selected = active === t.key
-        return (
-          <button
-            key={t.key}
-            type="button"
-            role="tab"
-            data-tab={t.key}
-            aria-selected={selected}
-            tabIndex={selected ? 0 : -1}
-            onClick={() => onSelect(t.key)}
-            className={`relative z-[1] inline-flex items-baseline gap-1.5 rounded-lg px-3.5 py-2 text-[13px] font-semibold outline-none transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-[#412d15]/40 ${
-              selected ? 'text-[#1f150c]' : 'text-[#6b5c42] hover:text-[#1f150c]'
-            }`}
-          >
-            <span className={`h-2 w-2 shrink-0 self-center rounded-full ${t.dot} ${selected ? '' : 'opacity-60'}`} aria-hidden="true" />
-            {t.label}
-            <span className={`hidden text-[9.5px] font-medium uppercase tracking-[0.06em] transition-colors duration-200 sm:inline ${selected ? 'text-[#8a7a5a]' : 'text-[#b6a684]'}`}>
-              {t.hint}
-            </span>
-          </button>
-        )
-      })}
+      <div className="relative flex flex-nowrap items-center gap-0.5 overflow-x-auto rounded-lg border border-[#e3d9c4] bg-[#f4eede]/60 p-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <span
+          ref={pillRef}
+          aria-hidden="true"
+          className="bulk-tab-pill pointer-events-none absolute left-0 top-0 rounded-md bg-white shadow-sm ring-1 ring-[#e3d9c4]"
+        />
+        {BULK_TABS.filter((t) => t.key !== 'trash').map((t) => {
+          const selected = active === t.key
+          return (
+            <button
+              key={t.key}
+              type="button"
+              role="tab"
+              data-tab={t.key}
+              data-group="pill"
+              aria-selected={selected}
+              tabIndex={selected ? 0 : -1}
+              onClick={() => onSelect(t.key)}
+              title={t.hint}
+              className={`relative z-[1] inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-[12.5px] font-semibold outline-none transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-[#412d15]/40 ${
+                selected ? 'text-[#1f150c]' : 'text-[#6b5c42] hover:text-[#1f150c]'
+              }`}
+            >
+              <span className={`h-2 w-2 shrink-0 rounded-full ${t.dot} ${selected ? '' : 'opacity-60'}`} aria-hidden="true" />
+              {t.label}
+            </button>
+          )
+        })}
+      </div>
+      <span className="ml-auto flex items-center gap-2">
+        {trailing}
+        <button
+          type="button"
+          role="tab"
+          data-tab="trash"
+          aria-selected={trashSelected}
+          tabIndex={trashSelected ? 0 : -1}
+          onClick={() => onSelect('trash')}
+          title={`${trashTab.label} · ${trashTab.hint.toLowerCase()}`}
+          className={`inline-flex h-[30px] w-[30px] items-center justify-center rounded-lg border outline-none transition focus-visible:ring-2 focus-visible:ring-[#412d15]/40 ${
+            trashSelected
+              ? 'border-rose-200 bg-rose-50 text-rose-700'
+              : 'border-[#e3d9c4] bg-white text-[#6b5c42] hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700'
+          }`}
+        >
+          <FiTrash2 className="h-3.5 w-3.5" />
+          <span className="sr-only">{trashTab.label}</span>
+        </button>
+      </span>
     </div>
   )
 }
 
 /** What a tab shows while its first answer is on the way — the shape of the list, not a bare "Loading…". */
-function BatchListSkeleton({ withCards }: { withCards: boolean }) {
+function BatchListSkeleton() {
   return (
-    <div data-testid="batch-list-skeleton" aria-busy="true" aria-label="Loading batches" className="space-y-4">
-      {withCards ? (
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {[0, 1, 2, 3].map((i) => (
-            <div key={i} className="h-[66px] animate-pulse rounded-xl border border-[#efe7d6] bg-[#f6f1e6]" />
-          ))}
-        </div>
-      ) : null}
-      <div className="space-y-2 rounded-2xl border border-[#efe7d6] bg-white p-3">
-        <div className="flex flex-wrap gap-1.5">
-          {[72, 64, 88, 96, 80].map((w, i) => (
-            <div key={i} className="h-7 animate-pulse rounded-full bg-[#f2ecdf]" style={{ width: w }} />
-          ))}
-        </div>
-        <div className="h-9 animate-pulse rounded-xl bg-[#f6f1e6]" />
-      </div>
+    <div data-testid="batch-list-skeleton" aria-busy="true" aria-label="Loading batches" className="space-y-3">
       <div className="space-y-2 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+        <div className="flex items-center gap-2">
+          <div className="h-8 flex-1 animate-pulse rounded-lg bg-[#f6f1e6]" />
+          {[72, 80, 76, 68].map((w, i) => (
+            <div key={i} className="h-8 animate-pulse rounded-lg bg-[#f2ecdf]" style={{ width: w }} />
+          ))}
+        </div>
         {[0, 1, 2, 3, 4].map((i) => (
           <div key={i} className="flex items-center gap-3 px-2 py-2">
             <div className="h-3 w-10 animate-pulse rounded bg-[#efe7d6]" />
