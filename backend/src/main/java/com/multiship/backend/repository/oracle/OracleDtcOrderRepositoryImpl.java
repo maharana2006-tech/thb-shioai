@@ -23,6 +23,9 @@ import java.util.List;
 @Slf4j
 @Repository
 @RequiredArgsConstructor
+// Only exists alongside the Oracle EMF: with the sync off (the default) there is no
+// "oracleEntityManagerFactory" to inject, and boot would fail on this bean.
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "multiship.oracle.enabled", havingValue = "true")
 public class OracleDtcOrderRepositoryImpl {
 
     @PersistenceContext(unitName = "oracleEntityManagerFactory")
