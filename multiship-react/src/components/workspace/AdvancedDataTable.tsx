@@ -1,4 +1,5 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
+import { useDismissable } from '../../hooks/useDismissable'
 import {
   flexRender,
   getCoreRowModel,
@@ -110,9 +111,6 @@ export interface AdvancedDataTableProps<T> {
    *  so removing a row moves an open expansion onto the next record. */
   getRowId?: (row: T, index: number) => string
   initialHiddenColumns?: string[]
-  /** Default column pinning (e.g. keep an Actions column visible on the right).
-   *  Applied only when the user hasn't pinned anything themselves. */
-  initialColumnPinning?: ColumnPinningState
   initialDensity?: Density
   initialPageSize?: number
   /** Filename base for the CSV export (no extension). */
@@ -206,27 +204,6 @@ function downloadCsv(filename: string, matrix: string[][]) {
   URL.revokeObjectURL(url)
 }
 
-function useDismissable(open: boolean, onClose: () => void) {
-  const ref = useRef<HTMLDivElement | null>(null)
-  useEffect(() => {
-    if (!open) return
-    const clickAway = (e: MouseEvent) => {
-      if (!ref.current) return
-      if (!ref.current.contains(e.target as Node)) onClose()
-    }
-    const escape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('mousedown', clickAway)
-    document.addEventListener('keydown', escape)
-    return () => {
-      document.removeEventListener('mousedown', clickAway)
-      document.removeEventListener('keydown', escape)
-    }
-  }, [open, onClose])
-  return ref
-}
-
 /** Read + write the per-table layout to localStorage. Never throws. */
 function loadLayout(tableKey: string): StoredLayout | null {
   if (typeof window === 'undefined') return null
@@ -295,10 +272,8 @@ function SortableHeader<T>({
   density: Density
   children: React.ReactNode
 }) {
-  const canReorder = header.column.getCanSort() !== undefined // always true; kept for future gating
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: header.column.id,
-    disabled: !canReorder,
   })
 
   const pinned = pinnedStyle(header.column)
@@ -355,7 +330,6 @@ export default function AdvancedDataTable<T>({
   onRowClick,
   getRowId,
   initialHiddenColumns,
-  initialColumnPinning,
   initialDensity = 'compact',
   initialPageSize = 25,
   csvFilename,
@@ -403,14 +377,11 @@ export default function AdvancedDataTable<T>({
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>(
     () => persisted?.columnSizing ?? {},
   )
-  const [columnPinning, setColumnPinning] = useState<ColumnPinningState>(() => {
-    const p = persisted?.columnPinning
-    // Respect the user's own pinning; otherwise apply the caller's default.
-    if (p && ((p.left?.length ?? 0) + (p.right?.length ?? 0)) > 0) return p
-    return initialColumnPinning ?? { left: [], right: [] }
-  })
+  const [columnPinning, setColumnPinning] = useState<ColumnPinningState>(
+    () => persisted?.columnPinning ?? { left: [], right: [] },
+  )
   const [density, setDensity] = useState<Density>(persisted?.density ?? initialDensity)
-  const [openMenu, setOpenMenu] = useState<null | 'columns' | 'density' | 'export'>(null)
+  const [openMenu, setOpenMenu] = useState<null | 'columns' | 'density'>(null)
   /**
    * Column-reorder draft (2026-09-14 operator ask). The Columns menu
    * lets the operator move columns up/down with arrow buttons; changes
@@ -458,7 +429,6 @@ export default function AdvancedDataTable<T>({
     setOpenMenu(null)
   })
   const densityMenuRef = useDismissable(openMenu === 'density', () => setOpenMenu(null))
-  const exportMenuRef = useDismissable(openMenu === 'export', () => setOpenMenu(null))
 
   /**
    * Select column is a fixed viewport gutter (2026-09-14 operator ask):
@@ -546,18 +516,10 @@ export default function AdvancedDataTable<T>({
   const visibleColumnCount = table.getVisibleLeafColumns().length
 
   const runExport = () => {
-    if (onExport) {
-      // Server-side export: parent owns fetching every filtered row and
-      // triggering the download. Close the menu immediately so the user gets
-      // feedback while the fetch runs.
-      setOpenMenu(null)
-      void onExport()
-      return
-    }
-    const matrix = exportRowValues(table)
+    // Server-side export: the parent fetches every filtered row and downloads it.
+    if (onExport) { void onExport(); return }
     const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-    downloadCsv(`${csvFilename || tableKey}-${stamp}.csv`, matrix)
-    setOpenMenu(null)
+    downloadCsv(`${csvFilename || tableKey}-${stamp}.csv`, exportRowValues(table))
   }
 
   const resetLayout = () => {
@@ -890,34 +852,15 @@ export default function AdvancedDataTable<T>({
           ) : null}
         </div>
 
-        {/* Export menu */}
-        <div ref={exportMenuRef} className="relative">
-          <button
-            type="button"
-            onClick={() => setOpenMenu((cur) => (cur === 'export' ? null : 'export'))}
-            aria-expanded={openMenu === 'export'}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
-            title="Export the current view"
-          >
-            <FiDownload className="h-3.5 w-3.5" />
-            Export
-          </button>
-          {openMenu === 'export' ? (
-            <div className="absolute right-0 z-20 mt-1.5 w-56 rounded-xl border border-[#e3d9c4] bg-white p-2 shadow-[0_12px_32px_rgba(31,21,12,0.12)]">
-              <button
-                type="button"
-                onClick={runExport}
-                className="w-full rounded-lg px-2 py-1.5 text-left text-[12.5px] text-slate-700 transition hover:bg-slate-50"
-              >
-                CSV — current view
-                <span className="ml-1 text-[10.5px] text-slate-400">(visible columns · filtered rows)</span>
-              </button>
-              <p className="mt-1 px-2 py-1 text-[10.5px] text-slate-400">
-                Full-record + Excel exports arrive in a later phase.
-              </p>
-            </div>
-          ) : null}
-        </div>
+        <button
+          type="button"
+          onClick={runExport}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+          title="Export the current view as CSV — visible columns, filtered rows"
+        >
+          <FiDownload className="h-3.5 w-3.5" />
+          Export
+        </button>
 
         {toolbarActions}
 
@@ -1144,9 +1087,12 @@ export default function AdvancedDataTable<T>({
         </DndContext>
       </div>
 
-      <p className="mt-2 text-right text-[10.5px] tabular-nums text-[#b6a684]">
-        Showing {visibleRows.length} of {totalRows} row{totalRows === 1 ? '' : 's'}
-      </p>
+      {/* Server-paged tables get one page as their data, so this would always read "N of N". */}
+      {manualPagination ? null : (
+        <p className="mt-2 text-right text-[10.5px] tabular-nums text-[#b6a684]">
+          Showing {visibleRows.length} of {totalRows} row{totalRows === 1 ? '' : 's'}
+        </p>
+      )}
     </div>
   )
 }

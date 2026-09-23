@@ -255,12 +255,7 @@ describe('ClientsPage · Global actions · positive', () => {
 
     const user = userEvent.setup()
     // AdvancedDataTable renders a top-level "Export" toggle that opens a menu.
-    const exportToggle = screen.getByRole('button', { name: /^Export$/i })
-    await user.click(exportToggle)
-
-    // Menu opens with "CSV — current view".
-    const csvItem = await screen.findByRole('button', { name: /CSV .* current view/i })
-    await user.click(csvItem)
+    await user.click(screen.getByRole('button', { name: /^Export$/i }))
 
     await waitFor(() => expect(exportClientsCsvMock).toHaveBeenCalledTimes(1))
     // First call: with the default (unfiltered) params — sortBy=code, ASC.
@@ -407,8 +402,6 @@ describe('ClientsPage · Global actions · negative', () => {
 
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: /^Export$/i }))
-    const csvItem = await screen.findByRole('button', { name: /CSV .* current view/i })
-    await user.click(csvItem)
 
     await waitFor(() => expect(notifyApiErrorMock).toHaveBeenCalledTimes(1))
     // Second arg is the friendly-fallback message.

@@ -24,13 +24,14 @@ import { wmsService } from '../api/wmsService'
 import { bulkService, type BulkSummary, type BulkView } from '../api/bulkService'
 import { AddShipViaMappingDialog, ShipViaCodesPanel } from './modals/ShipViaCodes'
 import OrderDocumentsTable from './OrderDocumentsTable'
-import DataHistoryFilterToolbar, { BulkFilterChips } from './DataHistoryFilterToolbar'
+import DataHistoryFilterToolbar, { BulkFilterChips, statusMeta } from './DataHistoryFilterToolbar'
 import { GridCell, DH_COLUMNS, DH_KEY_COLUMN_KEYS, RowIssuesIcon, RowChannelChip, bucketRowErrors, type DhColumn } from './batchGrid'
 import VirtualTable from './VirtualTable'
 import AnimatedHeight from './ui/AnimatedHeight'
 import BatchLabelBar from './bulk/BatchLabelBar'
 import { labelCountsOf, liveOrdersOf, type LabelCounts } from '../utils/batchLabels'
 import { printPdfBlob } from '../utils/printPdf'
+import { formatDuration, relativeTime } from '../utils/relativeTime'
 import { orderService } from '../api/orderService'
 import SendToPrinterDialog from './workspace/SendToPrinterDialog'
 import { BTN_GHOST_SM } from './ui/buttons'
@@ -55,34 +56,6 @@ import { normalizeRole } from '../utils/roles'
 import BulkLabelQueueBadge from './orders/BulkLabelQueueBadge'
 import MpsProgressCard from './orders/MpsProgressCard'
 import { normalizeCarrierCode } from '../utils/carrierUtils'
-
-/**
- * Compact "X ago" for a completion timestamp — mirrors the pattern
- * used in ApiKeysPage / CarrierConnections so all "last activity" cells
- * on the site read the same way. Returns null for unset / future
- * timestamps so the caller can render nothing at all.
- */
-const completedAgo = (iso?: string | null): string | null => {
-  if (!iso) return null
-  const secs = Math.round((Date.now() - new Date(iso).getTime()) / 1000)
-  if (Number.isNaN(secs) || secs < 0) return null
-  if (secs < 60) return 'completed just now'
-  const mins = Math.round(secs / 60)
-  if (mins < 60) return `completed ${mins}m ago`
-  const hrs = Math.round(mins / 60)
-  if (hrs < 24) return `completed ${hrs}h ago`
-  return `completed ${Math.round(hrs / 24)}d ago`
-}
-
-/** "45s" · "2m 03s" · "1h 04m" — how long a generate run took / has been running. */
-const formatDuration = (ms: number): string | null => {
-  if (!Number.isFinite(ms) || ms < 0) return null
-  const secs = Math.round(ms / 1000)
-  if (secs < 60) return `${secs}s`
-  const mins = Math.floor(secs / 60)
-  if (mins < 60) return `${mins}m ${String(secs % 60).padStart(2, '0')}s`
-  return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, '0')}m`
-}
 
 /**
  * Renders the running-elapsed caption ("12s", "1m 04s", …) and self-ticks
@@ -132,7 +105,6 @@ export default function DataHistoryPage() {
   const [codesTick, setCodesTick] = useState(0)
   const [batches, setBatches] = useState<ImportBatchSummary[]>([])
   const [loading, setLoading] = useState(true)
-  const [openId, setOpenId] = useState<number | null>(null)
   // Running-elapsed ticker moved inline into <RunningElapsed/> so the
   // 1s tick only re-renders that span; the parent's dhColumns memo stays
   // stable across ticks (was rebuilding the whole column def every second).
@@ -211,11 +183,8 @@ export default function DataHistoryPage() {
   }
   const [searchParams] = useSearchParams()
 
-  // F5-A — advanced filter + sort + pagination state extracted to
-  // useHistoryFilters (see hooks/useHistoryFilters.ts). Behavior is
-  // preserved 1:1 including the DRAFT/IN_PROGRESS-first status tiebreaker
-  // and the reset-to-page-1 effect on filter change.
-  const filters = useHistoryFilters(batches)
+  // What the toolbar set; the server applies it (listQuery below).
+  const filters = useHistoryFilters()
   const { clearFilters } = filters
 
   // ── Server-side list (phase 4): the page shows one page of batches, and the
@@ -253,15 +222,17 @@ export default function DataHistoryPage() {
   // reload independently when the operator flips between live and Trash.
   // The batch page re-reads its batch after a delete / restore (load is declared below).
   const reloadRef = useRef<() => void>(() => {})
+  /** Trash is a tab of its own; the batch page is "in Trash" when its batch is. */
+  const viewTrash = batchPageId != null
+    ? !!batches.find((b) => b.id === batchPageId)?.deletedAt
+    : bulkTab === 'trash'
   const trash = useTrashActions({
-    batches, setBatches, openId, setOpenId,
+    setBatches,
     onMoved: batchPageId != null
       ? () => reloadRef.current()
       : (id) => { setBatches((list) => list.filter((b) => b.id !== id)); void reloadQuiet() },
-    viewTrash: batchPageId != null ? !!batches.find((b) => b.id === batchPageId)?.deletedAt : bulkTab === 'trash',
   })
   const {
-    viewTrash,
     trashBusyId,
     confirmEmpty,
     setConfirmEmpty,
@@ -478,7 +449,6 @@ export default function DataHistoryPage() {
   useEffect(() => {
     /* eslint-disable react-hooks/set-state-in-effect -- data fetch on mount + when switching list (file / API / Trash / one batch) */
     void load()
-    setOpenId(null)
     setConfirmEmpty(false)
     /* eslint-enable react-hooks/set-state-in-effect */
     // eslint-disable-next-line react-hooks/exhaustive-deps -- load/setOpenId/setConfirmEmpty are stable; switching list re-fetches
@@ -990,30 +960,6 @@ export default function DataHistoryPage() {
     }
   }
 
-  /** Map an import status to a friendly label + pill classes. */
-  const statusMeta = (status?: string | null): { label: string; cls: string } => {
-    switch ((status || '').toUpperCase()) {
-      case 'COMPLETE':
-        return { label: 'Complete', cls: 'bg-emerald-50 text-emerald-700 ring-emerald-200' }
-      case 'PARTIAL_COMPLETE':
-        return { label: 'Partial complete', cls: 'bg-amber-50 text-amber-700 ring-amber-200' }
-      case 'FAILED':
-        return { label: 'Failed', cls: 'bg-rose-50 text-rose-700 ring-rose-200' }
-      case 'IN_PROGRESS':
-        return { label: 'In progress', cls: 'bg-sky-50 text-sky-700 ring-sky-200' }
-      case 'CANCELLED':
-        // Import I-3 — operator cancelled during the run. Amber ring to
-        // match the CANCELLED status style used on the bulk-labels modal.
-        return { label: 'Cancelled', cls: 'bg-amber-50 text-amber-700 ring-amber-200' }
-      case 'INITIATE':
-        return { label: 'Saved · not generated', cls: 'bg-slate-100 text-slate-600 ring-slate-200' }
-      case 'DRAFT':
-        return { label: 'Draft', cls: 'bg-orange-50 text-orange-700 ring-orange-200' }
-      default:
-        return { label: status || '—', cls: 'bg-slate-100 text-slate-500 ring-slate-200' }
-    }
-  }
-
   useEffect(() => {
     if (cancelRequested.size === 0) return
     const stillRunning = new Set(batches.filter((b) => (b.status || '').toUpperCase() === 'IN_PROGRESS').map((b) => b.id))
@@ -1117,7 +1063,8 @@ export default function DataHistoryPage() {
           // batch has landed a terminal state at least once; retries
           // that go back through IN_PROGRESS null completedAt so the
           // caption disappears until the next terminal transition.
-          const done = completedAgo(b.completedAt)
+          const ago = relativeTime(b.completedAt)
+          const done = ago ? `completed ${ago}` : null
           const startedMs = b.generationStartedAt ? new Date(b.generationStartedAt).getTime() : null
           const running = (b.status || '').toUpperCase() === 'IN_PROGRESS'
           // Finished-run elapsed is a fixed diff; running-run elapsed is
@@ -1536,15 +1483,6 @@ export default function DataHistoryPage() {
           )
         },
         meta: { headerLabel: 'Batch', exportValue: (b: ImportBatchSummary) => b.labelBatchId == null ? '' : String(b.labelBatchId) },
-      },
-      {
-        id: 'serial',
-        header: 'Serial no.',
-        enableSorting: false,
-        size: 70,
-        accessorFn: (b) => b.id,
-        cell: ({ row }) => <span className="font-mono text-[13px] font-bold text-[#1f150c]">#{row.original.id}</span>,
-        meta: { headerLabel: 'Serial no.' },
       },
       {
         id: 'file',
@@ -2295,8 +2233,6 @@ export default function DataHistoryPage() {
       statusFilter={filters.statusFilter}
       setStatusFilter={filters.setStatusFilter}
       statusCounts={summary?.statusCounts ?? {}}
-      statusMetaLabel={(s) => statusMeta(s).label}
-      anyFilterActive={filters.anyFilterActive}
       clearFilters={filters.clearFilters}
       dateFrom={filters.dateFrom}
       setDateFrom={filters.setDateFrom}
@@ -2424,8 +2360,7 @@ export default function DataHistoryPage() {
               <BulkFilterChips
                 statusFilter={filters.statusFilter}
                 setStatusFilter={filters.setStatusFilter}
-                statusMetaLabel={(s) => statusMeta(s).label}
-                dateFrom={filters.dateFrom}
+                          dateFrom={filters.dateFrom}
                 setDateFrom={filters.setDateFrom}
                 dateTo={filters.dateTo}
                 setDateTo={filters.setDateTo}
@@ -2440,14 +2375,13 @@ export default function DataHistoryPage() {
             }
             toolbarActions={listActions}
             manualPagination
+            manualSorting
             pageIndex={pageIndex}
             pageSize={pageSize}
             pageCount={pageInfo.pages}
             onPaginationChange={({ pageIndex: i, pageSize: n }) => { setPageIndex(n !== pageSize ? 0 : i); setPageSize(n) }}
             onRowClick={(b) => navigate(bulkBatchPath(b.id))}
             getRowId={(b) => String(b.id)}
-            initialColumnPinning={{ left: [], right: [] }}
-            initialHiddenColumns={['serial']}
             caption={viewTrash ? 'Trash — deleted batches · click a batch to open it'
               : isApiTab ? 'Batches from the WMS and the API · each fetch is one batch · click a batch to open it'
                 : 'Saved imports · click a batch to open it'}

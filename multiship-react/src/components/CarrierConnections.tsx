@@ -1,3 +1,4 @@
+import { relativeTime } from '../utils/relativeTime'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { notify } from '../utils/notify'
@@ -132,18 +133,6 @@ const credentialLabelsFor = (carrierCode: string) => {
 }
 
 const isPlatform = (a: CarrierAccountRef) => !a.customerNo || !a.customerNo.trim()
-
-const relativeTime = (value?: string | null) => {
-  if (!value) return null
-  const then = new Date(value).getTime()
-  if (Number.isNaN(then)) return value
-  const mins = Math.max(0, Math.round((Date.now() - then) / 60000))
-  if (mins < 1) return 'just now'
-  if (mins < 60) return `${mins} min ago`
-  const hours = Math.round(mins / 60)
-  if (hours < 24) return `${hours}h ago`
-  return `${Math.round(hours / 24)}d ago`
-}
 
 interface DrawerState {
   editingId: number | null

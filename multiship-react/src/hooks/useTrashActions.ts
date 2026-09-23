@@ -18,20 +18,13 @@ import {
 } from '../api/orderImportService'
 
 export interface UseTrashActionsOptions {
-  batches: ImportBatchSummary[]
   setBatches: React.Dispatch<React.SetStateAction<ImportBatchSummary[]>>
-  openId: number | null
-  setOpenId: (id: number | null) => void
-  /** When given, the Trash view is controlled by the caller (e.g. the URL tab). */
-  viewTrash?: boolean
   /** Called after a delete / restore instead of dropping the batch from the list —
    *  e.g. a single-batch page re-reads the batch to show its new state. */
   onMoved?: (id: number) => void
 }
 
 export interface UseTrashActionsResult {
-  viewTrash: boolean
-  setViewTrash: React.Dispatch<React.SetStateAction<boolean>>
   trashBusyId: number | null
   confirmEmpty: boolean
   setConfirmEmpty: React.Dispatch<React.SetStateAction<boolean>>
@@ -46,20 +39,9 @@ export interface UseTrashActionsResult {
 }
 
 export function useTrashActions({
-  batches: _batches,
   setBatches,
-  openId,
-  setOpenId,
-  viewTrash: controlledViewTrash,
   onMoved,
 }: UseTrashActionsOptions): UseTrashActionsResult {
-  // Silence the unused-arg warning — batches is accepted for symmetry
-  // with parent state and to make the hook API self-documenting even
-  // though the current implementation only mutates through setBatches.
-  void _batches
-
-  const [ownViewTrash, setViewTrash] = useState(false)
-  const viewTrash = controlledViewTrash ?? ownViewTrash
   const [trashBusyId, setTrashBusyId] = useState<number | null>(null)
   const [confirmEmpty, setConfirmEmpty] = useState(false)
   const [emptying, setEmptying] = useState(false)
@@ -70,7 +52,6 @@ export function useTrashActions({
     try {
       const res = await orderImportService.emptyTrash()
       setBatches([])
-      setOpenId(null)
       notify.success(res.message ?? 'Trash emptied.')
     } catch (e) {
       notify.apiError(e, 'Could not empty Trash.')
@@ -87,7 +68,6 @@ export function useTrashActions({
       await orderImportService.deleteBatch(id)
       if (onMoved) onMoved(id)
       else setBatches((list) => list.filter((b) => b.id !== id))
-      if (openId === id) setOpenId(null)
       notify.success(
         `"${fileName || `Import #${id}`}" moved to Trash · restore it from Trash anytime.`,
       )
@@ -114,7 +94,6 @@ export function useTrashActions({
       await orderImportService.restoreBatch(id, allowDuplicate)
       if (onMoved) onMoved(id)
       else setBatches((list) => list.filter((b) => b.id !== id))
-      if (openId === id) setOpenId(null)
       notify.success(`"${fileName || `Import #${id}`}" restored.`)
     } catch (e) {
       // Some orders are also in live imports — ask, like "Save anyway" does.
@@ -141,8 +120,6 @@ export function useTrashActions({
   }
 
   return {
-    viewTrash,
-    setViewTrash,
     trashBusyId,
     confirmEmpty,
     setConfirmEmpty,

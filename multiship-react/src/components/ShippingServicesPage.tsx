@@ -1,3 +1,4 @@
+import { relativeTime } from '../utils/relativeTime'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { notify } from '../utils/notify'
@@ -36,17 +37,6 @@ const CARRIERS = ['UPS', 'FEDEX', 'USPS'] as const
 /** Common ship-from origins offered in the picker (merged with whatever's already synced). */
 const COMMON_ORIGINS = ['US', 'GB', 'DE', 'FR', 'NL', 'IT', 'ES', 'IN', 'CN', 'JP', 'AU', 'CA', 'MX', 'BR', 'SG']
 
-/** Short relative time for the "synced N ago" provenance chip. */
-const relTime = (iso: string): string => {
-  const secs = Math.round((Date.now() - new Date(iso).getTime()) / 1000)
-  if (secs < 60) return 'just now'
-  const mins = Math.round(secs / 60)
-  if (mins < 60) return `${mins}m ago`
-  const hrs = Math.round(mins / 60)
-  if (hrs < 24) return `${hrs}h ago`
-  return `${Math.round(hrs / 24)}d ago`
-}
-
 /**
  * Provenance of a carrier's service group:
  *  live      — the carrier's LIVE availability API answered (CARRIER_API)
@@ -56,7 +46,7 @@ const relTime = (iso: string): string => {
 const groupProvenance = (list: ShippingServiceItem[]): { kind: 'live' | 'built-in' | 'seeded'; when: string } | null => {
   if (!list.length) return null
   const dated = list.map((s) => s.syncedAt).filter(Boolean).sort()
-  const when = dated.length ? relTime(dated.at(-1) as string) : ''
+  const when = dated.length ? relativeTime(dated.at(-1) as string) ?? '' : ''
   if (list.some((s) => s.source === 'CARRIER_API')) return { kind: 'live', when }
   if (list.some((s) => s.source === 'CARRIER_SYNC')) return { kind: 'built-in', when }
   return { kind: 'seeded', when: '' }

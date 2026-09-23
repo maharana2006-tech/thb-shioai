@@ -48,7 +48,7 @@ describe('BatchLabelBar', () => {
     renderBar()
     expect(screen.getByText(/live labels in this batch/)).toHaveTextContent('2 live labels in this batch')
     await userEvent.click(screen.getByRole('button', { name: /^Print$/ }))
-    await userEvent.click(screen.getByRole('menuitem', { name: /Print labels/ }))
+    await userEvent.click(screen.getByRole('menuitem', { name: /Download labels/ }))
     expect(printDocuments).toHaveBeenCalledWith([5001, 5002], 'LABEL')
     await userEvent.click(screen.getByRole('button', { name: /^Print$/ }))
     await userEvent.click(screen.getByRole('menuitem', { name: /Send to printer/ }))
@@ -59,7 +59,7 @@ describe('BatchLabelBar', () => {
     printDocuments.mockResolvedValue({ blob: new Blob(), included: 1, skipped: 0, skippedOrders: [] })
     renderBar([3])
     await userEvent.click(screen.getByRole('button', { name: /^Print$/ }))
-    await userEvent.click(screen.getByRole('menuitem', { name: /Print invoices/ }))
+    await userEvent.click(screen.getByRole('menuitem', { name: /Download invoices/ }))
     expect(printDocuments).toHaveBeenCalledWith([5002], 'COMMERCIAL_INVOICE')
   })
 

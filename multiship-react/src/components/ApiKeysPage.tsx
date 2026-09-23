@@ -1,3 +1,4 @@
+import { relativeTime } from '../utils/relativeTime'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { notify } from '../utils/notify'
@@ -13,18 +14,6 @@ import {
 } from 'react-icons/fi'
 import { apiKeyService, type ApiKey } from '../api/apiKeyService'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
-
-/** Short relative time for the created / last-used columns. */
-const relTime = (iso: string | null | undefined): string => {
-  if (!iso) return '—'
-  const secs = Math.round((Date.now() - new Date(iso).getTime()) / 1000)
-  if (secs < 60) return 'just now'
-  const mins = Math.round(secs / 60)
-  if (mins < 60) return `${mins}m ago`
-  const hrs = Math.round(mins / 60)
-  if (hrs < 24) return `${hrs}h ago`
-  return `${Math.round(hrs / 24)}d ago`
-}
 
 /** Audit A3 — expiry badge tone matches the backend spec: green >30d,
  *  amber ≤30d, red past-expiry. Null expiresAt (platform-only keys)
@@ -343,7 +332,7 @@ export default function ApiKeysPage() {
                           Active key. */}
                       {k.active && k.lastRotatedAt ? (
                         <span
-                          title={`Rotated ${relTime(k.lastRotatedAt)} — old key stops working 24h after rotation`}
+                          title={`Rotated ${relativeTime(k.lastRotatedAt) ?? '—'} — old key stops working 24h after rotation`}
                           className="ml-1 inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-amber-700 ring-1 ring-amber-100"
                         >
                           <FiRefreshCw className="h-2.5 w-2.5" />
@@ -365,10 +354,10 @@ export default function ApiKeysPage() {
                       })()}
                     </td>
                     <td className="whitespace-nowrap px-4 py-2.5 text-[11.5px] text-slate-500" title={k.createdAt ?? undefined}>
-                      {relTime(k.createdAt)}
+                      {relativeTime(k.createdAt) ?? '—'}
                     </td>
                     <td className="whitespace-nowrap px-4 py-2.5 text-[11.5px] text-slate-500" title={k.lastUsedAt ?? undefined}>
-                      {relTime(k.lastUsedAt)}
+                      {relativeTime(k.lastUsedAt) ?? '—'}
                     </td>
                     <td className="px-4 py-2.5 text-right">
                       {k.active ? (

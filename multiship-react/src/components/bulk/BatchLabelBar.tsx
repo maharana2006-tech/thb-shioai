@@ -179,9 +179,9 @@ export default function BatchLabelBar({
           {menuOpen ? (
             <div role="menu" aria-label="Print" className="bulk-pop-in absolute right-0 z-40 mt-1.5 w-56 rounded-xl border border-[#e3d9c4] bg-white p-1 shadow-[0_12px_32px_rgba(31,21,12,0.14)]">
               {([
-                { key: 'LABEL', label: 'Print labels', hint: 'One print dialog, 4×6 labels', icon: <FiPrinter className="h-3.5 w-3.5 text-[#412d15]" />,
+                { key: 'LABEL', label: 'Download labels', hint: 'One print dialog, 4×6 labels', icon: <FiPrinter className="h-3.5 w-3.5 text-[#412d15]" />,
                   run: () => void print('LABEL') },
-                { key: 'INVOICE', label: 'Print invoices', hint: 'Commercial invoices — international orders', icon: <FiFileText className="h-3.5 w-3.5 text-sky-700" />,
+                { key: 'INVOICE', label: 'Download invoices', hint: 'Commercial invoices — international orders', icon: <FiFileText className="h-3.5 w-3.5 text-sky-700" />,
                   run: () => void print('COMMERCIAL_INVOICE') },
                 { key: 'SEND', label: 'Send to printer', hint: 'Straight to a network printer', icon: <FiSend className="h-3.5 w-3.5 text-emerald-600" />,
                   run: () => setSendOpen(true) },

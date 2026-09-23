@@ -1,3 +1,4 @@
+import { relativeTime } from '../utils/relativeTime'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   FiCheckCircle, FiChevronDown, FiChevronRight, FiClock, FiCopy, FiDownload, FiKey,
@@ -347,7 +348,7 @@ export default function PrinterScanPanel({
               </span>
               <span className="flex items-center gap-2 shrink-0">
                 <span className="text-[11px] text-slate-400">
-                  {a.lastSeenAt ? `last seen ${formatSince(a.lastSeenAt)}` : 'never contacted'}
+                  {a.lastSeenAt ? `last seen ${relativeTime(a.lastSeenAt) ?? '—'}` : 'never contacted'}
                 </span>
                 <button
                   type="button"
@@ -393,7 +394,7 @@ export default function PrinterScanPanel({
                   </span>
                   <span className="flex items-center gap-2 shrink-0">
                     <span className="text-[11px] text-slate-400">
-                      {a.revokedAt ? `revoked ${formatSince(a.revokedAt)}` : 'revoked'}
+                      {a.revokedAt ? `revoked ${relativeTime(a.revokedAt) ?? '—'}` : 'revoked'}
                     </span>
                     <button
                       type="button"
@@ -448,7 +449,7 @@ export default function PrinterScanPanel({
                       }>
                         #{s.seq}
                       </span>
-                      <span className="truncate text-slate-500">{formatSince(s.scannedAt)}</span>
+                      <span className="truncate text-slate-500">{relativeTime(s.scannedAt)}</span>
                     </span>
                     <span className="flex items-center gap-2 shrink-0 text-[11px]">
                       <span className="font-semibold text-slate-800">{s.count} printer{s.count === 1 ? '' : 's'}</span>
@@ -640,14 +641,3 @@ function EnrollModal({ tenantCode, onClose }: { tenantCode: string; onClose: () 
   )
 }
 
-function formatSince(iso: string): string {
-  const then = new Date(iso).getTime()
-  if (!Number.isFinite(then)) return iso
-  const ms = Date.now() - then
-  if (ms < 60_000) return 'just now'
-  const mins = Math.floor(ms / 60_000)
-  if (mins < 60) return `${mins}m ago`
-  const hrs = Math.floor(mins / 60)
-  if (hrs < 24) return `${hrs}h ago`
-  return `${Math.floor(hrs / 24)}d ago`
-}
