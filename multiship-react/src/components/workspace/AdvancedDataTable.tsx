@@ -275,10 +275,8 @@ function SortableHeader<T>({
   density: Density
   children: React.ReactNode
 }) {
-  const canReorder = header.column.getCanSort() !== undefined // always true; kept for future gating
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: header.column.id,
-    disabled: !canReorder,
   })
 
   const pinned = pinnedStyle(header.column)
