@@ -1,4 +1,5 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
+import { useDismissable } from '../../hooks/useDismissable'
 import {
   flexRender,
   getCoreRowModel,
@@ -204,27 +205,6 @@ function downloadCsv(filename: string, matrix: string[][]) {
   link.download = filename
   link.click()
   URL.revokeObjectURL(url)
-}
-
-function useDismissable(open: boolean, onClose: () => void) {
-  const ref = useRef<HTMLDivElement | null>(null)
-  useEffect(() => {
-    if (!open) return
-    const clickAway = (e: MouseEvent) => {
-      if (!ref.current) return
-      if (!ref.current.contains(e.target as Node)) onClose()
-    }
-    const escape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('mousedown', clickAway)
-    document.addEventListener('keydown', escape)
-    return () => {
-      document.removeEventListener('mousedown', clickAway)
-      document.removeEventListener('keydown', escape)
-    }
-  }, [open, onClose])
-  return ref
 }
 
 /** Read + write the per-table layout to localStorage. Never throws. */

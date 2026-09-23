@@ -8,7 +8,7 @@
  * each removable on its own. Pure presentational: all state comes from
  * {@link useHistoryFilters}.
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import {
   FiArrowDown,
   FiArrowUp,
@@ -23,6 +23,7 @@ import {
   FiUser,
   FiX,
 } from 'react-icons/fi'
+import { useDismissable } from '../hooks/useDismissable'
 import type {
   BatchPresenceKey,
   HistorySortKey,
@@ -170,22 +171,8 @@ export default function DataHistoryFilterToolbar(props: DataHistoryFilterToolbar
   }
   const [field, setField] = useState<Field>('status')
   const [creatorQuery, setCreatorQuery] = useState('')
-  const ref = useRef<HTMLDivElement>(null)
+  const ref = useDismissable(open, useCallback(() => setOpen(false), []))
   const paneRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!open) return
-    const clickAway = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
-    }
-    const escape = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
-    document.addEventListener('mousedown', clickAway)
-    document.addEventListener('keydown', escape)
-    return () => {
-      document.removeEventListener('mousedown', clickAway)
-      document.removeEventListener('keydown', escape)
-    }
-  }, [open])
 
   // What the button counts: the search box is visible on its own, so not that.
   const activeCount = (statusFilter !== 'ALL' ? 1 : 0) + (dateFilterActive ? 1 : 0)

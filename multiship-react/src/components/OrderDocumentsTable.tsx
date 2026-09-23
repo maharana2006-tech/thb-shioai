@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { ColumnDef, SortingState } from '@tanstack/react-table'
 import {
@@ -17,6 +17,7 @@ import {
 import { orderService, type DocumentFacets, type DocumentsQuery, type OrderDocumentRow } from '../api/orderService'
 import { notify } from '../utils/notify'
 import { useLatestRequest } from '../hooks/useLatestRequest'
+import { useDismissable } from '../hooks/useDismissable'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
 
 /**
@@ -472,20 +473,7 @@ function DocumentsFilterMenu({
   const [open, setOpen] = useState(false)
   const [field, setField] = useState<Field>('status')
   const [shift, setShift] = useState(0)
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!open) return
-    const clickAway = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
-    }
-    const escape = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
-    document.addEventListener('mousedown', clickAway)
-    document.addEventListener('keydown', escape)
-    return () => {
-      document.removeEventListener('mousedown', clickAway)
-      document.removeEventListener('keydown', escape)
-    }
-  }, [open])
+  const ref = useDismissable(open, useCallback(() => setOpen(false), []))
   const toggle = () => {
     const rect = ref.current?.getBoundingClientRect()
     if (rect && typeof window !== 'undefined') {
