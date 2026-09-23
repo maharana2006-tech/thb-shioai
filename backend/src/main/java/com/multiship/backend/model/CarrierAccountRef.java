@@ -6,7 +6,6 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
-import jakarta.persistence.UniqueConstraint;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Builder.Default;
@@ -23,10 +22,17 @@ import java.time.LocalDateTime;
  * (scenario 2 saves fill-ups into this table so future orders auto-generate),
  * and exactly one row flagged isDefault serves scenario 3.
  */
+/*
+ * PR2026-09-23 — natural key changed from (account_number, carrier_code)
+ * to (account_number, carrier_code, customer_no) so multiple clients can
+ * share the same physical carrier account. The constraint is enforced
+ * via two partial unique indexes in V82 (one when customer_no is set,
+ * one when it's NULL for platform accounts) — Hibernate doesn't render
+ * partial indexes, so we omit the @UniqueConstraint annotation and let
+ * the migration own it. See V82__carrier_account_ref_per_client.sql.
+ */
 @Entity
-@Table(name = "carrier_account_ref",
-        uniqueConstraints = @UniqueConstraint(name = "uk_account_ref_number_carrier",
-                columnNames = {"account_number", "carrier_code"}))
+@Table(name = "carrier_account_ref")
 @Data
 @Builder
 @NoArgsConstructor
