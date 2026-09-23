@@ -1,4 +1,13 @@
-/** The Bulk Mailer's filters — the popover's editors and the applied-filter chips. */
+/**
+ * The Bulk Mailer's filters — the popover's editors and the applied-filter chips.
+ *
+ * Intentionally co-locates the shared `BATCH_STATUS` constant + `statusMeta`
+ * helper with the two React components in this file — every consumer imports
+ * both flavours from the same place, and there aren't enough of them to
+ * justify a file-split. Fast Refresh disabled file-wide since the rule
+ * fires per-export.
+ */
+/* eslint-disable react-refresh/only-export-components -- shared constants co-located with the components that use them */
 import { useMemo, useState } from 'react'
 import { FiArrowDown, FiArrowUp, FiCalendar, FiHash, FiLayers, FiSearch, FiTag, FiUser } from 'react-icons/fi'
 import {
