@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { FiFileText, FiPrinter, FiSend, FiSlash, FiX } from 'react-icons/fi'
+import { useEffect, useRef, useState } from 'react'
+import { FiChevronDown, FiFileText, FiPrinter, FiSend, FiSlash, FiX } from 'react-icons/fi'
 import type { OrderImportRow } from '../../api/orderImportService'
 import { orderImportService } from '../../api/orderImportService'
 import { orderService } from '../../api/orderService'
@@ -53,6 +53,22 @@ export default function BatchLabelBar({
   const [printing, setPrinting] = useState<'LABEL' | 'COMMERCIAL_INVOICE' | null>(null)
   const [sendOpen, setSendOpen] = useState(false)
   const [voiding, setVoiding] = useState(false)
+  // One Print button; what to print (or where to send it) is its menu.
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!menuOpen) return
+    const clickAway = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false)
+    }
+    const escape = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenuOpen(false) }
+    document.addEventListener('mousedown', clickAway)
+    document.addEventListener('keydown', escape)
+    return () => {
+      document.removeEventListener('mousedown', clickAway)
+      document.removeEventListener('keydown', escape)
+    }
+  }, [menuOpen])
 
   const allLive = liveOrdersOf(rows)
   const pickedSet = new Set(picked)
@@ -147,18 +163,48 @@ export default function BatchLabelBar({
         )}
       </span>
       <span className="flex flex-wrap items-center gap-1.5">
-        <button type="button" className={BTN_GHOST_SM} disabled={n === 0 || !!printing} onClick={() => void print('LABEL')}
-          title={`Print the labels of ${scopeLabel} in one print dialog`}>
-          {printing === 'LABEL' ? spin : <FiPrinter className="h-3.5 w-3.5 text-[#412d15]" />} Print labels
-        </button>
-        <button type="button" className={BTN_GHOST_SM} disabled={n === 0 || !!printing} onClick={() => void print('COMMERCIAL_INVOICE')}
-          title={`Print the commercial invoices of ${scopeLabel} (international orders)`}>
-          {printing === 'COMMERCIAL_INVOICE' ? spin : <FiFileText className="h-3.5 w-3.5 text-sky-700" />} Print invoices
-        </button>
-        <button type="button" className={BTN_GHOST_SM} disabled={n === 0} onClick={() => setSendOpen(true)}
-          title={`Send ${scopeLabel} to a network printer`}>
-          <FiSend className="h-3.5 w-3.5 text-emerald-600" /> Send to printer
-        </button>
+        <div ref={menuRef} className="relative">
+          <button
+            type="button"
+            className={BTN_GHOST_SM}
+            disabled={n === 0}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            onClick={() => setMenuOpen((v) => !v)}
+            title={`Print or send ${scopeLabel}`}
+          >
+            {printing ? spin : <FiPrinter className="h-3.5 w-3.5 text-[#412d15]" />} Print
+            <FiChevronDown className={`h-3 w-3 text-[#b6a684] transition-transform ${menuOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
+          </button>
+          {menuOpen ? (
+            <div role="menu" aria-label="Print" className="bulk-pop-in absolute right-0 z-40 mt-1.5 w-56 rounded-xl border border-[#e3d9c4] bg-white p-1 shadow-[0_12px_32px_rgba(31,21,12,0.14)]">
+              {([
+                { key: 'LABEL', label: 'Print labels', hint: 'One print dialog, 4×6 labels', icon: <FiPrinter className="h-3.5 w-3.5 text-[#412d15]" />,
+                  run: () => void print('LABEL') },
+                { key: 'INVOICE', label: 'Print invoices', hint: 'Commercial invoices — international orders', icon: <FiFileText className="h-3.5 w-3.5 text-sky-700" />,
+                  run: () => void print('COMMERCIAL_INVOICE') },
+                { key: 'SEND', label: 'Send to printer', hint: 'Straight to a network printer', icon: <FiSend className="h-3.5 w-3.5 text-emerald-600" />,
+                  run: () => setSendOpen(true) },
+              ] as const).map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  role="menuitem"
+                  disabled={!!printing}
+                  onClick={() => { setMenuOpen(false); item.run() }}
+                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[#f4eede]" aria-hidden="true">{item.icon}</span>
+                  <span className="min-w-0">
+                    <span className="block text-[12px] font-semibold leading-tight text-[#1f150c]">{item.label}</span>
+                    <span className="block text-[10.5px] leading-tight text-[#a1906d]">{item.hint}</span>
+                  </span>
+                </button>
+              ))}
+              <p className="border-t border-[#f2ecdf] px-2.5 pb-1 pt-1.5 text-[10.5px] text-[#a1906d]">For {scopeLabel}.</p>
+            </div>
+          ) : null}
+        </div>
         {canWrite ? (
           <button type="button" disabled={n === 0 || voiding || locked} onClick={() => void voidLabels()}
             title={locked ? 'Not while the batch is generating or in Trash' : `Void the labels of ${scopeLabel} with their carriers`}
