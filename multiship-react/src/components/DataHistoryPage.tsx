@@ -1538,15 +1538,6 @@ export default function DataHistoryPage() {
         meta: { headerLabel: 'Batch', exportValue: (b: ImportBatchSummary) => b.labelBatchId == null ? '' : String(b.labelBatchId) },
       },
       {
-        id: 'serial',
-        header: 'Serial no.',
-        enableSorting: false,
-        size: 70,
-        accessorFn: (b) => b.id,
-        cell: ({ row }) => <span className="font-mono text-[13px] font-bold text-[#1f150c]">#{row.original.id}</span>,
-        meta: { headerLabel: 'Serial no.' },
-      },
-      {
         id: 'file',
         header: 'File',
         enableSorting: false,
@@ -2447,7 +2438,6 @@ export default function DataHistoryPage() {
             onRowClick={(b) => navigate(bulkBatchPath(b.id))}
             getRowId={(b) => String(b.id)}
             initialColumnPinning={{ left: [], right: [] }}
-            initialHiddenColumns={['serial']}
             caption={viewTrash ? 'Trash — deleted batches · click a batch to open it'
               : isApiTab ? 'Batches from the WMS and the API · each fetch is one batch · click a batch to open it'
                 : 'Saved imports · click a batch to open it'}
