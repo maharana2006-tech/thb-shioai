@@ -111,9 +111,6 @@ export interface AdvancedDataTableProps<T> {
    *  so removing a row moves an open expansion onto the next record. */
   getRowId?: (row: T, index: number) => string
   initialHiddenColumns?: string[]
-  /** Default column pinning (e.g. keep an Actions column visible on the right).
-   *  Applied only when the user hasn't pinned anything themselves. */
-  initialColumnPinning?: ColumnPinningState
   initialDensity?: Density
   initialPageSize?: number
   /** Filename base for the CSV export (no extension). */
@@ -333,7 +330,6 @@ export default function AdvancedDataTable<T>({
   onRowClick,
   getRowId,
   initialHiddenColumns,
-  initialColumnPinning,
   initialDensity = 'compact',
   initialPageSize = 25,
   csvFilename,
@@ -381,12 +377,9 @@ export default function AdvancedDataTable<T>({
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>(
     () => persisted?.columnSizing ?? {},
   )
-  const [columnPinning, setColumnPinning] = useState<ColumnPinningState>(() => {
-    const p = persisted?.columnPinning
-    // Respect the user's own pinning; otherwise apply the caller's default.
-    if (p && ((p.left?.length ?? 0) + (p.right?.length ?? 0)) > 0) return p
-    return initialColumnPinning ?? { left: [], right: [] }
-  })
+  const [columnPinning, setColumnPinning] = useState<ColumnPinningState>(
+    () => persisted?.columnPinning ?? { left: [], right: [] },
+  )
   const [density, setDensity] = useState<Density>(persisted?.density ?? initialDensity)
   const [openMenu, setOpenMenu] = useState<null | 'columns' | 'density' | 'export'>(null)
   /**

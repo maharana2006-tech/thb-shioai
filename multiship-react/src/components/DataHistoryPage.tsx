@@ -2431,13 +2431,13 @@ export default function DataHistoryPage() {
             }
             toolbarActions={listActions}
             manualPagination
+            manualSorting
             pageIndex={pageIndex}
             pageSize={pageSize}
             pageCount={pageInfo.pages}
             onPaginationChange={({ pageIndex: i, pageSize: n }) => { setPageIndex(n !== pageSize ? 0 : i); setPageSize(n) }}
             onRowClick={(b) => navigate(bulkBatchPath(b.id))}
             getRowId={(b) => String(b.id)}
-            initialColumnPinning={{ left: [], right: [] }}
             caption={viewTrash ? 'Trash — deleted batches · click a batch to open it'
               : isApiTab ? 'Batches from the WMS and the API · each fetch is one batch · click a batch to open it'
                 : 'Saved imports · click a batch to open it'}

@@ -367,7 +367,6 @@ export default function OrderDocumentsTable({ onLoaded }: { onLoaded?: () => voi
         sorting={sorting}
         onSortingChange={(next) => setSorting(next.length ? next : [{ id: 'generated', desc: true }])}
         getRowId={(r) => String(r.orderNo)}
-        initialColumnPinning={{ left: [], right: [] }}
         csvFilename="shipment-documents"
         caption={`${pageInfo.total} labelled order${pageInfo.total === 1 ? '' : 's'} · tracking, label, invoice & statement for each`}
         emptyState={
