@@ -131,4 +131,25 @@ class OrderImportServiceImplBatchPageTest {
         assertNotNull(batch.getCompletedAt());
         assertFalse(batch.getCompletedAt().isBefore(batch.getGenerationStartedAt()), "took = completed - started, never negative");
     }
+
+    // ── Fix: an edit's / Validate all's answer carried the rows without their
+    //    last-printed time, so every "Printed 23 Sept" caption vanished. ─────
+
+    @Test
+    void rowResponsesCarryLastPrintedLikeThePageLoad() throws Exception {
+        savedBatch("PARTIAL_COMPLETE", List.of(shipRow(1, 906976, "GENERATED"), shipRow(13, 906981, "FAILED")));
+        com.multiship.backend.service.printing.DocumentPrintLog printLog =
+                mock(com.multiship.backend.service.printing.DocumentPrintLog.class);
+        when(printLog.lastPrintedByOrder(any())).thenReturn(java.util.Map.of(906976, LocalDateTime.of(2026, 9, 23, 16, 23, 47)));
+        ReflectionTestUtils.setField(service, "documentPrintLog", printLog);
+
+        ImportBatchDTO validated = service.validateAllRows(121L, "alice");
+        ImportBatchDTO edited = service.updateBatchRowJson(121L, 13, "{\"weight\": 4}", "alice");
+        ImportBatchDTO loaded = service.historyDetail(121L);
+
+        for (ImportBatchDTO dto : List.of(validated, edited, loaded)) {
+            assertEquals("2026-09-23T16:23:47", dto.getRows().get(0).getLastPrintedAt(), "row 1 was printed");
+            assertEquals(null, dto.getRows().get(1).getLastPrintedAt(), "row 13 never was");
+        }
+    }
 }

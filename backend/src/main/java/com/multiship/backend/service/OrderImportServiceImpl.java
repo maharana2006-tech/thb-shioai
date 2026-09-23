@@ -2940,26 +2940,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         // Throws AccessDeniedException (→ 403) for a scoped USER whose
         // tenant doesn't own this batch. Silent for operators.
         requireMatch(firstClientCode(parsedRows));
-        applyLiveLabelStatus(parsedRows);
-        return com.multiship.backend.dto.ImportBatchDTO.builder()
-                .id(b.getId())
-                .createdBy(b.getCreatedBy())
-                .fileName(b.getFileName())
-                .status(b.getStatus())
-                .labelBatchId(b.getLabelBatchId())
-                .createdAt(b.getCreatedAt() == null ? null : b.getCreatedAt().toString())
-                .completedAt(b.getCompletedAt() == null ? null : b.getCompletedAt().toString())
-                .generationStartedAt(b.getGenerationStartedAt() == null ? null : b.getGenerationStartedAt().toString())
-                .note(b.getNote())
-                .totalRows(b.getTotalRows())
-                .savedRows(b.getSavedRows())
-                .invalidRows(b.getInvalidRows())
-                .deletedAt(b.getDeletedAt() == null ? null : b.getDeletedAt().toString())
-                .deletedBy(b.getDeletedBy())
-                .billingMode(StringUtils.hasText(b.getBillingMode()) ? b.getBillingMode() : "AUTO")
-                .source(StringUtils.hasText(b.getSource()) ? b.getSource() : "BULK")
-                .rows(parsedRows)
-                .build();
+        return toBatchDTO(b, parsedRows);
     }
 
     /**
@@ -4328,6 +4309,9 @@ public class OrderImportServiceImpl implements OrderImportService {
     /** Build the history DTO (list + rows) from an entity + parsed rows. */
     private com.multiship.backend.dto.ImportBatchDTO toBatchDTO(
             com.multiship.backend.model.ImportBatch batch, List<OrderImportRowDTO> rows) {
+        // What the page load shows (last printed, voided) — every response that
+        // carries rows, or an edit's answer wiped the "Printed" captions.
+        applyLiveLabelStatus(rows);
         // Populate labelUrl and trackingUrl for generated orders so they're available in the frontend
         for (OrderImportRowDTO r : rows) {
             if (r.getGeneratedOrderNo() != null && "GENERATED".equalsIgnoreCase(r.getGeneratedStatus())) {
