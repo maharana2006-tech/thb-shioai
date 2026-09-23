@@ -99,27 +99,21 @@ public class NdsShipmentLookupRepository {
             String currency) {}
 
     public Optional<OrderHeader> findOrderHeader(String clientCode, String orderNo, String orderSuffix) {
+        // PATCH 2026-09-22: minimal SELECT — only columns explicitly named in
+        // the task spec + those we've confirmed exist. Real NDS DDL doesn't
+        // have CURRENCY_CD / INCOTERMS on OEHEAD and probably not CUST_PO /
+        // DEPARTMENT / SHIP_TO_ATTN / SHIP_TO_ADDR2/3 / SHIP_TO_EMAIL /
+        // SHIPPED_FLAG / HOLD_FLAG either. Restoring those columns is a TODO
+        // once ops shares the DDL (ALL_TAB_COLUMNS query).
+        // BARE MINIMUM until ops shares OEHEAD DDL — SHIP_TO_* columns
+        // aren't named what we guessed. Nulling everything except the
+        // primary key + SHIPVIA_CD so the scan flow can at least
+        // resolve the client + hit the next query. FE prefill will be
+        // mostly empty until the real column names land.
         String sql = """
                 SELECT ORDER_NO,
                        ORDER_SUFFIX,
-                       SHIP_TO_NAME,
-                       SHIP_TO_ATTN,
-                       SHIP_TO_ADDR1,
-                       SHIP_TO_ADDR2,
-                       SHIP_TO_ADDR3,
-                       SHIP_TO_CITY,
-                       SHIP_TO_STATE,
-                       SHIP_TO_POSTAL,
-                       SHIP_TO_COUNTRY_CD  AS SHIP_TO_COUNTRY,
-                       SHIP_TO_PHONE,
-                       SHIP_TO_EMAIL,
-                       SHIPVIA_CD,
-                       SHIPPED_FLAG,
-                       HOLD_FLAG,
-                       CUST_PO,
-                       DEPARTMENT,
-                       INCOTERMS,
-                       CURRENCY_CD         AS CURRENCY
+                       SHIPVIA_CD
                   FROM OEHEAD
                  WHERE ORDER_NO     = :orderNo
                    AND ORDER_SUFFIX = :orderSuffix
@@ -132,24 +126,24 @@ public class NdsShipmentLookupRepository {
                     new OrderHeader(
                             rs.getString("ORDER_NO"),
                             rs.getString("ORDER_SUFFIX"),
-                            rs.getString("SHIP_TO_NAME"),
-                            rs.getString("SHIP_TO_ATTN"),
-                            rs.getString("SHIP_TO_ADDR1"),
-                            rs.getString("SHIP_TO_ADDR2"),
-                            rs.getString("SHIP_TO_ADDR3"),
-                            rs.getString("SHIP_TO_CITY"),
-                            rs.getString("SHIP_TO_STATE"),
-                            rs.getString("SHIP_TO_POSTAL"),
-                            rs.getString("SHIP_TO_COUNTRY"),
-                            rs.getString("SHIP_TO_PHONE"),
-                            rs.getString("SHIP_TO_EMAIL"),
+                            null,   // SHIP_TO_NAME — TBD
+                            null,   // SHIP_TO_ATTN — TBD
+                            null,   // SHIP_TO_ADDR1 — TBD
+                            null,   // SHIP_TO_ADDR2 — TBD
+                            null,   // SHIP_TO_ADDR3 — TBD
+                            null,   // SHIP_TO_CITY — TBD
+                            null,   // SHIP_TO_STATE — TBD
+                            null,   // SHIP_TO_POSTAL — TBD
+                            null,   // SHIP_TO_COUNTRY_CD — TBD (invalid identifier confirmed)
+                            null,   // SHIP_TO_PHONE — TBD
+                            null,   // SHIP_TO_EMAIL — TBD
                             rs.getString("SHIPVIA_CD"),
-                            rs.getString("SHIPPED_FLAG"),
-                            rs.getString("HOLD_FLAG"),
-                            rs.getString("CUST_PO"),
-                            rs.getString("DEPARTMENT"),
-                            rs.getString("INCOTERMS"),
-                            rs.getString("CURRENCY"))));
+                            null,   // SHIPPED_FLAG — TBD
+                            null,   // HOLD_FLAG — TBD
+                            null,   // CUST_PO — TBD
+                            null,   // DEPARTMENT — TBD
+                            null,   // INCOTERMS — TBD
+                            null))); // CURRENCY_CD — TBD
         } catch (EmptyResultDataAccessException empty) {
             return Optional.empty();
         }

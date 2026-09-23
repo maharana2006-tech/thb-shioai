@@ -50,6 +50,28 @@ public interface CarrierAccountRefRepository extends JpaRepository<CarrierAccoun
 
     Optional<CarrierAccountRef> findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase(String accountNumber, String carrierCode);
 
+    /**
+     * Natural-key lookup that respects per-client ownership (V82 constraint).
+     * Use this from any code path that KNOWS the client — critically, the
+     * upsert path in {@code AccountRefServiceImpl.upsertAccount} — so that
+     * two clients holding the same physical (accountNumber, carrierCode)
+     * don't collide on each other's rows.
+     *
+     * <p>Splits into two shape-specific variants because Spring Data JPA
+     * derived queries can't express "IS NULL OR IGNORECASE-EQUALS":
+     * <ul>
+     *   <li>{@link #findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCaseAndCustomerNoIgnoreCase}
+     *       for client-owned rows.</li>
+     *   <li>{@link #findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCaseAndCustomerNoIsNull}
+     *       for platform rows (customer_no NULL).</li>
+     * </ul>
+     */
+    Optional<CarrierAccountRef> findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCaseAndCustomerNoIgnoreCase(
+            String accountNumber, String carrierCode, String customerNo);
+
+    Optional<CarrierAccountRef> findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCaseAndCustomerNoIsNull(
+            String accountNumber, String carrierCode);
+
     Optional<CarrierAccountRef> findFirstByIsDefaultTrueAndActiveTrue();
 
     List<CarrierAccountRef> findAllByOrderByIsDefaultDescUpdatedAtDesc();

@@ -223,7 +223,12 @@ class AccountRefServiceImplTest {
     }
 
     @Test
-    void upsertAccount_naturalKeyHijack_rejectsWhenExistingRowBelongsToDifferentTenant() {
+    void upsertAccount_sameAccountNumberOnDifferentClient_createsNewRow() {
+        // V82 (2026-09-23) — the old "natural-key hijack rejected" scenario
+        // can no longer happen: the lookup is scoped to (account, carrier,
+        // customerNo), so ACME can't reach OTHER's row. Instead, ACME's
+        // upsert creates a fresh row alongside OTHER's — proving the
+        // per-client-shared-account behavior V82 was written to enable.
         AccountRefUpsertRequest req = AccountRefUpsertRequest.builder()
                 .accountNumber("A12345")
                 .carrierCode("UPS")
@@ -232,19 +237,27 @@ class AccountRefServiceImplTest {
                 .customerNo("ACME")
                 .build();
 
-        // Scoped USER as ACME — clamp is silent (returns the same code).
         when(tenantScope.clampClientCode("ACME")).thenReturn("ACME");
         CarrierConnector connector = mock(CarrierConnector.class);
         when(connector.getCarrierCode()).thenReturn("UPS");
         when(carrierService.getCarrierConnector("UPS")).thenReturn(connector);
-        // Existing row belongs to OTHER — the natural-key hijack guard must
-        // refuse before any save happens.
-        CarrierAccountRef existing = accountWithTenant(5L, "OTHER");
-        when(accountRepo.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase("A12345", "UPS"))
-                .thenReturn(Optional.of(existing));
+        // OTHER already owns (A12345, UPS) — visible only via a lookup
+        // narrowed to OTHER. The ACME-scoped lookup below MUST return empty.
+        when(accountRepo
+                .findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCaseAndCustomerNoIgnoreCase(
+                        "A12345", "UPS", "ACME"))
+                .thenReturn(Optional.empty());
+        when(accountRepo.save(any(CarrierAccountRef.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
 
-        assertThrows(AccessDeniedException.class, () -> service.upsertAccount(req));
-        verify(accountRepo, never()).save(any());
+        ApiResponse<CarrierAccountRefDTO> resp = service.upsertAccount(req);
+
+        assertEquals("success", resp.getStatus(),
+                "V82 lets two clients hold the same physical account");
+        ArgumentCaptor<CarrierAccountRef> captor = ArgumentCaptor.forClass(CarrierAccountRef.class);
+        verify(accountRepo).save(captor.capture());
+        assertNull(captor.getValue().getId(), "must be a fresh insert, not a UPDATE of OTHER's row");
+        assertEquals("ACME", captor.getValue().getCustomerNo());
     }
 
     @Test
@@ -261,7 +274,9 @@ class AccountRefServiceImplTest {
         CarrierConnector connector = mock(CarrierConnector.class);
         when(connector.getCarrierCode()).thenReturn("UPS");
         when(carrierService.getCarrierConnector("UPS")).thenReturn(connector);
-        when(accountRepo.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase("A9999", "UPS"))
+        when(accountRepo
+                .findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCaseAndCustomerNoIgnoreCase(
+                        "A9999", "UPS", "ACME"))
                 .thenReturn(Optional.empty());
         // save() returns whatever it receives.
         when(accountRepo.save(any(CarrierAccountRef.class)))
@@ -551,7 +566,9 @@ class AccountRefServiceImplTest {
         CarrierConnector connector = mock(CarrierConnector.class);
         when(connector.getCarrierCode()).thenReturn("UPS");
         when(carrierService.getCarrierConnector("UPS")).thenReturn(connector);
-        when(accountRepo.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase("A-NEW", "UPS"))
+        when(accountRepo
+                .findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCaseAndCustomerNoIgnoreCase(
+                        "A-NEW", "UPS", "ACME"))
                 .thenReturn(Optional.empty());
 
         ApiResponse<CarrierAccountRefDTO> resp = service.upsertAccount(req);
@@ -580,7 +597,9 @@ class AccountRefServiceImplTest {
         CarrierAccountRef existing = accountWithTenant(50L, "ACME");
         existing.setVerified(true);
         existing.setLastVerifiedAt(LocalDateTime.of(2024, 1, 1, 0, 0));
-        when(accountRepo.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase("A12345", "UPS"))
+        when(accountRepo
+                .findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCaseAndCustomerNoIgnoreCase(
+                        "A12345", "UPS", "ACME"))
                 .thenReturn(Optional.of(existing));
         when(accountRepo.save(any(CarrierAccountRef.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
