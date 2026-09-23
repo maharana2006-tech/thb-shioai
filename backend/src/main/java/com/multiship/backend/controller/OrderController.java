@@ -1842,6 +1842,50 @@ public class OrderController {
                 .build());
     }
 
+    @Operation(summary = "The documents table, one page at a time",
+            description = "Same rows as /documents, filtered and sorted in the database: q matches the order "
+                    + "number, tracking number, recipient, client or city; carrier is matched anywhere in the "
+                    + "stored code; status LIVE|VOIDED; invoice YES|NO; from/to on the generation date; sort "
+                    + "generated|order|recipient|destination|carrier|billed. Tenant-scoped for client users.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping("/documents/page")
+    public ResponseEntity<ApiResponse<org.springframework.data.domain.Page<
+            com.multiship.backend.service.OrderDocumentSummaryService.DocumentRow>>> pageDocuments(
+            @org.springframework.web.bind.annotation.RequestParam(required = false) String q,
+            @org.springframework.web.bind.annotation.RequestParam(required = false) String carrier,
+            @org.springframework.web.bind.annotation.RequestParam(required = false) String status,
+            @org.springframework.web.bind.annotation.RequestParam(required = false) String invoice,
+            @org.springframework.web.bind.annotation.RequestParam(required = false)
+            @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate from,
+            @org.springframework.web.bind.annotation.RequestParam(required = false)
+            @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate to,
+            @org.springframework.web.bind.annotation.RequestParam(defaultValue = "generated") String sort,
+            @org.springframework.web.bind.annotation.RequestParam(defaultValue = "DESC") String dir,
+            @org.springframework.web.bind.annotation.RequestParam(defaultValue = "0") int page,
+            @org.springframework.web.bind.annotation.RequestParam(defaultValue = "25") int size) {
+        org.springframework.data.domain.Page<com.multiship.backend.service.OrderDocumentSummaryService.DocumentRow> result =
+                orderDocumentSummaryService.page(new com.multiship.backend.service.OrderDocumentSummaryService.Query(
+                        q, carrier, status, invoice, from, to, sort, "ASC".equalsIgnoreCase(dir)), page, size);
+        return ResponseEntity.ok(ApiResponse.<org.springframework.data.domain.Page<
+                        com.multiship.backend.service.OrderDocumentSummaryService.DocumentRow>>builder()
+                .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
+                .message(result.getTotalElements() + " labelled order(s).")
+                .data(result)
+                .build());
+    }
+
+    @Operation(summary = "Counts for the documents filter menu",
+            description = "Over the whole scope, not the current filters: total, live, voided, with an invoice, and per carrier.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping("/documents/facets")
+    public ResponseEntity<ApiResponse<com.multiship.backend.service.OrderDocumentSummaryService.Facets>> documentFacets() {
+        return ResponseEntity.ok(ApiResponse.<com.multiship.backend.service.OrderDocumentSummaryService.Facets>builder()
+                .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
+                .message("ok")
+                .data(orderDocumentSummaryService.facets())
+                .build());
+    }
+
     @Operation(
             summary = "Generate the order's shipping label (idempotent)",
             description = """

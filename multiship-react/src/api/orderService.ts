@@ -822,11 +822,55 @@ export interface OrderDocumentRow {
   markupCurrency: string | null
 }
 
+/** What the Documents tab asks the server for — blank means "any". */
+export interface DocumentsQuery {
+  q?: string
+  carrier?: string
+  status?: 'LIVE' | 'VOIDED'
+  invoice?: 'YES' | 'NO'
+  from?: string
+  to?: string
+  sort?: 'generated' | 'order' | 'recipient' | 'destination' | 'carrier' | 'billed'
+  dir?: 'ASC' | 'DESC'
+  page?: number
+  size?: number
+}
+
+/** One page of the documents table (a Spring page). */
+export interface DocumentsPage {
+  content: OrderDocumentRow[]
+  totalElements: number
+  totalPages: number
+  number: number
+  size: number
+}
+
+/** Counts over the whole scope, for the filter menu. */
+export interface DocumentFacets {
+  total: number
+  live: number
+  voided: number
+  withInvoice: number
+  carriers: { carrier: string; count: number }[]
+}
+
 export const orderService = {
   /** Unified documents table — one row per labelled order: tracking, label,
    *  invoice availability, and the billing-statement figures. */
   getDocuments: (limit = 200) =>
     apiClient.get<ApiResponse<OrderDocumentRow[]>>(`/orders/documents?limit=${limit}`),
+
+  /** The same table one page at a time, filtered and sorted by the server. */
+  pageDocuments: (query: DocumentsQuery) => {
+    const qs = new URLSearchParams()
+    for (const [k, v] of Object.entries(query)) {
+      if (v !== undefined && v !== null && v !== '') qs.set(k, String(v))
+    }
+    return apiClient.get<ApiResponse<DocumentsPage>>(`/orders/documents/page?${qs.toString()}`)
+  },
+
+  /** Counts for the documents filter menu. */
+  documentFacets: () => apiClient.get<ApiResponse<DocumentFacets>>('/orders/documents/facets'),
 
   /**
    * V76 — edit the internal per-order ops note. Passing null / empty
