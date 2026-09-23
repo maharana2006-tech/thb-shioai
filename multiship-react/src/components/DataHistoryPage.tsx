@@ -29,6 +29,7 @@ import { GridCell, DH_COLUMNS, DH_KEY_COLUMN_KEYS, RowIssuesIcon, RowChannelChip
 import VirtualTable from './VirtualTable'
 import AnimatedHeight from './ui/AnimatedHeight'
 import BatchLabelBar from './bulk/BatchLabelBar'
+import LabelPreviewModal from './bulk/LabelPreviewModal'
 import { labelCountsOf, liveOrdersOf, type LabelCounts } from '../utils/batchLabels'
 import { printPdfBlob } from '../utils/printPdf'
 import { formatDuration, relativeTime } from '../utils/relativeTime'
@@ -156,8 +157,7 @@ export default function DataHistoryPage() {
   const [genRowKey, setGenRowKey] = useState<string | null>(null)
   // Inline correction: the cell being saved (rowKey), for a per-cell spinner.
   const [savingCell, setSavingCell] = useState<string | null>(null)
-  // Label preview modal: stores the order number to show its label
-  const [showLabelModal, setShowLabelModal] = useState(false)
+  // The order whose label is open in the preview modal.
   const [labelModalOrderNo, setLabelModalOrderNo] = useState<number | null>(null)
 
   // Order Intake has three views: "orders" (unified per-order list across
@@ -1911,10 +1911,7 @@ export default function DataHistoryPage() {
                               {r.labelUrl && r.generatedOrderNo ? (
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    setLabelModalOrderNo(r.generatedOrderNo ?? null)
-                                    setShowLabelModal(true)
-                                  }}
+                                  onClick={() => setLabelModalOrderNo(r.generatedOrderNo ?? null)}
                                   className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-[#e3d9c4] bg-white text-[#412d15] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
                                   title="View the label PDF"
                                   aria-label={`View the label of order ${r.generatedOrderNo}`}
@@ -2016,64 +2013,7 @@ export default function DataHistoryPage() {
     />
   ) : null
 
-  const labelModal = showLabelModal && labelModalOrderNo ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-          onClick={() => setShowLabelModal(false)}
-        >
-          <div
-            className="relative w-full max-w-4xl rounded-lg bg-white shadow-lg"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div className="flex items-center justify-between border-b border-[#e3d9c4] px-6 py-4">
-              <h2 className="text-lg font-semibold text-[#1f150c]">Order #{labelModalOrderNo} - Label Preview</h2>
-              <button
-                type="button"
-                onClick={() => setShowLabelModal(false)}
-                className="rounded-full p-1 text-[#6b5c42] hover:bg-[#f2ecdf]"
-                title="Close"
-              >
-                <FiX className="h-5 w-5" />
-              </button>
-            </div>
-
-            {/* Content - PDF Viewer */}
-            <div className="h-[70vh] overflow-auto bg-[#f9f6f0]">
-              <iframe
-                src={`/api/v1/orders/${labelModalOrderNo}/label/pdf`}
-                className="h-full w-full border-0"
-                title={`Label for order ${labelModalOrderNo}`}
-              />
-            </div>
-
-            {/* Footer - Action Buttons */}
-            <div className="flex items-center justify-end gap-2 border-t border-[#e3d9c4] px-6 py-3">
-              <button
-                type="button"
-                onClick={() => window.open(`/api/v1/orders/${labelModalOrderNo}/label/pdf`, '_blank')}
-                className="inline-flex items-center gap-1 rounded-lg px-3 py-2 text-[12px] font-semibold text-[#1f150c] hover:bg-[#f2ecdf]"
-              >
-                📥 Download
-              </button>
-              <button
-                type="button"
-                onClick={() => window.print()}
-                className="inline-flex items-center gap-1 rounded-lg px-3 py-2 text-[12px] font-semibold text-[#1f150c] hover:bg-[#f2ecdf]"
-              >
-                🖨️ Print
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowLabelModal(false)}
-                className="inline-flex items-center gap-1 rounded-lg bg-[#1f150c] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#412d15]"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-  ) : null
+  const labelModal = labelModalOrderNo ? <LabelPreviewModal orderNo={labelModalOrderNo} onClose={() => setLabelModalOrderNo(null)} /> : null
 
   // ── /bulk/batches/:id — one batch on its own page ───────────────────────
   if (batchPageId != null) {

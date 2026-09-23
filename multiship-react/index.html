@@ -32,6 +32,9 @@
       Spring SecurityConfig response headers where it's actually
       enforceable (default is X-Frame-Options: DENY).
       Loosen only if a specific integration needs it — record why here.
+      frame-src / object-src blob: — the label preview modal and the print
+      flow show a fetched PDF from an object URL (the API's own /label/pdf
+      answers X-Frame-Options: DENY, so it can't be framed directly).
     -->
     <meta http-equiv="Content-Security-Policy"
           content="default-src 'self';
@@ -40,6 +43,8 @@
                    img-src 'self' data: https:;
                    font-src 'self' data:;
                    connect-src 'self' ws: wss:;
+                   frame-src 'self' blob:;
+                   object-src 'self' blob:;
                    base-uri 'self';
                    form-action 'self';" />
     <title>multiship-react</title>
