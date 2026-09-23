@@ -132,7 +132,6 @@ export default function DataHistoryPage() {
   const [codesTick, setCodesTick] = useState(0)
   const [batches, setBatches] = useState<ImportBatchSummary[]>([])
   const [loading, setLoading] = useState(true)
-  const [openId, setOpenId] = useState<number | null>(null)
   // Running-elapsed ticker moved inline into <RunningElapsed/> so the
   // 1s tick only re-renders that span; the parent's dhColumns memo stays
   // stable across ticks (was rebuilding the whole column def every second).
@@ -253,15 +252,17 @@ export default function DataHistoryPage() {
   // reload independently when the operator flips between live and Trash.
   // The batch page re-reads its batch after a delete / restore (load is declared below).
   const reloadRef = useRef<() => void>(() => {})
+  /** Trash is a tab of its own; the batch page is "in Trash" when its batch is. */
+  const viewTrash = batchPageId != null
+    ? !!batches.find((b) => b.id === batchPageId)?.deletedAt
+    : bulkTab === 'trash'
   const trash = useTrashActions({
-    batches, setBatches, openId, setOpenId,
+    setBatches,
     onMoved: batchPageId != null
       ? () => reloadRef.current()
       : (id) => { setBatches((list) => list.filter((b) => b.id !== id)); void reloadQuiet() },
-    viewTrash: batchPageId != null ? !!batches.find((b) => b.id === batchPageId)?.deletedAt : bulkTab === 'trash',
   })
   const {
-    viewTrash,
     trashBusyId,
     confirmEmpty,
     setConfirmEmpty,
@@ -478,7 +479,6 @@ export default function DataHistoryPage() {
   useEffect(() => {
     /* eslint-disable react-hooks/set-state-in-effect -- data fetch on mount + when switching list (file / API / Trash / one batch) */
     void load()
-    setOpenId(null)
     setConfirmEmpty(false)
     /* eslint-enable react-hooks/set-state-in-effect */
     // eslint-disable-next-line react-hooks/exhaustive-deps -- load/setOpenId/setConfirmEmpty are stable; switching list re-fetches
