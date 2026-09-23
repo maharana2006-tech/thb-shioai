@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   FiAlertCircle,
@@ -85,6 +85,30 @@ const formatDuration = (ms: number): string | null => {
 }
 
 /**
+ * Renders the running-elapsed caption ("12s", "1m 04s", …) and self-ticks
+ * every second. Owns its own timer so the parent's `dhColumns` memo — 13
+ * deps, one per interactive control — doesn't invalidate every second and
+ * cascade a full-table re-render. Only THIS span re-renders on each tick.
+ *
+ * <p>Renders the raw duration text only; caller applies wrapper styling
+ * (label, colour, "running "/"took " prefix).
+ */
+const RunningElapsed = ({ startedMs, prefix, className }: {
+  startedMs: number
+  prefix?: string
+  className?: string
+}) => {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [])
+  const el = formatDuration(now - startedMs)
+  if (!el) return null
+  return <span className={className}>{prefix ? `${prefix}${el}` : el}</span>
+}
+
+/**
  * Data History — every saved CSV/XLSX import. "Commit" in the import modal
  * saves the parsed rows here (no labels generated); this page lists those
  * saved imports and lets you expand one to see its rows.
@@ -109,8 +133,9 @@ export default function DataHistoryPage() {
   const [batches, setBatches] = useState<ImportBatchSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [openId, setOpenId] = useState<number | null>(null)
-  // Ticks once a second while a run is in flight so the elapsed timer moves.
-  const [nowTick, setNowTick] = useState(() => Date.now())
+  // Running-elapsed ticker moved inline into <RunningElapsed/> so the
+  // 1s tick only re-renders that span; the parent's dhColumns memo stays
+  // stable across ticks (was rebuilding the whole column def every second).
   const [rowsById, setRowsById] = useState<Record<number, OrderImportRow[] | 'loading'>>({})
   const [generatingId, setGeneratingId] = useState<number | null>(null)
   const [validatingId, setValidatingId] = useState<number | null>(null)
@@ -988,14 +1013,6 @@ export default function DataHistoryPage() {
     if (next.size !== cancelRequested.size) setCancelRequested(next)
   }, [batches, cancelRequested])
 
-  // Only runs while something is generating — no idle interval.
-  const anyGenerating = batches.some((b) => (b.status || '').toUpperCase() === 'IN_PROGRESS') || generatingId != null
-  useEffect(() => {
-    if (!anyGenerating) return
-    const t = setInterval(() => setNowTick(Date.now()), 1000)
-    return () => clearInterval(t)
-  }, [anyGenerating])
-
   /** Where a batch's labels stand — counted from its rows on the batch page, else the server's counts. */
   const labelCountsFor = (b: ImportBatchSummary): LabelCounts | null => {
     const r = rowsById[b.id]
@@ -1014,26 +1031,41 @@ export default function DataHistoryPage() {
   }
 
   /** A batch whose labels can be generated (or retried) now. */
-  const canGenerateBatch = (b: ImportBatchSummary) => {
+  // useCallback so the memoized scans below can honestly list this in
+  // their deps without churning every render (was a plain closure).
+  const canGenerateBatch = useCallback((b: ImportBatchSummary) => {
     const st = (b.status || '').toUpperCase()
     return canWrite && (st === 'INITIATE' || st === 'PARTIAL_COMPLETE' || st === 'FAILED'
       || st === 'CANCELLED' || (st === 'DRAFT' && b.savedRows > 0))
-  }
+  }, [canWrite])
   const isRetryBatch = (b: ImportBatchSummary) => ['PARTIAL_COMPLETE', 'FAILED', 'CANCELLED'].includes((b.status || '').toUpperCase())
 
   // ── Ticked batches in the list: Bills to and Generate act on all of them at once.
   const [pickedBatches, setPickedBatches] = useState<number[]>([])
-  const pickedSet = new Set(pickedBatches)
-  const pickable = batches.filter(canGenerateBatch)
-  const allPicked = pickable.length > 0 && pickable.every((b) => pickedSet.has(b.id))
+  // Memoize the derived scans so the once-a-second re-render (or any
+  // parent state churn) doesn't rescan `batches` for every downstream
+  // reader. Cheap wins: pickedSet becomes stable identity, pickable /
+  // pickedLive / pickedBilling / allPicked only recompute when their
+  // real inputs change.
+  const pickedSet = useMemo(() => new Set(pickedBatches), [pickedBatches])
+  const pickable = useMemo(() => batches.filter(canGenerateBatch), [batches, canGenerateBatch])
+  const allPicked = useMemo(
+    () => pickable.length > 0 && pickable.every((b) => pickedSet.has(b.id)),
+    [pickable, pickedSet],
+  )
   const togglePickBatch = (id: number) => setPickedBatches((cur) => cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id])
   const togglePickAll = () => setPickedBatches(allPicked ? [] : pickable.map((b) => b.id))
   const [bulkRunning, setBulkRunning] = useState<{ done: number; total: number } | null>(null)
-  const pickedLive = batches.filter((b) => pickedSet.has(b.id) && canGenerateBatch(b))
-  const pickedBilling: 'AUTO' | 'PLATFORM' | 'MIXED' =
-    pickedLive.length === 0 ? 'AUTO'
+  const pickedLive = useMemo(
+    () => batches.filter((b) => pickedSet.has(b.id) && canGenerateBatch(b)),
+    [batches, pickedSet, canGenerateBatch],
+  )
+  const pickedBilling = useMemo<'AUTO' | 'PLATFORM' | 'MIXED'>(
+    () => pickedLive.length === 0 ? 'AUTO'
       : pickedLive.every((b) => b.billingMode === 'PLATFORM') ? 'PLATFORM'
-        : pickedLive.every((b) => b.billingMode !== 'PLATFORM') ? 'AUTO' : 'MIXED'
+        : pickedLive.every((b) => b.billingMode !== 'PLATFORM') ? 'AUTO' : 'MIXED',
+    [pickedLive],
+  )
   /** Bills to, for every ticked batch. */
   const setBillingForPicked = async (mode: 'AUTO' | 'PLATFORM') => {
     for (const b of pickedLive) await setBilling(b.id, mode)
@@ -1079,12 +1111,12 @@ export default function DataHistoryPage() {
           const done = completedAgo(b.completedAt)
           const startedMs = b.generationStartedAt ? new Date(b.generationStartedAt).getTime() : null
           const running = (b.status || '').toUpperCase() === 'IN_PROGRESS'
-          // Running: tick from the claim. Finished: how long that run took.
-          const elapsed = running && startedMs != null
-            ? formatDuration(nowTick - startedMs)
-            : startedMs != null && b.completedAt
-              ? formatDuration(new Date(b.completedAt).getTime() - startedMs)
-              : null
+          // Finished-run elapsed is a fixed diff; running-run elapsed is
+          // rendered by <RunningElapsed/> so the 1s tick doesn't invalidate
+          // the whole dhColumns memo.
+          const finishedElapsed = !running && startedMs != null && b.completedAt
+            ? formatDuration(new Date(b.completedAt).getTime() - startedMs)
+            : null
           const timingTitle = [
             b.generationStartedAt ? `Started ${new Date(b.generationStartedAt).toLocaleString()}` : null,
             b.completedAt ? `Finished ${new Date(b.completedAt).toLocaleString()}` : null,
@@ -1092,13 +1124,20 @@ export default function DataHistoryPage() {
           return (
             <span className="flex max-w-[220px] flex-col items-start gap-0.5">
               <span className={`rounded-full px-2.5 py-0.5 text-[10.5px] font-bold ring-1 ${s.cls}`}>{s.label}</span>
-              {elapsed ? (
+              {running && startedMs != null ? (
                 <span
-                  className={`text-[10px] tabular-nums ${running ? 'font-semibold text-[#412d15]' : 'text-[#8a7a5a]'}`}
+                  className="text-[10px] tabular-nums font-semibold text-[#412d15]"
                   title={timingTitle}
                 >
-                  {running ? `running ${elapsed}` : `took ${elapsed}`}
-                  {!running && done ? <span className="text-[#b6a684]"> · {done}</span> : null}
+                  <RunningElapsed startedMs={startedMs} prefix="running " />
+                </span>
+              ) : finishedElapsed ? (
+                <span
+                  className="text-[10px] tabular-nums text-[#8a7a5a]"
+                  title={timingTitle}
+                >
+                  {`took ${finishedElapsed}`}
+                  {done ? <span className="text-[#b6a684]"> · {done}</span> : null}
                 </span>
               ) : done ? (
                 <span
@@ -1307,9 +1346,11 @@ export default function DataHistoryPage() {
                                   </span>
                                   {(() => {
                                     const st = b.generationStartedAt ? new Date(b.generationStartedAt).getTime() : null
-                                    const el = st != null ? formatDuration(nowTick - st) : null
-                                    return el ? (
-                                      <span className="shrink-0 font-mono tabular-nums text-[#f4eede]/85">{el}</span>
+                                    return st != null ? (
+                                      <RunningElapsed
+                                        startedMs={st}
+                                        className="shrink-0 font-mono tabular-nums text-[#f4eede]/85"
+                                      />
                                     ) : null
                                   })()}
                                 </div>
@@ -1593,13 +1634,14 @@ export default function DataHistoryPage() {
         meta: { headerLabel: 'Actions', exportable: false },
       },
     ],
-    // nowTick re-renders the running-elapsed caption once a second.
+    // Running-elapsed captions are handled inside <RunningElapsed/> which
+    // ticks its own state — nowTick no longer belongs in this dep list.
     // Handlers (cancelGeneration/generate/handleDelete/handleRestore/setBilling)
     // are re-created every render but close over their own state correctly —
     // adding them here would defeat memoization by giving dhColumns a new
     // identity every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [canWrite, viewTrash, trashBusyId, confirmGenId, billingSavingId, generatingId, genProgressById, nowTick, cancellingId, cancelRequested, validatingId,
+    [canWrite, viewTrash, trashBusyId, confirmGenId, billingSavingId, generatingId, genProgressById, cancellingId, cancelRequested, validatingId,
       // the tick column reads which batches are ticked and which can be
       pickedBatches, batches],
   )
