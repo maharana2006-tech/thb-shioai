@@ -1,3 +1,4 @@
+import { relativeTime } from '../utils/relativeTime'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { FiCheckSquare, FiPrinter, FiRefreshCw, FiSquare, FiX } from 'react-icons/fi'
 import {
@@ -244,7 +245,7 @@ export default function DiscoveredPickerModal({
                       </td>
                       <td className="px-3 py-2.5 text-[12px] text-slate-500">
                         <span className="block font-semibold text-slate-700">{r.agentId}</span>
-                        <span className="block text-[11px] text-slate-400">{formatWhen(r.discoveredAt)}</span>
+                        <span className="block text-[11px] text-slate-400">{relativeTime(r.discoveredAt)}</span>
                       </td>
                     </tr>
                   )
@@ -315,14 +316,3 @@ function fallbackName(row: PrinterDiscovered): string {
   return `${kind} · ${row.host}`
 }
 
-function formatWhen(iso: string): string {
-  const then = new Date(iso).getTime()
-  if (!Number.isFinite(then)) return iso
-  const ms = Date.now() - then
-  if (ms < 60_000) return 'just now'
-  const mins = Math.floor(ms / 60_000)
-  if (mins < 60) return `${mins}m ago`
-  const hrs = Math.floor(mins / 60)
-  if (hrs < 24) return `${hrs}h ago`
-  return `${Math.floor(hrs / 24)}d ago`
-}

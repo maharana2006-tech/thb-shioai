@@ -31,6 +31,7 @@ import AnimatedHeight from './ui/AnimatedHeight'
 import BatchLabelBar from './bulk/BatchLabelBar'
 import { labelCountsOf, liveOrdersOf, type LabelCounts } from '../utils/batchLabels'
 import { printPdfBlob } from '../utils/printPdf'
+import { formatDuration, relativeTime } from '../utils/relativeTime'
 import { orderService } from '../api/orderService'
 import SendToPrinterDialog from './workspace/SendToPrinterDialog'
 import { BTN_GHOST_SM } from './ui/buttons'
@@ -55,34 +56,6 @@ import { normalizeRole } from '../utils/roles'
 import BulkLabelQueueBadge from './orders/BulkLabelQueueBadge'
 import MpsProgressCard from './orders/MpsProgressCard'
 import { normalizeCarrierCode } from '../utils/carrierUtils'
-
-/**
- * Compact "X ago" for a completion timestamp — mirrors the pattern
- * used in ApiKeysPage / CarrierConnections so all "last activity" cells
- * on the site read the same way. Returns null for unset / future
- * timestamps so the caller can render nothing at all.
- */
-const completedAgo = (iso?: string | null): string | null => {
-  if (!iso) return null
-  const secs = Math.round((Date.now() - new Date(iso).getTime()) / 1000)
-  if (Number.isNaN(secs) || secs < 0) return null
-  if (secs < 60) return 'completed just now'
-  const mins = Math.round(secs / 60)
-  if (mins < 60) return `completed ${mins}m ago`
-  const hrs = Math.round(mins / 60)
-  if (hrs < 24) return `completed ${hrs}h ago`
-  return `completed ${Math.round(hrs / 24)}d ago`
-}
-
-/** "45s" · "2m 03s" · "1h 04m" — how long a generate run took / has been running. */
-const formatDuration = (ms: number): string | null => {
-  if (!Number.isFinite(ms) || ms < 0) return null
-  const secs = Math.round(ms / 1000)
-  if (secs < 60) return `${secs}s`
-  const mins = Math.floor(secs / 60)
-  if (mins < 60) return `${mins}m ${String(secs % 60).padStart(2, '0')}s`
-  return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, '0')}m`
-}
 
 /**
  * Renders the running-elapsed caption ("12s", "1m 04s", …) and self-ticks
@@ -1093,7 +1066,8 @@ export default function DataHistoryPage() {
           // batch has landed a terminal state at least once; retries
           // that go back through IN_PROGRESS null completedAt so the
           // caption disappears until the next terminal transition.
-          const done = completedAgo(b.completedAt)
+          const ago = relativeTime(b.completedAt)
+          const done = ago ? `completed ${ago}` : null
           const startedMs = b.generationStartedAt ? new Date(b.generationStartedAt).getTime() : null
           const running = (b.status || '').toUpperCase() === 'IN_PROGRESS'
           // Finished-run elapsed is a fixed diff; running-run elapsed is

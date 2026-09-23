@@ -1,3 +1,4 @@
+import { relativeTime } from '../utils/relativeTime'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useLocation, useNavigate } from 'react-router-dom'
@@ -101,18 +102,6 @@ const ACTION_OUTLINE =
   'border border-[#d8cbb0] bg-white text-[#412d15] hover:border-[#412d15] hover:bg-[#faf7f0] disabled:opacity-50'
 const ACTION_RETRY =
   'border border-amber-300 bg-amber-50 text-amber-800 hover:border-amber-400 hover:bg-amber-100 disabled:opacity-50'
-
-const relativeTime = (value?: string | null) => {
-  if (!value) return null
-  const then = new Date(value).getTime()
-  if (Number.isNaN(then)) return value
-  const mins = Math.max(0, Math.round((Date.now() - then) / 60000))
-  if (mins < 1) return 'just now'
-  if (mins < 60) return `${mins} min ago`
-  const hours = Math.round(mins / 60)
-  if (hours < 24) return `${hours}h ago`
-  return `${Math.round(hours / 24)}d ago`
-}
 
 /**
  * The single Orders & Labels workspace: browse every order, work the

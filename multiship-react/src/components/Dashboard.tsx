@@ -1,3 +1,4 @@
+import { relativeTime } from '../utils/relativeTime'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -68,16 +69,6 @@ const initials = (name?: string | null) =>
     .slice(0, 2)
     .map((p) => p[0]?.toUpperCase() ?? '')
     .join('') || '?'
-
-const relTime = (iso?: string | null) => {
-  if (!iso) return ''
-  const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000))
-  if (mins < 1) return 'just now'
-  if (mins < 60) return `${mins}m ago`
-  const h = Math.round(mins / 60)
-  if (h < 24) return `${h}h ago`
-  return `${Math.round(h / 24)}d ago`
-}
 
 /** Tiny inline area sparkline — no chart library, stays in the design system. */
 function Sparkline({ points }: { points: number[] }) {
@@ -384,17 +375,17 @@ export default function Dashboard() {
             if (isStale && updatedAt != null) {
               return (
                 <span
-                  title={`Last successful refresh was ${relTime(new Date(updatedAt).toISOString())}. Automatic polling may be blocked.`}
+                  title={`Last successful refresh was ${relativeTime(new Date(updatedAt).toISOString())}. Automatic polling may be blocked.`}
                   className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800 ring-1 ring-amber-200"
                 >
                   <FiAlertTriangle className="h-3 w-3" />
-                  Stale · {relTime(new Date(updatedAt).toISOString())}
+                  Stale · {relativeTime(new Date(updatedAt).toISOString())}
                 </span>
               )
             }
             return (
               <span className="text-[11.5px] text-slate-400">
-                {updatedAt ? `Updated ${relTime(new Date(updatedAt).toISOString())}` : 'Loading…'}
+                {updatedAt ? `Updated ${relativeTime(new Date(updatedAt).toISOString())}` : 'Loading…'}
               </span>
             )
           })()}
@@ -723,7 +714,7 @@ export default function Dashboard() {
                       <span className={`inline-flex h-5 items-center rounded px-1.5 text-[8.5px] font-black tracking-wide text-white ${av.bg}`}>
                         {av.mono}
                       </span>
-                      <span className="block text-[10px] text-slate-400">{relTime(l.generatedAt)}</span>
+                      <span className="block text-[10px] text-slate-400">{relativeTime(l.generatedAt)}</span>
                     </span>
                   </button>
                   {l.trackingNumber ? (

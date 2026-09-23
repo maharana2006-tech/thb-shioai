@@ -1,3 +1,4 @@
+import { relativeTime } from '../utils/relativeTime'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   FiActivity, FiAlertTriangle, FiCheckCircle, FiClock, FiEdit2, FiPrinter, FiRadio, FiTrash2, FiX,
@@ -340,7 +341,7 @@ export default function PrinterDetailsPanel({
                       )}
                       <span className="min-w-0">
                         <span className="block text-[11.5px] font-semibold text-slate-800" title={new Date(h.testedAt).toLocaleString()}>
-                          {formatSince(h.testedAt)}
+                          {relativeTime(h.testedAt)}
                           {h.testedBy ? <span className="ml-1 font-normal text-slate-500">by {h.testedBy}</span> : null}
                         </span>
                         {h.message ? (
@@ -357,19 +358,6 @@ export default function PrinterDetailsPanel({
       </div>
     </div>
   )
-}
-
-// PR-R9.5b — same formatSince helper the other panels use.
-function formatSince(iso: string): string {
-  const then = new Date(iso).getTime()
-  if (!Number.isFinite(then)) return iso
-  const ms = Date.now() - then
-  if (ms < 60_000) return 'just now'
-  const mins = Math.floor(ms / 60_000)
-  if (mins < 60) return `${mins}m ago`
-  const hrs = Math.floor(mins / 60)
-  if (hrs < 24) return `${hrs}h ago`
-  return `${Math.floor(hrs / 24)}d ago`
 }
 
 function ClientList({ codes }: { codes: string[] }) {
