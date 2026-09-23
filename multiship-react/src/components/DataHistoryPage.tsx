@@ -565,7 +565,19 @@ export default function DataHistoryPage() {
       let cancelled = false
       polls.set(id, { cancel: () => { cancelled = true } })
       void (async () => {
+        // Interval was 400ms which produced ~2.5 req/sec/batch — several
+        // IN_PROGRESS batches × 90 s of a page-load window generated 439
+        // requests in the operator's DevTools. Bumped to 2 s: still gives
+        // a smooth progress bar (a text "X of N" counter reads fine at
+        // 0.5 Hz) and cuts the request rate 5×.
+        // Also gate on tab visibility — a backgrounded tab has no reason
+        // to keep hammering; resume when the operator refocuses.
+        const POLL_INTERVAL_MS = 2000
         while (!cancelled) {
+          if (document.visibilityState !== 'visible') {
+            await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS))
+            continue
+          }
           try {
             const pr = await orderImportService.generationProgress(id)
             const d = pr.data
@@ -593,7 +605,7 @@ export default function DataHistoryPage() {
                above will refresh the batches list which drives our
                continue/stop decision on the next tick. */
           }
-          await new Promise((r) => setTimeout(r, 400))
+          await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS))
         }
         polls.delete(id)
       })()
