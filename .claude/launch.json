@@ -6,6 +6,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "multiship-react", "run", "dev", "--", "--port", "5175", "--strictPort", "--host"],
       "port": 5175
+    },
+    {
+      "name": "multiship-web-prod",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "multiship-react", "run", "preview", "--", "--port", "5176", "--strictPort", "--host"],
+      "port": 5176
     }
   ]
 }

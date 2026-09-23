@@ -4,7 +4,7 @@ import react from '@vitejs/plugin-react'
 import { visualizer } from 'rollup-plugin-visualizer'
 
 // https://vite.dev/config/
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ mode, command }) => {
   // Load .env, .env.local, .env.<mode>, .env.<mode>.local — the standard
   // Vite override chain. Prior to this, vite.config.ts read the proxy target
   // from `process.env.VITE_DEV_BACKEND_URL`, which only picks up OS-level
@@ -17,7 +17,9 @@ export default defineConfig(({ mode }) => {
   // ship with no VITE_API_BASE_URL. Runtime code used to fall back to
   // `${hostname}:8080`, which is a dev-only assumption (in prod the API
   // lives at a proxied /api on the same origin, not on port 8080).
-  if (mode === 'production' && !env.VITE_API_BASE_URL) {
+  // Only when building — `vite preview` also runs in production mode but just
+  // serves the bundle that was already built with the value baked in.
+  if (command === 'build' && mode === 'production' && !env.VITE_API_BASE_URL) {
     throw new Error(
       'VITE_API_BASE_URL is required for production builds. ' +
         'Set it to the deployed API origin (e.g. https://app.example.com/api/v1) ' +
@@ -65,6 +67,18 @@ export default defineConfig(({ mode }) => {
   // multiship-react/.env.local with:
   //     VITE_DEV_BACKEND_URL=http://localhost:8081
   server: {
+    proxy: {
+      '/api': {
+        target: env.VITE_DEV_BACKEND_URL || 'http://localhost:8080',
+        changeOrigin: false,
+      },
+    },
+  },
+  // `npm run preview -- --host` serves the production build (dist/) on the
+  // LAN with the same proxy, so a client machine gets one minified bundle
+  // instead of the dev server's ~140 unminified modules. Build first with
+  //     VITE_API_BASE_URL=/api/v1 npm run build
+  preview: {
     proxy: {
       '/api': {
         target: env.VITE_DEV_BACKEND_URL || 'http://localhost:8080',
