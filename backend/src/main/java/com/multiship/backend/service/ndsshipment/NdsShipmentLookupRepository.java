@@ -99,20 +99,23 @@ public class NdsShipmentLookupRepository {
             String currency) {}
 
     public Optional<OrderHeader> findOrderHeader(String clientCode, String orderNo, String orderSuffix) {
-        // PATCH 2026-09-22: minimal SELECT — only columns explicitly named in
-        // the task spec + those we've confirmed exist. Real NDS DDL doesn't
-        // have CURRENCY_CD / INCOTERMS on OEHEAD and probably not CUST_PO /
-        // DEPARTMENT / SHIP_TO_ATTN / SHIP_TO_ADDR2/3 / SHIP_TO_EMAIL /
-        // SHIPPED_FLAG / HOLD_FLAG either. Restoring those columns is a TODO
-        // once ops shares the DDL (ALL_TAB_COLUMNS query).
-        // BARE MINIMUM until ops shares OEHEAD DDL — SHIP_TO_* columns
-        // aren't named what we guessed. Nulling everything except the
-        // primary key + SHIPVIA_CD so the scan flow can at least
-        // resolve the client + hit the next query. FE prefill will be
-        // mostly empty until the real column names land.
+        // Ship-to columns use the real OEHEAD names confirmed by ops
+        // (SHIP_NAME / SHIP_ADDR1..3 / SHIPTO_*). Still not selected —
+        // not present on real OEHEAD or not yet confirmed: SHIP_TO_EMAIL,
+        // SHIPPED_FLAG, HOLD_FLAG, CUST_PO, DEPARTMENT, INCOTERMS, CURRENCY_CD.
         String sql = """
                 SELECT ORDER_NO,
                        ORDER_SUFFIX,
+                       SHIP_NAME,
+                       SHIP_ATTN,
+                       SHIP_ADDR1,
+                       SHIP_ADDR2,
+                       SHIP_ADDR3,
+                       SHIPTO_CITY,
+                       SHIPTO_STATE,
+                       SHIPTO_ZIP,
+                       SHIPTO_COUNTRY_CD,
+                       SHIPTO_RECIP_PHONE,
                        SHIPVIA_CD
                   FROM OEHEAD
                  WHERE ORDER_NO     = :orderNo
@@ -126,16 +129,16 @@ public class NdsShipmentLookupRepository {
                     new OrderHeader(
                             rs.getString("ORDER_NO"),
                             rs.getString("ORDER_SUFFIX"),
-                            null,   // SHIP_TO_NAME — TBD
-                            null,   // SHIP_TO_ATTN — TBD
-                            null,   // SHIP_TO_ADDR1 — TBD
-                            null,   // SHIP_TO_ADDR2 — TBD
-                            null,   // SHIP_TO_ADDR3 — TBD
-                            null,   // SHIP_TO_CITY — TBD
-                            null,   // SHIP_TO_STATE — TBD
-                            null,   // SHIP_TO_POSTAL — TBD
-                            null,   // SHIP_TO_COUNTRY_CD — TBD (invalid identifier confirmed)
-                            null,   // SHIP_TO_PHONE — TBD
+                            rs.getString("SHIP_NAME"),
+                            rs.getString("SHIP_ATTN"),
+                            rs.getString("SHIP_ADDR1"),
+                            rs.getString("SHIP_ADDR2"),
+                            rs.getString("SHIP_ADDR3"),
+                            rs.getString("SHIPTO_CITY"),
+                            rs.getString("SHIPTO_STATE"),
+                            rs.getString("SHIPTO_ZIP"),
+                            rs.getString("SHIPTO_COUNTRY_CD"),
+                            rs.getString("SHIPTO_RECIP_PHONE"),
                             null,   // SHIP_TO_EMAIL — TBD
                             rs.getString("SHIPVIA_CD"),
                             null,   // SHIPPED_FLAG — TBD

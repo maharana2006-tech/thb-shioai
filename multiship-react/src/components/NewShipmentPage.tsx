@@ -1307,6 +1307,13 @@ export default function NewShipmentPage() {
       })
     }
     if (p.shipMethod?.mappedServiceId != null) {
+      // The mapped service decides the carrier. applyClient above picked the
+      // client's DEFAULT carrier account (e.g. FedEx); leaving it there made
+      // the re-validate effect drop a UPS mapped service (not in FedEx's
+      // servicesForCarrier) and substitute the FedEx default service.
+      const mapped = services.find((s) => s.id === p.shipMethod!.mappedServiceId)
+      const mappedCarrier = canon(mapped?.carrier)
+      if (mappedCarrier) setCarrier(mappedCarrier)
       setServiceId(p.shipMethod.mappedServiceId)
     }
     if (p.packages.length > 0) {

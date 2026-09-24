@@ -176,7 +176,7 @@ class NdsShipmentLookupOracleIT extends AbstractIntegrationTest {
 
     @Test
     void directLookupInternationalPopulatesItems() {
-        jdbc.update("UPDATE OEHEAD SET SHIP_TO_COUNTRY_CD = 'GB' WHERE ORDER_NO = ?", "123456");
+        jdbc.update("UPDATE OEHEAD SET SHIPTO_COUNTRY_CD = 'GB' WHERE ORDER_NO = ?", "123456");
         jdbc.update(
                 "INSERT INTO OE_INTL_ITEMS (ORDER_NO, ORDER_SUFFIX, LINE_NO, DESCRIPTION, "
                         + "QUANTITY, UNIT_VALUE, CURRENCY_CD, HS_CODE, COUNTRY_OF_ORIGIN, UNIT_WEIGHT_LB) "
@@ -248,9 +248,9 @@ class NdsShipmentLookupOracleIT extends AbstractIntegrationTest {
                         + "VALUES (?, ?, ?, ?)",
                 containerId, client, orderNo, suffix);
         jdbc.update(
-                "INSERT INTO OEHEAD (ORDER_NO, ORDER_SUFFIX, SHIP_TO_NAME, SHIP_TO_ATTN, "
-                        + "SHIP_TO_ADDR1, SHIP_TO_CITY, SHIP_TO_STATE, SHIP_TO_POSTAL, "
-                        + "SHIP_TO_COUNTRY_CD, SHIP_TO_PHONE, SHIP_TO_EMAIL, SHIPVIA_CD, "
+                "INSERT INTO OEHEAD (ORDER_NO, ORDER_SUFFIX, SHIP_NAME, SHIP_ATTN, "
+                        + "SHIP_ADDR1, SHIPTO_CITY, SHIPTO_STATE, SHIPTO_ZIP, "
+                        + "SHIPTO_COUNTRY_CD, SHIPTO_RECIP_PHONE, SHIP_TO_EMAIL, SHIPVIA_CD, "
                         + "SHIPPED_FLAG, HOLD_FLAG, CUST_PO, DEPARTMENT, INCOTERMS, CURRENCY_CD) "
                         + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 orderNo, suffix, "Wile E Coyote", "ACME Corp",

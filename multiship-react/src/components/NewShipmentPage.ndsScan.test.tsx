@@ -284,4 +284,50 @@ describe('NewShipmentPage — NDS scan / prefill (PR2)', () => {
     expect(banner.textContent).toMatch(/NDS is unavailable/)
     expect(banner.className).toMatch(/amber/)
   })
+
+  it('switches the carrier to the mapped service carrier, not the client default', async () => {
+    // Client ACME defaults to FedEx; the NDS order is mapped to a UPS
+    // service. Before the fix the carrier stayed FEDEX and the
+    // re-validate effect swapped the UPS service for the FedEx default.
+    const { accountRefService } = await import('../api/accountRefService')
+    const { shippingConfigService } = await import('../api/shippingConfigService')
+    const { clientService } = await import('../api/clientService')
+    const acct = (id: number, carrierCode: string, accountNumber: string) => ({
+      id, carrierCode, accountNumber, accountName: null, customerNo: 'ACME',
+      environment: null, isDefault: false, active: true, complete: true,
+      clientIdPreview: null, verified: true, lastVerifiedAt: null,
+      labelsGenerated: null, lastUsedAt: null,
+    })
+    vi.mocked(accountRefService.listAccounts).mockResolvedValueOnce(
+      [acct(10, 'FEDEX', 'F-1'), acct(11, 'UPS', 'U-1')] as never)
+    const svc = (id: number, carrier: string, serviceCode: string, name: string) => ({
+      id, carrier, serviceCode, name, scope: 'DOMESTIC', enabled: true,
+      sortOrder: id, originCountry: 'US',
+    })
+    vi.mocked(shippingConfigService.catalog).mockResolvedValueOnce({
+      services: [svc(1, 'UPS', '03', 'UPS Ground'), svc(2, 'FEDEX', 'FEDEX_GROUND', 'FedEx Ground')],
+      carriers: [], links: [], rulePackages: [], ruleWarehouses: [], originCountries: ['US'],
+    } as never)
+    vi.mocked(clientService.listClients).mockResolvedValueOnce({
+      data: { content: [{
+        clientCode: 'ACME', name: 'Acme Corp',
+        carrierAccounts: [{ carrierCode: 'FEDEX', accountNumber: 'F-1', active: true, clientDefault: true }],
+      }] },
+    } as never)
+    ndsLookup.mockResolvedValue(okPrefill())
+    const Page = await loadPage()
+    renderWithProviders(<Page />)
+    const scanInput = await screen.findByPlaceholderText(/\.X<containerId>/)
+    // Let the accounts/catalog/clients load settle before scanning.
+    await waitFor(() => expect(clientService.listClients).toHaveBeenCalled())
+    await new Promise((r) => setTimeout(r, 50))
+    const user = userEvent.setup()
+    await user.type(scanInput, '.X77{Enter}')
+    await screen.findByRole('status')
+    await waitFor(() => {
+      const values = screen.getAllByRole('combobox').map((el) => (el as HTMLSelectElement).value)
+      expect(values).toContain('UPS')
+      expect(values).toContain('1')
+    })
+  }, 20_000)
 })
