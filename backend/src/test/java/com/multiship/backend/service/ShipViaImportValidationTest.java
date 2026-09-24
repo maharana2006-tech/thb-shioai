@@ -87,11 +87,20 @@ class ShipViaImportValidationTest {
                 .weight(new BigDecimal("2")).weightUnit("LB").build();
     }
 
-    /** Runs the same two steps the preview/edit paths run, in the same order. */
+    /** Runs the same two steps the preview/edit paths run, in the same order — as a file import. */
     private OrderImportRowDTO validate(OrderImportRowDTO row) {
+        return validate(row, true);
+    }
+
+    /** The same, as a WMS/API pull (a catalog code is accepted there). */
+    private OrderImportRowDTO validateWms(OrderImportRowDTO row) {
+        return validate(row, false);
+    }
+
+    private OrderImportRowDTO validate(OrderImportRowDTO row, boolean fileImport) {
         List<OrderImportRowDTO> rows = new java.util.ArrayList<>(List.of(row));
-        ReflectionTestUtils.invokeMethod(service, "resolveNamesToCodes", rows);
-        service.validateReferences(rows);
+        ReflectionTestUtils.invokeMethod(service, "resolveNamesToCodes", rows, fileImport);
+        service.validateReferences(rows, fileImport);
         return rows.get(0);
     }
 
@@ -124,9 +133,40 @@ class ShipViaImportValidationTest {
         assertTrue(err.contains("Shipping Service Mapping"), err);
     }
 
+    // ── File imports: the mapping is the only way in ─────────────────────────
+
     @Test
-    void aRealCarrierServiceCodeStillPassesForClientsWithNoMapping() {
+    void aFileImportRefusesARawCarrierCodeWithNoMappingRule() {
         OrderImportRowDTO r = validate(row("02", "UPS"));
+        assertEquals(1, r.getErrors().size(), r.getErrors().toString());
+        String err = r.getErrors().get(0);
+        // The upload window's Map button keys off "serviceType 'X' is not mapped".
+        assertTrue(err.startsWith("serviceType '02' is not mapped for DES875"), err);
+        assertTrue(err.contains("UPS service code"), err);
+        assertTrue(err.contains("Shipping Service Mapping"), err);
+    }
+
+    @Test
+    void aFileImportKeepsAnUnmappedNameAsWrittenSoTheOperatorMapsTheClientsCode() {
+        OrderImportRowDTO r = validate(row("UPS Ground", "UPS"));
+        assertEquals("UPS Ground", r.getServiceType(), "not rewritten to 03 behind the operator's back");
+        String err = r.getErrors().get(0);
+        assertTrue(err.startsWith("serviceType 'UPS GROUND' is not mapped for DES875"), err);
+        assertTrue(!err.contains("Shipping services"), "no pointer to raw catalog codes: " + err);
+    }
+
+    @Test
+    void aLabelledRowKeepsItsLabelEvenWithoutAMapping() {
+        OrderImportRowDTO labelled = row("02", "UPS");
+        labelled.setGeneratedStatus("GENERATED");
+        assertEquals(List.of(), validate(labelled).getErrors());
+    }
+
+    // ── WMS/API pulls: a catalog code is what the WMS sends ──────────────────
+
+    @Test
+    void aRealCarrierServiceCodeStillPassesForAWmsPullWithNoMapping() {
+        OrderImportRowDTO r = validateWms(row("02", "UPS"));
         assertEquals(List.of(), r.getErrors());
         assertEquals("02", r.getServiceType());
         assertNull(r.getShipViaCode(), "no rule fired — nothing was translated");
@@ -194,7 +234,7 @@ class ShipViaImportValidationTest {
      */
     @Test
     void aSwitchedOffCatalogCodeFailsSayingSo() {
-        OrderImportRowDTO r = validate(row("12", "UPS"));
+        OrderImportRowDTO r = validateWms(row("12", "UPS"));
         assertEquals(1, r.getErrors().size(), r.getErrors().toString());
         assertTrue(r.getErrors().get(0).contains("switched off"), r.getErrors().get(0));
     }
@@ -207,7 +247,7 @@ class ShipViaImportValidationTest {
         when(catalog.findAllByOrderByCarrierAscSortOrderAsc()).thenReturn(List.of(
                 svc("UPS", "01", "UPS Next Day Air"), svc("FEDEX", "01", "FedEx Priority Overnight")));
         ReflectionTestUtils.setField(service, "shippingServiceRepository", catalog);
-        OrderImportRowDTO r = validate(row("01", null));
+        OrderImportRowDTO r = validateWms(row("01", null));
         assertNull(r.getCarrierCode(), "nothing picked a carrier");
         assertEquals(1, r.getErrors().size(), r.getErrors().toString());
         assertTrue(r.getErrors().get(0).contains("UPS and FEDEX"), r.getErrors().get(0));
@@ -216,7 +256,7 @@ class ShipViaImportValidationTest {
 
     @Test
     void aCarrierServiceCodeWithNoCarrierColumnIsAcceptedAndNamesItsCarrier() {
-        OrderImportRowDTO r = validate(row("02", null));
+        OrderImportRowDTO r = validateWms(row("02", null));
         assertEquals(List.of(), r.getErrors(), r.getErrors().toString());
         assertEquals("UPS", r.getCarrierCode(), "the code names the carrier");
         assertNull(r.getShipViaCode(), "no rule fired — nothing was translated");

@@ -904,6 +904,17 @@ public class OrderImportServiceImpl implements OrderImportService {
      * work.
      */
     private void resolveNamesToCodes(List<OrderImportRowDTO> rows) {
+        resolveNamesToCodes(rows, true);
+    }
+
+    /**
+     * @param requireMapping file imports (CSV/Excel): only a Shipping Service
+     *        Mapping rule may translate serviceType. An unmapped value is left
+     *        exactly as the file wrote it, so the error and the Map button name
+     *        the code the client actually uses (rewriting "UPS Ground" to "03"
+     *        here made the operator map "03", and the next file failed again).
+     */
+    private void resolveNamesToCodes(List<OrderImportRowDTO> rows, boolean requireMapping) {
         // Ship-method rules first: the file's serviceType is normally the
         // client's OWN ship via code (U11, P10…), and the rule decides which
         // carrier + service it means. Runs before the catalog lookups below so
@@ -943,7 +954,7 @@ public class OrderImportServiceImpl implements OrderImportService {
             // when the value looks like a wire code already (no space,
             // ≤6 chars) so a raw "03" override stays untouched.
             String svcRaw = row.getServiceType();
-            if (looksLikeName(svcRaw)) {
+            if (!requireMapping && looksLikeName(svcRaw)) {
                 for (com.multiship.backend.model.ShippingService s : services) {
                     if (!carrierU.equalsIgnoreCase(s.getCarrier())) continue;
                     if (svcRaw.equalsIgnoreCase(s.getName())) {
@@ -956,7 +967,7 @@ public class OrderImportServiceImpl implements OrderImportService {
             // "UPS_GROUND" from an ERP) → the carrier's own code, so the row
             // validates, the grid shows the real service, and the carrier is
             // never sent a word it doesn't know.
-            if (shippingConfigService != null && StringUtils.hasText(row.getServiceType())) {
+            if (!requireMapping && shippingConfigService != null && StringUtils.hasText(row.getServiceType())) {
                 String cur = row.getServiceType().trim();
                 boolean isCode = services.stream().anyMatch(s -> carrierU.equalsIgnoreCase(s.getCarrier())
                         && s.getServiceCode() != null && s.getServiceCode().equalsIgnoreCase(cur));
@@ -1002,6 +1013,16 @@ public class OrderImportServiceImpl implements OrderImportService {
      * service or package code) is a WARNING.
      */
     void validateReferences(List<OrderImportRowDTO> rows) {
+        validateReferences(rows, true);
+    }
+
+    /**
+     * @param requireMapping file imports (CSV/Excel): every row not yet labelled
+     *        must reach its service through a Shipping Service Mapping rule — a
+     *        raw carrier code ("02", "03") is refused too. WMS/API pulls (false)
+     *        keep accepting a catalog code, which is what the WMS sends.
+     */
+    void validateReferences(List<OrderImportRowDTO> rows, boolean requireMapping) {
         if (clientRepository == null || rows.isEmpty()) return;
 
         // ---- Sprint 51 BP-M6: build the code set from the CSV rows so
@@ -1201,6 +1222,23 @@ public class OrderImportServiceImpl implements OrderImportService {
             if (service == null) {
                 errors.add("serviceType is required — enter the client's ship via code "
                         + "(Settings → Shipping Service Mapping) or a carrier service code");
+            } else if (shipVia == null && requireMapping
+                    && !"GENERATED".equalsIgnoreCase(row.getGeneratedStatus())) {
+                // File import, no rule fired: refuse even a real carrier code. The
+                // client's file must name ITS ship via, and only the mapping decides
+                // which carrier service that is. (A labelled row keeps its label.)
+                String owner = java.util.stream.Stream.of(servicesByCarrier, offByCarrier)
+                        .flatMap(m -> m.entrySet().stream())
+                        .filter(e -> e.getValue().contains(service))
+                        .map(Map.Entry::getKey).findFirst().orElse(null);
+                // No carrier passed: its wording would point at raw catalog codes,
+                // which a file import can no longer use.
+                errors.add(owner == null
+                        ? shipViaError(service, client, null, java.util.Set.of())
+                        : "serviceType '" + service + "' is not mapped"
+                                + (client == null ? " (this row has no client code)" : " for " + client)
+                                + " — it is a " + owner + " service code, but a file import must use a Shipping Service"
+                                + " Mapping rule. Add " + service + " in Settings → Shipping Service Mapping");
             } else if (shipVia == null) {
                 // No rule fired. Accept it only if it IS a carrier service code.
                 java.util.Set<String> known = carrier == null ? java.util.Set.of()
@@ -2108,6 +2146,11 @@ public class OrderImportServiceImpl implements OrderImportService {
 
     @Override
     public ApiResponse<OrderImportPreviewDTO> validate(List<OrderImportRowDTO> rows) {
+        return validate(rows, true);
+    }
+
+    /** @param requireMapping false for a WMS/API batch (see {@link #validateReferences(List, boolean)}). */
+    ApiResponse<OrderImportPreviewDTO> validate(List<OrderImportRowDTO> rows, boolean requireMapping) {
         if (rows == null) rows = List.of();
         // Sprint 50 Tier 0.5 PR G — clamp before any validation so a
         // tenant-scoped USER re-submitting rows edited to a foreign
@@ -2125,8 +2168,8 @@ public class OrderImportServiceImpl implements OrderImportService {
             row.setErrors(validateRow(row));
             row.setWarnings(List.of()); // clear warnings; will be re-added by validators below
         }
-        resolveNamesToCodes(rows);
-        validateReferences(rows);
+        resolveNamesToCodes(rows, requireMapping);
+        validateReferences(rows, requireMapping);
         validateBusinessRules(rows);
         validateCustomFields(rows);
         validateInternationalItems(rows);
@@ -2329,7 +2372,8 @@ public class OrderImportServiceImpl implements OrderImportService {
         // reverse-lookup here so a value the operator pasted in
         // ("UPS Ground") still resolves to the wire code before the
         // carrier connector sees it.
-        resolveNamesToCodes(rows);
+        boolean fileImport = sourceOverride == null;
+        resolveNamesToCodes(rows, fileImport);
         // Final server-side gate for the dynamic reference checks — start
         // from a clean slate (rows round-trip stale preview errors) so the
         // merge below sees only current failures. Warnings too: they were
@@ -2343,7 +2387,7 @@ public class OrderImportServiceImpl implements OrderImportService {
             row.setErrors(new ArrayList<>(validateRow(row)));
             row.setWarnings(List.of());
         }
-        validateReferences(rows);
+        validateReferences(rows, fileImport);
         validateBusinessRules(rows);
         validateCustomFields(rows);
         // Same for the international-item rule — operator edits could
@@ -3567,7 +3611,7 @@ public class OrderImportServiceImpl implements OrderImportService {
 
         // Re-validate all rows
         log.info("Validating all {} rows in batch {}", rows.size(), id);
-        validate(rows);
+        validate(rows, !isApiSource(batch.getSource()));
 
         // Update errors/warnings in import_batch_row for WMS/API batches
         boolean isWmsOrApi = batch.getSource() != null &&
@@ -4138,7 +4182,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         // Re-validate the whole batch — mutates each row's errors/warnings
         // in place through the same pipeline preview/commit use.
         log.info("Validating batch {} row {} before save: errors={}", id, rowNumber, rows.get(index).getErrors());
-        validate(rows);
+        validate(rows, !isApiSource(batch.getSource()));
         log.info("Validated batch {} row {} after validation: errors={}", id, rowNumber, rows.get(index).getErrors());
 
         // Re-stamp lifecycle status for every row that hasn't shipped.

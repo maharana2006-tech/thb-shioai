@@ -1770,9 +1770,10 @@ export default function DataHistoryPage() {
           const { byField } = bucketRowErrors(r.errors ?? [])
           const generated = (r.generatedStatus ?? '').toUpperCase() === 'GENERATED'
           // An API/WMS order shows the client's own ship via code (its resolved
-          // carrier service in the tooltip), and an unmapped code can be mapped here.
+          // carrier service in the tooltip). An unmapped code — WMS or file, since a
+          // file import must go through the mapping too — can be mapped here.
           const showShipVia = c.key === 'serviceType' && rowIsWms && !!r.shipViaCode
-          const unmapped = c.key === 'serviceType' && rowIsWms ? (byField.serviceType ?? []).map((m) => m.match(UNMAPPED_SHIP_VIA)).find(Boolean) : null
+          const unmapped = c.key === 'serviceType' ? (byField.serviceType ?? []).map((m) => m.match(UNMAPPED_SHIP_VIA)).find(Boolean) : null
           return (
             <div title={showShipVia ? (r.shipViaNote ?? undefined) : undefined}>
               <GridCell
