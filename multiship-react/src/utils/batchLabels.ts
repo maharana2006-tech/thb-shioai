@@ -15,6 +15,17 @@ export function labelCountsOf(rows: OrderImportRow[]): LabelCounts {
   return c
 }
 
+/**
+ * Whether this row's order has a commercial invoice: only an international
+ * shipment does. ponytail: "international" = destination outside the US, the
+ * same rule the row's invoice icon uses; a client shipping from another
+ * country would need its ship-from country here.
+ */
+export function hasCommercialInvoice(r: Pick<OrderImportRow, 'countryCode'>): boolean {
+  const c = (r.countryCode ?? '').trim().toUpperCase()
+  return c !== '' && c !== 'US'
+}
+
 /** The distinct orders behind these rows whose label is live (generated, not voided). */
 export function liveOrdersOf(rows: OrderImportRow[]): number[] {
   const out = new Set<number>()

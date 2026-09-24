@@ -6,7 +6,7 @@ import { orderService } from '../../api/orderService'
 import { notify } from '../../utils/notify'
 import { printPdfBlob } from '../../utils/printPdf'
 import { BTN_GHOST_SM } from '../ui/buttons'
-import { liveOrdersOf } from '../../utils/batchLabels'
+import { hasCommercialInvoice, liveOrdersOf } from '../../utils/batchLabels'
 import SendToPrinterDialog from '../workspace/SendToPrinterDialog'
 
 const MAX_PRINT = 500
@@ -76,19 +76,22 @@ export default function BatchLabelBar({
   const scoped = picked.length > 0
   const target = scoped ? pickedLive : allLive
   const n = target.length
+  // Invoices only for the orders that have one — offered only when there are any.
+  const invoiceTarget = liveOrdersOf((scoped ? rows.filter((r) => pickedSet.has(r.rowNumber)) : rows).filter(hasCommercialInvoice))
   const scopeLabel = scoped ? `${n} selected` : `all ${n}`
 
   if (allLive.length === 0) return null
 
   const print = async (docType: 'LABEL' | 'COMMERCIAL_INVOICE') => {
-    if (n === 0 || printing) return
-    if (n > MAX_PRINT) {
+    const orders = docType === 'LABEL' ? target : invoiceTarget
+    if (orders.length === 0 || printing) return
+    if (orders.length > MAX_PRINT) {
       notify.info({ title: 'Too many to print at once', body: `Print at most ${MAX_PRINT} orders at a time — tick fewer rows.` })
       return
     }
     setPrinting(docType)
     try {
-      const res = await orderService.printDocuments(target, docType)
+      const res = await orderService.printDocuments(orders, docType)
       printPdfBlob(res.blob)
       onPrinted?.()
       const what = docType === 'LABEL' ? 'label' : 'commercial invoice'
@@ -181,11 +184,12 @@ export default function BatchLabelBar({
               {([
                 { key: 'LABEL', label: 'Download labels', hint: 'One print dialog, 4×6 labels', icon: <FiPrinter className="h-3.5 w-3.5 text-[#412d15]" />,
                   run: () => void print('LABEL') },
-                { key: 'INVOICE', label: 'Download invoices', hint: 'Commercial invoices — international orders', icon: <FiFileText className="h-3.5 w-3.5 text-sky-700" />,
-                  run: () => void print('COMMERCIAL_INVOICE') },
+                ...(invoiceTarget.length > 0 ? [{ key: 'INVOICE', label: 'Download invoices',
+                  hint: `Commercial invoices — ${invoiceTarget.length} international order${invoiceTarget.length === 1 ? '' : 's'}`,
+                  icon: <FiFileText className="h-3.5 w-3.5 text-sky-700" />, run: () => void print('COMMERCIAL_INVOICE') }] : []),
                 { key: 'SEND', label: 'Send to printer', hint: 'Straight to a network printer', icon: <FiSend className="h-3.5 w-3.5 text-emerald-600" />,
                   run: () => setSendOpen(true) },
-              ] as const).map((item) => (
+              ]).map((item) => (
                 <button
                   key={item.key}
                   type="button"

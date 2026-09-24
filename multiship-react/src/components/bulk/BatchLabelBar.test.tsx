@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { OrderImportRow } from '../../api/orderImportService'
@@ -26,11 +26,11 @@ vi.mock('../workspace/SendToPrinterDialog', () => ({
 
 import BatchLabelBar from './BatchLabelBar'
 
-const row = (n: number, orderNo: number | null, status: string | null): OrderImportRow =>
-  ({ rowNumber: n, generatedOrderNo: orderNo, generatedStatus: status, errors: [] } as unknown as OrderImportRow)
+const row = (n: number, orderNo: number | null, status: string | null, countryCode = 'US'): OrderImportRow =>
+  ({ rowNumber: n, generatedOrderNo: orderNo, generatedStatus: status, countryCode, errors: [] } as unknown as OrderImportRow)
 
-// Rows 1+2 are one order; 4 is voided; 5 is pending.
-const rows = [row(1, 5001, 'GENERATED'), row(2, 5001, 'GENERATED'), row(3, 5002, 'GENERATED'), row(4, 5003, 'VOIDED'), row(5, null, null)]
+// Rows 1+2 are one domestic order; 3 ships to Germany; 4 is voided; 5 is pending.
+const rows = [row(1, 5001, 'GENERATED'), row(2, 5001, 'GENERATED'), row(3, 5002, 'GENERATED', 'DE'), row(4, 5003, 'VOIDED', 'FR'), row(5, null, null)]
 
 const renderBar = (picked: number[] = [], extra: Partial<Parameters<typeof BatchLabelBar>[0]> = {}) => {
   const onChanged = vi.fn()
@@ -60,6 +60,23 @@ describe('BatchLabelBar', () => {
     renderBar([3])
     await userEvent.click(screen.getByRole('button', { name: /^Print$/ }))
     await userEvent.click(screen.getByRole('menuitem', { name: /Download invoices/ }))
+    expect(printDocuments).toHaveBeenCalledWith([5002], 'COMMERCIAL_INVOICE')
+  })
+
+  it('offers invoices only for the orders that have one', async () => {
+    printDocuments.mockResolvedValue({ blob: new Blob(), included: 1, skipped: 0, skippedOrders: [] })
+    renderBar([1, 2])
+    await userEvent.click(screen.getByRole('button', { name: /^Print$/ }))
+    expect(screen.queryByRole('menuitem', { name: /Download invoices/ })).toBeNull()
+    await userEvent.keyboard('{Escape}')
+
+    // Nothing ticked: the batch's one live international order, not the domestic one.
+    cleanup()
+    renderBar()
+    await userEvent.click(screen.getByRole('button', { name: /^Print$/ }))
+    const invoices = screen.getByRole('menuitem', { name: /Download invoices/ })
+    expect(invoices).toHaveTextContent('1 international order')
+    await userEvent.click(invoices)
     expect(printDocuments).toHaveBeenCalledWith([5002], 'COMMERCIAL_INVOICE')
   })
 

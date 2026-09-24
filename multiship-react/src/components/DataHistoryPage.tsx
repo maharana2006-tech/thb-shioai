@@ -39,7 +39,7 @@ import LabelPreviewModal from './bulk/LabelPreviewModal'
 // The Orders page's per-order modals, reused on the batch page.
 const OrderDetailsModal = lazy(() => import('./modals/OrderDetailsModal'))
 const TrackingTimelineModal = lazy(() => import('./tracking/TrackingTimelineModal'))
-import { labelCountsOf, liveOrdersOf, type LabelCounts } from '../utils/batchLabels'
+import { hasCommercialInvoice, labelCountsOf, liveOrdersOf, type LabelCounts } from '../utils/batchLabels'
 import { printPdfBlob } from '../utils/printPdf'
 import { formatDuration, relativeTime } from '../utils/relativeTime'
 import { orderService, type Order } from '../api/orderService'
@@ -1839,7 +1839,7 @@ export default function DataHistoryPage() {
           const orderReady = !brokenOrders.has(orderKey(r))
           const orderNo = r.generatedOrderNo ?? null
           const tn = r.generatedTrackingNumber ?? null
-          const isIntl = (r.countryCode ?? '').toUpperCase() !== 'US'
+          const isIntl = hasCommercialInvoice(r)
           const rowKey = `${b.id}-${r.rowNumber}`
           const rowBusy = genRowKey === rowKey
           return (
