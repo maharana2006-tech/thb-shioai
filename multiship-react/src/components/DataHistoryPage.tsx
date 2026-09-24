@@ -1,5 +1,5 @@
 import { createPortal } from 'react-dom'
-import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   FiAlertCircle,
@@ -30,7 +30,9 @@ import { bulkBatchPath, bulkPaths, settingsPaths } from '../routes/workspaceRout
 import { wmsService } from '../api/wmsService'
 import { bulkService, type BulkSummary, type BulkView } from '../api/bulkService'
 import { AddShipViaMappingDialog, ShipViaCodesPanel } from './modals/ShipViaCodes'
-import OrderDocumentsTable from './OrderDocumentsTable'
+// Lazy — only rendered on the /bulk/documents tab. Keeps ~20-30 kB of
+// documents-table code out of the default /bulk/imports first-nav chunk.
+const OrderDocumentsTable = lazy(() => import('./OrderDocumentsTable'))
 import DataHistoryFilterToolbar, { BulkFilterChips, statusMeta } from './DataHistoryFilterToolbar'
 import { GridCell, DH_COLUMNS, fieldLabel, RowIssuesIcon, RowChannelChip, bucketRowErrors, rowStatus, type DhColumn } from './batchGrid'
 import NoteCell from './workspace/NoteCell'
@@ -2276,7 +2278,9 @@ export default function DataHistoryPage() {
         className={`space-y-3 ${tabMotion.dir > 0 ? 'bulk-tab-in-right' : 'bulk-tab-in-left'}`}
       >
       {dhView === 'docs' ? (
-        <OrderDocumentsTable onLoaded={() => setDocsLoadedFor(tabMotion.tab)} />
+        <Suspense fallback={<BatchListSkeleton />}>
+          <OrderDocumentsTable onLoaded={() => setDocsLoadedFor(tabMotion.tab)} />
+        </Suspense>
       ) : loadedView !== viewKey ? (
         <BatchListSkeleton />
       ) : (
