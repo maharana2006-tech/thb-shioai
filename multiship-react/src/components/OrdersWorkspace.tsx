@@ -108,7 +108,11 @@ const ACTION_RETRY =
  * generation pipeline (ready / needs details / no client / failed), and
  * review the archive — all server-side filtered against the unified list.
  */
-export default function OrdersWorkspace() {
+/**
+ * `batchId` pins the page to one label batch — the batch page embeds it so a
+ * batch's orders get the same table and every action the Orders page has.
+ */
+export default function OrdersWorkspace({ batchId }: { batchId?: number } = {}) {
   const navigate = useNavigate()
   const { role: sessionRole } = useAppSession()
   const location = useLocation()
@@ -136,9 +140,10 @@ export default function OrdersWorkspace() {
   const sortDirection: 'ASC' | 'DESC' = sorting[0]?.desc ? 'DESC' : 'ASC'
   const [showFilters, setShowFilters] = useState(false)
   const filtersRef = useRef<HTMLDivElement>(null)
-  const emptyColumnFilters = { orderNo: '', customer: '', city: '', status: '', tracking: '', batch: '' }
+  const emptyColumnFilters = { orderNo: '', customer: '', city: '', status: '', tracking: '', batch: batchId == null ? '' : String(batchId) }
   const [columnFilters, setColumnFilters] = useState(emptyColumnFilters)
   const [debouncedFilters, setDebouncedFilters] = useState(emptyColumnFilters)
+  const batchPinned = batchId != null
   /**
    * Batch-picker dropdown source (2026-09-14). Fetched from
    * /orders/batches whenever the OTHER filter surface changes AND the
@@ -1303,7 +1308,7 @@ export default function OrdersWorkspace() {
   const batchOverrideActive = activeBatchId.length > 0
   const clearBatchFilter = () => setColumnFilters((cur) => ({ ...cur, batch: '' }))
   const clearColumnFilters = () => {
-    setColumnFilters(emptyColumnFilters)
+    setColumnFilters(emptyColumnFilters) // keeps the pinned batch: it is the "empty" value
     setDateFrom('')
     setDateTo('')
     setSourceFilter('')
@@ -2031,17 +2036,21 @@ export default function OrdersWorkspace() {
               <FiTruck className="h-3 w-3" />
               Split across warehouses
             </button>
-            <button type="button"
-                    onClick={() => navigate('/bulk/imports')}
-                    className={BTN_GHOST_SM}
-                    title="Bulk Mailer — import history, the CSV/Excel importer, API batches and documents">
-              <FiDatabase className="h-3 w-3" />
-              Bulk Mailer
-            </button>
-            <button type="button" onClick={() => navigate('/orders/new')} className={BTN_PRIMARY_SM}>
-              <FiPlus className="h-3 w-3" />
-              New shipment
-            </button>
+            {batchPinned ? null : (
+              <>
+                <button type="button"
+                        onClick={() => navigate('/bulk/imports')}
+                        className={BTN_GHOST_SM}
+                        title="Bulk Mailer — import history, the CSV/Excel importer, API batches and documents">
+                  <FiDatabase className="h-3 w-3" />
+                  Bulk Mailer
+                </button>
+                <button type="button" onClick={() => navigate('/orders/new')} className={BTN_PRIMARY_SM}>
+                  <FiPlus className="h-3 w-3" />
+                  New shipment
+                </button>
+              </>
+            )}
       </div>
 
       {/* ===== workspace card ===== */}
@@ -2254,14 +2263,16 @@ export default function OrdersWorkspace() {
                   >
                     <FiInfo className="h-3.5 w-3.5 text-amber-600" />
                     Batch #{activeBatchId} · other filters ignored
-                    <button
-                      type="button"
-                      onClick={clearBatchFilter}
-                      aria-label="Clear batch filter"
-                      className="ml-0.5 rounded-full p-0.5 text-amber-800 transition hover:bg-amber-100 hover:text-amber-950"
-                    >
-                      <FiX className="h-3 w-3" />
-                    </button>
+                    {batchPinned ? null : (
+                      <button
+                        type="button"
+                        onClick={clearBatchFilter}
+                        aria-label="Clear batch filter"
+                        className="ml-0.5 rounded-full p-0.5 text-amber-800 transition hover:bg-amber-100 hover:text-amber-950"
+                      >
+                        <FiX className="h-3 w-3" />
+                      </button>
+                    )}
                   </span>
                 ) : null}
 
@@ -2364,6 +2375,7 @@ export default function OrdersWorkspace() {
                         <div className="flex items-center gap-1.5">
                           <select
                             value={columnFilters.batch}
+                            disabled={batchPinned}
                             onChange={(e) => setColumnFilter('batch')(e.target.value)}
                             className={`${advInputCls} min-w-0 flex-1`}
                             title="Pick from batches visible under the current filters"
@@ -2377,6 +2389,7 @@ export default function OrdersWorkspace() {
                           </select>
                           <input
                             value={columnFilters.batch}
+                            disabled={batchPinned}
                             onChange={(e) => setColumnFilter('batch')(e.target.value.replace(/[^0-9]/g, ''))}
                             placeholder="or type #"
                             inputMode="numeric"

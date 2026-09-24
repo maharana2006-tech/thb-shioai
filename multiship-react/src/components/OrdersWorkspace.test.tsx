@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { screen } from '@testing-library/react'
+import { screen, waitFor } from '@testing-library/react'
 import { renderWithProviders } from '../test/renderWithProviders'
 
 /**
@@ -41,6 +41,16 @@ vi.mock('../hooks/useAppSession', () => ({
 }))
 
 describe('OrdersWorkspace', () => {
+  it('batchId pins the batch filter: the first fetch is the batch override and the chip has no clear button', async () => {
+    const { orderService } = await import('../api/orderService')
+    const { default: OrdersWorkspace } = await import('./OrdersWorkspace')
+    renderWithProviders(<OrdersWorkspace batchId={161} />)
+    await waitFor(() => expect(orderService.listOrders).toHaveBeenCalledWith(expect.objectContaining({ batch: '161' })))
+    expect(await screen.findByText(/Batch #161 · other filters ignored/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Clear batch filter/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /New shipment/i })).toBeNull()
+  })
+
   it('renders without crashing within providers', async () => {
     const { default: OrdersWorkspace } = await import('./OrdersWorkspace')
     renderWithProviders(<OrdersWorkspace />)
