@@ -1083,13 +1083,16 @@ public class OrderImportServiceImpl implements OrderImportService {
                         .put(ref.getAccountNumber().trim().toUpperCase(Locale.ROOT), owner);
             }
         }
-        // carrier → set of catalog service codes
+        // carrier → set of catalog service codes that are switched ON. A code
+        // for a switched-off service used to validate clean here (mapping rules
+        // already skip such services) and was bought anyway at label time.
         Map<String, java.util.Set<String>> servicesByCarrier = new LinkedHashMap<>();
+        Map<String, java.util.Set<String>> offByCarrier = new LinkedHashMap<>();
         if (shippingServiceRepository != null) {
             for (com.multiship.backend.model.ShippingService s
                     : shippingServiceRepository.findAllByOrderByCarrierAscSortOrderAsc()) {
                 if (s.getCarrier() == null || s.getServiceCode() == null) continue;
-                servicesByCarrier
+                (s.isEnabled() ? servicesByCarrier : offByCarrier)
                         .computeIfAbsent(s.getCarrier().toUpperCase(Locale.ROOT), k -> new java.util.HashSet<>())
                         .add(s.getServiceCode().toUpperCase(Locale.ROOT));
             }
@@ -1209,10 +1212,22 @@ public class OrderImportServiceImpl implements OrderImportService {
                 // is UPS 2nd Day Air whether or not the file says UPS — calling
                 // it an unmapped ship via code invited the operator to create a
                 // rule named after a real carrier code.
+                String ambiguous = null;
                 if (!catalogued && carrier == null) {
-                    catalogued = servicesByCarrier.values().stream().anyMatch(codes -> codes.contains(service));
+                    List<String> owners = servicesByCarrier.entrySet().stream()
+                            .filter(e -> e.getValue().contains(service)).map(Map.Entry::getKey).toList();
+                    // Two carriers use the same code: the account cascade would pick
+                    // one and every carrier-specific check above was skipped.
+                    if (owners.size() > 1) ambiguous = String.join(" and ", owners);
+                    catalogued = owners.size() == 1;
                 }
-                if (!catalogued) {
+                if (ambiguous != null) {
+                    errors.add("serviceType '" + service + "' is a service code for " + ambiguous
+                            + " — add a carrierCode column, or map it in Settings → Shipping Service Mapping");
+                } else if (!catalogued && offByCarrier.getOrDefault(carrier == null ? "" : carrier, java.util.Set.of()).contains(service)) {
+                    errors.add("serviceType '" + service + "' is switched off in Settings → Shipping services"
+                            + " — turn it back on, or use another service");
+                } else if (!catalogued) {
                     errors.add(shipViaError(service, client, carrier, known));
                 }
             }
@@ -2322,7 +2337,10 @@ public class OrderImportServiceImpl implements OrderImportService {
         // same advisory (rows showed the platform-billing note 3× after
         // three attempts).
         for (OrderImportRowDTO row : rows) {
-            row.setErrors(List.of());
+            // Shape errors on every line: a bad weight on line 2 of an order
+            // blocks the order as much as one on line 1 (processGroup only
+            // re-ran validateRow on the leader).
+            row.setErrors(new ArrayList<>(validateRow(row)));
             row.setWarnings(List.of());
         }
         validateReferences(rows);
@@ -5581,10 +5599,20 @@ public class OrderImportServiceImpl implements OrderImportService {
                 if (!errors.contains(e)) errors.add(e);
             }
         }
+        // The order ships as ONE shipment, so a broken line 2 (a group-field
+        // mismatch, another client's account) blocks it as much as a broken
+        // leader — the leader's errors were the only ones ever checked here.
+        for (int i = 1; i < group.size(); i++) {
+            OrderImportRowDTO r = group.get(i);
+            if (r.getErrors() != null && !r.getErrors().isEmpty()) {
+                errors.add("row " + r.getRowNumber() + " of this order needs fixes: " + r.getErrors().get(0));
+            }
+        }
         leader.setErrors(errors);
         if (!errors.isEmpty()) {
             for (int i = 1; i < group.size(); i++) {
-                group.get(i).setErrors(List.of("orderRef leader failed validation"));
+                OrderImportRowDTO r = group.get(i);
+                if (r.getErrors() == null || r.getErrors().isEmpty()) r.setErrors(List.of("orderRef leader failed validation"));
             }
             return new GroupOutcome(0, group.size(), 0);
         }

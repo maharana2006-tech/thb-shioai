@@ -132,6 +132,23 @@ class OrderImportServiceImplBatchPageTest {
         assertFalse(batch.getCompletedAt().isBefore(batch.getGenerationStartedAt()), "took = completed - started, never negative");
     }
 
+    // ── Loophole: commit cleared every row's errors and processGroup re-checked
+    //    only the order's first row, so a broken line 2 shipped with it. ─────
+    @Test
+    void aBrokenSecondLineBlocksTheWholeOrder() {
+        OrderImportRowDTO leader = shipRow(1, null, null);
+        OrderImportRowDTO line2 = shipRow(2, null, null);
+        line2.setOrderRef("REF-1");
+        line2.setWeight(null);
+        List<OrderImportRowDTO> rows = new ArrayList<>(List.of(leader, line2));
+
+        service.commit(rows, "alice");
+
+        org.mockito.Mockito.verify(carrierService, org.mockito.Mockito.never()).generateManualLabel(any(), any(), any());
+        assertTrue(leader.getErrors().stream().anyMatch(e -> e.startsWith("row 2 of this order needs fixes")), leader.getErrors().toString());
+        assertTrue(line2.getErrors().stream().anyMatch(e -> e.startsWith("weight must be > 0")), line2.getErrors().toString());
+    }
+
     // ── Fix: an edit's / Validate all's answer carried the rows without their
     //    last-printed time, so every "Printed 23 Sept" caption vanished. ─────
 

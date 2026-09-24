@@ -43,6 +43,12 @@ class ShipViaImportValidationTest {
         return s;
     }
 
+    private static ShippingService off(String carrier, String code, String name) {
+        ShippingService s = svc(carrier, code, name);
+        s.setEnabled(false);
+        return s;
+    }
+
     @BeforeEach
     void setUp() {
         service = new OrderImportServiceImpl(mock(CarrierService.class));
@@ -58,7 +64,9 @@ class ShipViaImportValidationTest {
         when(catalog.findAllByOrderByCarrierAscSortOrderAsc()).thenReturn(List.of(
                 svc("UPS", "03", "UPS Ground"),
                 svc("UPS", "02", "UPS 2nd Day Air"),
-                svc("FEDEX", "FEDEX_GROUND", "FedEx Ground")));
+                svc("FEDEX", "FEDEX_GROUND", "FedEx Ground"),
+                off("UPS", "12", "UPS 3 Day Select"),
+                svc("FEDEX", "01", "FedEx Priority Overnight (legacy code)")));
         ReflectionTestUtils.setField(service, "shippingServiceRepository", catalog);
 
         shippingConfig = mock(ShippingConfigService.class);
@@ -184,6 +192,28 @@ class ShipViaImportValidationTest {
      * and calling it an unmapped ship via code invited the operator to create
      * a rule named after a real carrier code.
      */
+    @Test
+    void aSwitchedOffCatalogCodeFailsSayingSo() {
+        OrderImportRowDTO r = validate(row("12", "UPS"));
+        assertEquals(1, r.getErrors().size(), r.getErrors().toString());
+        assertTrue(r.getErrors().get(0).contains("switched off"), r.getErrors().get(0));
+    }
+
+    @Test
+    void aCodeTwoCarriersUseNeedsTheCarrierColumn() {
+        // "01" is catalogued by UPS (2nd Day Air) and FedEx: without a carrier
+        // the file is not saying which label to buy.
+        ShippingServiceRepository catalog = mock(ShippingServiceRepository.class);
+        when(catalog.findAllByOrderByCarrierAscSortOrderAsc()).thenReturn(List.of(
+                svc("UPS", "01", "UPS Next Day Air"), svc("FEDEX", "01", "FedEx Priority Overnight")));
+        ReflectionTestUtils.setField(service, "shippingServiceRepository", catalog);
+        OrderImportRowDTO r = validate(row("01", null));
+        assertNull(r.getCarrierCode(), "nothing picked a carrier");
+        assertEquals(1, r.getErrors().size(), r.getErrors().toString());
+        assertTrue(r.getErrors().get(0).contains("UPS and FEDEX"), r.getErrors().get(0));
+        assertTrue(r.getErrors().get(0).contains("carrierCode"), r.getErrors().get(0));
+    }
+
     @Test
     void aCarrierServiceCodeWithNoCarrierColumnIsAcceptedAndNamesItsCarrier() {
         OrderImportRowDTO r = validate(row("02", null));

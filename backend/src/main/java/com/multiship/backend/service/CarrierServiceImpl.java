@@ -3474,6 +3474,16 @@ public class CarrierServiceImpl implements CarrierService {
                     .resolveServiceCode(connector.getCarrierCode(), order.getShipviaCd(), shipperCountry)
                     .orElse(null);
         }
+        // An order that names a service gets THAT service or no label: the
+        // default below is for orders with no ship-via at all, not a silent
+        // downgrade for a code that no longer resolves (rule deleted, service
+        // switched off since validation).
+        if (StringUtils.hasText(order.getShipviaCd())
+                && (resolvedService == null || !resolvedService.isEnabled())) {
+            throw new IllegalStateException("Ship via '" + order.getShipviaCd() + "' is not a switched-on "
+                    + connector.getCarrierCode() + " service — map it in Settings → Shipping Service Mapping "
+                    + "or turn the service back on, then retry");
+        }
         Long resolvedRuleId = route != null ? route.ruleId() : null;
         String serviceType = resolvedService != null ? resolvedService.getServiceCode()
                 : firstNonBlank(connector.getConfiguration().defaultServiceType(), "GROUND");
