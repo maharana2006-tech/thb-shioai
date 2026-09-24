@@ -71,8 +71,15 @@ public class MockCarrierConnectorsTestConfig {
 
     /** Stub the minimum surface every constructor touches:
      *  {@code getCarrierCode()} (ExternalApiService key), {@code getCarrierName()}
-     *  (list endpoints), and {@code getConfiguration()} (list + status endpoints). */
-    private static <T extends CarrierConnector> T prime(T mock, String code, String name) {
+     *  (list endpoints), and {@code getConfiguration()} (list + status endpoints).
+     *
+     *  <p>Package-private static so test classes can re-apply the base stubs
+     *  after a {@link org.mockito.Mockito#reset(Object...)} — the connector
+     *  mocks are Spring singletons in the cached context, so a test class
+     *  that sets a broad {@code when(...).thenThrow(...)} stub leaks the
+     *  answer chain into every downstream class unless it resets + re-primes
+     *  in its own tear-down. */
+    static <T extends CarrierConnector> T prime(T mock, String code, String name) {
         Mockito.when(mock.getCarrierCode()).thenReturn(code);
         Mockito.when(mock.getCarrierName()).thenReturn(name);
         Mockito.when(mock.getConfiguration()).thenReturn(new CarrierConnector.CarrierConfiguration(

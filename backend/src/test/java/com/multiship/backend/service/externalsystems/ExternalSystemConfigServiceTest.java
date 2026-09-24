@@ -115,11 +115,19 @@ class ExternalSystemConfigServiceTest {
     }
 
     @Test
-    void getSecretThrowsWhenCryptoUnavailable() {
+    void getSecretReturnsStoredValueAsPlaintextWhenCryptoUnavailable() {
+        // When SECRETS_ENCRYPTION_KEY is unset, ExternalSystemConfigService
+        // falls back to plaintext storage/retrieval for dev convenience —
+        // getSecret returns the raw stored value and never calls decrypt.
+        ExternalSystemSecret row = new ExternalSystemSecret();
+        row.setEncryptedValue("hunter2");
         when(crypto.isAvailable()).thenReturn(false);
-        ExternalSystemException e = assertThrows(ExternalSystemException.class,
-                () -> svc.getSecret(1L, "productionPassword"));
-        assertEquals(ExternalSystemException.Kind.SECRET_UNAVAILABLE, e.kind());
+        when(secretRepo.findByConnectionIdAndSecretKey(1L, "productionPassword"))
+                .thenReturn(Optional.of(row));
+
+        Optional<String> got = svc.getSecret(1L, "productionPassword");
+        assertEquals("hunter2", got.orElseThrow());
+        verify(crypto, never()).decrypt(any());
     }
 
     @Test
