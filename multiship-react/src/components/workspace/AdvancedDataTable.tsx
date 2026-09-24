@@ -111,6 +111,10 @@ export interface AdvancedDataTableProps<T> {
    *  so removing a row moves an open expansion onto the next record. */
   getRowId?: (row: T, index: number) => string
   initialHiddenColumns?: string[]
+  /** Columns shown whatever the saved layout says, while the parent passes them
+   *  (e.g. the fields that have errors, under a "Needs attention" filter). The
+   *  operator's own show/hide choices are kept and come back once it stops. */
+  forceVisibleColumns?: string[]
   initialDensity?: Density
   initialPageSize?: number
   /** Filename base for the CSV export (no extension). */
@@ -330,6 +334,7 @@ export default function AdvancedDataTable<T>({
   onRowClick,
   getRowId,
   initialHiddenColumns,
+  forceVisibleColumns,
   initialDensity = 'compact',
   initialPageSize = 25,
   csvFilename,
@@ -455,6 +460,12 @@ export default function AdvancedDataTable<T>({
     return ['select', ...columnOrder.filter((id) => id !== 'select')]
   }, [columnOrder, hasSelectColumn])
 
+  const forcedKey = forceVisibleColumns?.join('|') ?? ''
+  const effectiveVisibility = useMemo<VisibilityState>(
+    () => (forcedKey ? { ...columnVisibility, ...Object.fromEntries(forcedKey.split('|').map((id) => [id, true])) } : columnVisibility),
+    [columnVisibility, forcedKey],
+  )
+
   // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Table's useReactTable() returns functions that cannot be memoized safely — library-level incompatibility with react-hooks analyzer, not a code issue
   const table = useReactTable<T>({
     data,
@@ -462,7 +473,7 @@ export default function AdvancedDataTable<T>({
     getRowId,
     state: {
       sorting,
-      columnVisibility,
+      columnVisibility: effectiveVisibility,
       columnOrder: effectiveColumnOrder,
       columnSizing,
       columnPinning: effectiveColumnPinning,

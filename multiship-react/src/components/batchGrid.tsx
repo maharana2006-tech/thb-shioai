@@ -123,6 +123,13 @@ export function bucketRowErrors(errors: string[]): {
  *  back; `w` is the cell input min-width. */
 export type DhColumn = { key: string; label?: string; mono?: boolean; upper?: boolean; numeric?: boolean; w: string }
 
+/** A field's name for people: its own label, else "recipientPhone" → "Recipient phone". */
+export function fieldLabel(c: Pick<DhColumn, 'key' | 'label'>): string {
+  if (c.label) return c.label
+  const words = c.key.replace(/([A-Z])/g, ' $1').toLowerCase()
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
+
 /** The columns the grid shows by default — the same things the Orders page
  *  shows for an order (reference, customer, recipient, destination, carrier,
  *  service, account, weight). Everything else sits behind "All columns". */

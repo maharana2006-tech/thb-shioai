@@ -20,16 +20,18 @@ import {
   FiSlash,
   FiX,
   FiZap,
+  FiEdit3,
 } from 'react-icons/fi'
 import type { ColumnDef } from '@tanstack/react-table'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
+import FixRowPanel from './bulk/FixRowPanel'
 import { bulkBatchPath, bulkPaths, settingsPaths } from '../routes/workspaceRoutes'
 import { wmsService } from '../api/wmsService'
 import { bulkService, type BulkSummary, type BulkView } from '../api/bulkService'
 import { AddShipViaMappingDialog, ShipViaCodesPanel } from './modals/ShipViaCodes'
 import OrderDocumentsTable from './OrderDocumentsTable'
 import DataHistoryFilterToolbar, { BulkFilterChips, statusMeta } from './DataHistoryFilterToolbar'
-import { GridCell, DH_COLUMNS, RowIssuesIcon, RowChannelChip, bucketRowErrors, rowStatus, type DhColumn } from './batchGrid'
+import { GridCell, DH_COLUMNS, fieldLabel, RowIssuesIcon, RowChannelChip, bucketRowErrors, rowStatus, type DhColumn } from './batchGrid'
 import NoteCell from './workspace/NoteCell'
 import AnimatedHeight from './ui/AnimatedHeight'
 import BatchLabelBar from './bulk/BatchLabelBar'
@@ -147,6 +149,9 @@ export default function DataHistoryPage() {
   const [gridSearch, setGridSearch] = useState('')
   /** The Orders page's Details / Track modals, for one order of the batch. */
   const [detailsOrderNo, setDetailsOrderNo] = useState<number | null>(null)
+  /** The import row open in the Fix panel, and whether its save is in flight. */
+  const [fixing, setFixing] = useState<{ batchId: number; rowNumber: number } | null>(null)
+  const [fixSaving, setFixSaving] = useState(false)
   const [trackingOrderNo, setTrackingOrderNo] = useState<number | null>(null)
   const [voidingOrderNo, setVoidingOrderNo] = useState<number | null>(null)
   /** The batch's orders by number — what the rows don't carry (note, created date, tracking link). */
@@ -788,7 +793,8 @@ export default function DataHistoryPage() {
   }
 
   /** Validate all rows in a batch */
-  const validateAll = async (id: number) => {
+  const validateAll = async (id: number): Promise<OrderImportRow[] | undefined> => {
+    let rowsBack: OrderImportRow[] | undefined
     setValidatingId(id)
     try {
       const res = await orderImportService.validateAllRows(id)
@@ -804,6 +810,7 @@ export default function DataHistoryPage() {
         )
         // Update the expanded rows
         if (updated.rows) setRowsById((m) => ({ ...m, [id]: updated.rows }))
+        rowsBack = updated.rows ?? undefined
         notify.success('All rows validated successfully. Errors have been updated.')
       }
     } catch (e) {
@@ -811,6 +818,7 @@ export default function DataHistoryPage() {
     } finally {
       setValidatingId(null)
     }
+    return rowsBack
   }
 
   /** Generate a label for a single row inside a batch. */
@@ -871,13 +879,22 @@ export default function DataHistoryPage() {
     let next: unknown = raw
     if (col.numeric) next = raw === '' ? null : Number(raw)
     else if (col.upper) next = raw.toUpperCase()
-    const current = (row as unknown as Record<string, unknown>)[col.key]
+    const current = col.key === 'serviceType' ? (row.shipViaCode ?? row.serviceType) : (row as unknown as Record<string, unknown>)[col.key]
     if (String(current ?? '') === String(next ?? '')) return // unchanged
     const edited = { ...row, [col.key]: next } as OrderImportRow
     const key = `${batchId}-${row.rowNumber}`
     setSavingCell(key)
     try {
-      const res = await orderImportService.updateRow(batchId, row.rowNumber, edited)
+      await saveRow(batchId, edited)
+    } finally {
+      setSavingCell(null)
+    }
+  }
+
+  /** Save one import row; the server re-validates the batch and answers with every row. */
+  const saveRow = async (batchId: number, edited: OrderImportRow): Promise<OrderImportRow[] | undefined> => {
+    try {
+      const res = await orderImportService.updateRow(batchId, edited.rowNumber, edited)
       const updated = res.data
       if (updated) {
         if (updated.rows) setRowsById((m) => ({ ...m, [batchId]: updated.rows }))
@@ -895,13 +912,12 @@ export default function DataHistoryPage() {
               : b,
           ),
         )
+        return updated.rows ?? undefined
       } else {
         notify.error(res.message ?? 'Save failed.')
       }
     } catch (e) {
       notify.apiError(e, 'Save failed.')
-    } finally {
-      setSavingCell(null)
     }
   }
 
@@ -1594,6 +1610,23 @@ export default function DataHistoryPage() {
     return filtered.filter((r) => [r.orderRef, r.reference, r.recipientName, r.city, r.clientCode, r.generatedOrderNo, r.generatedTrackingNumber]
       .some((v) => v != null && String(v).toLowerCase().includes(q)))
   }, [batchList, batchFilter, gridSearch])
+  /** Under "Needs attention", the imported fields that have errors come into view, to fix in the grid. */
+  const batchErrorColumns = useMemo(() => {
+    if (batchFilter !== 'failed') return undefined
+    const keys = new Set<string>()
+    for (const r of batchVisible) for (const k of Object.keys(bucketRowErrors(r.errors ?? []).byField)) keys.add(k)
+    return DH_COLUMNS.filter((c) => keys.has(c.key)).map((c) => `f_${c.key}`)
+  }, [batchFilter, batchVisible])
+  const fixRow = fixing
+    ? (Array.isArray(rowsById[fixing.batchId]) ? (rowsById[fixing.batchId] as OrderImportRow[]) : []).find((r) => r.rowNumber === fixing.rowNumber)
+    : undefined
+  /** A fix that came back clean closes the panel: the row can be labelled now. */
+  const closeFixIfClean = (rows: OrderImportRow[] | undefined, rowNumber: number) => {
+    const r = rows?.find((x) => x.rowNumber === rowNumber)
+    if (!r || (r.errors?.length ?? 0) > 0) return
+    setFixing(null)
+    notify.success(`Row ${rowNumber} is ready — generate it now or with the batch.`)
+  }
   const batchColumns = useMemo<ColumnDef<OrderImportRow, unknown>[]>(() => {
     const b = batchPageId != null ? batches.find((x) => x.id === batchPageId) : undefined
     if (!b) return []
@@ -1762,17 +1795,17 @@ export default function DataHistoryPage() {
       },
       // Every imported field, editable in place until the row is labelled.
       ...DH_COLUMNS.map((c): ColumnDef<OrderImportRow, unknown> => ({
-        id: `f_${c.key}`, header: c.label ?? c.key, size: 120, enableSorting: false,
+        id: `f_${c.key}`, header: fieldLabel(c), size: 120, enableSorting: false,
         accessorFn: (r) => (r as unknown as Record<string, unknown>)[c.key] ?? '',
         cell: ({ row }) => {
           const r = row.original
           const raw = (r as unknown as Record<string, unknown>)[c.key]
           const { byField } = bucketRowErrors(r.errors ?? [])
           const generated = (r.generatedStatus ?? '').toUpperCase() === 'GENERATED'
-          // An API/WMS order shows the client's own ship via code (its resolved
-          // carrier service in the tooltip). An unmapped code — WMS or file, since a
-          // file import must go through the mapping too — can be mapped here.
-          const showShipVia = c.key === 'serviceType' && rowIsWms && !!r.shipViaCode
+          // Every row shows the client's own ship via code (its resolved carrier
+          // service in the tooltip), and an unmapped one can be mapped here — a
+          // file import goes through the mapping just as a WMS pull does.
+          const showShipVia = c.key === 'serviceType' && !!r.shipViaCode
           const unmapped = c.key === 'serviceType' ? (byField.serviceType ?? []).map((m) => m.match(UNMAPPED_SHIP_VIA)).find(Boolean) : null
           return (
             <div title={showShipVia ? (r.shipViaNote ?? undefined) : undefined}>
@@ -1856,8 +1889,17 @@ export default function DataHistoryPage() {
                       : failed ? <FiRotateCcw className="h-3 w-3" /> : <FiZap className="h-3 w-3" />}
                     {rowBusy ? 'Generating…' : failed ? 'Retry' : 'Generate'}
                   </button>
+                ) : locked ? (
+                  <span className="text-[11px] text-[#b6a684]">Fix errors first</span>
                 ) : (
-                  <span className="text-[11px] text-[#b6a684]" title={ok ? `Another line of order ${r.orderRef ?? ''} needs fixes — the order is labelled as one shipment` : undefined}>Fix errors first</span>
+                  // A clean line of a broken order opens the line that needs the fix.
+                  <button type="button"
+                    onClick={() => setFixing({ batchId: b.id, rowNumber: ok ? (list.find((x) => orderKey(x) === orderKey(r) && (x.errors?.length ?? 0) > 0)?.rowNumber ?? r.rowNumber) : r.rowNumber })}
+                    title={ok ? `Another line of order ${r.orderRef ?? ''} needs fixes — the order is labelled as one shipment` : 'Edit this row and re-check it'}
+                    aria-label={`Fix row ${r.rowNumber}`}
+                    className="inline-flex items-center gap-1 whitespace-nowrap rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-rose-700 transition hover:border-rose-300 hover:bg-rose-50">
+                    <FiEdit3 className="h-3 w-3" /> Fix
+                  </button>
                 )}
               </span>
             </span>
@@ -1952,6 +1994,7 @@ export default function DataHistoryPage() {
               }
               // Exactly the Orders page's columns; every imported field is one Columns click away (to edit it).
               initialHiddenColumns={DH_COLUMNS.map((c) => `f_${c.key}`)}
+              forceVisibleColumns={batchErrorColumns}
               csvFilename={`batch-${b.id}-rows`}
               maxBodyHeight="calc(100vh - 320px)"
               emptyState={<p className="py-6 text-center text-[12px] text-[#6b5c42]">No rows match.</p>}
@@ -2001,14 +2044,32 @@ export default function DataHistoryPage() {
         const batchId = mapping.batchId
         setMapping(null)
         setCodesTick((t) => t + 1)
-        // The server re-validates the batch, so rows that failed on this code clear.
-        void validateAll(batchId)
+        // The server re-validates the batch, so rows that failed on this code clear —
+        // and a Fix panel open on one of them closes if that was its last problem.
+        const at = fixing
+        void validateAll(batchId).then((rows) => { if (at?.batchId === batchId) closeFixIfClean(rows, at.rowNumber) })
       }}
     />
   ) : null
 
   const labelModal = (
     <>
+      {fixing && fixRow ? (
+        <FixRowPanel
+          row={fixRow}
+          saving={fixSaving}
+          canMap={canWrite}
+          onSave={(edited) => {
+            setFixSaving(true)
+            const at = fixing
+            void saveRow(at.batchId, edited)
+              .then((rows) => closeFixIfClean(rows, at.rowNumber))
+              .finally(() => setFixSaving(false))
+          }}
+          onMap={(code) => setMapping({ code, clientCode: (fixRow.clientCode ?? '').trim().toUpperCase() || null, batchId: fixing.batchId })}
+          onClose={() => setFixing(null)}
+        />
+      ) : null}
       {labelModalOrderNo ? <LabelPreviewModal orderNo={labelModalOrderNo} onClose={() => setLabelModalOrderNo(null)} /> : null}
       {detailsOrderNo != null ? <Suspense fallback={null}><OrderDetailsModal orderNo={detailsOrderNo} onClose={() => setDetailsOrderNo(null)} /></Suspense> : null}
       {trackingOrderNo != null ? <Suspense fallback={null}><TrackingTimelineModal orderNo={trackingOrderNo} onClose={() => setTrackingOrderNo(null)} /></Suspense> : null}
