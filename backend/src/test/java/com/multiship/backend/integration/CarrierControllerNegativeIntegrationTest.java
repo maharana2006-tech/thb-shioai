@@ -43,6 +43,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -167,6 +168,14 @@ class CarrierControllerNegativeIntegrationTest extends AbstractIntegrationTest {
     void tearDown() {
         SecurityContextHolder.clearContext();
         cleanup();
+        // The Mockito mocks are Spring singletons in the shared context —
+        // stubs set via when(...).thenThrow(...) inside individual tests
+        // (e.g. "UPS OAuth rejected") persist and poison the next IT class
+        // that autowires the same upsMock / fedExMock. Reset + re-prime so
+        // the class-boundary is a clean slate.
+        reset(upsMock, fedExMock);
+        MockCarrierConnectorsTestConfig.prime(upsMock, "UPS", "UPS");
+        MockCarrierConnectorsTestConfig.prime(fedExMock, "FEDEX", "FedEx");
     }
 
     private void cleanup() {
