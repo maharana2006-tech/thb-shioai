@@ -111,22 +111,20 @@ class BulkBatchLabelRulesTest {
     }
 
     @Test
-    void emptyTrashKeepsBatchesThatStillHaveLiveLabels() throws Exception {
+    void emptyTrashPurgesEverythingInTrashLiveLabelsIncluded() throws Exception {
+        // 2026-09-23 product call: what is in Trash can be deleted directly. The
+        // orders and labels live on; only the import record goes.
         ImportBatch live = batch(10, "COMPLETE", List.of(row(1, 7001, "GENERATED")));
         ImportBatch done = batch(11, "COMPLETE", List.of(row(1, 7002, "GENERATED")));
         ImportBatch empty = batch(12, "INITIATE", List.of(row(1, null, null)));
         for (ImportBatch b : List.of(live, done, empty)) b.setDeletedAt(LocalDateTime.now());
         when(repo.findAllByDeletedAtIsNotNullOrderByIdDesc()).thenReturn(List.of(live, done, empty));
-        when(tracking.findByOrderNoIn(anyCollection())).thenAnswer(inv -> {
-            java.util.Collection<?> nos = inv.getArgument(0);
-            return nos.contains(7002) ? List.of(voided(7002)) : List.of();
-        });
 
         var result = service.purgeTrashChecked("alice");
 
-        assertEquals(2, result.purged());
-        assertEquals(1, result.keptWithLiveLabels());
-        verify(repo).deleteAll(List.of(done, empty));
+        assertEquals(3, result.purged());
+        assertEquals(0, result.keptWithLiveLabels());
+        verify(repo).deleteAll(List.of(live, done, empty));
     }
 
     @Test
