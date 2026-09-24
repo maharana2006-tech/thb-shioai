@@ -7,7 +7,6 @@ import {
   FiPrinter,
   FiTruck,
   FiXCircle,
-  FiSend,
   FiCheckCircle,
   FiDownloadCloud,
   FiArrowLeft,
@@ -25,6 +24,7 @@ import {
 import type { ColumnDef } from '@tanstack/react-table'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
 import FixRowPanel from './bulk/FixRowPanel'
+import BatchPrintMenu from './bulk/BatchPrintMenu'
 import { bulkBatchPath, bulkPaths, settingsPaths } from '../routes/workspaceRoutes'
 import { wmsService } from '../api/wmsService'
 import { bulkService, type BulkSummary, type BulkView } from '../api/bulkService'
@@ -267,22 +267,20 @@ export default function DataHistoryPage() {
   /** Print / send a whole batch from the list: its live labels, looked up on demand. */
   const [batchPrintBusy, setBatchPrintBusy] = useState<number | null>(null)
   const [sendBatch, setSendBatch] = useState<number[] | null>(null)
-  const liveOrdersOfBatch = async (b: ImportBatchSummary): Promise<number[]> => {
+  /** A batch's rows for the list's Print menu — the page's copy when it has one. */
+  const rowsOfBatch = async (b: ImportBatchSummary): Promise<OrderImportRow[]> => {
     const cached = rowsById[b.id]
-    const rows = Array.isArray(cached) ? cached : (await orderImportService.getHistory(b.id)).data?.rows ?? []
-    const live = liveOrdersOf(rows)
-    if (live.length === 0) notify.info('This batch has no live labels to print.')
-    return live
+    return Array.isArray(cached) ? cached : (await orderImportService.getHistory(b.id)).data?.rows ?? []
   }
-  const printBatchLabels = async (b: ImportBatchSummary) => {
+  const printBatchDocs = async (b: ImportBatchSummary, orders: number[], docType: 'LABEL' | 'COMMERCIAL_INVOICE') => {
+    if (orders.length === 0) return
     setBatchPrintBusy(b.id)
     try {
-      const live = await liveOrdersOfBatch(b)
-      if (live.length === 0) return
-      const res = await orderService.printDocuments(live.slice(0, 500), 'LABEL')
+      const res = await orderService.printDocuments(orders.slice(0, 500), docType)
       printPdfBlob(res.blob)
-      notify.success(`Opening ${res.included} label${res.included === 1 ? '' : 's'} of batch #${b.id} in the print dialog`
-        + (live.length > 500 ? ' — the first 500; open the batch to print the rest.' : '.'))
+      const what = docType === 'LABEL' ? 'label' : 'commercial invoice'
+      notify.success(`Opening ${res.included} ${what}${res.included === 1 ? '' : 's'} of batch #${b.id} in the print dialog`
+        + (orders.length > 500 ? ' — the first 500; open the batch to print the rest.' : '.'))
       void reloadQuiet()
     } catch (e) {
       notify.apiError(e, 'Could not print this batch.')
@@ -313,18 +311,6 @@ export default function DataHistoryPage() {
       void reloadQuiet()
     } catch (e) {
       notify.apiError(e, 'Could not void the labels.')
-    } finally {
-      setBatchPrintBusy(null)
-    }
-  }
-
-  const sendBatchToPrinter = async (b: ImportBatchSummary) => {
-    setBatchPrintBusy(b.id)
-    try {
-      const live = await liveOrdersOfBatch(b)
-      if (live.length > 0) setSendBatch(live.slice(0, 500))
-    } catch (e) {
-      notify.apiError(e, 'Could not read this batch.')
     } finally {
       setBatchPrintBusy(null)
     }
@@ -1333,28 +1319,13 @@ export default function DataHistoryPage() {
                   ) : null}
                   {batchPageId == null && !viewTrash && b.labelBatchId != null && b.liveOrders !== 0 ? (
                     <>
-                      <button
-                        type="button"
-                        onClick={() => void printBatchLabels(b)}
-                        disabled={batchPrintBusy === b.id}
-                        title="Print every live label of this batch"
-                        aria-label="Print batch labels"
-                        className="inline-flex items-center justify-center rounded-xl border border-[#e3d9c4] bg-[#faf7f0] p-2 text-[#412d15] transition hover:border-[#cdbf9f] hover:bg-[#f0e9d8] disabled:opacity-50"
-                      >
-                        {batchPrintBusy === b.id
-                          ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#e3d9c4] border-t-[#5a4526]" />
-                          : <FiPrinter className="h-3.5 w-3.5" />}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void sendBatchToPrinter(b)}
-                        disabled={batchPrintBusy === b.id}
-                        title="Send every live label of this batch to a network printer"
-                        aria-label="Send batch to printer"
-                        className="inline-flex items-center justify-center rounded-xl border border-emerald-100 bg-emerald-50 p-2 text-emerald-700 transition hover:border-emerald-200 hover:bg-emerald-100 disabled:opacity-50"
-                      >
-                        <FiSend className="h-3.5 w-3.5" />
-                      </button>
+                      <BatchPrintMenu
+                        batchId={b.id}
+                        busy={batchPrintBusy === b.id}
+                        loadRows={() => rowsOfBatch(b)}
+                        onPrint={(orders, docType) => void printBatchDocs(b, orders, docType)}
+                        onSend={(orders) => setSendBatch(orders.slice(0, 500))}
+                      />
                       {canWrite ? (
                         <button
                           type="button"
