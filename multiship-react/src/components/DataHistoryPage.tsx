@@ -1328,13 +1328,6 @@ export default function DataHistoryPage() {
                   ) : null}
                   {batchPageId == null && !viewTrash && b.labelBatchId != null && b.liveOrders !== 0 ? (
                     <>
-                      <BatchPrintMenu
-                        scope={`batch #${b.id}`}
-                        busy={batchPrintBusy === b.id}
-                        loadRows={() => rowsOfBatch(b)}
-                        onPrint={(orders, docType) => void printBatchDocs(b.id, `batch #${b.id}`, orders, docType)}
-                        onSend={(orders) => setSendBatch(orders.slice(0, 500))}
-                      />
                       {canWrite ? (
                         <button
                           type="button"
