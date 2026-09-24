@@ -638,11 +638,13 @@ describe('Bulk Mailer — layout', () => {
 
   it('shows exactly the Orders screen\'s columns; the imported fields stay in the Columns menu', async () => {
     getHistory.mockResolvedValue({ data: { ...batchSummary({ id: 121, fileName: 'acme_sept.csv', status: 'INITIATE' }),
-      rows: [{ rowNumber: 1, recipientName: 'Ann', city: 'Austin', errors: {} }] } })
+      rows: [{ rowNumber: 1, recipientName: 'Ann', city: 'Austin', errors: {}, generatedStatus: 'GENERATED', generatedOrderNo: 906976 }] } })
     await renderAt('/bulk/batches/121')
     await screen.findByTestId('batch-page-header')
     // pick and actions have no text header; every imported f_* column is hidden by default
     expect((await screen.findByTestId('visible-headers')).textContent).toBe('|Order|Ref #|Note|Batch|Dest|Status|Track|')
+    // Print / void live in a floating bar that appears once rows are ticked, not in the toolbar
+    expect(screen.queryByTestId('batch-label-bar')).toBeNull()
   })
 
   it('a trashed batch says when and by whom it was trashed', async () => {

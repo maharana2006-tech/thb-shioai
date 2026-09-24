@@ -1949,23 +1949,6 @@ export default function DataHistoryPage() {
                   ))}
                 </div>
               }
-              toolbarActions={
-                /* Print / send / void the ticked labels — hidden when nothing is live. */
-                <BatchLabelBar
-                  bare
-                  batchId={b.id}
-                  rows={list}
-                  picked={picked}
-                  onPickAllLive={() => setPickedRows((m) => ({ ...m, [b.id]: list.filter(rowIsLive).map((r) => r.rowNumber) }))}
-                  onClearPick={() => setPickedRows((m) => ({ ...m, [b.id]: [] }))}
-                  onChanged={() => { reloadRows(b.id); void reloadQuiet() }}
-                  onPrinted={() => reloadRows(b.id)}
-                  canWrite={canWrite}
-                  canManagePrinters={canPullWms}
-                  locked={viewTrash || (b.status || '').toUpperCase() === 'IN_PROGRESS'}
-                  onOpenPrinterSettings={() => navigate(settingsPaths.printers)}
-                />
-              }
               // Exactly the Orders page's columns; every imported field is one Columns click away (to edit it).
               initialHiddenColumns={DH_COLUMNS.map((c) => `f_${c.key}`)}
               csvFilename={`batch-${b.id}-rows`}
@@ -1983,6 +1966,25 @@ export default function DataHistoryPage() {
                 </p>
               }
             />
+            {picked.length > 0 ? (
+              // Sticky in the content column, as on the Orders page: it appears once rows are ticked.
+              <div className="pointer-events-none sticky bottom-5 z-30 mt-4 flex justify-center [&>*]:pointer-events-auto">
+                <BatchLabelBar
+                  floating
+                  batchId={b.id}
+                  rows={list}
+                  picked={picked}
+                  onPickAllLive={() => setPickedRows((m) => ({ ...m, [b.id]: list.filter(rowIsLive).map((r) => r.rowNumber) }))}
+                  onClearPick={() => setPickedRows((m) => ({ ...m, [b.id]: [] }))}
+                  onChanged={() => { reloadRows(b.id); void reloadQuiet() }}
+                  onPrinted={() => reloadRows(b.id)}
+                  canWrite={canWrite}
+                  canManagePrinters={canPullWms}
+                  locked={viewTrash || (b.status || '').toUpperCase() === 'IN_PROGRESS'}
+                  onOpenPrinterSettings={() => navigate(settingsPaths.printers)}
+                />
+              </div>
+            ) : null}
           </>
         )}
       </div>

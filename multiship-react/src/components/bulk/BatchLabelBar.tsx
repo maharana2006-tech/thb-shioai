@@ -30,7 +30,7 @@ export default function BatchLabelBar({
   canManagePrinters,
   locked,
   onOpenPrinterSettings,
-  bare = false,
+  floating = false,
 }: {
   batchId: number
   rows: OrderImportRow[]
@@ -47,8 +47,8 @@ export default function BatchLabelBar({
   /** Generating, or in Trash — no voiding. */
   locked: boolean
   onOpenPrinterSettings: () => void
-  /** No box of its own — it sits inside another toolbar, taking the space left. */
-  bare?: boolean
+  /** The Orders page's floating action card (shown once rows are ticked); the print menu opens upward. */
+  floating?: boolean
 }) {
   const [printing, setPrinting] = useState<'LABEL' | 'COMMERCIAL_INVOICE' | null>(null)
   const [sendOpen, setSendOpen] = useState(false)
@@ -141,15 +141,15 @@ export default function BatchLabelBar({
   return (
     <div
       data-testid="batch-label-bar"
-      className={bare
-        ? 'flex flex-1 flex-wrap items-center justify-between gap-2'
+      className={floating
+        ? 'flex max-w-full flex-wrap items-center justify-center gap-2 rounded-2xl border border-[#e3d9c4] bg-white px-3 py-2.5 shadow-[0_18px_50px_rgba(31,21,12,0.22)] sm:gap-3 sm:px-4'
         : 'mb-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2'}
     >
       <span className="flex flex-wrap items-center gap-2 text-[11.5px] text-[#6b5c42]">
         {scoped ? (
           <>
-            <span className="font-semibold text-[#1f150c]">{picked.length} row{picked.length === 1 ? '' : 's'} ticked</span>
-            <span>· {n} order{n === 1 ? '' : 's'} with a live label</span>
+            <span className="text-[13px] font-semibold text-[#1f150c] tabular-nums">{picked.length} selected</span>
+            {n !== picked.length ? <span>· {n} order{n === 1 ? '' : 's'} with a live label</span> : null}
             <button type="button" onClick={onClearPick} className="inline-flex items-center gap-0.5 font-semibold text-[#5a4526] hover:underline">
               <FiX className="h-3 w-3" /> Clear
             </button>
@@ -177,7 +177,7 @@ export default function BatchLabelBar({
             <FiChevronDown className={`h-3 w-3 text-[#b6a684] transition-transform ${menuOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
           </button>
           {menuOpen ? (
-            <div role="menu" aria-label="Print" className="bulk-pop-in absolute right-0 z-40 mt-1.5 w-56 rounded-xl border border-[#e3d9c4] bg-white p-1 shadow-[0_12px_32px_rgba(31,21,12,0.14)]">
+            <div role="menu" aria-label="Print" className={`bulk-pop-in absolute right-0 z-40 w-56 rounded-xl ${floating ? 'bottom-full mb-1.5' : 'mt-1.5'} border border-[#e3d9c4] bg-white p-1 shadow-[0_12px_32px_rgba(31,21,12,0.14)]`}>
               {([
                 { key: 'LABEL', label: 'Download labels', hint: 'One print dialog, 4×6 labels', icon: <FiPrinter className="h-3.5 w-3.5 text-[#412d15]" />,
                   run: () => void print('LABEL') },
