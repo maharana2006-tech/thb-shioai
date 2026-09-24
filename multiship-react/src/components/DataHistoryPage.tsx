@@ -29,7 +29,7 @@ import { bulkService, type BulkSummary, type BulkView } from '../api/bulkService
 import { AddShipViaMappingDialog, ShipViaCodesPanel } from './modals/ShipViaCodes'
 import OrderDocumentsTable from './OrderDocumentsTable'
 import DataHistoryFilterToolbar, { BulkFilterChips, statusMeta } from './DataHistoryFilterToolbar'
-import { GridCell, DH_COLUMNS, DH_KEY_COLUMN_KEYS, RowIssuesIcon, RowChannelChip, bucketRowErrors, rowStatus, type DhColumn } from './batchGrid'
+import { GridCell, DH_COLUMNS, RowIssuesIcon, RowChannelChip, bucketRowErrors, rowStatus, type DhColumn } from './batchGrid'
 import NoteCell from './workspace/NoteCell'
 import AnimatedHeight from './ui/AnimatedHeight'
 import BatchLabelBar from './bulk/BatchLabelBar'
@@ -1752,11 +1752,9 @@ export default function DataHistoryPage() {
           return (
             <span className="flex min-w-0 flex-col gap-0.5">
               {url ? <a href={url} target="_blank" rel="noreferrer" className="inline-block hover:opacity-80">{chip}</a> : chip}
-              {r.lastPrintedAt ? (
-                <span className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-emerald-700" title={`Last printed ${formatPrinted(r.lastPrintedAt, true)}`}>
-                  <FiPrinter className="h-2.5 w-2.5" aria-hidden="true" /> Printed {formatPrinted(r.lastPrintedAt)}
-                </span>
-              ) : ago ? <span className="truncate text-[11.5px] text-[#6b5c42]" title={o?.labelDetails.generatedAt ?? undefined}>{ago}</span> : null}
+              <span className="truncate text-[11.5px] text-[#6b5c42]" title={[o?.labelDetails.generatedAt, r.lastPrintedAt ? `printed ${formatPrinted(r.lastPrintedAt, true)}` : null].filter(Boolean).join(' · ') || undefined}>
+                {ago || '—'}
+              </span>
             </span>
           )
         },
@@ -1932,7 +1930,7 @@ export default function DataHistoryPage() {
               />
             ) : null}
             <AdvancedDataTable<OrderImportRow>
-              tableKey="bulk-batch-rows-v1"
+              tableKey="bulk-batch-rows-v2"
               columns={batchColumns}
               data={batchVisible}
               getRowId={(r) => String(r.rowNumber)}
@@ -1968,8 +1966,8 @@ export default function DataHistoryPage() {
                   onOpenPrinterSettings={() => navigate(settingsPaths.printers)}
                 />
               }
-              // The Orders page's columns show; every other imported field is one Columns click away.
-              initialHiddenColumns={DH_COLUMNS.filter((c) => !DH_KEY_COLUMN_KEYS.has(c.key) || ['city', 'state', 'countryCode', 'clientCode'].includes(c.key)).map((c) => `f_${c.key}`)}
+              // Exactly the Orders page's columns; every imported field is one Columns click away (to edit it).
+              initialHiddenColumns={DH_COLUMNS.map((c) => `f_${c.key}`)}
               csvFilename={`batch-${b.id}-rows`}
               maxBodyHeight="calc(100vh - 320px)"
               emptyState={<p className="py-6 text-center text-[12px] text-[#6b5c42]">No rows match.</p>}

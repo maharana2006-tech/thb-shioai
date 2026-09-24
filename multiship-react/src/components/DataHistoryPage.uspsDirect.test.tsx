@@ -202,7 +202,11 @@ function AdvancedDataTableStub<T extends { id?: number | string }>(props: {
   filterToggle?: React.ReactNode
   toolbarActions?: React.ReactNode
   emptyState?: React.ReactNode
+  columns?: { id?: string; header?: unknown }[]
+  initialHiddenColumns?: string[]
 }) {
+  const hidden = new Set(props.initialHiddenColumns ?? [])
+  const headers = (props.columns ?? []).filter((c) => c.id && !hidden.has(c.id)).map((c) => (typeof c.header === 'string' ? c.header : ''))
   const rows = props.data ?? []
   // Fire onRowExpand once per row on mount so ensureRows populates
   // rowsById in the parent — mirrors clicking every row header.
@@ -213,6 +217,7 @@ function AdvancedDataTableStub<T extends { id?: number | string }>(props: {
   }, [rows.length])
   return (
     <div data-testid="advanced-data-table-stub">
+      {headers.length ? <div data-testid="visible-headers">{headers.join('|')}</div> : null}
       {props.search ? (
         <input value={props.search.value} onChange={(e) => props.search?.onChange(e.target.value)} placeholder={props.search.placeholder} />
       ) : null}
@@ -629,6 +634,15 @@ describe('Bulk Mailer — layout', () => {
     expect(header).toHaveTextContent('acme_sept.csv')
     expect(screen.getByRole('button', { name: /Bulk Mailer · Import history/i })).toBeInTheDocument()
     expect(getHistory).toHaveBeenCalledWith(121)
+  })
+
+  it('shows exactly the Orders screen\'s columns; the imported fields stay in the Columns menu', async () => {
+    getHistory.mockResolvedValue({ data: { ...batchSummary({ id: 121, fileName: 'acme_sept.csv', status: 'INITIATE' }),
+      rows: [{ rowNumber: 1, recipientName: 'Ann', city: 'Austin', errors: {} }] } })
+    await renderAt('/bulk/batches/121')
+    await screen.findByTestId('batch-page-header')
+    // pick and actions have no text header; every imported f_* column is hidden by default
+    expect((await screen.findByTestId('visible-headers')).textContent).toBe('|Order|Ref #|Note|Batch|Dest|Status|Track|')
   })
 
   it('a trashed batch says when and by whom it was trashed', async () => {
