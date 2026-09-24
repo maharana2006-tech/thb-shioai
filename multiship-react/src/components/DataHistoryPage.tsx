@@ -2367,17 +2367,17 @@ export default function DataHistoryPage() {
                 <FiX className="h-3 w-3" /> Clear
               </button>
             </span>
-            {pickedPrintable.length > 0 ? (
-              <BatchPrintMenu
-                scope={pickedPrintable.length === 1 ? `batch #${pickedPrintable[0].id}` : `${pickedPrintable.length} batches`}
-                buttonLabel="Print"
-                busy={batchPrintBusy === -1}
-                loadRows={async () => (await Promise.all(pickedPrintable.map(rowsOfBatch))).flat()}
-                onPrint={(orders, docType) => void printBatchDocs(-1,
-                  pickedPrintable.length === 1 ? `batch #${pickedPrintable[0].id}` : `${pickedPrintable.length} batches`, orders, docType)}
-                onSend={(orders) => setSendBatch(orders.slice(0, 500))}
-              />
-            ) : null}
+            {/* Always there, as on the batch page; greyed out until a ticked batch has a label. */}
+            <BatchPrintMenu
+              scope={pickedPrintable.length === 1 ? `batch #${pickedPrintable[0].id}` : `${pickedPrintable.length} batches`}
+              buttonLabel="Print"
+              busy={batchPrintBusy === -1}
+              disabledReason={pickedPrintable.length === 0 ? 'No labels yet in the ticked batches — generate them first' : undefined}
+              loadRows={async () => (await Promise.all(pickedPrintable.map(rowsOfBatch))).flat()}
+              onPrint={(orders, docType) => void printBatchDocs(-1,
+                pickedPrintable.length === 1 ? `batch #${pickedPrintable[0].id}` : `${pickedPrintable.length} batches`, orders, docType)}
+              onSend={(orders) => setSendBatch(orders.slice(0, 500))}
+            />
             <label className={`${SHOW_BILLS_TO ? 'inline-flex' : 'hidden'} items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11px] font-semibold text-[#5a4526]`}>
               <FiHome className="h-3.5 w-3.5" />
               <span className="text-[9.5px] uppercase tracking-[0.08em] text-[#b6a684]">Bills to</span>

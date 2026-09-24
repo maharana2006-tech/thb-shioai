@@ -42,4 +42,16 @@ describe('BatchPrintMenu', () => {
     expect(await screen.findByText('No live labels in batch #128.')).toBeInTheDocument()
     expect(screen.queryByRole('menuitem')).toBeNull()
   })
+
+  it('shows but will not open when there is nothing to print, and says why', async () => {
+    const loadRows = vi.fn()
+    render(<BatchPrintMenu scope="2 batches" buttonLabel="Print" busy={false} disabledReason="No labels yet in the ticked batches — generate them first"
+      loadRows={loadRows} onPrint={vi.fn()} onSend={vi.fn()} />)
+    const btn = screen.getByRole('button', { name: /Print/ })
+    expect(btn).toBeDisabled()
+    expect(btn).toHaveAttribute('title', 'No labels yet in the ticked batches — generate them first')
+    await userEvent.click(btn)
+    expect(loadRows).not.toHaveBeenCalled()
+    expect(screen.queryByRole('menu')).toBeNull()
+  })
 })

@@ -16,6 +16,7 @@ export default function BatchPrintMenu({
   scope,
   buttonLabel,
   busy,
+  disabledReason,
   loadRows,
   onPrint,
   onSend,
@@ -25,6 +26,8 @@ export default function BatchPrintMenu({
   /** Text for the button (the selection bar); an icon button when omitted (a row). */
   buttonLabel?: string
   busy: boolean
+  /** Shown but not usable, with this as the reason (e.g. nothing ticked has a label). */
+  disabledReason?: string
   loadRows: () => Promise<OrderImportRow[]>
   onPrint: (orders: number[], docType: 'LABEL' | 'COMMERCIAL_INVOICE') => void
   onSend: (orders: number[]) => void
@@ -79,13 +82,13 @@ export default function BatchPrintMenu({
         ref={btn}
         type="button"
         onClick={toggle}
-        disabled={busy}
+        disabled={busy || !!disabledReason}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={buttonLabel ? undefined : 'Print batch'}
-        title={`Download labels or invoices of ${scope}, or send them to a printer`}
+        title={disabledReason ?? `Download labels or invoices of ${scope}, or send them to a printer`}
         className={buttonLabel
-          ? 'inline-flex items-center gap-1 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[12.5px] font-semibold text-[#412d15] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:opacity-50'
+          ? 'inline-flex items-center gap-1 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[12.5px] font-semibold text-[#412d15] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40'
           : 'inline-flex items-center gap-0.5 rounded-xl border border-[#e3d9c4] bg-[#faf7f0] p-2 text-[#412d15] transition hover:border-[#cdbf9f] hover:bg-[#f0e9d8] disabled:opacity-50'}
       >
         {busy
