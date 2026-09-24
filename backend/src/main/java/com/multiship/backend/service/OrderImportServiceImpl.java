@@ -2672,6 +2672,16 @@ public class OrderImportServiceImpl implements OrderImportService {
             batch.setInvalidRows(invalid);
             batch.setContentHash(contentHash);
             stampOwner(batch, safe);
+            // The batch number is allotted at save, labelled or not: the upload
+            // already stamped every row with it (preview), so the list and the
+            // batch page show it from now on instead of only after Generate. A
+            // save that arrives without one (rows posted as JSON) gets one here.
+            Integer labelBatch = firstBatchId(safe);
+            if (labelBatch == null && !safe.isEmpty()) {
+                labelBatch = mintLabelBatchId();
+                for (OrderImportRowDTO row : safe) row.setBatchId(labelBatch);
+            }
+            batch.setLabelBatchId(labelBatch);
             try {
                 batch.setRowsJson(importObjectMapper != null
                         ? importObjectMapper.writeValueAsString(safe) : "[]");

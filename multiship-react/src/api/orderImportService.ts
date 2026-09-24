@@ -134,8 +134,8 @@ export interface ImportBatchSummary {
   fileName?: string | null
   /** INITIATE | IN_PROGRESS | PARTIAL_COMPLETE | COMPLETE. */
   status?: ImportStatus | string | null
-  /** Label batch id shared by every order this import generated a label for.
-   *  Null until the first label is generated. Groups the orders in All Orders. */
+  /** Batch number shared by every order this import generates a label for.
+   *  Allotted when the import is saved (older imports: at the first label). Groups the orders in All Orders. */
   labelBatchId?: number | null
   createdAt?: string | null
   /** ISO timestamp of the last terminal transition (COMPLETE /

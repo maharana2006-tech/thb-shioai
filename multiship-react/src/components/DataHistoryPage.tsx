@@ -1315,7 +1315,7 @@ export default function DataHistoryPage() {
                       )}
                     </>
                   ) : null}
-                  {batchPageId == null && !viewTrash && b.labelBatchId != null ? (
+                  {batchPageId == null && !viewTrash && b.labelBatchId != null && b.liveOrders !== 0 ? (
                     <>
                       <button
                         type="button"
@@ -1425,13 +1425,13 @@ export default function DataHistoryPage() {
           const b = row.original
           return b.labelBatchId != null ? (
             <span
-              title="Label batch — the number every label of this import was generated under; find its orders together on the Orders page"
+              title="Batch number — allotted when the import was saved; every label of this import is generated under it, so its orders show together on the Orders page"
               className="inline-flex items-center gap-1 rounded-full bg-[#412d15] px-2 py-0.5 font-mono text-[10px] font-bold text-[#f4eede]"
             >
               <FiZap className="h-2.5 w-2.5" /> {b.labelBatchId}
             </span>
           ) : (
-            <span className="text-[10.5px] text-[#b6a684]" title="A label batch number is assigned when the first label is generated">No batch yet</span>
+            <span className="text-[10.5px] text-[#b6a684]" title="A batch number is allotted when the import is saved">No batch yet</span>
           )
         },
         meta: { headerLabel: 'Batch', exportValue: (b: ImportBatchSummary) => b.labelBatchId == null ? '' : String(b.labelBatchId) },

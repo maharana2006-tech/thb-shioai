@@ -132,6 +132,37 @@ class OrderImportServiceImplBatchPageTest {
         assertFalse(batch.getCompletedAt().isBefore(batch.getGenerationStartedAt()), "took = completed - started, never negative");
     }
 
+    // ── Flow: import → validate → save allots the batch number, labelled or not.
+    //    It used to reach the saved import only at Generate. ─────────────────
+    @Test
+    void savingAnImportAllotsTheBatchNumberTheUploadStamped() {
+        OrderImportRowDTO r1 = shipRow(1, null, null);
+        OrderImportRowDTO r2 = shipRow(2, null, null);
+        r1.setBatchId(161);
+        r2.setBatchId(161);
+        org.mockito.ArgumentCaptor<ImportBatch> saved = org.mockito.ArgumentCaptor.forClass(ImportBatch.class);
+
+        service.save(new ArrayList<>(List.of(r1, r2)), "alice", "acme.csv", true, true);
+
+        org.mockito.Mockito.verify(importBatchRepository).save(saved.capture());
+        assertEquals(161, saved.getValue().getLabelBatchId(), "the upload's batch number, before any label");
+    }
+
+    @Test
+    void savingRowsWithNoBatchNumberMintsOne() {
+        com.multiship.backend.repository.OrderRepository orders = mock(com.multiship.backend.repository.OrderRepository.class);
+        when(orders.nextLabelBatchNumber()).thenReturn(900L);
+        ReflectionTestUtils.setField(service, "orderRepository", orders);
+        OrderImportRowDTO r1 = shipRow(1, null, null);
+        org.mockito.ArgumentCaptor<ImportBatch> saved = org.mockito.ArgumentCaptor.forClass(ImportBatch.class);
+
+        service.save(new ArrayList<>(List.of(r1)), "alice", "acme.csv", true, true);
+
+        org.mockito.Mockito.verify(importBatchRepository).save(saved.capture());
+        assertEquals(900, saved.getValue().getLabelBatchId());
+        assertEquals(900, r1.getBatchId(), "the rows carry it too, so Generate keeps the same number");
+    }
+
     // ── Loophole: commit cleared every row's errors and processGroup re-checked
     //    only the order's first row, so a broken line 2 shipped with it. ─────
     @Test
