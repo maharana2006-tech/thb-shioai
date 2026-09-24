@@ -48,6 +48,19 @@ vi.mock('../api/orderImportService', () => ({
   },
 }))
 
+// The batch grid joins the batch's orders (note, created date, tracking link) and
+// borrows the Orders page's per-order actions; none of them fire on render.
+vi.mock('../api/orderService', () => ({
+  orderService: {
+    listOrders: vi.fn().mockResolvedValue({ data: { content: [], totalElements: 0, totalPages: 1 } }),
+    printDocuments: vi.fn(),
+    getLabelPdf: vi.fn(),
+    getCommercialInvoicePdf: vi.fn(),
+    voidLabel: vi.fn(),
+    updateNote: vi.fn(),
+  },
+}))
+
 const notifyInfo = vi.fn()
 const notifySuccess = vi.fn()
 const notifyError = vi.fn()

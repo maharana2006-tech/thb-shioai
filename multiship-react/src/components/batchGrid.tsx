@@ -32,6 +32,22 @@ export function RowChannelChip({ recipientCompany }: { recipientCompany?: string
 /** Builds the shared ⓘ tooltip's item list from a batch row's problems and
  *  renders it via IssuesInfoIcon — used on BOTH ends of a problem row in the
  *  Import-history and API (WMS) grids. */
+/** The Orders page's status pill, for an import row: GEN / PEND / ERR / VOID / QUEUED / FIX. */
+export function rowStatus(
+  r: { generatedStatus?: string | null; errors?: string[] | null; generatedMessage?: string | null; orderRef?: string | null },
+  orderReady: boolean,
+): { short: string; dot: string; label: string } {
+  const gen = (r.generatedStatus ?? '').toUpperCase()
+  const errors = r.errors?.length ?? 0
+  if (gen === 'GENERATED') return { short: 'GEN', dot: 'bg-emerald-500', label: 'Generated — label created and billed' }
+  if (gen === 'VOIDED') return { short: 'VOID', dot: 'bg-slate-400', label: "Voided with the carrier — it can't ship" }
+  if (gen === 'QUEUED_USPS') return { short: 'QUEUED', dot: 'bg-sky-500', label: 'Queued for USPS — the label is being made' }
+  if (gen === 'FAILED') return { short: 'ERR', dot: 'bg-rose-500', label: r.generatedMessage || 'The carrier rejected this shipment' }
+  if (errors > 0) return { short: 'ERR', dot: 'bg-rose-500', label: `${errors} error${errors === 1 ? '' : 's'} — fix the red cells` }
+  if (!orderReady) return { short: 'FIX', dot: 'bg-amber-500', label: `This line is fine, but another line of order ${r.orderRef ?? ''} needs fixes` }
+  return { short: 'PEND', dot: 'bg-amber-500', label: "Valid — its label hasn't been generated yet" }
+}
+
 export function RowIssuesIcon({
   side,
   rowNumber,

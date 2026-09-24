@@ -1,8 +1,12 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   FiAlertCircle,
+  FiEye,
+  FiInfo,
   FiPrinter,
+  FiTruck,
+  FiXCircle,
   FiSend,
   FiCheckCircle,
   FiDownloadCloud,
@@ -25,15 +29,18 @@ import { bulkService, type BulkSummary, type BulkView } from '../api/bulkService
 import { AddShipViaMappingDialog, ShipViaCodesPanel } from './modals/ShipViaCodes'
 import OrderDocumentsTable from './OrderDocumentsTable'
 import DataHistoryFilterToolbar, { BulkFilterChips, statusMeta } from './DataHistoryFilterToolbar'
-import { GridCell, DH_COLUMNS, DH_KEY_COLUMN_KEYS, RowIssuesIcon, RowChannelChip, bucketRowErrors, type DhColumn } from './batchGrid'
-import VirtualTable from './VirtualTable'
+import { GridCell, DH_COLUMNS, DH_KEY_COLUMN_KEYS, RowIssuesIcon, RowChannelChip, bucketRowErrors, rowStatus, type DhColumn } from './batchGrid'
+import NoteCell from './workspace/NoteCell'
 import AnimatedHeight from './ui/AnimatedHeight'
 import BatchLabelBar from './bulk/BatchLabelBar'
 import LabelPreviewModal from './bulk/LabelPreviewModal'
+// The Orders page's per-order modals, reused on the batch page.
+const OrderDetailsModal = lazy(() => import('./modals/OrderDetailsModal'))
+const TrackingTimelineModal = lazy(() => import('./tracking/TrackingTimelineModal'))
 import { labelCountsOf, liveOrdersOf, type LabelCounts } from '../utils/batchLabels'
 import { printPdfBlob } from '../utils/printPdf'
 import { formatDuration, relativeTime } from '../utils/relativeTime'
-import { orderService } from '../api/orderService'
+import { orderService, type Order } from '../api/orderService'
 import SendToPrinterDialog from './workspace/SendToPrinterDialog'
 import { BTN_GHOST_SM } from './ui/buttons'
 import { notify } from '../utils/notify'
@@ -136,15 +143,14 @@ export default function DataHistoryPage() {
   const [confirmGenId, setConfirmGenId] = useState<number | null>(null)
   // Per-batch row filter for the expanded grid — a 1,000-order batch is 2,484 rows.
   const [gridFilter, setGridFilter] = useState<Record<number, 'all' | 'failed' | 'pending'>>({})
-  // The grid shows the Orders page's columns by default; every imported field on request.
-  const [allGridCols, setAllGridCols] = useState<boolean>(() => {
-    try { return window.localStorage.getItem(GRID_COLUMNS_KEY) === 'all' } catch { return false }
-  })
-  const gridCols = allGridCols ? DH_COLUMNS : DH_COLUMNS.filter((c) => DH_KEY_COLUMN_KEYS.has(c.key))
-  const setGridColumns = (all: boolean) => {
-    setAllGridCols(all)
-    try { window.localStorage.setItem(GRID_COLUMNS_KEY, all ? 'all' : 'key') } catch { /* per-viewer convenience only */ }
-  }
+  /** The grid's search box (client-side over the loaded rows). */
+  const [gridSearch, setGridSearch] = useState('')
+  /** The Orders page's Details / Track modals, for one order of the batch. */
+  const [detailsOrderNo, setDetailsOrderNo] = useState<number | null>(null)
+  const [trackingOrderNo, setTrackingOrderNo] = useState<number | null>(null)
+  const [voidingOrderNo, setVoidingOrderNo] = useState<number | null>(null)
+  /** The batch's orders by number — what the rows don't carry (note, created date, tracking link). */
+  const [batchOrders, setBatchOrders] = useState<Record<number, Order>>({})
   /** Ticked rows (row numbers) per batch — for print / send / void. */
   const [pickedRows, setPickedRows] = useState<Record<number, number[]>>({})
   const [genRowKey, setGenRowKey] = useState<string | null>(null)
@@ -318,6 +324,24 @@ export default function DataHistoryPage() {
       setBatchPrintBusy(null)
     }
   }
+
+  /** The orders behind the batch page's rows, joined by order number. */
+  const batchPageLabelBatch = batchPageId != null ? batches.find((x) => x.id === batchPageId)?.labelBatchId ?? null : null
+  const batchPageRows = batchPageId != null ? rowsById[batchPageId] : undefined
+  useEffect(() => {
+    if (batchPageLabelBatch == null) return
+    let gone = false
+    orderService.listOrders({ batch: String(batchPageLabelBatch), page: 0, size: 500 })
+      .then((res) => {
+        if (gone) return
+        const byNo: Record<number, Order> = {}
+        for (const o of res.data?.content ?? []) byNo[o.orderDetails.orderNo] = o
+        setBatchOrders(byNo)
+      })
+      .catch(() => { /* the rows still render from their own fields */ })
+    return () => { gone = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-read when the batch's rows change (a void, a retry)
+  }, [batchPageLabelBatch, batchPageRows])
 
   /** Re-read a batch's rows (after a void) and its header counts. */
   const reloadRows = (id: number) => {
@@ -1526,38 +1550,334 @@ export default function DataHistoryPage() {
   )
 
   /** Expanded content for a batch row — the all-columns editable grid. */
-  const renderBatchExpanded = (b: ImportBatchSummary) => {
-    const rows = rowsById[b.id]
-    const list = Array.isArray(rows) ? rows : []
-    const filter = gridFilter[b.id] ?? 'all'
-    const needsAttention = (r: (typeof list)[number]) =>
-      (r.errors?.length ?? 0) > 0 || (r.generatedStatus ?? '').toUpperCase() === 'FAILED'
-    const notLabelled = (r: (typeof list)[number]) => (r.generatedStatus ?? '').toUpperCase() !== 'GENERATED'
-    const visible = filter === 'failed' ? list.filter(needsAttention) : filter === 'pending' ? list.filter(notLabelled) : list
+  /** One order of the batch: print its label / invoice, void it — the Orders page's actions. */
+  const printOrderLabel = async (orderNo: number) => {
+    try { printPdfBlob(await orderService.getLabelPdf(orderNo, undefined, { main: true })) }
+    catch (e) { notify.apiError(e, `Could not print label for #${orderNo}.`) }
+  }
+  const printOrderInvoice = async (orderNo: number) => {
+    try { printPdfBlob(await orderService.getCommercialInvoicePdf(orderNo)) }
+    catch (e) { notify.apiError(e, `Could not print commercial invoice for #${orderNo}.`) }
+  }
+  const voidOrder = async (batchId: number, orderNo: number, trackingNumber: string) => {
+    const ok = await notify.confirm(
+      `This cancels ${trackingNumber} at the carrier — it cannot be undone. Postage is refunded only if the label hasn't been scanned yet.`,
+      { title: `Void order #${orderNo}?`, confirmLabel: 'Void the label', cancelLabel: 'Keep the label', danger: true },
+    )
+    if (!ok) return
+    setVoidingOrderNo(orderNo)
+    try {
+      const data = (await orderService.voidLabel(orderNo)).data
+      if (data?.voided || data?.status === 'ALREADY_VOIDED') notify.success(`Order ${orderNo}: ${data.message}`)
+      else notify.error(`Void failed: ${data?.message ?? 'Unknown error.'}`)
+      reloadRows(batchId)
+      void reloadQuiet()
+    } catch (e) {
+      notify.apiError(e, 'Void call failed.')
+    } finally {
+      setVoidingOrderNo(null)
+    }
+  }
+
+  /** The batch page's grid: the Orders page's columns and actions, plus the import's editable fields. */
+  const batchList = Array.isArray(batchPageRows) ? batchPageRows : []
+  const batchFilter = batchPageId != null ? gridFilter[batchPageId] ?? 'all' : 'all'
+  const batchPicked = batchPageId != null ? pickedRows[batchPageId] ?? [] : []
+  const rowNeedsAttention = (r: OrderImportRow) => (r.errors?.length ?? 0) > 0 || (r.generatedStatus ?? '').toUpperCase() === 'FAILED'
+  const rowNotLabelled = (r: OrderImportRow) => (r.generatedStatus ?? '').toUpperCase() !== 'GENERATED'
+  const rowIsLive = (r: OrderImportRow) => r.generatedOrderNo != null && (r.generatedStatus ?? '').toUpperCase() === 'GENERATED'
+  const batchVisible = useMemo(() => {
+    const filtered = batchFilter === 'failed' ? batchList.filter(rowNeedsAttention)
+      : batchFilter === 'pending' ? batchList.filter(rowNotLabelled) : batchList
+    const q = gridSearch.trim().toLowerCase()
+    if (!q) return filtered
+    return filtered.filter((r) => [r.orderRef, r.reference, r.recipientName, r.city, r.clientCode, r.generatedOrderNo, r.generatedTrackingNumber]
+      .some((v) => v != null && String(v).toLowerCase().includes(q)))
+  }, [batchList, batchFilter, gridSearch])
+  const batchColumns = useMemo<ColumnDef<OrderImportRow, unknown>[]>(() => {
+    const b = batchPageId != null ? batches.find((x) => x.id === batchPageId) : undefined
+    if (!b) return []
+    const list = batchList
     // An order is labelled as one shipment, so a clean line of an order whose
     // other line has errors can't be labelled on its own either.
-    const orderKey = (r: (typeof list)[number]) => (r.orderRef ?? '').trim() || `__row_${r.rowNumber}`
+    const orderKey = (r: OrderImportRow) => (r.orderRef ?? '').trim() || `__row_${r.rowNumber}`
     const brokenOrders = new Set(list.filter((r) => (r.errors?.length ?? 0) > 0).map(orderKey))
-    // Rows whose label is live can be ticked for print / send / void.
-    const isLive = (r: (typeof list)[number]) => r.generatedOrderNo != null && (r.generatedStatus ?? '').toUpperCase() === 'GENERATED'
-    const picked = pickedRows[b.id] ?? []
-    const pickedSet = new Set(picked)
-    const visibleLive = visible.filter(isLive)
+    const pickedSet = new Set(batchPicked)
+    const visibleLive = batchVisible.filter(rowIsLive)
     const allVisiblePicked = visibleLive.length > 0 && visibleLive.every((r) => pickedSet.has(r.rowNumber))
+    const rowIsWms = ['WMS', 'API'].includes((b.source || '').toUpperCase())
+    const locked = viewTrash || (b.status || '').toUpperCase() === 'IN_PROGRESS'
     const togglePick = (rowNumber: number) => setPickedRows((m) => {
       const cur = new Set(m[b.id] ?? [])
-      if (cur.has(rowNumber)) cur.delete(rowNumber)
-      else cur.add(rowNumber)
+      if (cur.has(rowNumber)) cur.delete(rowNumber); else cur.add(rowNumber)
       return { ...m, [b.id]: Array.from(cur) }
     })
     const togglePickVisible = () => setPickedRows((m) => {
       const cur = new Set(m[b.id] ?? [])
-      for (const r of visibleLive) {
-        if (allVisiblePicked) cur.delete(r.rowNumber)
-        else cur.add(r.rowNumber)
-      }
+      for (const r of visibleLive) { if (allVisiblePicked) cur.delete(r.rowNumber); else cur.add(r.rowNumber) }
       return { ...m, [b.id]: Array.from(cur) }
     })
+    const ICON = 'flex h-7 w-7 items-center justify-center rounded-lg border transition'
+    const NEUTRAL = 'border-[#e6dcc7] bg-[#faf7f0] text-[#5a4526] hover:border-[#dccfb4] hover:bg-[#f2ebda]'
+    const slot = (node: React.ReactNode) => <span className="flex h-7 w-7 shrink-0 items-center justify-center">{node}</span>
+
+    const defs: ColumnDef<OrderImportRow, unknown>[] = [
+      {
+        id: 'pick',
+        header: () => (
+          <input type="checkbox" aria-label="Tick every live label shown" checked={allVisiblePicked} disabled={visibleLive.length === 0}
+            onChange={togglePickVisible} onPointerDown={(e) => e.stopPropagation()} className="h-3.5 w-3.5 accent-[#1f150c] disabled:opacity-30" />
+        ),
+        enableSorting: false, enableResizing: false, size: 36,
+        cell: ({ row }) => {
+          const r = row.original
+          return (
+            <input type="checkbox" aria-label={`Tick row ${r.rowNumber}`} checked={pickedSet.has(r.rowNumber)} disabled={!rowIsLive(r)}
+              onChange={() => togglePick(r.rowNumber)} title={rowIsLive(r) ? 'Tick to print, send or void this label' : 'Only rows with a live label can be ticked'}
+              className="h-3.5 w-3.5 accent-[#1f150c] disabled:opacity-25" />
+          )
+        },
+        meta: { headerLabel: 'Tick', exportValue: () => '', hideable: false },
+      },
+      {
+        id: 'order', header: 'Order', size: 190, enableSorting: false,
+        accessorFn: (r) => r.generatedOrderNo ?? r.rowNumber,
+        cell: ({ row }) => {
+          const r = row.original
+          const gen = (r.generatedStatus ?? '').toUpperCase()
+          const hasOrder = r.generatedOrderNo != null && (gen === 'GENERATED' || gen === 'VOIDED' || gen === 'QUEUED_USPS' || gen === 'FAILED')
+          return (
+            <span className="flex min-w-0 flex-col gap-0.5">
+              <span className="inline-flex items-center gap-1.5">
+                {hasOrder ? (
+                  <a href={`/label/${r.generatedOrderNo}`} className={`font-mono text-[13px] font-bold underline-offset-2 hover:underline ${gen === 'VOIDED' ? 'text-slate-400 line-through' : 'text-[#1f150c]'}`}>
+                    #{r.generatedOrderNo}
+                  </a>
+                ) : <span className="font-mono text-[12px] font-semibold text-[#6b5c42]">Row {r.rowNumber}</span>}
+                <span title={rowIsWms ? 'API — imported via external partner / WMS' : 'Bulk — imported via CSV/Excel'}
+                  className={`inline-flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-bold ring-1 ${rowIsWms ? 'bg-emerald-50 text-emerald-700 ring-emerald-200' : 'bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-200'}`}>
+                  {rowIsWms ? 'A' : 'B'}
+                </span>
+                {rowIsWms ? <RowChannelChip recipientCompany={r.recipientCompany} /> : null}
+                {savingCell === `${b.id}-${r.rowNumber}` ? <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#5a4526]" /> : null}
+              </span>
+              <span className="truncate font-mono text-[11px] text-[#6b5c42]" title={`Row ${r.rowNumber} of the file`}>
+                {(r.clientCode || '—')} · {r.orderRef || '—'}
+              </span>
+            </span>
+          )
+        },
+        meta: { headerLabel: 'Order', exportValue: (r: OrderImportRow) => r.generatedOrderNo ?? '' },
+      },
+      {
+        id: 'reference', header: 'Ref #', size: 120, enableSorting: false,
+        accessorFn: (r) => r.reference ?? '',
+        cell: ({ row }) => <span className="block truncate font-mono text-[12px] text-[#5a4526]" title={row.original.reference || undefined}>{row.original.reference || <span className="text-[#b3a583]">—</span>}</span>,
+        meta: { headerLabel: 'Ref #', exportValue: (r: OrderImportRow) => r.reference ?? '' },
+      },
+      {
+        id: 'note', header: 'Note', size: 44, enableSorting: false,
+        cell: ({ row }) => {
+          const o = row.original.generatedOrderNo != null ? batchOrders[row.original.generatedOrderNo] : undefined
+          return o ? <NoteCell orderNo={o.orderDetails.orderNo} note={o.orderDetails.note ?? ''} /> : <span className="text-[#b3a583]">—</span>
+        },
+        meta: { headerLabel: 'Note', exportValue: (r: OrderImportRow) => (r.generatedOrderNo != null ? batchOrders[r.generatedOrderNo]?.orderDetails.note : '') ?? '' },
+      },
+      {
+        id: 'labelBatch', header: 'Batch', size: 80, enableSorting: false,
+        accessorFn: (r) => r.batchId ?? '',
+        cell: ({ row }) => <span className="block truncate font-mono text-[12px] text-[#5a4526]">{row.original.batchId ?? <span className="text-[#b3a583]">—</span>}</span>,
+        meta: { headerLabel: 'Batch', exportValue: (r: OrderImportRow) => r.batchId ?? '' },
+      },
+      {
+        id: 'dest', header: 'Dest', size: 170, enableSorting: false,
+        accessorFn: (r) => `${r.city ?? ''} ${r.state ?? ''}`,
+        cell: ({ row }) => {
+          const r = row.original
+          const sub = [r.state, r.postalCode].filter(Boolean).join(' · ')
+          return (
+            <span className="flex min-w-0 flex-col gap-0.5" title={[r.recipientName, r.addressLine1, r.city, r.state, r.postalCode, r.countryCode].filter(Boolean).join(' ') || 'No destination on file'}>
+              <span className="truncate text-[13.5px] text-[#3f3527]">{r.city || r.countryCode || '—'}</span>
+              {sub ? <span className="truncate text-[11.5px] tabular-nums text-[#6b5c42]">{sub}</span> : null}
+            </span>
+          )
+        },
+        meta: { headerLabel: 'Destination', exportValue: (r: OrderImportRow) => [r.city, r.state, r.postalCode, r.countryCode].filter(Boolean).join(' ') },
+      },
+      {
+        id: 'status', header: 'Status', size: 190, enableSorting: false,
+        accessorFn: (r) => r.generatedStatus ?? '',
+        cell: ({ row }) => {
+          const r = row.original
+          const st = rowStatus(r, !brokenOrders.has(orderKey(r)))
+          const failed = (r.generatedStatus ?? '').toUpperCase() === 'FAILED'
+          const { byField, rowLevel } = bucketRowErrors(r.errors ?? [])
+          const warnings = r.warnings ?? []
+          const explain = (r.errors?.length ?? 0) > 0 || (failed && !!r.generatedMessage) || warnings.length > 0
+          const o = r.generatedOrderNo != null ? batchOrders[r.generatedOrderNo] : undefined
+          const when = o?.orderDetails.createdDate ?? null
+          return (
+            <span className="flex min-w-0 flex-col gap-0.5">
+              <span className="inline-flex items-center gap-1.5">
+                <span title={st.label} className="inline-flex items-center gap-1 rounded-full bg-slate-50 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-700 ring-1 ring-slate-200">
+                  <span className={`h-1.5 w-1.5 rounded-full ${st.dot}`} />{st.short}
+                </span>
+                {explain ? <RowIssuesIcon side="left" rowNumber={r.rowNumber} byField={byField} rowLevel={rowLevel} carrierMessage={failed ? r.generatedMessage : null} warnings={warnings} /> : null}
+              </span>
+              {when ? (
+                <span className="truncate text-[11.5px] text-[#6b5c42]" title={when}>{new Date(when).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+              ) : failed && r.generatedMessage ? (
+                <span className="truncate text-[11.5px] text-rose-700" title={r.generatedMessage}>{r.generatedMessage}</span>
+              ) : null}
+            </span>
+          )
+        },
+        meta: { headerLabel: 'Status', exportValue: (r: OrderImportRow) => r.generatedStatus ?? '' },
+      },
+      {
+        id: 'track', header: 'Track', size: 150, enableSorting: false,
+        accessorFn: (r) => r.generatedTrackingNumber ?? '',
+        cell: ({ row }) => {
+          const r = row.original
+          const tn = r.generatedTrackingNumber
+          if (!tn) return <span className="text-[#b3a583]">—</span>
+          const o = r.generatedOrderNo != null ? batchOrders[r.generatedOrderNo] : undefined
+          const url = o?.labelDetails.trackingUrl ?? r.trackingUrl ?? null
+          const chip = (
+            <span title={`Tracking ${tn}${url ? '\n(click to open carrier page)' : ''}`} className="inline-flex items-center rounded-full bg-sky-50 px-2 py-0.5 font-mono text-[11px] font-semibold text-sky-800 ring-1 ring-sky-200">
+              …{tn.length > 4 ? tn.slice(-4) : tn}
+            </span>
+          )
+          const ago = relativeTime(o?.labelDetails.generatedAt ?? null)
+          return (
+            <span className="flex min-w-0 flex-col gap-0.5">
+              {url ? <a href={url} target="_blank" rel="noreferrer" className="inline-block hover:opacity-80">{chip}</a> : chip}
+              {r.lastPrintedAt ? (
+                <span className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-emerald-700" title={`Last printed ${formatPrinted(r.lastPrintedAt, true)}`}>
+                  <FiPrinter className="h-2.5 w-2.5" aria-hidden="true" /> Printed {formatPrinted(r.lastPrintedAt)}
+                </span>
+              ) : ago ? <span className="truncate text-[11.5px] text-[#6b5c42]" title={o?.labelDetails.generatedAt ?? undefined}>{ago}</span> : null}
+            </span>
+          )
+        },
+        meta: { headerLabel: 'Tracking', exportValue: (r: OrderImportRow) => r.generatedTrackingNumber ?? '' },
+      },
+      // Every imported field, editable in place until the row is labelled.
+      ...DH_COLUMNS.map((c): ColumnDef<OrderImportRow, unknown> => ({
+        id: `f_${c.key}`, header: c.label ?? c.key, size: 120, enableSorting: false,
+        accessorFn: (r) => (r as unknown as Record<string, unknown>)[c.key] ?? '',
+        cell: ({ row }) => {
+          const r = row.original
+          const raw = (r as unknown as Record<string, unknown>)[c.key]
+          const { byField } = bucketRowErrors(r.errors ?? [])
+          const generated = (r.generatedStatus ?? '').toUpperCase() === 'GENERATED'
+          // An API/WMS order shows the client's own ship via code (its resolved
+          // carrier service in the tooltip), and an unmapped code can be mapped here.
+          const showShipVia = c.key === 'serviceType' && rowIsWms && !!r.shipViaCode
+          const unmapped = c.key === 'serviceType' && rowIsWms ? (byField.serviceType ?? []).map((m) => m.match(UNMAPPED_SHIP_VIA)).find(Boolean) : null
+          return (
+            <div title={showShipVia ? (r.shipViaNote ?? undefined) : undefined}>
+              <GridCell
+                value={showShipVia ? String(r.shipViaCode) : raw == null ? '' : String(raw)}
+                readOnly={generated || locked || (rowIsWms && c.key === 'orderRef')}
+                bad={(byField[c.key]?.length ?? 0) > 0}
+                errors={byField[c.key]}
+                mono={c.mono}
+                onCommit={(v) => void commitCell(b.id, r, c, v)}
+              />
+              {unmapped && canWrite && !generated && !viewTrash ? (
+                <button type="button" onClick={() => setMapping({ code: unmapped[1], clientCode: (r.clientCode ?? '').trim().toUpperCase() || null, batchId: b.id })}
+                  className="mt-0.5 block w-full truncate rounded border border-[#e3d9c4] bg-white px-1 py-0.5 text-[9px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]">
+                  Map {unmapped[1]}…
+                </button>
+              ) : null}
+            </div>
+          )
+        },
+        meta: { headerLabel: c.label ?? c.key, exportValue: (r: OrderImportRow) => String((r as unknown as Record<string, unknown>)[c.key] ?? '') },
+      })),
+      {
+        id: 'actions', header: () => <span className="block text-right">Actions</span>, size: 300, enableSorting: false,
+        cell: ({ row }) => {
+          const r = row.original
+          const gen = (r.generatedStatus ?? '').toUpperCase()
+          const generated = gen === 'GENERATED'
+          const failed = gen === 'FAILED'
+          const ok = (r.errors?.length ?? 0) === 0
+          const orderReady = !brokenOrders.has(orderKey(r))
+          const orderNo = r.generatedOrderNo ?? null
+          const tn = r.generatedTrackingNumber ?? null
+          const isIntl = (r.countryCode ?? '').toUpperCase() !== 'US'
+          const rowKey = `${b.id}-${r.rowNumber}`
+          const rowBusy = genRowKey === rowKey
+          return (
+            <span className="flex w-full items-center justify-end gap-1">
+              {slot(tn && orderNo != null ? (
+                <button type="button" onClick={() => setTrackingOrderNo(orderNo)} title={`Live tracking for ${tn}`} aria-label={`Track order ${orderNo}`} className={`${ICON} ${NEUTRAL}`}>
+                  <FiTruck className="h-3.5 w-3.5" />
+                </button>
+              ) : null)}
+              {slot(tn && orderNo != null && generated && canWrite ? (
+                <button type="button" disabled={voidingOrderNo === orderNo || locked} onClick={() => void voidOrder(b.id, orderNo, tn)} title={`Void ${tn} at the carrier`} aria-label={`Void order ${orderNo}`}
+                  className={`${ICON} border-rose-200 bg-rose-50 text-rose-700 hover:border-rose-300 hover:bg-rose-100 disabled:opacity-40`}>
+                  {voidingOrderNo === orderNo ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-rose-300 border-t-rose-700" /> : <FiXCircle className="h-3.5 w-3.5" />}
+                </button>
+              ) : null)}
+              {slot(orderNo != null ? (
+                <button type="button" onClick={() => setDetailsOrderNo(orderNo)} title="Order details" aria-label={`Details for order ${orderNo}`} className={`${ICON} ${NEUTRAL}`}>
+                  <FiInfo className="h-3.5 w-3.5" />
+                </button>
+              ) : null)}
+              {slot(generated && orderNo != null ? (
+                <button type="button" onClick={() => void printOrderLabel(orderNo)} title="Print the shipping label" aria-label={`Print label for order ${orderNo}`} className={`${ICON} ${NEUTRAL}`}>
+                  <FiPrinter className="h-3.5 w-3.5" />
+                </button>
+              ) : null)}
+              {slot(generated && orderNo != null && isIntl ? (
+                <button type="button" onClick={() => void printOrderInvoice(orderNo)} title="Print the commercial invoice" aria-label={`Print commercial invoice for order ${orderNo}`} className={`${ICON} ${NEUTRAL}`}>
+                  <FiFileText className="h-3.5 w-3.5" />
+                </button>
+              ) : null)}
+              <span className="ml-1 flex min-w-[116px] shrink-0 justify-end">
+                {generated && orderNo != null ? (
+                  <button type="button" onClick={() => navigate(`/label/${orderNo}`)}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-[#f4eede] transition hover:bg-[#412d15]">
+                    <FiEye className="h-3 w-3" /> View Label
+                  </button>
+                ) : gen === 'VOIDED' ? (
+                  <span className="text-[11px] text-slate-500" title="Voided with the carrier">Voided</span>
+                ) : !canWrite ? (
+                  <span className="text-[11px] text-[#b6a684]">Read-only</span>
+                ) : orderReady && (ok || failed) ? (
+                  <button type="button" onClick={() => void generateRow(b.id, r.rowNumber)} disabled={rowBusy || locked}
+                    title={failed ? 'Retry — re-sends this same order to the carrier (no duplicate order is created)' : 'Generate a carrier label for this row'}
+                    className={`inline-flex items-center gap-1 whitespace-nowrap rounded-lg border px-3 py-1.5 text-[12px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                      failed ? 'border-rose-200 bg-white text-rose-700 hover:border-rose-300 hover:bg-rose-50' : 'border-[#1f150c] bg-[#1f150c] text-[#f4eede] hover:bg-[#412d15]'}`}>
+                    {rowBusy ? <span className={`inline-block h-3 w-3 animate-spin rounded-full border-2 ${failed ? 'border-rose-100 border-t-rose-600' : 'border-[#f4eede]/40 border-t-[#f4eede]'}`} />
+                      : failed ? <FiRotateCcw className="h-3 w-3" /> : <FiZap className="h-3 w-3" />}
+                    {rowBusy ? 'Generating…' : failed ? 'Retry' : 'Generate'}
+                  </button>
+                ) : (
+                  <span className="text-[11px] text-[#b6a684]" title={ok ? `Another line of order ${r.orderRef ?? ''} needs fixes — the order is labelled as one shipment` : undefined}>Fix errors first</span>
+                )}
+              </span>
+            </span>
+          )
+        },
+        meta: { headerLabel: 'Actions', hideable: false, exportable: false },
+      },
+    ]
+    return defs
+    // Cells close over the picked rows, busy states and the batch's orders; the
+    // handlers are stable enough (they read state through setters and refs).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [batchPageId, batches, batchList, batchVisible, batchPicked, batchOrders, savingCell, genRowKey, voidingOrderNo, viewTrash, canWrite])
+
+  const renderBatchExpanded = (b: ImportBatchSummary) => {
+    const rows = rowsById[b.id]
+    const list = Array.isArray(rows) ? rows : []
+    const filter = gridFilter[b.id] ?? 'all'
+    const picked = pickedRows[b.id] ?? []
     return (
       <div className="px-3 py-2.5">
         {rows === 'loading' || rows === undefined ? (
@@ -1598,61 +1918,6 @@ export default function DataHistoryPage() {
                 </div>
               )
             })()}
-            <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-2">
-              <div className="inline-flex shrink-0 overflow-hidden rounded-lg border border-[#e3d9c4]" role="group" aria-label="Show rows">
-                {([
-                  ['all', `All ${list.length}`],
-                  ['failed', `Needs attention ${list.filter(needsAttention).length}`],
-                  ['pending', `Not labelled ${list.filter(notLabelled).length}`],
-                ] as const).map(([k, label]) => (
-                  <button
-                    key={k}
-                    type="button"
-                    aria-pressed={filter === k}
-                    onClick={() => setGridFilter((m) => ({ ...m, [b.id]: k }))}
-                    className={`px-2.5 py-1.5 text-[11px] font-semibold transition ${
-                      filter === k ? 'bg-[#1f150c] text-[#f4eede]' : 'bg-white text-[#5a4526] hover:bg-[#faf7f0]'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              <div className="inline-flex shrink-0 overflow-hidden rounded-lg border border-[#e3d9c4]" role="group" aria-label="Columns">
-                {([
-                  [false, 'Key columns'],
-                  [true, `All columns · ${DH_COLUMNS.length}`],
-                ] as const).map(([all, label]) => (
-                  <button
-                    key={String(all)}
-                    type="button"
-                    aria-pressed={allGridCols === all}
-                    onClick={() => setGridColumns(all)}
-                    title={all ? 'Every field of the import — scroll right' : "The columns the Orders page shows"}
-                    className={`px-2.5 py-1.5 text-[11px] font-semibold transition ${
-                      allGridCols === all ? 'bg-[#f4eede] text-[#1f150c]' : 'bg-white text-[#5a4526] hover:bg-[#faf7f0]'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              {/* Print / send / void — on the same line, at the right. Hidden when nothing is live. */}
-              <BatchLabelBar
-                bare
-                batchId={b.id}
-                rows={list}
-                picked={picked}
-                onPickAllLive={() => setPickedRows((m) => ({ ...m, [b.id]: list.filter(isLive).map((r) => r.rowNumber) }))}
-                onClearPick={() => setPickedRows((m) => ({ ...m, [b.id]: [] }))}
-                onChanged={() => { reloadRows(b.id); void reloadQuiet() }}
-                onPrinted={() => reloadRows(b.id)}
-                canWrite={canWrite}
-                canManagePrinters={canPullWms}
-                locked={viewTrash || (b.status || '').toUpperCase() === 'IN_PROGRESS'}
-                onOpenPrinterSettings={() => navigate(settingsPaths.printers)}
-              />
-            </div>
             {['WMS', 'API'].includes((b.source || '').toUpperCase()) ? (
               // The WMS sends the client's own ship via codes; these are the ones
               // that resolve to a carrier service.
@@ -1666,264 +1931,60 @@ export default function DataHistoryPage() {
                 reloadKey={codesTick}
               />
             ) : null}
-            <VirtualTable
-              rows={visible}
-              rowKey={(r) => r.rowNumber}
-              colCount={gridCols.length + 3}
-              maxHeight="calc(100vh - 300px)"
-              className="rounded-xl border border-[#e3d9c4] bg-white"
-              tableClassName="w-full border-collapse text-[11px] text-[#3f3527]"
-              empty={<p className="py-6 text-center text-[11px] text-[#6b5c42]">No rows match this filter.</p>}
-              head={
-                <thead className="sticky top-0 z-30">
-                  <tr className="bg-[#faf7f0] text-[10.5px] font-semibold text-[#6b5c42]">
-                    <th className="sticky left-0 z-20 border-b border-[#e3d9c4] bg-[#faf7f0] px-2 py-1.5 text-left font-bold"
-                      style={{ width: ROW_COL_W, minWidth: ROW_COL_W, maxWidth: ROW_COL_W }}>
-                      <span className="flex items-center gap-1.5">
-                        <input
-                          type="checkbox"
-                          aria-label="Tick every live label shown"
-                          checked={allVisiblePicked}
-                          disabled={visibleLive.length === 0}
-                          onChange={togglePickVisible}
-                          className="h-3.5 w-3.5 accent-[#1f150c] disabled:opacity-30"
-                        />
-                        Row · Label
-                      </span>
-                    </th>
-                    <th className="sticky z-20 border-b border-r border-[#e3d9c4] bg-[#faf7f0] px-2 py-1.5 text-left font-bold"
-                      style={{ left: ROW_COL_W, width: ORDER_COL_W, minWidth: ORDER_COL_W }}>Order · Batch</th>
-                    {gridCols.map((c) => (
-                      <th key={c.key} className="whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1.5 text-left font-bold" title={c.key}>{c.label ?? c.key}</th>
-                    ))}
-                    <th className="whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1.5 text-left font-bold">Tracking · Label</th>
-                  </tr>
-                </thead>
+            <AdvancedDataTable<OrderImportRow>
+              tableKey="bulk-batch-rows-v1"
+              columns={batchColumns}
+              data={batchVisible}
+              getRowId={(r) => String(r.rowNumber)}
+              search={{ value: gridSearch, onChange: setGridSearch, placeholder: 'Search order #, ref, recipient, city, tracking…' }}
+              filterToggle={
+                <div className="inline-flex shrink-0 overflow-hidden rounded-lg border border-[#e3d9c4]" role="group" aria-label="Show rows">
+                  {([
+                    ['all', `All ${list.length}`],
+                    ['failed', `Needs attention ${list.filter(rowNeedsAttention).length}`],
+                    ['pending', `Not labelled ${list.filter(rowNotLabelled).length}`],
+                  ] as const).map(([k, label]) => (
+                    <button key={k} type="button" aria-pressed={filter === k} onClick={() => setGridFilter((m) => ({ ...m, [b.id]: k }))}
+                      className={`px-2.5 py-1.5 text-[11px] font-semibold transition ${filter === k ? 'bg-[#1f150c] text-[#f4eede]' : 'bg-white text-[#5a4526] hover:bg-[#faf7f0]'}`}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
               }
-              renderRow={(r, index, measureRef) => {
-                    const ok = (r.errors?.length ?? 0) === 0
-                    const orderReady = !brokenOrders.has(orderKey(r))
-                    const gen = (r.generatedStatus ?? '').toUpperCase()
-                    const rowIsWms = ['WMS', 'API'].includes((b.source || '').toUpperCase())
-                    const generated = gen === 'GENERATED'
-                    // A row that passed validation but was rejected by the carrier
-                    // is FAILED, not "Ready" — surface that so it shows Retry (which
-                    // reuses the same order) instead of a fresh Generate.
-                    const failed = gen === 'FAILED'
-                    const rowKey = `${b.id}-${r.rowNumber}`
-                    const rowBusy = genRowKey === rowKey
-                    const saving = savingCell === rowKey
-                    const { byField, rowLevel } = bucketRowErrors(r.errors ?? [])
-                    const statusTitle = (r.errors ?? []).map((m) => '✗ ' + m).join('\n') || undefined
-                    const warnings = r.warnings ?? []
-                    // Anything worth explaining under the row: validation errors,
-                    // a carrier rejection, or warnings. Rendered as a visible
-                    // strip — hover tooltips alone hid the "why".
-                    const hasExplain = !ok || (failed && !!r.generatedMessage) || warnings.length > 0
-                    return (
-                      <Fragment key={r.rowNumber}>
-                      <tr ref={measureRef} data-index={index} className={ok ? 'bg-white' : 'bg-rose-50/40'}>
-                        <td className={`sticky left-0 z-10 whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1 ${pickedSet.has(r.rowNumber) ? 'bg-[#faf3e3]' : ok ? 'bg-white' : 'bg-rose-50'}`}
-                          style={{ width: ROW_COL_W, minWidth: ROW_COL_W, maxWidth: ROW_COL_W }}>
-                          <div className="flex items-center gap-1.5 overflow-hidden">
-                            <input
-                              type="checkbox"
-                              aria-label={`Tick row ${r.rowNumber}`}
-                              checked={pickedSet.has(r.rowNumber)}
-                              disabled={!isLive(r)}
-                              onChange={() => togglePick(r.rowNumber)}
-                              title={isLive(r) ? 'Tick to print, send or void this label' : 'Only rows with a live label can be ticked'}
-                              className="h-3.5 w-3.5 shrink-0 accent-[#1f150c] disabled:opacity-25"
-                            />
-                            <span className="font-mono text-[10px] font-bold text-[#6b5c42]">{r.rowNumber}</span>
-                            {generated ? (
-                              <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-800">Generated</span>
-                            ) : gen === 'VOIDED' ? (
-                              <span title="This label was voided with the carrier — it can't ship" className="cursor-help rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-semibold text-slate-500 line-through decoration-slate-400">Voided</span>
-                            ) : gen === 'QUEUED_USPS' ? (
-                              <span title="Queued for USPS — the label is being made" className="cursor-help rounded-full bg-sky-100 px-1.5 py-0.5 text-[9px] font-semibold text-sky-800">Queued</span>
-                            ) : failed ? (
-                              <span title={r.generatedMessage || 'The carrier rejected this shipment'} className="cursor-help rounded-full bg-rose-100 px-1.5 py-0.5 text-[9px] font-semibold text-rose-800">Failed</span>
-                            ) : ok && orderReady ? (
-                              <span title="Valid — its label hasn't been generated yet" className="cursor-help rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800">Pending</span>
-                            ) : ok ? (
-                              <span
-                                title={`This line is fine, but another line of order ${r.orderRef ?? ''} needs fixes`}
-                                className="cursor-help rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800"
-                              >
-                                Order needs fixes
-                              </span>
-                            ) : (
-                              <span title={statusTitle} className="cursor-help rounded-full bg-rose-100 px-1.5 py-0.5 text-[9px] font-semibold text-rose-800">
-                                {r.errors!.length} error{r.errors!.length === 1 ? '' : 's'}
-                              </span>
-                            )}
-                            {/* D2C / B2B belongs to the API side only (client request) —
-                                shown for WMS fetches, never for CSV/Excel uploads. */}
-                            {rowIsWms ? <RowChannelChip recipientCompany={r.recipientCompany} /> : null}
-                            {saving ? <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#5a4526]" /> : null}
-                            {/* Left ⓘ — sticky cell, so the issues stay one
-                                hover away at any horizontal scroll position. */}
-                            {hasExplain ? (
-                              <RowIssuesIcon
-                                side="left"
-                                rowNumber={r.rowNumber}
-                                byField={byField}
-                                rowLevel={rowLevel}
-                                carrierMessage={failed ? r.generatedMessage : null}
-                                warnings={warnings}
-                              />
-                            ) : null}
-                          </div>
-                        </td>
-                        <td className={`sticky z-10 whitespace-nowrap border-b border-r border-[#e3d9c4] px-2 py-1 ${pickedSet.has(r.rowNumber) ? 'bg-[#faf3e3]' : ok ? 'bg-white' : 'bg-rose-50'}`}
-                          style={{ left: ROW_COL_W, width: ORDER_COL_W, minWidth: ORDER_COL_W }}>
-                          {r.generatedOrderNo != null && (generated || gen === 'VOIDED' || gen === 'QUEUED_USPS') ? (
-                            <span className="flex flex-col leading-tight">
-                              <a href={`/label/${r.generatedOrderNo}`} className={`font-mono text-[10px] font-semibold underline-offset-2 hover:underline ${gen === 'VOIDED' ? 'text-slate-400 line-through' : 'text-[#1f150c]'}`}>
-                                #{r.generatedOrderNo}
-                              </a>
-                              <span className="font-mono text-[9.5px] text-[#8a7a5a]">{r.batchId != null ? `Batch ${r.batchId}` : 'Batch —'}</span>
-                              {r.lastPrintedAt ? (
-                                <span className="inline-flex items-center gap-0.5 text-[9px] font-semibold text-emerald-700" title={`Last printed ${formatPrinted(r.lastPrintedAt, true)}`}>
-                                  <FiPrinter className="h-2.5 w-2.5" aria-hidden="true" /> Printed {formatPrinted(r.lastPrintedAt)}
-                                </span>
-                              ) : null}
-                            </span>
-                          ) : (
-                            <span className="text-[10px] text-[#b6a684]">—</span>
-                          )}
-                        </td>
-                        {gridCols.map((c) => {
-                          const raw = (r as unknown as Record<string, unknown>)[c.key]
-                          // An API/WMS order shows the client's own ship via code (its
-                          // resolved carrier service in the tooltip), and an unmapped
-                          // code can be mapped right here.
-                          const showShipVia = c.key === 'serviceType' && rowIsWms && !!r.shipViaCode
-                          const unmapped = c.key === 'serviceType' && rowIsWms
-                            ? (byField.serviceType ?? []).map((m) => m.match(UNMAPPED_SHIP_VIA)).find(Boolean)
-                            : null
-                          return (
-                            <td key={c.key} className="border-b border-[#f2ecdf] px-1 py-1 align-top">
-                              <div className={c.w} title={showShipVia ? (r.shipViaNote ?? undefined) : undefined}>
-                                <GridCell
-                                  value={showShipVia ? String(r.shipViaCode) : raw == null ? '' : String(raw)}
-                                  // Locked when labelled, while the import is generating
-                                  // (the run would overwrite the edit) and in Trash. An API
-                                  // order's reference is the sender's, not ours to change.
-                                  readOnly={generated || viewTrash || (b.status || '').toUpperCase() === 'IN_PROGRESS'
-                                    || (rowIsWms && c.key === 'orderRef')}
-                                  bad={(byField[c.key]?.length ?? 0) > 0}
-                                  errors={byField[c.key]}
-                                  mono={c.mono}
-                                  onCommit={(v) => void commitCell(b.id, r, c, v)}
-                                />
-                                {unmapped && canWrite && !generated && !viewTrash ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => setMapping({
-                                      code: unmapped[1],
-                                      clientCode: (r.clientCode ?? '').trim().toUpperCase() || null,
-                                      batchId: b.id,
-                                    })}
-                                    className="mt-0.5 block w-full truncate rounded border border-[#e3d9c4] bg-white px-1 py-0.5 text-[9px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]"
-                                  >
-                                    Map {unmapped[1]}…
-                                  </button>
-                                ) : null}
-                              </div>
-                            </td>
-                          )
-                        })}
-                        <td className="whitespace-nowrap border-b border-[#f2ecdf] px-2 py-1">
-                          {generated ? (
-                            /* The order number sits in the pinned column; here, the tracking
-                               number and a quiet way to see the label. */
-                            <span className="inline-flex items-center gap-1.5">
-                              {r.labelUrl && r.generatedOrderNo ? (
-                                <button
-                                  type="button"
-                                  onClick={() => setLabelModalOrderNo(r.generatedOrderNo ?? null)}
-                                  className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-[#e3d9c4] bg-white text-[#412d15] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
-                                  title="View the label PDF"
-                                  aria-label={`View the label of order ${r.generatedOrderNo}`}
-                                >
-                                  <FiFileText className="h-3 w-3" />
-                                </button>
-                              ) : null}
-                              {r.generatedTrackingNumber ? (
-                                <span className="font-mono text-[10px] text-[#3f3527]" title="Tracking number">{r.generatedTrackingNumber}</span>
-                              ) : r.generatedOrderNo ? (
-                                <a href={`/label/${r.generatedOrderNo}`} className="font-mono text-[10px] font-semibold text-[#412d15] underline-offset-2 hover:underline" title="Open this order">
-                                  #{r.generatedOrderNo}
-                                </a>
-                              ) : (
-                                <span className="text-[10px] text-[#b6a684]">—</span>
-                              )}
-                            </span>
-                          ) : gen === 'VOIDED' ? (
-                            <span className="text-[9.5px] text-slate-500" title="Voided with the carrier">Voided</span>
-                          ) : !canWrite ? (
-                            <span className="text-[9.5px] text-[#b6a684]">Read-only view</span>
-                          ) : orderReady && (ok || failed) ? (
-                            <div className="flex flex-col items-start gap-0.5">
-                              <button
-                                type="button"
-                                onClick={() => void generateRow(b.id, r.rowNumber)}
-                                disabled={rowBusy || viewTrash || (b.status || '').toUpperCase() === 'IN_PROGRESS'}
-                                className={`inline-flex items-center gap-1 whitespace-nowrap rounded-lg border px-2 py-1 text-[10px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${
-                                  failed
-                                    ? 'border-rose-200 bg-white text-rose-700 hover:border-rose-300 hover:bg-rose-50'
-                                    : 'border-[#1f150c] bg-[#1f150c] text-[#f4eede] hover:bg-[#412d15]'
-                                }`}
-                                title={failed ? 'Retry — re-sends this same order to the carrier (no duplicate order is created)' : 'Generate a carrier label for this row'}
-                              >
-                                {rowBusy ? (
-                                  <span className={`inline-block h-3 w-3 animate-spin rounded-full border-2 ${failed ? 'border-rose-100 border-t-rose-600' : 'border-[#f4eede]/40 border-t-[#f4eede]'}`} />
-                                ) : failed ? (
-                                  <FiRotateCcw className="h-3 w-3" />
-                                ) : (
-                                  <FiZap className="h-3 w-3" />
-                                )}
-                                {rowBusy ? 'Generating…' : failed ? 'Retry' : 'Generate'}
-                              </button>
-                              {failed && r.generatedMessage ? (
-                                <span title={r.generatedMessage} className="max-w-[200px] truncate text-[9.5px] text-rose-700">{r.generatedMessage}</span>
-                              ) : null}
-                            </div>
-                          ) : (
-                            <span
-                              className="text-[9.5px] text-[#b6a684]"
-                              title={ok ? `Another line of order ${r.orderRef ?? ''} needs fixes — the order is labelled as one shipment` : undefined}
-                            >
-                              Fix errors first
-                            </span>
-                          )}
-                          {hasExplain ? (
-                            <RowIssuesIcon
-                              side="right"
-                              rowNumber={r.rowNumber}
-                              byField={byField}
-                              rowLevel={rowLevel}
-                              carrierMessage={failed ? r.generatedMessage : null}
-                              warnings={warnings}
-                            />
-                          ) : null}
-                        </td>
-                      </tr>
-                      </Fragment>
-                    )
-              }}
+              toolbarActions={
+                /* Print / send / void the ticked labels — hidden when nothing is live. */
+                <BatchLabelBar
+                  bare
+                  batchId={b.id}
+                  rows={list}
+                  picked={picked}
+                  onPickAllLive={() => setPickedRows((m) => ({ ...m, [b.id]: list.filter(rowIsLive).map((r) => r.rowNumber) }))}
+                  onClearPick={() => setPickedRows((m) => ({ ...m, [b.id]: [] }))}
+                  onChanged={() => { reloadRows(b.id); void reloadQuiet() }}
+                  onPrinted={() => reloadRows(b.id)}
+                  canWrite={canWrite}
+                  canManagePrinters={canPullWms}
+                  locked={viewTrash || (b.status || '').toUpperCase() === 'IN_PROGRESS'}
+                  onOpenPrinterSettings={() => navigate(settingsPaths.printers)}
+                />
+              }
+              // The Orders page's columns show; every other imported field is one Columns click away.
+              initialHiddenColumns={DH_COLUMNS.filter((c) => !DH_KEY_COLUMN_KEYS.has(c.key) || ['city', 'state', 'countryCode', 'clientCode'].includes(c.key)).map((c) => `f_${c.key}`)}
+              csvFilename={`batch-${b.id}-rows`}
+              maxBodyHeight="calc(100vh - 320px)"
+              emptyState={<p className="py-6 text-center text-[12px] text-[#6b5c42]">No rows match.</p>}
+              caption={
+                <p className="text-[10.5px] text-[#b6a684]">
+                  {viewTrash
+                    ? 'Read-only in Trash — restore this import to edit rows or generate labels.'
+                    : (b.status || '').toUpperCase() === 'IN_PROGRESS'
+                      ? 'Locked while labels are generating — editing opens again when the run finishes.'
+                      : !canWrite
+                        ? 'Read-only view.'
+                        : 'Click a field cell to edit; it saves and re-validates on blur. Columns shows every imported field.'}
+                </p>
+              }
             />
-            <p className="mt-1.5 text-[10.5px] text-[#b6a684]">
-              {viewTrash
-                ? 'Read-only in Trash — restore this import to edit rows or generate labels.'
-                : (b.status || '').toUpperCase() === 'IN_PROGRESS'
-                  ? 'Locked while labels are generating — editing opens again when the run finishes.'
-                  : !canWrite
-                    ? 'Read-only view. Scroll right for more columns.'
-                    : 'Click any cell to edit; it saves and re-validates on blur. Scroll right for more columns.'}
-            </p>
           </>
         )}
       </div>
@@ -1945,7 +2006,13 @@ export default function DataHistoryPage() {
     />
   ) : null
 
-  const labelModal = labelModalOrderNo ? <LabelPreviewModal orderNo={labelModalOrderNo} onClose={() => setLabelModalOrderNo(null)} /> : null
+  const labelModal = (
+    <>
+      {labelModalOrderNo ? <LabelPreviewModal orderNo={labelModalOrderNo} onClose={() => setLabelModalOrderNo(null)} /> : null}
+      {detailsOrderNo != null ? <Suspense fallback={null}><OrderDetailsModal orderNo={detailsOrderNo} onClose={() => setDetailsOrderNo(null)} /></Suspense> : null}
+      {trackingOrderNo != null ? <Suspense fallback={null}><TrackingTimelineModal orderNo={trackingOrderNo} onClose={() => setTrackingOrderNo(null)} /></Suspense> : null}
+    </>
+  )
 
   // ── /bulk/batches/:id — one batch on its own page ───────────────────────
   if (batchPageId != null) {
@@ -2448,13 +2515,6 @@ function BatchListSkeleton() {
     </div>
   )
 }
-
-/** Where the grid's column choice is remembered (per browser). */
-const GRID_COLUMNS_KEY = 'bulk-grid-columns:v1'
-
-/** Widths of the two columns pinned at the left of a batch's rows grid. */
-const ROW_COL_W = 196
-const ORDER_COL_W = 104
 
 /** "22 Sep" (or with the time, for a tooltip). */
 function formatPrinted(iso: string, withTime = false) {
