@@ -201,7 +201,7 @@ public class NdsShipmentLookupService {
                 NdsAddressSanitizer.sanitize(h.shipToName()),
                 NdsAddressSanitizer.sanitize(h.shipToAddr1()),
                 h.shipToAddr2(),
-                h.shipToAddr3(),
+                null,
                 h.shipToCity(),
                 h.shipToState(),
                 h.shipToPostal(),
