@@ -10,7 +10,7 @@ const row = (n: number, orderNo: number | null, status: string | null, countryCo
 const open = async (rows: OrderImportRow[]) => {
   const onPrint = vi.fn()
   const onSend = vi.fn()
-  render(<BatchPrintMenu batchId={128} busy={false} loadRows={() => Promise.resolve(rows)} onPrint={onPrint} onSend={onSend} />)
+  render(<BatchPrintMenu scope="batch #128" busy={false} loadRows={() => Promise.resolve(rows)} onPrint={onPrint} onSend={onSend} />)
   await userEvent.click(screen.getByRole('button', { name: 'Print batch' }))
   return { onPrint, onSend }
 }
@@ -39,7 +39,7 @@ describe('BatchPrintMenu', () => {
 
   it('says so when nothing in the batch has a live label', async () => {
     await open([row(1, 7003, 'VOIDED'), row(2, null, null)])
-    expect(await screen.findByText('This batch has no live labels.')).toBeInTheDocument()
+    expect(await screen.findByText('No live labels in batch #128.')).toBeInTheDocument()
     expect(screen.queryByRole('menuitem')).toBeNull()
   })
 })

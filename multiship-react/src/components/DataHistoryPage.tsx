@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom'
 import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
@@ -272,15 +273,16 @@ export default function DataHistoryPage() {
     const cached = rowsById[b.id]
     return Array.isArray(cached) ? cached : (await orderImportService.getHistory(b.id)).data?.rows ?? []
   }
-  const printBatchDocs = async (b: ImportBatchSummary, orders: number[], docType: 'LABEL' | 'COMMERCIAL_INVOICE') => {
+  /** busyId: the batch whose row spins; -1 for the selection bar. */
+  const printBatchDocs = async (busyId: number, scope: string, orders: number[], docType: 'LABEL' | 'COMMERCIAL_INVOICE') => {
     if (orders.length === 0) return
-    setBatchPrintBusy(b.id)
+    setBatchPrintBusy(busyId)
     try {
       const res = await orderService.printDocuments(orders.slice(0, 500), docType)
       printPdfBlob(res.blob)
       const what = docType === 'LABEL' ? 'label' : 'commercial invoice'
-      notify.success(`Opening ${res.included} ${what}${res.included === 1 ? '' : 's'} of batch #${b.id} in the print dialog`
-        + (orders.length > 500 ? ' — the first 500; open the batch to print the rest.' : '.'))
+      notify.success(`Opening ${res.included} ${what}${res.included === 1 ? '' : 's'} of ${scope} in the print dialog`
+        + (orders.length > 500 ? ' — the first 500; print the rest in smaller groups.' : '.'))
       void reloadQuiet()
     } catch (e) {
       notify.apiError(e, 'Could not print this batch.')
@@ -950,7 +952,14 @@ export default function DataHistoryPage() {
   // pickedLive / pickedBilling / allPicked only recompute when their
   // real inputs change.
   const pickedSet = useMemo(() => new Set(pickedBatches), [pickedBatches])
-  const pickable = useMemo(() => batches.filter(canGenerateBatch), [batches, canGenerateBatch])
+  /** Live labels to print — the loaded rows when the page has them, else the list's figure. */
+  const hasLiveLabels = useCallback((b: ImportBatchSummary) => {
+    const r = rowsById[b.id]
+    return Array.isArray(r) ? liveOrdersOf(r).length > 0 : (b.liveOrders ?? b.labelsGenerated ?? 0) > 0
+  }, [rowsById])
+  const canPickBatch = useCallback((b: ImportBatchSummary) => canGenerateBatch(b) || hasLiveLabels(b), [canGenerateBatch, hasLiveLabels])
+  const pickable = useMemo(() => batches.filter(canPickBatch), [batches, canPickBatch])
+  const pickedPrintable = useMemo(() => batches.filter((b) => pickedSet.has(b.id) && hasLiveLabels(b)), [batches, pickedSet, hasLiveLabels])
   const allPicked = useMemo(
     () => pickable.length > 0 && pickable.every((b) => pickedSet.has(b.id)),
     [pickable, pickedSet],
@@ -1320,10 +1329,10 @@ export default function DataHistoryPage() {
                   {batchPageId == null && !viewTrash && b.labelBatchId != null && b.liveOrders !== 0 ? (
                     <>
                       <BatchPrintMenu
-                        batchId={b.id}
+                        scope={`batch #${b.id}`}
                         busy={batchPrintBusy === b.id}
                         loadRows={() => rowsOfBatch(b)}
-                        onPrint={(orders, docType) => void printBatchDocs(b, orders, docType)}
+                        onPrint={(orders, docType) => void printBatchDocs(b.id, `batch #${b.id}`, orders, docType)}
                         onSend={(orders) => setSendBatch(orders.slice(0, 500))}
                       />
                       {canWrite ? (
@@ -1374,7 +1383,7 @@ export default function DataHistoryPage() {
         header: () => (
           <input
             type="checkbox"
-            aria-label="Tick every batch that can generate"
+            aria-label="Tick every batch you can print or generate"
             checked={allPicked}
             disabled={pickable.length === 0}
             onChange={togglePickAll}
@@ -1387,7 +1396,7 @@ export default function DataHistoryPage() {
         size: 36,
         cell: ({ row }) => {
           const b = row.original
-          const can = canGenerateBatch(b) && !viewTrash
+          const can = canPickBatch(b) && !viewTrash
           return (
             <input
               type="checkbox"
@@ -1395,7 +1404,7 @@ export default function DataHistoryPage() {
               checked={pickedSet.has(b.id)}
               disabled={!can}
               onChange={() => togglePickBatch(b.id)}
-              title={can ? 'Tick to bill or generate this batch with the others' : 'Nothing to generate in this batch'}
+              title={can ? 'Tick to print or generate this batch with the others' : 'Nothing to print or generate in this batch'}
               className="h-3.5 w-3.5 accent-[#1f150c] disabled:opacity-25"
             />
           )
@@ -2279,44 +2288,6 @@ export default function DataHistoryPage() {
         <BatchListSkeleton />
       ) : (
       <div className="bulk-fade-in space-y-3">
-      {pickedBatches.length > 0 && batchPageId == null && !viewTrash ? (
-        <div data-testid="batch-pick-bar" className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[#412d15] bg-[#fcfaf5] px-4 py-2.5">
-          <span className="flex flex-wrap items-center gap-2 text-[12px] text-[#5a4526]">
-            <span className="font-semibold text-[#1f150c]">{pickedLive.length} batch{pickedLive.length === 1 ? '' : 'es'} ticked</span>
-            <span>· {pickedLive.reduce((n, b) => n + b.savedRows, 0)} rows to label</span>
-            <button type="button" onClick={() => setPickedBatches([])} className="inline-flex items-center gap-0.5 font-semibold hover:underline">
-              <FiX className="h-3 w-3" /> Clear
-            </button>
-          </span>
-          <span className="flex flex-wrap items-center gap-2">
-            <label className={`${SHOW_BILLS_TO ? 'inline-flex' : 'hidden'} items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11px] font-semibold text-[#5a4526]`}>
-              <FiHome className="h-3.5 w-3.5" />
-              <span className="text-[9.5px] uppercase tracking-[0.08em] text-[#b6a684]">Bills to</span>
-              <select
-                value={pickedBilling === 'MIXED' ? '' : pickedBilling}
-                onChange={(e) => { if (e.target.value) void setBillingForPicked(e.target.value as 'AUTO' | 'PLATFORM') }}
-                disabled={!!bulkRunning || billingSavingId != null}
-                className="bg-transparent text-[12px] font-semibold text-[#1f150c] outline-none"
-              >
-                {pickedBilling === 'MIXED' ? <option value="">Mixed — pick one</option> : null}
-                <option value="AUTO">Client account</option>
-                <option value="PLATFORM">Platform account</option>
-              </select>
-            </label>
-            <button
-              type="button"
-              onClick={() => void generatePicked()}
-              disabled={pickedLive.length === 0 || !!bulkRunning}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[12.5px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
-            >
-              {bulkRunning
-                ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
-                : <FiZap className="h-3.5 w-3.5" />}
-              {bulkRunning ? `Generating ${bulkRunning.done + 1} of ${bulkRunning.total}…` : `Generate labels (${pickedLive.length})`}
-            </button>
-          </span>
-        </div>
-      ) : null}
       <section
         aria-busy={refreshing}
         className={`rounded-2xl border border-slate-200 bg-white p-3 shadow-sm transition-opacity duration-200 ${refreshing && !loading ? 'opacity-60' : ''}`}
@@ -2382,6 +2353,62 @@ export default function DataHistoryPage() {
           />
         )}
       </section>
+      {pickedBatches.length > 0 && batchPageId == null && !viewTrash ? (
+        // Pinned to the bottom of the window (the list is often shorter than the
+        // screen) — portalled, since the tab's slide-in transform would pin a fixed
+        // bar to the tab instead. The spacer keeps the last batch from sitting under it.
+        <>
+        <div aria-hidden="true" className="h-20" />
+        {createPortal(<div className="pointer-events-none fixed inset-x-0 bottom-5 z-30 flex justify-center px-4 [&>*]:pointer-events-auto">
+          <div data-testid="batch-pick-bar" className="flex max-w-full flex-wrap items-center justify-center gap-2 rounded-2xl border border-[#e3d9c4] bg-white px-3 py-2.5 shadow-[0_18px_50px_rgba(31,21,12,0.22)] sm:gap-3 sm:px-4">
+            <span className="flex flex-wrap items-center gap-2 text-[11.5px] text-[#6b5c42]">
+              <span className="text-[13px] font-semibold tabular-nums text-[#1f150c]">{pickedBatches.length} batch{pickedBatches.length === 1 ? '' : 'es'} selected</span>
+              <button type="button" onClick={() => setPickedBatches([])} className="inline-flex items-center gap-0.5 font-semibold text-[#5a4526] hover:underline">
+                <FiX className="h-3 w-3" /> Clear
+              </button>
+            </span>
+            {pickedPrintable.length > 0 ? (
+              <BatchPrintMenu
+                scope={pickedPrintable.length === 1 ? `batch #${pickedPrintable[0].id}` : `${pickedPrintable.length} batches`}
+                buttonLabel="Print"
+                busy={batchPrintBusy === -1}
+                loadRows={async () => (await Promise.all(pickedPrintable.map(rowsOfBatch))).flat()}
+                onPrint={(orders, docType) => void printBatchDocs(-1,
+                  pickedPrintable.length === 1 ? `batch #${pickedPrintable[0].id}` : `${pickedPrintable.length} batches`, orders, docType)}
+                onSend={(orders) => setSendBatch(orders.slice(0, 500))}
+              />
+            ) : null}
+            <label className={`${SHOW_BILLS_TO ? 'inline-flex' : 'hidden'} items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11px] font-semibold text-[#5a4526]`}>
+              <FiHome className="h-3.5 w-3.5" />
+              <span className="text-[9.5px] uppercase tracking-[0.08em] text-[#b6a684]">Bills to</span>
+              <select
+                value={pickedBilling === 'MIXED' ? '' : pickedBilling}
+                onChange={(e) => { if (e.target.value) void setBillingForPicked(e.target.value as 'AUTO' | 'PLATFORM') }}
+                disabled={!!bulkRunning || billingSavingId != null}
+                className="bg-transparent text-[12px] font-semibold text-[#1f150c] outline-none"
+              >
+                {pickedBilling === 'MIXED' ? <option value="">Mixed — pick one</option> : null}
+                <option value="AUTO">Client account</option>
+                <option value="PLATFORM">Platform account</option>
+              </select>
+            </label>
+            {pickedLive.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => void generatePicked()}
+                disabled={!!bulkRunning}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[12.5px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
+              >
+                {bulkRunning
+                  ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
+                  : <FiZap className="h-3.5 w-3.5" />}
+                {bulkRunning ? `Generating ${bulkRunning.done + 1} of ${bulkRunning.total}…` : `Generate labels (${pickedLive.length})`}
+              </button>
+            ) : null}
+          </div>
+        </div>, document.body)}
+        </>
+      ) : null}
 
       {labelModal}
       </div>
