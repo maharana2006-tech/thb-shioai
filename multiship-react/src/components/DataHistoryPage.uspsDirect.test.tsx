@@ -167,10 +167,6 @@ vi.mock('./modals/ShipViaCodes', () => ({
 vi.mock('./OrderDocumentsTable', () => ({
   default: () => <div data-testid="documents-stub" />,
 }))
-const ordersWorkspace = vi.fn()
-vi.mock('./OrdersWorkspace', () => ({
-  default: (props: { batchId?: number }) => { ordersWorkspace(props); return <div data-testid="orders-workspace-stub" /> },
-}))
 vi.mock('./modals/OrderImportModal', () => ({
   default: () => <div data-testid="import-modal-stub" />,
 }))
@@ -410,7 +406,6 @@ describe('DataHistoryPage — MpsProgressCard renders inside USPS batches (audit
 
     // The rows (and the MPS cards) live on the batch's own page.
     await renderAt('/bulk/batches/100')
-    await userEvent.click(await screen.findByRole('button', { name: 'Import rows' }))
 
     // Auto-expand fires from the stub, which triggers ensureRows →
     // getHistory. Wait for the MPS section to appear.
@@ -441,7 +436,6 @@ describe('DataHistoryPage — MpsProgressCard renders inside USPS batches (audit
 
     // The rows (and the MPS cards) live on the batch's own page.
     await renderAt('/bulk/batches/200')
-    await userEvent.click(await screen.findByRole('button', { name: 'Import rows' }))
 
     // Wait for the batch page to show the batch.
     await waitFor(() => {
@@ -470,7 +464,6 @@ describe('DataHistoryPage — MpsProgressCard renders inside USPS batches (audit
 
     // The rows (and the MPS cards) live on the batch's own page.
     await renderAt('/bulk/batches/300')
-    await userEvent.click(await screen.findByRole('button', { name: 'Import rows' }))
 
     await waitFor(
       () => {
@@ -497,7 +490,6 @@ describe('DataHistoryPage — MpsProgressCard renders inside USPS batches (audit
 
     // The rows (and the MPS cards) live on the batch's own page.
     await renderAt('/bulk/batches/400')
-    await userEvent.click(await screen.findByRole('button', { name: 'Import rows' }))
 
     await waitFor(() => {
       expect(screen.getByTestId('batch-page-header')).toBeInTheDocument()
@@ -624,25 +616,6 @@ describe('Bulk Mailer — layout', () => {
     expect(header).toHaveTextContent('acme_sept.csv')
     expect(screen.getByRole('button', { name: /Bulk Mailer · Import history/i })).toBeInTheDocument()
     expect(getHistory).toHaveBeenCalledWith(121)
-  })
-
-  it('a labelled batch opens on its orders — the Orders page pinned to its label batch', async () => {
-    getHistory.mockResolvedValue({ data: { ...batchSummary({ id: 121, status: 'PARTIAL_COMPLETE', labelBatchId: 161 }), rows: [] } })
-    await renderAt('/bulk/batches/121')
-    expect(await screen.findByTestId('orders-workspace-stub')).toBeInTheDocument()
-    expect(ordersWorkspace).toHaveBeenCalledWith({ batchId: 161 })
-    expect(screen.getByRole('button', { name: 'Orders' })).toHaveAttribute('aria-pressed', 'true')
-    await userEvent.click(screen.getByRole('button', { name: 'Import rows' }))
-    expect(screen.queryByTestId('orders-workspace-stub')).toBeNull()
-    expect(screen.getByRole('button', { name: 'Import rows' })).toHaveAttribute('aria-pressed', 'true')
-  })
-
-  it('an unlabelled batch opens on its rows and cannot switch to orders yet', async () => {
-    getHistory.mockResolvedValue({ data: { ...batchSummary({ id: 124, status: 'INITIATE', labelBatchId: null }), rows: [] } })
-    await renderAt('/bulk/batches/124')
-    await screen.findByTestId('batch-page-header')
-    expect(screen.queryByTestId('orders-workspace-stub')).toBeNull()
-    expect(screen.getByRole('button', { name: 'Orders' })).toBeDisabled()
   })
 
   it('a trashed batch says when and by whom it was trashed', async () => {

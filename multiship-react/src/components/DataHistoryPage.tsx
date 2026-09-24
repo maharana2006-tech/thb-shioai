@@ -1,4 +1,4 @@
-import { Fragment, Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   FiAlertCircle,
@@ -30,8 +30,6 @@ import VirtualTable from './VirtualTable'
 import AnimatedHeight from './ui/AnimatedHeight'
 import BatchLabelBar from './bulk/BatchLabelBar'
 import LabelPreviewModal from './bulk/LabelPreviewModal'
-// The Orders page, pinned to this batch — its own chunk, loaded when the view is opened.
-const OrdersWorkspace = lazy(() => import('./OrdersWorkspace'))
 import { labelCountsOf, liveOrdersOf, type LabelCounts } from '../utils/batchLabels'
 import { printPdfBlob } from '../utils/printPdf'
 import { formatDuration, relativeTime } from '../utils/relativeTime'
@@ -147,8 +145,6 @@ export default function DataHistoryPage() {
     setAllGridCols(all)
     try { window.localStorage.setItem(GRID_COLUMNS_KEY, all ? 'all' : 'key') } catch { /* per-viewer convenience only */ }
   }
-  /** The batch page shows its import rows, or its orders with the Orders page's table and actions. */
-  const [batchView, setBatchView] = useState<'rows' | 'orders' | null>(null)
   /** Ticked rows (row numbers) per batch — for print / send / void. */
   const [pickedRows, setPickedRows] = useState<Record<number, number[]>>({})
   const [genRowKey, setGenRowKey] = useState<string | null>(null)
@@ -2008,41 +2004,9 @@ export default function DataHistoryPage() {
               </div>
               {renderActionsCell(b)}
             </section>
-            {(() => {
-              // Orders once labels exist (the Orders page's table and every action);
-              // rows until then (that is where fixes and Generate live).
-              const view = batchView ?? (b.labelBatchId != null ? 'orders' : 'rows')
-              return (
-                <>
-                  <div className="inline-flex overflow-hidden rounded-lg border border-[#e3d9c4]" role="group" aria-label="Batch view">
-                    {([['rows', 'Import rows'], ['orders', 'Orders']] as const).map(([k, label]) => (
-                      <button
-                        key={k}
-                        type="button"
-                        aria-pressed={view === k}
-                        disabled={k === 'orders' && b.labelBatchId == null}
-                        title={k === 'orders' && b.labelBatchId == null ? 'No labels yet — generate them first' : undefined}
-                        onClick={() => setBatchView(k)}
-                        className={`px-3 py-1.5 text-[12px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${
-                          view === k ? 'bg-[#1f150c] text-[#f4eede]' : 'bg-white text-[#5a4526] hover:bg-[#faf7f0]'
-                        }`}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                  {view === 'orders' && b.labelBatchId != null ? (
-                    <Suspense fallback={<p className="rounded-2xl border border-[#e3d9c4] bg-white px-5 py-10 text-center text-sm text-[#6b5c42]">Loading orders…</p>}>
-                      <OrdersWorkspace batchId={b.labelBatchId} />
-                    </Suspense>
-                  ) : (
-                    <section className="rounded-2xl border border-[#e3d9c4] bg-white shadow-sm">
-                      {renderBatchExpanded(b)}
-                    </section>
-                  )}
-                </>
-              )
-            })()}
+            <section className="rounded-2xl border border-[#e3d9c4] bg-white shadow-sm">
+              {renderBatchExpanded(b)}
+            </section>
           </>
         )}
         {labelModal}
