@@ -128,14 +128,6 @@ export default function DataHistoryPage() {
   // card and button keep saying "Cancelling…" — it used to snap straight back
   // to "Cancel" while workers drained, which read as the click doing nothing.
   const [cancelRequested, setCancelRequested] = useState<Set<number>>(() => new Set())
-  // Observer-mode poll tracking (2026-09-12 post-mortem) — pre-fix, the
-  // progress bar only rendered when THIS browser session called
-  // generate(id). Reloading the page or opening Data History in a fresh
-  // tab left IN_PROGRESS batches without a visible progress bar even
-  // though workers were actively labelling. This map holds a cancel
-  // function per batch so the effect below can restart / stop polls
-  // without racing the local generate() session.
-  const observerPollsRef = useRef<Map<number, { cancel: () => void }>>(new Map())
   // Bill-to account: the batch whose "Bills to" selector is mid-save.
   const [billingSavingId, setBillingSavingId] = useState<number | null>(null)
   // Confirm-before-generate when a batch bills to the platform account.
@@ -329,8 +321,30 @@ export default function DataHistoryPage() {
       .catch((e) => notify.apiError(e, 'Could not reload the rows.'))
   }
 
-  /** Lazy-load a batch's rows when its row is expanded. */
+  /**
+   * Lazy-load a batch's rows when its row is expanded.
+   *
+   * <p>Also does a one-shot {@code generationProgress} fetch if the
+   * batch is currently IN_PROGRESS. Replaces the observer-mode poll
+   * (removed 2026-09-23) with an on-demand snapshot: operators see
+   * "X of N" the moment they expand a row; the number won't tick
+   * live but they get an accurate reading each expand + on Refresh.
+   */
   const ensureRows = (id: number) => {
+    const batch = batches.find((b) => b.id === id)
+    const isRunning = (batch?.status || '').toUpperCase() === 'IN_PROGRESS'
+    if (isRunning) {
+      orderImportService.generationProgress(id).then((pr) => {
+        const d = pr.data
+        if (d && d.running && d.total > 0) {
+          setGenProgressById((m) => ({
+            ...m,
+            [id]: { done: d.done, total: d.total, note: d.note ?? null,
+                    cancelling: !!d.cancelling, jobStatus: d.jobStatus ?? null },
+          }))
+        }
+      }).catch(() => { /* progress is a nice-to-have; a failed snapshot doesn't matter */ })
+    }
     if (rowsById[id]) return
     setRowsById((m) => ({ ...m, [id]: 'loading' }))
     orderImportService
@@ -491,146 +505,36 @@ export default function DataHistoryPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- reloadQuiet reads only stable refs; empty deps keeps the handler map identity stable across renders so useEventStream doesn't churn subscriptions
   }), [])
 
-  const { status: sseStatus } = useEventStream({
+  // Side-effect only — the hook holds the SSE connection open and
+  // dispatches sseHandlers as events arrive. No `status` capture: the
+  // polling fallbacks that used to gate on it are gone (zero-poll
+  // strategy, see block below), and there's no UI indicator today.
+  useEventStream({
     enabled: !viewTrash,
     topics: ['import-batches'],
     handlers: sseHandlers,
   })
 
-  /**
-   * Auto-poll — the FALLBACK path when SSE isn't available. Runs
-   * ONLY while: (a) not in Trash view, (b) at least one batch is
-   * IN_PROGRESS, AND (c) the SSE stream is NOT 'open'. When SSE
-   * connects, the poll goes quiet; when SSE drops, it resumes.
-   */
-  useEffect(() => {
-    if (viewTrash) return
-    if (sseStatus === 'open') return
-    const anyInProgress = batches.some(
-      (b) => (b.status || '').toUpperCase() === 'IN_PROGRESS',
-    )
-    if (!anyInProgress) return
-    const timer = window.setInterval(() => { void reloadQuiet() }, 4_000)
-    return () => window.clearInterval(timer)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- reloadQuiet reads only stable state via closure; deps kept minimal so the interval doesn't churn on unrelated re-renders
-  }, [batches, viewTrash, sseStatus])
-
-  /**
-   * Idle refresh. Generate is a background job, so a run can start from another
-   * tab, another operator or the API while this page sits idle — and the 4 s poll
-   * above only runs once the page already knows something is IN_PROGRESS. A slow
-   * refresh (visible tab only, no SSE) picks those up.
-   */
-  useEffect(() => {
-    if (viewTrash) return
-    if (sseStatus === 'open') return
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === 'visible') void reloadQuiet()
-    }, 20_000)
-    return () => window.clearInterval(timer)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- reloadQuiet + document.visibilityState read via closure; only viewTrash + sseStatus toggle the interval on/off
-  }, [viewTrash, sseStatus])
-
-  /**
-   * Observer-mode progress polling (2026-09-12 fix). For any batch whose
-   * SERVER-side status is IN_PROGRESS but that WASN'T started by this
-   * session (generatingId !== id), poll {@code generationProgress} so
-   * the progress bar renders regardless of who kicked off the generate.
-   * Covers: page-reload while a batch is generating, opening Data
-   * History in a fresh tab, watching a batch another operator started.
-   *
-   * <p>The local generate() call runs its own poll (with a tighter
-   * closure-scoped stop signal), so this observer poll skips batches
-   * where {@code generatingId === b.id}. Otherwise duplicate polls
-   * would race on the same setGenProgressById state.
-   *
-   * <p>Each poll auto-terminates when the server reports
-   * {@code running: false} (batch reached a terminal status) or when
-   * the batch leaves the IN_PROGRESS state on our next render. Cancel
-   * functions live in {@link observerPollsRef} keyed by batch id.
-   */
-  useEffect(() => {
-    if (viewTrash) return
-    const polls = observerPollsRef.current
-    const inProgressIds = new Set(
-      batches
-        .filter((b) => (b.status || '').toUpperCase() === 'IN_PROGRESS')
-        .map((b) => b.id),
-    )
-    // Start polls for any newly-IN_PROGRESS batch we're not already
-    // polling AND that the local generate() isn't already polling itself.
-    for (const id of inProgressIds) {
-      if (polls.has(id)) continue
-      if (generatingId === id) continue
-      let cancelled = false
-      polls.set(id, { cancel: () => { cancelled = true } })
-      void (async () => {
-        // Interval was 400ms which produced ~2.5 req/sec/batch — several
-        // IN_PROGRESS batches × 90 s of a page-load window generated 439
-        // requests in the operator's DevTools. Bumped to 2 s: still gives
-        // a smooth progress bar (a text "X of N" counter reads fine at
-        // 0.5 Hz) and cuts the request rate 5×.
-        // Also gate on tab visibility — a backgrounded tab has no reason
-        // to keep hammering; resume when the operator refocuses.
-        const POLL_INTERVAL_MS = 2000
-        while (!cancelled) {
-          if (document.visibilityState !== 'visible') {
-            await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS))
-            continue
-          }
-          try {
-            const pr = await orderImportService.generationProgress(id)
-            const d = pr.data
-            if (cancelled) break
-            if (d && d.running && d.total > 0) {
-              setGenProgressById((m) => ({
-                ...m,
-                [id]: { done: d.done, total: d.total, note: d.note ?? null, cancelling: !!d.cancelling, jobStatus: d.jobStatus ?? null },
-              }))
-            } else if (d && !d.running) {
-              // Server says the run finished — reload first so the row leaves
-              // IN_PROGRESS at once (waiting for the 4 s list poll left a
-              // count-less "Generating…" card flickering in between), then stop.
-              await reloadQuiet()
-              setGenProgressById((m) => {
-                if (!(id in m)) return m
-                const next = { ...m }
-                delete next[id]
-                return next
-              })
-              break
-            }
-          } catch {
-            /* transient poll error — try again; the auto-poll effect
-               above will refresh the batches list which drives our
-               continue/stop decision on the next tick. */
-          }
-          await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS))
-        }
-        polls.delete(id)
-      })()
-    }
-    // Stop polls for batches that are no longer IN_PROGRESS (reached
-    // a terminal state, got soft-deleted, or otherwise fell off the list).
-    for (const [id, poll] of polls) {
-      if (!inProgressIds.has(id)) {
-        poll.cancel()
-        polls.delete(id)
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- observerPollsRef + reloadQuiet + setGenProgressById read via closure; batches/viewTrash/generatingId are the real driver signals
-  }, [batches, viewTrash, generatingId])
-
-  /** Cleanup on unmount — cancel every in-flight observer poll so the
-   *  loop doesn't outlive the component. Ref captured OUTSIDE the cleanup
-   *  so React lint doesn't warn about a stale ref.current read. */
-  useEffect(() => {
-    const polls = observerPollsRef.current
-    return () => {
-      for (const [, poll] of polls) poll.cancel()
-      polls.clear()
-    }
-  }, [])
+  // ─── Zero-poll update strategy (2026-09-23) ───────────────────────
+  // All three polls that used to live here (4 s batch-list, 20 s idle
+  // refresh, 2 s per-IN_PROGRESS observer for generationProgress) were
+  // removed. The page now updates via exactly two paths:
+  //
+  //   1. SSE push (see sseHandlers above) — cross-operator batch state
+  //      changes arrive through the always-open /events/stream. Requires
+  //      REDIS_HOST + Redis autoconfig on (PR #744 wired the dev profile;
+  //      prod already sets it). When SSE drops, the browser tab shows
+  //      stale state until the operator hits Refresh.
+  //
+  //   2. Explicit operator action — the Refresh button in the tab
+  //      toolbar (listActions) calls load(), and clicking to expand a
+  //      batch triggers ensureRows(id) which now ALSO one-shot-fetches
+  //      generationProgress if the batch is IN_PROGRESS.
+  //
+  // Trade-off: the "X of N" counter no longer ticks live during a run;
+  // it snapshots on expand + on Refresh. Operators asked for this
+  // explicitly ("remove the observer and update the status after page
+  // load") because a 50-batch list × 2 s polls was still visibly slow.
 
   /** Show a success / info / error toast that matches the generation outcome,
    *  so a FAILED batch never appears under a green "Success" header. */
