@@ -32,9 +32,10 @@ export interface UseTrashActionsResult {
   setConfirmEmpty: React.Dispatch<React.SetStateAction<boolean>>
   emptying: boolean
   handleEmptyTrash: () => Promise<void>
-  handleDelete: (id: number, fileName?: string | null) => Promise<void>
+  handleDelete: (id: number, slug: string, fileName?: string | null) => Promise<void>
   handleRestore: (
     id: number,
+    slug: string,
     fileName?: string | null,
     allowDuplicate?: boolean,
   ) => Promise<void>
@@ -73,10 +74,10 @@ export function useTrashActions({
   }
 
   /** Move a batch to Trash (soft delete). Recoverable from the Trash view. */
-  const handleDelete = async (id: number, fileName?: string | null) => {
+  const handleDelete = async (id: number, slug: string, fileName?: string | null) => {
     setTrashBusyId(id)
     try {
-      await orderImportService.deleteBatch(id)
+      await orderImportService.deleteBatch(slug)
       if (onMoved) onMoved(id)
       else setBatches((list) => list.filter((b) => b.id !== id))
       notify.success(
@@ -97,12 +98,13 @@ export function useTrashActions({
   /** Restore a batch from Trash back to the live Data History list. */
   const handleRestore = async (
     id: number,
+    slug: string,
     fileName?: string | null,
     allowDuplicate = false,
   ) => {
     setTrashBusyId(id)
     try {
-      await orderImportService.restoreBatch(id, allowDuplicate)
+      await orderImportService.restoreBatch(slug, allowDuplicate)
       if (onMoved) onMoved(id)
       else setBatches((list) => list.filter((b) => b.id !== id))
       notify.success(`"${fileName || `Import #${id}`}" restored.`)
@@ -121,7 +123,7 @@ export function useTrashActions({
           cancelLabel: 'Cancel',
           danger: true,
         })
-        if (ok) await handleRestore(id, fileName, true)
+        if (ok) await handleRestore(id, slug, fileName, true)
         return
       }
       notify.apiError(e, 'Could not restore import.')

@@ -35,7 +35,7 @@ const rows = [row(1, 5001, 'GENERATED'), row(2, 5001, 'GENERATED'), row(3, 5002,
 const renderBar = (picked: number[] = [], extra: Partial<Parameters<typeof BatchLabelBar>[0]> = {}) => {
   const onChanged = vi.fn()
   const onClearPick = vi.fn()
-  render(<BatchLabelBar batchId={121} rows={rows} picked={picked} onPickAllLive={vi.fn()} onClearPick={onClearPick}
+  render(<BatchLabelBar batchSlug="slug-121" rows={rows} picked={picked} onPickAllLive={vi.fn()} onClearPick={onClearPick}
     onChanged={onChanged} canWrite canManagePrinters locked={false} onOpenPrinterSettings={vi.fn()} {...extra} />)
   return { onChanged, onClearPick }
 }
@@ -89,7 +89,7 @@ describe('BatchLabelBar', () => {
     const { onChanged } = renderBar()
     await userEvent.click(screen.getByRole('button', { name: /Void all/ }))
     expect(confirm).toHaveBeenCalled()
-    await waitFor(() => expect(voidBatchLabels).toHaveBeenCalledWith(121, []))
+    await waitFor(() => expect(voidBatchLabels).toHaveBeenCalledWith('slug-121', []))
     expect(info).toHaveBeenCalledWith(expect.objectContaining({ title: '1 voided, 1 refused by the carrier' }))
     expect(onChanged).toHaveBeenCalled()
   })
@@ -107,7 +107,7 @@ describe('BatchLabelBar', () => {
   })
 
   it('hides itself when the batch has no live labels', () => {
-    render(<BatchLabelBar batchId={1} rows={[row(1, null, null), row(2, 7, 'VOIDED')]} picked={[]} onPickAllLive={vi.fn()}
+    render(<BatchLabelBar batchSlug="slug-1" rows={[row(1, null, null), row(2, 7, 'VOIDED')]} picked={[]} onPickAllLive={vi.fn()}
       onClearPick={vi.fn()} onChanged={vi.fn()} canWrite canManagePrinters locked={false} onOpenPrinterSettings={vi.fn()} />)
     expect(screen.queryByTestId('batch-label-bar')).toBeNull()
   })

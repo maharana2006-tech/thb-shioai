@@ -171,9 +171,17 @@ export default function DataHistoryPage() {
   // Bulk / Manual / API / WMS), "import" (inline CSV/Excel upload + validation),
   // and "imports" (history of bulk import batches).
   // Bulk Mailer tab from the URL (/bulk/:tab): imports (default) · api · documents · trash.
-  const { tab, batchId: batchIdParam } = useParams<{ tab?: string; batchId?: string }>()
-  /** /bulk/batches/:id — one batch on its own page. */
-  const batchPageId = batchIdParam ? Number(batchIdParam) || null : null
+  const { tab, batchId: batchSlugParam } = useParams<{ tab?: string; batchId?: string }>()
+  /** /bulk/batches/{slug} — one batch on its own page. The URL segment is
+   *  the opaque slug (security/opaque-batch-slug); numeric id is derived
+   *  from the fetched batches list below for local react-key / map
+   *  operations. Null when the list hasn't landed yet — that's fine
+   *  because the fetchBatches() below keys off `batchPageSlug`, not `id`. */
+  const batchPageSlug = batchSlugParam ?? null
+  const batchPageId = useMemo(() => {
+    if (!batchPageSlug) return null
+    return batches.find((b) => b.slug === batchPageSlug)?.id ?? null
+  }, [batches, batchPageSlug])
   const bulkTab: BulkTab = BULK_TABS.some((t) => t.key === tab) ? (tab as BulkTab) : 'imports'
   const dhView: 'imports' | 'docs' = bulkTab === 'documents' ? 'docs' : 'imports'
   /** Import history and API batches are the same list — only where the batches come from differs. */
@@ -188,7 +196,7 @@ export default function DataHistoryPage() {
     setTabMotion({ tab: bulkTab, dir: to >= from ? 1 : -1 })
     setDocsLoadedFor(null)
   }
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
 
   // What the toolbar set; the server applies it (listQuery below).
   const filters = useHistoryFilters()
@@ -235,7 +243,7 @@ export default function DataHistoryPage() {
     : bulkTab === 'trash'
   const trash = useTrashActions({
     setBatches,
-    onMoved: batchPageId != null
+    onMoved: batchPageSlug != null
       ? () => reloadRef.current()
       : (id) => { setBatches((list) => list.filter((b) => b.id !== id)); void reloadQuiet() },
     onEmptied: () => reloadRef.current(),
@@ -255,14 +263,16 @@ export default function DataHistoryPage() {
 
 
   useEffect(() => {
-    if (!batchPageId && tab && !BULK_TABS.some((t) => t.key === tab)) navigate(bulkPaths.imports, { replace: true })
+    if (!batchPageSlug && tab && !BULK_TABS.some((t) => t.key === tab)) navigate(bulkPaths.imports, { replace: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab])
 
   /** Restore, then hold Generate for a moment: it lands exactly where Restore was, under the cursor. */
   const [justRestoredId, setJustRestoredId] = useState<number | null>(null)
   const restoreBatch = async (id: number, fileName?: string | null) => {
-    await handleRestore(id, fileName)
+    const slug = batches.find((b) => b.id === id)?.slug
+    if (!slug) return
+    await handleRestore(id, slug, fileName)
     setJustRestoredId(id)
     window.setTimeout(() => setJustRestoredId((cur) => (cur === id ? null : cur)), 1500)
   }
@@ -273,7 +283,7 @@ export default function DataHistoryPage() {
   /** A batch's rows for the list's Print menu — the page's copy when it has one. */
   const rowsOfBatch = async (b: ImportBatchSummary): Promise<OrderImportRow[]> => {
     const cached = rowsById[b.id]
-    return Array.isArray(cached) ? cached : (await orderImportService.getHistory(b.id)).data?.rows ?? []
+    return Array.isArray(cached) ? cached : (await orderImportService.getHistory(b.slug)).data?.rows ?? []
   }
   /** busyId: the batch whose row spins; -1 for the selection bar. */
   const printBatchDocs = async (busyId: number, scope: string, orders: number[], docType: 'LABEL' | 'COMMERCIAL_INVOICE') => {
@@ -303,7 +313,7 @@ export default function DataHistoryPage() {
     if (!ok) return
     setBatchPrintBusy(b.id)
     try {
-      const res = (await orderImportService.voidBatchLabels(b.id, [])).data
+      const res = (await orderImportService.voidBatchLabels(b.slug, [])).data
       if (!res || res.orders.length === 0) notify.info('There were no live labels left to void.')
       else if (res.refused === 0) notify.success(`${res.voided} label${res.voided === 1 ? '' : 's'} of batch #${b.id} voided.`)
       else {
@@ -340,7 +350,9 @@ export default function DataHistoryPage() {
 
   /** Re-read a batch's rows (after a void) and its header counts. */
   const reloadRows = (id: number) => {
-    orderImportService.getHistory(id)
+    const slug = batches.find((b) => b.id === id)?.slug
+    if (!slug) return
+    orderImportService.getHistory(slug)
       .then((res) => setRowsById((m) => ({ ...m, [id]: res.data?.rows ?? [] })))
       .catch((e) => notify.apiError(e, 'Could not reload the rows.'))
   }
@@ -354,11 +366,16 @@ export default function DataHistoryPage() {
    * "X of N" the moment they expand a row; the number won't tick
    * live but they get an accurate reading each expand + on Refresh.
    */
-  const ensureRows = (id: number) => {
-    const batch = batches.find((b) => b.id === id)
-    const isRunning = (batch?.status || '').toUpperCase() === 'IN_PROGRESS'
+  const ensureRows = (id: number, hint?: ImportBatchSummary) => {
+    // Fall back to the batches state, but callers may pass a `hint` (the
+    // just-fetched batch) so ensureRows can fire on the first render before
+    // setBatches has propagated (the slug memo lags one render otherwise).
+    const batch = hint ?? batches.find((b) => b.id === id)
+    if (!batch) return
+    const slug = batch.slug
+    const isRunning = (batch.status || '').toUpperCase() === 'IN_PROGRESS'
     if (isRunning) {
-      orderImportService.generationProgress(id).then((pr) => {
+      orderImportService.generationProgress(slug).then((pr) => {
         const d = pr.data
         if (d && d.running && d.total > 0) {
           setGenProgressById((m) => ({
@@ -372,7 +389,7 @@ export default function DataHistoryPage() {
     if (rowsById[id]) return
     setRowsById((m) => ({ ...m, [id]: 'loading' }))
     orderImportService
-      .getHistory(id)
+      .getHistory(slug)
       .then((res) => setRowsById((m) => ({ ...m, [id]: res.data?.rows ?? [] })))
       .catch((e) => {
         notify.apiError(e, 'Could not load import rows.')
@@ -384,8 +401,8 @@ export default function DataHistoryPage() {
   const listView: BulkView = viewTrash ? 'TRASH' : isApiTab ? 'API' : 'FILE'
   const fetchBatches = async (): Promise<{ data: ImportBatchSummary[]; page?: { total: number; pages: number }; summary?: BulkSummary | null }> => {
     // The batch page's "list" is that one batch (live or in Trash, any source).
-    if (batchPageId != null) {
-      const res = await orderImportService.getHistory(batchPageId)
+    if (batchPageSlug != null) {
+      const res = await orderImportService.getHistory(batchPageSlug)
       return { data: res.data ? [res.data as ImportBatchSummary] : [] }
     }
     const [res, sum] = await Promise.all([
@@ -403,7 +420,7 @@ export default function DataHistoryPage() {
   /** Which list the shown batches belong to — until the new tab's answer lands, its skeleton shows. */
   const [loadedView, setLoadedView] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
-  const viewKey = batchPageId != null ? `batch:${batchPageId}` : listView
+  const viewKey = batchPageSlug != null ? `batch:${batchPageSlug}` : listView
   /** The tab shows its real content — the panel's height may settle. */
   const tabReady = dhView === 'docs' ? docsLoadedFor === 'documents' : loadedView === viewKey
   const applyFetch = (seq: number, view: string, r: Awaited<ReturnType<typeof fetchBatches>>) => {
@@ -431,7 +448,7 @@ export default function DataHistoryPage() {
         } else {
           notify.info('The WMS has no pending shipments to fetch.')
         }
-        if (r.importBatchId != null) navigate(bulkBatchPath(r.importBatchId))
+        if (r.importBatchSlug) navigate(bulkBatchPath(r.importBatchSlug))
       }
     } catch (e) {
       notify.apiError(e, 'Could not reach the WMS.')
@@ -446,17 +463,30 @@ export default function DataHistoryPage() {
     if (batches.length === 0) setLoading(true)
     setRefreshing(true)
     try {
-      if (!applyFetch(seq, view, await fetchBatches())) return
-      if (batchPageId != null) ensureRows(batchPageId)
-      // Old ?highlight=<id> links: open that batch's page.
-      const highlightId = Number(searchParams.get('highlight')) || null
-      if (highlightId) navigate(bulkBatchPath(highlightId), { replace: true })
+      const fetched = await fetchBatches()
+      if (!applyFetch(seq, view, fetched)) return
+      // batches state hasn't reflected the setBatches yet in this closure —
+      // find the batch id directly on the just-fetched data so ensureRows
+      // fires on the first render (was regressed by the slug refactor where
+      // batchPageId now derives from `batches` state, so it lags one render).
+      if (batchPageSlug != null) {
+        const target = fetched.data.find((b) => b.slug === batchPageSlug)
+        if (target) ensureRows(target.id, target)
+      }
+      // Old `?highlight=<numeric-id>` links: they can't be honoured now
+      // that URLs are slug-based (the numeric id is off the wire — see
+      // security/opaque-batch-slug). Silently drop the query param.
+      if (searchParams.get('highlight')) {
+        const next = new URLSearchParams(searchParams)
+        next.delete('highlight')
+        setSearchParams(next, { replace: true })
+      }
     } catch (e) {
       // Keep whatever is already listed: wiping it rendered the "no imports
       // yet" empty state on a transient 502, which reads as data loss.
       // A missing batch gets the page's own "isn't here" message, not an error notice.
-      if (batchPageId != null && e instanceof ApiError && (e.status === 404 || e.status === 403)) return
-      notify.apiError(e, batchPageId != null ? 'Could not load this batch.'
+      if (batchPageSlug != null && e instanceof ApiError && (e.status === 404 || e.status === 403)) return
+      notify.apiError(e, batchPageSlug != null ? 'Could not load this batch.'
         : viewTrash ? 'Could not load Trash.' : isApiTab ? 'Could not load the API batches.' : 'Could not load import history.')
     } finally {
       if (latest.isLatest(seq)) {
@@ -490,7 +520,7 @@ export default function DataHistoryPage() {
     setConfirmEmpty(false)
     /* eslint-enable react-hooks/set-state-in-effect */
     // eslint-disable-next-line react-hooks/exhaustive-deps -- load/setOpenId/setConfirmEmpty are stable; switching list re-fetches
-  }, [viewTrash, isApiTab, batchPageId, listQueryKey, pageIndex, pageSize])
+  }, [viewTrash, isApiTab, batchPageSlug, listQueryKey, pageIndex, pageSize])
 
   /**
    * Auto-poll the list while any batch is IN_PROGRESS so status
@@ -591,12 +621,14 @@ export default function DataHistoryPage() {
 
   /** Persist a batch's bill-to account mode (survives reload + auditable). */
   const setBilling = async (id: number, mode: 'AUTO' | 'PLATFORM') => {
+    const slug = batches.find((b) => b.id === id)?.slug
+    if (!slug) return
     setBillingSavingId(id)
     // Optimistic: reflect the choice immediately.
     setBatches((list) => list.map((b) => (b.id === id ? { ...b, billingMode: mode } : b)))
     if (mode !== 'PLATFORM') setConfirmGenId((c) => (c === id ? null : c))
     try {
-      await orderImportService.setBillingMode(id, mode)
+      await orderImportService.setBillingMode(slug, mode)
     } catch (e) {
       notify.apiError(e, 'Could not update the bill-to account.')
       await load() // revert to server truth on failure
@@ -623,7 +655,10 @@ export default function DataHistoryPage() {
   }
 
   const generate = async (id: number, isRetry: boolean, allowDuplicate = false) => {
-    const platform = batches.find((b) => b.id === id)?.billingMode === 'PLATFORM'
+    const target = batches.find((b) => b.id === id)
+    const slug = target?.slug
+    if (!slug) return
+    const platform = target?.billingMode === 'PLATFORM'
     setConfirmGenId(null)
     setGeneratingId(id)
     setGenProgressById((m) => ({ ...m, [id]: { done: 0, total: 0 } }))
@@ -639,7 +674,7 @@ export default function DataHistoryPage() {
     const pollProgress = async () => {
       while (polling) {
         try {
-          const pr = await orderImportService.generationProgress(id)
+          const pr = await orderImportService.generationProgress(slug)
           const d = pr.data
           if (polling && d && d.running && d.total > 0) {
             setGenProgressById((m) => ({ ...m, [id]: { done: d.done, total: d.total, note: d.note ?? null, cancelling: !!d.cancelling, jobStatus: d.jobStatus ?? null } }))
@@ -652,16 +687,16 @@ export default function DataHistoryPage() {
     }
     void pollProgress()
     try {
-      const res = await orderImportService.generateLabels(id, { onlyFailed: isRetry, usePlatformAccount: platform, allowDuplicate })
+      const res = await orderImportService.generateLabels(slug, { onlyFailed: isRetry, usePlatformAccount: platform, allowDuplicate })
       const updated = res.data
       if (updated && (updated.status || '').toUpperCase() === 'IN_PROGRESS') {
         // Queued as a background job (the default). The card is driven by the
         // progress poll; follow the job to the end, then show what happened.
-        const final = await orderImportService.waitForGeneration(id, { isAlive: () => mountedRef.current })
+        const final = await orderImportService.waitForGeneration(slug, { isAlive: () => mountedRef.current })
         if (!final) return
         let detail: Awaited<ReturnType<typeof orderImportService.getHistory>>['data'] | undefined
         try {
-          detail = (await orderImportService.getHistory(id)).data
+          detail = (await orderImportService.getHistory(slug)).data
         } catch {
           /* the list reload below still settles the row */
         }
@@ -759,6 +794,8 @@ export default function DataHistoryPage() {
   const [cancellingId, setCancellingId] = useState<number | null>(null)
   const cancelGeneration = async (id: number) => {
     if (cancellingId != null) return
+    const slug = batches.find((b) => b.id === id)?.slug
+    if (!slug) return
     const ok = await notify.confirm(
       `Orders already at the carrier finish (that can take a few seconds); orders still queued are not sent. `
         + `Labels already made stay in Import history, and Retry labels sends the rest later.`,
@@ -767,7 +804,7 @@ export default function DataHistoryPage() {
     if (!ok) return
     setCancellingId(id)
     try {
-      await orderImportService.cancelGeneration(id)
+      await orderImportService.cancelGeneration(slug)
       setCancelRequested((cur) => new Set(cur).add(id))
       notify.info(`Cancelling import #${id} — finishing the orders already at the carrier.`)
       // Poll status a few times so the button flips when the run
@@ -784,10 +821,12 @@ export default function DataHistoryPage() {
 
   /** Validate all rows in a batch */
   const validateAll = async (id: number): Promise<OrderImportRow[] | undefined> => {
+    const slug = batches.find((b) => b.id === id)?.slug
+    if (!slug) return undefined
     let rowsBack: OrderImportRow[] | undefined
     setValidatingId(id)
     try {
-      const res = await orderImportService.validateAllRows(id)
+      const res = await orderImportService.validateAllRows(slug)
       const updated = res.data
       if (updated) {
         // Update the batch in the list
@@ -813,10 +852,12 @@ export default function DataHistoryPage() {
 
   /** Generate a label for a single row inside a batch. */
   const generateRow = async (batchId: number, rowNumber: number, allowDuplicate = false) => {
+    const slug = batches.find((b) => b.id === batchId)?.slug
+    if (!slug) return
     const key = `${batchId}-${rowNumber}`
     setGenRowKey(key)
     try {
-      const res = await orderImportService.generateRowLabel(batchId, rowNumber, allowDuplicate)
+      const res = await orderImportService.generateRowLabel(slug, rowNumber, allowDuplicate)
       const updated = res.data
       if (updated) {
         if (updated.rows) setRowsById((m) => ({ ...m, [batchId]: updated.rows }))
@@ -883,8 +924,10 @@ export default function DataHistoryPage() {
 
   /** Save one import row; the server re-validates the batch and answers with every row. */
   const saveRow = async (batchId: number, edited: OrderImportRow): Promise<OrderImportRow[] | undefined> => {
+    const slug = batches.find((b) => b.id === batchId)?.slug
+    if (!slug) return undefined
     try {
-      const res = await orderImportService.updateRow(batchId, edited.rowNumber, edited)
+      const res = await orderImportService.updateRow(slug, edited.rowNumber, edited)
       const updated = res.data
       if (updated) {
         if (updated.rows) setRowsById((m) => ({ ...m, [batchId]: updated.rows }))
@@ -1349,7 +1392,7 @@ export default function DataHistoryPage() {
                   {canWrite ? (
                     <button
                       type="button"
-                      onClick={() => void handleDelete(b.id, b.fileName)}
+                      onClick={() => void handleDelete(b.id, b.slug, b.fileName)}
                       disabled={trashBusyId === b.id || st === 'IN_PROGRESS' || liveCountOf(b) > 0}
                       title={st === 'IN_PROGRESS' ? 'Wait for the label run to finish (or cancel it) before moving this import to Trash'
                         : liveCountOf(b) > 0 ? `${liveCountOf(b)} label${liveCountOf(b) === 1 ? ' is' : 's are'} still live — void ${liveCountOf(b) === 1 ? 'it' : 'them'} first, then this import can be deleted`
@@ -1990,7 +2033,7 @@ export default function DataHistoryPage() {
               <div className="pointer-events-none sticky bottom-5 z-30 mt-4 flex justify-center [&>*]:pointer-events-auto">
                 <BatchLabelBar
                   floating
-                  batchId={b.id}
+                  batchSlug={b.slug}
                   rows={list}
                   picked={picked}
                   onPickAllLive={() => setPickedRows((m) => ({ ...m, [b.id]: list.filter(rowIsLive).map((r) => r.rowNumber) }))}
@@ -2051,9 +2094,12 @@ export default function DataHistoryPage() {
     </>
   )
 
-  // ── /bulk/batches/:id — one batch on its own page ───────────────────────
-  if (batchPageId != null) {
-    const b = batches.find((x) => x.id === batchPageId)
+  // ── /bulk/batches/{slug} — one batch on its own page ───────────────────
+  // Enter this branch on the URL, not on `batchPageId`, so a failed fetch
+  // (batch not found, 403) still renders the "isn't here" copy instead of
+  // falling through to the list view.
+  if (batchPageSlug != null) {
+    const b = batches.find((x) => x.slug === batchPageSlug)
     const src = (b?.source || '').toUpperCase()
     const back = b?.deletedAt
       ? { to: bulkPaths.trash, label: 'Trash' }
@@ -2070,7 +2116,7 @@ export default function DataHistoryPage() {
             <button type="button" onClick={() => navigate(back.to)} className="mb-3 inline-flex items-center gap-1 text-[12px] font-semibold text-[#5a4526] hover:underline">
               <FiArrowLeft className="h-3.5 w-3.5" /> Bulk Mailer · {back.label}
             </button>
-            <p className="text-sm font-semibold text-[#1f150c]">Batch #{batchPageId} isn't here.</p>
+            <p className="text-sm font-semibold text-[#1f150c]">This batch isn't here.</p>
             <p className="mt-1 text-[12.5px] text-[#6b5c42]">It may have been deleted, or it belongs to a client you can't see.</p>
             <div className="mt-4 flex justify-center gap-2">
               <button type="button" onClick={() => navigate(bulkPaths.imports)} className="rounded-xl border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12.5px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]">Import history</button>
@@ -2320,7 +2366,7 @@ export default function DataHistoryPage() {
             pageSize={pageSize}
             pageCount={pageInfo.pages}
             onPaginationChange={({ pageIndex: i, pageSize: n }) => { setPageIndex(n !== pageSize ? 0 : i); setPageSize(n) }}
-            onRowClick={(b) => navigate(bulkBatchPath(b.id))}
+            onRowClick={(b) => navigate(bulkBatchPath(b.slug))}
             getRowId={(b) => String(b.id)}
             caption={viewTrash ? 'Trash — deleted batches · click a batch to open it'
               : isApiTab ? 'Batches from the WMS and the API · each fetch is one batch · click a batch to open it'

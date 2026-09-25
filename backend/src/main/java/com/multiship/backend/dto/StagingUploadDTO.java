@@ -36,6 +36,10 @@ public class StagingUploadDTO {
     private int readyOrders;
 
     private Long lastSavedBatchId;
+    /** Opaque slug of {@link #lastSavedBatchId} — the FE navigates to
+     *  /bulk/batches/{slug} after Save; the numeric id is retained for
+     *  cross-references that never leave the server. */
+    private String lastSavedBatchSlug;
     /** Rows already saved to Import history (read-only here). */
     private List<Integer> savedRowNumbers;
 

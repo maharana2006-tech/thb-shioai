@@ -96,6 +96,8 @@ export interface StagingUpload {
   /** Valid orders not saved yet — what the next Save writes. */
   readyOrders: number
   lastSavedBatchId?: number | null
+  /** Opaque slug of the last-saved batch — use for /bulk/batches/{slug} navigation. */
+  lastSavedBatchSlug?: string | null
   /** Rows already saved to Import history (read-only here). */
   savedRowNumbers?: number[]
   createdAt?: string | null
@@ -129,6 +131,10 @@ export type ImportStatus =
 /** A saved import in the Data History list. */
 export interface ImportBatchSummary {
   id: number
+  /** Opaque URL-safe id — use this for every URL and API call
+   *  (`/bulk/batches/{slug}`, `/orders/import/history/{slug}`). The
+   *  numeric `id` is kept only for local react-key / equality use. */
+  slug: string
   createdBy?: string | null
   /** Original uploaded file the rows came from. */
   fileName?: string | null
@@ -303,18 +309,18 @@ export const orderImportService = {
     ),
 
   /** One saved import with its full rows. */
-  getHistory: (id: number) =>
-    apiClient.get<ApiResponse<ImportBatchDetail>>(`/orders/import/history/${id}`),
+  getHistory: (slug: string) =>
+    apiClient.get<ApiResponse<ImportBatchDetail>>(`/orders/import/history/${slug}`),
 
   /** Soft-delete an import batch — moves it to Trash (recoverable). */
-  deleteBatch: (id: number) =>
-    apiClient.delete<ApiResponse<ImportBatchDetail>>(`/orders/import/history/${id}`),
+  deleteBatch: (slug: string) =>
+    apiClient.delete<ApiResponse<ImportBatchDetail>>(`/orders/import/history/${slug}`),
 
   /** Restore a soft-deleted import batch from Trash. */
   /** allowDuplicate = restore even though some of its orders are also in live imports (409 otherwise). */
-  restoreBatch: (id: number, allowDuplicate = false) =>
+  restoreBatch: (slug: string, allowDuplicate = false) =>
     apiClient.post<ApiResponse<ImportBatchDetail>>(
-      `/orders/import/history/${id}/restore${allowDuplicate ? '?allowDuplicate=true' : ''}`,
+      `/orders/import/history/${slug}/restore${allowDuplicate ? '?allowDuplicate=true' : ''}`,
       {},
     ),
 
@@ -324,9 +330,9 @@ export const orderImportService = {
     apiClient.delete<ApiResponse<number>>('/orders/import/history/trash'),
 
   /** Set a batch's bill-to account mode ('AUTO' | 'PLATFORM'). Persisted. */
-  setBillingMode: (id: number, mode: 'AUTO' | 'PLATFORM') =>
+  setBillingMode: (slug: string, mode: 'AUTO' | 'PLATFORM') =>
     apiClient.put<ApiResponse<ImportBatchDetail>>(
-      `/orders/import/history/${id}/billing-mode?mode=${mode}`,
+      `/orders/import/history/${slug}/billing-mode?mode=${mode}`,
       {},
     ),
 
@@ -338,9 +344,9 @@ export const orderImportService = {
    *   when RETRYING a PARTIAL_COMPLETE batch — no duplicate carrier calls/billing.
    * - usePlatformAccount=true forces the platform (house) account for every row.
    */
-  generateLabels: (id: number, opts?: { onlyFailed?: boolean; usePlatformAccount?: boolean; allowDuplicate?: boolean }) =>
+  generateLabels: (slug: string, opts?: { onlyFailed?: boolean; usePlatformAccount?: boolean; allowDuplicate?: boolean }) =>
     apiClient.post<ApiResponse<ImportBatchDetail>>(
-      `/orders/import/history/${id}/generate${(() => {
+      `/orders/import/history/${slug}/generate${(() => {
         const p: string[] = []
         if (opts?.onlyFailed) p.push('onlyFailed=true')
         if (opts?.usePlatformAccount) p.push('usePlatformAccount=true')
@@ -352,9 +358,9 @@ export const orderImportService = {
     ),
 
   /** Generate a carrier label for a single row of a saved batch. */
-  generateRowLabel: (id: number, rowNumber: number, allowDuplicate = false) =>
+  generateRowLabel: (slug: string, rowNumber: number, allowDuplicate = false) =>
     apiClient.post<ApiResponse<ImportBatchDetail>>(
-      `/orders/import/history/${id}/generate/${rowNumber}${allowDuplicate ? '?allowDuplicate=true' : ''}`,
+      `/orders/import/history/${slug}/generate/${rowNumber}${allowDuplicate ? '?allowDuplicate=true' : ''}`,
       {},
     ),
 
@@ -369,23 +375,23 @@ export const orderImportService = {
    * BULK_JOB_ALREADY_TERMINAL if the batch is already COMPLETE /
    * PARTIAL_COMPLETE / FAILED / CANCELLED.
    */
-  cancelGeneration: (id: number) =>
-    apiClient.delete<ApiResponse<string>>(`/orders/import/history/${id}/generate`),
+  cancelGeneration: (slug: string) =>
+    apiClient.delete<ApiResponse<string>>(`/orders/import/history/${slug}/generate`),
 
   /**
    * Void labels with their carriers — the given rows, or every generated row
    * of the batch when none are given. Each order is reported on its own; a
    * carrier refusal is a refusal, not a success.
    */
-  voidBatchLabels: (id: number, rowNumbers: number[] = []) =>
-    apiClient.post<ApiResponse<BatchVoidResult>>(`/orders/import/history/${id}/void`, { rowNumbers }),
+  voidBatchLabels: (slug: string, rowNumbers: number[] = []) =>
+    apiClient.post<ApiResponse<BatchVoidResult>>(`/orders/import/history/${slug}/void`, { rowNumbers }),
 
   /**
    * Validate all rows in a batch and update their errors/warnings
    */
-  validateAllRows: (id: number) =>
+  validateAllRows: (slug: string) =>
     apiClient.post<ApiResponse<ImportBatchDetail>>(
-      `/orders/import/history/${id}/validate-all`,
+      `/orders/import/history/${slug}/validate-all`,
       {},
     ),
 
@@ -394,9 +400,9 @@ export const orderImportService = {
    * request so the UI can show a real "X of N" bar. `running` is false (with
    * done=total=0) when nothing is generating for the batch.
    */
-  generationProgress: (id: number, signal?: AbortSignal) =>
+  generationProgress: (slug: string, signal?: AbortSignal) =>
     apiClient.get<ApiResponse<GenerationProgress>>(
-      `/orders/import/history/${id}/generate/progress`,
+      `/orders/import/history/${slug}/generate/progress`,
       { signal },
     ),
 
@@ -407,14 +413,14 @@ export const orderImportService = {
    * null if `isAlive` turns false first (the page was left).
    */
   waitForGeneration: async (
-    id: number,
+    slug: string,
     opts?: { intervalMs?: number; isAlive?: () => boolean },
   ): Promise<GenerationProgress | null> => {
     const interval = opts?.intervalMs ?? 1000
     for (;;) {
       if (opts?.isAlive && !opts.isAlive()) return null
       try {
-        const d = (await orderImportService.generationProgress(id)).data
+        const d = (await orderImportService.generationProgress(slug)).data
         if (d && !d.running) {
           // A finished job, or an inline run with no job row: either way it's over.
           if (!d.jobStatus || (d.jobStatus !== 'QUEUED' && d.jobStatus !== 'RUNNING')) return d
@@ -432,9 +438,9 @@ export const orderImportService = {
    * SAVED / NEEDS_FIX, and returns the refreshed batch (counts + status
    * updated). Rows that already have a label are immutable.
    */
-  updateRow: (id: number, rowNumber: number, row: OrderImportRow) =>
+  updateRow: (slug: string, rowNumber: number, row: OrderImportRow) =>
     apiClient.put<ApiResponse<ImportBatchDetail>>(
-      `/orders/import/history/${id}/rows/${rowNumber}`,
+      `/orders/import/history/${slug}/rows/${rowNumber}`,
       row,
     ),
 

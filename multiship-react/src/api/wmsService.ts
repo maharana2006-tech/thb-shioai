@@ -13,6 +13,9 @@ export interface WmsPullResult {
   batchId: number | null
   /** Import-history batch id recording this fetch (null if none imported). */
   importBatchId: number | null
+  /** Opaque slug of the recorded import batch — use for
+   *  /bulk/batches/{slug} navigation (numeric id is off the wire). */
+  importBatchSlug: string | null
   importedOrderNos: number[]
   messages: string[]
 }
@@ -28,5 +31,5 @@ export const wmsService = {
   batches: () => apiClient.get<ApiResponse<ImportBatchSummary[]>>('/wms/batches'),
 
   /** One API/WMS batch with its shipment rows (to expand a batch card). */
-  batch: (id: number) => apiClient.get<ApiResponse<ImportBatchDetail>>(`/wms/batches/${id}`),
+  batch: (slug: string) => apiClient.get<ApiResponse<ImportBatchDetail>>(`/wms/batches/${slug}`),
 }
