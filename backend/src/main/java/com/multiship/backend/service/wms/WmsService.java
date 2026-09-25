@@ -110,6 +110,15 @@ public class WmsService {
                 requestedBy, totalFetched, batchResult.totalRows,
                 batchResult.totalRows - batchResult.shipments, batchResult.failed);
 
+        // Look up the slug so the FE can navigate to /bulk/batches/{slug}
+        // instead of exposing the numeric id (enumeration guard — see
+        // security/opaque-batch-slug). Repo is nullable in test wiring.
+        String importBatchSlug =
+                (batchResult.importBatchId == null || importBatchRepository == null) ? null :
+                importBatchRepository.findById(batchResult.importBatchId)
+                        .map(ImportBatch::getSlug)
+                        .orElse(null);
+
         return WmsPullResultDTO.builder()
                 .configured(true)
                 .fetched(totalFetched)
@@ -118,6 +127,7 @@ public class WmsService {
                 .failed(batchResult.failed)
                 .batchId(null)               // label batch is assigned when labels are generated
                 .importBatchId(batchResult.importBatchId)
+                .importBatchSlug(importBatchSlug)
                 .importedOrderNos(List.of())
                 .messages(batchResult.messages)
                 .build();

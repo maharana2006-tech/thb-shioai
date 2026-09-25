@@ -19,8 +19,11 @@ export const bulkPaths = {
   importFile: '/bulk/import',
 } as const
 
-/** One batch's page: its rows, fixes and label actions. */
-export const bulkBatchPath = (id: number) => `/bulk/batches/${id}`
+/** One batch's page: its rows, fixes and label actions.
+ *  The segment is the batch's opaque `slug` (see ImportBatchSummary.slug),
+ *  NOT its numeric id — keeps the numeric id off the wire so a scoped
+ *  user can't enumerate other tenants' batches. */
+export const bulkBatchPath = (slug: string) => `/bulk/batches/${slug}`
 
 export type WorkspaceRouteKey = keyof typeof workspacePaths
 

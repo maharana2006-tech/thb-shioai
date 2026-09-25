@@ -17,6 +17,7 @@ import org.springframework.security.core.userdetails.UserDetails;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -55,14 +56,28 @@ import static org.mockito.Mockito.when;
 class OrderImportControllerTest {
 
     private OrderImportService orderImportService;
+    private com.multiship.backend.repository.ImportBatchRepository importBatchRepository;
     private OrderImportController controller;
     private UserDetails alice;
 
     @BeforeEach
     void setUp() {
         orderImportService = mock(OrderImportService.class);
-        controller = new OrderImportController(orderImportService);
+        importBatchRepository = mock(com.multiship.backend.repository.ImportBatchRepository.class);
+        controller = new OrderImportController(orderImportService, importBatchRepository);
         alice = User.withUsername("alice").password("x").authorities("ROLE_USER").build();
+    }
+
+    /** Register a fake batch with the mock repo and return its slug, so the
+     *  controller's slug → id resolution finds it. Tests use this instead of
+     *  a bare numeric id (URLs are slug-based post security/opaque-batch-slug). */
+    private String slugFor(long id) {
+        String slug = "slug" + id;
+        com.multiship.backend.model.ImportBatch b = new com.multiship.backend.model.ImportBatch();
+        b.setId(id);
+        b.setSlug(slug);
+        when(importBatchRepository.findBySlug(slug)).thenReturn(Optional.of(b));
+        return slug;
     }
 
     // ─── preview: multipart forwarding + status echo ───────────────────────
@@ -169,10 +184,20 @@ class OrderImportControllerTest {
     // ─── historyDetail: controller-owned null → 404 branch ─────────────────
 
     @Test
+    void historyDetail_returns404_whenSlugUnknown() {
+        // Unknown slug → repo returns empty → controller answers 404 without
+        // ever calling the service. Closes the enumeration oracle.
+        ResponseEntity<ApiResponse<ImportBatchDTO>> resp = controller.historyDetail("no-such-slug");
+        assertEquals(HttpStatus.NOT_FOUND, resp.getStatusCode());
+        assertEquals("Import not found.", resp.getBody().getMessage());
+    }
+
+    @Test
     void historyDetail_returns404_whenServiceReturnsNull() {
+        String slug = slugFor(999L);
         when(orderImportService.historyDetail(999L)).thenReturn(null);
 
-        ResponseEntity<ApiResponse<ImportBatchDTO>> resp = controller.historyDetail(999L);
+        ResponseEntity<ApiResponse<ImportBatchDTO>> resp = controller.historyDetail(slug);
 
         assertEquals(HttpStatus.NOT_FOUND, resp.getStatusCode());
         assertEquals("Import not found.", resp.getBody().getMessage());
@@ -180,10 +205,11 @@ class OrderImportControllerTest {
 
     @Test
     void historyDetail_returns200_whenServiceReturnsDto() {
+        String slug = slugFor(42L);
         ImportBatchDTO dto = ImportBatchDTO.builder().id(42L).fileName("batch-42.csv").build();
         when(orderImportService.historyDetail(42L)).thenReturn(dto);
 
-        ResponseEntity<ApiResponse<ImportBatchDTO>> resp = controller.historyDetail(42L);
+        ResponseEntity<ApiResponse<ImportBatchDTO>> resp = controller.historyDetail(slug);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         assertSame(dto, resp.getBody().getData());
@@ -194,11 +220,12 @@ class OrderImportControllerTest {
 
     @Test
     void generateForBatch_returns404_whenServiceReturnsNull() {
+        String slug = slugFor(999L);
         when(orderImportService.generateLabelsForBatch(anyLong(), anyString(), anyBoolean(), anyBoolean(), anyBoolean()))
                 .thenReturn(null);
 
         ResponseEntity<ApiResponse<ImportBatchDTO>> resp =
-                controller.generateForBatch(999L, false, false, false, true, alice);
+                controller.generateForBatch(slug, false, false, false, true, alice);
 
         assertEquals(HttpStatus.NOT_FOUND, resp.getStatusCode());
         assertEquals("Import not found.", resp.getBody().getMessage());
@@ -206,12 +233,13 @@ class OrderImportControllerTest {
 
     @Test
     void generateForBatch_queuesByDefault_andReturns202WithoutWaitingForTheRun() {
+        String slug = slugFor(7L);
         ImportBatchDTO claimed = ImportBatchDTO.builder().id(7L).status("IN_PROGRESS").build();
         when(orderImportService.enqueueGeneration(anyLong(), anyString(), anyBoolean(), anyBoolean(), anyBoolean()))
                 .thenReturn(claimed);
 
         ResponseEntity<ApiResponse<ImportBatchDTO>> resp =
-                controller.generateForBatch(7L, false, false, false, false, alice);
+                controller.generateForBatch(slug, false, false, false, false, alice);
 
         assertEquals(HttpStatus.ACCEPTED, resp.getStatusCode());
         assertEquals("IN_PROGRESS", resp.getBody().getData().getStatus());
@@ -239,7 +267,7 @@ class OrderImportControllerTest {
                 .thenReturn(dto);
 
         ResponseEntity<ApiResponse<ImportBatchDTO>> resp =
-                controller.generateForBatch(7L, true, false, false, true, alice);
+                controller.generateForBatch(slugFor(7L), true, false, false, true, alice);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         assertNotNull(resp.getBody().getMessage());
@@ -266,7 +294,7 @@ class OrderImportControllerTest {
                 .thenReturn(dto);
 
         ResponseEntity<ApiResponse<ImportBatchDTO>> resp =
-                controller.generateForBatch(7L, false, false, false, true, alice);
+                controller.generateForBatch(slugFor(7L), false, false, false, true, alice);
 
         assertTrue(resp.getBody().getMessage().contains("1 of 2 orders labelled"),
                 "expected order-based count; got: " + resp.getBody().getMessage());
@@ -282,7 +310,7 @@ class OrderImportControllerTest {
         when(orderImportService.generateLabelsForBatch(anyLong(), anyString(), anyBoolean(), anyBoolean(), anyBoolean()))
                 .thenReturn(dto);
 
-        controller.generateForBatch(7L, true, false, false, true, alice);
+        controller.generateForBatch(slugFor(7L), true, false, false, true, alice);
 
         ArgumentCaptor<Boolean> flag = ArgumentCaptor.forClass(Boolean.class);
         verify(orderImportService).generateLabelsForBatch(eq(7L), eq("alice"), flag.capture(), anyBoolean(), anyBoolean());
@@ -298,7 +326,7 @@ class OrderImportControllerTest {
                 .thenReturn(dto);
 
         ResponseEntity<ApiResponse<ImportBatchDTO>> resp =
-                controller.generateForBatch(7L, false, false, false, true, alice);
+                controller.generateForBatch(slugFor(7L), false, false, false, true, alice);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         assertTrue(resp.getBody().getMessage().contains("0 of 0 orders labelled"),
@@ -309,11 +337,12 @@ class OrderImportControllerTest {
 
     @Test
     void generateForRow_returns404_whenServiceReturnsNull() {
+        String slug = slugFor(999L);
         when(orderImportService.generateLabelForRow(anyLong(), any(Integer.class), anyString(), anyBoolean()))
                 .thenReturn(null);
 
         ResponseEntity<ApiResponse<ImportBatchDTO>> resp =
-                controller.generateForRow(999L, 3, false, alice);
+                controller.generateForRow(slug, 3, false, alice);
 
         assertEquals(HttpStatus.NOT_FOUND, resp.getStatusCode());
         assertEquals("Import not found.", resp.getBody().getMessage());
@@ -321,11 +350,12 @@ class OrderImportControllerTest {
 
     @Test
     void generateForRow_composesMessageWithRowNumberAndStatus() {
+        String slug = slugFor(7L);
         ImportBatchDTO dto = ImportBatchDTO.builder().status("COMPLETE").build();
         when(orderImportService.generateLabelForRow(eq(7L), eq(3), eq("alice"), anyBoolean())).thenReturn(dto);
 
         ResponseEntity<ApiResponse<ImportBatchDTO>> resp =
-                controller.generateForRow(7L, 3, false, alice);
+                controller.generateForRow(slug, 3, false, alice);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         assertTrue(resp.getBody().getMessage().contains("row 3"),

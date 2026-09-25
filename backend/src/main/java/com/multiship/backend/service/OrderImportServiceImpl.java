@@ -271,6 +271,16 @@ public class OrderImportServiceImpl implements OrderImportService {
         return null;
     }
 
+    /** id → slug for outbound DTOs. Repo can be null in some unit-test
+     *  wiring; returns null in that case (the FE tolerates a missing
+     *  slug and falls back to the numeric id for pre-migration links). */
+    private String lookupBatchSlug(Long id) {
+        if (id == null || importBatchRepository == null) return null;
+        return importBatchRepository.findById(id)
+                .map(com.multiship.backend.model.ImportBatch::getSlug)
+                .orElse(null);
+    }
+
     /** Fetch an ImportBatch's rows from import_batch_row table (WMS imports) or parse from rowsJson (CSV/manual imports).
      *  Returns empty list on any failure. */
     private List<OrderImportRowDTO> parseBatchRows(com.multiship.backend.model.ImportBatch batch) {
@@ -4392,6 +4402,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         }
         return com.multiship.backend.dto.ImportBatchDTO.builder()
                 .id(batch.getId())
+                .slug(batch.getSlug())
                 .createdBy(batch.getCreatedBy())
                 .fileName(batch.getFileName())
                 .status(batch.getStatus())
@@ -6678,6 +6689,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                 .savedOrders(up.getSavedOrders())
                 .readyOrders(Math.max(0, up.getValidOrders() - up.getSavedOrders()))
                 .lastSavedBatchId(up.getLastSavedBatchId())
+                .lastSavedBatchSlug(lookupBatchSlug(up.getLastSavedBatchId()))
                 .createdAt(up.getCreatedAt())
                 .expiresAt(up.getCreatedAt() == null ? null : up.getCreatedAt().plusDays(Math.max(1, stagingRetentionDays)))
                 .build();
@@ -6757,6 +6769,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                 .savedOrders(c.savedOrders())
                 .readyOrders(c.readyOrders())
                 .lastSavedBatchId(up.getLastSavedBatchId())
+                .lastSavedBatchSlug(lookupBatchSlug(up.getLastSavedBatchId()))
                 .savedRowNumbers(saved.keySet().stream().sorted().toList())
                 .createdAt(up.getCreatedAt())
                 .expiresAt(up.getCreatedAt() == null ? null : up.getCreatedAt().plusDays(Math.max(1, stagingRetentionDays)))

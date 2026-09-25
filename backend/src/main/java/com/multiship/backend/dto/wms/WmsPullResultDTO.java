@@ -23,6 +23,14 @@ public class WmsPullResultDTO {
     private Integer batchId;
     /** Import-history batch id recording this fetch (null if none imported / not recorded). */
     private Long importBatchId;
+    /**
+     * Opaque URL-safe slug for the import batch — the FE navigates to
+     * /bulk/batches/{importBatchSlug} after a pull. Prefer this over the
+     * numeric {@link #importBatchId} for anything user-visible; the
+     * numeric id is kept only for cross-references that never leave the
+     * server (worker logs, cross-service RPC).
+     */
+    private String importBatchSlug;
     /** The order numbers created by this pull. */
     private List<Integer> importedOrderNos;
     /** Per-row notes (skips / failures) for the operator. */

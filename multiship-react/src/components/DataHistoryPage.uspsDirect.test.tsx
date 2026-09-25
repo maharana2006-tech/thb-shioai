@@ -290,21 +290,27 @@ async function loadAndRender() {
 
 // ---------- Fixtures ----------
 
-const batchSummary = (over: Record<string, unknown> = {}) => ({
-  id: 100,
-  createdBy: 'ops',
-  fileName: 'test.csv',
-  status: 'COMPLETE',
-  labelBatchId: 55,
-  createdAt: '2026-09-16T00:00:00Z',
-  completedAt: '2026-09-16T00:05:00Z',
-  totalRows: 3,
-  savedRows: 3,
-  invalidRows: 0,
-  billingMode: 'AUTO',
-  source: 'BULK',
-  ...over,
-})
+const batchSummary = (over: Record<string, unknown> = {}) => {
+  const id = (over.id as number | undefined) ?? 100
+  return {
+    id,
+    // In tests the "slug" mirrors the id string so tests can navigate to
+    // /bulk/batches/<id> and still match against b.slug on the client.
+    slug: String(id),
+    createdBy: 'ops',
+    fileName: 'test.csv',
+    status: 'COMPLETE',
+    labelBatchId: 55,
+    createdAt: '2026-09-16T00:00:00Z',
+    completedAt: '2026-09-16T00:05:00Z',
+    totalRows: 3,
+    savedRows: 3,
+    invalidRows: 0,
+    billingMode: 'AUTO',
+    source: 'BULK',
+    ...over,
+  }
+}
 
 const rowUsps = (over: Record<string, unknown> = {}) => ({
   rowNumber: 1,
@@ -633,7 +639,7 @@ describe('Bulk Mailer — layout', () => {
     expect(header).toHaveTextContent('Batch #121')
     expect(header).toHaveTextContent('acme_sept.csv')
     expect(screen.getByRole('button', { name: /Bulk Mailer · Import history/i })).toBeInTheDocument()
-    expect(getHistory).toHaveBeenCalledWith(121)
+    expect(getHistory).toHaveBeenCalledWith('121')
   })
 
   it('shows exactly the Orders screen\'s columns; the imported fields stay in the Columns menu', async () => {
@@ -660,7 +666,7 @@ describe('Bulk Mailer — layout', () => {
   it('says so when the batch is not there', async () => {
     getHistory.mockRejectedValue(new (await import('../api/apiClient')).ApiError('Not found', 404, null))
     await renderAt('/bulk/batches/999999')
-    expect(await screen.findByText(/Batch #999999 isn't here/)).toBeInTheDocument()
+    expect(await screen.findByText(/This batch isn't here/)).toBeInTheDocument()
   })
 
   it('sends the filters to the server and starts again at page 1', async () => {

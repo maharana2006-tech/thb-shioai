@@ -13,8 +13,9 @@ import { bulkBatchPath, bulkPaths } from '../routes/workspaceRoutes'
 export default function BulkImportPage() {
   const navigate = useNavigate()
   const [savedBatchId, setSavedBatchId] = useState<number | null>(null)
-  const toHistory = (batchId: number | null) =>
-    navigate(batchId ? bulkBatchPath(batchId) : bulkPaths.imports)
+  const [savedBatchSlug, setSavedBatchSlug] = useState<string | null>(null)
+  const toHistory = (slug: string | null) =>
+    navigate(slug ? bulkBatchPath(slug) : bulkPaths.imports)
 
   return (
     <div className="space-y-4 pb-24">
@@ -43,7 +44,7 @@ export default function BulkImportPage() {
           </span>
           <button
             type="button"
-            onClick={() => toHistory(savedBatchId)}
+            onClick={() => toHistory(savedBatchSlug)}
             className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[12.5px] font-semibold text-[#f4eede] hover:bg-[#412d15]"
           >
             Open batch #{savedBatchId}
@@ -52,7 +53,10 @@ export default function BulkImportPage() {
         </div>
       ) : null}
 
-      <OrderImportModal inline onImported={(batchId) => setSavedBatchId(batchId)} />
+      <OrderImportModal inline onImported={(batchId, batchSlug) => {
+        setSavedBatchId(batchId)
+        setSavedBatchSlug(batchSlug)
+      }} />
     </div>
   )
 }

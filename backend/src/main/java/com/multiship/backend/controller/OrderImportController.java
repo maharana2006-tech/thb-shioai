@@ -41,6 +41,27 @@ import java.util.List;
 public class OrderImportController {
 
     private final OrderImportService orderImportService;
+    private final com.multiship.backend.repository.ImportBatchRepository importBatchRepository;
+
+    /**
+     * Slug → internal id. The FE receives an opaque {@code slug} on every
+     * batch DTO and sends it back on every {@code /history/{slug}...}
+     * endpoint. Missing / unknown slug ⇒ empty ⇒ the caller returns 404
+     * with the same shape as a numeric id that doesn't exist, which
+     * closes the enumeration oracle that a scoped {@code USER} could
+     * otherwise use to walk the id space.
+     */
+    private java.util.Optional<Long> resolveBatchId(String slug) {
+        if (slug == null || slug.isBlank()) return java.util.Optional.empty();
+        return importBatchRepository.findBySlug(slug)
+                .map(com.multiship.backend.model.ImportBatch::getId);
+    }
+
+    private ResponseEntity<ApiResponse<com.multiship.backend.dto.ImportBatchDTO>> notFound() {
+        return ResponseEntity.status(404).body(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
+                .status("ERROR").code(404).timestamp(java.time.LocalDateTime.now())
+                .message("Import not found.").build());
+    }
 
     @Operation(summary = "Preview a CSV / XLSX upload",
             description = "Parses the file into a preview list, one entry per row, with per-row " +
@@ -204,17 +225,15 @@ public class OrderImportController {
 
     @Operation(summary = "Soft-delete an import batch (move to Trash)")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
-    @org.springframework.web.bind.annotation.DeleteMapping("/history/{id}")
+    @org.springframework.web.bind.annotation.DeleteMapping("/history/{slug}")
     public ResponseEntity<ApiResponse<com.multiship.backend.dto.ImportBatchDTO>> deleteBatch(
-            @org.springframework.web.bind.annotation.PathVariable Long id,
+            @org.springframework.web.bind.annotation.PathVariable String slug,
             @AuthenticationPrincipal UserDetails userDetails) {
+        Long id = resolveBatchId(slug).orElse(null);
+        if (id == null) return notFound();
         String username = userDetails == null ? "unknown" : userDetails.getUsername();
         com.multiship.backend.dto.ImportBatchDTO dto = orderImportService.softDeleteBatch(id, username);
-        if (dto == null) {
-            return ResponseEntity.status(404).body(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
-                    .status("ERROR").code(404).timestamp(java.time.LocalDateTime.now())
-                    .message("Import not found.").build());
-        }
+        if (dto == null) return notFound();
         return ResponseEntity.ok(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
                 .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
                 .message("Import moved to Trash.").data(dto).build());
@@ -222,17 +241,15 @@ public class OrderImportController {
 
     @Operation(summary = "Restore a soft-deleted import batch from Trash")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
-    @PostMapping("/history/{id}/restore")
+    @PostMapping("/history/{slug}/restore")
     public ResponseEntity<ApiResponse<com.multiship.backend.dto.ImportBatchDTO>> restoreBatch(
-            @org.springframework.web.bind.annotation.PathVariable Long id,
+            @org.springframework.web.bind.annotation.PathVariable String slug,
             @io.swagger.v3.oas.annotations.Parameter(description = "true = restore even though some of its orders are also in live imports (409 otherwise)")
             @RequestParam(required = false, defaultValue = "false") boolean allowDuplicate) {
+        Long id = resolveBatchId(slug).orElse(null);
+        if (id == null) return notFound();
         com.multiship.backend.dto.ImportBatchDTO dto = orderImportService.restoreBatch(id, allowDuplicate);
-        if (dto == null) {
-            return ResponseEntity.status(404).body(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
-                    .status("ERROR").code(404).timestamp(java.time.LocalDateTime.now())
-                    .message("Import not found.").build());
-        }
+        if (dto == null) return notFound();
         return ResponseEntity.ok(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
                 .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
                 .message("Import restored.").data(dto).build());
@@ -240,18 +257,16 @@ public class OrderImportController {
 
     @Operation(summary = "Set a batch's bill-to account mode (AUTO | PLATFORM)")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
-    @org.springframework.web.bind.annotation.PutMapping("/history/{id}/billing-mode")
+    @org.springframework.web.bind.annotation.PutMapping("/history/{slug}/billing-mode")
     public ResponseEntity<ApiResponse<com.multiship.backend.dto.ImportBatchDTO>> setBillingMode(
-            @org.springframework.web.bind.annotation.PathVariable Long id,
+            @org.springframework.web.bind.annotation.PathVariable String slug,
             @RequestParam String mode,
             @AuthenticationPrincipal UserDetails userDetails) {
+        Long id = resolveBatchId(slug).orElse(null);
+        if (id == null) return notFound();
         String username = userDetails == null ? "unknown" : userDetails.getUsername();
         com.multiship.backend.dto.ImportBatchDTO dto = orderImportService.setBillingMode(id, mode, username);
-        if (dto == null) {
-            return ResponseEntity.status(404).body(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
-                    .status("ERROR").code(404).timestamp(java.time.LocalDateTime.now())
-                    .message("Import not found.").build());
-        }
+        if (dto == null) return notFound();
         return ResponseEntity.ok(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
                 .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
                 .message("Billing mode updated.").data(dto).build());
@@ -276,22 +291,28 @@ public class OrderImportController {
                 .data(purged).build());
     }
 
-    /** Body of POST /history/{id}/void — the rows to void; empty = every generated row. */
+    /** Body of POST /history/{slug}/void — the rows to void; empty = every generated row. */
     public record VoidBatchRequest(java.util.List<Integer> rowNumbers) { }
 
     @Operation(summary = "Void a batch's labels with their carriers",
             description = "Voids the labels of the given rows (or every generated row when none are given). "
                     + "Each order is voided once and reported on its own — a carrier refusal is not a success.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
-    @PostMapping("/history/{id}/void")
+    @PostMapping("/history/{slug}/void")
     public ResponseEntity<ApiResponse<OrderImportService.BatchVoidResult>> voidBatch(
-            @org.springframework.web.bind.annotation.PathVariable Long id,
+            @org.springframework.web.bind.annotation.PathVariable String slug,
             @org.springframework.web.bind.annotation.RequestBody(required = false) VoidBatchRequest body) {
+        Long id = resolveBatchId(slug).orElse(null);
+        if (id == null) {
+            return ResponseEntity.status(404).body(ApiResponse.<OrderImportService.BatchVoidResult>builder()
+                    .status("ERROR").code(404).timestamp(java.time.LocalDateTime.now())
+                    .message("Import not found.").build());
+        }
         var result = orderImportService.voidBatchLabels(id, body == null ? null : body.rowNumbers());
         if (result == null) {
             return ResponseEntity.status(404).body(ApiResponse.<OrderImportService.BatchVoidResult>builder()
                     .status("ERROR").code(404).timestamp(java.time.LocalDateTime.now())
-                    .message("Import #" + id + " not found.").build());
+                    .message("Import not found.").build());
         }
         String msg = result.orders().isEmpty() ? "No live labels to void."
                 : result.voided() + " voided" + (result.refused() > 0 ? ", " + result.refused() + " refused by the carrier" : "") + ".";
@@ -303,16 +324,13 @@ public class OrderImportController {
 
     @Operation(summary = "One saved import with its rows")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
-    @GetMapping("/history/{id}")
+    @GetMapping("/history/{slug}")
     public ResponseEntity<ApiResponse<com.multiship.backend.dto.ImportBatchDTO>> historyDetail(
-            @org.springframework.web.bind.annotation.PathVariable Long id) {
+            @org.springframework.web.bind.annotation.PathVariable String slug) {
+        Long id = resolveBatchId(slug).orElse(null);
+        if (id == null) return notFound();
         com.multiship.backend.dto.ImportBatchDTO dto = orderImportService.historyDetail(id);
-        if (dto == null) {
-            return ResponseEntity.status(404).body(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
-                    .status("ERROR").code(404).timestamp(java.time.LocalDateTime.now())
-                    .message("Import not found.")
-                    .build());
-        }
+        if (dto == null) return notFound();
         return ResponseEntity.ok(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
                 .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
                 .message("Import loaded.")
@@ -324,15 +342,17 @@ public class OrderImportController {
             description = "Advances the batch status INITIATE → IN_PROGRESS → COMPLETE / " +
                     "PARTIAL_COMPLETE as it generates a label per saved row.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
-    @PostMapping("/history/{id}/generate")
+    @PostMapping("/history/{slug}/generate")
     public ResponseEntity<ApiResponse<com.multiship.backend.dto.ImportBatchDTO>> generateForBatch(
-            @org.springframework.web.bind.annotation.PathVariable Long id,
+            @org.springframework.web.bind.annotation.PathVariable String slug,
             @org.springframework.web.bind.annotation.RequestParam(name = "onlyFailed", defaultValue = "false") boolean onlyFailed,
             @RequestParam(required = false, defaultValue = "false") boolean usePlatformAccount,
             @RequestParam(required = false, defaultValue = "false") boolean allowDuplicate,
             @io.swagger.v3.oas.annotations.Parameter(description = "false (default) = queue a background job and return 202 with the import IN_PROGRESS — follow it on GET …/generate/progress. true = run inside this request and return the finished import.")
             @RequestParam(required = false, defaultValue = "false") boolean wait,
             @AuthenticationPrincipal UserDetails userDetails) {
+        Long id = resolveBatchId(slug).orElse(null);
+        if (id == null) return notFound();
         String username = userDetails == null ? "unknown" : userDetails.getUsername();
         // Sprint 55 audit #302 F3.2 — onlyFailed=true skips rows already
         // marked GENERATED to prevent duplicate carrier calls + billing
@@ -392,9 +412,15 @@ public class OrderImportController {
                     "COMPLETE/PARTIAL_COMPLETE/FAILED/CANCELLED. Tenant-scoped: a USER cannot cancel " +
                     "another tenant's batch.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
-    @org.springframework.web.bind.annotation.DeleteMapping("/history/{id}/generate")
+    @org.springframework.web.bind.annotation.DeleteMapping("/history/{slug}/generate")
     public ResponseEntity<ApiResponse<String>> cancelGeneration(
-            @org.springframework.web.bind.annotation.PathVariable Long id) {
+            @org.springframework.web.bind.annotation.PathVariable String slug) {
+        Long id = resolveBatchId(slug).orElse(null);
+        if (id == null) {
+            return ResponseEntity.status(404).body(ApiResponse.<String>builder()
+                    .status("ERROR").code(404).timestamp(java.time.LocalDateTime.now())
+                    .message("Import not found.").build());
+        }
         ApiResponse<String> response = orderImportService.cancelGeneration(id);
         return ResponseEntity.status(response.getCode()).body(response);
     }
@@ -415,12 +441,14 @@ public class OrderImportController {
 
     @Operation(summary = "Generate a carrier label for one row of a saved batch")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
-    @PostMapping("/history/{id}/generate/{rowNumber}")
+    @PostMapping("/history/{slug}/generate/{rowNumber}")
     public ResponseEntity<ApiResponse<com.multiship.backend.dto.ImportBatchDTO>> generateForRow(
-            @org.springframework.web.bind.annotation.PathVariable Long id,
+            @org.springframework.web.bind.annotation.PathVariable String slug,
             @org.springframework.web.bind.annotation.PathVariable int rowNumber,
             @RequestParam(required = false, defaultValue = "false") boolean allowDuplicate,
             @AuthenticationPrincipal UserDetails userDetails) {
+        Long id = resolveBatchId(slug).orElse(null);
+        if (id == null) return notFound();
         String username = userDetails == null ? "unknown" : userDetails.getUsername();
         com.multiship.backend.dto.ImportBatchDTO dto;
         try {
@@ -450,9 +478,15 @@ public class OrderImportController {
                     + "(they haven't been labelled yet — the 55/hr queue is still draining). Cheap to poll "
                     + "(in-memory, no DB round-trip); running=false with done=total=0 means nothing is generating.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
-    @GetMapping("/history/{id}/generate/progress")
+    @GetMapping("/history/{slug}/generate/progress")
     public ResponseEntity<ApiResponse<OrderImportService.GenProgressView>> generationProgress(
-            @org.springframework.web.bind.annotation.PathVariable Long id) {
+            @org.springframework.web.bind.annotation.PathVariable String slug) {
+        Long id = resolveBatchId(slug).orElse(null);
+        if (id == null) {
+            return ResponseEntity.status(404).body(ApiResponse.<OrderImportService.GenProgressView>builder()
+                    .status("ERROR").code(404).timestamp(java.time.LocalDateTime.now())
+                    .message("Import not found.").build());
+        }
         OrderImportService.GenProgressView view = orderImportService.generationProgress(id);
         return ResponseEntity.ok(ApiResponse.<OrderImportService.GenProgressView>builder()
                 .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
@@ -464,10 +498,12 @@ public class OrderImportController {
             description = "Re-validates all rows in the batch, updates their errors/warnings, " +
                     "and returns the updated batch with validation results.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
-    @org.springframework.web.bind.annotation.PostMapping("/history/{id}/validate-all")
+    @org.springframework.web.bind.annotation.PostMapping("/history/{slug}/validate-all")
     public ResponseEntity<ApiResponse<com.multiship.backend.dto.ImportBatchDTO>> validateAllRows(
-            @org.springframework.web.bind.annotation.PathVariable Long id,
+            @org.springframework.web.bind.annotation.PathVariable String slug,
             @AuthenticationPrincipal UserDetails userDetails) {
+        Long id = resolveBatchId(slug).orElse(null);
+        if (id == null) return notFound();
         String username = userDetails == null ? "unknown" : userDetails.getUsername();
         com.multiship.backend.dto.ImportBatchDTO dto = orderImportService.validateAllRows(id, username);
         if (dto == null) {
@@ -487,12 +523,14 @@ public class OrderImportController {
                     "whole batch, re-stamps each ungenerated row SAVED / NEEDS_FIX, and recomputes " +
                     "the batch counts + status. Rows that already have a label are immutable.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
-    @org.springframework.web.bind.annotation.PutMapping("/history/{id}/rows/{rowNumber}")
+    @org.springframework.web.bind.annotation.PutMapping("/history/{slug}/rows/{rowNumber}")
     public ResponseEntity<ApiResponse<com.multiship.backend.dto.ImportBatchDTO>> updateRow(
-            @org.springframework.web.bind.annotation.PathVariable Long id,
+            @org.springframework.web.bind.annotation.PathVariable String slug,
             @org.springframework.web.bind.annotation.PathVariable int rowNumber,
             @RequestBody(required = false) String edited,
             @AuthenticationPrincipal UserDetails userDetails) {
+        Long id = resolveBatchId(slug).orElse(null);
+        if (id == null) return notFound();
         String username = userDetails == null ? "unknown" : userDetails.getUsername();
         com.multiship.backend.dto.ImportBatchDTO dto = orderImportService.updateBatchRowJson(id, rowNumber, edited, username);
         if (dto == null) {
