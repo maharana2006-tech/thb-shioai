@@ -160,22 +160,40 @@ class SseControllerTest {
     }
 
     /**
-     * With Redis absent the stream must refuse synchronously with 503.
-     * Completing an emitter with an error instead pushed the failure down an
-     * async ERROR dispatch that carries no security context, so the browser
-     * was told 401 "Please sign in again" and every live stream looked like
-     * an expired session.
+     * Without Redis (one server, a dev machine) the stream opens and relays this
+     * server's own events: it answered 503, and the Bulk Mailer — which no longer
+     * polls — never updated by itself.
      */
     @Test
-    void streamRefusesWithServiceUnavailableWhenRedisIsMissing() {
-        SseController controller = new SseController(
-                org.mockito.Mockito.mock(com.multiship.backend.service.TenantScopeEnforcer.class), null);
-        org.springframework.web.server.ResponseStatusException e =
-                org.junit.jupiter.api.Assertions.assertThrows(
-                        org.springframework.web.server.ResponseStatusException.class,
-                        () -> controller.stream("import-batches", null));
-        assertEquals(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE, e.getStatusCode());
-        org.junit.jupiter.api.Assertions.assertTrue(
-                String.valueOf(e.getReason()).contains("Redis"), e.getReason());
+    void withoutRedisTheStreamOpensAndRelaysLocalEvents() {
+        com.multiship.backend.service.TenantScopeEnforcer scope =
+                org.mockito.Mockito.mock(com.multiship.backend.service.TenantScopeEnforcer.class);
+        org.mockito.Mockito.when(scope.resolveScope()).thenReturn(java.util.Optional.empty());
+        org.mockito.Mockito.when(scope.isPlatformOperator()).thenReturn(true);
+        SseController controller = new SseController(scope, null);
+        org.junit.jupiter.api.Assertions.assertNotNull(controller.stream("import-batches", null));
+        // no subscriber of that topic left behind a failure
+        controller.onLocalEvent(new com.multiship.backend.events.LocalAppEvent("import-batches",
+                "{\"eventType\":\"batch-updated\"}", 1));
+    }
+
+    /** The one filter both relays use: the topic asked for, and never another client's events. */
+    @Test
+    void theRelaySendsOnlyTheTopicAskedForAndTheCallersTenant() throws Exception {
+        org.springframework.web.servlet.mvc.method.annotation.SseEmitter emitter =
+                org.mockito.Mockito.mock(org.springframework.web.servlet.mvc.method.annotation.SseEmitter.class);
+        java.util.Set<String> topics = java.util.Set.of("import-batches");
+        String acme = "{\"tenant\":\"ACME\",\"eventType\":\"batch-updated\"}";
+        String other = "{\"tenant\":\"DES875\",\"eventType\":\"batch-updated\"}";
+
+        SseController.relay(emitter, topics, "ACME", false, 1, "import-batches", acme, "local-1");
+        SseController.relay(emitter, topics, "ACME", false, 1, "bulk-jobs", acme, "local-2");
+        SseController.relay(emitter, topics, "ACME", false, 1, "import-batches", other, "local-3");
+        org.mockito.Mockito.verify(emitter, org.mockito.Mockito.times(1)).send(
+                org.mockito.ArgumentMatchers.any(org.springframework.web.servlet.mvc.method.annotation.SseEmitter.SseEventBuilder.class));
+
+        SseController.relay(emitter, topics, null, true, 1, "import-batches", other, "local-4");   // an operator sees all
+        org.mockito.Mockito.verify(emitter, org.mockito.Mockito.times(2)).send(
+                org.mockito.ArgumentMatchers.any(org.springframework.web.servlet.mvc.method.annotation.SseEmitter.SseEventBuilder.class));
     }
 }

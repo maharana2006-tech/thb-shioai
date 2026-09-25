@@ -196,6 +196,54 @@ public class ImportBatchRowStore {
         return rows.isEmpty() ? null : rows.get(0);
     }
 
+    /** The rows of these orders (trimmed orderRef), and the row with this number — an order's lines, for an edit. */
+    public List<OrderImportRowDTO> rowsOfOrders(long batchId, Collection<String> orderRefs, int rowNumber) {
+        MapSqlParameterSource p = new MapSqlParameterSource("b", batchId).addValue("n", rowNumber)
+                .addValue("refs", orderRefs == null || orderRefs.isEmpty() ? List.of("~no order~") : orderRefs);
+        return jdbc.query("SELECT row_number, " + COLUMN_LIST + " FROM import_batch_row WHERE import_batch_id = :b "
+                + "AND (row_number = :n OR TRIM(order_ref) IN (:refs)) ORDER BY row_number, id", p, (rs, i) -> rowOf(rs));
+    }
+
+    /** What the batch's counters read: rows, rows with errors, labelled, failed, and rows of orders with no broken line. */
+    public record Stats(int total, int invalid, int generated, int failed, int ready) { }
+
+    public Stats stats(long batchId) {
+        String key = "COALESCE(NULLIF(TRIM(order_ref), ''), '#' || row_number)";
+        Map<String, Object> m = jdbc.queryForMap("SELECT COUNT(*) AS total, "
+                + "COUNT(*) FILTER (WHERE " + HAS_ERRORS + ") AS invalid, "
+                + "COUNT(*) FILTER (WHERE UPPER(COALESCE(generated_status, '')) = 'GENERATED') AS generated, "
+                + "COUNT(*) FILTER (WHERE UPPER(COALESCE(generated_status, '')) = 'FAILED') AS failed, "
+                + "COUNT(*) FILTER (WHERE " + key + " NOT IN (SELECT " + key + " FROM import_batch_row "
+                + "   WHERE import_batch_id = :b AND " + HAS_ERRORS + ")) AS ready "
+                + "FROM import_batch_row WHERE import_batch_id = :b", Map.of("b", batchId));
+        return new Stats(((Number) m.get("total")).intValue(), ((Number) m.get("invalid")).intValue(),
+                ((Number) m.get("generated")).intValue(), ((Number) m.get("failed")).intValue(),
+                ((Number) m.get("ready")).intValue());
+    }
+
+    /** A labelled row in some live import with one of the asked orderRefs. */
+    public record RefHit(String ref, int orderNo, String status, long batchId) { }
+
+    /**
+     * Rows of live (not trashed) imports, newest import first, that carry an
+     * order number and one of these orderRefs (upper-cased) — the "already
+     * generated in another import" check, one indexed query per 1,000 refs
+     * instead of reading every row of 60 imports.
+     */
+    public List<RefHit> labelledRowsWithRefs(Collection<String> refsUpper) {
+        List<RefHit> out = new ArrayList<>();
+        List<String> refs = new ArrayList<>(refsUpper);
+        for (int i = 0; i < refs.size(); i += BATCH) {
+            out.addAll(jdbc.query("SELECT UPPER(TRIM(r.order_ref)) AS ref, r.generated_order_no AS no, r.generated_status AS st, b.id AS bid "
+                            + "FROM import_batch_row r JOIN import_batch b ON b.id = r.import_batch_id "
+                            + "WHERE b.deleted_at IS NULL AND r.generated_order_no ~ '^[0-9]+$' AND UPPER(r.order_ref) IN (:refs) "
+                            + "ORDER BY b.id DESC, r.row_number",
+                    Map.of("refs", refs.subList(i, Math.min(i + BATCH, refs.size()))),
+                    (rs, n) -> new RefHit(rs.getString("ref"), Integer.parseInt(rs.getString("no")), rs.getString("st"), rs.getLong("bid"))));
+        }
+        return out;
+    }
+
     /** The first client code in row order — who owns the import. */
     public String firstClientCode(long batchId) {
         List<String> c = jdbc.queryForList("SELECT client_code FROM import_batch_row WHERE import_batch_id = :b "
@@ -273,11 +321,29 @@ public class ImportBatchRowStore {
      * @return rows written (inserted + updated + deleted)
      */
     public int store(long batchId, List<OrderImportRowDTO> rows) {
+        return store(batchId, rows, true);
+    }
+
+    /**
+     * Store only these rows (an order's lines after an edit): insert or update
+     * them, leave every other row as it is.
+     */
+    public int storeSome(long batchId, List<OrderImportRowDTO> rows) {
+        return rows.isEmpty() ? 0 : store(batchId, rows, false);
+    }
+
+    private int store(long batchId, List<OrderImportRowDTO> rows, boolean wholeBatch) {
         Map<Integer, Long> idOf = new HashMap<>();
         Map<Integer, Object[]> stored = new HashMap<>();
         List<Long> duplicates = new ArrayList<>();
-        jdbc.query("SELECT id, row_number, " + COLUMN_LIST + " FROM import_batch_row WHERE import_batch_id = :b ORDER BY row_number, id",
-                Map.of("b", batchId), rs -> {
+        MapSqlParameterSource which = new MapSqlParameterSource("b", batchId);
+        String only = "";
+        if (!wholeBatch) {
+            which.addValue("ns", rows.stream().map(OrderImportRowDTO::getRowNumber).distinct().toList());
+            only = " AND row_number IN (:ns)";
+        }
+        jdbc.query("SELECT id, row_number, " + COLUMN_LIST + " FROM import_batch_row WHERE import_batch_id = :b" + only + " ORDER BY row_number, id",
+                which, rs -> {
                     int n = rs.getInt("row_number");
                     if (idOf.containsKey(n)) { duplicates.add(rs.getLong("id")); return; }
                     idOf.put(n, rs.getLong("id"));
@@ -305,7 +371,7 @@ public class ImportBatchRowStore {
             else if (changed) updates.add(p.addValue("id", idOf.get(r.getRowNumber())));
         }
         List<Long> deletes = new ArrayList<>(duplicates);
-        for (Map.Entry<Integer, Long> e : idOf.entrySet()) if (!kept.contains(e.getKey())) deletes.add(e.getValue());
+        if (wholeBatch) for (Map.Entry<Integer, Long> e : idOf.entrySet()) if (!kept.contains(e.getKey())) deletes.add(e.getValue());
 
         String values = String.join(", ", COLS.stream().map(c -> ":" + c.name()).toList());
         String sets = String.join(", ", COLS.stream().map(c -> c.name() + " = :" + c.name()).toList());

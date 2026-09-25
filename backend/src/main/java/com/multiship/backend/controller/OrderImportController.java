@@ -541,8 +541,8 @@ public class OrderImportController {
                     .message("Import not found.")
                     .build());
         }
-        long held = dto.getRows() == null ? 0 : dto.getRows().stream()
-                .filter(r -> "NEEDS_FIX".equalsIgnoreCase(r.getGeneratedStatus())).count();
+        // The batch's own count: the answer's rows may be the edited order's lines only.
+        long held = dto.getInvalidRows();
         return ResponseEntity.ok(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
                 .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
                 .message(held == 0 ? "Row " + rowNumber + " saved · all rows ready"
