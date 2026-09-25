@@ -23,6 +23,7 @@ import {
   FiZap,
   FiPlus,
   FiDatabase,
+  FiDownloadCloud,
   FiHash,
   FiUser,
   FiMapPin,
@@ -44,12 +45,11 @@ import type { CarrierAccountRef, OrderAccountResolution } from '../api/accountRe
 import AccountScenarioBadge from './workspace/AccountScenarioBadge'
 // PR #555 — inline compact status dot+label supersedes OrderStatusBadge.
 // import OrderStatusBadge from './workspace/OrderStatusBadge'
-import NoteCell from './workspace/NoteCell'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
 import SendToPrinterDialog from './workspace/SendToPrinterDialog'
 import { useAppSession } from '../hooks/useAppSession'
 import { normalizeRole } from '../utils/roles'
-import { settingsPaths } from '../routes/workspaceRoutes'
+import { apiBatchesPath, settingsPaths } from '../routes/workspaceRoutes'
 import { printPdfBlob as printPdfBlobUtil } from '../utils/printPdf'
 // Bundle audit #434 follow-up: modals are only rendered behind
 // `xxxOpen ?` guards, so React.lazy defers each chunk fetch until an
@@ -1365,10 +1365,6 @@ export default function OrdersWorkspace() {
     if (!rows.length) return hidden
     if (rows.every((r) => !r.orderDetails.refOrderNumber)) hidden.push('refOrderNumber')
     if (rows.every((r) => r.orderDetails.batchId == null)) hidden.push('batchId')
-    // V76 — hide the Note column when no row on the current page has a
-    // populated note; keeps the row density unchanged for tenants that
-    // don't use the feature.
-    if (rows.every((r) => !(r.orderDetails.note ?? '').trim())) hidden.push('note')
     return hidden
   }, [rows])
 
@@ -1583,22 +1579,6 @@ export default function OrdersWorkspace() {
         headerLabel: 'Ref #',
         exportAlways: true,
         exportValue: (o: Order) => o.orderDetails.refOrderNumber ?? '',
-      },
-    })
-
-    defs.push({
-      id: 'note',
-      accessorFn: (o) => o.orderDetails.note ?? '',
-      header: 'Note',
-      enableSorting: false,
-      // V76 — internal per-order ops note. Column is icon-only + tooltip
-      // on hover so a long note doesn't blow up row height. Popover-on-
-      // click renders the full text in-place.
-      size: 44,
-      cell: ({ row }) => <NoteCell orderNo={row.original.orderDetails.orderNo} note={row.original.orderDetails.note ?? ''} />,
-      meta: {
-        headerLabel: 'Note',
-        exportValue: (o: Order) => o.orderDetails.note ?? '',
       },
     })
 
@@ -2035,9 +2015,16 @@ export default function OrdersWorkspace() {
             <button type="button"
                     onClick={() => navigate('/bulk/imports')}
                     className={BTN_GHOST_SM}
-                    title="Bulk Mailer — import history, the CSV/Excel importer, API batches and documents">
+                    title="Bulk Mailer — import history, the CSV/Excel importer, and labels & invoices">
               <FiDatabase className="h-3 w-3" />
               Bulk Mailer
+            </button>
+            <button type="button"
+                    onClick={() => navigate(apiBatchesPath)}
+                    className={BTN_GHOST_SM}
+                    title="API batches — orders fetched from the WMS and the API, one batch per fetch">
+              <FiDownloadCloud className="h-3 w-3" />
+              API Batches
             </button>
             <button type="button" onClick={() => navigate('/orders/new')} className={BTN_PRIMARY_SM}>
               <FiPlus className="h-3 w-3" />
@@ -2808,11 +2795,3 @@ export default function OrdersWorkspace() {
     </div>
   )
 }
-
-/**
- * V76 — internal per-order ops note cell. Empty note = greyed placeholder
- * icon (still clickable so operator can ADD one). Non-empty = filled icon
- * + click opens a popover with the full text and Edit / Save controls.
- * On save, PATCHes the note via orderService.updateNote and mutates the
- * row locally so the list reflects the change without a full refetch.
- */

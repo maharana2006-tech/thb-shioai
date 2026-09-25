@@ -1,5 +1,5 @@
 import { createPortal } from 'react-dom'
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   FiAlertCircle,
@@ -26,16 +26,12 @@ import type { ColumnDef } from '@tanstack/react-table'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
 import FixRowPanel from './bulk/FixRowPanel'
 import BatchPrintMenu from './bulk/BatchPrintMenu'
-import { bulkBatchPath, bulkPaths, settingsPaths } from '../routes/workspaceRoutes'
+import { apiBatchPath, apiBatchesPath, bulkBatchPath, bulkPaths, settingsPaths } from '../routes/workspaceRoutes'
 import { wmsService } from '../api/wmsService'
 import { bulkService, type BulkSummary, type BulkView } from '../api/bulkService'
 import { AddShipViaMappingDialog, ShipViaCodesPanel } from './modals/ShipViaCodes'
-// Lazy — only rendered on the /bulk/documents tab. Keeps ~20-30 kB of
-// documents-table code out of the default /bulk/imports first-nav chunk.
-const OrderDocumentsTable = lazy(() => import('./OrderDocumentsTable'))
 import DataHistoryFilterToolbar, { BulkFilterChips, statusMeta } from './DataHistoryFilterToolbar'
 import { GridCell, DH_COLUMNS, fieldLabel, RowIssuesIcon, RowChannelChip, bucketRowErrors, rowStatus, type DhColumn } from './batchGrid'
-import NoteCell from './workspace/NoteCell'
 import AnimatedHeight from './ui/AnimatedHeight'
 import BatchLabelBar from './bulk/BatchLabelBar'
 import LabelPreviewModal from './bulk/LabelPreviewModal'
@@ -103,7 +99,8 @@ const RunningElapsed = ({ startedMs, prefix, className }: {
  * saves the parsed rows here (no labels generated); this page lists those
  * saved imports and lets you expand one to see its rows.
  */
-export default function DataHistoryPage() {
+/** apiBatches: the API batches page (Orders section) rather than Bulk Mailer. */
+export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: boolean } = {}) {
   const navigate = useNavigate()
   /** Audit R2 #329 — TENANT role should see the page read-only.
    *  Backend already 403s on cross-tenant access (OrderImportServiceImpl
@@ -183,23 +180,20 @@ export default function DataHistoryPage() {
   // Order Intake has three views: "orders" (unified per-order list across
   // Bulk / Manual / API / WMS), "import" (inline CSV/Excel upload + validation),
   // and "imports" (history of bulk import batches).
-  // Bulk Mailer tab from the URL (/bulk/:tab): imports (default) · api · documents · trash.
+  // Bulk Mailer tab from the URL (/bulk/:tab): imports (default) · trash.
+  // API batches are their own page (apiBatches), shown with the 'api' view.
   const { tab, batchId: batchIdParam } = useParams<{ tab?: string; batchId?: string }>()
   /** /bulk/batches/:id — one batch on its own page. */
   const batchPageId = batchIdParam ? Number(batchIdParam) || null : null
-  const bulkTab: BulkTab = BULK_TABS.some((t) => t.key === tab) ? (tab as BulkTab) : 'imports'
-  const dhView: 'imports' | 'docs' = bulkTab === 'documents' ? 'docs' : 'imports'
+  const bulkTab: BulkTab = apiBatches ? 'api' : BULK_TABS.some((t) => t.key === tab) ? (tab as BulkTab) : 'imports'
   /** Import history and API batches are the same list — only where the batches come from differs. */
   const isApiTab = bulkTab === 'api'
   // Which way the content slides in: from the right for a tab further along, from the left for one before.
   const [tabMotion, setTabMotion] = useState<{ tab: BulkTab; dir: 1 | -1 }>({ tab: bulkTab, dir: 1 })
-  /** The Documents table has loaded (for this visit to the tab). */
-  const [docsLoadedFor, setDocsLoadedFor] = useState<BulkTab | null>(null)
   if (tabMotion.tab !== bulkTab) {
     const from = BULK_TABS.findIndex((t) => t.key === tabMotion.tab)
     const to = BULK_TABS.findIndex((t) => t.key === bulkTab)
     setTabMotion({ tab: bulkTab, dir: to >= from ? 1 : -1 })
-    setDocsLoadedFor(null)
   }
   const [searchParams] = useSearchParams()
 
@@ -268,9 +262,18 @@ export default function DataHistoryPage() {
 
 
   useEffect(() => {
-    if (!batchPageId && tab && !BULK_TABS.some((t) => t.key === tab)) navigate(bulkPaths.imports, { replace: true })
+    if (!apiBatches && !batchPageId && tab && !BULK_TABS.some((t) => t.key === tab)) navigate(bulkPaths.imports, { replace: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab])
+
+  // A batch opens under its own section: API batches in Orders, file imports in Bulk Mailer.
+  useEffect(() => {
+    const b = batchPageId != null ? batches.find((x) => x.id === batchPageId) : undefined
+    if (!b) return
+    const isApi = ['WMS', 'API'].includes((b.source || '').toUpperCase())
+    if (isApi !== apiBatches) navigate(isApi ? apiBatchPath(b.id) : bulkBatchPath(b.id), { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [batchPageId, batches, apiBatches])
 
   /** Restore, then hold Generate for a moment: it lands exactly where Restore was, under the cursor. */
   const [justRestoredId, setJustRestoredId] = useState<number | null>(null)
@@ -421,7 +424,7 @@ export default function DataHistoryPage() {
   const [refreshing, setRefreshing] = useState(false)
   const viewKey = batchPageId != null ? `batch:${batchPageId}` : listView
   /** The tab shows its real content — the panel's height may settle. */
-  const tabReady = dhView === 'docs' ? docsLoadedFor === 'documents' : loadedView === viewKey
+  const tabReady = loadedView === viewKey
   const applyFetch = (seq: number, view: string, r: Awaited<ReturnType<typeof fetchBatches>>) => {
     if (!latest.isLatest(seq)) return false
     setBatches(r.data)
@@ -452,7 +455,7 @@ export default function DataHistoryPage() {
         } else {
           notify.info('The WMS has no pending shipments to fetch.')
         }
-        if (r.importBatchId != null) navigate(bulkBatchPath(r.importBatchId))
+        if (r.importBatchId != null) navigate(apiBatchPath(r.importBatchId))
       }
     } catch (e) {
       notify.apiError(e, 'Could not reach the WMS.')
@@ -463,7 +466,6 @@ export default function DataHistoryPage() {
 
   /** fresh=false: only search, filters or paging changed, so the view's summary still holds. */
   const load = async (fresh = true) => {
-    if (dhView === 'docs') return
     const seq = latest.begin()
     const view = viewKey
     if (batches.length === 0) setLoading(true)
@@ -497,7 +499,6 @@ export default function DataHistoryPage() {
    * blow up the operator's view; the next poll will retry.
    */
   const reloadQuiet = async () => {
-    if (dhView === 'docs') return
     const seq = latest.begin()
     const view = viewKey
     try {
@@ -1029,7 +1030,6 @@ export default function DataHistoryPage() {
           // that go back through IN_PROGRESS null completedAt so the
           // caption disappears until the next terminal transition.
           const ago = relativeTime(b.completedAt)
-          const done = ago ? `completed ${ago}` : null
           const startedMs = b.generationStartedAt ? new Date(b.generationStartedAt).getTime() : null
           const running = (b.status || '').toUpperCase() === 'IN_PROGRESS'
           // Finished-run elapsed is a fixed diff; running-run elapsed is
@@ -1038,51 +1038,40 @@ export default function DataHistoryPage() {
           const finishedElapsed = !running && startedMs != null && b.completedAt
             ? formatDuration(new Date(b.completedAt).getTime() - startedMs)
             : null
+          // One short caption under the badge; how long it took and the exact times are on hover.
           const timingTitle = [
+            finishedElapsed ? `Took ${finishedElapsed}` : null,
             b.generationStartedAt ? `Started ${new Date(b.generationStartedAt).toLocaleString()}` : null,
             b.completedAt ? `Finished ${new Date(b.completedAt).toLocaleString()}` : null,
           ].filter(Boolean).join(' · ') || undefined
+          const printedAt = printedAtOf(b)
           return (
             <span className="flex max-w-[220px] flex-col items-start gap-0.5">
               <span className={`rounded-full px-2.5 py-0.5 text-[10.5px] font-bold ring-1 ${s.cls}`}>{s.label}</span>
-              {running && startedMs != null ? (
-                <span
-                  className="text-[10px] tabular-nums font-semibold text-[#412d15]"
-                  title={timingTitle}
-                >
-                  <RunningElapsed startedMs={startedMs} prefix="running " />
-                </span>
-              ) : finishedElapsed ? (
-                <span
-                  className="text-[10px] tabular-nums text-[#8a7a5a]"
-                  title={timingTitle}
-                >
-                  {`took ${finishedElapsed}`}
-                  {done ? <span className="text-[#b6a684]"> · {done}</span> : null}
-                </span>
-              ) : done ? (
-                <span
-                  className="text-[10px] text-[#8a7a5a]"
-                  title={timingTitle ?? (b.completedAt ? new Date(b.completedAt).toLocaleString() : undefined)}
-                >
-                  {done}
+              {(running && startedMs != null) || ago || printedAt ? (
+                <span className="inline-flex items-center gap-1 whitespace-nowrap text-[10px] tabular-nums">
+                  {running && startedMs != null ? (
+                    <span className="font-semibold text-[#412d15]" title={timingTitle}>
+                      <RunningElapsed startedMs={startedMs} prefix="running " />
+                    </span>
+                  ) : ago ? (
+                    <span className="text-[#8a7a5a]" title={timingTitle}>done {ago}</span>
+                  ) : null}
+                  {printedAt ? (
+                    <span className="inline-flex items-center gap-1 font-semibold text-emerald-700" title={`Last printed ${formatPrinted(printedAt, true)}`}>
+                      {(running && startedMs != null) || ago ? <span className="font-normal text-[#b6a684]" aria-hidden="true">·</span> : null}
+                      <FiPrinter className="h-3 w-3" aria-hidden="true" />
+                      <span className="sr-only">Printed</span> {formatPrinted(printedAt)}
+                    </span>
+                  ) : null}
                 </span>
               ) : null}
               {b.note ? (
                 // Batch #11 post-mortem (2026-09-12) — batch-level note
                 // like "UPS was rate-limiting throughout — N rows still
-                // queued". Rendered as a subtle amber caption; full text
-                // in the title so operators can scan on hover.
-                <span
-                  className="whitespace-normal text-[10px] leading-snug text-amber-800"
-                  title={b.note}
-                >
+                // queued". One line; the full text on hover.
+                <span className="max-w-full truncate text-[10px] text-amber-800" title={b.note}>
                   {b.note}
-                </span>
-              ) : null}
-              {printedAtOf(b) ? (
-                <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700" title={`Last printed ${formatPrinted(printedAtOf(b)!, true)}`}>
-                  <FiPrinter className="h-3 w-3" aria-hidden="true" /> Printed {formatPrinted(printedAtOf(b)!)}
                 </span>
               ) : null}
               {b.deletedAt ? (
@@ -1099,32 +1088,26 @@ export default function DataHistoryPage() {
   const renderRowsCell = (b: ImportBatchSummary) => {
           const total = b.totalRows || 0
           const invalid = b.invalidRows || 0
-          // Errors are the only thing worth a second line: a clean import is just its size.
-          // The bar is the share of rows whose whole order can be labelled.
-          const readyPct = total > 0 ? Math.min(100, (b.savedRows / total) * 100) : 0
+          const counts = labelCountsFor(b)
+          // "N pending" alone just repeats the size: the second line only when something was labelled, voided or failed.
+          const nothingYet = !counts || (counts.generated + counts.voided + counts.failed === 0)
           return (
-            <span className="flex w-full min-w-[88px] flex-col gap-1">
-              <span className="text-[12px] font-semibold tabular-nums text-[#1f150c]">
-                {total} row{total === 1 ? '' : 's'}
-              </span>
-              <LabelCountsLine counts={labelCountsFor(b)} />
-              {invalid > 0 ? (
-                <>
+            <span className="flex w-full min-w-[88px] flex-col gap-0.5">
+              <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 whitespace-nowrap">
+                <span className="text-[12px] font-semibold tabular-nums text-[#1f150c]">
+                  {total.toLocaleString()} row{total === 1 ? '' : 's'}
+                </span>
+                {invalid > 0 ? (
                   <span
-                    className="flex h-1 w-full max-w-[110px] overflow-hidden rounded-full bg-rose-200"
-                    title={`${b.savedRows} of ${total} rows can be labelled · the rest wait on fixes`}
-                  >
-                    <span className="h-full bg-[#b6a684]" style={{ width: `${readyPct}%` }} />
-                  </span>
-                  <span
-                    className="inline-flex items-center gap-1 text-[10.5px] font-semibold text-rose-700"
-                    title="Open the import to see each error under its row"
+                    className="inline-flex items-center gap-0.5 text-[10.5px] font-semibold tabular-nums text-rose-700"
+                    title={`${invalid.toLocaleString()} row${invalid === 1 ? '' : 's'} need fixes · ${b.savedRows.toLocaleString()} of ${total.toLocaleString()} can be labelled · open the import to see each error under its row`}
                   >
                     <FiAlertCircle className="h-3 w-3 shrink-0" />
-                    {invalid} need{invalid === 1 ? 's' : ''} fixes
+                    {invalid.toLocaleString()} to fix
                   </span>
-                </>
-              ) : null}
+                ) : null}
+              </span>
+              {nothingYet ? null : <LabelCountsLine counts={counts} />}
             </span>
           )
   }
@@ -1753,14 +1736,6 @@ export default function DataHistoryPage() {
         meta: { headerLabel: 'Ref #', exportValue: (r: OrderImportRow) => r.reference ?? '' },
       },
       {
-        id: 'note', header: 'Note', size: 44, enableSorting: false,
-        cell: ({ row }) => {
-          const o = row.original.generatedOrderNo != null ? batchOrders[row.original.generatedOrderNo] : undefined
-          return o ? <NoteCell orderNo={o.orderDetails.orderNo} note={o.orderDetails.note ?? ''} /> : <span className="text-[#b3a583]">—</span>
-        },
-        meta: { headerLabel: 'Note', exportValue: (r: OrderImportRow) => (r.generatedOrderNo != null ? batchOrders[r.generatedOrderNo]?.orderDetails.note : '') ?? '' },
-      },
-      {
         id: 'labelBatch', header: 'Batch', size: 80, enableSorting: false,
         accessorFn: (r) => r.batchId ?? '',
         cell: ({ row }) => <span className="block truncate font-mono text-[12px] text-[#5a4526]">{row.original.batchId ?? <span className="text-[#b3a583]">—</span>}</span>,
@@ -1914,11 +1889,11 @@ export default function DataHistoryPage() {
                   <FiFileText className="h-3.5 w-3.5" />
                 </button>
               ) : null)}
-              <span className="ml-1 flex min-w-[116px] shrink-0 justify-end">
+              <span className="ml-1 flex min-w-7 shrink-0 justify-end">
                 {generated && orderNo != null ? (
-                  <button type="button" onClick={() => navigate(`/label/${orderNo}`)}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-[#f4eede] transition hover:bg-[#412d15]">
-                    <FiEye className="h-3 w-3" /> View Label
+                  <button type="button" onClick={() => navigate(`/label/${orderNo}`)} title="View label" aria-label={`View label for order ${orderNo}`}
+                    className={`${ICON} border-[#1f150c] bg-[#1f150c] text-[#f4eede] hover:bg-[#412d15]`}>
+                    <FiEye className="h-3.5 w-3.5" />
                   </button>
                 ) : gen === 'VOIDED' ? (
                   <span className="text-[11px] text-slate-500" title="Voided with the carrier">Voided</span>
@@ -1927,11 +1902,11 @@ export default function DataHistoryPage() {
                 ) : orderReady && (ok || failed) ? (
                   <button type="button" onClick={() => void generateRow(b.id, r.rowNumber)} disabled={rowBusy || locked}
                     title={failed ? 'Retry — re-sends this same order to the carrier (no duplicate order is created)' : 'Generate a carrier label for this row'}
-                    className={`inline-flex items-center gap-1 whitespace-nowrap rounded-lg border px-3 py-1.5 text-[12px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                    aria-label={rowBusy ? `Generating row ${r.rowNumber}` : `${failed ? 'Retry' : 'Generate'} row ${r.rowNumber}`}
+                    className={`${ICON} disabled:cursor-not-allowed disabled:opacity-50 ${
                       failed ? 'border-rose-200 bg-white text-rose-700 hover:border-rose-300 hover:bg-rose-50' : 'border-[#1f150c] bg-[#1f150c] text-[#f4eede] hover:bg-[#412d15]'}`}>
-                    {rowBusy ? <span className={`inline-block h-3 w-3 animate-spin rounded-full border-2 ${failed ? 'border-rose-100 border-t-rose-600' : 'border-[#f4eede]/40 border-t-[#f4eede]'}`} />
-                      : failed ? <FiRotateCcw className="h-3 w-3" /> : <FiZap className="h-3 w-3" />}
-                    {rowBusy ? 'Generating…' : failed ? 'Retry' : 'Generate'}
+                    {rowBusy ? <span className={`inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 ${failed ? 'border-rose-100 border-t-rose-600' : 'border-[#f4eede]/40 border-t-[#f4eede]'}`} />
+                      : failed ? <FiRotateCcw className="h-3.5 w-3.5" /> : <FiZap className="h-3.5 w-3.5" />}
                   </button>
                 ) : locked ? (
                   <span className="text-[11px] text-[#b6a684]">Fix errors first</span>
@@ -2131,10 +2106,10 @@ export default function DataHistoryPage() {
     const b = batches.find((x) => x.id === batchPageId)
     const src = (b?.source || '').toUpperCase()
     const back = b?.deletedAt
-      ? { to: bulkPaths.trash, label: 'Trash' }
-      : src === 'WMS' || src === 'API'
-        ? { to: bulkPaths.api, label: 'API batches' }
-        : { to: bulkPaths.imports, label: 'Import history' }
+      ? { to: bulkPaths.trash, label: 'Bulk Mailer · Trash' }
+      : apiBatches
+        ? { to: apiBatchesPath, label: 'API batches' }
+        : { to: bulkPaths.imports, label: 'Bulk Mailer · Import history' }
     return (
       <div className="space-y-3 pb-8">
         {mappingDialog}
@@ -2143,7 +2118,7 @@ export default function DataHistoryPage() {
         ) : !b ? (
           <div className="rounded-2xl border border-[#e3d9c4] bg-white px-5 py-12 text-center">
             <button type="button" onClick={() => navigate(back.to)} className="mb-3 inline-flex items-center gap-1 text-[12px] font-semibold text-[#5a4526] hover:underline">
-              <FiArrowLeft className="h-3.5 w-3.5" /> Bulk Mailer · {back.label}
+              <FiArrowLeft className="h-3.5 w-3.5" /> {back.label}
             </button>
             <p className="text-sm font-semibold text-[#1f150c]">Batch #{batchPageId} isn't here.</p>
             <p className="mt-1 text-[12.5px] text-[#6b5c42]">It may have been deleted, or it belongs to a client you can't see.</p>
@@ -2159,7 +2134,7 @@ export default function DataHistoryPage() {
               <button
                 type="button"
                 onClick={() => navigate(back.to)}
-                aria-label={`Bulk Mailer · ${back.label}`}
+                aria-label={back.label}
                 title={`Back to ${back.label}`}
                 className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
               >
@@ -2203,7 +2178,7 @@ export default function DataHistoryPage() {
   ) : null
 
   /** This tab's own buttons, in the table's toolbar: refresh, then the one action the tab is for. */
-  const listActions = dhView === 'imports' ? (
+  const listActions = (
     <>
       <button
         type="button"
@@ -2276,7 +2251,7 @@ export default function DataHistoryPage() {
         </button>
       ) : null}
     </>
-  ) : null
+  )
 
   /** Every filter behind one button, in the table's toolbar. */
   const filterMenu = (
@@ -2314,25 +2289,46 @@ export default function DataHistoryPage() {
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-1 pt-1">
         <h2
           className="flex items-center gap-2 text-[17px] font-semibold tracking-tight text-[#1f150c]"
-          title="Import orders in bulk, fix what needs it, and buy their labels — from a file or from the API."
+          title={apiBatches
+            ? 'Orders from the WMS and the API — each fetch is one batch. Fix what needs it and buy their labels.'
+            : 'Import orders in bulk from a file, fix what needs it, and buy their labels.'}
         >
           <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#1f150c] text-[#f4eede] shadow-sm" aria-hidden="true">
-            <FiUpload className="h-3.5 w-3.5" />
+            {apiBatches ? <FiDownloadCloud className="h-3.5 w-3.5" /> : <FiUpload className="h-3.5 w-3.5" />}
           </span>
-          Bulk Mailer
+          {apiBatches ? 'API Batches' : 'Bulk Mailer'}
         </h2>
-        {/* Bulk Mailer tabs — each one is its own address (/bulk/:tab). */}
-        <BulkTabBar
-          active={bulkTab}
-          onSelect={(t) => navigate(`/bulk/${t}`)}
-          trailing={
-            /* PR-G4 — USPS queue depth pill (audit U2). Self-hides when the queue is
-               empty; non-admin users see nothing because the metrics endpoint 403s. */
-            <div data-testid="usps-queue-badge-slot">
-              <BulkLabelQueueBadge />
-            </div>
-          }
-        />
+        {/* PR-G4 — USPS queue depth pill (audit U2). Self-hides when the queue is
+            empty; non-admin users see nothing because the metrics endpoint 403s. */}
+        <div className="mr-auto" data-testid="usps-queue-badge-slot"><BulkLabelQueueBadge /></div>
+        {apiBatches ? null : (
+          // Trash is its own address (/bulk/trash); the same button leads back to Import history.
+          <button
+            type="button"
+            aria-pressed={bulkTab === 'trash'}
+            onClick={() => navigate(bulkTab === 'trash' ? bulkPaths.imports : bulkPaths.trash)}
+            title={bulkTab === 'trash' ? 'Back to Import history' : 'Trash · deleted batches'}
+            className={`inline-flex h-[30px] w-[30px] items-center justify-center rounded-lg border transition ${
+              bulkTab === 'trash'
+                ? 'border-rose-200 bg-rose-50 text-rose-700'
+                : 'border-[#e3d9c4] bg-white text-[#6b5c42] hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700'
+            }`}
+          >
+            <FiTrash2 className="h-3.5 w-3.5" />
+            <span className="sr-only">Trash</span>
+          </button>
+        )}
+        {apiBatches ? null : (
+          <button
+            type="button"
+            onClick={() => navigate(bulkPaths.labels)}
+            title="Every labelled order's label, commercial invoice and billing statement"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+          >
+            <FiFileText className="h-3.5 w-3.5" />
+            Labels &amp; Invoices
+          </button>
+        )}
         <button
           type="button"
           onClick={() => navigate('/orders')}
@@ -2348,15 +2344,11 @@ export default function DataHistoryPage() {
       <AnimatedHeight holdKey={bulkTab} ready={tabReady}>
       <div
         key={bulkTab}
-        role="tabpanel"
+        role="region"
         aria-label={BULK_TABS.find((t) => t.key === bulkTab)?.label}
         className={`space-y-3 ${tabMotion.dir > 0 ? 'bulk-tab-in-right' : 'bulk-tab-in-left'}`}
       >
-      {dhView === 'docs' ? (
-        <Suspense fallback={<BatchListSkeleton />}>
-          <OrderDocumentsTable onLoaded={() => setDocsLoadedFor(tabMotion.tab)} />
-        </Suspense>
-      ) : loadedView !== viewKey ? (
+      {loadedView !== viewKey ? (
         <BatchListSkeleton />
       ) : (
       <div className="bulk-fade-in space-y-3">
@@ -2402,7 +2394,7 @@ export default function DataHistoryPage() {
             pageSize={pageSize}
             pageCount={pageInfo.pages}
             onPaginationChange={({ pageIndex: i, pageSize: n }) => { setPageIndex(n !== pageSize ? 0 : i); setPageSize(n) }}
-            onRowClick={(b) => navigate(bulkBatchPath(b.id))}
+            onRowClick={(b) => navigate(isApiTab ? apiBatchPath(b.id) : bulkBatchPath(b.id))}
             getRowId={(b) => String(b.id)}
             caption={viewTrash ? 'Trash — deleted batches · click a batch to open it'
               : isApiTab ? 'Batches from the WMS and the API · each fetch is one batch · click a batch to open it'
@@ -2498,19 +2490,17 @@ export default function DataHistoryPage() {
   )
 }
 
-export type BulkTab = 'imports' | 'api' | 'documents' | 'trash'
+export type BulkTab = 'imports' | 'api' | 'trash'
 
 /** The "Bills to" control (client vs platform account) — hidden for now at the
  *  client's request; billing stays as each batch has it (client account by
  *  default). Flip to true to bring it back on the batch page and the bar. */
 const SHOW_BILLS_TO = false
 
-/** Bulk Mailer tabs, in order. Import history is the landing tab. */
-const BULK_TABS: { key: BulkTab; label: string; hint: string; dot: string }[] = [
-  { key: 'imports', label: 'Import history', hint: 'Saved batches', dot: 'bg-[#412d15]' },
-  { key: 'api', label: 'API batches', hint: 'WMS · API', dot: 'bg-violet-500' },
-  { key: 'documents', label: 'Documents', hint: 'Label · invoice · statement', dot: 'bg-sky-500' },
-  { key: 'trash', label: 'Trash', hint: 'Deleted batches', dot: 'bg-rose-400' },
+/** Bulk Mailer views, in order. Import history is the landing view; Trash is behind the bin button. */
+const BULK_TABS: { key: BulkTab; label: string }[] = [
+  { key: 'imports', label: 'Import history' },
+  { key: 'trash', label: 'Trash' },
 ]
 
 /** Import history's sortable columns ↔ the server's sort keys (the Filters menu's Sort). */
@@ -2519,121 +2509,6 @@ const SORT_COLUMN = Object.fromEntries(Object.entries(COLUMN_SORT).map(([col, ke
 
 /** A row's serviceType error for a ship via code with no carrier service mapped. */
 const UNMAPPED_SHIP_VIA = /serviceType '([^']+)' is (?:not mapped|mapped, but not)/
-
-/**
- * The Bulk Mailer tabs. A single highlight slides to the chosen tab (moved
- * with a transform — no re-layout), and the arrow / Home / End keys move
- * between tabs as a tablist should.
- */
-export /** Set by an arrow-key move; the next tab bar to mount focuses its active tab. */
-let focusTabOnMount = false
-
-export function BulkTabBar({ active, onSelect, trailing }: { active: BulkTab; onSelect: (tab: BulkTab) => void; trailing?: React.ReactNode }) {
-  const listRef = useRef<HTMLDivElement>(null)
-  const pillRef = useRef<HTMLSpanElement>(null)
-
-  useLayoutEffect(() => {
-    const list = listRef.current
-    const pill = pillRef.current
-    if (!list || !pill) return
-    const place = () => {
-      const tab = list.querySelector<HTMLElement>(`[data-tab="${active}"]`)
-      // Trash sits outside the pill group — the highlight steps aside.
-      pill.style.opacity = tab && tab.dataset.group === 'pill' ? '1' : '0'
-      if (!tab || tab.dataset.group !== 'pill') return
-      pill.style.width = `${tab.offsetWidth}px`
-      pill.style.height = `${tab.offsetHeight}px`
-      pill.style.transform = `translate(${tab.offsetLeft}px, ${tab.offsetTop}px)`
-    }
-    place()
-    // Animate only moves, not the first placement.
-    const raf = requestAnimationFrame(() => { pill.dataset.ready = 'true' })
-    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(place) : null
-    ro?.observe(list)
-    return () => { cancelAnimationFrame(raf); ro?.disconnect() }
-  }, [active])
-
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    const i = BULK_TABS.findIndex((t) => t.key === active)
-    const next = e.key === 'ArrowRight' ? (i + 1) % BULK_TABS.length
-      : e.key === 'ArrowLeft' ? (i - 1 + BULK_TABS.length) % BULK_TABS.length
-        : e.key === 'Home' ? 0 : e.key === 'End' ? BULK_TABS.length - 1 : null
-    if (next == null) return
-    e.preventDefault()
-    // The page is rebuilt on the address change; the new tab bar puts focus back (see below).
-    focusTabOnMount = true
-    onSelect(BULK_TABS[next].key)
-  }
-
-  useLayoutEffect(() => {
-    if (!focusTabOnMount) return
-    focusTabOnMount = false
-    listRef.current?.querySelector<HTMLElement>(`[data-tab="${active}"]`)?.focus()
-  }, [active])
-
-  const trashTab = BULK_TABS.find((t) => t.key === 'trash')!
-  const trashSelected = active === 'trash'
-  return (
-    <div
-      ref={listRef}
-      role="tablist"
-      aria-label="Bulk Mailer"
-      onKeyDown={onKeyDown}
-      // On a phone the tabs take their own line under the title; wider, they share it.
-      className="order-last flex w-full flex-wrap items-center gap-2 sm:order-none sm:w-auto sm:flex-1"
-    >
-      <div className="relative flex flex-nowrap items-center gap-0.5 overflow-x-auto rounded-lg border border-[#e3d9c4] bg-[#f4eede]/60 p-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        <span
-          ref={pillRef}
-          aria-hidden="true"
-          className="bulk-tab-pill pointer-events-none absolute left-0 top-0 rounded-md bg-white shadow-sm ring-1 ring-[#e3d9c4]"
-        />
-        {BULK_TABS.filter((t) => t.key !== 'trash').map((t) => {
-          const selected = active === t.key
-          return (
-            <button
-              key={t.key}
-              type="button"
-              role="tab"
-              data-tab={t.key}
-              data-group="pill"
-              aria-selected={selected}
-              tabIndex={selected ? 0 : -1}
-              onClick={() => onSelect(t.key)}
-              title={t.hint}
-              className={`relative z-[1] inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-[12.5px] font-semibold outline-none transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-[#412d15]/40 ${
-                selected ? 'text-[#1f150c]' : 'text-[#6b5c42] hover:text-[#1f150c]'
-              }`}
-            >
-              <span className={`h-2 w-2 shrink-0 rounded-full ${t.dot} ${selected ? '' : 'opacity-60'}`} aria-hidden="true" />
-              {t.label}
-            </button>
-          )
-        })}
-      </div>
-      <span className="ml-auto flex items-center gap-2">
-        {trailing}
-        <button
-          type="button"
-          role="tab"
-          data-tab="trash"
-          aria-selected={trashSelected}
-          tabIndex={trashSelected ? 0 : -1}
-          onClick={() => onSelect('trash')}
-          title={`${trashTab.label} · ${trashTab.hint.toLowerCase()}`}
-          className={`inline-flex h-[30px] w-[30px] items-center justify-center rounded-lg border outline-none transition focus-visible:ring-2 focus-visible:ring-[#412d15]/40 ${
-            trashSelected
-              ? 'border-rose-200 bg-rose-50 text-rose-700'
-              : 'border-[#e3d9c4] bg-white text-[#6b5c42] hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700'
-          }`}
-        >
-          <FiTrash2 className="h-3.5 w-3.5" />
-          <span className="sr-only">{trashTab.label}</span>
-        </button>
-      </span>
-    </div>
-  )
-}
 
 /** What a tab shows while its first answer is on the way — the shape of the list, not a bare "Loading…". */
 function BatchListSkeleton() {
@@ -2684,7 +2559,7 @@ function LabelCountsLine({ counts }: { counts: LabelCounts | null }) {
         <span key={p.label} className={`inline-flex items-center gap-1 ${p.text}`}>
           {i > 0 ? <span className="text-[#b6a684]" aria-hidden="true">·</span> : null}
           <span className={`h-1.5 w-1.5 rounded-full ${p.dot}`} aria-hidden="true" />
-          {p.n} {p.label}
+          {p.n.toLocaleString()} {p.label}
         </span>
       ))}
     </span>

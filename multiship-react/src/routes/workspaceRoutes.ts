@@ -4,7 +4,7 @@ import { getNavKeysForRole, type UserRole } from '../utils/roles'
 export const workspacePaths = {
   dashboard: '/dashboard',
   orders: '/orders',
-  /** Bulk Mailer — imported batches (file + API), the importer, documents. */
+  /** Bulk Mailer — file imports, the importer, labels & invoices. */
   bulk: '/bulk',
   settings: '/settings',
 } as const
@@ -12,8 +12,8 @@ export const workspacePaths = {
 /** Bulk Mailer tabs and pages. The tab lives in the URL, so Back and links land on it. */
 export const bulkPaths = {
   imports: '/bulk/imports',
-  api: '/bulk/api',
-  documents: '/bulk/documents',
+  /** Labels & Invoices — every labelled order's label, invoice and statement; its own page, opened from Bulk Mailer. */
+  labels: '/bulk/labels',
   trash: '/bulk/trash',
   /** The CSV / Excel importer — its own page, reached from Import history. */
   importFile: '/bulk/import',
@@ -21,6 +21,10 @@ export const bulkPaths = {
 
 /** One batch's page: its rows, fixes and label actions. */
 export const bulkBatchPath = (id: number) => `/bulk/batches/${id}`
+
+/** API batches (WMS + API fetches) — their own page in the Orders section. */
+export const apiBatchesPath = '/orders/api-batches'
+export const apiBatchPath = (id: number) => `${apiBatchesPath}/${id}`
 
 export type WorkspaceRouteKey = keyof typeof workspacePaths
 
@@ -171,7 +175,7 @@ export const resolveWorkspaceRouteKey = (pathname: string): WorkspaceRouteKey | 
     return 'dashboard'
   }
 
-  if (pathname === workspacePaths.orders || pathname === '/track-orders') {
+  if (pathname === workspacePaths.orders || pathname === '/track-orders' || pathname.startsWith(apiBatchesPath)) {
     return 'orders'
   }
 
@@ -202,11 +206,17 @@ export const resolveBreadcrumb = (
   if (pathname === workspacePaths.dashboard) {
     return { section: 'Overview', label: 'Dashboard', iconKey: 'dashboard' }
   }
+  if (pathname.startsWith(apiBatchesPath)) {
+    return { section: 'Operations', label: 'API Batches', iconKey: 'orders' }
+  }
   if (pathname === '/orders/new') {
     return { section: 'Operations', label: 'New Shipment', iconKey: 'orders' }
   }
   if (pathname === workspacePaths.orders || pathname === '/track-orders' || pathname.startsWith('/label/')) {
     return { section: 'Operations', label: 'Shipment & Label', iconKey: 'orders' }
+  }
+  if (pathname === bulkPaths.labels) {
+    return { section: 'Bulk Mailer', label: 'Labels & Invoices', iconKey: 'bulk' }
   }
   if (pathname === bulkPaths.importFile) {
     return { section: 'Bulk Mailer', label: 'Import CSV / Excel', iconKey: 'bulk' }

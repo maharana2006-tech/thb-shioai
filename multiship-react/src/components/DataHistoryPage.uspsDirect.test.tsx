@@ -191,9 +191,6 @@ vi.mock('./modals/ShipViaCodes', () => ({
   ShipViaCodesPanel: () => <div data-testid="ship-via-panel" />,
   AddShipViaMappingDialog: () => null,
 }))
-vi.mock('./OrderDocumentsTable', () => ({
-  default: () => <div data-testid="documents-stub" />,
-}))
 vi.mock('./modals/OrderImportModal', () => ({
   default: () => <div data-testid="import-modal-stub" />,
 }))
@@ -280,6 +277,8 @@ async function renderAt(path: string) {
         <Routes>
           <Route path="/bulk/batches/:batchId" element={<DataHistoryPage />} />
           <Route path="/bulk/:tab" element={<DataHistoryPage />} />
+          <Route path="/orders/api-batches" element={<DataHistoryPage apiBatches />} />
+          <Route path="/orders/api-batches/:batchId" element={<DataHistoryPage apiBatches />} />
         </Routes>
       </MemoryRouter>
     </Provider>,
@@ -408,10 +407,8 @@ describe('DataHistoryPage — BulkLabelQueueBadge mount (audit U2)', () => {
   it('renders the slot in the header row, before the tab panel (top-of-page placement)', async () => {
     await loadAndRender()
     const slot = await waitFor(() => screen.getByTestId('usps-queue-badge-slot'))
-    // The pill shares the one header line with the tabs (inside the tablist, at its right end)…
-    expect(screen.getByRole('tablist', { name: 'Bulk Mailer' })).toContainElement(slot)
-    // …and everything the tab shows comes after it.
-    const panel = screen.getByRole('tabpanel')
+    // Everything the view shows comes after the header's pill.
+    const panel = screen.getByRole('region', { name: 'Import history' })
     const pos = slot.compareDocumentPosition(panel)
     expect(pos & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
@@ -562,7 +559,7 @@ describe('DataHistoryPage — normalizeCarrierCode helper contract', () => {
 // ==================================================================
 
 describe('Bulk Mailer — layout', () => {
-  it('opens on Import history with four tabs, no All orders, and an Import CSV / Excel button', async () => {
+  it('opens on Import history with no tabs, a Trash button, no All orders, and an Import CSV / Excel button', async () => {
     listBatches.mockResolvedValue(pageOf([
       batchSummary({ id: 1, status: 'INITIATE', invalidRows: 0 }),
       batchSummary({ id: 2, status: 'IN_PROGRESS' }),
@@ -571,10 +568,11 @@ describe('Bulk Mailer — layout', () => {
     // The cards come from the server's counts over the whole view.
     bulkSummary.mockResolvedValue(summaryOf({ total: 3, readyToGenerate: 1, generating: 1, needsFixes: 1 }))
     await loadAndRender()
-    const tabs = await screen.findAllByRole('tab')
-    expect(tabs.map((t) => t.textContent?.replace(/(Saved batches|WMS · API|Label · invoice · statement|Deleted batches)$/, '')))
-      .toEqual(['Import history', 'API batches', 'Documents', 'Trash'])
-    expect(screen.getByRole('tab', { name: /Import history/i })).toHaveAttribute('aria-selected', 'true')
+    expect(await screen.findByRole('region', { name: 'Import history' })).toBeInTheDocument()
+    expect(screen.queryByRole('tab')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Trash' })).toHaveAttribute('aria-pressed', 'false')
+    // Labels & Invoices is its own page, opened from here.
+    expect(screen.getByRole('button', { name: /Labels & Invoices/i })).toBeInTheDocument()
     expect(screen.queryByText(/All orders/i)).toBeNull()
     expect(await screen.findByRole('button', { name: /Import CSV \/ Excel/i })).toBeInTheDocument()
     // No summary cards: the list gets the screen, the filters sit behind one button.
@@ -585,13 +583,13 @@ describe('Bulk Mailer — layout', () => {
     expect(dialog).toHaveTextContent('3 of 3 imports shown')
   })
 
-  it('shows the API batches in the same list, with Fetch from WMS for an admin', async () => {
+  it('API batches are their own page, with Fetch from WMS for an admin and no Bulk Mailer tabs', async () => {
     listBatches.mockImplementation(async (q: { view: string }) => q.view === 'API'
       ? pageOf([batchSummary({ id: 7, fileName: 'WMS fetch 22 Sep', source: 'WMS', status: 'DRAFT', invalidRows: 1, savedRows: 3 })])
       : pageOf([]))
-    await renderAt('/bulk/imports')
-    await userEvent.click(await screen.findByRole('tab', { name: /API batches/i }))
-    expect(screen.getByRole('tab', { name: /API batches/i })).toHaveAttribute('aria-selected', 'true')
+    await renderAt('/orders/api-batches')
+    expect(await screen.findByRole('heading', { name: 'API Batches' })).toBeInTheDocument()
+    expect(screen.queryByRole('tab')).toBeNull()
     await waitFor(() => expect(listBatches).toHaveBeenCalledWith(expect.objectContaining({ view: 'API' })))
     expect(await screen.findByTestId('batch-row-7')).toBeInTheDocument()
     expect(await screen.findByRole('button', { name: /Fetch from WMS/i })).toBeInTheDocument()
@@ -601,7 +599,7 @@ describe('Bulk Mailer — layout', () => {
 
   it('opens the Trash tab from its address', async () => {
     await renderAt('/bulk/trash')
-    expect(await screen.findByRole('tab', { name: /Trash/i })).toHaveAttribute('aria-selected', 'true')
+    expect(await screen.findByRole('button', { name: 'Trash' })).toHaveAttribute('aria-pressed', 'true')
     await waitFor(() => expect(listBatches).toHaveBeenCalledWith(expect.objectContaining({ view: 'TRASH' })))
   })
 
@@ -666,20 +664,13 @@ describe('Bulk Mailer — layout', () => {
     await waitFor(() => expect(historyRows).toHaveBeenCalledWith(121, expect.objectContaining({ view: 'attention', q: 'ZZ50K-12345', page: 0 })))
   })
 
-  it('the Documents tab does not load the Import history list behind it', async () => {
-    await renderAt('/bulk/documents')
-    await new Promise((r) => setTimeout(r, 50))
-    expect(listBatches).not.toHaveBeenCalled()
-    expect(bulkSummary).not.toHaveBeenCalled()
-  })
-
   it('shows exactly the Orders screen\'s columns; the imported fields stay in the Columns menu', async () => {
     getHistory.mockResolvedValue({ data: { ...batchSummary({ id: 121, fileName: 'acme_sept.csv', status: 'INITIATE' }),
       rows: [{ rowNumber: 1, recipientName: 'Ann', city: 'Austin', errors: {}, generatedStatus: 'GENERATED', generatedOrderNo: 906976 }] } })
     await renderAt('/bulk/batches/121')
     await screen.findByTestId('batch-page-header')
     // pick and actions have no text header; every imported f_* column is hidden by default
-    expect((await screen.findByTestId('visible-headers')).textContent).toBe('|Order|Ref #|Note|Batch|Dest|Status|Track|')
+    expect((await screen.findByTestId('visible-headers')).textContent).toBe('|Order|Ref #|Batch|Dest|Status|Track|')
     // Print / void live in a floating bar that appears once rows are ticked, not in the toolbar
     expect(screen.queryByTestId('batch-label-bar')).toBeNull()
   })
@@ -713,44 +704,33 @@ describe('Bulk Mailer — layout', () => {
 
 })
 
-describe('Bulk Mailer — tab transitions', () => {
-  it('slides the new tab in from the side you moved towards', async () => {
+describe('Bulk Mailer — Import history and Trash', () => {
+  it('the Trash button opens Trash, and pressed again goes back to Import history, sliding each way', async () => {
     await renderAt('/bulk/imports')
-    await userEvent.click(await screen.findByRole('tab', { name: /Documents/i }))
-    expect(screen.getByRole('tabpanel')).toHaveClass('bulk-tab-in-right')
-    await userEvent.click(screen.getByRole('tab', { name: /API batches/i }))
-    expect(screen.getByRole('tabpanel')).toHaveClass('bulk-tab-in-left')
-  })
-
-  it('moves between tabs with the arrow keys, and only the chosen tab is in the tab order', async () => {
-    await renderAt('/bulk/imports')
-    const imports = await screen.findByRole('tab', { name: /Import history/i })
-    expect(imports).toHaveAttribute('tabindex', '0')
-    expect(screen.getByRole('tab', { name: /API batches/i })).toHaveAttribute('tabindex', '-1')
-    imports.focus()
-    await userEvent.keyboard('{ArrowRight}')
-    expect(screen.getByRole('tab', { name: /API batches/i })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByRole('tab', { name: /API batches/i })).toHaveFocus()
-    await userEvent.keyboard('{End}')
-    expect(screen.getByRole('tab', { name: /Trash/i })).toHaveAttribute('aria-selected', 'true')
+    await userEvent.click(await screen.findByRole('button', { name: 'Trash' }))
+    expect(screen.getByRole('region', { name: 'Trash' })).toHaveClass('bulk-tab-in-right')
+    expect(screen.getByRole('button', { name: 'Trash' })).toHaveAttribute('aria-pressed', 'true')
+    await userEvent.click(screen.getByRole('button', { name: 'Trash' }))
+    expect(screen.getByRole('region', { name: 'Import history' })).toHaveClass('bulk-tab-in-left')
+    expect(screen.getByRole('button', { name: 'Trash' })).toHaveAttribute('aria-pressed', 'false')
   })
 
   it('shows a skeleton, not the last tab\'s batches, and ignores a late answer for a tab already left', async () => {
     let answerApi: (v: unknown) => void = () => {}
-    listBatches.mockImplementation((q: { view: string }) => q.view === 'API'
+    listBatches.mockImplementation((q: { view: string }) => q.view === 'FILE'
       ? new Promise((resolve) => { answerApi = resolve })
       : Promise.resolve(pageOf(q.view === 'TRASH' ? [batchSummary({ id: 55, fileName: 'deleted.csv' })] : [batchSummary({ id: 1 })])))
-    await renderAt('/bulk/imports')
-    expect(await screen.findByTestId('batch-row-1')).toBeInTheDocument()
+    await renderAt('/bulk/trash')
+    expect(await screen.findByTestId('batch-row-55')).toBeInTheDocument()
 
-    await userEvent.click(screen.getByRole('tab', { name: /API batches/i }))
+    await userEvent.click(screen.getByRole('button', { name: 'Trash' }))
     expect(screen.getByTestId('batch-list-skeleton')).toBeInTheDocument()
     expect(screen.queryByTestId('batch-row-1')).toBeNull()
 
-    await userEvent.click(screen.getByRole('tab', { name: /Trash/i }))
+    await userEvent.click(screen.getByRole('button', { name: 'Trash' }))
     expect(await screen.findByTestId('batch-row-55')).toBeInTheDocument()
-    // The API answer finally arrives — it must not replace Trash.
-    await act(async () => { answerApi(pageOf([batchSummary({ id: 7, source: 'WMS' })])) })
+    // Import history's answer finally arrives — it must not replace Trash.
+    await act(async () => { answerApi(pageOf([batchSummary({ id: 7 })])) })
     expect(screen.getByTestId('batch-row-55')).toBeInTheDocument()
     expect(screen.queryByTestId('batch-row-7')).toBeNull()
   })

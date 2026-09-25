@@ -307,14 +307,9 @@ textarea {
 }
 
 /* ===== Bulk Mailer tab transitions =====
-   The highlight glides between tabs; the new tab's content slides in from
-   the side you moved towards. Transform + opacity only (no layout work), and
+   The new view's content slides in from the side you moved towards. Transform + opacity only (no layout work), and
    the end state is transform: none so fixed-position modals inside keep
    their viewport positioning. Off for anyone who asked for less motion. */
-.bulk-tab-pill[data-ready='true'] {
-  transition: transform 320ms cubic-bezier(0.2, 0.8, 0.2, 1), width 320ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    height 320ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
 @keyframes bulk-tab-in-right {
   from { opacity: 0; transform: translateX(10px); }
   to { opacity: 1; transform: none; }
@@ -331,7 +326,6 @@ textarea {
 .bulk-tab-in-right { animation: bulk-tab-in-right 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
 .bulk-tab-in-left { animation: bulk-tab-in-left 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
 @media (prefers-reduced-motion: reduce) {
-  .bulk-tab-pill[data-ready='true'] { transition: none; }
   .bulk-tab-in-right, .bulk-tab-in-left, .bulk-fade-in, .bulk-pop-in { animation: none; }
   .animated-height { transition: none !important; }
 }

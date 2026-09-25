@@ -54,8 +54,7 @@ const money = (v: number | null | undefined, ccy?: string | null) =>
 const DOC_BTN =
   'inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[10.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40'
 
-/** onLoaded fires after each load settles — Bulk Mailer holds its tab's height until then. */
-export default function OrderDocumentsTable({ onLoaded }: { onLoaded?: () => void } = {}) {
+export default function OrderDocumentsTable() {
   const [rows, setRows] = useState<OrderDocumentRow[]>([])
   const [pageInfo, setPageInfo] = useState({ total: 0, pages: 1 })
   const [loaded, setLoaded] = useState(false)
@@ -109,12 +108,11 @@ export default function OrderDocumentsTable({ onLoaded }: { onLoaded?: () => voi
       if (f?.data) setFacets(f.data)
     } catch (e) {
       if (!latest.isLatest(seq)) return
-      notify.apiError(e, 'Could not load the documents table.')
+      notify.apiError(e, 'Could not load labels & invoices.')
     } finally {
       if (latest.isLatest(seq)) {
         setRefreshing(false)
         setLoaded(true)
-        onLoaded?.()
       }
     }
   }
@@ -231,7 +229,7 @@ export default function OrderDocumentsTable({ onLoaded }: { onLoaded?: () => voi
     },
     {
       id: 'documents',
-      header: 'Documents',
+      header: 'Downloads',
       enableSorting: false,
       size: 290,
       cell: ({ row }) => {

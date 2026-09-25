@@ -42,7 +42,7 @@ import OrdersPage from '../pages/OrdersPage'
 import ProtectedRoute from './ProtectedRoute'
 import AnonymousRoute from './AnonymousRoute'
 import RequireRole from './RequireRole'
-import { bulkPaths, settingsPaths, workspacePaths } from './workspaceRoutes'
+import { apiBatchesPath, bulkPaths, settingsPaths, workspacePaths } from './workspaceRoutes'
 
 /** /orders/:orderNo → /label/:orderNo (numeric segment only; /orders/new etc. are static routes). */
 function OrderNoRedirect() {
@@ -93,6 +93,7 @@ const UspsDirectDashboardPage = lazy(() => import('../pages/UspsDirectDashboardP
 // Lazy — one-shot flows (bulky but not on every page load).
 const NewShipmentPage = lazy(() => import('../components/NewShipmentPage'))
 const DataHistoryPage = lazy(() => import('../components/DataHistoryPage'))
+const LabelsInvoicesPage = lazy(() => import('../components/LabelsInvoicesPage'))
 const BulkImportPage = lazy(() => import('../components/BulkImportPage'))
 
 // Sprint 51 User↔Client linkage re-audit items #1 + #2 — public
@@ -197,6 +198,13 @@ export default function AppRoutes() {
             <Route path={workspacePaths.bulk} element={<Navigate to={bulkPaths.imports} replace />} />
             <Route path={bulkPaths.importFile} element={<BulkImportPage />} />
             <Route path="/bulk/batches/:batchId" element={<DataHistoryPage />} />
+            {/* API batches left Bulk Mailer for their own page under Orders. */}
+            <Route path="/bulk/api" element={<Navigate to={apiBatchesPath} replace />} />
+            <Route path={apiBatchesPath} element={<DataHistoryPage apiBatches />} />
+            <Route path={`${apiBatchesPath}/:batchId`} element={<DataHistoryPage apiBatches />} />
+            {/* Labels & Invoices — its own page, opened from Bulk Mailer (was the Documents tab). */}
+            <Route path={bulkPaths.labels} element={<LabelsInvoicesPage />} />
+            <Route path="/bulk/documents" element={<Navigate to={bulkPaths.labels} replace />} />
             <Route path="/bulk/:tab" element={<DataHistoryPage />} />
             {/* Old "Order History" address — bookmarks and links keep working. */}
             <Route path="/orders/history" element={<Navigate to={bulkPaths.imports} replace />} />
