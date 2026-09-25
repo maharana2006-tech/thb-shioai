@@ -3013,6 +3013,61 @@ public class OrderImportServiceImpl implements OrderImportService {
         return toBatchDTO(b, parsedRows);
     }
 
+    /** Largest page of rows one call returns (an export asks for the most). */
+    static final int MAX_ROWS_PAGE = 5000;
+
+    @Override
+    public com.multiship.backend.dto.ImportBatchRowsPageDTO historyRows(Long id, String view, String q, Integer rowNumber,
+                                                                      int page, int size) {
+        if (importBatchRepository == null || id == null) return null;
+        com.multiship.backend.model.ImportBatch b = importBatchRepository.findById(id).orElse(null);
+        if (b == null) return null;
+        // ponytail: still parses the whole batch per page (rows_json); the row table
+        // (import_batch_row for every source) lets this become an indexed query.
+        List<OrderImportRowDTO> rows = new ArrayList<>(parseBatchRows(b));
+        requireMatch(firstClientCode(rows));
+        // The statuses the filters read: a label voided since generation is not live.
+        applyLiveLabelStatus(rows);
+
+        java.util.function.Predicate<OrderImportRowDTO> hasErrors = r -> r.getErrors() != null && !r.getErrors().isEmpty();
+        java.util.function.Predicate<OrderImportRowDTO> attention = r -> hasErrors.test(r) || "FAILED".equalsIgnoreCase(r.getGeneratedStatus());
+        java.util.function.Predicate<OrderImportRowDTO> pending = r -> !"GENERATED".equalsIgnoreCase(r.getGeneratedStatus());
+        // An order is labelled as one shipment: its first broken line holds the others back.
+        Map<String, Integer> brokenBy = new LinkedHashMap<>();
+        for (OrderImportRowDTO r : rows) if (hasErrors.test(r)) brokenBy.putIfAbsent(groupKeyOf(r), r.getRowNumber());
+
+        String needle = q == null ? "" : q.trim().toLowerCase(Locale.ROOT);
+        java.util.function.Predicate<OrderImportRowDTO> inView = "attention".equalsIgnoreCase(view) ? attention
+                : "pending".equalsIgnoreCase(view) ? pending : r -> true;
+        java.util.function.Predicate<OrderImportRowDTO> found = needle.isEmpty() ? r -> true : r -> java.util.stream.Stream.of(
+                        r.getOrderRef(), r.getReference(), r.getRecipientName(), r.getCity(), r.getClientCode(),
+                        r.getGeneratedOrderNo() == null ? null : String.valueOf(r.getGeneratedOrderNo()), r.getGeneratedTrackingNumber())
+                .anyMatch(v -> v != null && v.toLowerCase(Locale.ROOT).contains(needle));
+        List<OrderImportRowDTO> matched = rowNumber != null
+                ? rows.stream().filter(r -> r.getRowNumber() == rowNumber).toList()
+                : rows.stream().filter(inView.and(found)).toList();
+
+        int pageSize = Math.min(Math.max(size, 1), MAX_ROWS_PAGE);
+        int from = (int) Math.min((long) Math.max(page, 0) * pageSize, matched.size());
+        List<OrderImportRowDTO> pageRows = matched.subList(from, Math.min(from + pageSize, matched.size()));
+        for (OrderImportRowDTO r : pageRows) {
+            if (!hasErrors.test(r)) r.setOrderBlockedBy(brokenBy.get(groupKeyOf(r)));
+            if (r.getGeneratedOrderNo() != null && "GENERATED".equalsIgnoreCase(r.getGeneratedStatus())
+                    && !StringUtils.hasText(r.getLabelUrl())) {
+                r.setLabelUrl("/api/v1/orders/" + r.getGeneratedOrderNo() + "/label/pdf");
+            }
+        }
+        return com.multiship.backend.dto.ImportBatchRowsPageDTO.builder()
+                .rows(pageRows)
+                .total(matched.size())
+                .all(rows.size())
+                .attention(rows.stream().filter(attention).count())
+                .pending(rows.stream().filter(pending).count())
+                .clientCodes(rows.stream().map(OrderImportRowDTO::getClientCode).filter(StringUtils::hasText)
+                        .map(c -> c.trim().toUpperCase(Locale.ROOT)).distinct().sorted().toList())
+                .build();
+    }
+
     /**
      * Generate carrier labels for a previously-saved import (Data History).
      * The batch moves INITIATE → IN_PROGRESS (persisted so a concurrent read

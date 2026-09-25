@@ -97,15 +97,42 @@ public class BulkBatchQueryService {
                 .getResultList();
         List<ImportBatchDTO> content = tuples.stream().map(BulkBatchQueryService::summaryOf).toList();
         applyLabelCounts(tuples, content);
-        if (printLog != null) {
-            java.util.Map<Integer, LocalDateTime> printed = printLog.lastPrintedByLabelBatch(content.stream()
-                    .map(ImportBatchDTO::getLabelBatchId).filter(java.util.Objects::nonNull).toList());
-            for (ImportBatchDTO d : content) {
-                LocalDateTime at = d.getLabelBatchId() == null ? null : printed.get(d.getLabelBatchId());
-                d.setLastPrintedAt(at == null ? null : at.toString());
-            }
-        }
+        applyLastPrinted(content);
         return new org.springframework.data.domain.PageImpl<>(content, paging, repository.count(where));
+    }
+
+    /**
+     * One batch as the list shows it — its facts, label counts and last print —
+     * without its rows, in any view (Trash included). The batch page's header:
+     * a 50k-row batch's rows_json is tens of MB, this is a few hundred bytes.
+     */
+    @Transactional(readOnly = true)
+    public Optional<ImportBatchDTO> one(Long id) {
+        if (id == null) return Optional.empty();
+        Optional<String> scope = tenantScope == null ? Optional.empty() : tenantScope.resolveScope();
+        CriteriaBuilder cb = entityManager.getCriteriaBuilder();
+        jakarta.persistence.criteria.CriteriaQuery<jakarta.persistence.Tuple> cq = cb.createTupleQuery();
+        Root<ImportBatch> root = cq.from(ImportBatch.class);
+        cq.multiselect(LIST_COLUMNS.stream().<jakarta.persistence.criteria.Selection<?>>map(c -> root.get(c).alias(c)).toList());
+        List<Predicate> p = new ArrayList<>(List.of(cb.equal(root.get("id"), id)));
+        scope.ifPresent(s -> p.add(cb.equal(cb.upper(root.get("clientCode")), s.trim().toUpperCase(Locale.ROOT))));
+        cq.where(p.toArray(Predicate[]::new));
+        List<jakarta.persistence.Tuple> tuples = entityManager.createQuery(cq).getResultList();
+        if (tuples.isEmpty()) return Optional.empty();
+        List<ImportBatchDTO> content = tuples.stream().map(BulkBatchQueryService::summaryOf).toList();
+        applyLabelCounts(tuples, content);
+        applyLastPrinted(content);
+        return Optional.of(content.get(0));
+    }
+
+    private void applyLastPrinted(List<ImportBatchDTO> content) {
+        if (printLog == null) return;
+        java.util.Map<Integer, LocalDateTime> printed = printLog.lastPrintedByLabelBatch(content.stream()
+                .map(ImportBatchDTO::getLabelBatchId).filter(java.util.Objects::nonNull).toList());
+        for (ImportBatchDTO d : content) {
+            LocalDateTime at = d.getLabelBatchId() == null ? null : printed.get(d.getLabelBatchId());
+            d.setLastPrintedAt(at == null ? null : at.toString());
+        }
     }
 
     @Transactional(readOnly = true)

@@ -320,6 +320,45 @@ public class OrderImportController {
                 .build());
     }
 
+    /**
+     * ?rows=false on a write that answers with the batch: leave its rows out —
+     * the batch page re-reads one page instead of the whole batch. Read from the
+     * request so the endpoints' signatures (and their direct callers) stay as they are.
+     */
+    private static com.multiship.backend.dto.ImportBatchDTO withRows(com.multiship.backend.dto.ImportBatchDTO dto) {
+        var attrs = org.springframework.web.context.request.RequestContextHolder.getRequestAttributes();
+        if (dto != null && attrs instanceof org.springframework.web.context.request.ServletRequestAttributes req
+                && "false".equalsIgnoreCase(req.getRequest().getParameter("rows"))) {
+            dto.setRows(null);
+        }
+        return dto;
+    }
+
+    @Operation(summary = "One page of a saved import's rows",
+            description = "view = all | attention (errors or a failed label) | pending (no live label); "
+                    + "q searches order ref, reference, recipient, city, client, order # and tracking; "
+                    + "rowNumber returns that one row. Also answers the three views' counts and the "
+                    + "batch's client codes. size is capped at 5000.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping("/history/{id}/rows")
+    public ResponseEntity<ApiResponse<com.multiship.backend.dto.ImportBatchRowsPageDTO>> historyRows(
+            @org.springframework.web.bind.annotation.PathVariable Long id,
+            @RequestParam(defaultValue = "all") String view,
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) Integer rowNumber,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "50") int size) {
+        com.multiship.backend.dto.ImportBatchRowsPageDTO dto = orderImportService.historyRows(id, view, q, rowNumber, page, size);
+        if (dto == null) {
+            return ResponseEntity.status(404).body(ApiResponse.<com.multiship.backend.dto.ImportBatchRowsPageDTO>builder()
+                    .status("ERROR").code(404).timestamp(java.time.LocalDateTime.now())
+                    .message("Import not found.").build());
+        }
+        return ResponseEntity.ok(ApiResponse.<com.multiship.backend.dto.ImportBatchRowsPageDTO>builder()
+                .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
+                .message(dto.getTotal() + " row(s).").data(dto).build());
+    }
+
     @Operation(summary = "Generate carrier labels for a saved import batch",
             description = "Advances the batch status INITIATE → IN_PROGRESS → COMPLETE / " +
                     "PARTIAL_COMPLETE as it generates a label per saved row.")
@@ -373,14 +412,14 @@ public class OrderImportController {
                     .status("SUCCESS").code(202).timestamp(java.time.LocalDateTime.now())
                     .message("Label generation started for import #" + id
                             + ". It runs in the background — you can leave this page.")
-                    .data(dto)
+                    .data(withRows(dto))
                     .build());
         }
         // Finished inline (wait=true, or no queue wired). Counts ORDERS, not rows.
         return ResponseEntity.ok(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
                 .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
                 .message(com.multiship.backend.service.OrderImportServiceImpl.generationSummaryMessage(dto))
-                .data(dto)
+                .data(withRows(dto))
                 .build());
     }
 
@@ -439,7 +478,7 @@ public class OrderImportController {
         return ResponseEntity.ok(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
                 .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
                 .message("Label generation attempted for row " + rowNumber + " · status " + dto.getStatus())
-                .data(dto)
+                .data(withRows(dto))
                 .build());
     }
 
@@ -479,7 +518,7 @@ public class OrderImportController {
         return ResponseEntity.ok(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
                 .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
                 .message("All rows validated successfully.")
-                .data(dto).build());
+                .data(withRows(dto)).build());
     }
 
     @Operation(summary = "Correct one row of a saved import (Data History inline edit)",
@@ -507,7 +546,7 @@ public class OrderImportController {
                 .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
                 .message(held == 0 ? "Row " + rowNumber + " saved · all rows ready"
                         : "Row " + rowNumber + " saved · " + held + " row(s) still need fixing")
-                .data(dto)
+                .data(withRows(dto))
                 .build());
     }
 

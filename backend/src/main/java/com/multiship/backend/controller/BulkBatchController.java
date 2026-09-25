@@ -14,6 +14,7 @@ import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -54,6 +55,19 @@ public class BulkBatchController {
                 .status("success").code(200)
                 .message(result.getTotalElements() + " batch(es).")
                 .data(result).build());
+    }
+
+    @Operation(summary = "One batch's header, as the list shows it",
+            description = "Facts, label counts, live orders and last print — never its rows (see "
+                    + "GET /orders/import/history/{id}/rows). Any view, Trash included.")
+    @GetMapping("/batches/{id}")
+    @PreAuthorize("hasAnyRole('ADMIN','USER')")
+    public ResponseEntity<ApiResponse<ImportBatchDTO>> batch(@PathVariable Long id) {
+        return queryService.one(id)
+                .map(d -> ResponseEntity.ok(ApiResponse.<ImportBatchDTO>builder()
+                        .status("success").code(200).message("ok").data(d).build()))
+                .orElseGet(() -> ResponseEntity.status(404).body(ApiResponse.<ImportBatchDTO>builder()
+                        .status("ERROR").code(404).message("Import not found.").build()));
     }
 
     @Operation(summary = "Counts for the cards and status chips of one view",
