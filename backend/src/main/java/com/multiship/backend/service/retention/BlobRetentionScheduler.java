@@ -50,6 +50,9 @@ public class BlobRetentionScheduler {
     private final GeneratedReportRepository generatedReportRepo;
     private final ImportBatchRepository importBatchRepo;
     private final RetentionProperties props;
+    /** File imports' rows (V86). Optional for hand-built tests. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.ImportBatchRowStore importRows;
 
     /**
      * Cron string is a Spring 6-second format: {@code sec min hour dom mon dow}.
@@ -86,8 +89,9 @@ public class BlobRetentionScheduler {
 
         runOne("import_batch.rows_json", props.getImportBatch(), now,
                 () -> phase("null-blob", "import_batch",
-                        () -> importBatchRepo.nullifyRowsJsonOlderThan(
-                                now.minusDays(props.getImportBatch().getBlobDays()))),
+                        () -> importBatchRepo.nullifyRowsJsonOlderThan(now.minusDays(props.getImportBatch().getBlobDays()))
+                                + (importRows == null ? 0
+                                        : importRows.deleteFileImportRowsOlderThan(now.minusDays(props.getImportBatch().getBlobDays())))),
                 () -> phase("delete-row", "import_batch",
                         () -> importBatchRepo.deleteRowsOlderThan(
                                 now.minusDays(props.getImportBatch().getRowDays()))));

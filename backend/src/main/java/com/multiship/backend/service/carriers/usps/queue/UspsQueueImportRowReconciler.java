@@ -71,6 +71,9 @@ public class UspsQueueImportRowReconciler {
 
     private final ImportBatchRepository importBatchRepository;
     private final ObjectMapper objectMapper;
+    /** Every import's rows (V86). Optional for hand-built tests. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.ImportBatchRowStore rowStore;
 
     /**
      * Spring resolves {@link ObjectMapper} to the Boot-configured
@@ -133,7 +136,8 @@ public class UspsQueueImportRowReconciler {
             return;
         }
         ImportBatch batch = maybeBatch.get();
-        if (batch.getRowsJson() == null || batch.getRowsJson().isBlank()) {
+        boolean inRowsTable = batch.getRowsJson() == null || batch.getRowsJson().isBlank();
+        if (inRowsTable && rowStore == null) {
             log.warn("USPS queue reconciler: import batch {} has no rowsJson - nothing to reconcile",
                     event.importBatchId());
             return;
@@ -146,11 +150,10 @@ public class UspsQueueImportRowReconciler {
 
         List<OrderImportRowDTO> rows;
         try {
-            rows = objectMapper.readValue(
-                    batch.getRowsJson(),
-                    new TypeReference<List<OrderImportRowDTO>>() {});
+            rows = inRowsTable ? new ArrayList<>(rowStore.load(batch.getId()))
+                    : objectMapper.readValue(batch.getRowsJson(), new TypeReference<List<OrderImportRowDTO>>() {});
         } catch (Exception parseFail) {
-            log.warn("USPS queue reconciler: batch {} rowsJson parse failed: {}",
+            log.warn("USPS queue reconciler: batch {} rows could not be read: {}",
                     event.importBatchId(), parseFail.getMessage());
             return;
         }
@@ -188,7 +191,12 @@ public class UspsQueueImportRowReconciler {
         }
 
         try {
-            batch.setRowsJson(objectMapper.writeValueAsString(rows));
+            if (rowStore != null) {
+                rowStore.store(batch.getId(), rows);   // the flipped row(s) only
+                batch.setRowsJson(null);
+            } else {
+                batch.setRowsJson(objectMapper.writeValueAsString(rows));
+            }
             com.multiship.backend.service.OrderImportServiceImpl.stampLabelCounts(batch, rows, objectMapper);
             importBatchRepository.save(batch);
             log.info("USPS queue reconciler: import batch {} - flipped {} row(s) for order={} -> {}",

@@ -161,6 +161,9 @@ public class OrderImportServiceImpl implements OrderImportService {
     private ShippingConfigService shippingConfigService;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.fasterxml.jackson.databind.ObjectMapper importObjectMapper;
+    /** Every import's rows (V86). Absent in hand-built unit tests, which keep rows in rows_json. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ImportBatchRowStore rowStore;
 
     /** Sprint 50 Tier 0.5 PR G — tenant-scope clamp on every entry point.
      *  Optional so unit tests that construct the service via the no-arg
@@ -277,35 +280,48 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (batch == null) {
             return java.util.List.of();
         }
-
-        // For WMS/API imports, fetch from import_batch_row table
-        if (batch.getSource() != null && (batch.getSource().equalsIgnoreCase("WMS") || batch.getSource().equalsIgnoreCase("API"))) {
-            if (importBatchRowRepository != null) {
-                try {
-                    java.util.List<com.multiship.backend.model.ImportBatchRow> rows = importBatchRowRepository.findByImportBatchId(batch.getId());
-                    log.info("parseBatchRows: batch {} (source: {}) fetched {} rows from import_batch_row",
-                            batch.getId(), batch.getSource(), rows.size());
-                    return rows.stream().map(this::convertToOrderImportRowDTO).toList();
-                } catch (Exception e) {
-                    log.warn("parseBatchRows: error fetching rows for batch {} from import_batch_row: {}", batch.getId(), e.getMessage());
-                    return java.util.List.of();
-                }
-            } else {
-                log.warn("parseBatchRows: importBatchRowRepository is null for batch {} (source: {})", batch.getId(), batch.getSource());
+        // A file import saved before V86 keeps its rows in rows_json until it is
+        // moved (the startup backfill, or its next write).
+        if (StringUtils.hasText(batch.getRowsJson()) && importObjectMapper != null) {
+            try {
+                return importObjectMapper.readValue(
+                        batch.getRowsJson(),
+                        new com.fasterxml.jackson.core.type.TypeReference<List<OrderImportRowDTO>>() {});
+            } catch (Exception e) {
                 return java.util.List.of();
             }
         }
+        // Every import's rows, in row order.
+        if (rowStore != null && batch.getId() != null) {
+            return new ArrayList<>(rowStore.load(batch.getId()));
+        }
+        // No row store (hand-built unit tests): WMS/API rows through the repository.
+        if (isApiSource(batch.getSource()) && importBatchRowRepository != null) {
+            try {
+                return importBatchRowRepository.findByImportBatchId(batch.getId()).stream()
+                        .map(this::convertToOrderImportRowDTO).toList();
+            } catch (Exception e) {
+                log.warn("parseBatchRows: error fetching rows for batch {} from import_batch_row: {}", batch.getId(), e.getMessage());
+            }
+        }
+        return java.util.List.of();
+    }
 
-        // For CSV/manual imports, parse from rowsJson
-        if (batch.getRowsJson() == null || importObjectMapper == null) {
-            return java.util.List.of();
+    /**
+     * Store an import's rows: in import_batch_row — only the rows that changed —
+     * and the old rows_json blob is dropped. Without a row store (hand-built
+     * unit tests) they go to rows_json as before. The batch needs its id.
+     */
+    private void storeRows(com.multiship.backend.model.ImportBatch batch, List<OrderImportRowDTO> rows) {
+        if (rowStore != null && batch.getId() != null) {
+            rowStore.store(batch.getId(), rows);
+            batch.setRowsJson(null);
+            return;
         }
         try {
-            return importObjectMapper.readValue(
-                    batch.getRowsJson(),
-                    new com.fasterxml.jackson.core.type.TypeReference<List<OrderImportRowDTO>>() {});
-        } catch (Exception e) {
-            return java.util.List.of();
+            batch.setRowsJson(importObjectMapper != null ? importObjectMapper.writeValueAsString(rows) : "[]");
+        } catch (Exception ex) {
+            log.warn("Import batch {} rowsJson serialisation failed — keeping prior payload: {}", batch.getId(), ex.getMessage());
         }
     }
 
@@ -2682,13 +2698,9 @@ public class OrderImportServiceImpl implements OrderImportService {
                 for (OrderImportRowDTO row : safe) row.setBatchId(labelBatch);
             }
             batch.setLabelBatchId(labelBatch);
-            try {
-                batch.setRowsJson(importObjectMapper != null
-                        ? importObjectMapper.writeValueAsString(safe) : "[]");
-            } catch (Exception e) {
-                batch.setRowsJson("[]");
-            }
+            if (rowStore == null) storeRows(batch, safe);   // rows_json goes in with the batch
             batch = importBatchRepository.save(batch);
+            if (rowStore != null) storeRows(batch, safe);   // import_batch_row needs the batch's id
             batchId = batch.getId();
         }
 
@@ -3022,8 +3034,11 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (importBatchRepository == null || id == null) return null;
         com.multiship.backend.model.ImportBatch b = importBatchRepository.findById(id).orElse(null);
         if (b == null) return null;
-        // ponytail: still parses the whole batch per page (rows_json); the row table
-        // (import_batch_row for every source) lets this become an indexed query.
+        // Rows in import_batch_row: a page, its counts and its order checks are SQL.
+        if (rowStore != null && !StringUtils.hasText(b.getRowsJson())) {
+            return historyRowsFromStore(id, view, q, rowNumber, page, size);
+        }
+        // Rows still in rows_json (not moved yet): filtered in memory.
         List<OrderImportRowDTO> rows = new ArrayList<>(parseBatchRows(b));
         requireMatch(firstClientCode(rows));
         // The statuses the filters read: a label voided since generation is not live.
@@ -3067,6 +3082,37 @@ public class OrderImportServiceImpl implements OrderImportService {
                 .clientCodes(rows.stream().map(OrderImportRowDTO::getClientCode).filter(StringUtils::hasText)
                         .map(c -> c.trim().toUpperCase(Locale.ROOT)).distinct().sorted().toList())
                 .build();
+    }
+
+    private com.multiship.backend.dto.ImportBatchRowsPageDTO historyRowsFromStore(Long id, String view, String q, Integer rowNumber,
+                                                                                int page, int size) {
+        requireMatch(rowStore.firstClientCode(id));
+        // A label voided since generation (from the Orders page too) is not live.
+        java.util.Set<Integer> voided = voidedOrders(rowStore.labelledOrders(id));
+        int pageSize = Math.min(Math.max(size, 1), MAX_ROWS_PAGE);
+        ImportBatchRowStore.Page pg = rowStore.page(id, view, q, voided, page, pageSize);
+        List<OrderImportRowDTO> rows = new ArrayList<>(pg.rows());
+        long total = pg.total();
+        if (rowNumber != null) {
+            OrderImportRowDTO one = rowStore.row(id, rowNumber);
+            rows = one == null ? new ArrayList<>() : new ArrayList<>(List.of(one));
+            total = rows.size();
+        }
+        applyLiveLabelStatus(rows);
+        // An order ships as one: a clean line waits for its order's first broken line.
+        java.util.function.Predicate<OrderImportRowDTO> clean = r -> r.getErrors() == null || r.getErrors().isEmpty();
+        Map<String, Integer> brokenBy = rowStore.firstBrokenRow(id, rows.stream().filter(clean)
+                .map(OrderImportRowDTO::getOrderRef).filter(StringUtils::hasText).map(String::trim).distinct().toList());
+        for (OrderImportRowDTO r : rows) {
+            if (clean.test(r) && StringUtils.hasText(r.getOrderRef())) r.setOrderBlockedBy(brokenBy.get(r.getOrderRef().trim()));
+            if (r.getGeneratedOrderNo() != null && "GENERATED".equalsIgnoreCase(r.getGeneratedStatus())
+                    && !StringUtils.hasText(r.getLabelUrl())) {
+                r.setLabelUrl("/api/v1/orders/" + r.getGeneratedOrderNo() + "/label/pdf");
+            }
+        }
+        return com.multiship.backend.dto.ImportBatchRowsPageDTO.builder()
+                .rows(rows).total(total).all(pg.all()).attention(pg.attention()).pending(pg.pending())
+                .clientCodes(pg.clientCodes()).build();
     }
 
     /**
@@ -3493,19 +3539,10 @@ public class OrderImportServiceImpl implements OrderImportService {
         // its labels belong to. Keep any prior id if this run generated none.
         Integer labelBatchId = firstBatchId(rows);
         if (labelBatchId != null) batch.setLabelBatchId(labelBatchId);
-        // Persist generation results to ImportBatchRow so they survive a page refresh
-        persistGenerationResults(id, rows);
+        // The generation results, so they survive a page refresh.
+        if (rowStore == null) persistGenerationResults(id, rows);   // unit tests: WMS rows via the repository
         stampOwner(batch, rows);
-        try {
-            if (importObjectMapper != null) batch.setRowsJson(importObjectMapper.writeValueAsString(rows));
-        } catch (Exception ex) {
-            // Sprint 50 PR N post-audit #12 — was `ignore`; that hid every
-            // serialisation failure. If rowsJson silently stops reflecting
-            // the latest outcomes, data-history rows drift with no
-            // diagnostic. Log so ops can trace regressions.
-            log.warn("Import batch {} rowsJson serialisation failed — keeping prior payload: {}",
-                    id, ex.getMessage());
-        }
+        if (rowStore != null || !isApiSource(batch.getSource())) storeRows(batch, rows);
         batch = importBatchRepository.save(batch);
         // Terminal-state notification — SSE subscribers on the FE
         // update instantly instead of waiting for the 4s auto-poll.
@@ -3683,7 +3720,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         boolean isWmsOrApi = batch.getSource() != null &&
                 (batch.getSource().equalsIgnoreCase("WMS") || batch.getSource().equalsIgnoreCase("API"));
 
-        if (isWmsOrApi && importBatchRowRepository != null) {
+        if (isWmsOrApi && importBatchRowRepository != null && rowStore == null) {
             List<com.multiship.backend.model.ImportBatchRow> dbRows = importBatchRowRepository.findByImportBatchId(id);
             for (int i = 0; i < rows.size() && i < dbRows.size(); i++) {
                 OrderImportRowDTO validatedRow = rows.get(i);
@@ -3736,6 +3773,8 @@ public class OrderImportServiceImpl implements OrderImportService {
         int failed = (int) rows.stream().filter(r -> "FAILED".equalsIgnoreCase(r.getGeneratedStatus())).count();
         batch.setStatus(deriveGenerationStatus(total, generated, failed, invalid));
         stampOwner(batch, rows);
+        // The re-validated errors are stored: a file batch's used to live only in the answer.
+        if (rowStore != null || !isWmsOrApi) storeRows(batch, rows);
         batch = importBatchRepository.save(batch);
 
         log.info("Batch {} validated: {} rows, {} valid, {} invalid → {}", id, total, total - invalid, invalid, batch.getStatus());
@@ -4091,19 +4130,10 @@ public class OrderImportServiceImpl implements OrderImportService {
         stampCompletionIfTerminal(batch);
         Integer labelBatchId = firstBatchId(rows);
         if (labelBatchId != null) batch.setLabelBatchId(labelBatchId);
-        // Persist generation results to ImportBatchRow so they survive a page refresh
-        persistGenerationResults(id, rows);
+        // The generation results, so they survive a page refresh.
+        if (rowStore == null) persistGenerationResults(id, rows);   // unit tests: WMS rows via the repository
         stampOwner(batch, rows);
-        try {
-            if (importObjectMapper != null) batch.setRowsJson(importObjectMapper.writeValueAsString(rows));
-        } catch (Exception ex) {
-            // Sprint 50 PR N post-audit #12 — was `ignore`; that hid every
-            // serialisation failure. If rowsJson silently stops reflecting
-            // the latest outcomes, data-history rows drift with no
-            // diagnostic. Log so ops can trace regressions.
-            log.warn("Import batch {} rowsJson serialisation failed — keeping prior payload: {}",
-                    id, ex.getMessage());
-        }
+        if (rowStore != null || !isApiSource(batch.getSource())) storeRows(batch, rows);
         batch = importBatchRepository.save(batch);
 
         log.info("Import batch {} row {} label ({}): {} → batch {} (labelBatch {})",
@@ -4189,8 +4219,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                 (batch.getSource().equalsIgnoreCase("WMS") || batch.getSource().equalsIgnoreCase("API"));
 
         List<OrderImportRowDTO> rows = new ArrayList<>();
-        if (isWmsOrApi) {
-            // For WMS/API batches, fetch from import_batch_row table
+        if (isWmsOrApi || rowStore != null) {
             rows = new ArrayList<>(parseBatchRows(batch));
         } else {
             // For CSV/manual batches, parse from rowsJson
@@ -4279,8 +4308,11 @@ public class OrderImportServiceImpl implements OrderImportService {
         // completedAt stands (it read "completed just now" after every edit).
         batch.setStatus(deriveGenerationStatus(total, generated, failed, invalid));
 
-        // Save rows back to appropriate storage
-        if (isWmsOrApi && importBatchRowRepository != null) {
+        // Save rows back: every row the edit changed (a whole order follows an edit).
+        if (rowStore != null) {
+            stampOwner(batch, rows);
+            storeRows(batch, rows);
+        } else if (isWmsOrApi && importBatchRowRepository != null) {
             // For WMS/API batches, update import_batch_row table
             try {
                 com.multiship.backend.model.ImportBatchRow dbRow = importBatchRowRepository

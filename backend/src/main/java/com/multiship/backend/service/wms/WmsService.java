@@ -295,6 +295,8 @@ public class WmsService {
         row.setCountryCode(dto.getCountryCode());
         row.setCarrierCode(dto.getCarrierCode());
         row.setServiceType(dto.getServiceType());
+        row.setShipViaCode(dto.getShipViaCode());
+        row.setShipViaNote(dto.getShipViaNote());
         row.setAccountNumber(dto.getAccountNumber());
         row.setPackageType(dto.getPackageType());
         row.setWeight(dto.getWeight());

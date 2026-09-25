@@ -29,6 +29,19 @@ public interface ImportBatchRepository extends JpaRepository<ImportBatch, Long>,
             + "WHERE b.createdAt < :cutoff AND b.rowsJson IS NOT NULL")
     int nullifyRowsJsonOlderThan(@Param("cutoff") LocalDateTime cutoff);
 
+    /** File imports still holding their rows in rows_json (not moved to import_batch_row yet), oldest first. */
+    @Query("SELECT b.id FROM ImportBatch b WHERE b.rowsJson IS NOT NULL ORDER BY b.id")
+    List<Long> findIdsWithRowsJson();
+
+    /**
+     * Drop a moved batch's rows_json — only if it is still the payload that was
+     * moved (md5 of what was read), so a write in between is never lost.
+     */
+    @Modifying
+    @org.springframework.transaction.annotation.Transactional
+    @Query(value = "UPDATE import_batch SET rows_json = NULL WHERE id = :id AND md5(rows_json) = :md5", nativeQuery = true)
+    int clearRowsJsonIfUnchanged(@Param("id") Long id, @Param("md5") String md5);
+
     /**
      * Audit R2 #330 — nightly retention: hard-delete batches created
      * before {@code cutoff}.
@@ -97,14 +110,24 @@ public interface ImportBatchRepository extends JpaRepository<ImportBatch, Long>,
      * that are already in Import history.
      */
     @org.springframework.data.jpa.repository.Query(value = """
-        SELECT DISTINCT ON (UPPER(x->>'orderRef')) UPPER(x->>'orderRef') AS ref, b.id
-        FROM import_batch b
-        CROSS JOIN LATERAL jsonb_array_elements(
-            CASE WHEN jsonb_typeof(CAST(b.rows_json AS jsonb)) = 'array'
-                 THEN CAST(b.rows_json AS jsonb) ELSE CAST('[]' AS jsonb) END) x
-        WHERE b.deleted_at IS NULL
-          AND UPPER(x->>'orderRef') IN (:refs)
-        ORDER BY UPPER(x->>'orderRef'), b.id DESC
+        SELECT DISTINCT ON (ref) ref, id FROM (
+            SELECT UPPER(r.order_ref) AS ref, b.id
+            FROM import_batch b
+            JOIN import_batch_row r ON r.import_batch_id = b.id
+            WHERE b.deleted_at IS NULL
+              AND UPPER(COALESCE(b.source, 'BULK')) NOT IN ('WMS', 'API')
+              AND UPPER(r.order_ref) IN (:refs)
+            UNION ALL
+            SELECT UPPER(x->>'orderRef') AS ref, b.id
+            FROM import_batch b
+            CROSS JOIN LATERAL jsonb_array_elements(
+                CASE WHEN jsonb_typeof(CAST(b.rows_json AS jsonb)) = 'array'
+                     THEN CAST(b.rows_json AS jsonb) ELSE CAST('[]' AS jsonb) END) x
+            WHERE b.deleted_at IS NULL
+              AND b.rows_json IS NOT NULL
+              AND UPPER(x->>'orderRef') IN (:refs)
+        ) held
+        ORDER BY ref, id DESC
         """, nativeQuery = true)
     List<Object[]> findBatchesHoldingOrderRefs(
             @org.springframework.data.repository.query.Param("refs") java.util.Collection<String> refs);
