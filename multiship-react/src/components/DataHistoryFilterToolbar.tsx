@@ -25,7 +25,7 @@ export const BATCH_STATUS: Record<string, { label: string; hint: string; cls: st
   DRAFT: { label: 'Draft', hint: 'Saved with rows still to fix', cls: 'bg-orange-50 text-orange-700 ring-orange-200', dot: 'bg-orange-500' },
   INITIATE: { label: 'Saved · not generated', hint: 'Valid, no labels bought yet', cls: 'bg-slate-100 text-slate-600 ring-slate-200', dot: 'bg-slate-400' },
   IN_PROGRESS: { label: 'In progress', hint: 'Labels being bought now', cls: 'bg-sky-50 text-sky-700 ring-sky-200', dot: 'bg-sky-500' },
-  PARTIAL_COMPLETE: { label: 'Partial complete', hint: 'Some rows failed', cls: 'bg-amber-50 text-amber-700 ring-amber-200', dot: 'bg-amber-400' },
+  PARTIAL_COMPLETE: { label: 'Partially Generated', hint: 'Some rows failed', cls: 'bg-amber-50 text-amber-700 ring-amber-200', dot: 'bg-amber-400' },
   COMPLETE: { label: 'Complete', hint: 'Every label generated', cls: 'bg-emerald-50 text-emerald-700 ring-emerald-200', dot: 'bg-emerald-500' },
   FAILED: { label: 'Failed', hint: 'The run did not finish', cls: 'bg-rose-50 text-rose-700 ring-rose-200', dot: 'bg-rose-500' },
   CANCELLED: { label: 'Cancelled', hint: 'Stopped by an operator', cls: 'bg-amber-50 text-amber-700 ring-amber-200', dot: 'bg-amber-400' },
