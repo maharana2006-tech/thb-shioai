@@ -111,22 +111,52 @@ public class BulkBatchQueryService {
     @Transactional(readOnly = true)
     public Summary summary(View view) {
         Specification<ImportBatch> base = visible(view);
+        // One aggregation query for all counts (was 11 separate count(*) calls, one per
+        // bucket — dominant cost of every DataHistoryPage load). Hibernate emits
+        // SUM(CASE WHEN ... THEN 1 ELSE 0 END) which Postgres plans as a single seq/index
+        // scan with per-row branching, same shape as count(*) FILTER (WHERE ...).
+        CriteriaBuilder cb = entityManager.getCriteriaBuilder();
+        jakarta.persistence.criteria.CriteriaQuery<jakarta.persistence.Tuple> cq = cb.createTupleQuery();
+        Root<ImportBatch> root = cq.from(ImportBatch.class);
+        Expression<String> statusUpper = cb.upper(root.get("status"));
+        Expression<Integer> invalid = root.get("invalidRows");
+        LocalDateTime weekAgo = LocalDateTime.now().minusDays(7);
+
+        List<jakarta.persistence.criteria.Selection<?>> sel = new ArrayList<>();
+        for (String s : STATUSES) {
+            sel.add(cb.sum(cb.<Long>selectCase()
+                    .when(cb.equal(statusUpper, s), 1L).otherwise(0L)).alias("st_" + s));
+        }
+        sel.add(cb.count(root).alias("total"));
+        sel.add(cb.sum(cb.<Long>selectCase()
+                .when(cb.and(cb.equal(statusUpper, "INITIATE"), cb.equal(invalid, 0)), 1L)
+                .otherwise(0L)).alias("ready"));
+        sel.add(cb.sum(cb.<Long>selectCase()
+                .when(cb.or(statusUpper.in("DRAFT", "FAILED"), cb.greaterThan(invalid, 0)), 1L)
+                .otherwise(0L)).alias("needsFixes"));
+        sel.add(cb.sum(cb.<Long>selectCase()
+                .when(cb.and(cb.equal(statusUpper, "COMPLETE"),
+                             cb.greaterThanOrEqualTo(root.<LocalDateTime>get("completedAt"), weekAgo)), 1L)
+                .otherwise(0L)).alias("doneThisWeek"));
+
+        cq.multiselect(sel);
+        cq.where(base.toPredicate(root, cq, cb));
+        jakarta.persistence.Tuple t = entityManager.createQuery(cq).getSingleResult();
+
         Map<String, Long> byStatus = new LinkedHashMap<>();
         for (String s : STATUSES) {
-            long n = repository.count(base.and(statusIs(s)));
-            if (n > 0) byStatus.put(s, n);
+            long n = asLong(t.get("st_" + s));
+            if (n > 0) byStatus.put(s, n);   // preserve prior contract: only non-zero buckets appear
         }
-        long total = repository.count(base);
+        long total = asLong(t.get("total"));
         byStatus.put("ALL", total);
-        long ready = repository.count(base.and(statusIs("INITIATE"))
-                .and((r, q, cb) -> cb.equal(r.get("invalidRows"), 0)));
-        long needsFixes = repository.count(base.and((r, q, cb) -> cb.or(
-                cb.upper(r.get("status")).in("DRAFT", "FAILED"), cb.greaterThan(r.get("invalidRows"), 0))));
-        long doneThisWeek = repository.count(base.and(statusIs("COMPLETE"))
-                .and((r, q, cb) -> cb.greaterThanOrEqualTo(r.get("completedAt"), LocalDateTime.now().minusDays(7))));
-        List<String> creators = creators(base);
-        return new Summary(total, ready, byStatus.getOrDefault("IN_PROGRESS", 0L), needsFixes, doneThisWeek,
-                byStatus, creators);
+        return new Summary(total, asLong(t.get("ready")), byStatus.getOrDefault("IN_PROGRESS", 0L),
+                asLong(t.get("needsFixes")), asLong(t.get("doneThisWeek")),
+                byStatus, creators(base));
+    }
+
+    private static long asLong(Object v) {
+        return v instanceof Number n ? n.longValue() : 0L;
     }
 
     /**
@@ -213,10 +243,6 @@ public class BulkBatchQueryService {
             scope.ifPresent(s -> p.add(cb.equal(cb.upper(root.get("clientCode")), s.trim().toUpperCase(Locale.ROOT))));
             return cb.and(p.toArray(Predicate[]::new));
         };
-    }
-
-    private static Specification<ImportBatch> statusIs(String status) {
-        return (root, query, cb) -> cb.equal(cb.upper(root.get("status")), status);
     }
 
     /** The toolbar's filters. Search matches the file name, the creator, "#id" and the label batch number. */
