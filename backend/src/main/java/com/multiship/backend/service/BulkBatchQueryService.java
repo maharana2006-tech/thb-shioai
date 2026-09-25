@@ -199,12 +199,7 @@ public class BulkBatchQueryService {
             perBatch.add(orders);
             allOrders.addAll(orders.keySet());
         }
-        java.util.Set<Integer> voided = new java.util.HashSet<>();
-        if (trackingRepository != null && !allOrders.isEmpty()) {
-            for (var tr : trackingRepository.findByOrderNoIn(allOrders)) {
-                if ("VOIDED".equalsIgnoreCase(tr.getStatus())) voided.add(tr.getOrderNo());
-            }
-        }
+        java.util.Set<Integer> voided = voidedOrdersOfBatches(content, allOrders);
         for (int i = 0; i < content.size(); i++) {
             jakarta.persistence.Tuple t = tuples.get(i);
             ImportBatchDTO d = content.get(i);
@@ -219,6 +214,44 @@ public class BulkBatchQueryService {
             d.setLabelsFailed(failed);
             d.setLabelsPending(Math.max(0, d.getTotalRows() - generated - failed));
         }
+    }
+
+    /** SQL literal: a label_orders map of digit keys to integers. */
+    private static final String LABEL_MAP_SHAPE =
+            "'^\\{\\s*(\"[0-9]+\"\\s*:\\s*[0-9]+\\s*(,\\s*\"[0-9]+\"\\s*:\\s*[0-9]+\\s*)*)?\\}$'";
+
+    /**
+     * The orders of these batches that were voided since generation. The
+     * database expands each batch's label_orders map and joins it to the
+     * tracking rows itself — only the page's batch ids go over the wire. It
+     * sent every labelled order number of the page (tens of thousands for a
+     * client's big batches) in one IN list.
+     */
+    private java.util.Set<Integer> voidedOrdersOfBatches(List<ImportBatchDTO> content, java.util.Set<Integer> allOrders) {
+        java.util.Set<Integer> voided = new java.util.HashSet<>();
+        if (allOrders.isEmpty()) return voided;
+        if (entityManager != null) {
+            // Only maps of the shape this code writes — {"906976": 1, …} — are cast
+            // (inside the CASE, so no plan can cast first): a failed cast would abort
+            // this read-only transaction. Any other map simply counts no voids.
+            List<?> hits = entityManager.createNativeQuery(
+                            "SELECT DISTINCT CAST(e.key AS INTEGER) FROM import_batch b "
+                                    + "CROSS JOIN LATERAL jsonb_each_text(CASE WHEN b.label_orders ~ " + LABEL_MAP_SHAPE
+                                    + " THEN CAST(b.label_orders AS jsonb) END) e "
+                                    + "JOIN order_label_tracking t ON t.order_no = CAST(e.key AS INTEGER) "
+                                    + "WHERE b.id IN (:ids) "
+                                    + "AND UPPER(t.status) = 'VOIDED'")
+                    .setParameter("ids", content.stream().map(ImportBatchDTO::getId).toList())
+                    .getResultList();
+            for (Object o : hits) voided.add(((Number) o).intValue());
+            return voided;
+        }
+        if (trackingRepository != null) {
+            for (var tr : trackingRepository.findByOrderNoIn(allOrders)) {
+                if ("VOIDED".equalsIgnoreCase(tr.getStatus())) voided.add(tr.getOrderNo());
+            }
+        }
+        return voided;
     }
 
     private static int orZero(Integer v) { return v == null ? 0 : v; }
