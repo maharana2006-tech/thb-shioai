@@ -1,6 +1,7 @@
 package com.multiship.backend.controller;
 
 import com.multiship.backend.dto.ApiResponse;
+import com.multiship.backend.dto.CarrierShippingLimitActiveRequest;
 import com.multiship.backend.dto.CarrierShippingLimitRequest;
 import com.multiship.backend.dto.CarrierShippingLimitResponse;
 import com.multiship.backend.service.CarrierLimitAdminService;
@@ -12,6 +13,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -92,15 +94,26 @@ public class CarrierLimitAdminController {
                     .map(dto -> ResponseEntity.ok(ok("Row updated.", dto)))
                     .orElseGet(() -> notFound(id));
         } catch (org.springframework.orm.ObjectOptimisticLockingFailureException race) {
-            // Audit R2 #377 — another admin bumped the version between our
-            // read + save. 409 with dedicated errorCode so the FE prompts
-            // refresh + retry.
-            return ResponseEntity.status(409).body(ApiResponse.<CarrierShippingLimitResponse>builder()
-                    .status("ERROR").code(409).timestamp(LocalDateTime.now())
-                    .errorCode(com.multiship.backend.dto.ErrorCode.CARRIER_LIMIT_CONCURRENT_EDIT.name())
-                    .message("This carrier limit row was changed by another admin — "
-                            + "refresh the page and re-apply your edits.")
-                    .build());
+            return concurrentEdit();
+        }
+    }
+
+    @Operation(summary = "Toggle only the active flag",
+            description = "Audit L4 #376 — dedicated PATCH so the FE row-level activate/deactivate button "
+                    + "no longer round-trips every other field on the row. Removes the race where a second "
+                    + "admin's mid-edit of maxPackages / notes / etc. got silently overwritten by the toggler's "
+                    + "stale snapshot. Same 409 CARRIER_LIMIT_CONCURRENT_EDIT semantics as PUT when two admins "
+                    + "race on the toggle itself (audit R2 #377).")
+    @PatchMapping("/{id}/active")
+    public ResponseEntity<ApiResponse<CarrierShippingLimitResponse>> setActive(
+            @PathVariable Long id,
+            @Valid @RequestBody CarrierShippingLimitActiveRequest body) {
+        try {
+            return service.setActive(id, body.getActive())
+                    .map(dto -> ResponseEntity.ok(ok("Row " + (body.getActive() ? "activated" : "deactivated") + ".", dto)))
+                    .orElseGet(() -> notFound(id));
+        } catch (org.springframework.orm.ObjectOptimisticLockingFailureException race) {
+            return concurrentEdit();
         }
     }
 
@@ -121,6 +134,21 @@ public class CarrierLimitAdminController {
         return ApiResponse.<CarrierShippingLimitResponse>builder()
                 .status("SUCCESS").code(200).timestamp(LocalDateTime.now())
                 .message(msg).data(dto).build();
+    }
+
+    /**
+     * Audit R2 #377 shared 409 shape — used by both PUT (update) and PATCH
+     * (setActive). Another admin bumped the {@code @Version} between our
+     * read + save; the FE picks up {@code CARRIER_LIMIT_CONCURRENT_EDIT}
+     * on the errorCode and prompts a refresh + retry.
+     */
+    private static ResponseEntity<ApiResponse<CarrierShippingLimitResponse>> concurrentEdit() {
+        return ResponseEntity.status(409).body(ApiResponse.<CarrierShippingLimitResponse>builder()
+                .status("ERROR").code(409).timestamp(LocalDateTime.now())
+                .errorCode(com.multiship.backend.dto.ErrorCode.CARRIER_LIMIT_CONCURRENT_EDIT.name())
+                .message("This carrier limit row was changed by another admin — "
+                        + "refresh the page and re-apply your edits.")
+                .build());
     }
 
     /**

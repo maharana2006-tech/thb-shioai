@@ -155,6 +155,40 @@ class CarrierLimitAdminServiceTest {
         verify(resolver, times(0)).invalidateCache();
     }
 
+    // ===== setActive (audit L4 #376) =====
+
+    @Test
+    void setActive_flipsOnlyActive_leavesOtherFieldsUntouched() {
+        // Existing row has maxPackages=20, notes="seeded" — a concurrent
+        // full-payload PUT would risk stomping these with a stale copy.
+        // setActive must only touch `active` on the loaded entity.
+        CarrierShippingLimit existing = fixture();
+        existing.setId(7L);
+        when(repository.findById(7L)).thenReturn(Optional.of(existing));
+        when(repository.save(any(CarrierShippingLimit.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Optional<CarrierShippingLimitResponse> out = service.setActive(7L, false);
+
+        assertTrue(out.isPresent());
+        assertEquals(Boolean.FALSE, out.get().getActive());
+        // Every other field survives unchanged.
+        assertEquals("UPS", out.get().getCarrierCode());
+        assertEquals("UPS_GROUND", out.get().getServiceCode());
+        assertEquals(20, out.get().getMaxPackages());
+        assertEquals("seeded", out.get().getNotes());
+        verify(resolver, times(1)).invalidateCache();
+    }
+
+    @Test
+    void setActive_missing_returnsEmpty_andDoesNotInvalidate() {
+        when(repository.findById(99L)).thenReturn(Optional.empty());
+
+        Optional<CarrierShippingLimitResponse> out = service.setActive(99L, true);
+
+        assertTrue(out.isEmpty());
+        verify(resolver, times(0)).invalidateCache();
+    }
+
     // ===== delete =====
 
     @Test

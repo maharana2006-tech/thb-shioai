@@ -61,21 +61,15 @@ export default function CarrierShippingLimitsPage() {
     })
   }, [rows, filterCarrier, filterScope])
 
+  // Audit L4 #376 — dedicated PATCH so the toggle never round-trips
+  // maxPackages / notes / etc. picked from the local snapshot. If a
+  // second admin edited any of those between our load and this click,
+  // their edit survives — the previous full-payload PUT would silently
+  // overwrite it with our stale copy.
   const toggleActive = async (row: CarrierShippingLimit) => {
     const nextActive = !row.active
     try {
-      await carrierShippingLimitService.update(row.id, {
-        carrierCode: row.carrierCode,
-        serviceCode: row.serviceCode,
-        scope: row.scope,
-        direction: row.direction,
-        maxPackages: row.maxPackages,
-        maxCommodities: row.maxCommodities,
-        maxTotalWeightLb: row.maxTotalWeightLb,
-        freeDeclaredValue: row.freeDeclaredValue,
-        active: nextActive,
-        notes: row.notes,
-      })
+      await carrierShippingLimitService.setActive(row.id, nextActive)
       notify.success(nextActive
         ? `Activated ${row.carrierCode}/${row.serviceCode ?? '(default)'} row.`
         : `Deactivated ${row.carrierCode}/${row.serviceCode ?? '(default)'} row.`)
