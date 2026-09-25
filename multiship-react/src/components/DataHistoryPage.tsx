@@ -57,7 +57,7 @@ import {
 } from '../api/orderImportService'
 import { useAppSession } from '../hooks/useAppSession'
 import { useEventStream } from '../hooks/useEventStream'
-import { useHistoryFilters } from '../hooks/useHistoryFilters'
+import { useHistoryFilters, type HistorySortKey } from '../hooks/useHistoryFilters'
 import { useTrashActions } from '../hooks/useTrashActions'
 import { useLatestRequest } from '../hooks/useLatestRequest'
 import { useDismissable } from '../hooks/useDismissable'
@@ -354,7 +354,7 @@ export default function DataHistoryPage() {
    * "X of N" the moment they expand a row; the number won't tick
    * live but they get an accurate reading each expand + on Refresh.
    */
-  const ensureRows = (id: number) => {
+  const ensureRows = (id: number, rowsLoaded = false) => {
     const batch = batches.find((b) => b.id === id)
     const isRunning = (batch?.status || '').toUpperCase() === 'IN_PROGRESS'
     if (isRunning) {
@@ -369,7 +369,7 @@ export default function DataHistoryPage() {
         }
       }).catch(() => { /* progress is a nice-to-have; a failed snapshot doesn't matter */ })
     }
-    if (rowsById[id]) return
+    if (rowsLoaded || rowsById[id]) return
     setRowsById((m) => ({ ...m, [id]: 'loading' }))
     orderImportService
       .getHistory(id)
@@ -382,20 +382,25 @@ export default function DataHistoryPage() {
 
   /** File imports, API/WMS fetches, or Trash (deleted batches of either kind). */
   const listView: BulkView = viewTrash ? 'TRASH' : isApiTab ? 'API' : 'FILE'
-  const fetchBatches = async (): Promise<{ data: ImportBatchSummary[]; page?: { total: number; pages: number }; summary?: BulkSummary | null }> => {
-    // The batch page's "list" is that one batch (live or in Trash, any source).
+  /** The view whose summary is on screen — it depends on the view only, not on search, filters or page. */
+  const [summaryFor, setSummaryFor] = useState<string | null>(null)
+  const fetchBatches = async (fresh = true): Promise<{ data: ImportBatchSummary[]; rows?: OrderImportRow[]; page?: { total: number; pages: number }; summary?: BulkSummary | null; summaryView?: string }> => {
+    // The batch page's "list" is that one batch (live or in Trash, any source) —
+    // and the same answer carries its rows, so they are not fetched a second time.
     if (batchPageId != null) {
       const res = await orderImportService.getHistory(batchPageId)
-      return { data: res.data ? [res.data as ImportBatchSummary] : [] }
+      return { data: res.data ? [res.data as ImportBatchSummary] : [], rows: res.data?.rows ?? undefined }
     }
+    const needSummary = fresh || summaryFor !== listView
     const [res, sum] = await Promise.all([
       bulkService.listBatches({ view: listView, ...listQuery, page: pageIndex, size: pageSize }),
-      bulkService.summary(listView).catch(() => null),
+      needSummary ? bulkService.summary(listView).catch(() => null) : Promise.resolve(null),
     ])
     return {
       data: res.data?.content ?? [],
       page: { total: res.data?.totalElements ?? 0, pages: Math.max(res.data?.totalPages ?? 1, 1) },
       summary: sum?.data ?? null,
+      summaryView: listView,
     }
   }
   /** Each fetch is numbered; a slower answer for a list the operator has already left is dropped. */
@@ -409,8 +414,13 @@ export default function DataHistoryPage() {
   const applyFetch = (seq: number, view: string, r: Awaited<ReturnType<typeof fetchBatches>>) => {
     if (!latest.isLatest(seq)) return false
     setBatches(r.data)
+    const rows = r.rows
+    if (batchPageId != null && rows) setRowsById((m) => ({ ...m, [batchPageId]: rows }))
     if (r.page) setPageInfo(r.page)
-    if (r.summary) setSummary(r.summary)
+    if (r.summary) {
+      setSummary(r.summary)
+      setSummaryFor(r.summaryView ?? null)
+    }
     setLoadedView(view)
     return true
   }
@@ -440,14 +450,17 @@ export default function DataHistoryPage() {
     }
   }
 
-  const load = async () => {
+  /** fresh=false: only search, filters or paging changed, so the view's summary still holds. */
+  const load = async (fresh = true) => {
+    if (dhView === 'docs') return
     const seq = latest.begin()
     const view = viewKey
     if (batches.length === 0) setLoading(true)
     setRefreshing(true)
     try {
-      if (!applyFetch(seq, view, await fetchBatches())) return
-      if (batchPageId != null) ensureRows(batchPageId)
+      const r = await fetchBatches(fresh)
+      if (!applyFetch(seq, view, r)) return
+      if (batchPageId != null) ensureRows(batchPageId, !!r.rows)
       // Old ?highlight=<id> links: open that batch's page.
       const highlightId = Number(searchParams.get('highlight')) || null
       if (highlightId) navigate(bulkBatchPath(highlightId), { replace: true })
@@ -473,6 +486,7 @@ export default function DataHistoryPage() {
    * blow up the operator's view; the next poll will retry.
    */
   const reloadQuiet = async () => {
+    if (dhView === 'docs') return
     const seq = latest.begin()
     const view = viewKey
     try {
@@ -486,7 +500,7 @@ export default function DataHistoryPage() {
 
   useEffect(() => {
     /* eslint-disable react-hooks/set-state-in-effect -- data fetch on mount + when switching list (file / API / Trash / one batch) */
-    void load()
+    void load(false)
     setConfirmEmpty(false)
     /* eslint-enable react-hooks/set-state-in-effect */
     // eslint-disable-next-line react-hooks/exhaustive-deps -- load/setOpenId/setConfirmEmpty are stable; switching list re-fetches
@@ -1409,7 +1423,7 @@ export default function DataHistoryPage() {
       {
         id: 'labelBatch',
         header: 'Batch',
-        enableSorting: false,
+        enableSorting: true,
         size: 110,
         accessorFn: (b) => b.labelBatchId ?? '',
         cell: ({ row }) => {
@@ -1430,7 +1444,7 @@ export default function DataHistoryPage() {
       {
         id: 'file',
         header: 'File',
-        enableSorting: false,
+        enableSorting: true,
         size: 230,
         accessorFn: (b) => b.fileName ?? '',
         cell: ({ row }) => {
@@ -1474,7 +1488,7 @@ export default function DataHistoryPage() {
       {
         id: 'created',
         header: 'Date',
-        enableSorting: false,
+        enableSorting: true,
         size: 150,
         accessorFn: (b) => b.createdAt ?? '',
         cell: ({ row }) => {
@@ -1499,7 +1513,7 @@ export default function DataHistoryPage() {
       {
         id: 'status',
         header: 'Status',
-        enableSorting: false,
+        enableSorting: true,
         size: 160,
         accessorFn: (b) => b.status ?? '',
         cell: ({ row }) => renderStatusCell(row.original),
@@ -1508,7 +1522,7 @@ export default function DataHistoryPage() {
       {
         id: 'rows',
         header: 'Rows',
-        enableSorting: false,
+        enableSorting: true,
         size: 190,
         accessorFn: (b) => b.totalRows,
         cell: ({ row }) => renderRowsCell(row.original),
@@ -2316,6 +2330,13 @@ export default function DataHistoryPage() {
             toolbarActions={listActions}
             manualPagination
             manualSorting
+            sorting={[{ id: SORT_COLUMN[filters.sortKey] ?? 'created', desc: filters.sortDir === 'DESC' }]}
+            onSortingChange={(next) => {
+              // A header click cycles the column; clearing it goes back to newest first.
+              const s = next[0]
+              filters.setSortKey(s ? (COLUMN_SORT[s.id] ?? 'created') : 'created')
+              filters.setSortDir(s && !s.desc ? 'ASC' : 'DESC')
+            }}
             pageIndex={pageIndex}
             pageSize={pageSize}
             pageCount={pageInfo.pages}
@@ -2430,6 +2451,10 @@ const BULK_TABS: { key: BulkTab; label: string; hint: string; dot: string }[] = 
   { key: 'documents', label: 'Documents', hint: 'Label · invoice · statement', dot: 'bg-sky-500' },
   { key: 'trash', label: 'Trash', hint: 'Deleted batches', dot: 'bg-rose-400' },
 ]
+
+/** Import history's sortable columns ↔ the server's sort keys (the Filters menu's Sort). */
+const COLUMN_SORT: Record<string, HistorySortKey> = { labelBatch: 'labelBatch', file: 'fileName', created: 'created', status: 'status', rows: 'savedRows' }
+const SORT_COLUMN = Object.fromEntries(Object.entries(COLUMN_SORT).map(([col, key]) => [key, col])) as Record<HistorySortKey, string>
 
 /** A row's serviceType error for a ship via code with no carrier service mapped. */
 const UNMAPPED_SHIP_VIA = /serviceType '([^']+)' is (?:not mapped|mapped, but not)/

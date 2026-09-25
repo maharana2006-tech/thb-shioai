@@ -295,6 +295,9 @@ function SortableHeader<T>({
     <th
       ref={setNodeRef}
       style={style}
+      aria-sort={!header.column.getCanSort() ? undefined
+        : header.column.getIsSorted() === 'asc' ? 'ascending'
+          : header.column.getIsSorted() === 'desc' ? 'descending' : 'none'}
       className={`${densityRowClass[density]} relative select-none ${isDragging ? 'z-10' : ''}`}
     >
       <div className="flex items-center gap-1">

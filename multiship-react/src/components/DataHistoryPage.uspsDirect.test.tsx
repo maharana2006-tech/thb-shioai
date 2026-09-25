@@ -634,6 +634,16 @@ describe('Bulk Mailer — layout', () => {
     expect(header).toHaveTextContent('acme_sept.csv')
     expect(screen.getByRole('button', { name: /Bulk Mailer · Import history/i })).toBeInTheDocument()
     expect(getHistory).toHaveBeenCalledWith(121)
+    // A 50k-row batch was fetched twice (header, then rows): once is enough.
+    await new Promise((r) => setTimeout(r, 50))
+    expect(getHistory).toHaveBeenCalledTimes(1)
+  })
+
+  it('the Documents tab does not load the Import history list behind it', async () => {
+    await renderAt('/bulk/documents')
+    await new Promise((r) => setTimeout(r, 50))
+    expect(listBatches).not.toHaveBeenCalled()
+    expect(bulkSummary).not.toHaveBeenCalled()
   })
 
   it('shows exactly the Orders screen\'s columns; the imported fields stay in the Columns menu', async () => {
@@ -667,8 +677,11 @@ describe('Bulk Mailer — layout', () => {
     await renderAt('/bulk/imports')
     await waitFor(() => expect(listBatches).toHaveBeenCalledWith(expect.objectContaining({ view: 'FILE', page: 0, size: 25, sort: 'created', dir: 'DESC' })))
     listBatches.mockClear()
+    bulkSummary.mockClear()
     await userEvent.type(screen.getByPlaceholderText(/Search file name/i), 'acme')
     await waitFor(() => expect(listBatches).toHaveBeenCalledWith(expect.objectContaining({ q: 'acme', page: 0 })), { timeout: 2000 })
+    // The summary depends on the view only: a search does not re-read it.
+    expect(bulkSummary).not.toHaveBeenCalled()
   })
 
 })
