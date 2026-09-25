@@ -2033,7 +2033,7 @@ export default function DataHistoryPage() {
               <div className="pointer-events-none sticky bottom-5 z-30 mt-4 flex justify-center [&>*]:pointer-events-auto">
                 <BatchLabelBar
                   floating
-                  batchId={b.id}
+                  batchSlug={b.slug}
                   rows={list}
                   picked={picked}
                   onPickAllLive={() => setPickedRows((m) => ({ ...m, [b.id]: list.filter(rowIsLive).map((r) => r.rowNumber) }))}
