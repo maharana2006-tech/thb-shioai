@@ -71,7 +71,7 @@ public class UspsQueueImportRowReconciler {
 
     private final ImportBatchRepository importBatchRepository;
     private final ObjectMapper objectMapper;
-    /** Every import's rows (V86). Optional for hand-built tests. */
+    /** Every import's rows (V87). Optional for hand-built tests. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.service.ImportBatchRowStore rowStore;
 

@@ -161,7 +161,7 @@ public class OrderImportServiceImpl implements OrderImportService {
     private ShippingConfigService shippingConfigService;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.fasterxml.jackson.databind.ObjectMapper importObjectMapper;
-    /** Every import's rows (V86). Absent in hand-built unit tests, which keep rows in rows_json. */
+    /** Every import's rows (V87). Absent in hand-built unit tests, which keep rows in rows_json. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ImportBatchRowStore rowStore;
 
@@ -274,13 +274,23 @@ public class OrderImportServiceImpl implements OrderImportService {
         return null;
     }
 
+    /** id → slug for outbound DTOs. Repo can be null in some unit-test
+     *  wiring; returns null in that case (the FE tolerates a missing
+     *  slug and falls back to the numeric id for pre-migration links). */
+    private String lookupBatchSlug(Long id) {
+        if (id == null || importBatchRepository == null) return null;
+        return importBatchRepository.findById(id)
+                .map(com.multiship.backend.model.ImportBatch::getSlug)
+                .orElse(null);
+    }
+
     /** Fetch an ImportBatch's rows from import_batch_row table (WMS imports) or parse from rowsJson (CSV/manual imports).
      *  Returns empty list on any failure. */
     private List<OrderImportRowDTO> parseBatchRows(com.multiship.backend.model.ImportBatch batch) {
         if (batch == null) {
             return java.util.List.of();
         }
-        // A file import saved before V86 keeps its rows in rows_json until it is
+        // A file import saved before V87 keeps its rows in rows_json until it is
         // moved (the startup backfill, or its next write).
         if (StringUtils.hasText(batch.getRowsJson()) && importObjectMapper != null) {
             try {
@@ -4590,6 +4600,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         }
         return com.multiship.backend.dto.ImportBatchDTO.builder()
                 .id(batch.getId())
+                .slug(batch.getSlug())
                 .createdBy(batch.getCreatedBy())
                 .fileName(batch.getFileName())
                 .status(batch.getStatus())
@@ -6876,6 +6887,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                 .savedOrders(up.getSavedOrders())
                 .readyOrders(Math.max(0, up.getValidOrders() - up.getSavedOrders()))
                 .lastSavedBatchId(up.getLastSavedBatchId())
+                .lastSavedBatchSlug(lookupBatchSlug(up.getLastSavedBatchId()))
                 .createdAt(up.getCreatedAt())
                 .expiresAt(up.getCreatedAt() == null ? null : up.getCreatedAt().plusDays(Math.max(1, stagingRetentionDays)))
                 .build();
@@ -6955,6 +6967,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                 .savedOrders(c.savedOrders())
                 .readyOrders(c.readyOrders())
                 .lastSavedBatchId(up.getLastSavedBatchId())
+                .lastSavedBatchSlug(lookupBatchSlug(up.getLastSavedBatchId()))
                 .savedRowNumbers(saved.keySet().stream().sorted().toList())
                 .createdAt(up.getCreatedAt())
                 .expiresAt(up.getCreatedAt() == null ? null : up.getCreatedAt().plusDays(Math.max(1, stagingRetentionDays)))

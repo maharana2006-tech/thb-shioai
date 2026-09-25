@@ -10,6 +10,14 @@ import java.util.List;
 @Builder
 public class ImportBatchDTO {
     private Long id;
+    /**
+     * Opaque URL-safe id. The FE navigates via /bulk/batches/{slug}
+     * and calls /orders/import/history/{slug}; the numeric {@link #id}
+     * is retained for internal cross-references (label counts, print
+     * events) but the FE MUST use this slug for any URL/API surface
+     * so a scoped user can't enumerate other tenants' batches.
+     */
+    private String slug;
     private String createdBy;
     private String createdAt;
     /**

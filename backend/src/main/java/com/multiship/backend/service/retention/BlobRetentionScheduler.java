@@ -50,7 +50,7 @@ public class BlobRetentionScheduler {
     private final GeneratedReportRepository generatedReportRepo;
     private final ImportBatchRepository importBatchRepo;
     private final RetentionProperties props;
-    /** File imports' rows (V86). Optional for hand-built tests. */
+    /** File imports' rows (V87). Optional for hand-built tests. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.service.ImportBatchRowStore importRows;
 

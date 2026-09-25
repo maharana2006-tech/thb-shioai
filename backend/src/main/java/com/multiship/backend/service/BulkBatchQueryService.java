@@ -395,6 +395,7 @@ public class BulkBatchQueryService {
     static ImportBatchDTO summaryOf(ImportBatch b) {
         return ImportBatchDTO.builder()
                 .id(b.getId())
+                .slug(b.getSlug())
                 .createdBy(b.getCreatedBy())
                 .fileName(b.getFileName())
                 .status(b.getStatus())

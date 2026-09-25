@@ -5,12 +5,15 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+import java.security.SecureRandom;
 import java.time.LocalDateTime;
+import java.util.Base64;
 
 /**
  * A saved CSV/XLSX import. "Commit" persists the parsed rows here as a data
@@ -27,6 +30,28 @@ public class ImportBatch {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    /**
+     * Opaque URL-safe identifier. Populated via {@link #ensureSlug()} on
+     * insert if not already set; the FE navigates and calls the API with
+     * this slug so the numeric {@link #id} never leaves the server —
+     * closes the enumeration oracle on {@code GET /orders/import/history/{id}}.
+     * 22 base64url chars = 128 bits of entropy (unguessable).
+     */
+    @Column(name = "slug", length = 22, nullable = false, unique = true, updatable = false)
+    private String slug;
+
+    private static final SecureRandom SLUG_RNG = new SecureRandom();
+    private static final Base64.Encoder SLUG_ENC = Base64.getUrlEncoder().withoutPadding();
+
+    @PrePersist
+    void ensureSlug() {
+        if (slug == null || slug.isBlank()) {
+            byte[] bytes = new byte[16];
+            SLUG_RNG.nextBytes(bytes);
+            slug = SLUG_ENC.encodeToString(bytes);
+        }
+    }
 
     @Column(name = "created_by", length = 120)
     private String createdBy;

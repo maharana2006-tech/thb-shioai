@@ -36,13 +36,15 @@ class WmsControllerTest {
 
     private WmsService wmsService;
     private OrderImportService orderImportService;
+    private com.multiship.backend.repository.ImportBatchRepository importBatchRepository;
     private WmsController controller;
 
     @BeforeEach
     void setUp() {
         wmsService = mock(WmsService.class);
         orderImportService = mock(OrderImportService.class);
-        controller = new WmsController(wmsService, orderImportService);
+        importBatchRepository = mock(com.multiship.backend.repository.ImportBatchRepository.class);
+        controller = new WmsController(wmsService, orderImportService, importBatchRepository);
     }
 
     private UserDetails alice() {

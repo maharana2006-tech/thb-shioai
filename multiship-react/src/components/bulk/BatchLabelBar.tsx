@@ -19,7 +19,7 @@ const MAX_PRINT = 500
  * own answer.
  */
 export default function BatchLabelBar({
-  batchId,
+  batchSlug,
   rows,
   picked,
   onPickAllLive,
@@ -32,7 +32,8 @@ export default function BatchLabelBar({
   onOpenPrinterSettings,
   floating = false,
 }: {
-  batchId: number
+  /** Opaque slug — used for /orders/import/history/{slug} API calls. */
+  batchSlug: string
   rows: OrderImportRow[]
   /** Ticked row numbers. */
   picked: number[]
@@ -117,7 +118,7 @@ export default function BatchLabelBar({
     setVoiding(true)
     try {
       const rowNumbers = scoped ? picked : []
-      const res = (await orderImportService.voidBatchLabels(batchId, rowNumbers)).data
+      const res = (await orderImportService.voidBatchLabels(batchSlug, rowNumbers)).data
       if (!res || res.orders.length === 0) {
         notify.info('There were no live labels left to void.')
       } else if (res.refused === 0) {

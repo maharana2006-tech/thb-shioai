@@ -25,7 +25,7 @@ import java.util.function.BiConsumer;
 import java.util.function.Function;
 
 /**
- * Every import's rows, one record each in import_batch_row (V86) — file
+ * Every import's rows, one record each in import_batch_row (V87) — file
  * imports as well as WMS/API pulls. The batch page reads a page of them in
  * SQL; a write stores only the rows that changed, in JDBC batches (the
  * table's IDENTITY key rules out Hibernate's insert batching).

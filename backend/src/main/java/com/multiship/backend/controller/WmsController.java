@@ -42,6 +42,7 @@ public class WmsController {
 
     private final WmsService wmsService;
     private final OrderImportService orderImportService;
+    private final com.multiship.backend.repository.ImportBatchRepository importBatchRepository;
     /**
      * Slice-2 tenant channel gate. Optional (@Autowired required=false)
      * so pure-Mockito tests that pre-date the guard degrade cleanly
@@ -82,9 +83,12 @@ public class WmsController {
     @Operation(summary = "One API/WMS batch with its shipment rows",
             description = "The full row payload for a single fetch batch, to expand a batch card.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
-    @GetMapping("/batches/{id}")
-    public ResponseEntity<ApiResponse<ImportBatchDTO>> batch(@PathVariable Long id) {
-        ImportBatchDTO dto = orderImportService.historyDetail(id);
+    @GetMapping("/batches/{slug}")
+    public ResponseEntity<ApiResponse<ImportBatchDTO>> batch(@PathVariable String slug) {
+        Long id = importBatchRepository.findBySlug(slug)
+                .map(com.multiship.backend.model.ImportBatch::getId)
+                .orElse(null);
+        ImportBatchDTO dto = id == null ? null : orderImportService.historyDetail(id);
         if (dto == null) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
                     .body(ApiResponse.<ImportBatchDTO>builder()

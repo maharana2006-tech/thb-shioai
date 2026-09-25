@@ -30,6 +30,7 @@ import java.util.Locale;
 public class BulkBatchController {
 
     private final BulkBatchQueryService queryService;
+    private final com.multiship.backend.repository.ImportBatchRepository importBatchRepository;
 
     @Operation(summary = "One page of batches",
             description = "view = FILE (file imports) · API (WMS / external API) · TRASH (deleted, any source). "
@@ -59,11 +60,14 @@ public class BulkBatchController {
 
     @Operation(summary = "One batch's header, as the list shows it",
             description = "Facts, label counts, live orders and last print — never its rows (see "
-                    + "GET /orders/import/history/{id}/rows). Any view, Trash included.")
-    @GetMapping("/batches/{id}")
+                    + "GET /orders/import/history/{slug}/rows). Any view, Trash included. By the batch's "
+                    + "opaque slug; an unknown slug is a 404 like a batch the caller can't see.")
+    @GetMapping("/batches/{slug}")
     @PreAuthorize("hasAnyRole('ADMIN','USER')")
-    public ResponseEntity<ApiResponse<ImportBatchDTO>> batch(@PathVariable Long id) {
-        return queryService.one(id)
+    public ResponseEntity<ApiResponse<ImportBatchDTO>> batch(@PathVariable String slug) {
+        return (slug == null || slug.isBlank() ? java.util.Optional.<com.multiship.backend.model.ImportBatch>empty()
+                        : importBatchRepository.findBySlug(slug))
+                .flatMap(b -> queryService.one(b.getId()))
                 .map(d -> ResponseEntity.ok(ApiResponse.<ImportBatchDTO>builder()
                         .status("success").code(200).message("ok").data(d).build()))
                 .orElseGet(() -> ResponseEntity.status(404).body(ApiResponse.<ImportBatchDTO>builder()

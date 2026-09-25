@@ -19,7 +19,7 @@ import java.util.HexFormat;
 import java.util.List;
 
 /**
- * Moves file imports saved before V86 from rows_json into import_batch_row,
+ * Moves file imports saved before V87 from rows_json into import_batch_row,
  * once, in the background after startup. Each batch is stored, then its
  * rows_json dropped only if unchanged since it was read. Until a batch is
  * moved, the service reads its rows_json as before; its next write moves it

@@ -57,8 +57,8 @@ export const bulkService = {
   listBatches: (q: BulkBatchQuery) =>
     apiClient.get<ApiResponse<BulkBatchPage>>(`/bulk/batches?${bulkQueryString(q)}`),
   /** One batch's header as the list shows it — never its rows. */
-  batch: (id: number) =>
-    apiClient.get<ApiResponse<ImportBatchSummary>>(`/bulk/batches/${id}`),
+  batch: (slug: string) =>
+    apiClient.get<ApiResponse<ImportBatchSummary>>(`/bulk/batches/${slug}`),
   summary: (view: BulkView) =>
     apiClient.get<ApiResponse<BulkSummary>>(`/bulk/summary?view=${view}`),
 }

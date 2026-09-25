@@ -53,6 +53,11 @@ public interface ImportBatchRepository extends JpaRepository<ImportBatch, Long>,
     /** Live (non-deleted) imports, newest first — the normal Data History list. */
     List<ImportBatch> findAllByDeletedAtIsNullOrderByIdDesc();
 
+    /** Slug → batch. The FE receives the slug in every DTO and sends it back
+     *  as the path parameter on {@code /orders/import/history/{slug}}, so the
+     *  numeric {@link ImportBatch#getId() id} never leaves the server. */
+    Optional<ImportBatch> findBySlug(String slug);
+
     /** Soft-deleted imports, newest first — the Trash view. */
     List<ImportBatch> findAllByDeletedAtIsNotNullOrderByIdDesc();
 
