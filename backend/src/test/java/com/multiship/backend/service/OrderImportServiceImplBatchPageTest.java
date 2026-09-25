@@ -192,6 +192,8 @@ class OrderImportServiceImplBatchPageTest {
 
         assertEquals(List.of(2, 4), service.historyRows(121L, "attention", null, null, 0, 50).getRows().stream()
                 .map(OrderImportRowDTO::getRowNumber).toList());
+        assertEquals(List.of(1), service.historyRows(121L, "live", null, null, 0, 50).getRows().stream()
+                .map(OrderImportRowDTO::getRowNumber).toList(), "only the live label — Print's rows");
         var found = service.historyRows(121L, "all", "austin", null, 0, 50);
         assertEquals(1, found.getTotal());
         assertEquals(5, found.getRows().get(0).getRowNumber());

@@ -3037,8 +3037,9 @@ public class OrderImportServiceImpl implements OrderImportService {
         for (OrderImportRowDTO r : rows) if (hasErrors.test(r)) brokenBy.putIfAbsent(groupKeyOf(r), r.getRowNumber());
 
         String needle = q == null ? "" : q.trim().toLowerCase(Locale.ROOT);
+        java.util.function.Predicate<OrderImportRowDTO> live = r -> r.getGeneratedOrderNo() != null && !pending.test(r);
         java.util.function.Predicate<OrderImportRowDTO> inView = "attention".equalsIgnoreCase(view) ? attention
-                : "pending".equalsIgnoreCase(view) ? pending : r -> true;
+                : "pending".equalsIgnoreCase(view) ? pending : "live".equalsIgnoreCase(view) ? live : r -> true;
         java.util.function.Predicate<OrderImportRowDTO> found = needle.isEmpty() ? r -> true : r -> java.util.stream.Stream.of(
                         r.getOrderRef(), r.getReference(), r.getRecipientName(), r.getCity(), r.getClientCode(),
                         r.getGeneratedOrderNo() == null ? null : String.valueOf(r.getGeneratedOrderNo()), r.getGeneratedTrackingNumber())

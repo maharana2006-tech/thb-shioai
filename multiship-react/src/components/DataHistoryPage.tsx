@@ -42,7 +42,8 @@ import LabelPreviewModal from './bulk/LabelPreviewModal'
 // The Orders page's per-order modals, reused on the batch page.
 const OrderDetailsModal = lazy(() => import('./modals/OrderDetailsModal'))
 const TrackingTimelineModal = lazy(() => import('./tracking/TrackingTimelineModal'))
-import { hasCommercialInvoice, labelCountsOf, liveOrdersOf, type LabelCounts } from '../utils/batchLabels'
+import { hasCommercialInvoice, type LabelCounts } from '../utils/batchLabels'
+import { downloadCsv } from '../utils/csv'
 import { printPdfBlob } from '../utils/printPdf'
 import { formatDuration, relativeTime } from '../utils/relativeTime'
 import { orderService, type Order } from '../api/orderService'
@@ -52,6 +53,8 @@ import { notify } from '../utils/notify'
 import { ApiError } from '../api/apiClient'
 import {
   orderImportService,
+  type BatchRowsPage,
+  type BatchRowsView,
   type ImportBatchSummary,
   type OrderImportRow,
 } from '../api/orderImportService'
@@ -155,6 +158,16 @@ export default function DataHistoryPage() {
   /** The import row open in the Fix panel, and whether its save is in flight. */
   const [fixing, setFixing] = useState<{ batchId: number; rowNumber: number } | null>(null)
   const [fixSaving, setFixSaving] = useState(false)
+  /** The batch page's rows come a page at a time: this page, and its filter chips' counts. */
+  const [rowsPage, setRowsPage] = useState<{ id: number; page: BatchRowsPage } | null>(null)
+  /** Bumped when a batch's rows change on the server, so the page is read again. */
+  const [rowsTick, setRowsTick] = useState(0)
+  const [gridPage, setGridPage] = useState(0)
+  const [gridPageSize, setGridPageSize] = useState(25)
+  /** Rows as they were when ticked, by batch — a tick survives turning the page. */
+  const [pickedRowData, setPickedRowData] = useState<Record<number, Record<number, OrderImportRow>>>({})
+  /** The Fix panel's row when it is not on the current page. */
+  const [fixRowOffPage, setFixRowOffPage] = useState<OrderImportRow | null>(null)
   const [trackingOrderNo, setTrackingOrderNo] = useState<number | null>(null)
   const [voidingOrderNo, setVoidingOrderNo] = useState<number | null>(null)
   /** The batch's orders by number — what the rows don't carry (note, created date, tracking link). */
@@ -272,8 +285,7 @@ export default function DataHistoryPage() {
   const [sendBatch, setSendBatch] = useState<number[] | null>(null)
   /** A batch's rows for the list's Print menu — the page's copy when it has one. */
   const rowsOfBatch = async (b: ImportBatchSummary): Promise<OrderImportRow[]> => {
-    const cached = rowsById[b.id]
-    return Array.isArray(cached) ? cached : (await orderImportService.getHistory(b.id)).data?.rows ?? []
+    return (await orderImportService.historyRows(b.id, { view: 'live', size: 5000 })).data?.rows ?? []
   }
   /** busyId: the batch whose row spins; -1 for the selection bar. */
   const printBatchDocs = async (busyId: number, scope: string, orders: number[], docType: 'LABEL' | 'COMMERCIAL_INVOICE') => {
@@ -335,14 +347,13 @@ export default function DataHistoryPage() {
       })
       .catch(() => { /* the rows still render from their own fields */ })
     return () => { gone = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-read when the batch's rows change (a void, a retry)
-  }, [batchPageLabelBatch, batchPageRows])
+    // rowsTick: re-read when the batch's rows change (a void, a retry), not on a page flip
+  }, [batchPageLabelBatch, rowsTick])
 
-  /** Re-read a batch's rows (after a void) and its header counts. */
+  /** A batch's rows changed on the server: its page is read again, and the list's copy is dropped. */
   const reloadRows = (id: number) => {
-    orderImportService.getHistory(id)
-      .then((res) => setRowsById((m) => ({ ...m, [id]: res.data?.rows ?? [] })))
-      .catch((e) => notify.apiError(e, 'Could not reload the rows.'))
+    if (id === batchPageId) setRowsTick((t) => t + 1)
+    else setRowsById((m) => { if (!(id in m)) return m; const next = { ...m }; delete next[id]; return next })
   }
 
   /**
@@ -388,8 +399,8 @@ export default function DataHistoryPage() {
     // The batch page's "list" is that one batch (live or in Trash, any source) —
     // and the same answer carries its rows, so they are not fetched a second time.
     if (batchPageId != null) {
-      const res = await orderImportService.getHistory(batchPageId)
-      return { data: res.data ? [res.data as ImportBatchSummary] : [], rows: res.data?.rows ?? undefined }
+      const res = await bulkService.batch(batchPageId)
+      return { data: res.data ? [res.data] : [] }
     }
     const needSummary = fresh || summaryFor !== listView
     const [res, sum] = await Promise.all([
@@ -460,7 +471,7 @@ export default function DataHistoryPage() {
     try {
       const r = await fetchBatches(fresh)
       if (!applyFetch(seq, view, r)) return
-      if (batchPageId != null) ensureRows(batchPageId, !!r.rows)
+      if (batchPageId != null) ensureRows(batchPageId, true)   // the rows come a page at a time (below)
       // Old ?highlight=<id> links: open that batch's page.
       const highlightId = Number(searchParams.get('highlight')) || null
       if (highlightId) navigate(bulkBatchPath(highlightId), { replace: true })
@@ -537,7 +548,7 @@ export default function DataHistoryPage() {
    * so the operator never sees stale state.
    */
   const sseHandlers = useMemo(() => ({
-    'batch-updated': () => { void reloadQuiet() },
+    'batch-updated': () => { void reloadQuiet(); setRowsTick((t) => t + 1) },
     'batch-created': () => { void reloadQuiet() },
     'batch-cancel-requested': () => { void reloadQuiet() },
   // eslint-disable-next-line react-hooks/exhaustive-deps -- reloadQuiet reads only stable refs; empty deps keeps the handler map identity stable across renders so useEventStream doesn't churn subscriptions
@@ -673,9 +684,9 @@ export default function DataHistoryPage() {
         // progress poll; follow the job to the end, then show what happened.
         const final = await orderImportService.waitForGeneration(id, { isAlive: () => mountedRef.current })
         if (!final) return
-        let detail: Awaited<ReturnType<typeof orderImportService.getHistory>>['data'] | undefined
+        let detail: ImportBatchSummary | undefined
         try {
-          detail = (await orderImportService.getHistory(id)).data
+          detail = (await bulkService.batch(id)).data
         } catch {
           /* the list reload below still settles the row */
         }
@@ -697,7 +708,7 @@ export default function DataHistoryPage() {
                 : b,
             ),
           )
-          if (d.rows) setRowsById((m) => ({ ...m, [id]: d.rows }))
+          reloadRows(id)
         } else {
           await load()
         }
@@ -724,8 +735,8 @@ export default function DataHistoryPage() {
               : b,
           ),
         )
-        // Refresh the expanded rows so tracking numbers show.
-        if (updated.rows) setRowsById((m) => ({ ...m, [id]: updated.rows }))
+        // Read the rows again so tracking numbers show.
+        reloadRows(id)
         notifyForStatus(updated.status, res.message ?? 'Label generation finished.')
       } else {
         await load()
@@ -797,8 +808,7 @@ export default function DataHistoryPage() {
   }
 
   /** Validate all rows in a batch */
-  const validateAll = async (id: number): Promise<OrderImportRow[] | undefined> => {
-    let rowsBack: OrderImportRow[] | undefined
+  const validateAll = async (id: number) => {
     setValidatingId(id)
     try {
       const res = await orderImportService.validateAllRows(id)
@@ -812,9 +822,7 @@ export default function DataHistoryPage() {
               : b,
           ),
         )
-        // Update the expanded rows
-        if (updated.rows) setRowsById((m) => ({ ...m, [id]: updated.rows }))
-        rowsBack = updated.rows ?? undefined
+        reloadRows(id)
         notify.success('All rows validated successfully. Errors have been updated.')
       }
     } catch (e) {
@@ -822,7 +830,6 @@ export default function DataHistoryPage() {
     } finally {
       setValidatingId(null)
     }
-    return rowsBack
   }
 
   /** Generate a label for a single row inside a batch. */
@@ -833,7 +840,7 @@ export default function DataHistoryPage() {
       const res = await orderImportService.generateRowLabel(batchId, rowNumber, allowDuplicate)
       const updated = res.data
       if (updated) {
-        if (updated.rows) setRowsById((m) => ({ ...m, [batchId]: updated.rows }))
+        reloadRows(batchId)
         setBatches((list) =>
           list.map((b) =>
             b.id === batchId
@@ -896,12 +903,12 @@ export default function DataHistoryPage() {
   }
 
   /** Save one import row; the server re-validates the batch and answers with every row. */
-  const saveRow = async (batchId: number, edited: OrderImportRow): Promise<OrderImportRow[] | undefined> => {
+  const saveRow = async (batchId: number, edited: OrderImportRow): Promise<boolean> => {
     try {
       const res = await orderImportService.updateRow(batchId, edited.rowNumber, edited)
       const updated = res.data
       if (updated) {
-        if (updated.rows) setRowsById((m) => ({ ...m, [batchId]: updated.rows }))
+        reloadRows(batchId)
         setBatches((list) =>
           list.map((b) =>
             b.id === batchId
@@ -916,13 +923,14 @@ export default function DataHistoryPage() {
               : b,
           ),
         )
-        return updated.rows ?? undefined
+        return true
       } else {
         notify.error(res.message ?? 'Save failed.')
       }
     } catch (e) {
       notify.apiError(e, 'Save failed.')
     }
+    return false
   }
 
   useEffect(() => {
@@ -935,20 +943,12 @@ export default function DataHistoryPage() {
 
   /** Where a batch's labels stand — counted from its rows on the batch page, else the server's counts. */
   const labelCountsFor = (b: ImportBatchSummary): LabelCounts | null => {
-    const r = rowsById[b.id]
-    if (Array.isArray(r)) return labelCountsOf(r)
     if (b.labelsGenerated == null) return null
     return { generated: b.labelsGenerated ?? 0, pending: b.labelsPending ?? 0, voided: b.labelsVoided ?? 0, failed: b.labelsFailed ?? 0 }
   }
 
   /** When the batch was last printed — from the list, or from its rows on the batch page. */
-  const printedAtOf = (b: ImportBatchSummary): string | null => {
-    const r = rowsById[b.id]
-    const fromRows = Array.isArray(r)
-      ? r.map((x) => x.lastPrintedAt).filter((x): x is string => !!x).sort().pop() ?? null
-      : null
-    return fromRows ?? b.lastPrintedAt ?? null
-  }
+  const printedAtOf = (b: ImportBatchSummary): string | null => b.lastPrintedAt ?? null
 
   /** A batch whose labels can be generated (or retried) now. */
   // useCallback so the memoized scans below can honestly list this in
@@ -969,10 +969,7 @@ export default function DataHistoryPage() {
   // real inputs change.
   const pickedSet = useMemo(() => new Set(pickedBatches), [pickedBatches])
   /** Live labels to print — the loaded rows when the page has them, else the list's figure. */
-  const hasLiveLabels = useCallback((b: ImportBatchSummary) => {
-    const r = rowsById[b.id]
-    return Array.isArray(r) ? liveOrdersOf(r).length > 0 : (b.liveOrders ?? b.labelsGenerated ?? 0) > 0
-  }, [rowsById])
+  const hasLiveLabels = useCallback((b: ImportBatchSummary) => (b.liveOrders ?? b.labelsGenerated ?? 0) > 0, [])
   const canPickBatch = useCallback((b: ImportBatchSummary) => canGenerateBatch(b) || hasLiveLabels(b), [canGenerateBatch, hasLiveLabels])
   const pickable = useMemo(() => batches.filter(canPickBatch), [batches, canPickBatch])
   const pickedPrintable = useMemo(() => batches.filter((b) => pickedSet.has(b.id) && hasLiveLabels(b)), [batches, pickedSet, hasLiveLabels])
@@ -1022,11 +1019,7 @@ export default function DataHistoryPage() {
   }
 
   /** Live labels of a batch, when its rows are loaded (the batch page); the server enforces the rule either way. */
-  const liveCountOf = (b: ImportBatchSummary) => {
-    const r = rowsById[b.id]
-    // Orders, not rows — the batch page counts its loaded rows, the list uses the server's figure.
-    return Array.isArray(r) ? liveOrdersOf(r).length : (b.liveOrders ?? b.labelsGenerated ?? 0)
-  }
+  const liveCountOf = (b: ImportBatchSummary) => b.liveOrders ?? b.labelsGenerated ?? 0
 
   // Status, rows and actions of a batch — shared by the table's cells and the batch page.
   const renderStatusCell = (b: ImportBatchSummary) => {
@@ -1588,17 +1581,50 @@ export default function DataHistoryPage() {
   const batchList = Array.isArray(batchPageRows) ? batchPageRows : []
   const batchFilter = batchPageId != null ? gridFilter[batchPageId] ?? 'all' : 'all'
   const batchPicked = batchPageId != null ? pickedRows[batchPageId] ?? [] : []
-  const rowNeedsAttention = (r: OrderImportRow) => (r.errors?.length ?? 0) > 0 || (r.generatedStatus ?? '').toUpperCase() === 'FAILED'
-  const rowNotLabelled = (r: OrderImportRow) => (r.generatedStatus ?? '').toUpperCase() !== 'GENERATED'
   const rowIsLive = (r: OrderImportRow) => r.generatedOrderNo != null && (r.generatedStatus ?? '').toUpperCase() === 'GENERATED'
-  const batchVisible = useMemo(() => {
-    const filtered = batchFilter === 'failed' ? batchList.filter(rowNeedsAttention)
-      : batchFilter === 'pending' ? batchList.filter(rowNotLabelled) : batchList
-    const q = gridSearch.trim().toLowerCase()
-    if (!q) return filtered
-    return filtered.filter((r) => [r.orderRef, r.reference, r.recipientName, r.city, r.clientCode, r.generatedOrderNo, r.generatedTrackingNumber]
-      .some((v) => v != null && String(v).toLowerCase().includes(q)))
-  }, [batchList, batchFilter, gridSearch])
+  // Filtered, searched and paged by the server: a 50k-row batch never comes over whole.
+  const batchVisible = batchList
+  const [gridQ, setGridQ] = useState('')
+  useEffect(() => {
+    const t = window.setTimeout(() => setGridQ(gridSearch.trim()), 300)
+    return () => window.clearTimeout(t)
+  }, [gridSearch])
+  const rowsView: BatchRowsView = batchFilter === 'failed' ? 'attention' : batchFilter === 'pending' ? 'pending' : 'all'
+  // A new batch, filter or search starts again at page 1.
+  const rowsQueryKey = `${batchPageId}|${rowsView}|${gridQ}`
+  const [pagedRowsKey, setPagedRowsKey] = useState(rowsQueryKey)
+  if (pagedRowsKey !== rowsQueryKey) {
+    setPagedRowsKey(rowsQueryKey)
+    setGridPage(0)
+  }
+  useEffect(() => {
+    if (batchPageId == null) return
+    let gone = false
+    orderImportService.historyRows(batchPageId, { view: rowsView, q: gridQ || undefined, page: gridPage, size: gridPageSize })
+      .then((res) => {
+        const pg = res.data
+        if (gone || !pg) return
+        setRowsPage({ id: batchPageId, page: pg })
+        setRowsById((m) => ({ ...m, [batchPageId]: pg.rows }))
+      })
+      .catch((e) => { if (!gone) notify.apiError(e, 'Could not load import rows.') })
+    return () => { gone = true }
+  }, [batchPageId, rowsView, gridQ, gridPage, gridPageSize, rowsTick])
+  /** Export what the filter and search match — up to 5,000 rows, read from the server (the grid holds one page). */
+  const exportBatchRows = async (b: ImportBatchSummary) => {
+    try {
+      const pg = (await orderImportService.historyRows(b.id, { view: rowsView, q: gridQ || undefined, size: 5000 })).data
+      if (!pg) return
+      // The template's own column names, so the file imports again.
+      const head = ['row', 'orderNo', 'status', 'tracking', ...DH_COLUMNS.map((c) => c.key), 'errors']
+      const body = pg.rows.map((r) => [String(r.rowNumber), String(r.generatedOrderNo ?? ''), r.generatedStatus ?? '', r.generatedTrackingNumber ?? '',
+        ...DH_COLUMNS.map((c) => String((r as unknown as Record<string, unknown>)[c.key] ?? '')), (r.errors ?? []).join(' | ')])
+      downloadCsv(`batch-${b.id}-rows-${new Date().toISOString().slice(0, 10)}.csv`, [head, ...body])
+      if (pg.total > pg.rows.length) notify.info(`Exported the first ${pg.rows.length} of ${pg.total} rows — narrow it with a filter or search.`)
+    } catch (e) {
+      notify.apiError(e, 'Could not export the rows.')
+    }
+  }
   /** Under "Needs attention", the imported fields that have errors come into view, to fix in the grid. */
   const batchErrorColumns = useMemo(() => {
     if (batchFilter !== 'failed') return undefined
@@ -1608,7 +1634,17 @@ export default function DataHistoryPage() {
   }, [batchFilter, batchVisible])
   const fixRow = fixing
     ? (Array.isArray(rowsById[fixing.batchId]) ? (rowsById[fixing.batchId] as OrderImportRow[]) : []).find((r) => r.rowNumber === fixing.rowNumber)
+      ?? (fixRowOffPage?.rowNumber === fixing.rowNumber ? fixRowOffPage : undefined)
     : undefined
+  /** Open the Fix panel on a row — read from the server when it is not on this page. */
+  const openFix = (batchId: number, rowNumber: number) => {
+    setFixing({ batchId, rowNumber })
+    const page = rowsById[batchId]
+    if (Array.isArray(page) && page.some((r) => r.rowNumber === rowNumber)) return
+    orderImportService.historyRows(batchId, { rowNumber })
+      .then((res) => setFixRowOffPage(res.data?.rows?.[0] ?? null))
+      .catch((e) => notify.apiError(e, 'Could not read that row.'))
+  }
   /** A fix that came back clean closes the panel: the row can be labelled now. */
   const closeFixIfClean = (rows: OrderImportRow[] | undefined, rowNumber: number) => {
     const r = rows?.find((x) => x.rowNumber === rowNumber)
@@ -1616,29 +1652,48 @@ export default function DataHistoryPage() {
     setFixing(null)
     notify.success(`Row ${rowNumber} is ready — generate it now or with the batch.`)
   }
+  /** Read the Fix panel's row again (after its save, or a new mapping); it closes once clean. */
+  const recheckFix = async (batchId: number, rowNumber: number) => {
+    try {
+      const r = (await orderImportService.historyRows(batchId, { rowNumber })).data?.rows?.[0]
+      if (!r) return
+      setFixRowOffPage(r)
+      closeFixIfClean([r], rowNumber)
+    } catch {
+      /* the page's own re-read shows the row either way */
+    }
+  }
   const batchColumns = useMemo<ColumnDef<OrderImportRow, unknown>[]>(() => {
     const b = batchPageId != null ? batches.find((x) => x.id === batchPageId) : undefined
     if (!b) return []
-    const list = batchList
-    // An order is labelled as one shipment, so a clean line of an order whose
-    // other line has errors can't be labelled on its own either.
-    const orderKey = (r: OrderImportRow) => (r.orderRef ?? '').trim() || `__row_${r.rowNumber}`
-    const brokenOrders = new Set(list.filter((r) => (r.errors?.length ?? 0) > 0).map(orderKey))
+    // An order is labelled as one shipment: a line is held back by its own errors, or
+    // by another line of its order (the server names it — it may be on another page).
+    const orderReadyOf = (r: OrderImportRow) => r.orderBlockedBy == null && (r.errors?.length ?? 0) === 0
     const pickedSet = new Set(batchPicked)
     const visibleLive = batchVisible.filter(rowIsLive)
     const allVisiblePicked = visibleLive.length > 0 && visibleLive.every((r) => pickedSet.has(r.rowNumber))
     const rowIsWms = ['WMS', 'API'].includes((b.source || '').toUpperCase())
     const locked = viewTrash || (b.status || '').toUpperCase() === 'IN_PROGRESS'
-    const togglePick = (rowNumber: number) => setPickedRows((m) => {
-      const cur = new Set(m[b.id] ?? [])
-      if (cur.has(rowNumber)) cur.delete(rowNumber); else cur.add(rowNumber)
-      return { ...m, [b.id]: Array.from(cur) }
-    })
-    const togglePickVisible = () => setPickedRows((m) => {
-      const cur = new Set(m[b.id] ?? [])
-      for (const r of visibleLive) { if (allVisiblePicked) cur.delete(r.rowNumber); else cur.add(r.rowNumber) }
-      return { ...m, [b.id]: Array.from(cur) }
-    })
+    // A tick keeps the row itself too: the selection bar needs its order after the page turns.
+    const rememberRows = (rows: OrderImportRow[]) => setPickedRowData((m) => ({
+      ...m, [b.id]: { ...(m[b.id] ?? {}), ...Object.fromEntries(rows.map((r) => [r.rowNumber, r])) },
+    }))
+    const togglePick = (r: OrderImportRow) => {
+      rememberRows([r])
+      setPickedRows((m) => {
+        const cur = new Set(m[b.id] ?? [])
+        if (cur.has(r.rowNumber)) cur.delete(r.rowNumber); else cur.add(r.rowNumber)
+        return { ...m, [b.id]: Array.from(cur) }
+      })
+    }
+    const togglePickVisible = () => {
+      rememberRows(visibleLive)
+      setPickedRows((m) => {
+        const cur = new Set(m[b.id] ?? [])
+        for (const r of visibleLive) { if (allVisiblePicked) cur.delete(r.rowNumber); else cur.add(r.rowNumber) }
+        return { ...m, [b.id]: Array.from(cur) }
+      })
+    }
     const ICON = 'flex h-7 w-7 items-center justify-center rounded-lg border transition'
     const NEUTRAL = 'border-[#e6dcc7] bg-[#faf7f0] text-[#5a4526] hover:border-[#dccfb4] hover:bg-[#f2ebda]'
     const slot = (node: React.ReactNode) => <span className="flex h-7 w-7 shrink-0 items-center justify-center">{node}</span>
@@ -1655,7 +1710,7 @@ export default function DataHistoryPage() {
           const r = row.original
           return (
             <input type="checkbox" aria-label={`Tick row ${r.rowNumber}`} checked={pickedSet.has(r.rowNumber)} disabled={!rowIsLive(r)}
-              onChange={() => togglePick(r.rowNumber)} title={rowIsLive(r) ? 'Tick to print, send or void this label' : 'Only rows with a live label can be ticked'}
+              onChange={() => togglePick(r)} title={rowIsLive(r) ? 'Tick to print, send or void this label' : 'Only rows with a live label can be ticked'}
               className="h-3.5 w-3.5 accent-[#1f150c] disabled:opacity-25" />
           )
         },
@@ -1731,7 +1786,7 @@ export default function DataHistoryPage() {
         accessorFn: (r) => r.generatedStatus ?? '',
         cell: ({ row }) => {
           const r = row.original
-          const st = rowStatus(r, !brokenOrders.has(orderKey(r)))
+          const st = rowStatus(r, orderReadyOf(r))
           const failed = (r.generatedStatus ?? '').toUpperCase() === 'FAILED'
           const { byField, rowLevel } = bucketRowErrors(r.errors ?? [])
           const warnings = r.warnings ?? []
@@ -1825,7 +1880,7 @@ export default function DataHistoryPage() {
           const generated = gen === 'GENERATED'
           const failed = gen === 'FAILED'
           const ok = (r.errors?.length ?? 0) === 0
-          const orderReady = !brokenOrders.has(orderKey(r))
+          const orderReady = orderReadyOf(r)
           const orderNo = r.generatedOrderNo ?? null
           const tn = r.generatedTrackingNumber ?? null
           const isIntl = hasCommercialInvoice(r)
@@ -1883,7 +1938,7 @@ export default function DataHistoryPage() {
                 ) : (
                   // A clean line of a broken order opens the line that needs the fix.
                   <button type="button"
-                    onClick={() => setFixing({ batchId: b.id, rowNumber: ok ? (list.find((x) => orderKey(x) === orderKey(r) && (x.errors?.length ?? 0) > 0)?.rowNumber ?? r.rowNumber) : r.rowNumber })}
+                    onClick={() => openFix(b.id, ok ? (r.orderBlockedBy ?? r.rowNumber) : r.rowNumber)}
                     title={ok ? `Another line of order ${r.orderRef ?? ''} needs fixes — the order is labelled as one shipment` : 'Edit this row and re-check it'}
                     aria-label={`Fix row ${r.rowNumber}`}
                     className="inline-flex items-center gap-1 whitespace-nowrap rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-rose-700 transition hover:border-rose-300 hover:bg-rose-50">
@@ -1908,11 +1963,13 @@ export default function DataHistoryPage() {
     const list = Array.isArray(rows) ? rows : []
     const filter = gridFilter[b.id] ?? 'all'
     const picked = pickedRows[b.id] ?? []
+    const counts = rowsPage?.id === b.id ? rowsPage.page : null
+    const pickedKnown = Object.values(pickedRowData[b.id] ?? {}).filter((p) => !list.some((x) => x.rowNumber === p.rowNumber))
     return (
       <div className="px-3 py-2.5">
         {rows === 'loading' || rows === undefined ? (
           <p className="py-4 text-center text-[12px] text-[#6b5c42]">Loading rows…</p>
-        ) : rows.length === 0 ? (
+        ) : (counts?.all ?? list.length) === 0 ? (
           <p className="px-4 py-4 text-center text-[12px] text-[#6b5c42]">
             {['WMS', 'API'].includes((b.source || '').toUpperCase())
               ? "This fetch's rows are no longer stored — it was pulled before rows were kept. Fetch from WMS again for a fresh batch."
@@ -1952,10 +2009,7 @@ export default function DataHistoryPage() {
               // The WMS sends the client's own ship via codes; these are the ones
               // that resolve to a carrier service.
               <ShipViaCodesPanel
-                clientCode={(() => {
-                  const codes = Array.from(new Set(rows.map((r) => (r.clientCode ?? '').trim().toUpperCase()).filter(Boolean)))
-                  return codes.length === 1 ? codes[0] : null
-                })()}
+                clientCode={counts?.clientCodes.length === 1 ? counts.clientCodes[0] : null}
                 canEdit={canWrite}
                 onOpenMapping={() => navigate(settingsPaths.shippingServiceMapping)}
                 reloadKey={codesTick}
@@ -1970,9 +2024,9 @@ export default function DataHistoryPage() {
               filterToggle={
                 <div className="inline-flex shrink-0 overflow-hidden rounded-lg border border-[#e3d9c4]" role="group" aria-label="Show rows">
                   {([
-                    ['all', `All ${list.length}`],
-                    ['failed', `Needs attention ${list.filter(rowNeedsAttention).length}`],
-                    ['pending', `Not labelled ${list.filter(rowNotLabelled).length}`],
+                    ['all', `All ${counts?.all ?? 0}`],
+                    ['failed', `Needs attention ${counts?.attention ?? 0}`],
+                    ['pending', `Not labelled ${counts?.pending ?? 0}`],
                   ] as const).map(([k, label]) => (
                     <button key={k} type="button" aria-pressed={filter === k} onClick={() => setGridFilter((m) => ({ ...m, [b.id]: k }))}
                       className={`px-2.5 py-1.5 text-[11px] font-semibold transition ${filter === k ? 'bg-[#1f150c] text-[#f4eede]' : 'bg-white text-[#5a4526] hover:bg-[#faf7f0]'}`}>
@@ -1984,6 +2038,13 @@ export default function DataHistoryPage() {
               // Exactly the Orders page's columns; every imported field is one Columns click away (to edit it).
               initialHiddenColumns={DH_COLUMNS.map((c) => `f_${c.key}`)}
               forceVisibleColumns={batchErrorColumns}
+              manualPagination
+              pageIndex={gridPage}
+              pageSize={gridPageSize}
+              pageCount={Math.max(1, Math.ceil((counts?.total ?? 0) / gridPageSize))}
+              totalRowCount={counts?.total}
+              onPaginationChange={({ pageIndex: i, pageSize: n }) => { setGridPage(n !== gridPageSize ? 0 : i); setGridPageSize(n) }}
+              onExport={() => exportBatchRows(b)}
               csvFilename={`batch-${b.id}-rows`}
               maxBodyHeight="calc(100vh - 320px)"
               emptyState={<p className="py-6 text-center text-[12px] text-[#6b5c42]">No rows match.</p>}
@@ -2005,7 +2066,7 @@ export default function DataHistoryPage() {
                 <BatchLabelBar
                   floating
                   batchId={b.id}
-                  rows={list}
+                  rows={[...list, ...pickedKnown]}
                   picked={picked}
                   onPickAllLive={() => setPickedRows((m) => ({ ...m, [b.id]: list.filter(rowIsLive).map((r) => r.rowNumber) }))}
                   onClearPick={() => setPickedRows((m) => ({ ...m, [b.id]: [] }))}
@@ -2036,7 +2097,7 @@ export default function DataHistoryPage() {
         // The server re-validates the batch, so rows that failed on this code clear —
         // and a Fix panel open on one of them closes if that was its last problem.
         const at = fixing
-        void validateAll(batchId).then((rows) => { if (at?.batchId === batchId) closeFixIfClean(rows, at.rowNumber) })
+        void validateAll(batchId).then(() => { if (at?.batchId === batchId) void recheckFix(at.batchId, at.rowNumber) })
       }}
     />
   ) : null
@@ -2052,7 +2113,7 @@ export default function DataHistoryPage() {
             setFixSaving(true)
             const at = fixing
             void saveRow(at.batchId, edited)
-              .then((rows) => closeFixIfClean(rows, at.rowNumber))
+              .then((ok) => { if (ok) void recheckFix(at.batchId, at.rowNumber) })
               .finally(() => setFixSaving(false))
           }}
           onMap={(code) => setMapping({ code, clientCode: (fixRow.clientCode ?? '').trim().toUpperCase() || null, batchId: fixing.batchId })}

@@ -335,7 +335,8 @@ public class OrderImportController {
     }
 
     @Operation(summary = "One page of a saved import's rows",
-            description = "view = all | attention (errors or a failed label) | pending (no live label); "
+            description = "view = all | attention (errors or a failed label) | pending (no live label) | "
+                    + "live (a live label, e.g. what Print acts on); "
                     + "q searches order ref, reference, recipient, city, client, order # and tracking; "
                     + "rowNumber returns that one row. Also answers the three views' counts and the "
                     + "batch's client codes. size is capped at 5000.")

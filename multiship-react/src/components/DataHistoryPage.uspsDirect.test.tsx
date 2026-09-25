@@ -30,10 +30,23 @@ import orderReducer from '../store/orderSlice'
 const listHistory = vi.fn()
 const getHistory = vi.fn()
 const generationProgress = vi.fn()
+type Row = { rowNumber: number; clientCode?: string; errors?: string[]; generatedStatus?: string | null }
+// The batch page reads its header and a page of rows; both come from the same
+// getHistory fixture here, so each test still sets one batch.
+const bulkBatch = vi.fn((id: number) => getHistory(id).then((res: { data?: Record<string, unknown> }) =>
+  ({ data: res.data ? { ...res.data, rows: undefined } : res.data })))
+const historyRows = vi.fn<(id: number, q?: unknown) => Promise<unknown>>((id: number) => getHistory(id).then((res: { data?: { rows?: Row[] } }) => {
+  const rows = res.data?.rows ?? []
+  const attention = rows.filter((r) => (r.errors?.length ?? 0) > 0 || r.generatedStatus === 'FAILED').length
+  return { data: { rows, total: rows.length, all: rows.length, attention,
+    pending: rows.filter((r) => r.generatedStatus !== 'GENERATED').length,
+    clientCodes: [...new Set(rows.map((r) => r.clientCode).filter(Boolean))] } }
+}))
 vi.mock('../api/orderImportService', () => ({
   orderImportService: {
     listHistory: (...a: unknown[]) => listHistory(...a),
     getHistory: (...a: unknown[]) => getHistory(...a),
+    historyRows: (id: number, q?: unknown) => historyRows(id, q),
     generationProgress: (...a: unknown[]) => generationProgress(...a),
     listStaging: vi.fn().mockResolvedValue({ data: [] }),
     generateLabels: vi.fn(),
@@ -161,6 +174,7 @@ vi.mock('../api/bulkService', () => ({
   bulkService: {
     listBatches: (...a: unknown[]) => listBatches(...a),
     summary: (...a: unknown[]) => bulkSummary(...a),
+    batch: (id: number) => bulkBatch(id),
   },
 }))
 const pageOf = (content: unknown[]) => ({ data: { content, totalElements: content.length, totalPages: 1, number: 0, size: 25 } })
@@ -633,10 +647,23 @@ describe('Bulk Mailer — layout', () => {
     expect(header).toHaveTextContent('Batch #121')
     expect(header).toHaveTextContent('acme_sept.csv')
     expect(screen.getByRole('button', { name: /Bulk Mailer · Import history/i })).toBeInTheDocument()
-    expect(getHistory).toHaveBeenCalledWith(121)
-    // A 50k-row batch was fetched twice (header, then rows): once is enough.
+    // The header and one page of rows — never the whole batch at once (a 50k-row batch was ~58 MB, twice).
+    await waitFor(() => expect(historyRows).toHaveBeenCalledWith(121, expect.objectContaining({ page: 0 })))
+    expect(bulkBatch).toHaveBeenCalledWith(121)
     await new Promise((r) => setTimeout(r, 50))
-    expect(getHistory).toHaveBeenCalledTimes(1)
+    expect(bulkBatch).toHaveBeenCalledTimes(1)
+    expect(historyRows).toHaveBeenCalledTimes(1)
+  })
+
+  it('the batch grid searches and filters on the server, from page 1', async () => {
+    getHistory.mockResolvedValue({ data: { ...batchSummary({ id: 121, fileName: 'acme_sept.csv', status: 'INITIATE' }),
+      rows: [{ rowNumber: 1, recipientName: 'Ann', city: 'Austin', errors: [] }] } })
+    await renderAt('/bulk/batches/121')
+    await waitFor(() => expect(historyRows).toHaveBeenCalledWith(121, expect.objectContaining({ view: 'all', page: 0, size: 25 })))
+    await userEvent.type(screen.getByPlaceholderText(/Search order #/i), 'ZZ50K-12345')
+    await waitFor(() => expect(historyRows).toHaveBeenCalledWith(121, expect.objectContaining({ q: 'ZZ50K-12345', page: 0 })), { timeout: 2000 })
+    await userEvent.click(screen.getByRole('button', { name: /^Needs attention/ }))
+    await waitFor(() => expect(historyRows).toHaveBeenCalledWith(121, expect.objectContaining({ view: 'attention', q: 'ZZ50K-12345', page: 0 })))
   })
 
   it('the Documents tab does not load the Import history list behind it', async () => {
