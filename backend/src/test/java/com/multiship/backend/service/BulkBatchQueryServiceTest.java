@@ -9,6 +9,7 @@ import java.time.LocalDateTime;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Bulk Mailer's server-side batch list. The filtering, sorting and paging
@@ -43,7 +44,8 @@ class BulkBatchQueryServiceTest {
     @Test
     void theListQueryNeverSelectsTheRowsColumn() {
         assertFalse(BulkBatchQueryService.LIST_COLUMNS.contains("rowsJson"));
-        assertEquals(20, BulkBatchQueryService.LIST_COLUMNS.size());
+        assertEquals(21, BulkBatchQueryService.LIST_COLUMNS.size());
+        assertTrue(BulkBatchQueryService.LIST_COLUMNS.contains("slug"), "the list links to each batch by its slug");
     }
 
     /** "18 generated · 2 pending · 1 voided": stored counts, less the rows of orders voided since. */

@@ -67,7 +67,7 @@ public class BulkBatchQueryService {
     private static final int MAX_PAGE_SIZE = 100;
 
     /** The list columns — never rows_json, which can be megabytes per batch. */
-    static final List<String> LIST_COLUMNS = List.of("id", "createdBy", "fileName", "status", "labelBatchId",
+    static final List<String> LIST_COLUMNS = List.of("id", "slug", "createdBy", "fileName", "status", "labelBatchId",
             "createdAt", "completedAt", "generationStartedAt", "note", "totalRows", "savedRows", "invalidRows",
             "deletedAt", "deletedBy", "billingMode", "source", "labelsGenerated", "labelsFailed", "labelOrders", "labelsCounted");
 
@@ -373,6 +373,7 @@ public class BulkBatchQueryService {
     static ImportBatchDTO summaryOf(jakarta.persistence.Tuple t) {
         ImportBatch b = new ImportBatch();
         b.setId(t.get("id", Long.class));
+        b.setSlug(t.get("slug", String.class));
         b.setCreatedBy(t.get("createdBy", String.class));
         b.setFileName(t.get("fileName", String.class));
         b.setStatus(t.get("status", String.class));
