@@ -16,13 +16,16 @@ ALTER TABLE IF EXISTS import_batch ADD COLUMN IF NOT EXISTS slug VARCHAR(22);
 DO $$
 BEGIN
     IF to_regclass('import_batch') IS NOT NULL THEN
-        -- Backfill NULL slugs with a random 16-byte base64url (dropped
-        -- padding + swapped +/ for -_ so it's URL-safe). pgcrypto's
-        -- gen_random_bytes is available on every supported Postgres.
+        -- Backfill NULL slugs. gen_random_uuid() is core Postgres from
+        -- 13 onwards (no pgcrypto extension needed); two concat'd UUIDs
+        -- give 64 hex chars → substring 22 → 88 bits of entropy per
+        -- pre-existing row. Java's @PrePersist keeps generating 128-bit
+        -- base64url slugs for all new rows, so backfill-only entropy is
+        -- amply unguessable.
         UPDATE import_batch
-           SET slug = translate(
-                          rtrim(encode(gen_random_bytes(16), 'base64'), '='),
-                          '+/', '-_')
+           SET slug = substring(
+                          replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '')
+                          FROM 1 FOR 22)
          WHERE slug IS NULL;
 
         ALTER TABLE import_batch ALTER COLUMN slug SET NOT NULL;
