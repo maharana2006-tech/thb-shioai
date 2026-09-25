@@ -369,16 +369,30 @@ public class ShipmentValidationService {
                 callCarrierValidateShipment(req, adapted, pickedAccount, skipped, rates, rateProblem);
         // A login failure reads as one, whichever carrier said it and however
         // (UPS: HTTP 401 / 250002 "Invalid Authentication Information").
+        // BUT — 250002 is also what UPS returns when the OAuth token was minted
+        // fine but the App on developer.ups.com hasn't been granted access to
+        // the Rating / Shipping API (scope problem, not credentials). Detect
+        // that case via the persisted `verified` flag: if the account is
+        // marked verified (token mint works) yet the API call is 401'd, the
+        // fix is on the carrier's dev-portal side, not our login keys.
+        boolean verifiedRecently = pickedAccount != null && Boolean.TRUE.equals(pickedAccount.getVerified());
         if (carrierResult != null && !carrierResult.isValid() && isLoginFailure(carrierResult)) {
-            carrierResult = carrierResult.toBuilder()
-                    .message("Couldn't sign in to " + carrierName(carrierResult.getCarrierCode())
-                            + " with this account's login keys — ask an admin to check them in Settings → Carrier Accounts.")
-                    .build();
+            String name = carrierName(carrierResult.getCarrierCode());
+            String msg = verifiedRecently
+                    ? name + " accepted this account's login keys but rejected the token when calling its APIs. "
+                            + "This usually means the App on " + name + "'s developer portal doesn't have "
+                            + "Rating/Shipping API access — check the App's Products list."
+                    : "Couldn't sign in to " + name + " with this account's login keys — "
+                            + "ask an admin to check them in Settings → Carrier Accounts.";
+            carrierResult = carrierResult.toBuilder().message(msg).build();
         }
         if (rateProblem.get() != null && looksLikeLoginFailure(rateProblem.get())) {
-            rateProblem.set("No price: " + carrierName(req.getCarrierCode() == null ? null
-                    : blankTo(ShippingConfigService.canonicalCarrierFor(req.getCarrierCode()), req.getCarrierCode()))
-                    + " didn't accept this account's login keys.");
+            String name = carrierName(req.getCarrierCode() == null ? null
+                    : blankTo(ShippingConfigService.canonicalCarrierFor(req.getCarrierCode()), req.getCarrierCode()));
+            rateProblem.set(verifiedRecently
+                    ? "No price: " + name + " accepted the keys but rejected the token on the Rating API "
+                            + "(check the App's API access on " + name + "'s developer portal)."
+                    : "No price: " + name + " didn't accept this account's login keys.");
         }
         ShipmentValidationResult.RateQuote quote = buildQuote(req, service, preset, rates.get(), rateProblem.get());
         if (quote != null && "NOT_OFFERED".equals(quote.getStatus())) {
