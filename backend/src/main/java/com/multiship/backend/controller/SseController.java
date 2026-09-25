@@ -95,6 +95,22 @@ public class SseController {
     /** Live subscriptions — kept so a shutdown hook could iterate. */
     private final ConcurrentHashMap<Long, SseEmitter> live = new ConcurrentHashMap<>();
 
+    /** Without Redis: who is listening, and for what. */
+    private record LocalSub(SseEmitter emitter, Set<String> topics, String tenant, boolean platform) { }
+    private final ConcurrentHashMap<Long, LocalSub> localSubs = new ConcurrentHashMap<>();
+
+    /**
+     * Without Redis: an event published on this server reaches its subscribers,
+     * filtered exactly as the Redis relay filters (topic, tenant).
+     * ponytail: sent on the publisher's thread; a queue per subscriber if a slow
+     * client ever holds a publisher up.
+     */
+    @org.springframework.context.event.EventListener
+    public void onLocalEvent(com.multiship.backend.events.LocalAppEvent e) {
+        localSubs.forEach((id, s) -> relay(s.emitter(), s.topics(), s.tenant(), s.platform(), id,
+                e.topic(), e.payload(), "local-" + e.seq()));
+    }
+
     @Autowired
     public SseController(TenantScopeEnforcer tenantScope,
                         @Autowired(required = false)
@@ -102,8 +118,7 @@ public class SseController {
         this.tenantScope = tenantScope;
         this.streamListeners = streamListeners;
         if (streamListeners == null) {
-            log.info("SseController: Redis not configured — /events/stream will return 503; "
-                    + "FE falls back to polling.");
+            log.info("SseController: Redis not configured — /events/stream relays this server's own events.");
         }
     }
 
@@ -128,18 +143,33 @@ public class SseController {
         // instead sent the failure down an async ERROR dispatch that carries
         // no security context, so the client saw 401 "Please sign in again"
         // and every stream looked like an expired session.
-        if (streamListeners == null) {
-            throw new org.springframework.web.server.ResponseStatusException(
-                    org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
-                    "Live updates are unavailable — Redis is not configured. Set REDIS_HOST to enable.");
-        }
-
         Set<String> topics = parseTopics(topicsCsv);
         String tenant = tenantScope.resolveScope().orElse(null);
         boolean platform = tenantScope.isPlatformOperator();
         long subscriptionId = subscriptionCounter.getAndIncrement();
 
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
+
+        // No Redis (one server, e.g. a dev machine): relay this JVM's own events
+        // (AppEventBus hands them over as LocalAppEvent). It answered 503 and the
+        // page, which no longer polls, never updated by itself.
+        if (streamListeners == null) {
+            localSubs.put(subscriptionId, new LocalSub(emitter, topics, tenant, platform));
+            live.put(subscriptionId, emitter);
+            Runnable cleanup = () -> {
+                localSubs.remove(subscriptionId);
+                live.remove(subscriptionId);
+            };
+            emitter.onCompletion(cleanup);
+            emitter.onTimeout(cleanup);
+            emitter.onError(err -> cleanup.run());
+            try {
+                emitter.send(SseEmitter.event().id("sub-" + subscriptionId).name("subscribed").data("{}"));
+            } catch (IOException ignored) {
+                // Client gone before we could say hello — normal.
+            }
+            return emitter;
+        }
 
         // Phase 4 — resume from Last-Event-Id when present. If the
         // browser reconnects after a network blip, it sends the id
@@ -269,10 +299,16 @@ public class SseController {
 
         @Override
         public void onMessage(MapRecord<String, String, String> record) {
-            String topic = record.getValue().get(AppEventBus.TOPIC_FIELD);
-            if (topic == null || !topics.contains(topic)) return;
+            relay(emitter, topics, callerTenant, platform, subscriptionId,
+                    record.getValue().get(AppEventBus.TOPIC_FIELD), record.getValue().get(AppEventBus.PAYLOAD_FIELD),
+                    record.getId() == null ? "0-0" : record.getId().getValue());
+        }
+    }
 
-            String body = record.getValue().get(AppEventBus.PAYLOAD_FIELD);
+    /** Send one event to one subscriber if it wants the topic and may see the tenant. */
+    static void relay(SseEmitter emitter, Set<String> topics, String callerTenant, boolean platform, long subscriptionId,
+                      String topic, String body, String id) {
+            if (topic == null || !topics.contains(topic)) return;
             if (body == null) return;
 
             // Tenant filter — parse the payload just enough to find
@@ -288,7 +324,6 @@ public class SseController {
             }
 
             String eventType = extractEventType(body).orElse("message");
-            String id = record.getId() == null ? "0-0" : record.getId().getValue();
 
             try {
                 emitter.send(SseEmitter.event()
@@ -300,7 +335,6 @@ public class SseController {
                 // onCompletion/onError; nothing more to do here.
                 log.debug("SSE subscription {} send failed: {}", subscriptionId, ex.getMessage());
             }
-        }
     }
 
     /** Extract {@code "tenant":"..."} from a JSON body without a full

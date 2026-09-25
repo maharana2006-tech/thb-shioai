@@ -82,15 +82,20 @@ public class AppEventBus {
      */
     private final StringRedisTemplate redisTemplate;
 
+    /** Without Redis, events go to this JVM's listeners (the SSE stream) instead of nowhere. */
+    @Autowired(required = false)
+    private org.springframework.context.ApplicationEventPublisher localEvents;
+    private final java.util.concurrent.atomic.AtomicLong localSeq = new java.util.concurrent.atomic.AtomicLong();
+
     @Autowired
     public AppEventBus(ObjectMapper objectMapper,
                        @Autowired(required = false) StringRedisTemplate redisTemplate) {
         this.objectMapper = objectMapper;
         this.redisTemplate = redisTemplate;
         if (redisTemplate == null) {
-            log.info("AppEventBus starting in NO-OP mode — Redis not configured. "
-                    + "SSE clients will fall back to polling. "
-                    + "Set REDIS_HOST to enable real-time event delivery.");
+            log.info("AppEventBus starting in LOCAL mode — Redis not configured. "
+                    + "Events reach this server's SSE clients only; "
+                    + "set REDIS_HOST to share them between servers.");
         } else {
             log.info("AppEventBus ready — publishing to Redis Stream '{}' (approx MAXLEN {}).",
                     STREAM_KEY, STREAM_MAXLEN);
@@ -111,8 +116,15 @@ public class AppEventBus {
     public void publish(AppEvent event) {
         if (event == null) return;
         if (redisTemplate == null) {
-            log.debug("AppEventBus no-op (Redis absent): {} {}",
-                    event.topic(), event.eventType());
+            // One server, no Redis: this JVM's SSE clients still hear it.
+            if (localEvents != null) {
+                try {
+                    localEvents.publishEvent(new LocalAppEvent(event.topic(),
+                            objectMapper.writeValueAsString(event), localSeq.incrementAndGet()));
+                } catch (Exception ex) {
+                    log.debug("AppEventBus local publish failed for {}.{}: {}", event.topic(), event.eventType(), ex.getMessage());
+                }
+            }
             return;
         }
         try {

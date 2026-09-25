@@ -16,6 +16,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -161,6 +162,45 @@ class OrderImportServiceImplBatchPageTest {
         org.mockito.Mockito.verify(importBatchRepository).save(saved.capture());
         assertEquals(900, saved.getValue().getLabelBatchId());
         assertEquals(900, r1.getBatchId(), "the rows carry it too, so Generate keeps the same number");
+    }
+
+    // ── Paged rows: the batch page reads one page, not the whole batch ──────
+    @Test
+    void aPageOfRowsIsFilteredSearchedAndCountedByTheServer() throws Exception {
+        OrderImportRowDTO labelled = shipRow(1, 906976, "GENERATED");
+        OrderImportRowDTO broken = shipRow(2, null, null);
+        broken.setOrderRef("REF-3");
+        broken.setErrors(new ArrayList<>(List.of("recipientPhone is required")));
+        OrderImportRowDTO sameOrder = shipRow(3, null, null);          // clean line of REF-3's order
+        OrderImportRowDTO failed = shipRow(4, 7004, "FAILED");
+        OrderImportRowDTO ready = shipRow(5, null, null);
+        ready.setCity("Austin");
+        savedBatch("PARTIAL_COMPLETE", List.of(labelled, broken, sameOrder, failed, ready));
+
+        var all = service.historyRows(121L, "all", null, null, 0, 2);
+        assertEquals(5, all.getAll());
+        assertEquals(5, all.getTotal());
+        assertEquals(List.of(1, 2), all.getRows().stream().map(OrderImportRowDTO::getRowNumber).toList(), "page 1 of 2 rows");
+        assertEquals(2, all.getAttention(), "the broken row and the failed label");
+        assertEquals(4, all.getPending(), "everything but the live label");
+        assertEquals(List.of("ACME"), all.getClientCodes());
+        assertEquals("/api/v1/orders/906976/label/pdf", all.getRows().get(0).getLabelUrl());
+
+        var page2 = service.historyRows(121L, "all", null, null, 1, 2);
+        assertEquals(List.of(3, 4), page2.getRows().stream().map(OrderImportRowDTO::getRowNumber).toList());
+        assertEquals(2, page2.getRows().get(0).getOrderBlockedBy(), "row 3 waits for row 2, the broken line of its order");
+
+        assertEquals(List.of(2, 4), service.historyRows(121L, "attention", null, null, 0, 50).getRows().stream()
+                .map(OrderImportRowDTO::getRowNumber).toList());
+        assertEquals(List.of(1), service.historyRows(121L, "live", null, null, 0, 50).getRows().stream()
+                .map(OrderImportRowDTO::getRowNumber).toList(), "only the live label — Print's rows");
+        var found = service.historyRows(121L, "all", "austin", null, 0, 50);
+        assertEquals(1, found.getTotal());
+        assertEquals(5, found.getRows().get(0).getRowNumber());
+        assertEquals(5, found.getAll(), "the view counts stay the batch's, whatever the search");
+        assertEquals(3, service.historyRows(121L, "attention", null, 3, 0, 50).getRows().get(0).getRowNumber(),
+                "one row by number, whatever the view");
+        assertNull(service.historyRows(999L, "all", null, null, 0, 50));
     }
 
     // ── Loophole: commit cleared every row's errors and processGroup re-checked

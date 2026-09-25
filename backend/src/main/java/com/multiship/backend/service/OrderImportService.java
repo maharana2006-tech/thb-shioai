@@ -75,6 +75,15 @@ public interface OrderImportService {
     com.multiship.backend.dto.ImportBatchDTO historyDetail(Long id);
 
     /**
+     * One page of a saved import's rows. view = all | attention | pending | live (a live label);
+     * q searches order ref, reference, recipient, city, client, order # and
+     * tracking; rowNumber picks one row whatever the view. Null when the
+     * import is not there.
+     */
+    com.multiship.backend.dto.ImportBatchRowsPageDTO historyRows(Long id, String view, String q, Integer rowNumber,
+                                                               int page, int size);
+
+    /**
      * Soft-delete an import batch — moves it to Trash (sets deletedAt/deletedBy)
      * instead of removing it. Returns the updated DTO, or null if not found.
      * Idempotent: deleting an already-deleted batch is a no-op.

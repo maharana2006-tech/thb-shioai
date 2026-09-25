@@ -179,4 +179,12 @@ public class OrderImportRowDTO {
      * Populated after successful label generation.
      */
     private String trackingUrl;
+
+    /**
+     * On a page of rows only: the row number of another line of this row's
+     * order that has errors — the order ships as one, so this clean line waits
+     * for it. Never stored.
+     */
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    private Integer orderBlockedBy;
 }

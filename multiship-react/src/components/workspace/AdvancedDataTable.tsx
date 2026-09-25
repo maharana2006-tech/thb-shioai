@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useDismissable } from '../../hooks/useDismissable'
+import { downloadCsv } from '../../utils/csv'
 import {
   flexRender,
   getCoreRowModel,
@@ -111,6 +112,8 @@ export interface AdvancedDataTableProps<T> {
    *  so removing a row moves an open expansion onto the next record. */
   getRowId?: (row: T, index: number) => string
   initialHiddenColumns?: string[]
+  /** Server-paged tables: every matching row over all pages, for "Showing N of M". */
+  totalRowCount?: number
   /** Columns shown whatever the saved layout says, while the parent passes them
    *  (e.g. the fields that have errors, under a "Needs attention" filter). The
    *  operator's own show/hide choices are kept and come back once it stops. */
@@ -157,13 +160,6 @@ const densityRowClass: Record<Density, string> = {
   comfortable: 'px-2.5 py-3',
 }
 
-const csvCell = (value: unknown): string => {
-  if (value === null || value === undefined) return ''
-  const str = String(value)
-  if (/[",\r\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`
-  return str
-}
-
 function exportRowValues<T>(table: Table<T>): string[][] {
   const exportable = (col: { columnDef: { meta?: unknown } }) =>
     (col.columnDef.meta as { exportable?: boolean } | undefined)?.exportable !== false
@@ -195,17 +191,6 @@ function exportRowValues<T>(table: Table<T>): string[][] {
   )
 
   return [header, ...rows]
-}
-
-function downloadCsv(filename: string, matrix: string[][]) {
-  const csv = matrix.map((row) => row.map(csvCell).join(',')).join('\r\n')
-  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = filename
-  link.click()
-  URL.revokeObjectURL(url)
 }
 
 /** Read + write the per-table layout to localStorage. Never throws. */
@@ -295,6 +280,9 @@ function SortableHeader<T>({
     <th
       ref={setNodeRef}
       style={style}
+      aria-sort={!header.column.getCanSort() ? undefined
+        : header.column.getIsSorted() === 'asc' ? 'ascending'
+          : header.column.getIsSorted() === 'desc' ? 'descending' : 'none'}
       className={`${densityRowClass[density]} relative select-none ${isDragging ? 'z-10' : ''}`}
     >
       <div className="flex items-center gap-1">
@@ -334,6 +322,7 @@ export default function AdvancedDataTable<T>({
   onRowClick,
   getRowId,
   initialHiddenColumns,
+  totalRowCount,
   forceVisibleColumns,
   initialDensity = 'compact',
   initialPageSize = 25,
@@ -523,7 +512,7 @@ export default function AdvancedDataTable<T>({
   const pageIndex = table.getState().pagination.pageIndex
   const pageSize = table.getState().pagination.pageSize
   const visibleRows = table.getRowModel().rows
-  const totalRows = table.getPreFilteredRowModel().rows.length
+  const totalRows = totalRowCount ?? table.getPreFilteredRowModel().rows.length
   const visibleColumnCount = table.getVisibleLeafColumns().length
 
   const runExport = () => {

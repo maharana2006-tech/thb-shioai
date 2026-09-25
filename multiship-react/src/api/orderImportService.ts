@@ -72,6 +72,8 @@ export interface OrderImportRow {
   /** Tracking URL for the carrier's tracking page.
    *  Populated after successful label generation. */
   trackingUrl?: string | null
+  /** On a page of rows: another line of this row's order that has errors — the order ships as one. */
+  orderBlockedBy?: number | null
   /** Id shared by every order generated from this same file upload. Null until commit. */
   batchId?: number | null
 }
@@ -195,6 +197,20 @@ export interface ImportBatchDetail extends ImportBatchSummary {
   rows: OrderImportRow[]
 }
 
+/** all · attention (errors or a failed label) · pending (no live label) · live (a live label). */
+export type BatchRowsView = 'all' | 'attention' | 'pending' | 'live'
+
+/** One page of a saved import's rows, and what the batch page's filter chips count. */
+export interface BatchRowsPage {
+  rows: OrderImportRow[]
+  /** Rows matching the view and search, over every page. */
+  total: number
+  all: number
+  attention: number
+  pending: number
+  clientCodes: string[]
+}
+
 export const orderImportService = {
   /**
    * Multipart upload — client passes a File; we wrap in FormData.
@@ -302,9 +318,16 @@ export const orderImportService = {
       `/orders/import/history${deleted ? '?deleted=true' : ''}`,
     ),
 
-  /** One saved import with its full rows. */
+  /** One saved import with its full rows. Heavy for a big batch — the batch page reads historyRows. */
   getHistory: (id: number) =>
     apiClient.get<ApiResponse<ImportBatchDetail>>(`/orders/import/history/${id}`),
+
+  /** One page of a saved import's rows, filtered and searched by the server, with the views' counts. */
+  historyRows: (id: number, q: { view?: BatchRowsView; q?: string; rowNumber?: number; page?: number; size?: number } = {}) => {
+    const p = new URLSearchParams()
+    for (const [k, v] of Object.entries(q)) if (v !== undefined && v !== null && String(v).trim() !== '') p.set(k, String(v).trim())
+    return apiClient.get<ApiResponse<BatchRowsPage>>(`/orders/import/history/${id}/rows${p.size ? `?${p}` : ''}`)
+  },
 
   /** Soft-delete an import batch — moves it to Trash (recoverable). */
   deleteBatch: (id: number) =>
@@ -346,7 +369,8 @@ export const orderImportService = {
         if (opts?.usePlatformAccount) p.push('usePlatformAccount=true')
         // allowDuplicate=true confirms re-shipping orders the server flagged as already labelled (409 otherwise).
         if (opts?.allowDuplicate) p.push('allowDuplicate=true')
-        return p.length ? `?${p.join('&')}` : ''
+        p.push('rows=false')
+        return `?${p.join('&')}`
       })()}`,
       {},
     ),
@@ -354,7 +378,7 @@ export const orderImportService = {
   /** Generate a carrier label for a single row of a saved batch. */
   generateRowLabel: (id: number, rowNumber: number, allowDuplicate = false) =>
     apiClient.post<ApiResponse<ImportBatchDetail>>(
-      `/orders/import/history/${id}/generate/${rowNumber}${allowDuplicate ? '?allowDuplicate=true' : ''}`,
+      `/orders/import/history/${id}/generate/${rowNumber}?rows=false${allowDuplicate ? '&allowDuplicate=true' : ''}`,
       {},
     ),
 
@@ -385,7 +409,7 @@ export const orderImportService = {
    */
   validateAllRows: (id: number) =>
     apiClient.post<ApiResponse<ImportBatchDetail>>(
-      `/orders/import/history/${id}/validate-all`,
+      `/orders/import/history/${id}/validate-all?rows=false`,
       {},
     ),
 
@@ -434,7 +458,7 @@ export const orderImportService = {
    */
   updateRow: (id: number, rowNumber: number, row: OrderImportRow) =>
     apiClient.put<ApiResponse<ImportBatchDetail>>(
-      `/orders/import/history/${id}/rows/${rowNumber}`,
+      `/orders/import/history/${id}/rows/${rowNumber}?rows=false`,
       row,
     ),
 

@@ -97,15 +97,42 @@ public class BulkBatchQueryService {
                 .getResultList();
         List<ImportBatchDTO> content = tuples.stream().map(BulkBatchQueryService::summaryOf).toList();
         applyLabelCounts(tuples, content);
-        if (printLog != null) {
-            java.util.Map<Integer, LocalDateTime> printed = printLog.lastPrintedByLabelBatch(content.stream()
-                    .map(ImportBatchDTO::getLabelBatchId).filter(java.util.Objects::nonNull).toList());
-            for (ImportBatchDTO d : content) {
-                LocalDateTime at = d.getLabelBatchId() == null ? null : printed.get(d.getLabelBatchId());
-                d.setLastPrintedAt(at == null ? null : at.toString());
-            }
-        }
+        applyLastPrinted(content);
         return new org.springframework.data.domain.PageImpl<>(content, paging, repository.count(where));
+    }
+
+    /**
+     * One batch as the list shows it — its facts, label counts and last print —
+     * without its rows, in any view (Trash included). The batch page's header:
+     * a 50k-row batch's rows_json is tens of MB, this is a few hundred bytes.
+     */
+    @Transactional(readOnly = true)
+    public Optional<ImportBatchDTO> one(Long id) {
+        if (id == null) return Optional.empty();
+        Optional<String> scope = tenantScope == null ? Optional.empty() : tenantScope.resolveScope();
+        CriteriaBuilder cb = entityManager.getCriteriaBuilder();
+        jakarta.persistence.criteria.CriteriaQuery<jakarta.persistence.Tuple> cq = cb.createTupleQuery();
+        Root<ImportBatch> root = cq.from(ImportBatch.class);
+        cq.multiselect(LIST_COLUMNS.stream().<jakarta.persistence.criteria.Selection<?>>map(c -> root.get(c).alias(c)).toList());
+        List<Predicate> p = new ArrayList<>(List.of(cb.equal(root.get("id"), id)));
+        scope.ifPresent(s -> p.add(cb.equal(cb.upper(root.get("clientCode")), s.trim().toUpperCase(Locale.ROOT))));
+        cq.where(p.toArray(Predicate[]::new));
+        List<jakarta.persistence.Tuple> tuples = entityManager.createQuery(cq).getResultList();
+        if (tuples.isEmpty()) return Optional.empty();
+        List<ImportBatchDTO> content = tuples.stream().map(BulkBatchQueryService::summaryOf).toList();
+        applyLabelCounts(tuples, content);
+        applyLastPrinted(content);
+        return Optional.of(content.get(0));
+    }
+
+    private void applyLastPrinted(List<ImportBatchDTO> content) {
+        if (printLog == null) return;
+        java.util.Map<Integer, LocalDateTime> printed = printLog.lastPrintedByLabelBatch(content.stream()
+                .map(ImportBatchDTO::getLabelBatchId).filter(java.util.Objects::nonNull).toList());
+        for (ImportBatchDTO d : content) {
+            LocalDateTime at = d.getLabelBatchId() == null ? null : printed.get(d.getLabelBatchId());
+            d.setLastPrintedAt(at == null ? null : at.toString());
+        }
     }
 
     @Transactional(readOnly = true)
@@ -172,12 +199,7 @@ public class BulkBatchQueryService {
             perBatch.add(orders);
             allOrders.addAll(orders.keySet());
         }
-        java.util.Set<Integer> voided = new java.util.HashSet<>();
-        if (trackingRepository != null && !allOrders.isEmpty()) {
-            for (var tr : trackingRepository.findByOrderNoIn(allOrders)) {
-                if ("VOIDED".equalsIgnoreCase(tr.getStatus())) voided.add(tr.getOrderNo());
-            }
-        }
+        java.util.Set<Integer> voided = voidedOrdersOfBatches(content, allOrders);
         for (int i = 0; i < content.size(); i++) {
             jakarta.persistence.Tuple t = tuples.get(i);
             ImportBatchDTO d = content.get(i);
@@ -192,6 +214,44 @@ public class BulkBatchQueryService {
             d.setLabelsFailed(failed);
             d.setLabelsPending(Math.max(0, d.getTotalRows() - generated - failed));
         }
+    }
+
+    /** SQL literal: a label_orders map of digit keys to integers. */
+    private static final String LABEL_MAP_SHAPE =
+            "'^\\{\\s*(\"[0-9]+\"\\s*:\\s*[0-9]+\\s*(,\\s*\"[0-9]+\"\\s*:\\s*[0-9]+\\s*)*)?\\}$'";
+
+    /**
+     * The orders of these batches that were voided since generation. The
+     * database expands each batch's label_orders map and joins it to the
+     * tracking rows itself — only the page's batch ids go over the wire. It
+     * sent every labelled order number of the page (tens of thousands for a
+     * client's big batches) in one IN list.
+     */
+    private java.util.Set<Integer> voidedOrdersOfBatches(List<ImportBatchDTO> content, java.util.Set<Integer> allOrders) {
+        java.util.Set<Integer> voided = new java.util.HashSet<>();
+        if (allOrders.isEmpty()) return voided;
+        if (entityManager != null) {
+            // Only maps of the shape this code writes — {"906976": 1, …} — are cast
+            // (inside the CASE, so no plan can cast first): a failed cast would abort
+            // this read-only transaction. Any other map simply counts no voids.
+            List<?> hits = entityManager.createNativeQuery(
+                            "SELECT DISTINCT CAST(e.key AS INTEGER) FROM import_batch b "
+                                    + "CROSS JOIN LATERAL jsonb_each_text(CASE WHEN b.label_orders ~ " + LABEL_MAP_SHAPE
+                                    + " THEN CAST(b.label_orders AS jsonb) END) e "
+                                    + "JOIN order_label_tracking t ON t.order_no = CAST(e.key AS INTEGER) "
+                                    + "WHERE b.id IN (:ids) "
+                                    + "AND UPPER(t.status) = 'VOIDED'")
+                    .setParameter("ids", content.stream().map(ImportBatchDTO::getId).toList())
+                    .getResultList();
+            for (Object o : hits) voided.add(((Number) o).intValue());
+            return voided;
+        }
+        if (trackingRepository != null) {
+            for (var tr : trackingRepository.findByOrderNoIn(allOrders)) {
+                if ("VOIDED".equalsIgnoreCase(tr.getStatus())) voided.add(tr.getOrderNo());
+            }
+        }
+        return voided;
     }
 
     private static int orZero(Integer v) { return v == null ? 0 : v; }

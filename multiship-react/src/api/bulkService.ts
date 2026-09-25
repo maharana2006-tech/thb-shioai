@@ -56,6 +56,9 @@ export const bulkService = {
   /** One page of batches, filtered and sorted by the server. */
   listBatches: (q: BulkBatchQuery) =>
     apiClient.get<ApiResponse<BulkBatchPage>>(`/bulk/batches?${bulkQueryString(q)}`),
+  /** One batch's header as the list shows it — never its rows. */
+  batch: (id: number) =>
+    apiClient.get<ApiResponse<ImportBatchSummary>>(`/bulk/batches/${id}`),
   summary: (view: BulkView) =>
     apiClient.get<ApiResponse<BulkSummary>>(`/bulk/summary?view=${view}`),
 }
