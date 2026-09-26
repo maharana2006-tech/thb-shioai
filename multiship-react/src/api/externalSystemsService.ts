@@ -139,6 +139,26 @@ export const externalSystemsService = {
       `${BASE}/${id}/client-overrides/${encodeURIComponent(clientCode)}`,
     ),
 
+  // PR #750 follow-up — tenant → writeback-connection routing. Empty
+  // list on GET means no clients currently route their writeback here.
+  listRoutedTenants: (id: number) =>
+    apiClient
+      .get<ApiResponse<string[]>>(`${BASE}/${id}/tenant-routings`)
+      .then((res) => res.data ?? []),
+
+  addRoutedTenant: (id: number, tenantCode: string) =>
+    apiClient
+      .put<ApiResponse<{ isSet: boolean }>>(
+        `${BASE}/${id}/tenant-routings/${encodeURIComponent(tenantCode)}`,
+        {},
+      )
+      .then((res) => res.data),
+
+  removeRoutedTenant: (id: number, tenantCode: string) =>
+    apiClient.delete<ApiResponse<void>>(
+      `${BASE}/${id}/tenant-routings/${encodeURIComponent(tenantCode)}`,
+    ),
+
   health: (id: number) =>
     apiClient
       .get<ApiResponse<HealthSnapshot>>(`${BASE}/${id}/health`)

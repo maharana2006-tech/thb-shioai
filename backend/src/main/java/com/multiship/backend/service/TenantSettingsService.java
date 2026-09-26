@@ -107,6 +107,26 @@ public class TenantSettingsService {
         return saved;
     }
 
+    /** Remove a setting. Idempotent — silently no-ops when the row is absent. */
+    @Transactional
+    public void deleteSetting(String tenantCode, String key) {
+        if (tenantCode == null || tenantCode.isBlank() || key == null || key.isBlank()) return;
+        repo.findByTenantCodeAndSettingKey(tenantCode, key).ifPresent(row -> {
+            repo.delete(row);
+            log.info("tenant-setting-cleared: tenant={} key={}", tenantCode, key);
+        });
+    }
+
+    /** Reverse lookup — every tenant whose {@code key} equals {@code value}.
+     *  Used by external-systems admin for the "routed clients" view. */
+    public List<String> tenantsWithSetting(String key, String value) {
+        if (key == null || value == null) return List.of();
+        return repo.findBySettingKeyAndSettingValue(key, value).stream()
+                .map(TenantSetting::getTenantCode)
+                .sorted(String.CASE_INSENSITIVE_ORDER)
+                .toList();
+    }
+
     // ────────────────────────────────────────────────────────────────
     // Typed helpers for enabledChannels
     // ────────────────────────────────────────────────────────────────

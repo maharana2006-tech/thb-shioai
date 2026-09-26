@@ -42,6 +42,7 @@ public class ExternalSystemsAdminController {
     private final ExternalSystemConfigService config;
     private final ExternalSystemRegistry registry;
     private final ObjectMapper objectMapper;
+    private final com.multiship.backend.service.TenantSettingsService tenantSettings;
 
     // ─── connectors ─────────────────────────────────────────────────
 
@@ -168,6 +169,54 @@ public class ExternalSystemsAdminController {
             @PathVariable Long id, @PathVariable String clientCode) {
         config.deleteClientOverride(id, clientCode);
         config.findById(id).ifPresent(c -> registry.reload(c.getName()));
+        return ok(null);
+    }
+
+    // ─── tenant → connection routing (writeback dispatcher target) ──
+
+    /** PR #750 follow-up — expose the {@code writebackConnection} tenant
+     *  setting so admins can route a client's writeback to this connection
+     *  from the FE. The dispatcher's connection resolver
+     *  (ExternalSystemWritebackDispatcher) reads exactly this key. */
+    @Operation(summary = "List clients currently routed to this connection for writeback.")
+    @GetMapping("/{id}/tenant-routings")
+    public ResponseEntity<ApiResponse<List<String>>> listRoutings(@PathVariable Long id) {
+        ExternalSystemConnection c = config.findById(id).orElseThrow(() ->
+                new IllegalArgumentException("Connection " + id + " not found."));
+        return ok(tenantSettings.tenantsWithSetting(
+                com.multiship.backend.service.externalsystems.writeback.ExternalSystemWritebackDispatcher.SETTING_WRITEBACK_CONNECTION,
+                c.getName()));
+    }
+
+    @Operation(summary = "Route this client's writeback to this connection. "
+            + "Sets tenant_settings[tenantCode].writebackConnection to this connection's name.")
+    @PutMapping("/{id}/tenant-routings/{tenantCode}")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> putRouting(
+            @PathVariable Long id, @PathVariable String tenantCode, Authentication auth) {
+        ExternalSystemConnection c = config.findById(id).orElseThrow(() ->
+                new IllegalArgumentException("Connection " + id + " not found."));
+        tenantSettings.putSetting(tenantCode.trim(),
+                com.multiship.backend.service.externalsystems.writeback.ExternalSystemWritebackDispatcher.SETTING_WRITEBACK_CONNECTION,
+                c.getName(), actor(auth));
+        return ok(Map.of("connectionId", id, "connectionName", c.getName(),
+                "tenantCode", tenantCode, "isSet", true));
+    }
+
+    @Operation(summary = "Remove this client's writeback routing. "
+            + "The dispatcher then falls back to the default connection.")
+    @DeleteMapping("/{id}/tenant-routings/{tenantCode}")
+    public ResponseEntity<ApiResponse<Void>> deleteRouting(
+            @PathVariable Long id, @PathVariable String tenantCode) {
+        // Only clear the setting when it actually points at THIS connection —
+        // avoids accidentally clearing a routing that names a different one.
+        ExternalSystemConnection c = config.findById(id).orElseThrow(() ->
+                new IllegalArgumentException("Connection " + id + " not found."));
+        String key = com.multiship.backend.service.externalsystems.writeback.ExternalSystemWritebackDispatcher.SETTING_WRITEBACK_CONNECTION;
+        if (tenantSettings.getSetting(tenantCode.trim(), key)
+                .map(v -> v.equalsIgnoreCase(c.getName()))
+                .orElse(false)) {
+            tenantSettings.deleteSetting(tenantCode.trim(), key);
+        }
         return ok(null);
     }
 

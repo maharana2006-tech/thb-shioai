@@ -408,6 +408,7 @@ function EditDrawer({
             />
           ) : tab === 'writeback' ? (
             <WritebackTab
+              connectionId={initial?.id ?? null}
               wbTracking={wbTracking} setWbTracking={setWbTracking}
               wbShipDate={wbShipDate} setWbShipDate={setWbShipDate}
               wbStatus={wbStatus} setWbStatus={setWbStatus}
@@ -538,6 +539,7 @@ function MainTab({
  * flags in the same PUT that saves the main fields.
  */
 function WritebackTab({
+  connectionId,
   wbTracking, setWbTracking,
   wbShipDate, setWbShipDate,
   wbStatus, setWbStatus,
@@ -545,6 +547,7 @@ function WritebackTab({
   wbService, setWbService,
   wbFreight, setWbFreight,
 }: {
+  connectionId: number | null
   wbTracking: boolean; setWbTracking: (v: boolean) => void
   wbShipDate: boolean; setWbShipDate: (v: boolean) => void
   wbStatus: boolean; setWbStatus: (v: boolean) => void
@@ -621,6 +624,124 @@ function WritebackTab({
           </label>
         ))}
       </div>
+
+      {connectionId != null ? <RoutedTenantsSection connectionId={connectionId} /> : null}
+    </div>
+  )
+}
+
+/**
+ * PR #750 follow-up — bind clients to this connection for writeback.
+ * The dispatcher reads {@code tenant_settings[tenantCode].writebackConnection}
+ * to decide which connection a client's writeback lands on; without a
+ * route, the client's writeback silently no-ops. This section lets an
+ * admin add / remove those routes from the connection editor.
+ */
+function RoutedTenantsSection({ connectionId }: { connectionId: number }) {
+  const [routed, setRouted] = useState<string[]>([])
+  const [adding, setAdding] = useState<string>('')
+  const [busy, setBusy] = useState<boolean>(false)
+  const [loadErr, setLoadErr] = useState<string | null>(null)
+
+  const reload = async () => {
+    try {
+      const list = await externalSystemsService.listRoutedTenants(connectionId)
+      setRouted(list)
+      setLoadErr(null)
+    } catch (e) {
+      setLoadErr((e as Error).message ?? 'Failed to load')
+    }
+  }
+
+  useEffect(() => { void reload() }, [connectionId])
+
+  const add = async () => {
+    const code = adding.trim().toUpperCase()
+    if (!code) { notify.error('Enter a client code.'); return }
+    if (routed.includes(code)) { notify.info(`${code} is already routed here.`); return }
+    setBusy(true)
+    try {
+      await externalSystemsService.addRoutedTenant(connectionId, code)
+      notify.success(`${code} routed to this connection.`)
+      setAdding('')
+      await reload()
+    } catch (e) {
+      notify.apiError(e, 'Route add failed.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const remove = async (code: string) => {
+    setBusy(true)
+    try {
+      await externalSystemsService.removeRoutedTenant(connectionId, code)
+      notify.success(`${code} unrouted (falls back to default connection).`)
+      await reload()
+    } catch (e) {
+      notify.apiError(e, 'Route remove failed.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="mt-2 space-y-2">
+      <div className="flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-[12px] text-slate-700">
+        <FiCornerUpLeft className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-500" />
+        <div>
+          <p className="font-semibold text-slate-800">Routed clients</p>
+          <p className="mt-1 text-slate-600">
+            Clients listed here send their writeback to this connection. A client
+            not on any connection's routing list falls back to the default
+            connection (<code>nds-default</code>) or is silently skipped.
+          </p>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <input
+          type="text"
+          value={adding}
+          onChange={(e) => setAdding(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void add() } }}
+          placeholder="Client code (e.g. ACME)"
+          className="flex-1 rounded-lg border border-slate-200 px-3 py-1.5 text-[13px] focus:border-slate-400 focus:outline-none"
+        />
+        <button
+          type="button"
+          onClick={() => void add()}
+          disabled={busy || !adding.trim()}
+          className="rounded-lg bg-slate-900 px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Add
+        </button>
+      </div>
+
+      {loadErr ? (
+        <p className="text-[12px] text-rose-600">Failed to load routings: {loadErr}</p>
+      ) : routed.length === 0 ? (
+        <p className="text-[12px] text-slate-500">No clients routed to this connection yet.</p>
+      ) : (
+        <div className="rounded-xl border border-slate-200 bg-white">
+          {routed.map((code, i) => (
+            <div
+              key={code}
+              className={`flex items-center justify-between px-3 py-2 ${i > 0 ? 'border-t border-slate-100' : ''}`}
+            >
+              <span className="font-mono text-[12.5px] text-slate-800">{code}</span>
+              <button
+                type="button"
+                onClick={() => void remove(code)}
+                disabled={busy}
+                className="text-[12px] font-semibold text-rose-600 hover:underline disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

@@ -13,4 +13,9 @@ public interface TenantSettingRepository extends JpaRepository<TenantSetting, Lo
     Optional<TenantSetting> findByTenantCodeAndSettingKey(String tenantCode, String settingKey);
 
     List<TenantSetting> findByTenantCode(String tenantCode);
+
+    /** Reverse lookup — every tenant whose {@code settingKey} points at
+     *  {@code settingValue}. Used by ExternalSystemsAdminController to
+     *  list clients routed to a given writeback connection. */
+    List<TenantSetting> findBySettingKeyAndSettingValue(String settingKey, String settingValue);
 }
