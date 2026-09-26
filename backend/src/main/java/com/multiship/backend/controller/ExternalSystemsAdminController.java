@@ -43,6 +43,7 @@ public class ExternalSystemsAdminController {
     private final ExternalSystemRegistry registry;
     private final ObjectMapper objectMapper;
     private final com.multiship.backend.service.TenantSettingsService tenantSettings;
+    private final com.multiship.backend.service.externalsystems.writeback.ExternalSystemWritebackDispatcher writebackDispatcher;
 
     // ─── connectors ─────────────────────────────────────────────────
 
@@ -231,6 +232,42 @@ public class ExternalSystemsAdminController {
         return ok(registry.healthCheck(c.getName()));
     }
 
+    @Operation(summary = "V90 verify — send a synthetic writeback dispatch with the "
+            + "given source + channel through the real dispatcher. Bypasses carrier / "
+            + "label generation so admins can prove the gate matrix without shipping. "
+            + "Returns the WritebackAck; watch backend logs for the routing decision.")
+    @PostMapping("/{id}/writeback-probe")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> writebackProbe(
+            @PathVariable Long id, @RequestBody(required = false) WritebackProbeRequest req) {
+        ExternalSystemConnection c = config.findById(id).orElseThrow(() ->
+                new IllegalArgumentException("Connection " + id + " not found."));
+        String clientCode = req == null || req.clientCode == null ? "PROBE" : req.clientCode;
+        String source     = req == null ? "MANUAL" : req.source;
+        String channel    = req == null ? "D2C"    : req.channel;
+        int orderNo       = req == null || req.orderNo == null ? 999_999_999 : req.orderNo;
+        var payload = com.multiship.backend.service.externalsystems.writeback.WritebackPayload.builder()
+                .clientCode(clientCode)
+                .orderNo(orderNo)
+                .source(source)
+                .channel(channel)
+                .trackingNumber("PROBE-1Z999")
+                .shipDate(LocalDateTime.now())
+                .status("SHIPPED")
+                .carrierCode("PROBE")
+                .serviceCode("PROBE_GROUND")
+                .build();
+        writebackDispatcher.dispatchOnGenerate(payload);
+        return ok(Map.of(
+                "connectionName", c.getName(),
+                "systemType", c.getSystemType(),
+                "sent", Map.of(
+                        "clientCode", clientCode,
+                        "orderNo", orderNo,
+                        "source", source,
+                        "channel", channel),
+                "note", "Fire-and-forget dispatch queued. Tail backend.log for 'writeback[generate]' or 'skipping generate' lines."));
+    }
+
     @Operation(summary = "Dial the connection with a given login profile "
             + "(PRODUCTION / CLIENT) and confirm it can open. For CLIENT the "
             + "caller supplies a clientCode. Returns health-shape but with a "
@@ -330,6 +367,14 @@ public class ExternalSystemsAdminController {
     public static class TestConnectionRequest {
         public String loginProfile;
         public String clientCode;
+    }
+
+    /** V90 verify — synthetic writeback probe body. All nullable; sensible defaults applied. */
+    public static class WritebackProbeRequest {
+        public String clientCode;
+        public String source;
+        public String channel;
+        public Integer orderNo;
     }
 
     // ─────────────────────────── helpers ────────────────────────────
