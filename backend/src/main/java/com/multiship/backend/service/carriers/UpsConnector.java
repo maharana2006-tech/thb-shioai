@@ -685,136 +685,28 @@ public class UpsConnector implements CarrierConnector {
     }
 
     /**
-     * Native UPS shipment-level validation through the Rating API
-     * ({@code /api/rating/{v}/Rate}, RequestOption "Rate") for the picked
-     * service. UPS checks the lane, service availability, addresses and
-     * packages and returns any {@code Response.Alert[]} — and nothing is
-     * created. It used to POST to {@code /ship} with RequestOption
-     * "validate", which still creates a shipment and a label.
+     * UPS shipment-level validation. Delegates to the {@link CarrierConnector}
+     * default, which runs address-only validation via {@link #validateAddress}
+     * (UPS AVS, {@code /api/addressvalidation/{v}/1}) on the recipient.
      *
-     * <p>Response shape (200):
-     * <pre>
-     * ShipmentResponse.Response.ResponseStatus { Code (1=success), Description }
-     * ShipmentResponse.Response.Alert[] { Code, Description }
-     * </pre>
-     * Error shape (4xx / 5xx):
-     * <pre>
-     * response.errors[] { code, message }
-     * </pre>
+     * <p>History: Sprint 52 PR δ.1 (Sept 21) had this override hit the
+     * Rating API ({@code /api/rating/{v}/Rate}) for a richer lane +
+     * service + package check. Turned out UPS's CIE Rating API returns
+     * {@code 111212 "Package Type unavailable"} even for lanes the same
+     * account had successfully shipped through the Ship API a day earlier
+     * (documented UPS CIE quirk — Rating API's lane matrix ≠ Shipping
+     * API's). That silently gated Generate Label on every UPS order for
+     * anyone using CIE credentials. The override is deleted; the default
+     * address-only check is what we can guarantee across CIE + Production
+     * without a third UPS-side scope dance. Ship API's own validation
+     * runs at Generate Label time, so wire errors still surface before
+     * a real label is created — just at Generate rather than pre-flight.
      *
-     * <p>Verdict mapping:
-     * <ul>
-     *   <li>ResponseStatus.Code = 1 + no Alert → EXACT / valid=true.</li>
-     *   <li>ResponseStatus.Code = 1 + Alert[] present → CORRECTED / valid=true, warnings populated.</li>
-     *   <li>ResponseStatus.Code != 1 → NOT_FOUND / valid=false.</li>
-     *   <li>4xx / 5xx → ERROR / valid=false.</li>
-     * </ul>
+     * <p>To re-enable richer pre-flight validation later, either (a) add
+     * a per-account "rating pre-flight" flag that opts in when the
+     * operator's UPS account has confirmed Rating coverage in CIE, or
+     * (b) call UPS's Time-in-Transit API (no rate scope) for lane check.
      */
-    @Override
-    public ValidateShipmentResult validateShipment(ShipmentRequestDTO request,
-                                                    String accessToken,
-                                                    String environment) {
-        normalizeUsTerritories(request);
-        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
-            return new ValidateShipmentResult(false, "NOT_SUPPORTED", "SHIPMENT",
-                    java.util.List.of(), java.util.List.of(),
-                    "UPS validateShipment needs live credentials; the account is on a fallback token.",
-                    null);
-        }
-        // Same boundary guards as createShipment — a validate call with
-        // blank country / account is guaranteed to fail on the wire, so
-        // fail here with the actionable message the operator can act on.
-        if (!StringUtils.hasText(request.getRecipientCountryCode())) {
-            return new ValidateShipmentResult(false, "ERROR", "SHIPMENT",
-                    java.util.List.of(),
-                    java.util.List.of("recipient country code is required"),
-                    "UPS validateShipment requires a recipient country code (order "
-                            + request.getReferenceNumber() + ").",
-                    null);
-        }
-        if (!StringUtils.hasText(request.getAccountNumber())
-                || "ACCOUNT".equalsIgnoreCase(request.getAccountNumber().trim())) {
-            return new ValidateShipmentResult(false, "ERROR", "SHIPMENT",
-                    java.util.List.of(),
-                    java.util.List.of("shipper account number is required"),
-                    "UPS validateShipment requires the shipper account number that owns the label "
-                            + "(order " + request.getReferenceNumber() + ").",
-                    null);
-        }
-        // UPS-9120800 same boundary guard as createShipment. Surface as a
-        // typed ValidateShipmentResult so the validate button shows the
-        // actionable message inline in the FE panel instead of rethrowing.
-        try {
-            assertUpsIntlContactPresent(request);
-        } catch (IllegalArgumentException guardEx) {
-            return new ValidateShipmentResult(false, "ERROR", "SHIPMENT",
-                    java.util.List.of(),
-                    java.util.List.of(guardEx.getMessage()),
-                    guardEx.getMessage(), null);
-        }
-        try {
-            // The Rating API, never Ship. POST /ship CREATES a shipment and a
-            // label whatever RequestOption says — "validate" only switches on
-            // city/state/ZIP checking — so every Validate click used to open
-            // a real UPS shipment that was then thrown away without a void.
-            // Rate with the picked service runs the lane, service, address
-            // and package checks and creates nothing.
-            Map<String, Object> shipment = buildRateShopShipment(request);
-            shipment.put("Service", Map.of("Code", firstNonBlank(request.getServiceType(), "03")));
-            Map<String, Object> rateRequest = new LinkedHashMap<>();
-            rateRequest.put("Request", Map.of(
-                    "RequestOption", "Rate",
-                    "SubVersion", "2205",
-                    "TransactionReference", Map.of("CustomerContext",
-                            firstNonBlank(request.getReferenceNumber(), ""))));
-            rateRequest.put("CustomerClassification", Map.of("Code", "00"));
-            rateRequest.put("Shipment", shipment);
-            Map<String, Object> payload = Map.of("RateRequest", rateRequest);
-            String baseUrl = isSandbox(environment)
-                    ? carrierProperties.getUps().getSandboxUrl()
-                    : carrierProperties.getUps().getApiBaseUrl();
-            logUpsWirePayload("validateShipment", payload, environment);
-            String rateUri = "/api/rating/" + carrierProperties.getUps().getApiVersion() + "/Rate";
-            String response = HttpClients.newBuilder()
-                    .baseUrl(baseUrl)
-                    .build()
-                    .post()
-                    .uri(rateUri)
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .accept(MediaType.APPLICATION_JSON)
-                    .header("Authorization", "Bearer " + accessToken)
-                    .header("transId", java.util.UUID.randomUUID().toString())
-                    .header("transactionSrc", "multiship")
-                    .body(payload)
-                    .retrieve()
-                    .body(String.class);
-            log.debug("UPS validateShipment response: {}", response);
-            return parseUpsValidateShipmentResponse(response);
-        } catch (org.springframework.web.client.RestClientResponseException ex) {
-            String body = ex.getResponseBodyAsString();
-            log.warn("UPS validateShipment rejected (HTTP {}): {}",
-                    ex.getStatusCode().value(), body);
-            java.util.List<String> errors = extractUpsErrors(body);
-            // PR #533 — human summary. Same pattern as FedEx: on a
-            // multi-error rejection, show the count + bulleted details;
-            // single error surfaced inline.
-            String msg;
-            if (errors.isEmpty()) {
-                msg = "UPS validateShipment rejected: HTTP " + ex.getStatusCode().value();
-            } else if (errors.size() == 1) {
-                msg = "UPS rejected the shipment: " + errors.get(0);
-            } else {
-                msg = "UPS flagged " + errors.size() + " issues with the shipment.";
-            }
-            return new ValidateShipmentResult(false, "ERROR", "SHIPMENT",
-                    java.util.List.of(), errors, msg, body);
-        } catch (Exception ex) {
-            log.warn("UPS validateShipment call failed: {}", ex.getMessage());
-            return new ValidateShipmentResult(false, "ERROR", "SHIPMENT",
-                    java.util.List.of(), java.util.List.of(ex.getMessage()),
-                    "UPS validateShipment call failed: " + ex.getMessage(), null);
-        }
-    }
 
     /**
      * Parse a UPS ShipConfirm-with-validate 200 response. Package-visible
