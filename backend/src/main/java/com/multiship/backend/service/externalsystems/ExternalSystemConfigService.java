@@ -44,9 +44,33 @@ public class ExternalSystemConfigService {
         return connectionRepo.findByActiveTrue();
     }
 
+    /**
+     * V91 — env-aware name lookup. Returns the DEV row when the PROD row's
+     * {@code use_dev} toggle is TRUE and a DEV row exists; otherwise returns
+     * the PROD row. Falls back to PROD (with a WARN log) if DEV is requested
+     * but not configured — a misconfigured toggle shouldn't nuke live prod.
+     */
     public Optional<ExternalSystemConnection> findByName(String name) {
         if (name == null || name.isBlank()) return Optional.empty();
-        return connectionRepo.findByName(name);
+        java.util.List<ExternalSystemConnection> rows = connectionRepo.findAllByName(name);
+        if (rows.isEmpty()) return Optional.empty();
+        ExternalSystemConnection prod = rows.stream()
+                .filter(r -> ExternalSystemConnection.ENV_PROD.equalsIgnoreCase(r.getEnvironment()))
+                .findFirst().orElse(null);
+        ExternalSystemConnection dev = rows.stream()
+                .filter(r -> ExternalSystemConnection.ENV_DEV.equalsIgnoreCase(r.getEnvironment()))
+                .findFirst().orElse(null);
+        if (prod != null && Boolean.TRUE.equals(prod.getUseDev())) {
+            if (dev != null) return Optional.of(dev);
+            log.warn("external-system '{}': use_dev=true but no DEV row exists — falling back to PROD", name);
+        }
+        return prod != null ? Optional.of(prod) : Optional.ofNullable(dev);
+    }
+
+    /** V91 — env-scoped fetch for admin CRUD (never resolves via use_dev). */
+    public Optional<ExternalSystemConnection> findByNameAndEnvironment(String name, String environment) {
+        if (name == null || name.isBlank() || environment == null || environment.isBlank()) return Optional.empty();
+        return connectionRepo.findByNameAndEnvironment(name.trim(), environment.trim().toUpperCase());
     }
 
     public Optional<ExternalSystemConnection> findById(Long id) {

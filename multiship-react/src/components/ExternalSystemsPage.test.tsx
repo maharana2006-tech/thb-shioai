@@ -79,6 +79,8 @@ const CONN_SUMMARY: ConnectionSummary = {
   active: true,
   updatedAt: '2026-09-26T10:00:00Z',
   updatedBy: 'admin',
+  environment: 'PROD',
+  useDev: false,
 }
 
 const CONN_DETAIL: ConnectionDetail = {
@@ -101,6 +103,8 @@ const CONN_DETAIL: ConnectionDetail = {
   writebackSourceApi: true,
   writebackChannelD2c: true,
   writebackChannelB2b: true,
+  environment: 'PROD',
+  useDev: false,
 }
 
 const CONNECTORS: ConnectorSummary[] = [

@@ -22,6 +22,9 @@ export interface ConnectionSummary {
   active: boolean
   updatedAt: string | null
   updatedBy: string | null
+  // V91 env split. Shows PROD or DEV chip + a "using DEV" marker on PROD rows.
+  environment: 'PROD' | 'DEV' | string
+  useDev: boolean
 }
 
 export interface ConnectionDetail {
@@ -48,6 +51,10 @@ export interface ConnectionDetail {
   writebackSourceApi: boolean
   writebackChannelD2c: boolean
   writebackChannelB2b: boolean
+  // V91 env split. environment is PROD | DEV (this row's env). useDev is
+  // canonical on the PROD row: TRUE = resolver picks the DEV row.
+  environment: 'PROD' | 'DEV' | string
+  useDev: boolean
 }
 
 export interface ConnectionUpsertRequest {
@@ -68,6 +75,9 @@ export interface ConnectionUpsertRequest {
   writebackSourceApi?: boolean
   writebackChannelD2c?: boolean
   writebackChannelB2b?: boolean
+  // V91 env split — omit to leave alone.
+  environment?: 'PROD' | 'DEV' | string
+  useDev?: boolean
 }
 
 /** Health / test-connection response payload shape. */

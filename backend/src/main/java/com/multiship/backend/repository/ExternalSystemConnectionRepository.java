@@ -10,7 +10,16 @@ import java.util.Optional;
 @Repository
 public interface ExternalSystemConnectionRepository extends JpaRepository<ExternalSystemConnection, Long> {
 
+    /** V91 — returns the row currently active for this name (PROD unless the
+     *  PROD row's use_dev toggle is TRUE, in which case DEV). Implemented in
+     *  the service layer via findAllByName; kept here for backwards-compat. */
     Optional<ExternalSystemConnection> findByName(String name);
+
+    /** V91 — env-scoped lookup for admin CRUD (edit the PROD row, edit the DEV row). */
+    Optional<ExternalSystemConnection> findByNameAndEnvironment(String name, String environment);
+
+    /** V91 — both env rows for a given name (0, 1, or 2 rows). */
+    List<ExternalSystemConnection> findAllByName(String name);
 
     List<ExternalSystemConnection> findBySystemType(String systemType);
 

@@ -322,7 +322,10 @@ public class ExternalSystemsAdminController {
 
     public record ConnectionSummary(
             Long id, String name, String systemType, boolean active,
-            LocalDateTime updatedAt, String updatedBy) {}
+            LocalDateTime updatedAt, String updatedBy,
+            // V91 env split — surface so the list can render an env chip and
+            // an at-a-glance "using DEV" indicator on the PROD row.
+            String environment, boolean useDev) {}
 
     public record ConnectionDetail(
             Long id, String name, String systemType, boolean active,
@@ -342,7 +345,11 @@ public class ExternalSystemsAdminController {
             boolean writebackSourceBulk,
             boolean writebackSourceApi,
             boolean writebackChannelD2c,
-            boolean writebackChannelB2b) {}
+            boolean writebackChannelB2b,
+            // V91 env split — this row is PROD or DEV. useDev is canonical
+            // on the PROD row (TRUE = resolver hands the DEV row back).
+            String environment,
+            boolean useDev) {}
 
     public static class ConnectionUpsertRequest {
         public String name;
@@ -364,6 +371,9 @@ public class ExternalSystemsAdminController {
         public Boolean writebackSourceApi;
         public Boolean writebackChannelD2c;
         public Boolean writebackChannelB2b;
+        // V91 env split — null = don't touch.
+        public String environment;
+        public Boolean useDev;
     }
 
     public static class SecretUpsertRequest {
@@ -422,11 +432,22 @@ public class ExternalSystemsAdminController {
         if (req.writebackSourceApi    != null) c.setWritebackSourceApi(req.writebackSourceApi);
         if (req.writebackChannelD2c   != null) c.setWritebackChannelD2c(req.writebackChannelD2c);
         if (req.writebackChannelB2b   != null) c.setWritebackChannelB2b(req.writebackChannelB2b);
+        // V91 env split. Environment is PROD/DEV; useDev flip valid only on PROD row.
+        if (req.environment != null) {
+            String env = req.environment.trim().toUpperCase();
+            if (!ExternalSystemConnection.ENV_PROD.equals(env) && !ExternalSystemConnection.ENV_DEV.equals(env)) {
+                throw new IllegalArgumentException("environment must be PROD or DEV, got: " + env);
+            }
+            c.setEnvironment(env);
+        }
+        if (req.useDev != null) c.setUseDev(req.useDev);
     }
 
     private ConnectionSummary summarize(ExternalSystemConnection c) {
         return new ConnectionSummary(c.getId(), c.getName(), c.getSystemType(),
-                c.isActive(), c.getUpdatedAt(), c.getUpdatedBy());
+                c.isActive(), c.getUpdatedAt(), c.getUpdatedBy(),
+                c.getEnvironment() == null ? ExternalSystemConnection.ENV_PROD : c.getEnvironment(),
+                Boolean.TRUE.equals(c.getUseDev()));
     }
 
     private ConnectionDetail detail(ExternalSystemConnection c) {
@@ -443,7 +464,9 @@ public class ExternalSystemsAdminController {
                 Boolean.TRUE.equals(c.getWritebackSourceBulk()),
                 Boolean.TRUE.equals(c.getWritebackSourceApi()),
                 Boolean.TRUE.equals(c.getWritebackChannelD2c()),
-                Boolean.TRUE.equals(c.getWritebackChannelB2b()));
+                Boolean.TRUE.equals(c.getWritebackChannelB2b()),
+                c.getEnvironment() == null ? ExternalSystemConnection.ENV_PROD : c.getEnvironment(),
+                Boolean.TRUE.equals(c.getUseDev()));
     }
 
     private String actor(Authentication auth) {

@@ -155,7 +155,26 @@ export default function ExternalSystemsPage() {
                 const health = healthById[row.id]
                 return (
                   <tr key={row.id} className="hover:bg-slate-50/60">
-                    <td className="px-3 py-2 font-mono text-[12.5px] text-slate-800">{row.name}</td>
+                    <td className="px-3 py-2 font-mono text-[12.5px] text-slate-800">
+                      <div className="flex items-center gap-1.5">
+                        <span>{row.name}</span>
+                        <span className={`rounded-full px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide ${
+                          row.environment === 'DEV'
+                            ? 'bg-amber-100 text-amber-800 ring-1 ring-amber-200'
+                            : 'bg-slate-100 text-slate-600 ring-1 ring-slate-200'
+                        }`}>
+                          {row.environment ?? 'PROD'}
+                        </span>
+                        {row.environment === 'PROD' && row.useDev ? (
+                          <span
+                            title="use_dev=true — resolver hands the DEV row back to consumers"
+                            className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[9.5px] font-semibold text-amber-800 ring-1 ring-amber-200"
+                          >
+                            → DEV
+                          </span>
+                        ) : null}
+                      </div>
+                    </td>
                     <td className="px-3 py-2">
                       <span className="rounded-full bg-slate-100 px-2 py-0.5 font-mono text-[11px] font-semibold text-slate-700">
                         {row.systemType}
@@ -320,6 +339,11 @@ function EditDrawer({
   const [wbSrcApi,    setWbSrcApi]    = useState<boolean>(initial?.writebackSourceApi    ?? true)
   const [wbChanD2c,   setWbChanD2c]   = useState<boolean>(initial?.writebackChannelD2c   ?? true)
   const [wbChanB2b,   setWbChanB2b]   = useState<boolean>(initial?.writebackChannelB2b   ?? true)
+  // V91 env split. environment picks which env this row IS (PROD/DEV); useDev
+  // flips the resolver on the PROD row to hand the DEV row back to consumers.
+  const [environment, setEnvironment] = useState<'PROD' | 'DEV'>(
+    (initial?.environment as 'PROD' | 'DEV') ?? 'PROD')
+  const [useDev, setUseDev] = useState<boolean>(initial?.useDev ?? false)
 
   const parseError = useMemo(() => {
     try { JSON.parse(configJson); return null }
@@ -351,6 +375,8 @@ function EditDrawer({
         writebackSourceApi:    wbSrcApi,
         writebackChannelD2c:   wbChanD2c,
         writebackChannelB2b:   wbChanB2b,
+        environment,
+        useDev,
       }
       if (isNew) {
         await externalSystemsService.create(payload)
@@ -417,6 +443,8 @@ function EditDrawer({
               parseError={parseError}
               connectors={connectors}
               isNew={isNew}
+              environment={environment} setEnvironment={setEnvironment}
+              useDev={useDev} setUseDev={setUseDev}
             />
           ) : tab === 'writeback' ? (
             <WritebackTab
@@ -469,6 +497,7 @@ function EditDrawer({
 function MainTab({
   name, setName, systemType, setSystemType, active, setActive,
   configJson, setConfigJson, parseError, connectors, isNew,
+  environment, setEnvironment, useDev, setUseDev,
 }: {
   name: string; setName: (v: string) => void
   systemType: string; setSystemType: (v: string) => void
@@ -477,6 +506,8 @@ function MainTab({
   parseError: string | null
   connectors: ConnectorSummary[]
   isNew: boolean
+  environment: 'PROD' | 'DEV'; setEnvironment: (v: 'PROD' | 'DEV') => void
+  useDev: boolean; setUseDev: (v: boolean) => void
 }) {
   return (
     <div className="space-y-3">
@@ -519,6 +550,39 @@ function MainTab({
         <span className="text-[12.5px] font-semibold text-slate-800">Active</span>
         <span className="text-[11px] text-slate-500">— inactive rows are loaded but never dispatched to.</span>
       </label>
+
+      {/* V91 env split — one row per (name, env). Locked after create. */}
+      <label className="block">
+        <span className="mb-1 block text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Environment</span>
+        <select
+          value={environment}
+          onChange={(e) => setEnvironment(e.target.value as 'PROD' | 'DEV')}
+          disabled={!isNew}
+          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-[13px] disabled:bg-slate-50 disabled:text-slate-500 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+        >
+          <option value="PROD">PROD — production config</option>
+          <option value="DEV">DEV — development / staging config</option>
+        </select>
+        <span className="mt-1 block text-[10.5px] text-slate-400">
+          {isNew
+            ? 'Two rows per name allowed: PROD + DEV. Toggle "Use DEV" on the PROD row to make the resolver hand DEV back to consumers.'
+            : 'Environment is immutable after create. Delete + recreate to change.'}
+        </span>
+      </label>
+
+      {environment === 'PROD' ? (
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={useDev}
+            onChange={(e) => setUseDev(e.target.checked)}
+            className="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-300"
+          />
+          <span className="text-[12.5px] font-semibold text-slate-800">Use DEV environment</span>
+          <span className="text-[11px] text-slate-500">— resolver hands the DEV row back to consumers. Requires a DEV row with the same name.</span>
+        </label>
+      ) : null}
+
       <label className="block">
         <span className="mb-1 flex items-center justify-between text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">
           <span>Config (JSON)</span>

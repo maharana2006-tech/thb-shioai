@@ -19,10 +19,14 @@ import java.time.ZoneOffset;
  */
 @Entity
 @Table(name = "external_system_connection", uniqueConstraints =
-        @UniqueConstraint(name = "uk_external_system_connection_name",
-                columnNames = "name"))
+        @UniqueConstraint(name = "uk_external_system_connection_name_env",
+                columnNames = {"name", "environment"}))
 @Data
 public class ExternalSystemConnection {
+
+    /** V91 — this row is either PROD config or DEV config for its name. */
+    public static final String ENV_PROD = "PROD";
+    public static final String ENV_DEV  = "DEV";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -99,4 +103,17 @@ public class ExternalSystemConnection {
 
     @Column(name = "writeback_channel_b2b", nullable = false, columnDefinition = "boolean default true")
     private Boolean writebackChannelB2b = true;
+
+    // ── V91 environment split ─────────────────────────────────────────
+    // Two rows per connection name allowed: one PROD + one DEV. The
+    // `use_dev` toggle is canonical on the PROD row: TRUE = resolver
+    // hands the DEV row back when consumers ask for the connection.
+
+    /** {@link #ENV_PROD} or {@link #ENV_DEV}. */
+    @Column(name = "environment", nullable = false, length = 10, columnDefinition = "varchar(10) default 'PROD'")
+    private String environment = ENV_PROD;
+
+    /** Canonical on the PROD row (ignored on DEV). TRUE = pick the DEV row. */
+    @Column(name = "use_dev", nullable = false, columnDefinition = "boolean default false")
+    private Boolean useDev = false;
 }
