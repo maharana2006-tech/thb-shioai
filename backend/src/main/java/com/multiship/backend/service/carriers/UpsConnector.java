@@ -3380,6 +3380,11 @@ public class UpsConnector implements CarrierConnector {
             boolean shipToHasEmail = false;
             Object intlInvoiceTotal = "-";
             Integer intlProductCount = null;
+            Object shipperPostal = null;
+            Object shipperState = null;
+            Object shipperNumber = null;
+            Object shipToPostal = null;
+            Object shipToState = null;
             if (shipment != null) {
                 Map<String, Object> serviceOptions =
                         (Map<String, Object>) shipment.get("ShipmentServiceOptions");
@@ -3412,25 +3417,34 @@ public class UpsConnector implements CarrierConnector {
                 Map<String, Object> shipTo = (Map<String, Object>) shipment.get("ShipTo");
                 if (shipTo != null) {
                     Map<String, Object> a = (Map<String, Object>) shipTo.get("Address");
-                    if (a != null) shipToCountry = a.get("CountryCode");
+                    if (a != null) {
+                        shipToCountry = a.get("CountryCode");
+                        shipToPostal = a.get("PostalCode");
+                        shipToState = a.get("StateProvinceCode");
+                    }
                     shipToHasPhone = shipTo.get("Phone") != null;
                     shipToHasEmail = StringUtils.hasText((String) shipTo.get("EMailAddress"));
                 }
                 Map<String, Object> shipper = (Map<String, Object>) shipment.get("Shipper");
                 if (shipper != null) {
                     Map<String, Object> a = (Map<String, Object>) shipper.get("Address");
-                    if (a != null) shipperCountry = a.get("CountryCode");
+                    if (a != null) {
+                        shipperCountry = a.get("CountryCode");
+                        shipperPostal = a.get("PostalCode");
+                        shipperState = a.get("StateProvinceCode");
+                    }
                     shipperHasPhone = shipper.get("Phone") != null;
                     shipperHasEmail = StringUtils.hasText((String) shipper.get("EMailAddress"));
+                    shipperNumber = shipper.get("ShipperNumber");
                 }
             }
             log.info("UPS {} wire → env={} Service.Code={} Package[0].Packaging.Code={} "
-                            + "Shipper.CountryCode={} hasPhone={} hasEmail={} "
-                            + "ShipTo.CountryCode={} hasPhone={} hasEmail={} "
+                            + "Shipper.Number={} Shipper.CountryCode={} state={} postal={} hasPhone={} hasEmail={} "
+                            + "ShipTo.CountryCode={} state={} postal={} hasPhone={} hasEmail={} "
                             + "IntlForms.InvoiceLineTotal={} products={}",
                     op, environment, serviceCode, packagingCode,
-                    shipperCountry, shipperHasPhone, shipperHasEmail,
-                    shipToCountry, shipToHasPhone, shipToHasEmail,
+                    shipperNumber, shipperCountry, shipperState, shipperPostal, shipperHasPhone, shipperHasEmail,
+                    shipToCountry, shipToState, shipToPostal, shipToHasPhone, shipToHasEmail,
                     intlInvoiceTotal, intlProductCount);
         } catch (Exception ex) {
             log.debug("UPS {} wire payload log skipped: {}", op, ex.getMessage());
