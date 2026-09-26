@@ -144,4 +144,37 @@ class UpsConnectorValidateShipmentTest {
                 .referenceNumber("PO-1001")
                 .build();
     }
+
+    // ─── UPS Time-in-Transit response parser (Sprint / TiT swap) ────────
+
+    @Test
+    void tit_requestedServiceInResponse_isExactValid() {
+        String response = "{\"emsResponse\":{\"services\":["
+                + "{\"serviceLevel\":\"03\",\"serviceLevelDescription\":\"Ground\",\"businessTransitDays\":\"5\"},"
+                + "{\"serviceLevel\":\"02\",\"serviceLevelDescription\":\"2nd Day Air\",\"businessTransitDays\":\"2\"}]}}";
+        ValidateShipmentResult r = connector.parseUpsTitResponse("03", response);
+        assertTrue(r.valid());
+        assertEquals("EXACT", r.matchLevel());
+        assertTrue(r.message().contains("Ground"));
+        assertTrue(r.message().contains("5 business day"));
+    }
+
+    @Test
+    void tit_requestedServiceMissing_lists_available_and_fails() {
+        String response = "{\"emsResponse\":{\"services\":["
+                + "{\"serviceLevel\":\"02\",\"serviceLevelDescription\":\"2nd Day Air\"},"
+                + "{\"serviceLevel\":\"01\",\"serviceLevelDescription\":\"Next Day Air\"}]}}";
+        ValidateShipmentResult r = connector.parseUpsTitResponse("03", response);
+        assertFalse(r.valid());
+        assertEquals("NOT_FOUND", r.matchLevel());
+        assertTrue(r.message().contains("2nd Day Air"));
+        assertTrue(r.message().contains("Next Day Air"));
+    }
+
+    @Test
+    void tit_noServices_isFail() {
+        ValidateShipmentResult r = connector.parseUpsTitResponse("03", "{\"emsResponse\":{\"services\":[]}}");
+        assertFalse(r.valid());
+        assertEquals("NOT_FOUND", r.matchLevel());
+    }
 }

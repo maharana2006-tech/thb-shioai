@@ -685,28 +685,164 @@ public class UpsConnector implements CarrierConnector {
     }
 
     /**
-     * UPS shipment-level validation. Delegates to the {@link CarrierConnector}
-     * default, which runs address-only validation via {@link #validateAddress}
-     * (UPS AVS, {@code /api/addressvalidation/{v}/1}) on the recipient.
+     * UPS shipment-level validation via UPS Time-in-Transit API
+     * ({@code POST /api/shipments/{v}/transittimes}). Answers "does UPS
+     * service this lane with the requested service?" without touching
+     * Rating scope and without creating a shipment.
+     *
+     * <p>Verdict:
+     * <ul>
+     *   <li>Requested {@code serviceCode} is in {@code emsResponse.services[]}
+     *       → EXACT / valid=true, business-day transit surfaced in message.</li>
+     *   <li>Response has services but not the requested one → NOT_FOUND /
+     *       valid=false, message names the available services.</li>
+     *   <li>4xx / 5xx → ERROR / valid=false with UPS's own reason.</li>
+     * </ul>
      *
      * <p>History: Sprint 52 PR δ.1 (Sept 21) had this override hit the
-     * Rating API ({@code /api/rating/{v}/Rate}) for a richer lane +
-     * service + package check. Turned out UPS's CIE Rating API returns
-     * {@code 111212 "Package Type unavailable"} even for lanes the same
-     * account had successfully shipped through the Ship API a day earlier
-     * (documented UPS CIE quirk — Rating API's lane matrix ≠ Shipping
-     * API's). That silently gated Generate Label on every UPS order for
-     * anyone using CIE credentials. The override is deleted; the default
-     * address-only check is what we can guarantee across CIE + Production
-     * without a third UPS-side scope dance. Ship API's own validation
-     * runs at Generate Label time, so wire errors still surface before
-     * a real label is created — just at Generate rather than pre-flight.
-     *
-     * <p>To re-enable richer pre-flight validation later, either (a) add
-     * a per-account "rating pre-flight" flag that opts in when the
-     * operator's UPS account has confirmed Rating coverage in CIE, or
-     * (b) call UPS's Time-in-Transit API (no rate scope) for lane check.
+     * Rating API; UPS's CIE Rating lane matrix returned 111212 on lanes
+     * the same account successfully shipped through Ship API a day
+     * earlier, silently gating Generate Label for CIE users. TiT has its
+     * own Product scope on developer.ups.com but doesn't have Rating's
+     * lane-quote pre-population problem.
      */
+    @Override
+    public ValidateShipmentResult validateShipment(ShipmentRequestDTO request,
+                                                    String accessToken,
+                                                    String environment) {
+        normalizeUsTerritories(request);
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new ValidateShipmentResult(false, "NOT_SUPPORTED", "SHIPMENT",
+                    java.util.List.of(), java.util.List.of(),
+                    "UPS validateShipment needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        if (!StringUtils.hasText(request.getRecipientCountryCode())
+                || !StringUtils.hasText(request.getRecipientPostalCode())) {
+            return new ValidateShipmentResult(false, "ERROR", "SHIPMENT",
+                    java.util.List.of(),
+                    java.util.List.of("recipient country + postal code are required"),
+                    "UPS Time-in-Transit requires a recipient country + postal code.",
+                    null);
+        }
+        String serviceCode = firstNonBlank(request.getServiceType(), "03").trim();
+        String baseUrl = isSandbox(environment)
+                ? carrierProperties.getUps().getSandboxUrl()
+                : carrierProperties.getUps().getApiBaseUrl();
+        String uri = "/api/shipments/" + carrierProperties.getUps().getApiVersion() + "/transittimes";
+        try {
+            Map<String, Object> body = buildUpsTitRequest(request);
+            String response = HttpClients.newBuilder()
+                    .baseUrl(baseUrl).build()
+                    .post()
+                    .uri(uri)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .header("transId", java.util.UUID.randomUUID().toString())
+                    .header("transactionSrc", "multiship")
+                    .body(body)
+                    .retrieve()
+                    .body(String.class);
+            return parseUpsTitResponse(serviceCode, response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            String errBody = ex.getResponseBodyAsString();
+            log.warn("UPS Time-in-Transit rejected (HTTP {}): {}",
+                    ex.getStatusCode().value(), errBody);
+            java.util.List<String> errors = extractUpsErrors(errBody);
+            String msg = errors.isEmpty()
+                    ? "UPS Time-in-Transit rejected: HTTP " + ex.getStatusCode().value()
+                    : errors.size() == 1
+                            ? "UPS Time-in-Transit: " + errors.get(0)
+                            : "UPS flagged " + errors.size() + " issues with the lane.";
+            return new ValidateShipmentResult(false, "ERROR", "SHIPMENT",
+                    java.util.List.of(), errors, msg, errBody);
+        } catch (Exception ex) {
+            log.warn("UPS Time-in-Transit call failed: {}", ex.getMessage());
+            return new ValidateShipmentResult(false, "ERROR", "SHIPMENT",
+                    java.util.List.of(), java.util.List.of(ex.getMessage()),
+                    "UPS Time-in-Transit call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /** UPS TiT REST OAuth body. Weight is a total across the packages;
+     *  UPS TiT rates one shipment aggregate, not per-package. */
+    private Map<String, Object> buildUpsTitRequest(ShipmentRequestDTO request) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("originCountryCode", firstNonBlank(request.getShipperCountryCode(), "US"));
+        if (StringUtils.hasText(request.getShipperState()))
+            body.put("originStateProvince", sanitizeUpsStateCode(request.getShipperState()));
+        if (StringUtils.hasText(request.getShipperCity()))
+            body.put("originCityName", request.getShipperCity().trim());
+        if (StringUtils.hasText(request.getShipperPostalCode()))
+            body.put("originPostalCode", request.getShipperPostalCode().trim());
+        body.put("destinationCountryCode", firstNonBlank(request.getRecipientCountryCode(), "US"));
+        if (StringUtils.hasText(request.getRecipientState()))
+            body.put("destinationStateProvince", sanitizeUpsStateCode(request.getRecipientState()));
+        if (StringUtils.hasText(request.getRecipientCity()))
+            body.put("destinationCityName", request.getRecipientCity().trim());
+        if (StringUtils.hasText(request.getRecipientPostalCode()))
+            body.put("destinationPostalCode", request.getRecipientPostalCode().trim());
+        // Aggregate weight across packages; TiT wants one weight for the shipment.
+        java.math.BigDecimal totalWeight = java.math.BigDecimal.ZERO;
+        for (com.multiship.backend.dto.PackageDetailDTO p : request.effectivePackages()) {
+            if (p.getWeight() != null) totalWeight = totalWeight.add(p.getWeight());
+        }
+        boolean kg = "KG".equalsIgnoreCase(firstNonBlank(request.getWeightUnit(), "LBS"));
+        boolean imperialOrigin = upsImperialOrigin(request.getShipperCountryCode());
+        if (kg && imperialOrigin) {
+            totalWeight = kgToLbCeil(totalWeight);
+            kg = false;
+        }
+        body.put("weight", totalWeight.toPlainString());
+        body.put("weightUnitOfMeasure", kg ? "KGS" : "LBS");
+        // shipDate today, yyyyMMdd; shipTime noon local as a benign default.
+        java.time.LocalDate today = java.time.LocalDate.now();
+        body.put("shipDate", today.format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd")));
+        body.put("shipTime", "1200");
+        body.put("residentialIndicator",
+                Boolean.TRUE.equals(request.getRecipientResidential()) ? "01" : "02");
+        body.put("billType", "03"); // 02 = document, 03 = non-document. Non-doc covers parcels.
+        return body;
+    }
+
+    /** Match the requested service code against emsResponse.services[]. */
+    ValidateShipmentResult parseUpsTitResponse(String requestedServiceCode, String response) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(
+                    Optional.ofNullable(response).orElse("{}"));
+            com.fasterxml.jackson.databind.JsonNode services = root.at("/emsResponse/services");
+            if (!services.isArray() || services.size() == 0) {
+                return new ValidateShipmentResult(false, "NOT_FOUND", "SHIPMENT",
+                        java.util.List.of(), java.util.List.of(),
+                        "UPS doesn't service this lane on any service.", response);
+            }
+            java.util.List<String> available = new java.util.ArrayList<>();
+            for (com.fasterxml.jackson.databind.JsonNode s : services) {
+                String code = s.path("serviceLevel").asText("");
+                String name = s.path("serviceLevelDescription").asText(code);
+                if (code.equalsIgnoreCase(requestedServiceCode)) {
+                    String transitDays = s.path("businessTransitDays").asText("");
+                    String msg = "UPS confirmed the lane for " + name
+                            + (StringUtils.hasText(transitDays)
+                                    ? " (" + transitDays + " business day" + ("1".equals(transitDays) ? "" : "s") + " transit)."
+                                    : ".");
+                    return new ValidateShipmentResult(true, "EXACT", "SHIPMENT",
+                            java.util.List.of(), java.util.List.of(), msg, response);
+                }
+                available.add(name + " (" + code + ")");
+            }
+            return new ValidateShipmentResult(false, "NOT_FOUND", "SHIPMENT",
+                    java.util.List.of(), java.util.List.of(),
+                    "UPS doesn't offer service " + requestedServiceCode + " on this lane. "
+                            + "Available: " + String.join(", ", available) + ".",
+                    response);
+        } catch (Exception ex) {
+            return new ValidateShipmentResult(false, "ERROR", "SHIPMENT",
+                    java.util.List.of(), java.util.List.of(ex.getMessage()),
+                    "UPS Time-in-Transit parse failed: " + ex.getMessage(), response);
+        }
+    }
 
     /**
      * Parse a UPS ShipConfirm-with-validate 200 response. Package-visible
