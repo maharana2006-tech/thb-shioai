@@ -4,9 +4,13 @@ import com.multiship.backend.service.externalsystems.ConnectorSecretAccess;
 import com.multiship.backend.service.externalsystems.ExternalSystemException;
 import com.multiship.backend.service.externalsystems.HealthCheckResult;
 import com.multiship.backend.service.externalsystems.LoginContext;
+import com.multiship.backend.service.externalsystems.writeback.WritebackPayload;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -157,5 +161,56 @@ class RestExternalConnectorTest {
         baseConfig.setBaseUrl(null);
         HealthCheckResult result = connector.healthCheck("api", baseConfig, new StubSecrets());
         assertEquals(HealthCheckResult.Status.DOWN, result.status());
+    }
+
+    // ─── V89 writeback body shape ──────────────────────────────────
+
+    @Test
+    void writebackBodyContainsOnlyNonNullFlaggedFields() {
+        // Payload with tracking + carrier + freight set; ship_date + status + service null
+        // (dispatcher redacted them). Body must carry only the non-null keys.
+        WritebackPayload p = WritebackPayload.builder()
+                .clientCode("ACME")
+                .orderNo(1001)
+                .trackingNumber("1Z999")
+                .carrierCode("UPS")
+                .freightAmount(new BigDecimal("12.34"))
+                .currency("USD")
+                .build();
+        Map<String, Object> body = RestExternalConnector.toBody(p);
+        assertEquals(1001, body.get("orderNo"));
+        assertEquals("ACME", body.get("clientCode"));
+        assertEquals("1Z999", body.get("trackingNumber"));
+        assertEquals("UPS", body.get("carrierCode"));
+        assertEquals(new BigDecimal("12.34"), body.get("freightAmount"));
+        assertEquals("USD", body.get("currency"));
+        assertFalse(body.containsKey("shipDate"), "unflagged shipDate must NOT appear in body");
+        assertFalse(body.containsKey("status"));
+        assertFalse(body.containsKey("serviceCode"));
+    }
+
+    @Test
+    void writebackBodyEmitsShipDateAsIsoStringWhenPresent() {
+        WritebackPayload p = WritebackPayload.builder()
+                .clientCode("ACME")
+                .orderNo(1)
+                .shipDate(LocalDateTime.of(2026, 9, 26, 10, 30))
+                .build();
+        Map<String, Object> body = RestExternalConnector.toBody(p);
+        assertEquals("2026-09-26T10:30", body.get("shipDate"));
+    }
+
+    @Test
+    void writebackBodyOmitsCurrencyWhenFreightAmountAbsent() {
+        // withRedacted couples currency to freight — if freight is off, currency
+        // travels with it. Verify the connector body-builder mirrors that.
+        WritebackPayload p = WritebackPayload.builder()
+                .clientCode("ACME")
+                .orderNo(1)
+                .currency("USD") // set but no freight; connector should skip currency too
+                .build();
+        Map<String, Object> body = RestExternalConnector.toBody(p);
+        assertFalse(body.containsKey("freightAmount"));
+        assertFalse(body.containsKey("currency"));
     }
 }

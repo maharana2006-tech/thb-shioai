@@ -152,6 +152,13 @@ public class CarrierServiceImpl implements CarrierService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private AuditService auditService;
 
+    /** V89 — post-label writeback to any wired external system.
+     *  Fire-and-forget @Async inside the dispatcher — never blocks
+     *  the label response. Optional so hand-built tests don't have to
+     *  plumb it (null = no writeback). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.externalsystems.writeback.ExternalSystemWritebackDispatcher writebackDispatcher;
+
     /** Sprint 44 — optional so existing tests that build CarrierServiceImpl
      *  without Spring don't have to plumb another dep. When null, routing
      *  rules simply don't run. */
@@ -757,6 +764,27 @@ public class CarrierServiceImpl implements CarrierService {
                 log.warn("PR-G5 D2: LABEL_GENERATED audit emit failed for order {}: {}",
                         order.getOrderNo(), auditFail.getMessage());
             }
+        }
+
+        // V89 — post-label writeback (auto/queue path). Same fire-and-forget
+        // dispatch as the manual path.
+        try {
+            if (writebackDispatcher != null) {
+                writebackDispatcher.dispatchOnGenerate(
+                        com.multiship.backend.service.externalsystems.writeback.WritebackPayload.builder()
+                                .clientCode(order.getCustNo())
+                                .orderNo(order.getOrderNo())
+                                .trackingNumber(shipmentResult.trackingNumber())
+                                .shipDate(java.time.LocalDateTime.now())
+                                .status("SHIPPED")
+                                .carrierCode(used.carrierCode())
+                                .serviceCode(order.getShipviaCd())
+                                .freightAmount(shipmentResult.shippingCost())
+                                .build());
+            }
+        } catch (RuntimeException wbFail) {
+            log.warn("V89 writeback dispatch failed for order {} (auto path, label already generated): {}",
+                    order.getOrderNo(), wbFail.getMessage());
         }
 
         return success("Label generated successfully.", response);
@@ -2204,6 +2232,31 @@ public class CarrierServiceImpl implements CarrierService {
                 .message(("BULK".equalsIgnoreCase(req.getSource()) ? "Bulk" : "API".equalsIgnoreCase(req.getSource()) ? "API" : "Manual")
                         + " shipment #" + orderNo + " labelled on " + billToNumber + ".")
                 .build();
+
+        // V89 — post-label writeback to any external system this client
+        // has wired. Fire-and-forget inside the dispatcher (@Async +
+        // internal try/catch); guarded here too so even a bean-lookup
+        // NPE can't fail the label.
+        try {
+            if (writebackDispatcher != null) {
+                writebackDispatcher.dispatchOnGenerate(
+                        com.multiship.backend.service.externalsystems.writeback.WritebackPayload.builder()
+                                .clientCode(req.getClientCode())
+                                .orderNo(orderNo)
+                                .trackingNumber(result.trackingNumber())
+                                .shipDate(java.time.LocalDateTime.now())
+                                .status("SHIPPED")
+                                .carrierCode(carrier)
+                                .serviceCode(service != null ? service.getServiceCode() : null)
+                                .freightAmount(markup.billable())
+                                .currency(markup.currency())
+                                .build());
+            }
+        } catch (RuntimeException wbFail) {
+            log.warn("V89 writeback dispatch failed for order {} (label already generated): {}",
+                    orderNo, wbFail.getMessage());
+        }
+
         return success("Label generated successfully.", response);
     }
 

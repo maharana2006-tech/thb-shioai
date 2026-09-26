@@ -1,5 +1,9 @@
 package com.multiship.backend.service.externalsystems;
 
+import com.multiship.backend.service.externalsystems.writeback.WritebackAck;
+import com.multiship.backend.service.externalsystems.writeback.WritebackClearRequest;
+import com.multiship.backend.service.externalsystems.writeback.WritebackPayload;
+
 /**
  * Framework SPI. Each protocol / vendor implementation (Oracle-schema-
  * per-tenant, SAP-REST, SFTP, gRPC, ...) is a {@code @Component} bean
@@ -105,4 +109,34 @@ public interface ExternalSystemConnector<C, H> {
      * cancel background tasks, release native resources.
      */
     default void shutdown() {}
+
+    /**
+     * V89 — post-generate writeback. Push flagged shipment fields to
+     * this external system. The dispatcher has already redacted the
+     * payload fields whose per-connection flag is off (nulls carry
+     * that meaning). Default no-op returns {@code SKIPPED}; connectors
+     * that support writeback override.
+     *
+     * <p>Fire-and-forget: the dispatcher catches every exception. Prefer
+     * returning {@link WritebackAck#failed} over throwing so the caller
+     * gets a structured status in the log line.
+     */
+    default WritebackAck writeShipment(String connectionName, C config,
+                                       ConnectorSecretAccess secrets,
+                                       WritebackPayload payload) {
+        return WritebackAck.skipped("writeShipment not implemented by " + getClass().getSimpleName());
+    }
+
+    /**
+     * V89 — post-void clear. NULL out (or set to VOIDED) the same set
+     * of flagged fields on the external row that {@link #writeShipment}
+     * populated. The dispatcher enforces symmetry — same flags gate
+     * both sides — so a connector that supports one MUST support the
+     * other with the matching field set.
+     */
+    default WritebackAck clearShipment(String connectionName, C config,
+                                       ConnectorSecretAccess secrets,
+                                       WritebackClearRequest req) {
+        return WritebackAck.skipped("clearShipment not implemented by " + getClass().getSimpleName());
+    }
 }

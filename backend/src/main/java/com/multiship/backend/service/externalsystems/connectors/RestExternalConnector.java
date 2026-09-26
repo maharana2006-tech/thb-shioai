@@ -7,11 +7,16 @@ import com.multiship.backend.service.externalsystems.ExternalSystemException;
 import com.multiship.backend.service.externalsystems.ExternalSystemException.Kind;
 import com.multiship.backend.service.externalsystems.HealthCheckResult;
 import com.multiship.backend.service.externalsystems.LoginContext;
+import com.multiship.backend.service.externalsystems.writeback.WritebackAck;
+import com.multiship.backend.service.externalsystems.writeback.WritebackClearRequest;
+import com.multiship.backend.service.externalsystems.writeback.WritebackPayload;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -99,6 +104,91 @@ public class RestExternalConnector implements ExternalSystemConnector<RestExtern
             return HealthCheckResult.down(connectionName, SYSTEM_TYPE,
                     "Health check failed: " + e.getMessage(), details);
         }
+    }
+
+    @Override
+    public WritebackAck writeShipment(String connectionName, RestExternalConfig cfg,
+                                      ConnectorSecretAccess secrets, WritebackPayload payload) {
+        RestClient client;
+        try {
+            client = clients.computeIfAbsent(connectionName, n -> buildClient(n, cfg, secrets));
+        } catch (ExternalSystemException e) {
+            return WritebackAck.failed("client build failed: " + e.getMessage());
+        }
+        Map<String, Object> body = toBody(payload);
+        String path = cfg.getWritebackPath() == null || cfg.getWritebackPath().isBlank()
+                ? "/shipments" : cfg.getWritebackPath();
+        try {
+            client.post()
+                    .uri(path)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .toBodilessEntity();
+            return WritebackAck.ok("POST " + path + " OK — keys=" + body.keySet());
+        } catch (Exception e) {
+            return WritebackAck.failed("POST " + path + " failed: " + e.getMessage());
+        }
+    }
+
+    @Override
+    public WritebackAck clearShipment(String connectionName, RestExternalConfig cfg,
+                                      ConnectorSecretAccess secrets, WritebackClearRequest req) {
+        RestClient client;
+        try {
+            client = clients.computeIfAbsent(connectionName, n -> buildClient(n, cfg, secrets));
+        } catch (ExternalSystemException e) {
+            return WritebackAck.failed("client build failed: " + e.getMessage());
+        }
+        String template = cfg.getWritebackClearPath() == null || cfg.getWritebackClearPath().isBlank()
+                ? "/shipments/{tracking}" : cfg.getWritebackClearPath();
+        // Two conventions: {tracking} placeholder → DELETE; otherwise POST body.
+        boolean hasTrackingSlot = template.contains("{tracking}");
+        try {
+            if (hasTrackingSlot) {
+                String tracking = req.trackingNumber() == null ? "" : req.trackingNumber();
+                String path = template.replace("{tracking}", java.net.URLEncoder.encode(
+                        tracking, java.nio.charset.StandardCharsets.UTF_8));
+                client.delete().uri(path).retrieve().toBodilessEntity();
+                return WritebackAck.ok("DELETE " + path + " OK");
+            }
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("trackingNumber", req.trackingNumber());
+            body.put("orderNo", req.orderNo());
+            body.put("clientCode", req.clientCode());
+            client.post()
+                    .uri(template)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .toBodilessEntity();
+            return WritebackAck.ok("POST " + template + " OK");
+        } catch (Exception e) {
+            return WritebackAck.failed("clear " + template + " failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Body shape for the generate-side writeback. Includes only the
+     * fields the dispatcher didn't redact — null-valued keys are
+     * dropped so the JSON stays clean.
+     */
+    static Map<String, Object> toBody(WritebackPayload p) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("orderNo", p.orderNo());
+        body.put("clientCode", p.clientCode());
+        if (p.trackingNumber() != null) body.put("trackingNumber", p.trackingNumber());
+        if (p.shipDate() != null) body.put("shipDate", p.shipDate().toString());
+        if (p.status() != null) body.put("status", p.status());
+        if (p.carrierCode() != null) body.put("carrierCode", p.carrierCode());
+        if (p.serviceCode() != null) body.put("serviceCode", p.serviceCode());
+        if (p.freightAmount() != null) {
+            body.put("freightAmount", p.freightAmount());
+            if (p.currency() != null) body.put("currency", p.currency());
+        }
+        if (p.batchId() != null) body.put("batchId", p.batchId());
+        if (p.scannedValue() != null) body.put("scannedValue", p.scannedValue());
+        return body;
     }
 
     @Override

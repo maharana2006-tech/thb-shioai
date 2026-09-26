@@ -55,6 +55,10 @@ public class VoidServiceImpl implements VoidService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private AuditService auditService;
 
+    /** V89 — external-system writeback on void. Fire-and-forget. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.externalsystems.writeback.ExternalSystemWritebackDispatcher writebackDispatcher;
+
     /**
      * Sprint 51 R1 (audit finding #1) — the void path used to read
      * {@link OrderTracking} without a row lock and without a transaction
@@ -258,6 +262,23 @@ public class VoidServiceImpl implements VoidService {
                 auditService.logShipment(AuditService.LABEL_VOIDED, orderNo, null,
                         tracking.getTrackingNumber(),
                         canonicalCarrier + " label voided (" + perBatchResults.size() + " batch(es))" + money);
+            }
+            // V89 — external-system writeback clear. Resolve the order's
+            // clientCode from the persisted Order row so per-tenant
+            // routing works. Fire-and-forget; a writeback failure here
+            // must NOT surface as a void failure (the label IS voided).
+            try {
+                if (writebackDispatcher != null) {
+                    String clientCode = orderRepository.findByOrderNo(orderNo)
+                            .map(com.multiship.backend.model.Order::getCustNo)
+                            .orElse(null);
+                    writebackDispatcher.dispatchOnClear(
+                            com.multiship.backend.service.externalsystems.writeback.WritebackClearRequest
+                                    .of(null, tracking.getTrackingNumber(), orderNo, clientCode));
+                }
+            } catch (RuntimeException wbFail) {
+                log.warn("V89 writeback clear failed for voided order {} (void succeeded): {}",
+                        orderNo, wbFail.getMessage());
             }
         }
 

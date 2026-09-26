@@ -3,6 +3,7 @@ import { useOutletContext } from 'react-router-dom'
 import {
   FiActivity,
   FiCheckCircle,
+  FiCornerUpLeft,
   FiEdit2,
   FiHelpCircle,
   FiKey,
@@ -302,7 +303,16 @@ function EditDrawer({
   const [active, setActive] = useState<boolean>(initial?.active ?? true)
   const [configJson, setConfigJson] = useState<string>(initial?.configJson ?? '{}')
   const [saving, setSaving] = useState(false)
-  const [tab, setTab] = useState<'main' | 'secrets' | 'overrides'>('main')
+  const [tab, setTab] = useState<'main' | 'secrets' | 'overrides' | 'writeback'>('main')
+  // V89 writeback flags — persist through save() alongside the main
+  // fields so admins can flip them on the details view too if they
+  // prefer (the dedicated tab is just clearer UX).
+  const [wbTracking, setWbTracking] = useState<boolean>(initial?.writebackTracking ?? false)
+  const [wbShipDate, setWbShipDate] = useState<boolean>(initial?.writebackShipDate ?? false)
+  const [wbStatus, setWbStatus] = useState<boolean>(initial?.writebackStatus ?? false)
+  const [wbCarrier, setWbCarrier] = useState<boolean>(initial?.writebackCarrier ?? false)
+  const [wbService, setWbService] = useState<boolean>(initial?.writebackService ?? false)
+  const [wbFreight, setWbFreight] = useState<boolean>(initial?.writebackFreight ?? false)
 
   const parseError = useMemo(() => {
     try { JSON.parse(configJson); return null }
@@ -320,17 +330,21 @@ function EditDrawer({
     }
     setSaving(true)
     try {
+      const payload = {
+        name: name.trim(), systemType: systemType.trim(),
+        active, configJson,
+        writebackTracking: wbTracking,
+        writebackShipDate: wbShipDate,
+        writebackStatus: wbStatus,
+        writebackCarrier: wbCarrier,
+        writebackService: wbService,
+        writebackFreight: wbFreight,
+      }
       if (isNew) {
-        await externalSystemsService.create({
-          name: name.trim(), systemType: systemType.trim(),
-          active, configJson,
-        })
+        await externalSystemsService.create(payload)
         notify.success('Connection created.')
       } else {
-        await externalSystemsService.update(initial!.id, {
-          name: name.trim(), systemType: systemType.trim(),
-          active, configJson,
-        })
+        await externalSystemsService.update(initial!.id, payload)
         notify.success('Connection updated.')
       }
       await onSaved()
@@ -361,7 +375,7 @@ function EditDrawer({
 
         {!isNew ? (
           <div className="flex border-b border-slate-200 bg-slate-50">
-            {(['main', 'secrets', 'overrides'] as const).map((t) => (
+            {(['main', 'writeback', 'secrets', 'overrides'] as const).map((t) => (
               <button
                 key={t}
                 type="button"
@@ -372,7 +386,10 @@ function EditDrawer({
                     : 'text-slate-500 hover:text-slate-800'
                 }`}
               >
-                {t === 'main' ? 'Details' : t === 'secrets' ? 'Secrets' : 'Client overrides'}
+                {t === 'main' ? 'Details'
+                  : t === 'writeback' ? 'Writeback'
+                  : t === 'secrets' ? 'Secrets'
+                  : 'Client overrides'}
               </button>
             ))}
           </div>
@@ -389,6 +406,15 @@ function EditDrawer({
               connectors={connectors}
               isNew={isNew}
             />
+          ) : tab === 'writeback' ? (
+            <WritebackTab
+              wbTracking={wbTracking} setWbTracking={setWbTracking}
+              wbShipDate={wbShipDate} setWbShipDate={setWbShipDate}
+              wbStatus={wbStatus} setWbStatus={setWbStatus}
+              wbCarrier={wbCarrier} setWbCarrier={setWbCarrier}
+              wbService={wbService} setWbService={setWbService}
+              wbFreight={wbFreight} setWbFreight={setWbFreight}
+            />
           ) : tab === 'secrets' ? (
             <SecretsTab id={initial!.id} />
           ) : (
@@ -396,7 +422,7 @@ function EditDrawer({
           )}
         </div>
 
-        {(tab === 'main' || isNew) ? (
+        {(tab === 'main' || tab === 'writeback' || isNew) ? (
           <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
             <button
               type="button"
@@ -496,6 +522,105 @@ function MainTab({
           Passwords go in the Secrets tab, not here.
         </span>
       </label>
+    </div>
+  )
+}
+
+/**
+ * V89 — per-connection writeback flags. Six symmetric booleans that
+ * gate BOTH the label-generate push and the label-void clear for
+ * this external system. Same flag for both directions: turning off
+ * "Carrier" means the carrier is neither sent on generate nor nulled
+ * on void.
+ *
+ * <p>The Save button lives on the drawer footer (shared with Details);
+ * this tab only mutates local state. The parent's save() sends all six
+ * flags in the same PUT that saves the main fields.
+ */
+function WritebackTab({
+  wbTracking, setWbTracking,
+  wbShipDate, setWbShipDate,
+  wbStatus, setWbStatus,
+  wbCarrier, setWbCarrier,
+  wbService, setWbService,
+  wbFreight, setWbFreight,
+}: {
+  wbTracking: boolean; setWbTracking: (v: boolean) => void
+  wbShipDate: boolean; setWbShipDate: (v: boolean) => void
+  wbStatus: boolean; setWbStatus: (v: boolean) => void
+  wbCarrier: boolean; setWbCarrier: (v: boolean) => void
+  wbService: boolean; setWbService: (v: boolean) => void
+  wbFreight: boolean; setWbFreight: (v: boolean) => void
+}) {
+  const rows: Array<{
+    key: string
+    label: string
+    desc: string
+    checked: boolean
+    onChange: (v: boolean) => void
+  }> = [
+    { key: 'tracking', label: 'Tracking number',
+      desc: 'Carrier tracking number produced by the label.',
+      checked: wbTracking, onChange: setWbTracking },
+    { key: 'shipDate', label: 'Shipment date',
+      desc: 'Timestamp the label was generated.',
+      checked: wbShipDate, onChange: setWbShipDate },
+    { key: 'status', label: 'Status',
+      desc: 'SHIPPED on generate / VOIDED on clear.',
+      checked: wbStatus, onChange: setWbStatus },
+    { key: 'carrier', label: 'Carrier',
+      desc: 'Carrier code (UPS, FEDEX, USPS, DHL, STAMPS).',
+      checked: wbCarrier, onChange: setWbCarrier },
+    { key: 'service', label: 'Service',
+      desc: 'Carrier-side service code (FEDEX_GROUND, UPS_02, …).',
+      checked: wbService, onChange: setWbService },
+    { key: 'freight', label: 'Freight amount',
+      desc: 'Final freight cost + currency.',
+      checked: wbFreight, onChange: setWbFreight },
+  ]
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-[12px] text-slate-700">
+        <FiCornerUpLeft className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-500" />
+        <div>
+          <p className="font-semibold text-slate-800">Write back to this system on ship + void</p>
+          <p className="mt-1 text-slate-600">
+            When enabled, multiship pushes the flagged fields to this
+            external system after a label is generated and clears them
+            after a label is voided. Same flag gates both sides —
+            leaving a field off means we neither send it on generate
+            nor null it on void.
+          </p>
+          <p className="mt-1 text-slate-500">
+            All flags default off. Enabling any flag is a per-connection change.
+          </p>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-slate-200 bg-white">
+        {rows.map((r, i) => (
+          <label
+            key={r.key}
+            htmlFor={`wb-${r.key}`}
+            className={`flex cursor-pointer items-start gap-3 px-3 py-2.5 ${
+              i > 0 ? 'border-t border-slate-100' : ''
+            } hover:bg-slate-50`}
+          >
+            <input
+              id={`wb-${r.key}`}
+              type="checkbox"
+              checked={r.checked}
+              onChange={(e) => r.onChange(e.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-300"
+            />
+            <div className="flex-1">
+              <p className="text-[13px] font-semibold text-slate-800">{r.label}</p>
+              <p className="text-[11.5px] text-slate-500">{r.desc}</p>
+            </div>
+          </label>
+        ))}
+      </div>
     </div>
   )
 }

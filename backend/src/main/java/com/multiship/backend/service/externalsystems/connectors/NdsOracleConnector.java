@@ -6,9 +6,15 @@ import com.multiship.backend.service.externalsystems.ExternalSystemException;
 import com.multiship.backend.service.externalsystems.ExternalSystemException.Kind;
 import com.multiship.backend.service.externalsystems.HealthCheckResult;
 import com.multiship.backend.service.externalsystems.LoginContext;
+import com.multiship.backend.service.externalsystems.writeback.WritebackAck;
+import com.multiship.backend.service.externalsystems.writeback.WritebackClearRequest;
+import com.multiship.backend.service.externalsystems.writeback.WritebackPayload;
+import com.multiship.backend.service.ndsshipment.NdsShipmentOracleWriter;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import javax.sql.DataSource;
@@ -81,6 +87,16 @@ public class NdsOracleConnector implements ExternalSystemConnector<NdsOracleConf
 
     private record ClientPool(HikariDataSource ds, AtomicLong lastUsedEpochMs) {}
 
+    /**
+     * V89 writeback delegate. Lazy provider so the connector can be
+     * constructed before the writer's dep-graph (NdsTemplates →
+     * ExternalSystemRegistry → this connector) has settled — pulls
+     * the bean on first writeShipment / clearShipment call, when
+     * context init is complete.
+     */
+    @Autowired
+    private ObjectProvider<NdsShipmentOracleWriter> writerProvider;
+
     @Override
     public String systemType() { return SYSTEM_TYPE; }
 
@@ -142,6 +158,30 @@ public class NdsOracleConnector implements ExternalSystemConnector<NdsOracleConf
             return HealthCheckResult.down(connectionName, SYSTEM_TYPE,
                     "SELECT 1 FROM DUAL failed: " + e.getMessage(), details);
         }
+    }
+
+    @Override
+    public WritebackAck writeShipment(String connectionName, NdsOracleConfig cfg,
+                                      ConnectorSecretAccess secrets, WritebackPayload payload) {
+        NdsShipmentOracleWriter writer = writerProvider == null ? null : writerProvider.getIfAvailable();
+        if (writer == null) {
+            return WritebackAck.skipped("nds-writer bean unavailable — writeback disabled in this context");
+        }
+        return writer.writeShipment(payload);
+    }
+
+    @Override
+    public WritebackAck clearShipment(String connectionName, NdsOracleConfig cfg,
+                                      ConnectorSecretAccess secrets, WritebackClearRequest req) {
+        NdsShipmentOracleWriter writer = writerProvider == null ? null : writerProvider.getIfAvailable();
+        if (writer == null) {
+            return WritebackAck.skipped("nds-writer bean unavailable — writeback disabled in this context");
+        }
+        // Dispatcher threaded the six per-connection flags through the
+        // ClearRequest so the writer can NULL only the flagged columns.
+        return writer.clearShipment(req,
+                req.clearTracking(), req.clearShipDate(), req.clearStatus(),
+                req.clearCarrier(), req.clearService(), req.clearFreight());
     }
 
     @Override
