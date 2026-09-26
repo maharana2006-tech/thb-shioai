@@ -274,6 +274,156 @@ public class OrderImportServiceImpl implements OrderImportService {
         return null;
     }
 
+    /**
+     * UPS Time-in-Transit lane check for UPS rows in a batch.
+     * <p>Dedups by (warehouseCode, destPostalCode, serviceType, environment)
+     * so a 5000-row batch fires a handful of TiT calls, not thousands.
+     * Non-UPS rows are untouched. Rows whose UPS TiT says NOT_FOUND or
+     * whose TiT call fails outright get the message appended to their
+     * errors list — the batch's downstream invalid-count logic then flips
+     * them to NEEDS_FIX. Rows without enough context (missing dest ZIP,
+     * unresolvable warehouse origin, unresolvable UPS account) are
+     * skipped silently — the local validator already flagged the missing
+     * fields separately, and there's nothing UPS can tell us that we
+     * don't already know.
+     */
+    private void applyUpsTitLaneCheck(List<OrderImportRowDTO> rows) {
+        if (rows == null || rows.isEmpty() || carrierService == null || accountRefRepository == null) return;
+
+        // Reusable helpers
+        java.util.Map<String, com.multiship.backend.service.carriers.CarrierConnector.ValidateShipmentResult>
+                titCache = new java.util.HashMap<>();
+        java.util.Map<String, Warehouse> warehouseCache = new java.util.HashMap<>();
+        java.util.Map<String, com.multiship.backend.model.CarrierAccountRef> accountCache = new java.util.HashMap<>();
+        java.util.Map<String, String> tokenCache = new java.util.HashMap<>();
+
+        for (OrderImportRowDTO row : rows) {
+            String carrier = row.getCarrierCode();
+            if (!StringUtils.hasText(carrier)) continue;
+            String canonical = com.multiship.backend.service.ShippingConfigService.canonicalCarrierFor(carrier);
+            if (!"UPS".equalsIgnoreCase(canonical)) continue;
+            if (!StringUtils.hasText(row.getPostalCode()) || !StringUtils.hasText(row.getCountryCode())
+                    || !StringUtils.hasText(row.getServiceType())) continue;
+
+            String clientCode = row.getClientCode();
+            String warehouseCode = row.getWarehouseCode();
+            if (!StringUtils.hasText(clientCode)) continue;
+
+            // Warehouse resolution — falls back to the client's default when the
+            // row doesn't name one. Cache misses skip the row silently.
+            Warehouse origin = warehouseCache.computeIfAbsent(
+                    clientCode.trim().toUpperCase(Locale.ROOT) + "|" + (warehouseCode == null ? "" : warehouseCode.trim()),
+                    k -> resolveOriginWarehouse(clientCode, warehouseCode));
+            if (origin == null || origin.getAddress() == null
+                    || !StringUtils.hasText(origin.getAddress().getZip())) continue;
+
+            String tupleKey = origin.getAddress().getZip() + "|" + row.getPostalCode()
+                    + "|" + row.getServiceType() + "|" + clientCode.trim().toUpperCase(Locale.ROOT);
+            com.multiship.backend.service.carriers.CarrierConnector.ValidateShipmentResult result =
+                    titCache.get(tupleKey);
+            if (result == null) {
+                com.multiship.backend.model.CarrierAccountRef account = accountCache.computeIfAbsent(
+                        clientCode.trim().toUpperCase(Locale.ROOT),
+                        k -> resolveUpsAccount(clientCode));
+                if (account == null) continue;
+                String tokenKey = account.getId() + "|" + account.getEnvironment();
+                String accessToken = tokenCache.get(tokenKey);
+                if (accessToken == null) {
+                    try {
+                        com.multiship.backend.service.carriers.CarrierConnector connector =
+                                carrierService.getCarrierConnector("UPS");
+                        accessToken = connector.getAccessToken(account.getClientId(), account.getClientSecret(),
+                                account.getAccountNumber(), account.getEnvironment());
+                        if (accessToken != null) tokenCache.put(tokenKey, accessToken);
+                    } catch (Exception ex) {
+                        log.warn("bulk validate — UPS token acquisition failed for client {}: {}",
+                                clientCode, ex.getMessage());
+                    }
+                }
+                if (accessToken == null || accessToken.contains("-local-")) continue;
+
+                com.multiship.backend.dto.ShipmentRequestDTO dto =
+                        buildTitProbe(row, origin, account.getAccountNumber());
+                try {
+                    com.multiship.backend.service.carriers.CarrierConnector connector =
+                            carrierService.getCarrierConnector("UPS");
+                    result = connector.validateShipment(dto, accessToken, account.getEnvironment());
+                } catch (Exception ex) {
+                    log.warn("bulk validate — UPS TiT call failed for {}→{} {}: {}",
+                            origin.getAddress().getZip(), row.getPostalCode(), row.getServiceType(),
+                            ex.getMessage());
+                    result = new com.multiship.backend.service.carriers.CarrierConnector.ValidateShipmentResult(
+                            false, "ERROR", "SHIPMENT", java.util.List.of(),
+                            java.util.List.of(ex.getMessage()),
+                            "UPS Time-in-Transit call failed: " + ex.getMessage(), null);
+                }
+                titCache.put(tupleKey, result);
+            }
+            if (result != null && !result.valid()) {
+                List<String> errors = new java.util.ArrayList<>(
+                        row.getErrors() == null ? List.of() : row.getErrors());
+                errors.add(result.message());
+                row.setErrors(errors);
+            }
+        }
+    }
+
+    /** Resolve the row's origin warehouse — row's own warehouseCode wins, else
+     *  the client's default warehouse. Null when neither resolves. */
+    private Warehouse resolveOriginWarehouse(String clientCode, String warehouseCode) {
+        if (warehouseRepository == null) return null;
+        if (StringUtils.hasText(warehouseCode)) {
+            try {
+                return warehouseRepository.findByCodeIgnoreCase(warehouseCode.trim()).orElse(null);
+            } catch (Exception ignore) { /* fall through */ }
+        }
+        if (clientWarehouseRepository == null || !StringUtils.hasText(clientCode)) return null;
+        return clientWarehouseRepository.findByClientCodeIgnoreCaseAndIsDefaultTrue(clientCode.trim())
+                .flatMap(link -> warehouseRepository.findById(link.getWarehouseId()))
+                .filter(w -> !Boolean.FALSE.equals(w.getActive()))
+                .orElse(null);
+    }
+
+    /** Find the client's active UPS account. Null when the client has none. */
+    private com.multiship.backend.model.CarrierAccountRef resolveUpsAccount(String clientCode) {
+        if (accountRefRepository == null || !StringUtils.hasText(clientCode)) return null;
+        return accountRefRepository
+                .findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc(clientCode.trim())
+                .stream()
+                .filter(a -> "UPS".equalsIgnoreCase(a.getCarrierCode()))
+                .filter(a -> !Boolean.FALSE.equals(a.getActive()))
+                .findFirst()
+                .orElse(null);
+    }
+
+    /** Minimal ShipmentRequestDTO for a TiT lane probe — origin + dest + service
+     *  + weight. UpsConnector.validateShipment (TiT-backed) only reads origin/dest
+     *  postal/state/country + service + total weight, so a partial DTO is enough. */
+    private com.multiship.backend.dto.ShipmentRequestDTO buildTitProbe(
+            OrderImportRowDTO row, Warehouse origin, String accountNumber) {
+        com.multiship.backend.dto.ShipmentRequestDTO dto = new com.multiship.backend.dto.ShipmentRequestDTO();
+        dto.setCarrierCode("UPS");
+        dto.setServiceType(row.getServiceType());
+        dto.setAccountNumber(accountNumber);
+        com.multiship.backend.model.Address a = origin.getAddress();
+        if (a != null) {
+            dto.setShipperCity(a.getCity());
+            dto.setShipperState(a.getState());
+            dto.setShipperPostalCode(a.getZip());
+            dto.setShipperCountryCode(StringUtils.hasText(a.getCountry()) ? a.getCountry() : "US");
+        } else {
+            dto.setShipperCountryCode("US");
+        }
+        dto.setRecipientCity(row.getCity());
+        dto.setRecipientState(row.getState());
+        dto.setRecipientPostalCode(row.getPostalCode());
+        dto.setRecipientCountryCode(row.getCountryCode());
+        java.math.BigDecimal w = row.getWeight() != null ? row.getWeight() : java.math.BigDecimal.ONE;
+        dto.setWeight(w);
+        dto.setWeightUnit(StringUtils.hasText(row.getWeightUnit()) ? row.getWeightUnit() : "LBS");
+        return dto;
+    }
+
     /** id → slug for outbound DTOs. Repo can be null in some unit-test
      *  wiring; returns null in that case (the FE tolerates a missing
      *  slug and falls back to the numeric id for pre-migration links). */
@@ -3766,6 +3916,12 @@ public class OrderImportServiceImpl implements OrderImportService {
         // Re-validate all rows
         log.info("Validating all {} rows in batch {}", rows.size(), id);
         validate(rows, !isApiSource(batch.getSource()));
+
+        // UPS Time-in-Transit lane check for UPS rows. Dedup by (warehouse,
+        // destZip, service) so a 5k-row batch fires a handful of API calls,
+        // not thousands. TiT unreachable on a UPS row → NEEDS_FIX per operator
+        // spec (label would 400 later anyway); non-UPS rows unaffected.
+        applyUpsTitLaneCheck(rows);
 
         // Update errors/warnings in import_batch_row for WMS/API batches
         boolean isWmsOrApi = batch.getSource() != null &&
