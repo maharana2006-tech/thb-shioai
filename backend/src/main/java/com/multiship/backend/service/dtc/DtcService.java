@@ -1,15 +1,18 @@
 package com.multiship.backend.service.dtc;
 
+import com.multiship.backend.config.OracleDtcConfig;
 import com.multiship.backend.dto.OrderImportRowDTO;
 import com.multiship.backend.dto.wms.WmsPullResultDTO;
 import com.multiship.backend.model.ImportBatch;
-import com.multiship.backend.model.oracle.OracleDtcOrder;
-import com.multiship.backend.repository.oracle.OracleDtcOrderRepositoryImpl;
 import com.multiship.backend.service.OrderImportServiceImpl;
+import com.multiship.backend.service.externalsystems.ExternalSystemConfigService;
+import com.multiship.backend.service.ndsshipment.NdsTemplates;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -22,15 +25,19 @@ import java.util.Locale;
 
 /**
  * "Fetch from NDS" — pulls pending rows from the Oracle NDS view
- * ({@code TB_SHIPX_DTC_UVW} / {@code _TEST}) and records each fetch as ONE
- * ImportBatch with {@code source = "DTC"}. Mirrors {@code WmsService} in
- * shape so the copied D2C History page uses the same batch wiring.
+ * ({@code oracle.dtc.view-name}, e.g. {@code TB_SHIPX_DTC_UVW}) and records
+ * each fetch as ONE ImportBatch with {@code source = "DTC"}. Mirrors
+ * {@code WmsService} in shape so the copied D2C History page uses the
+ * same batch wiring.
  *
- * <p>Feature-gated off by default: when {@code multiship.oracle.enabled=false}
- * (the current default) the Oracle repository bean isn't loaded and
- * {@link #isConfigured()} returns {@code false}; {@link #pullShippable} then
- * short-circuits with a non-configured result — same shape as
- * {@code WmsService} when the WMS URL is blank.
+ * <p>Wired to the S1 external-systems framework via {@link NdsTemplates}
+ * (PRODUCTION login on {@code nds-default}) so the connection details
+ * live in the {@code external_system_connection} table + secrets — no
+ * separate {@code multiship.oracle.enabled} flag or {@code oracleEntityManagerFactory}
+ * needed. If the {@code nds-default} connection row is missing or
+ * inactive, {@link #isConfigured()} returns {@code false} and the pull
+ * short-circuits with a non-configured result (same shape
+ * {@code WmsService} uses when {@code WMS_BASE_URL} is blank).
  */
 @Service
 @RequiredArgsConstructor
@@ -38,9 +45,16 @@ public class DtcService {
 
     private static final Logger log = LoggerFactory.getLogger(DtcService.class);
 
-    /** Null when {@code multiship.oracle.enabled=false} — the bean isn't loaded. */
-    @Autowired(required = false)
-    private OracleDtcOrderRepositoryImpl oracleRepo;
+    /** NDS SPI helper — dispenses a PRODUCTION-login JDBC template
+     *  from the active {@code nds-default} connection. */
+    private final NdsTemplates ndsTemplates;
+
+    /** Read-only helper — checks that the {@code nds-default} row exists + is active. */
+    private final ExternalSystemConfigService externalSystemConfig;
+
+    /** The view name lives in {@code oracle.dtc.view-name} (dev default
+     *  {@code TB_SHIPX_DTC_NEW_DEV}, prod {@code TB_SHIPX_DTC_UVW}). */
+    private final OracleDtcConfig oracleDtcConfig;
 
     @Autowired(required = false)
     private com.multiship.backend.repository.ImportBatchRepository importBatchRepository;
@@ -51,27 +65,41 @@ public class DtcService {
     @Autowired(required = false)
     private OrderImportServiceImpl orderImportService;
 
+    /** True when the {@code nds-default} connection row exists and is active. */
     public boolean isConfigured() {
-        return oracleRepo != null;
+        return externalSystemConfig.findByName(NdsTemplates.NDS_CONNECTION)
+                .filter(com.multiship.backend.model.ExternalSystemConnection::isActive)
+                .isPresent();
     }
 
     public WmsPullResultDTO pullShippable(String requestedBy) {
         if (!isConfigured()) {
             return WmsPullResultDTO.builder()
                     .configured(false)
-                    .messages(List.of("D2C is not configured. Set multiship.oracle.enabled=true and configure oracle.dtc.* to enable."))
+                    .messages(List.of("D2C is not configured. Set up the '" + NdsTemplates.NDS_CONNECTION
+                            + "' connection under /settings/external-systems (must be active)."))
                     .importedOrderNos(List.of())
                     .build();
         }
 
-        List<OracleDtcOrder> rows;
+        String viewName = oracleDtcConfig.getDtcViewName();
+        if (!StringUtils.hasText(viewName)) {
+            return WmsPullResultDTO.builder()
+                    .configured(false)
+                    .messages(List.of("D2C view name is blank — set oracle.dtc.view-name in application properties."))
+                    .importedOrderNos(List.of())
+                    .build();
+        }
+
+        List<OrderImportRowDTO> rows;
         try {
-            rows = oracleRepo.findAllPendingDtcOrders();
+            rows = fetchViewRows(viewName);
         } catch (Exception e) {
-            log.warn("D2C pull: Oracle view fetch failed: {}", e.getMessage());
+            log.warn("D2C pull: NDS view fetch failed ({}): {}", viewName, e.getMessage());
             return WmsPullResultDTO.builder()
                     .configured(true)
-                    .messages(List.of("Oracle NDS view isn't reachable right now — check the connection settings, then try the fetch again."))
+                    .messages(List.of("Oracle NDS view isn't reachable right now — check " + NdsTemplates.NDS_CONNECTION
+                            + " under /settings/external-systems, then try the fetch again."))
                     .importedOrderNos(List.of())
                     .build();
         }
@@ -79,7 +107,7 @@ public class DtcService {
         if (rows.isEmpty()) {
             return WmsPullResultDTO.builder()
                     .configured(true).fetched(0).imported(0).skipped(0).failed(0)
-                    .messages(List.of("No pending DTC orders in the NDS view."))
+                    .messages(List.of("No pending DTC orders in " + viewName + "."))
                     .importedOrderNos(List.of())
                     .build();
         }
@@ -87,28 +115,68 @@ public class DtcService {
         return processBatch(requestedBy, rows);
     }
 
-    /** Map + persist as one DTC ImportBatch, dedup'd by content hash like WMS. */
-    @Transactional
-    protected WmsPullResultDTO processBatch(String requestedBy, List<OracleDtcOrder> rows) {
-        List<OrderImportRowDTO> importRows = new ArrayList<>();
-        int shipments = 0, failed = 0;
-        List<String> messages = new ArrayList<>();
-
-        for (OracleDtcOrder src : rows) {
-            if (src == null || src.getOrderNo() == null) {
-                failed++;
-                continue;
-            }
-            shipments++;
-            OrderImportRowDTO row = toImportRow(src, importRows.size() + 1);
-            List<String> errors = new ArrayList<>(OrderImportServiceImpl.validateRow(row));
-            row.setErrors(errors);
-            importRows.add(row);
+    /** SELECT * FROM {view} through NDS production-login JDBC template, mapped to import rows. */
+    private List<OrderImportRowDTO> fetchViewRows(String viewName) {
+        // Validate view name against a strict character set to keep this
+        // safe even though it comes from server-side properties (defense
+        // in depth — properties files sometimes take env-var overrides).
+        if (!viewName.matches("[A-Za-z0-9_]+")) {
+            throw new IllegalArgumentException("Invalid oracle.dtc.view-name: " + viewName);
         }
+        String sql = "SELECT ORDER_NO, ORDER_SUFFIX, ORDER_STATUS, CUST_NO, CUST_PO, TENANT_ID, "
+                + "SHIPVIA_CD, SHIP_VIA, TERMS_CD, SHIP_NAME, SHIP_ATTN, SHIP_ADDR1, SHIP_ADDR2, "
+                + "SHIPTO_CITY, SHIPTO_STATE, SHIPTO_ZIP, SHIPTO_COUNTRY_CD, PHONE, EMAIL, "
+                + "WEIGHT, UNIT_VALUE, GOODS_DESC, INTL_YN, TOTE_NUMBER "
+                + "FROM " + viewName + " o "
+                + "WHERE o.BATCH_ID != 0 "
+                + "  AND o.TOTE_NUMBER IS NOT NULL "
+                + "  AND TRIM(o.TOTE_NUMBER) != '' "
+                + "  AND COALESCE(o.ORDER_SUFFIX, 0) = 0 "
+                + "ORDER BY o.BATCH_ID DESC";
+        NamedParameterJdbcTemplate jdbc = ndsTemplates.production();
+        List<OrderImportRowDTO> out = new ArrayList<>();
+        int[] rowNumber = { 0 };
+        jdbc.query(sql, new MapSqlParameterSource(), rs -> {
+            OrderImportRowDTO r = new OrderImportRowDTO();
+            r.setRowNumber(++rowNumber[0]);
+            BigDecimal orderNo = rs.getBigDecimal("ORDER_NO");
+            r.setOrderRef(orderNo == null ? null : orderNo.toPlainString());
+            r.setClientCode(trimOrNull(rs.getString("CUST_NO")));
+            r.setRecipientName(firstNonBlank(rs.getString("SHIP_NAME"), rs.getString("SHIP_ATTN")));
+            r.setRecipientCompany(trimOrNull(rs.getString("SHIP_ATTN")));
+            r.setRecipientPhone(digitsOrNull(rs.getString("PHONE")));
+            r.setRecipientEmail(trimOrNull(rs.getString("EMAIL")));
+            r.setAddressLine1(trimOrNull(rs.getString("SHIP_ADDR1")));
+            r.setAddressLine2(trimOrNull(rs.getString("SHIP_ADDR2")));
+            r.setCity(trimOrNull(rs.getString("SHIPTO_CITY")));
+            r.setState(trimOrNull(rs.getString("SHIPTO_STATE")));
+            r.setPostalCode(trimOrNull(rs.getString("SHIPTO_ZIP")));
+            r.setCountryCode(trimOrNull(rs.getString("SHIPTO_COUNTRY_CD")));
+            r.setShipViaCode(trimOrNull(rs.getString("SHIPVIA_CD")));
+            r.setReference(trimOrNull(rs.getString("CUST_PO")));
+            BigDecimal w = rs.getBigDecimal("WEIGHT");
+            if (w != null && w.signum() > 0) {
+                r.setWeight(w);
+                r.setWeightUnit("LB");
+            }
+            r.setItemDescription(trimOrNull(rs.getString("GOODS_DESC")));
+            r.setItemUnitValue(rs.getBigDecimal("UNIT_VALUE"));
+            out.add(r);
+        });
+        return out;
+    }
 
+    /** Persist the fetch as one DTC ImportBatch, dedup'd by content hash like WMS. */
+    @Transactional
+    protected WmsPullResultDTO processBatch(String requestedBy, List<OrderImportRowDTO> importRows) {
+        // Validate each row so the batch surfaces "needs fixes" correctly.
+        for (OrderImportRowDTO r : importRows) {
+            r.setErrors(new ArrayList<>(OrderImportServiceImpl.validateRow(r)));
+        }
         int total = importRows.size();
         int invalid = (int) importRows.stream()
                 .filter(r -> r.getErrors() != null && !r.getErrors().isEmpty()).count();
+        List<String> messages = new ArrayList<>();
 
         Long importBatchId = null;
         String slug = null;
@@ -117,13 +185,10 @@ public class DtcService {
             ImportBatch existing = hash == null ? null
                     : importBatchRepository.findFirstByContentHashAndDeletedAtIsNullOrderByIdDesc(hash).orElse(null);
             if (existing != null) {
-                importBatchId = existing.getId();
-                slug = existing.getSlug();
                 messages.add("These DTC rows were already fetched — showing batch #" + existing.getId() + ".");
                 return WmsPullResultDTO.builder()
-                        .configured(true).fetched(rows.size()).imported(0)
-                        .skipped(shipments).failed(failed)
-                        .importBatchId(importBatchId).importBatchSlug(slug)
+                        .configured(true).fetched(total).imported(0).skipped(total).failed(0)
+                        .importBatchId(existing.getId()).importBatchSlug(existing.getSlug())
                         .importedOrderNos(List.of()).messages(messages).build();
             }
             if (orderImportService != null) {
@@ -145,10 +210,9 @@ public class DtcService {
             }
         }
 
-        log.info("D2C pull ({}): fetched {}, imported {}, failed {}", requestedBy, rows.size(), shipments, failed);
+        log.info("D2C pull ({}): fetched {}, imported {}", requestedBy, total, total);
         return WmsPullResultDTO.builder()
-                .configured(true).fetched(rows.size()).imported(shipments)
-                .skipped(0).failed(failed)
+                .configured(true).fetched(total).imported(total).skipped(0).failed(0)
                 .importBatchId(importBatchId).importBatchSlug(slug)
                 .importedOrderNos(List.of()).messages(messages).build();
     }
@@ -174,34 +238,6 @@ public class DtcService {
             log.warn("D2C pull: could not record the fetch batch: {}", e.getMessage());
             return null;
         }
-    }
-
-    /** Oracle DTC row → editable import row. Field mapping mirrors OracleDtcSyncService. */
-    private OrderImportRowDTO toImportRow(OracleDtcOrder src, int rowNumber) {
-        OrderImportRowDTO r = new OrderImportRowDTO();
-        r.setRowNumber(rowNumber);
-        r.setOrderRef(src.getOrderNo() == null ? null : src.getOrderNo().toPlainString());
-        r.setClientCode(trimOrNull(src.getCustNo()));
-        r.setRecipientName(firstNonBlank(src.getShipName(), src.getShipAttn()));
-        r.setRecipientCompany(trimOrNull(src.getShipAttn()));
-        r.setRecipientPhone(digitsOrNull(src.getPhone()));
-        r.setRecipientEmail(trimOrNull(src.getEmail()));
-        r.setAddressLine1(trimOrNull(src.getShipAddr1()));
-        r.setAddressLine2(trimOrNull(src.getShipAddr2()));
-        r.setCity(trimOrNull(src.getShipToCity()));
-        r.setState(trimOrNull(src.getShipToState()));
-        r.setPostalCode(trimOrNull(src.getShipToZip()));
-        r.setCountryCode(trimOrNull(src.getShipToCountryCode()));
-        r.setShipViaCode(trimOrNull(src.getShipViaCode()));
-        r.setReference(trimOrNull(src.getCustPo()));
-        BigDecimal w = src.getWeight();
-        if (w != null && w.signum() > 0) {
-            r.setWeight(w);
-            r.setWeightUnit("LB");
-        }
-        r.setItemDescription(trimOrNull(src.getGoodsDesc()));
-        r.setItemUnitValue(src.getUnitValue());
-        return r;
     }
 
     private com.multiship.backend.model.ImportBatchRow toImportBatchRow(ImportBatch batch, OrderImportRowDTO dto) {
