@@ -230,13 +230,30 @@ public class ExternalSystemsAdminController {
     public record ConnectionDetail(
             Long id, String name, String systemType, boolean active,
             String configJson, LocalDateTime createdAt, LocalDateTime updatedAt,
-            String updatedBy) {}
+            String updatedBy,
+            // V89 writeback flags — one boolean per payload field; same
+            // flag gates both generate + void.
+            boolean writebackTracking,
+            boolean writebackShipDate,
+            boolean writebackStatus,
+            boolean writebackCarrier,
+            boolean writebackService,
+            boolean writebackFreight) {}
 
     public static class ConnectionUpsertRequest {
         public String name;
         public String systemType;
         public Boolean active;
         public String configJson;
+        // V89 writeback flags. Nullable so a partial update (e.g. from a
+        // client that doesn't know about the flags yet) doesn't zero
+        // them; only flags the client explicitly sends get applied.
+        public Boolean writebackTracking;
+        public Boolean writebackShipDate;
+        public Boolean writebackStatus;
+        public Boolean writebackCarrier;
+        public Boolean writebackService;
+        public Boolean writebackFreight;
     }
 
     public static class SecretUpsertRequest {
@@ -270,6 +287,15 @@ public class ExternalSystemsAdminController {
             }
             c.setConfigJson(req.configJson);
         }
+        // V89 writeback flags — null on the request means "don't touch";
+        // FE always sends all six on save so partial-update surprise
+        // isn't a concern in practice.
+        if (req.writebackTracking != null) c.setWritebackTracking(req.writebackTracking);
+        if (req.writebackShipDate != null) c.setWritebackShipDate(req.writebackShipDate);
+        if (req.writebackStatus != null) c.setWritebackStatus(req.writebackStatus);
+        if (req.writebackCarrier != null) c.setWritebackCarrier(req.writebackCarrier);
+        if (req.writebackService != null) c.setWritebackService(req.writebackService);
+        if (req.writebackFreight != null) c.setWritebackFreight(req.writebackFreight);
     }
 
     private ConnectionSummary summarize(ExternalSystemConnection c) {
@@ -280,7 +306,13 @@ public class ExternalSystemsAdminController {
     private ConnectionDetail detail(ExternalSystemConnection c) {
         return new ConnectionDetail(c.getId(), c.getName(), c.getSystemType(),
                 c.isActive(), c.getConfigJson(), c.getCreatedAt(), c.getUpdatedAt(),
-                c.getUpdatedBy());
+                c.getUpdatedBy(),
+                Boolean.TRUE.equals(c.getWritebackTracking()),
+                Boolean.TRUE.equals(c.getWritebackShipDate()),
+                Boolean.TRUE.equals(c.getWritebackStatus()),
+                Boolean.TRUE.equals(c.getWritebackCarrier()),
+                Boolean.TRUE.equals(c.getWritebackService()),
+                Boolean.TRUE.equals(c.getWritebackFreight()));
     }
 
     private String actor(Authentication auth) {

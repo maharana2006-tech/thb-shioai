@@ -54,4 +54,28 @@ public class ExternalSystemConnection {
 
     @Column(name = "updated_by", length = 200)
     private String updatedBy;
+
+    // ── V89 writeback flags ────────────────────────────────────────────
+    // One boolean per payload field. Same flag gates BOTH the generate-
+    // side push AND the void-side clear: if writeback_carrier is off,
+    // the carrier code is neither sent on generate nor nulled on void.
+    // All default false; admin enables from /settings/external-systems.
+
+    @Column(name = "writeback_tracking", nullable = false, columnDefinition = "boolean default false")
+    private Boolean writebackTracking = false;
+
+    @Column(name = "writeback_ship_date", nullable = false, columnDefinition = "boolean default false")
+    private Boolean writebackShipDate = false;
+
+    @Column(name = "writeback_status", nullable = false, columnDefinition = "boolean default false")
+    private Boolean writebackStatus = false;
+
+    @Column(name = "writeback_carrier", nullable = false, columnDefinition = "boolean default false")
+    private Boolean writebackCarrier = false;
+
+    @Column(name = "writeback_service", nullable = false, columnDefinition = "boolean default false")
+    private Boolean writebackService = false;
+
+    @Column(name = "writeback_freight", nullable = false, columnDefinition = "boolean default false")
+    private Boolean writebackFreight = false;
 }

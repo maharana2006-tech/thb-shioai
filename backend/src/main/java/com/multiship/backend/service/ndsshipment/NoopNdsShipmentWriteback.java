@@ -1,21 +1,37 @@
 package com.multiship.backend.service.ndsshipment;
 
+import com.multiship.backend.service.externalsystems.writeback.WritebackAck;
+import com.multiship.backend.service.externalsystems.writeback.WritebackPackagePayload;
+import com.multiship.backend.service.externalsystems.writeback.WritebackPayload;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDateTime;
+import java.util.List;
+
 /**
- * PR1 default implementation of {@link NdsShipmentWriteback} — logs
- * the payload and returns {@code SKIPPED}. Real Oracle writeback
- * lands in a separate PR that replaces this bean (via {@code @Primary}
- * or profile-scoped alternative).
+ * V89 — thin adapter that lets legacy callers of {@link NdsShipmentWriteback}
+ * (any code holding this bean directly) reach the new
+ * {@link NdsShipmentOracleWriter} without changing their call site.
  *
- * <p>Kept as a Spring @Component with no priority annotation so the
- * eventual real implementation just needs to be discovered as another
- * @Component and marked @Primary — no config surgery required.
+ * <p>The original scaffold was a no-op stub named
+ * {@code NoopNdsShipmentWriteback}; V89 promoted the shared payload
+ * shape into {@code service/externalsystems/writeback/} and wired the
+ * real Oracle writer up. This bean bridges the two shapes so anything
+ * still holding the old interface (there is nothing today — grep is
+ * empty — but the interface stays for backwards-compat and doc value)
+ * keeps working.
+ *
+ * <p>The primary path is via {@link com.multiship.backend.service.externalsystems.writeback.ExternalSystemWritebackDispatcher};
+ * production label-generate wiring never calls this class directly.
  */
 @Slf4j
 @Component
+@RequiredArgsConstructor
 public class NoopNdsShipmentWriteback implements NdsShipmentWriteback {
+
+    private final NdsShipmentOracleWriter writer;
 
     @Override
     public Ack writeback(Payload payload) {
@@ -23,15 +39,34 @@ public class NoopNdsShipmentWriteback implements NdsShipmentWriteback {
             log.warn("nds-writeback: null payload — ignoring");
             return Ack.skipped("null payload");
         }
-        log.info("nds-writeback (STUB): scan={} scope={} client={} batch={} tracking={} carrier={} service={} packages={}",
-                payload.scannedValue(),
-                payload.scope(),
-                payload.clientCode(),
-                payload.batchId(),
-                payload.trackingNumber(),
-                payload.carrierCode(),
-                payload.serviceCode(),
-                payload.packages() == null ? 0 : payload.packages().size());
-        return Ack.skipped("NDS writeback not yet implemented — payload logged only");
+        // Translate legacy → shared shape and delegate.
+        WritebackPayload shared = WritebackPayload.builder()
+                .scannedValue(payload.scannedValue())
+                .clientCode(payload.clientCode())
+                .batchId(payload.batchId())
+                .trackingNumber(payload.trackingNumber())
+                .shipDate(LocalDateTime.now())
+                .status("SHIPPED")
+                .carrierCode(payload.carrierCode())
+                .serviceCode(payload.serviceCode())
+                .freightAmount(payload.freightAmount())
+                .currency(payload.currency())
+                .packages(mapPkgs(payload.packages()))
+                .build();
+        WritebackAck ack = writer.writeShipment(shared);
+        return switch (ack.status()) {
+            case OK -> Ack.ok(ack.detail());
+            case FAILED -> Ack.failed(ack.detail());
+            case SKIPPED -> Ack.skipped(ack.detail());
+        };
+    }
+
+    private static List<WritebackPackagePayload> mapPkgs(List<PackagePayload> pkgs) {
+        if (pkgs == null || pkgs.isEmpty()) return List.of();
+        return pkgs.stream()
+                .map(p -> new WritebackPackagePayload(p.sequence(), p.containerNo(),
+                        p.containerIds(), p.orderNos(), p.orderSuffix(),
+                        p.weight(), p.weightUnit(), p.packageTracking()))
+                .toList();
     }
 }

@@ -59,4 +59,22 @@ public class RestExternalConfig {
      * indicator doesn't wait for a slow endpoint to time out.
      */
     private int healthCheckTimeoutSeconds = 3;
+
+    // ── V89 writeback paths (relative to baseUrl) ──────────────────────
+    // Both default to conventional REST shapes; override per-vendor via
+    // config_json when their API doesn't fit.
+
+    /** POST path for the generate-side writeback. Body is the payload JSON. */
+    private String writebackPath = "/shipments";
+
+    /**
+     * Void-side path template. Two conventions supported:
+     * <ul>
+     *   <li>Path with {@code {tracking}} placeholder — connector substitutes
+     *       and calls DELETE (e.g. {@code /shipments/{tracking}}).</li>
+     *   <li>Path without placeholder — connector POSTs a small JSON body
+     *       ({@code {trackingNumber, orderNo}}) (e.g. {@code /shipments/void}).</li>
+     * </ul>
+     */
+    private String writebackClearPath = "/shipments/{tracking}";
 }

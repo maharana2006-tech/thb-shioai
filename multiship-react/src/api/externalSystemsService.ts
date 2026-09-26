@@ -33,6 +33,14 @@ export interface ConnectionDetail {
   createdAt: string | null
   updatedAt: string | null
   updatedBy: string | null
+  // V89 — writeback flags. One boolean per payload field. Same flag
+  // gates both label-generate push and label-void clear.
+  writebackTracking: boolean
+  writebackShipDate: boolean
+  writebackStatus: boolean
+  writebackCarrier: boolean
+  writebackService: boolean
+  writebackFreight: boolean
 }
 
 export interface ConnectionUpsertRequest {
@@ -40,6 +48,13 @@ export interface ConnectionUpsertRequest {
   systemType?: string
   active?: boolean
   configJson?: string
+  // V89 — all six sent together on save; omit to leave a flag alone.
+  writebackTracking?: boolean
+  writebackShipDate?: boolean
+  writebackStatus?: boolean
+  writebackCarrier?: boolean
+  writebackService?: boolean
+  writebackFreight?: boolean
 }
 
 /** Health / test-connection response payload shape. */

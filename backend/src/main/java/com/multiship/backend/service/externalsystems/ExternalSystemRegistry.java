@@ -2,6 +2,9 @@ package com.multiship.backend.service.externalsystems;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.multiship.backend.model.ExternalSystemConnection;
+import com.multiship.backend.service.externalsystems.writeback.WritebackAck;
+import com.multiship.backend.service.externalsystems.writeback.WritebackClearRequest;
+import com.multiship.backend.service.externalsystems.writeback.WritebackPayload;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
@@ -157,6 +160,63 @@ public class ExternalSystemRegistry {
             out.add(healthCheck(row.getName()));
         }
         return out;
+    }
+
+    /**
+     * V89 — dispatch a post-generate writeback. Loads the connection
+     * row, parses its config, and invokes {@code connector.writeShipment}.
+     * Missing / inactive rows return {@link WritebackAck#skipped}
+     * without throwing — the caller (dispatcher) is fire-and-forget.
+     */
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    public WritebackAck writeShipment(String connectionName, WritebackPayload payload) {
+        Optional<ExternalSystemConnection> maybe = config.findByName(connectionName);
+        if (maybe.isEmpty()) {
+            return WritebackAck.skipped("no external_system_connection named '" + connectionName + "'");
+        }
+        ExternalSystemConnection row = maybe.get();
+        if (!row.isActive()) return WritebackAck.skipped("connection inactive");
+        ExternalSystemConnector connector = byType.get(normalizeType(row.getSystemType()));
+        if (connector == null) {
+            return WritebackAck.skipped("no connector registered for system_type=" + row.getSystemType());
+        }
+        Object cfg;
+        try { cfg = parseConfig(row, connector); }
+        catch (ExternalSystemException e) { return WritebackAck.failed(e.getMessage()); }
+        try {
+            return connector.writeShipment(row.getName(), cfg, secretsFor(row.getId()), payload);
+        } catch (Exception e) {
+            return WritebackAck.failed(connector.getClass().getSimpleName()
+                    + " threw during writeShipment: " + e.getMessage());
+        }
+    }
+
+    /**
+     * V89 — dispatch a post-void clear. Same lookup + parse pattern as
+     * {@link #writeShipment}. The connector nulls the flagged fields on
+     * the external row (or sets a VOIDED status marker).
+     */
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    public WritebackAck clearShipment(String connectionName, WritebackClearRequest req) {
+        Optional<ExternalSystemConnection> maybe = config.findByName(connectionName);
+        if (maybe.isEmpty()) {
+            return WritebackAck.skipped("no external_system_connection named '" + connectionName + "'");
+        }
+        ExternalSystemConnection row = maybe.get();
+        if (!row.isActive()) return WritebackAck.skipped("connection inactive");
+        ExternalSystemConnector connector = byType.get(normalizeType(row.getSystemType()));
+        if (connector == null) {
+            return WritebackAck.skipped("no connector registered for system_type=" + row.getSystemType());
+        }
+        Object cfg;
+        try { cfg = parseConfig(row, connector); }
+        catch (ExternalSystemException e) { return WritebackAck.failed(e.getMessage()); }
+        try {
+            return connector.clearShipment(row.getName(), cfg, secretsFor(row.getId()), req);
+        } catch (Exception e) {
+            return WritebackAck.failed(connector.getClass().getSimpleName()
+                    + " threw during clearShipment: " + e.getMessage());
+        }
     }
 
     /** Notify the connector that its config / secrets changed. */
