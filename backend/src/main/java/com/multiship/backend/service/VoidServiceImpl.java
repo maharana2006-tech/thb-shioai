@@ -269,12 +269,14 @@ public class VoidServiceImpl implements VoidService {
             // must NOT surface as a void failure (the label IS voided).
             try {
                 if (writebackDispatcher != null) {
-                    String clientCode = orderRepository.findByOrderNo(orderNo)
-                            .map(com.multiship.backend.model.Order::getCustNo)
-                            .orElse(null);
+                    java.util.Optional<com.multiship.backend.model.Order> ord =
+                            orderRepository.findByOrderNo(orderNo);
+                    String clientCode = ord.map(com.multiship.backend.model.Order::getCustNo).orElse(null);
+                    String source     = ord.map(com.multiship.backend.model.Order::getSource).orElse(null);
+                    String channel    = ord.map(com.multiship.backend.model.Order::getOrderChannel).orElse(null);
                     writebackDispatcher.dispatchOnClear(
                             com.multiship.backend.service.externalsystems.writeback.WritebackClearRequest
-                                    .of(null, tracking.getTrackingNumber(), orderNo, clientCode));
+                                    .of(null, tracking.getTrackingNumber(), orderNo, clientCode, source, channel));
                 }
             } catch (RuntimeException wbFail) {
                 log.warn("V89 writeback clear failed for voided order {} (void succeeded): {}",

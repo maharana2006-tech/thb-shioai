@@ -287,7 +287,14 @@ public class ExternalSystemsAdminController {
             boolean writebackStatus,
             boolean writebackCarrier,
             boolean writebackService,
-            boolean writebackFreight) {}
+            boolean writebackFreight,
+            // V90 dispatch gates — source (MANUAL / BULK / API) and
+            // channel (D2C / B2B). Default true = fire everywhere.
+            boolean writebackSourceManual,
+            boolean writebackSourceBulk,
+            boolean writebackSourceApi,
+            boolean writebackChannelD2c,
+            boolean writebackChannelB2b) {}
 
     public static class ConnectionUpsertRequest {
         public String name;
@@ -303,6 +310,12 @@ public class ExternalSystemsAdminController {
         public Boolean writebackCarrier;
         public Boolean writebackService;
         public Boolean writebackFreight;
+        // V90 dispatch gates — null = don't touch.
+        public Boolean writebackSourceManual;
+        public Boolean writebackSourceBulk;
+        public Boolean writebackSourceApi;
+        public Boolean writebackChannelD2c;
+        public Boolean writebackChannelB2b;
     }
 
     public static class SecretUpsertRequest {
@@ -345,6 +358,12 @@ public class ExternalSystemsAdminController {
         if (req.writebackCarrier != null) c.setWritebackCarrier(req.writebackCarrier);
         if (req.writebackService != null) c.setWritebackService(req.writebackService);
         if (req.writebackFreight != null) c.setWritebackFreight(req.writebackFreight);
+        // V90 dispatch gates.
+        if (req.writebackSourceManual != null) c.setWritebackSourceManual(req.writebackSourceManual);
+        if (req.writebackSourceBulk   != null) c.setWritebackSourceBulk(req.writebackSourceBulk);
+        if (req.writebackSourceApi    != null) c.setWritebackSourceApi(req.writebackSourceApi);
+        if (req.writebackChannelD2c   != null) c.setWritebackChannelD2c(req.writebackChannelD2c);
+        if (req.writebackChannelB2b   != null) c.setWritebackChannelB2b(req.writebackChannelB2b);
     }
 
     private ConnectionSummary summarize(ExternalSystemConnection c) {
@@ -361,7 +380,12 @@ public class ExternalSystemsAdminController {
                 Boolean.TRUE.equals(c.getWritebackStatus()),
                 Boolean.TRUE.equals(c.getWritebackCarrier()),
                 Boolean.TRUE.equals(c.getWritebackService()),
-                Boolean.TRUE.equals(c.getWritebackFreight()));
+                Boolean.TRUE.equals(c.getWritebackFreight()),
+                Boolean.TRUE.equals(c.getWritebackSourceManual()),
+                Boolean.TRUE.equals(c.getWritebackSourceBulk()),
+                Boolean.TRUE.equals(c.getWritebackSourceApi()),
+                Boolean.TRUE.equals(c.getWritebackChannelD2c()),
+                Boolean.TRUE.equals(c.getWritebackChannelB2b()));
     }
 
     private String actor(Authentication auth) {

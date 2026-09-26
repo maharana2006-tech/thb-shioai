@@ -22,6 +22,10 @@ import java.util.Map;
  *       original writeback; empty for non-WMS orders</li>
  *   <li>{@code connectionSpecific} — free-form map of extra keys the
  *       connector recognises (kept for forward-compat; empty today)</li>
+ *   <li>V90 {@code source} / {@code channel} — the original order's
+ *       source (MANUAL/BULK/API) and channel (D2C/B2B). Used by the
+ *       dispatcher for source/channel gate symmetry with generate; the
+ *       connector doesn't see them (dispatcher strips before dial).</li>
  * </ul>
  */
 public record WritebackClearRequest(
@@ -42,7 +46,11 @@ public record WritebackClearRequest(
         boolean clearStatus,
         boolean clearCarrier,
         boolean clearService,
-        boolean clearFreight
+        boolean clearFreight,
+        /** V90 — dispatch gate; null on legacy .of() callers = ungated. */
+        String source,
+        /** V90 — dispatch gate; null on legacy .of() callers = ungated. */
+        String channel
 ) {
     /** Minimal constructor with all flags on — for simple connectors
      *  (REST) that don't do per-column selection anyway. */
@@ -50,6 +58,17 @@ public record WritebackClearRequest(
                                             Integer orderNo, String clientCode) {
         return new WritebackClearRequest(connectionName, trackingNumber, orderNo,
                 clientCode, List.of(), List.of(), Map.of(),
-                true, true, true, true, true, true);
+                true, true, true, true, true, true,
+                null, null);
+    }
+
+    /** V90 — .of() variant that carries source + channel for the dispatcher gate. */
+    public static WritebackClearRequest of(String connectionName, String trackingNumber,
+                                            Integer orderNo, String clientCode,
+                                            String source, String channel) {
+        return new WritebackClearRequest(connectionName, trackingNumber, orderNo,
+                clientCode, List.of(), List.of(), Map.of(),
+                true, true, true, true, true, true,
+                source, channel);
     }
 }

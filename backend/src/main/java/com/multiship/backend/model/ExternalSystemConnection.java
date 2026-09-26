@@ -78,4 +78,25 @@ public class ExternalSystemConnection {
 
     @Column(name = "writeback_freight", nullable = false, columnDefinition = "boolean default false")
     private Boolean writebackFreight = false;
+
+    // ── V90 source / channel dispatch gates ────────────────────────────
+    // Filter WHETHER writeback fires for a given payload, based on the
+    // origin (source) or shipping channel of the order. Default TRUE so
+    // existing rows keep firing across all surfaces unless an admin
+    // narrows the connection.
+
+    @Column(name = "writeback_source_manual", nullable = false, columnDefinition = "boolean default true")
+    private Boolean writebackSourceManual = true;
+
+    @Column(name = "writeback_source_bulk", nullable = false, columnDefinition = "boolean default true")
+    private Boolean writebackSourceBulk = true;
+
+    @Column(name = "writeback_source_api", nullable = false, columnDefinition = "boolean default true")
+    private Boolean writebackSourceApi = true;
+
+    @Column(name = "writeback_channel_d2c", nullable = false, columnDefinition = "boolean default true")
+    private Boolean writebackChannelD2c = true;
+
+    @Column(name = "writeback_channel_b2b", nullable = false, columnDefinition = "boolean default true")
+    private Boolean writebackChannelB2b = true;
 }

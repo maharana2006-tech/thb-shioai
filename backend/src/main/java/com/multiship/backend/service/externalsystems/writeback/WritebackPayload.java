@@ -21,12 +21,20 @@ import java.util.List;
  * because they're just row-lookup keys — connectors that don't
  * recognise them ignore them harmlessly.
  *
+ * <p>V90 adds {@code source} + {@code channel} — routing keys used
+ * by the dispatcher to decide whether the connection is even eligible
+ * for this payload. They're stripped before {@code writeShipment} is
+ * called (connectors don't need them).
+ *
  * @param connectionName connection name for logging / audit
  * @param scannedValue   original {@code .X} / {@code .Y} value the shipper scanned
  *                       (null for orders that didn't originate from a WMS scan)
  * @param clientCode     tenant / client identifier (NDS FF_SCHEMA, REST tenant)
  * @param batchId        external batch id (WMS batch), null for direct
  * @param orderNo        multiship order number (always present)
+ * @param source         V90 dispatch gate — MANUAL / BULK / API / null (auto path).
+ *                       Gate off = skip; null = ungated
+ * @param channel        V90 dispatch gate — D2C / B2B / null. Gate off = skip; null = ungated
  * @param trackingNumber carrier tracking, null when writeback_tracking flag is off
  * @param shipDate       label-generated timestamp, null when writeback_ship_date is off
  * @param status         "SHIPPED" on generate, null when writeback_status is off
@@ -42,6 +50,8 @@ public record WritebackPayload(
         String clientCode,
         String batchId,
         Integer orderNo,
+        String source,
+        String channel,
         String trackingNumber,
         LocalDateTime shipDate,
         String status,
@@ -59,6 +69,7 @@ public record WritebackPayload(
             boolean keepCarrier, boolean keepService, boolean keepFreight) {
         return new WritebackPayload(
                 connectionName, scannedValue, clientCode, batchId, orderNo,
+                source, channel,
                 keepTracking ? trackingNumber : null,
                 keepShipDate ? shipDate : null,
                 keepStatus ? status : null,
@@ -72,6 +83,7 @@ public record WritebackPayload(
     public static final class Builder {
         private String connectionName, scannedValue, clientCode, batchId;
         private Integer orderNo;
+        private String source, channel;
         private String trackingNumber, status, carrierCode, serviceCode, currency;
         private LocalDateTime shipDate;
         private BigDecimal freightAmount;
@@ -82,6 +94,8 @@ public record WritebackPayload(
         public Builder clientCode(String v) { this.clientCode = v; return this; }
         public Builder batchId(String v) { this.batchId = v; return this; }
         public Builder orderNo(Integer v) { this.orderNo = v; return this; }
+        public Builder source(String v) { this.source = v; return this; }
+        public Builder channel(String v) { this.channel = v; return this; }
         public Builder trackingNumber(String v) { this.trackingNumber = v; return this; }
         public Builder shipDate(LocalDateTime v) { this.shipDate = v; return this; }
         public Builder status(String v) { this.status = v; return this; }
@@ -95,7 +109,7 @@ public record WritebackPayload(
 
         public WritebackPayload build() {
             return new WritebackPayload(connectionName, scannedValue, clientCode, batchId,
-                    orderNo, trackingNumber, shipDate, status, carrierCode, serviceCode,
+                    orderNo, source, channel, trackingNumber, shipDate, status, carrierCode, serviceCode,
                     freightAmount, currency, packages);
         }
     }

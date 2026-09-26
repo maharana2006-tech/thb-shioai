@@ -88,6 +88,16 @@ public class ExternalSystemWritebackDispatcher {
                 log.debug("writeback: skipping generate — connection '{}' inactive", name);
                 return;
             }
+            if (!isSourceAllowed(payload.source(), row.get())) {
+                log.info("writeback: skipping generate on '{}' order={} — source '{}' not enabled",
+                        name, payload.orderNo(), payload.source());
+                return;
+            }
+            if (!isChannelAllowed(payload.channel(), row.get())) {
+                log.info("writeback: skipping generate on '{}' order={} — channel '{}' not enabled",
+                        name, payload.orderNo(), payload.channel());
+                return;
+            }
             WritebackPayload redacted = redactByFlags(payload, row.get());
             if (allFieldsRedacted(redacted)) {
                 log.debug("writeback: skipping generate on '{}' — no flags enabled", name);
@@ -126,6 +136,16 @@ public class ExternalSystemWritebackDispatcher {
                 log.debug("writeback: skipping clear on '{}' — no flags enabled", name);
                 return;
             }
+            if (!isSourceAllowed(req.source(), row.get())) {
+                log.info("writeback: skipping clear on '{}' order={} — source '{}' not enabled",
+                        name, req.orderNo(), req.source());
+                return;
+            }
+            if (!isChannelAllowed(req.channel(), row.get())) {
+                log.info("writeback: skipping clear on '{}' order={} — channel '{}' not enabled",
+                        name, req.orderNo(), req.channel());
+                return;
+            }
             // Thread the flag matrix through so per-column connectors
             // (NDS) honour symmetry — same flags gate generate + clear.
             ExternalSystemConnection r = row.get();
@@ -137,7 +157,9 @@ public class ExternalSystemWritebackDispatcher {
                     Boolean.TRUE.equals(r.getWritebackStatus()),
                     Boolean.TRUE.equals(r.getWritebackCarrier()),
                     Boolean.TRUE.equals(r.getWritebackService()),
-                    Boolean.TRUE.equals(r.getWritebackFreight()));
+                    Boolean.TRUE.equals(r.getWritebackFreight()),
+                    req.source(),
+                    req.channel());
             WritebackAck ack = registry.clearShipment(name, named);
             logAck("clear", name, req.orderNo(), ack);
         } catch (Exception e) {
@@ -180,6 +202,33 @@ public class ExternalSystemWritebackDispatcher {
         return p.trackingNumber() == null && p.shipDate() == null && p.status() == null
                 && p.carrierCode() == null && p.serviceCode() == null
                 && p.freightAmount() == null;
+    }
+
+    /**
+     * V90 — source gate. {@code null} / blank source is ungated (fires),
+     * on the theory that auto/queue paths that couldn't determine
+     * origin should default to firing. An unknown / unmapped source
+     * (anything outside MANUAL / BULK / API) is also ungated so we
+     * don't silently drop future new origins.
+     */
+    static boolean isSourceAllowed(String source, ExternalSystemConnection row) {
+        if (source == null || source.isBlank()) return true;
+        return switch (source.trim().toUpperCase()) {
+            case "MANUAL" -> Boolean.TRUE.equals(row.getWritebackSourceManual());
+            case "BULK"   -> Boolean.TRUE.equals(row.getWritebackSourceBulk());
+            case "API"    -> Boolean.TRUE.equals(row.getWritebackSourceApi());
+            default -> true;
+        };
+    }
+
+    /** V90 — channel gate; same null-is-ungated semantics as source. */
+    static boolean isChannelAllowed(String channel, ExternalSystemConnection row) {
+        if (channel == null || channel.isBlank()) return true;
+        return switch (channel.trim().toUpperCase()) {
+            case "D2C" -> Boolean.TRUE.equals(row.getWritebackChannelD2c());
+            case "B2B" -> Boolean.TRUE.equals(row.getWritebackChannelB2b());
+            default -> true;
+        };
     }
 
     static boolean noFlagsEnabled(ExternalSystemConnection row) {

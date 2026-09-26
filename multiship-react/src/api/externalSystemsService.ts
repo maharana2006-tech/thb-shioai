@@ -41,6 +41,13 @@ export interface ConnectionDetail {
   writebackCarrier: boolean
   writebackService: boolean
   writebackFreight: boolean
+  // V90 — dispatch gates. Default true (fire everywhere) so existing
+  // rows stay firing after upgrade.
+  writebackSourceManual: boolean
+  writebackSourceBulk: boolean
+  writebackSourceApi: boolean
+  writebackChannelD2c: boolean
+  writebackChannelB2b: boolean
 }
 
 export interface ConnectionUpsertRequest {
@@ -55,6 +62,12 @@ export interface ConnectionUpsertRequest {
   writebackCarrier?: boolean
   writebackService?: boolean
   writebackFreight?: boolean
+  // V90 dispatch gates — omit to leave alone.
+  writebackSourceManual?: boolean
+  writebackSourceBulk?: boolean
+  writebackSourceApi?: boolean
+  writebackChannelD2c?: boolean
+  writebackChannelB2b?: boolean
 }
 
 /** Health / test-connection response payload shape. */

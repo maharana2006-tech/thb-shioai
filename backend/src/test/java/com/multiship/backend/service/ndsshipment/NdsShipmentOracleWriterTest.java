@@ -165,7 +165,8 @@ class NdsShipmentOracleWriterTest {
         WritebackClearRequest req = new WritebackClearRequest(
                 "nds-default", "1Z999", 1001, "ACME",
                 List.of(10L), List.of(5001), Map.of(),
-                true, false, true, false, false, false);
+                true, false, true, false, false, false,
+                null, null);
 
         WritebackAck ack = writer.clearShipment(req, true, false, true, false, false, false);
         assertEquals(WritebackAck.Status.OK, ack.status());

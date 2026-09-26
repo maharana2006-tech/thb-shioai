@@ -188,6 +188,78 @@ class ExternalSystemWritebackDispatcherTest {
         verify(registry, never()).clearShipment(anyString(), any());
     }
 
+    // ── V90 source / channel dispatch gates ──────────────────────────
+
+    @Test
+    void isSourceAllowedNullBypassesGate() {
+        ExternalSystemConnection row = conn("nds-default", true, true, true, true, true, true);
+        row.setWritebackSourceManual(false);
+        row.setWritebackSourceBulk(false);
+        row.setWritebackSourceApi(false);
+        // Null / blank source = ungated (auto path). Otherwise every legacy
+        // caller who forgot to set source would silently drop.
+        assertTrue(ExternalSystemWritebackDispatcher.isSourceAllowed(null, row));
+        assertTrue(ExternalSystemWritebackDispatcher.isSourceAllowed("", row));
+    }
+
+    @Test
+    void isSourceAllowedGatesKnownValues() {
+        ExternalSystemConnection row = conn("nds-default", true, true, true, true, true, true);
+        row.setWritebackSourceManual(true);
+        row.setWritebackSourceBulk(false);
+        row.setWritebackSourceApi(false);
+        assertTrue(ExternalSystemWritebackDispatcher.isSourceAllowed("MANUAL", row));
+        assertTrue(ExternalSystemWritebackDispatcher.isSourceAllowed("manual", row)); // case-insensitive
+        assertFalse(ExternalSystemWritebackDispatcher.isSourceAllowed("BULK", row));
+        assertFalse(ExternalSystemWritebackDispatcher.isSourceAllowed("API", row));
+        // Unknown values pass through so new origins don't silently drop.
+        assertTrue(ExternalSystemWritebackDispatcher.isSourceAllowed("WMS", row));
+    }
+
+    @Test
+    void isChannelAllowedGatesKnownValues() {
+        ExternalSystemConnection row = conn("nds-default", true, true, true, true, true, true);
+        row.setWritebackChannelD2c(false);
+        row.setWritebackChannelB2b(true);
+        assertFalse(ExternalSystemWritebackDispatcher.isChannelAllowed("D2C", row));
+        assertTrue(ExternalSystemWritebackDispatcher.isChannelAllowed("B2B", row));
+        assertTrue(ExternalSystemWritebackDispatcher.isChannelAllowed(null, row));
+    }
+
+    @Test
+    void dispatchOnGenerateSkipsWhenSourceGateOff() {
+        when(tenantSettings.getSetting(anyString(), anyString())).thenReturn(Optional.empty());
+        ExternalSystemConnection row = conn("nds-default", true, true, true, true, true, true);
+        row.setWritebackSourceBulk(false);
+        when(config.findByName("nds-default")).thenReturn(Optional.of(row));
+
+        dispatcher.dispatchOnGenerate(
+                WritebackPayload.builder()
+                        .clientCode("ACME").orderNo(1001)
+                        .source("BULK").channel("D2C")
+                        .trackingNumber("1Z999").status("SHIPPED")
+                        .build());
+
+        verify(registry, never()).writeShipment(anyString(), any());
+    }
+
+    @Test
+    void dispatchOnGenerateSkipsWhenChannelGateOff() {
+        when(tenantSettings.getSetting(anyString(), anyString())).thenReturn(Optional.empty());
+        ExternalSystemConnection row = conn("nds-default", true, true, true, true, true, true);
+        row.setWritebackChannelB2b(false);
+        when(config.findByName("nds-default")).thenReturn(Optional.of(row));
+
+        dispatcher.dispatchOnGenerate(
+                WritebackPayload.builder()
+                        .clientCode("ACME").orderNo(1001)
+                        .source("MANUAL").channel("B2B")
+                        .trackingNumber("1Z999").status("SHIPPED")
+                        .build());
+
+        verify(registry, never()).writeShipment(anyString(), any());
+    }
+
     @Test
     void dispatchOnClearForwardsFlagsToRegistry() {
         when(tenantSettings.getSetting(anyString(), anyString())).thenReturn(Optional.empty());

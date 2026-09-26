@@ -96,6 +96,11 @@ const CONN_DETAIL: ConnectionDetail = {
   writebackCarrier: false,
   writebackService: false,
   writebackFreight: false,
+  writebackSourceManual: true,
+  writebackSourceBulk: true,
+  writebackSourceApi: true,
+  writebackChannelD2c: true,
+  writebackChannelB2b: true,
 }
 
 const CONNECTORS: ConnectorSummary[] = [
