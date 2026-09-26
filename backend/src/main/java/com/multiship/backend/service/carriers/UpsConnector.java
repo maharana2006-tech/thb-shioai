@@ -732,6 +732,7 @@ public class UpsConnector implements CarrierConnector {
         String uri = "/api/shipments/" + carrierProperties.getUps().getApiVersion() + "/transittimes";
         try {
             Map<String, Object> body = buildUpsTitRequest(request);
+            log.warn("ups.tit.request: uri={} body={}", uri, body);
             String response = HttpClients.newBuilder()
                     .baseUrl(baseUrl).build()
                     .post()
@@ -744,6 +745,8 @@ public class UpsConnector implements CarrierConnector {
                     .body(body)
                     .retrieve()
                     .body(String.class);
+            log.warn("ups.tit.response: {}", response == null ? "null" :
+                    response.length() > 800 ? response.substring(0, 800) + "…" : response);
             return parseUpsTitResponse(serviceCode, response);
         } catch (org.springframework.web.client.RestClientResponseException ex) {
             String errBody = ex.getResponseBodyAsString();
@@ -796,10 +799,10 @@ public class UpsConnector implements CarrierConnector {
         }
         body.put("weight", totalWeight.toPlainString());
         body.put("weightUnitOfMeasure", kg ? "KGS" : "LBS");
-        // shipDate today, yyyyMMdd; shipTime noon local as a benign default.
-        java.time.LocalDate today = java.time.LocalDate.now();
-        body.put("shipDate", today.format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd")));
-        body.put("shipTime", "1200");
+        // shipDate/shipTime deliberately omitted — UPS TiT defaults to server-side
+        // "today" when absent. Sending our system's LocalDate.now() breaks under
+        // clock skew (dev machines running ahead of real UPS time trip
+        // UPS code 1080 "Invalid Ship Date" and the whole validate fails).
         body.put("residentialIndicator",
                 Boolean.TRUE.equals(request.getRecipientResidential()) ? "01" : "02");
         body.put("billType", "03"); // 02 = document, 03 = non-document. Non-doc covers parcels.
@@ -811,6 +814,18 @@ public class UpsConnector implements CarrierConnector {
         try {
             com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(
                     Optional.ofNullable(response).orElse("{}"));
+            // UPS TiT 200s with a `validationList` envelope when the request body
+            // fails field validation (e.g. code 1080 "Invalid Ship Date"). Surface
+            // the offending fields so the operator sees the real reason.
+            com.fasterxml.jackson.databind.JsonNode vl = root.at("/validationList/invalidFieldList");
+            if (vl.isArray() && vl.size() > 0) {
+                java.util.List<String> fields = new java.util.ArrayList<>();
+                for (com.fasterxml.jackson.databind.JsonNode f : vl) fields.add(f.asText(""));
+                return new ValidateShipmentResult(false, "ERROR", "SHIPMENT",
+                        java.util.List.of(), fields,
+                        "UPS Time-in-Transit rejected the request: invalid " + String.join(", ", fields) + ".",
+                        response);
+            }
             com.fasterxml.jackson.databind.JsonNode services = root.at("/emsResponse/services");
             if (!services.isArray() || services.size() == 0) {
                 return new ValidateShipmentResult(false, "NOT_FOUND", "SHIPMENT",

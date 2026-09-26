@@ -177,4 +177,16 @@ class UpsConnectorValidateShipmentTest {
         assertFalse(r.valid());
         assertEquals("NOT_FOUND", r.matchLevel());
     }
+
+    @Test
+    void tit_validationList_surfacesInvalidFields() {
+        // UPS 200s with a validationList envelope on field-level rejection —
+        // don't hide it behind "lane not served."
+        String response = "{\"validationList\":{\"invalidFieldList\":[\"ShipDate\"],"
+                + "\"invalidFieldListCodes\":[\"1080\"]}}";
+        ValidateShipmentResult r = connector.parseUpsTitResponse("03", response);
+        assertFalse(r.valid());
+        assertEquals("ERROR", r.matchLevel());
+        assertTrue(r.message().contains("ShipDate"));
+    }
 }
