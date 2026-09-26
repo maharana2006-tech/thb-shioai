@@ -35,7 +35,7 @@ import java.util.Optional;
 public class BulkBatchQueryService {
 
     /** Which list: file imports, WMS/API fetches, or Trash (deleted, any source). */
-    public enum View { FILE, API, TRASH }
+    public enum View { FILE, API, TRASH, DTC }
 
     /** Filters from the Import history toolbar. Nulls / blanks mean "any". */
     public record Query(
@@ -294,9 +294,13 @@ public class BulkBatchQueryService {
                     p.add(cb.isNull(root.get("deletedAt")));
                     p.add(source.in("WMS", "API"));
                 }
+                case DTC -> {
+                    p.add(cb.isNull(root.get("deletedAt")));
+                    p.add(cb.equal(source, "DTC"));
+                }
                 default -> {
                     p.add(cb.isNull(root.get("deletedAt")));
-                    p.add(cb.not(source.in("WMS", "API")));
+                    p.add(cb.not(source.in("WMS", "API", "DTC")));
                 }
             }
             // A client-scoped user sees their client's batches only; operators see all.

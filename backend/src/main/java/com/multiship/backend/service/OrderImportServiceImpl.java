@@ -2950,6 +2950,14 @@ public class OrderImportServiceImpl implements OrderImportService {
         return s.equals("WMS") || s.equals("API");
     }
 
+    /** D2C History — batches whose source is DTC (Oracle NDS view pulls). */
+    @Override
+    public java.util.List<com.multiship.backend.dto.ImportBatchDTO> dtcBatches() {
+        if (importBatchRepository == null) return java.util.List.of();
+        return summariesFor(importBatchRepository.findAllByDeletedAtIsNullOrderByIdDesc()
+                .stream().filter(b -> b.getSource() != null && b.getSource().trim().equalsIgnoreCase("DTC")).toList());
+    }
+
     @Override
     public java.util.List<com.multiship.backend.dto.ImportBatchDTO> deletedHistory() {
         if (importBatchRepository == null) return java.util.List.of();

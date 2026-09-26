@@ -68,6 +68,9 @@ public interface OrderImportService {
      *  first — shown under the "API" section of All Orders, not Import history. */
     java.util.List<com.multiship.backend.dto.ImportBatchDTO> apiBatches();
 
+    /** D2C History — live batches with source=DTC (Oracle NDS view pulls). */
+    java.util.List<com.multiship.backend.dto.ImportBatchDTO> dtcBatches();
+
     /** Soft-deleted imports, newest first — the Trash view. */
     java.util.List<com.multiship.backend.dto.ImportBatchDTO> deletedHistory();
 

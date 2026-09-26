@@ -93,6 +93,7 @@ const UspsDirectDashboardPage = lazy(() => import('../pages/UspsDirectDashboardP
 // Lazy — one-shot flows (bulky but not on every page load).
 const NewShipmentPage = lazy(() => import('../components/NewShipmentPage'))
 const DataHistoryPage = lazy(() => import('../components/DataHistoryPage'))
+const DtcHistoryPage = lazy(() => import('../components/DtcHistoryPage'))
 const LabelsInvoicesPage = lazy(() => import('../components/LabelsInvoicesPage'))
 const BulkImportPage = lazy(() => import('../components/BulkImportPage'))
 
@@ -202,6 +203,9 @@ export default function AppRoutes() {
             <Route path="/bulk/api" element={<Navigate to={apiBatchesPath} replace />} />
             <Route path={apiBatchesPath} element={<DataHistoryPage apiBatches />} />
             <Route path={`${apiBatchesPath}/:batchId`} element={<DataHistoryPage apiBatches />} />
+            {/* D2C History — Oracle NDS view pulls (Fetch from NDS). */}
+            <Route path={workspacePaths.d2c} element={<DtcHistoryPage />} />
+            <Route path={`${workspacePaths.d2c}/:batchId`} element={<DtcHistoryPage />} />
             {/* Labels & Invoices — its own page, opened from Bulk Mailer (was the Documents tab). */}
             <Route path={bulkPaths.labels} element={<LabelsInvoicesPage />} />
             <Route path="/bulk/documents" element={<Navigate to={bulkPaths.labels} replace />} />

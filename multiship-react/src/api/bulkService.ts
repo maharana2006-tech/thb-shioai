@@ -3,7 +3,7 @@ import type { ApiResponse } from './orderService'
 import type { ImportBatchSummary } from './orderImportService'
 
 /** Which Bulk Mailer list: file imports, WMS/API fetches, or Trash (any source). */
-export type BulkView = 'FILE' | 'API' | 'TRASH'
+export type BulkView = 'FILE' | 'API' | 'TRASH' | 'DTC'
 
 /** The Import history toolbar's filters, sent to the server. */
 export interface BulkBatchQuery {

@@ -6,6 +6,8 @@ export const workspacePaths = {
   orders: '/orders',
   /** Bulk Mailer — file imports, the importer, labels & invoices. */
   bulk: '/bulk',
+  /** D2C History — Oracle NDS view pulls (Fetch from NDS). Mirrors Bulk Mailer's shape. */
+  d2c: '/d2c/history',
   settings: '/settings',
 } as const
 
@@ -29,6 +31,10 @@ export const bulkBatchPath = (slug: string) => `/bulk/batches/${slug}`
 export const apiBatchesPath = '/orders/api-batches'
 /** An API batch's page — by its opaque slug, like bulkBatchPath. */
 export const apiBatchPath = (slug: string) => `${apiBatchesPath}/${slug}`
+
+/** D2C History (Oracle NDS view) — its own top-level page + batch detail by slug. */
+export const dtcBatchesPath = '/d2c/history'
+export const dtcBatchPath = (slug: string) => `${dtcBatchesPath}/${slug}`
 
 export type WorkspaceRouteKey = keyof typeof workspacePaths
 
@@ -86,6 +92,7 @@ export const workspaceNavItems: Array<{
   { key: 'dashboard', label: 'Dashboard', to: workspacePaths.dashboard },
   { key: 'orders', label: 'Orders', to: workspacePaths.orders },
   { key: 'bulk', label: 'Bulk Mailer', to: bulkPaths.imports },
+  { key: 'd2c', label: 'D2C History', to: workspacePaths.d2c },
   { key: 'settings', label: 'Settings', to: settingsPaths.clients },
 ]
 
@@ -191,6 +198,10 @@ export const resolveWorkspaceRouteKey = (pathname: string): WorkspaceRouteKey | 
     return 'bulk'
   }
 
+  if (pathname === workspacePaths.d2c || pathname.startsWith('/d2c/')) {
+    return 'd2c'
+  }
+
   if (
     pathname.startsWith('/settings') ||
     pathname === '/clients' ||
@@ -227,6 +238,9 @@ export const resolveBreadcrumb = (
   }
   if (pathname === workspacePaths.bulk || pathname.startsWith('/bulk/')) {
     return { section: 'Operations', label: 'Bulk Mailer', iconKey: 'bulk' }
+  }
+  if (pathname === workspacePaths.d2c || pathname.startsWith('/d2c/')) {
+    return { section: 'Operations', label: 'D2C History', iconKey: 'bulk' }
   }
   if (pathname.startsWith('/settings') || pathname === '/clients' || pathname === '/carrier') {
     const sub = settingsNavItems.find((i) => i.to === pathname)
