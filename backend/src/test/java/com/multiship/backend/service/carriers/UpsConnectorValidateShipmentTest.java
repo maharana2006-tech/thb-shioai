@@ -149,14 +149,25 @@ class UpsConnectorValidateShipmentTest {
 
     @Test
     void tit_requestedServiceInResponse_isExactValid() {
+        // UPS TiT actually returns alpha codes (GND, 1DA, 2DA…) — the
+        // request comes in as numeric ("03"). Parser must translate.
         String response = "{\"emsResponse\":{\"services\":["
-                + "{\"serviceLevel\":\"03\",\"serviceLevelDescription\":\"Ground\",\"businessTransitDays\":\"5\"},"
-                + "{\"serviceLevel\":\"02\",\"serviceLevelDescription\":\"2nd Day Air\",\"businessTransitDays\":\"2\"}]}}";
+                + "{\"serviceLevel\":\"GND\",\"serviceLevelDescription\":\"UPS Ground\",\"businessTransitDays\":\"5\"},"
+                + "{\"serviceLevel\":\"2DA\",\"serviceLevelDescription\":\"UPS 2nd Day Air®\",\"businessTransitDays\":\"2\"}]}}";
         ValidateShipmentResult r = connector.parseUpsTitResponse("03", response);
         assertTrue(r.valid());
         assertEquals("EXACT", r.matchLevel());
         assertTrue(r.message().contains("Ground"));
         assertTrue(r.message().contains("5 business day"));
+    }
+
+    @Test
+    void tit_numeric_and_alpha_service_codes_both_match() {
+        // Same GND response, request in alpha form should also match.
+        String response = "{\"emsResponse\":{\"services\":["
+                + "{\"serviceLevel\":\"GND\",\"serviceLevelDescription\":\"UPS Ground\"}]}}";
+        assertTrue(connector.parseUpsTitResponse("03", response).valid());
+        assertTrue(connector.parseUpsTitResponse("GND", response).valid());
     }
 
     @Test

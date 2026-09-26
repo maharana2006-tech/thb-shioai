@@ -809,8 +809,29 @@ public class UpsConnector implements CarrierConnector {
         return body;
     }
 
+    /** UPS Rating/Ship uses numeric service codes ("03" = Ground); UPS TiT
+     *  returns alphabetic codes ("GND"). Translate the numeric input to
+     *  the TiT alpha so equality holds. Unknown numeric → returns the
+     *  original, and the fallback matcher below still tries direct equality. */
+    private static final java.util.Map<String, String> NUMERIC_TO_TIT_ALPHA =
+            java.util.Map.ofEntries(
+                    java.util.Map.entry("01", "1DA"), // Next Day Air
+                    java.util.Map.entry("02", "2DA"), // 2nd Day Air
+                    java.util.Map.entry("03", "GND"), // Ground
+                    java.util.Map.entry("07", "01"),  // Worldwide Express
+                    java.util.Map.entry("08", "05"),  // Worldwide Expedited
+                    java.util.Map.entry("11", "03"),  // Standard (US→CA)
+                    java.util.Map.entry("12", "3DS"), // 3 Day Select
+                    java.util.Map.entry("13", "1DP"), // Next Day Air Saver
+                    java.util.Map.entry("14", "1DM"), // Next Day Air Early
+                    java.util.Map.entry("54", "21"),  // Worldwide Express Plus
+                    java.util.Map.entry("59", "2DM"), // 2nd Day Air AM
+                    java.util.Map.entry("65", "28")); // Worldwide Saver
+
     /** Match the requested service code against emsResponse.services[]. */
     ValidateShipmentResult parseUpsTitResponse(String requestedServiceCode, String response) {
+        String want = requestedServiceCode == null ? "" : requestedServiceCode.trim();
+        String wantTit = NUMERIC_TO_TIT_ALPHA.getOrDefault(want, want);
         try {
             com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(
                     Optional.ofNullable(response).orElse("{}"));
@@ -836,7 +857,10 @@ public class UpsConnector implements CarrierConnector {
             for (com.fasterxml.jackson.databind.JsonNode s : services) {
                 String code = s.path("serviceLevel").asText("");
                 String name = s.path("serviceLevelDescription").asText(code);
-                if (code.equalsIgnoreCase(requestedServiceCode)) {
+                // Match against BOTH the raw request code and its TiT-alpha
+                // translation, so "03" matches TiT's "GND" and either raw form
+                // matches its own literal.
+                if (code.equalsIgnoreCase(want) || code.equalsIgnoreCase(wantTit)) {
                     String transitDays = s.path("businessTransitDays").asText("");
                     String msg = "UPS confirmed the lane for " + name
                             + (StringUtils.hasText(transitDays)
