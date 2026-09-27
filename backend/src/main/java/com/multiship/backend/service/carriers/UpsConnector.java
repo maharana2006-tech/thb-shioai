@@ -808,18 +808,18 @@ public class UpsConnector implements CarrierConnector {
         body.put("billType", "03"); // 02 = document, 03 = non-document. Non-doc covers parcels.
 
         // F1 (P1) fix — UPS Time-in-Transit rejects EVERY international lane
-        // without `shipmentContentsValue`. Send the commercial-invoice total
-        // (falls back to declaredValue) as monetaryValue + currencyCode.
-        // Domestic (same-country) requests omit this field — TiT accepts them.
+        // without `shipmentContentsValue`. UPS TiT's schema is a scalar
+        // string monetary value (confirmed by the domestic response echoing
+        // `"shipmentContentsValue":"0"`), NOT the object shape the Ship
+        // API's InvoiceLineTotal uses. Sending an object earned HTTP 400
+        // "Failed to read request"; sending the scalar clears the field
+        // validation. Domestic (same-country) requests omit it — TiT
+        // accepts them. Currency is implicit to origin country on TiT.
         String originCountry = firstNonBlank(request.getShipperCountryCode(), "US").toUpperCase();
         String destCountry   = firstNonBlank(request.getRecipientCountryCode(), "US").toUpperCase();
         if (!originCountry.equals(destCountry)) {
             java.math.BigDecimal invoiceTotal = commercialInvoiceTotal(request);
-            String currency = firstNonBlank(request.getDeclaredValueCurrency(), "USD").toUpperCase();
-            Map<String, Object> contents = new LinkedHashMap<>();
-            contents.put("monetaryValue", invoiceTotal.toPlainString());
-            contents.put("currencyCode", currency);
-            body.put("shipmentContentsValue", contents);
+            body.put("shipmentContentsValue", invoiceTotal.toPlainString());
         }
         return body;
     }
