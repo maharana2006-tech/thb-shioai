@@ -806,7 +806,43 @@ public class UpsConnector implements CarrierConnector {
         body.put("residentialIndicator",
                 Boolean.TRUE.equals(request.getRecipientResidential()) ? "01" : "02");
         body.put("billType", "03"); // 02 = document, 03 = non-document. Non-doc covers parcels.
+
+        // F1 (P1) fix — UPS Time-in-Transit rejects EVERY international lane
+        // without `shipmentContentsValue`. Send the commercial-invoice total
+        // (falls back to declaredValue) as monetaryValue + currencyCode.
+        // Domestic (same-country) requests omit this field — TiT accepts them.
+        String originCountry = firstNonBlank(request.getShipperCountryCode(), "US").toUpperCase();
+        String destCountry   = firstNonBlank(request.getRecipientCountryCode(), "US").toUpperCase();
+        if (!originCountry.equals(destCountry)) {
+            java.math.BigDecimal invoiceTotal = commercialInvoiceTotal(request);
+            String currency = firstNonBlank(request.getDeclaredValueCurrency(), "USD").toUpperCase();
+            Map<String, Object> contents = new LinkedHashMap<>();
+            contents.put("monetaryValue", invoiceTotal.toPlainString());
+            contents.put("currencyCode", currency);
+            body.put("shipmentContentsValue", contents);
+        }
         return body;
+    }
+
+    /** Sum of commercial-invoice line totals when present; otherwise declared value;
+     *  otherwise 1.00 (UPS TiT rejects 0 / null). */
+    private static java.math.BigDecimal commercialInvoiceTotal(ShipmentRequestDTO request) {
+        java.math.BigDecimal sum = java.math.BigDecimal.ZERO;
+        if (request.getIntl() != null && request.getIntl().getCommodities() != null) {
+            for (com.multiship.backend.dto.CustomsCommodityDTO c : request.getIntl().getCommodities()) {
+                if (c == null) continue;
+                java.math.BigDecimal unit = c.getUnitValue();
+                if (unit == null) continue;
+                Integer qty = c.getQuantity();
+                int q = qty == null || qty < 1 ? 1 : qty;
+                sum = sum.add(unit.multiply(java.math.BigDecimal.valueOf(q)));
+            }
+        }
+        if (sum.signum() > 0) return sum;
+        if (request.getDeclaredValue() != null && request.getDeclaredValue().signum() > 0) {
+            return request.getDeclaredValue();
+        }
+        return java.math.BigDecimal.ONE;
     }
 
     /** UPS Rating/Ship uses numeric service codes ("03" = Ground); UPS TiT

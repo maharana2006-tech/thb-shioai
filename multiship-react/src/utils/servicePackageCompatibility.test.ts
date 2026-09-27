@@ -22,17 +22,17 @@ describe('compatiblePresetIds', () => {
     expect(compatiblePresetIds(undefined, 1)).toBeNull()
   })
 
-  it('returns null when the picked service has ZERO linked presets', () => {
-    // Deliberate null-not-empty-set — the caller uses null as "don't filter"
-    // so the FE dropdown shows the pre-Sprint-52 pool. The BE guard will
-    // return SERVICE_HAS_NO_LINKED_PACKAGES at submit time with the fix
-    // path to /settings/shipping-catalog.
-    expect(
-      compatiblePresetIds(
-        [link(2, 100), link(3, 101)], // no rows for serviceId=1
-        1,
-      ),
-    ).toBeNull()
+  it('returns an EMPTY Set when the picked service has ZERO linked presets (F6 fix)', () => {
+    // MKL246 validation F6 (2026-09-27): reversed from null. Zero linked
+    // rows means the CARRIER-package filter runs and rejects every carrier
+    // preset (UPS Ground was the canonical broken case). CUSTOM boxes
+    // still render via the separate optgroup.
+    const result = compatiblePresetIds(
+      [link(2, 100), link(3, 101)], // no rows for serviceId=1
+      1,
+    )
+    expect(result).toBeInstanceOf(Set)
+    expect(result?.size).toBe(0)
   })
 
   it('returns a Set of preset IDs linked to the picked service only', () => {
@@ -67,16 +67,17 @@ describe('compatiblePresetIds', () => {
     expect(result?.has(9)).toBe(false) // FEDEX_TUBE not linked
   })
 
-  it('regression pin — FEDEX_GROUND (id=1) with no CARRIER links returns null', () => {
+  it('regression pin — FEDEX_GROUND (id=1) with no CARRIER links returns empty Set (F6 fix)', () => {
     // V29 deliberately does NOT seed FEDEX_GROUND × any FEDEX_* preset
-    // (Ground accepts only YOUR_PACKAGING, which is handled by the
-    // CUSTOM short-circuit in the guard). The FE filter falls through
-    // to null so the "Your boxes" section still renders as the only
-    // option — matching the order-900003 fix contract.
+    // (Ground accepts only YOUR_PACKAGING, handled by the CUSTOM
+    // short-circuit). Post-F6 the filter returns an empty Set so the
+    // CARRIER optgroup renders nothing — "Your boxes" is the only path.
     const links = [
       link(42, 7), // some Express row
       link(43, 8), // another Express row
     ]
-    expect(compatiblePresetIds(links, 1)).toBeNull()
+    const result = compatiblePresetIds(links, 1)
+    expect(result).toBeInstanceOf(Set)
+    expect(result?.size).toBe(0)
   })
 })

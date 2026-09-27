@@ -2597,12 +2597,16 @@ public class FedExConnector implements CarrierConnector {
 
         // US Electronic Export Information (EEI). Emit an exportDetail
         // block whenever the operator has supplied EITHER an FTR §30.37
-        // exemption OR an AES ITN. Absent both, we let FedEx apply its
-        // server-side default — safe only when customs value < $2,500
-        // USD (IntlShipmentValidator gates the high-value case upstream
-        // with CODE_EEI_REQUIRED so we never reach the connector without
-        // one populated on shipments that need it).
-        Map<String, Object> exportDetail = buildExportDetail(intl);
+        // exemption OR an AES ITN. Absent both on US-origin shipments,
+        // default to "NO EEI 30.37(a)" — the Census low-value exemption
+        // that applies below the $2,500 Schedule-B threshold — because
+        // FedEx rejects US→CN with "invalid FTR/AES for EEI" when the
+        // statement is omitted (F3 fix; CA/GB/AU/BR/IN pass without it
+        // but CN and other export-controlled lanes don't). Safe: the
+        // high-value case is gated upstream by IntlShipmentValidator
+        // with CODE_EEI_REQUIRED so we never reach here at ≥ $2,500
+        // without an operator-supplied FTR or AES.
+        Map<String, Object> exportDetail = buildExportDetail(intl, request);
         if (!exportDetail.isEmpty()) detail.put("exportDetail", exportDetail);
 
         return detail;
@@ -2623,7 +2627,8 @@ public class FedExConnector implements CarrierConnector {
      *                                or "AES" prefix per Census filing format)</li>
      * </ul>
      */
-    private Map<String, Object> buildExportDetail(com.multiship.backend.dto.IntlShipmentBlockDTO intl) {
+    private Map<String, Object> buildExportDetail(com.multiship.backend.dto.IntlShipmentBlockDTO intl,
+                                                   ShipmentRequestDTO request) {
         Map<String, Object> out = new LinkedHashMap<>();
         String statement = null;
         if (StringUtils.hasText(intl.getAesCitation())) {
@@ -2635,9 +2640,23 @@ public class FedExConnector implements CarrierConnector {
             // declaration / IN SB, verbatim. FedEx's exportComplianceStatement
             // is documented catch-all for any origin-specific reference.
             statement = intl.getExportDeclarationReference().trim();
+        } else if (isUsOrigin(request)) {
+            // F3 fix — default US-origin exports under the $2,500 Schedule-B
+            // threshold to the §30.37(a) low-value exemption. FedEx rejects
+            // US→CN (and other export-controlled lanes) without a statement;
+            // 30.37(a) is the Census-recognised default for commercial
+            // shipments below threshold. High-value shipments are gated
+            // upstream by IntlShipmentValidator so we never default here
+            // for a shipment that legally requires an ITN.
+            statement = "NO EEI 30.37(a)";
         }
         if (statement != null) out.put("exportComplianceStatement", statement);
         return out;
+    }
+
+    private static boolean isUsOrigin(ShipmentRequestDTO request) {
+        String origin = request == null ? null : request.getShipperCountryCode();
+        return origin == null || origin.isBlank() || "US".equalsIgnoreCase(origin.trim());
     }
 
     /** FTR wire-code → FedEx statement text. Unknown codes pass through

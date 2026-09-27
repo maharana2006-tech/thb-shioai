@@ -3730,13 +3730,18 @@ export default function NewShipmentPage() {
             >
               <div className="space-y-3">
                 <div className="grid grid-cols-2 gap-3">
-                  <Field label="Packaging" required className="col-span-2" error={errAt('package')}>
+                  <Field label="Packaging" required className="col-span-2" error={errAt('package')}
+                         hint={compatiblePresetIdsForService?.size === 0 && serviceId
+                           ? `No carrier packaging is linked to this service — link it in Settings → Shipping Catalog, or pick "Custom package…".`
+                           : undefined}>
                     <select className={inputCls} value={packageChoice} onChange={(e) => { setPackageChoice(e.target.value); clearFixKey('package') }}>
-                      <optgroup label={`${CARRIER_LABEL[carrier] || carrier} packaging`}>
-                        {packagesForCarrier.map((p) => (
-                          <option key={p.id} value={String(p.id)}>{p.name}</option>
-                        ))}
-                      </optgroup>
+                      {packagesForCarrier.length ? (
+                        <optgroup label={`${CARRIER_LABEL[carrier] || carrier} packaging`}>
+                          {packagesForCarrier.map((p) => (
+                            <option key={p.id} value={String(p.id)}>{p.name}</option>
+                          ))}
+                        </optgroup>
+                      ) : null}
                       {customBoxes.length ? (
                         <optgroup label="Your boxes">
                           {customBoxes.map((p) => (
