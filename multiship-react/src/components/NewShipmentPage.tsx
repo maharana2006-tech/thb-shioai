@@ -284,6 +284,13 @@ export default function NewShipmentPage() {
   const [ndsBanner, setNdsBanner] = useState<
     { status: NdsPrefillStatus; messages: NdsMessage[]; text?: string } | null
   >(null)
+  // Multi-container scan (2026-09-28): operator enters comma/space-separated
+  // container/batch tokens. Each lookup returns the full order (all sibling
+  // packages), so we dedup by orderNo. Same order → filled as-is. Multiple
+  // orders → this page loads the first; the rest sit in the "Queued
+  // shipments" chip strip below the scan input for click-to-swap.
+  const [ndsQueue, setNdsQueue] = useState<NdsShipmentPrefill[]>([])
+  const [ndsActiveIdx, setNdsActiveIdx] = useState<number>(-1)
   /** Tracks phone/email fields the backend flagged as `defaulted` so a
    *  later sender-side fill can override the fallback value. */
   const senderFallbackPendingRef = useRef<{ phone: boolean; email: boolean } | null>(null)
@@ -1367,37 +1374,94 @@ export default function NewShipmentPage() {
   const onScanSubmit = async () => {
     const raw = ndsScan.trim()
     if (!raw) return
+    // Split on comma OR whitespace; bare tokens default to .X, and existing
+    // .X / .Y prefixes are preserved verbatim.
+    const tokens = raw.split(/[,\s]+/).map((t) => t.trim()).filter(Boolean)
+      .map((t) => (/^\.[XY]/i.test(t) ? t : `.X${t}`))
+    if (tokens.length === 0) return
     setNdsLoading(true)
     setNdsBanner(null)
     try {
-      const prefill = await ndsShipmentService.lookup(raw)
-      applyNdsPrefill(prefill)
-      setNdsBanner({ status: prefill.status, messages: prefill.messages ?? [] })
-    } catch (err) {
-      const httpStatus = (err as ApiError)?.status
-      if (httpStatus === 404) {
-        setNdsBanner({
-          status: 'BLOCKED',
-          messages: [],
-          text: 'No NDS record matched the scanned value.',
-        })
-      } else if (httpStatus === 422) {
-        setNdsBanner({
-          status: 'BLOCKED',
-          messages: [],
-          text: (err as ApiError)?.message ?? 'Scan format invalid — use .X<containerId> or .Y<batchId>.',
-        })
-      } else if (httpStatus === 503) {
-        setNdsBanner({
-          status: 'WARNING',
-          messages: [],
-          text: 'NDS is unavailable right now. Try again in a moment.',
-        })
-      } else {
-        notify.apiError(err, 'NDS lookup failed.')
+      // Parallel calls — one per token. Existing endpoint returns the full
+      // order for every .X (all sibling packages), so multiple containers
+      // of the same order collapse via dedup below.
+      const results = await Promise.allSettled(tokens.map((t) => ndsShipmentService.lookup(t)))
+      const prefills: NdsShipmentPrefill[] = []
+      const failures: { token: string; status?: number; msg?: string }[] = []
+      results.forEach((r, i) => {
+        if (r.status === 'fulfilled') prefills.push(r.value)
+        else failures.push({ token: tokens[i], status: (r.reason as ApiError)?.status, msg: (r.reason as ApiError)?.message })
+      })
+      // Dedup by primary orderNo (fallback: scannedValue).
+      const seen = new Set<string>()
+      const unique: NdsShipmentPrefill[] = []
+      for (const p of prefills) {
+        const key = p.orders?.[0]?.orderNo != null
+          ? `order:${p.orders[0].orderNo}` : `scan:${p.scannedValue}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        unique.push(p)
       }
+      if (unique.length === 0) {
+        // Every token failed — surface the first failure's status.
+        const first = failures[0]
+        setNdsBanner({
+          status: first?.status === 503 ? 'WARNING' : 'BLOCKED',
+          messages: [],
+          text: first?.status === 404 ? 'No NDS record matched the scanned value.'
+              : first?.status === 422 ? (first.msg ?? 'Scan format invalid — use .X<containerId> or .Y<batchId>.')
+              : first?.status === 503 ? 'NDS is unavailable right now. Try again in a moment.'
+              : 'NDS lookup failed.',
+        })
+        return
+      }
+      // Apply the first prefill. Rest (if any) queue for click-to-swap.
+      applyNdsPrefill(unique[0])
+      setNdsQueue(unique)
+      setNdsActiveIdx(0)
+      const bannerText = unique.length > 1
+        ? `${unique.length} orders scanned — loaded the first; the rest are queued below.`
+        : failures.length > 0
+          ? `${failures.length} of ${tokens.length} scans failed; loaded ${unique.length}.`
+          : undefined
+      setNdsBanner({
+        status: unique[0].status,
+        messages: unique[0].messages ?? [],
+        text: bannerText,
+      })
     } finally {
       setNdsLoading(false)
+    }
+  }
+
+  /** Click a queued order chip → swap it in as the active shipment. */
+  const activateQueued = (idx: number) => {
+    if (idx < 0 || idx >= ndsQueue.length || idx === ndsActiveIdx) return
+    applyNdsPrefill(ndsQueue[idx])
+    setNdsActiveIdx(idx)
+    setNdsBanner({
+      status: ndsQueue[idx].status,
+      messages: ndsQueue[idx].messages ?? [],
+    })
+  }
+
+  /** X on a chip → drop that order from the queue. Removing the active
+   *  one advances to the next; empty queue clears the strip. */
+  const removeQueued = (idx: number) => {
+    if (idx < 0 || idx >= ndsQueue.length) return
+    const next = ndsQueue.filter((_, i) => i !== idx)
+    if (next.length === 0) {
+      setNdsQueue([])
+      setNdsActiveIdx(-1)
+      return
+    }
+    setNdsQueue(next)
+    if (idx === ndsActiveIdx) {
+      const newActive = Math.min(idx, next.length - 1)
+      setNdsActiveIdx(newActive)
+      applyNdsPrefill(next[newActive])
+    } else if (idx < ndsActiveIdx) {
+      setNdsActiveIdx(ndsActiveIdx - 1)
     }
   }
 
@@ -2936,7 +3000,10 @@ export default function NewShipmentPage() {
                 {/* NDS scan — .X<containerId> or .Y<batchId>. Enter fires the
                     lookup; matches USB scanners that auto-append CR/LF. Fills
                     client + recipient + packages + notify + CI items. */}
-                <Field label="Scan (NDS)">
+                <Field label="Scan (NDS)"
+                       hint={ndsQueue.length > 1
+                         ? undefined
+                         : 'One or many — separate multiple containers by comma or space.'}>
                   <input
                     className={inputCls}
                     value={ndsScan}
@@ -2947,10 +3014,43 @@ export default function NewShipmentPage() {
                         onScanSubmit()
                       }
                     }}
-                    placeholder=".X<containerId> or .Y<batchId>"
+                    placeholder=".X<containerId>, .X<c2>… or .Y<batchId>"
                     disabled={ndsLoading}
                     aria-busy={ndsLoading}
                   />
+                  {ndsQueue.length > 1 ? (
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5" aria-label="Queued shipments">
+                      <span className="text-[11px] font-bold uppercase tracking-[0.1em] text-slate-500">Queued</span>
+                      {ndsQueue.map((p, i) => {
+                        const label = p.orders?.[0]?.orderNo != null
+                          ? `Order ${p.orders[0].orderNo}` : p.scannedValue
+                        const sub = p.recipient?.name ?? p.recipient?.attn ?? p.clientCode
+                        const active = i === ndsActiveIdx
+                        return (
+                          <span key={`${p.scannedValue}:${i}`}
+                                className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11.5px] ring-1 ${
+                                  active
+                                    ? 'bg-[#1f150c] text-[#f4eede] ring-[#1f150c]'
+                                    : 'bg-white text-slate-700 ring-slate-300 hover:bg-slate-50 cursor-pointer'
+                                }`}
+                                onClick={active ? undefined : () => activateQueued(i)}
+                                title={active ? 'Currently loaded' : `Click to swap in ${label}${sub ? ` (${sub})` : ''}`}>
+                            <span className="font-semibold">{label}</span>
+                            {sub ? <span className={active ? 'opacity-70' : 'text-slate-500'}>· {sub}</span> : null}
+                            <button
+                              type="button"
+                              className={`ml-0.5 rounded-full px-1 leading-none ${
+                                active ? 'hover:bg-[#412d15]' : 'hover:bg-slate-200'
+                              }`}
+                              onClick={(e) => { e.stopPropagation(); removeQueued(i) }}
+                              aria-label={`Remove ${label} from queue`}
+                              title="Remove from queue"
+                            >×</button>
+                          </span>
+                        )
+                      })}
+                    </div>
+                  ) : null}
                 </Field>
                 {/* Client stays REQUIRED (validation under the field) — dev's
                     layout change and this branch's required-client rule merge. */}

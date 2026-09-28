@@ -273,6 +273,46 @@ describe('NewShipmentPage — NDS scan / prefill (PR2)', () => {
     expect(banner.className).toMatch(/rose/)
   })
 
+  it('multi-scan: comma-separated tokens fire one lookup per token, dedup by order, queue extras', async () => {
+    // Two containers, two orders → two lookups, both succeed, both queued.
+    const p1 = okPrefill()
+    const p2 = { ...okPrefill(),
+      scannedValue: '.X88',
+      orders: [{ orderNo: 22222, orderSuffix: 1, invNo: null, thpAccount: null }],
+      packages: [{ ...okPrefill().packages[0], containerNo: '88', containerIds: [88] }],
+    }
+    ndsLookup.mockImplementation(async (scan: string) => scan === '.X77' ? p1 : p2)
+    const Page = await loadPage()
+    renderWithProviders(<Page />)
+    const scanInput = await screen.findByPlaceholderText(/\.X<containerId>/)
+    const user = userEvent.setup()
+    await user.type(scanInput, '.X77, .X88{Enter}')
+    await waitFor(() => expect(ndsLookup).toHaveBeenCalledTimes(2))
+    expect(ndsLookup).toHaveBeenCalledWith('.X77')
+    expect(ndsLookup).toHaveBeenCalledWith('.X88')
+    const banner = await screen.findByRole('status')
+    expect(banner.textContent).toMatch(/2 orders scanned/)
+    // Queued strip renders with both orders.
+    expect(await screen.findByText(/Order 12345/)).toBeInTheDocument()
+    expect(screen.getByText(/Order 22222/)).toBeInTheDocument()
+  })
+
+  it('multi-scan: same-order duplicates collapse to one prefill (no queue strip)', async () => {
+    // Two containers, both from the same order — dedup by orderNo → 1 unique.
+    ndsLookup.mockResolvedValue(okPrefill())
+    const Page = await loadPage()
+    renderWithProviders(<Page />)
+    const scanInput = await screen.findByPlaceholderText(/\.X<containerId>/)
+    const user = userEvent.setup()
+    await user.type(scanInput, '.X77 .X78{Enter}')
+    await waitFor(() => expect(ndsLookup).toHaveBeenCalledTimes(2))
+    const banner = await screen.findByRole('status')
+    // Success banner, no "2 orders scanned" text since dedup → 1 order.
+    expect(banner.textContent).not.toMatch(/orders scanned/)
+    // No queue strip when only one unique order.
+    expect(screen.queryByLabelText(/Queued shipments/)).toBeNull()
+  })
+
   it('paints the "NDS unavailable" amber banner on 503', async () => {
     ndsLookup.mockRejectedValue({ status: 503, message: 'TNS-12541' })
     const Page = await loadPage()
