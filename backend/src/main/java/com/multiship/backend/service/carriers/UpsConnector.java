@@ -820,6 +820,10 @@ public class UpsConnector implements CarrierConnector {
         if (!originCountry.equals(destCountry)) {
             java.math.BigDecimal invoiceTotal = commercialInvoiceTotal(request);
             body.put("shipmentContentsValue", invoiceTotal.toPlainString());
+            // The value needs its currency: without it UPS answers "invalid
+            // ShipmentContentsCurrencyCode" (a bulk row to Berlin, 2026-09-28).
+            body.put("shipmentContentsCurrencyCode",
+                    firstNonBlank(request.getDeclaredValueCurrency(), "USD").trim().toUpperCase(java.util.Locale.ROOT));
         }
         return body;
     }
@@ -849,7 +853,7 @@ public class UpsConnector implements CarrierConnector {
      *  returns alphabetic codes ("GND"). Translate the numeric input to
      *  the TiT alpha so equality holds. Unknown numeric → returns the
      *  original, and the fallback matcher below still tries direct equality. */
-    private static final java.util.Map<String, String> NUMERIC_TO_TIT_ALPHA =
+    public static final java.util.Map<String, String> NUMERIC_TO_TIT_ALPHA =
             java.util.Map.ofEntries(
                     java.util.Map.entry("01", "1DA"), // Next Day Air
                     java.util.Map.entry("02", "2DA"), // 2nd Day Air

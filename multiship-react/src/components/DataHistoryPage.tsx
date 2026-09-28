@@ -363,6 +363,13 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
     // rowsTick: re-read when the batch's rows change (a void, a retry), not on a page flip
   }, [batchPageLabelBatch, rowsTick])
 
+  /** Batches this page is writing: a live "batch-updated" for one is its own echo, until 3 s after the answer. */
+  const localWrites = useRef(new Set<number>())
+  const beginLocalWrite = (id: number) => { localWrites.current.add(id) }
+  const endLocalWrite = (id: number) => { window.setTimeout(() => localWrites.current.delete(id), 3000) }
+  /** Validate all runs for these batches — set before the request, so a quick second click is ignored. */
+  const validatingIds = useRef(new Set<number>())
+
   /** A batch's rows changed on the server: its page is read again, and the list's copy is dropped. */
   const reloadRows = (id: number) => {
     if (id === batchPageId) setRowsTick((t) => t + 1)
@@ -571,7 +578,12 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
    * so the operator never sees stale state.
    */
   const sseHandlers = useMemo(() => ({
-    'batch-updated': () => { void reloadQuiet(); setRowsTick((t) => t + 1) },
+    'batch-updated': (p: unknown) => {
+      // A change this page just made itself: its own answer already re-read the rows.
+      const id = (p as { batchId?: number } | null)?.batchId
+      if (id != null && localWrites.current.has(id)) return
+      void reloadQuiet(); setRowsTick((t) => t + 1)
+    },
     'batch-created': () => { void reloadQuiet() },
     'batch-cancel-requested': () => { void reloadQuiet() },
   // eslint-disable-next-line react-hooks/exhaustive-deps -- reloadQuiet reads only stable refs; empty deps keeps the handler map identity stable across renders so useEventStream doesn't churn subscriptions
@@ -840,7 +852,9 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
   /** Validate all rows in a batch */
   const validateAll = async (id: number) => {
     const slug = batches.find((b) => b.id === id)?.slug
-    if (!slug) return
+    if (!slug || validatingIds.current.has(id)) return
+    validatingIds.current.add(id)
+    beginLocalWrite(id)
     setValidatingId(id)
     try {
       const res = await orderImportService.validateAllRows(slug)
@@ -855,11 +869,16 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
           ),
         )
         reloadRows(id)
-        notify.success('All rows validated successfully. Errors have been updated.')
+        const total = updated.totalRows ?? 0
+        const bad = updated.invalidRows ?? 0
+        if (bad > 0) notify.info({ title: 'Validation finished', body: `Checked ${total} row${total === 1 ? '' : 's'} · ${bad} need${bad === 1 ? 's' : ''} fixes` })
+        else notify.success(`Checked ${total} row${total === 1 ? '' : 's'} · all valid`)
       }
     } catch (e) {
       notify.apiError(e, 'Validation failed.')
     } finally {
+      validatingIds.current.delete(id)
+      endLocalWrite(id)
       setValidatingId(null)
     }
   }
@@ -940,6 +959,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
   const saveRow = async (batchId: number, edited: OrderImportRow): Promise<boolean> => {
     const slug = batches.find((b) => b.id === batchId)?.slug
     if (!slug) return false
+    beginLocalWrite(batchId)
     try {
       const res = await orderImportService.updateRow(slug, edited.rowNumber, edited)
       const updated = res.data
@@ -965,6 +985,8 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
       }
     } catch (e) {
       notify.apiError(e, 'Save failed.')
+    } finally {
+      endLocalWrite(batchId)
     }
     return false
   }
@@ -1190,6 +1212,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
                     type="button"
                     onClick={() => void validateAll(b.id)}
                     disabled={validatingId === b.id || (b.status || '').toUpperCase() === 'IN_PROGRESS'}
+                    aria-busy={validatingId === b.id}
                     title="Validate all rows in this batch and update their errors/warnings"
                     className={batchPageId == null
                       ? 'inline-flex items-center justify-center rounded-xl border border-emerald-100 bg-emerald-50 p-2 text-emerald-700 transition hover:border-emerald-200 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-40'

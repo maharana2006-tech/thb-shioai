@@ -297,7 +297,11 @@ public class OrderImportServiceImpl implements OrderImportService {
         java.util.Map<String, com.multiship.backend.model.CarrierAccountRef> accountCache = new java.util.HashMap<>();
         java.util.Map<String, String> tokenCache = new java.util.HashMap<>();
 
+        java.util.Map<String, List<java.util.Map<String, Object>>> shipViaCodesByClient = new java.util.HashMap<>();
         for (OrderImportRowDTO row : rows) {
+            // A row the app's own checks already failed must be fixed first; asking UPS
+            // about it costs a call and piles a second, vaguer error on top.
+            if (row.getErrors() != null && !row.getErrors().isEmpty()) continue;
             String carrier = row.getCarrierCode();
             if (!StringUtils.hasText(carrier)) continue;
             String canonical = com.multiship.backend.service.ShippingConfigService.canonicalCarrierFor(carrier);
@@ -317,8 +321,8 @@ public class OrderImportServiceImpl implements OrderImportService {
             if (origin == null || origin.getAddress() == null
                     || !StringUtils.hasText(origin.getAddress().getZip())) continue;
 
-            String tupleKey = origin.getAddress().getZip() + "|" + row.getPostalCode()
-                    + "|" + row.getServiceType() + "|" + clientCode.trim().toUpperCase(Locale.ROOT);
+            String tupleKey = origin.getAddress().getZip() + "|" + row.getCountryCode() + "|" + row.getPostalCode()
+                    + "|" + row.getServiceType() + "|" + row.getCurrency() + "|" + clientCode.trim().toUpperCase(Locale.ROOT);
             com.multiship.backend.service.carriers.CarrierConnector.ValidateShipmentResult result =
                     titCache.get(tupleKey);
             if (result == null) {
@@ -360,12 +364,104 @@ public class OrderImportServiceImpl implements OrderImportService {
                 titCache.put(tupleKey, result);
             }
             if (result != null && !result.valid()) {
-                List<String> errors = new java.util.ArrayList<>(
-                        row.getErrors() == null ? List.of() : row.getErrors());
-                errors.add(result.message());
-                row.setErrors(errors);
+                List<java.util.Map<String, Object>> codes = shipViaCodesByClient.computeIfAbsent(
+                        clientCode.trim().toUpperCase(Locale.ROOT), this::shipViaCodesOrEmpty);
+                addError(row, upsLaneMessage(row, result, codes));
             }
         }
+    }
+
+    private List<java.util.Map<String, Object>> shipViaCodesOrEmpty(String client) {
+        if (shippingConfigService == null) return List.of();
+        try {
+            return shippingConfigService.shipViaCodesFor(client);
+        } catch (RuntimeException e) {
+            return List.of();
+        }
+    }
+
+    /**
+     * What UPS said about a row, in the operator's words and on the cell it is
+     * about: the service by its name and the client's own code ("UPS Ground
+     * (U11)", not "03"), the codes the client can type instead, and a plain
+     * sentence in place of UPS's error text.
+     */
+    String upsLaneMessage(OrderImportRowDTO row,
+                          com.multiship.backend.service.carriers.CarrierConnector.ValidateShipmentResult result,
+                          List<java.util.Map<String, Object>> clientCodes) {
+        String shipVia = normalizeOrNull(row.getShipViaCode());
+        String service = null;
+        for (java.util.Map<String, Object> c : clientCodes) {
+            if (shipVia != null && shipVia.equalsIgnoreCase(String.valueOf(c.get("code")))) {
+                service = c.get("serviceName") + " (" + shipVia + ")";
+            }
+        }
+        if (service == null) service = shipVia != null ? shipVia : "UPS service " + row.getServiceType();
+
+        if ("NOT_FOUND".equals(result.matchLevel())) {
+            java.util.Set<String> offered = upsServicesOffered(result.rawResponse());
+            if (offered.isEmpty()) {
+                return "serviceType — UPS doesn't deliver from the warehouse to this address with any service";
+            }
+            List<String> usable = clientCodes.stream()
+                    .filter(c -> "UPS".equalsIgnoreCase(String.valueOf(c.get("carrier"))))
+                    .filter(c -> !Boolean.FALSE.equals(c.get("enabled")))
+                    .filter(c -> offered.contains(String.valueOf(c.get("serviceCode")).toUpperCase(Locale.ROOT)))
+                    .map(c -> c.get("code") + " (" + c.get("serviceName") + ")")
+                    .toList();
+            String client = normalizeOrNull(row.getClientCode());
+            return "serviceType — UPS doesn't offer " + service + " to this address. "
+                    + (usable.isEmpty()
+                        ? "None of " + (client == null ? "this client" : client) + "'s ship via codes works here — "
+                            + "add one in Settings → Shipping Service Mapping"
+                        : "Use " + String.join(" or ", usable) + " instead");
+        }
+        return plainUpsError(result);
+    }
+
+    /** The services UPS offers on the lane, as the numeric codes the mapping uses ("GND" → "03"). */
+    private java.util.Set<String> upsServicesOffered(String rawResponse) {
+        java.util.Set<String> out = new java.util.HashSet<>();
+        if (!StringUtils.hasText(rawResponse)) return out;
+        java.util.Map<String, String> toNumeric = new java.util.HashMap<>();
+        com.multiship.backend.service.carriers.UpsConnector.NUMERIC_TO_TIT_ALPHA
+                .forEach((numeric, alpha) -> toNumeric.put(alpha.toUpperCase(Locale.ROOT), numeric));
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper m = importObjectMapper != null
+                    ? importObjectMapper : new com.fasterxml.jackson.databind.ObjectMapper();
+            for (com.fasterxml.jackson.databind.JsonNode s : m.readTree(rawResponse).at("/emsResponse/services")) {
+                String code = s.path("serviceLevel").asText("").trim().toUpperCase(Locale.ROOT);
+                if (!code.isEmpty()) out.add(toNumeric.getOrDefault(code, code));
+            }
+        } catch (Exception e) {
+            // unreadable answer: no alternatives to offer
+        }
+        return out;
+    }
+
+    /** UPS's error text as a sentence the operator can act on, starting with the field it is about. */
+    static String plainUpsError(com.multiship.backend.service.carriers.CarrierConnector.ValidateShipmentResult result) {
+        String raw = ((result.message() == null ? "" : result.message()) + " "
+                + String.join(" ", result.errors() == null ? List.of() : result.errors())).trim();
+        String t = raw.toLowerCase(Locale.ROOT);
+        if (t.contains("currency")) {
+            return "currency — UPS needs the currency of the goods' value: fill the currency column (e.g. USD)";
+        }
+        if (t.contains("401") || t.contains("403") || t.contains("unauthor") || t.contains("credential")) {
+            return "accountNumber — UPS refused the account's credentials: check the client's UPS account "
+                    + "in Settings → Carrier Accounts";
+        }
+        if (t.contains("postal") || t.contains("zip")) {
+            return "postalCode — UPS doesn't recognise this postal code for the address: check the city, state and postal code";
+        }
+        if (t.contains("stateprovince") || t.contains("state province") || t.contains("state code")) {
+            return "state — UPS doesn't accept this state or province for the address";
+        }
+        if (t.contains("ship date") || t.contains("call failed") || t.contains("timed out") || t.contains("i/o error")) {
+            return "serviceType — UPS couldn't be asked about this shipment just now: run Validate all again";
+        }
+        String detail = raw.replaceFirst("(?i)^UPS Time-in-Transit( rejected the request)?:?\\s*", "").trim();
+        return "serviceType — UPS couldn't confirm this shipment" + (detail.isEmpty() ? "" : ": " + detail);
     }
 
     /** Resolve the row's origin warehouse — row's own warehouseCode wins, else
@@ -420,6 +516,11 @@ public class OrderImportServiceImpl implements OrderImportService {
         dto.setRecipientCountryCode(row.getCountryCode());
         java.math.BigDecimal w = row.getWeight() != null ? row.getWeight() : java.math.BigDecimal.ONE;
         dto.setWeight(w);
+        dto.setDeclaredValueCurrency(StringUtils.hasText(row.getCurrency()) ? row.getCurrency().trim() : "USD");
+        if (row.getItemUnitValue() != null && row.getItemUnitValue().signum() > 0) {
+            int qty = row.getItemQuantity() == null || row.getItemQuantity() < 1 ? 1 : row.getItemQuantity();
+            dto.setDeclaredValue(row.getItemUnitValue().multiply(java.math.BigDecimal.valueOf(qty)));
+        }
         dto.setWeightUnit(StringUtils.hasText(row.getWeightUnit()) ? row.getWeightUnit() : "LBS");
         return dto;
     }
@@ -1334,6 +1435,16 @@ public class OrderImportServiceImpl implements OrderImportService {
             if (carrier != null && !KNOWN_CARRIERS.contains(carrier)) {
                 errors.add("carrierCode '" + carrier + "' is not supported (UPS, FEDEX, USPS, DHL)");
             }
+            // UPS does not deliver to PO Boxes: the label is bought and the parcel comes back.
+            if (carrier != null && "UPS".equalsIgnoreCase(
+                    com.multiship.backend.service.ShippingConfigService.canonicalCarrierFor(carrier))) {
+                if (StringUtils.hasText(row.getAddressLine1()) && PO_BOX.matcher(row.getAddressLine1()).find()) {
+                    errors.add("addressLine1 is a PO Box — UPS can't deliver to a PO Box, use a street address");
+                }
+                if (StringUtils.hasText(row.getAddressLine2()) && PO_BOX.matcher(row.getAddressLine2()).find()) {
+                    errors.add("addressLine2 is a PO Box — UPS can't deliver to a PO Box, use a street address");
+                }
+            }
 
             String account = normalizeOrNull(row.getAccountNumber());
             boolean thirdParty = "THIRD_PARTY".equalsIgnoreCase(
@@ -1349,8 +1460,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                 String rowClient = normalizeOrNull(row.getClientCode());
                 if (owner == null) {
                     errors.add("accountNumber " + account + " is not a registered " + carrier
-                            + " account for client " + (rowClient == null ? "(blank)" : rowClient)
-                            + " or the platform");
+                            + " account for client " + (rowClient == null ? "(blank)" : rowClient));
                 } else if (!owner.isEmpty() && rowClient != null && !owner.equals(rowClient)) {
                     errors.add("accountNumber " + account + " belongs to client " + owner
                             + ", not " + rowClient);
@@ -2090,7 +2200,8 @@ public class OrderImportServiceImpl implements OrderImportService {
                 if (lb != null && service.getMaxWeightLb() != null
                         && lb.compareTo(new BigDecimal(service.getMaxWeightLb())) > 0) {
                     addError(row, "weight " + lb.setScale(1, java.math.RoundingMode.HALF_UP)
-                            + " lb exceeds the " + service.getMaxWeightLb() + " lb limit for " + serviceCode);
+                            + " lb exceeds the " + service.getMaxWeightLb() + " lb limit for " + service.getName()
+                            + (row.getShipViaCode() != null ? " (" + row.getShipViaCode() + ")" : ""));
                 }
 
                 // Package must be one this service accepts.
@@ -3905,9 +4016,23 @@ public class OrderImportServiceImpl implements OrderImportService {
      *
      * <p>Called from OrderImportController.cancelGeneration().
      */
+    /** Batches a Validate all is running for — a second click waits its turn with a 409. */
+    private final java.util.Set<Long> validatingBatchIds = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     @Override
     public com.multiship.backend.dto.ImportBatchDTO validateAllRows(Long id, String requestedBy) {
         if (importBatchRepository == null || id == null) return null;
+        if (!validatingBatchIds.add(id)) {
+            throw new ImportBatchStateException(409, "Validate all is already running for this import — wait for it to finish.");
+        }
+        try {
+            return validateAllRowsLocked(id);
+        } finally {
+            validatingBatchIds.remove(id);
+        }
+    }
+
+    private com.multiship.backend.dto.ImportBatchDTO validateAllRowsLocked(Long id) {
         com.multiship.backend.model.ImportBatch batch = importBatchRepository.findById(id).orElse(null);
         if (batch == null) return null;
 
@@ -5593,6 +5718,42 @@ public class OrderImportServiceImpl implements OrderImportService {
             Map.entry("MX", java.util.regex.Pattern.compile("^\\d{5}$")),
             Map.entry("SG", java.util.regex.Pattern.compile("^\\d{6}$")));
 
+    /** First three ZIP digits → state, for the 50 states and DC (territories and military ZIPs are left out). */
+    private static final int[][] US_ZIP3_RANGES = {
+            {10, 27}, {28, 29}, {30, 38}, {39, 49}, {50, 54}, {55, 55}, {56, 59}, {60, 69}, {70, 89},
+            {100, 149}, {150, 196}, {197, 199}, {200, 200}, {201, 201}, {202, 205}, {206, 219}, {220, 246},
+            {247, 268}, {270, 289}, {290, 299}, {300, 319}, {320, 339}, {341, 349}, {350, 369}, {370, 385},
+            {386, 397}, {398, 399}, {400, 427}, {430, 459}, {460, 479}, {480, 499}, {500, 528}, {530, 549},
+            {550, 567}, {569, 569}, {570, 577}, {580, 588}, {590, 599}, {600, 629}, {630, 658}, {660, 679},
+            {680, 693}, {700, 714}, {716, 729}, {730, 731}, {733, 733}, {734, 749}, {750, 799}, {800, 816},
+            {820, 831}, {832, 838}, {840, 847}, {850, 865}, {870, 884}, {885, 885}, {889, 898}, {900, 961},
+            {967, 968}, {970, 979}, {980, 994}, {995, 999}};
+    private static final String[] US_ZIP3_STATES = {
+            "MA", "RI", "NH", "ME", "VT", "MA", "VT", "CT", "NJ",
+            "NY", "PA", "DE", "DC", "VA", "DC", "MD", "VA",
+            "WV", "NC", "SC", "GA", "FL", "FL", "AL", "TN",
+            "MS", "GA", "KY", "OH", "IN", "MI", "IA", "WI",
+            "MN", "DC", "SD", "ND", "MT", "IL", "MO", "KS",
+            "NE", "LA", "AR", "OK", "TX", "OK", "TX", "CO",
+            "WY", "ID", "UT", "AZ", "NM", "TX", "NV", "CA",
+            "HI", "OR", "WA", "AK"};
+
+    /** The state a US ZIP is in, from its first three digits; null when the prefix isn't a state's. */
+    static String usStateForZip(String zip) {
+        if (zip == null || zip.length() < 3 || !Character.isDigit(zip.charAt(0))
+                || !Character.isDigit(zip.charAt(1)) || !Character.isDigit(zip.charAt(2))) return null;
+        int p = Integer.parseInt(zip.substring(0, 3));
+        if (p == 5) return "NY";   // 005 — Holtsville IRS
+        for (int i = 0; i < US_ZIP3_RANGES.length; i++) {
+            if (p >= US_ZIP3_RANGES[i][0] && p <= US_ZIP3_RANGES[i][1]) return US_ZIP3_STATES[i];
+        }
+        return null;
+    }
+
+    /** "PO Box 12", "P.O. Box", "Post Office Box". */
+    static final java.util.regex.Pattern PO_BOX = java.util.regex.Pattern.compile(
+            "\\bp\\.?\\s*o\\.?\\s*box\\b|\\bpost\\s+office\\s+box\\b", java.util.regex.Pattern.CASE_INSENSITIVE);
+
     public static List<String> validateRow(OrderImportRowDTO row) {
         List<String> errors = new ArrayList<>();
         // Sprint 51 — clientCode is the owning-client identifier; a blank one
@@ -5649,6 +5810,16 @@ public class OrderImportServiceImpl implements OrderImportService {
             } else if (p == null && !GENERIC_ZIP.matcher(zip.trim()).matches()) {
                 // Unmodelled country — still enforce a sane postal shape.
                 errors.add("postalCode '" + zip + "' is not a valid postal code");
+            }
+        }
+        // A US ZIP belongs to one state, and its first three digits say which:
+        // CA with ZIP 60606 (Chicago) used to pass and only failed at the carrier.
+        if ("US".equals(countryUp) && StringUtils.hasText(zip) && StringUtils.hasText(row.getState())) {
+            String zipState = usStateForZip(zip.trim());
+            String st = row.getState().trim().toUpperCase(Locale.ROOT);
+            if (zipState != null && US_STATES.contains(st) && !zipState.equals(st)) {
+                errors.add("postalCode " + zip.trim() + " is in " + zipState + ", not " + st
+                        + " — correct the state or the ZIP");
             }
         }
         String email = row.getRecipientEmail();
@@ -5865,9 +6036,13 @@ public class OrderImportServiceImpl implements OrderImportService {
         // that crosses a border, which otherwise defaults through and fails at
         // the carrier for a second, unrelated-looking reason.
         Map<String, Map<String, String>> serviceScope = new java.util.HashMap<>();
+        Map<String, String> serviceNames = new java.util.HashMap<>();   // "UPS|03" → "UPS Ground"
         if (shippingServiceRepository != null) {
             for (com.multiship.backend.model.ShippingService s
                     : shippingServiceRepository.findAllByOrderByCarrierAscSortOrderAsc()) {
+                if (s.getCarrier() != null && s.getServiceCode() != null && s.getName() != null) {
+                    serviceNames.put(s.getCarrier().toUpperCase(Locale.ROOT) + '|' + s.getServiceCode().toUpperCase(Locale.ROOT), s.getName());
+                }
                 if (s.getCarrier() == null || s.getServiceCode() == null || s.getScope() == null) continue;
                 serviceScope
                         .computeIfAbsent(s.getCarrier().toUpperCase(Locale.ROOT), k -> new java.util.HashMap<>())
@@ -5914,9 +6089,12 @@ public class OrderImportServiceImpl implements OrderImportService {
             } else if (carr != null) {
                 String scope = serviceScope.getOrDefault(carr, java.util.Map.of()).get(svc);
                 if ("DOMESTIC".equals(scope)) {
-                    errs.add("serviceType '" + svc + "' is a domestic-only service and cannot ship to "
-                            + country.trim().toUpperCase(Locale.ROOT)
-                            + "; choose an international service for this carrier");
+                    // Name the service the operator knows: "UPS Ground (U11)", not the carrier's "03".
+                    String name = serviceNames.getOrDefault(carr + '|' + svc, svc);
+                    String shipVia = leader.getShipViaCode();
+                    errs.add("serviceType " + name + (StringUtils.hasText(shipVia) ? " (" + shipVia.trim() + ")" : "")
+                            + " is domestic only and can't ship to " + country.trim().toUpperCase(Locale.ROOT)
+                            + " — use an international service for this carrier");
                 }
             }
 

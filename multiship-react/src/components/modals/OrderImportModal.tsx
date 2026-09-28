@@ -33,6 +33,7 @@ import VirtualTable from '../VirtualTable'
 // the parsed CSV contains enough USPS rows to blow past ~1h at the
 // 55/hr platform cap. Both surfaces close audit gap U2 + U4.
 import BulkLabelQueueBadge from '../orders/BulkLabelQueueBadge'
+import { readableError } from '../batchGrid'
 import { systemSettingsService } from '../../api/systemSettingsService'
 import { normalizeCarrierCode } from '../../utils/carrierUtils'
 
@@ -999,7 +1000,7 @@ function EditCell({
       />
     )
   }
-  const tooltip = bad && errors && errors.length > 0 ? errors.join('\n') : hint || value || undefined
+  const tooltip = bad && errors && errors.length > 0 ? errors.map(readableError).join('\n') : hint || value || undefined
   return (
     <button
       type="button"
@@ -1271,8 +1272,8 @@ function PreviewStep({
               // including the group-level customs rules that belong to no single
               // field — so hovering the status chip explains the whole row.
               const statusTitle = [
-                ...(r.errors ?? []).map((m) => '✗ ' + m),
-                ...(r.warnings ?? []).map((w) => '⚠ ' + w),
+                ...(r.errors ?? []).map((m) => '✗ ' + readableError(m)),
+                ...(r.warnings ?? []).map((w) => '⚠ ' + readableError(w)),
               ].join('\n') || undefined
               return (
                 <tr key={r.rowNumber} ref={measureRef} data-index={index} className={ok ? 'bg-white' : 'bg-rose-50/40'}>
@@ -1422,10 +1423,10 @@ function PreviewStep({
                   {rowLevel.length > 0 || (selected.warnings?.length ?? 0) > 0 ? (
                     <div className="mt-2 space-y-0.5">
                       {rowLevel.map((m, i) => (
-                        <p key={`e${i}`} className="text-[10.5px] text-rose-700">✗ {m}</p>
+                        <p key={`e${i}`} className="text-[10.5px] text-rose-700">✗ {readableError(m)}</p>
                       ))}
                       {(selected.warnings ?? []).map((m, i) => (
-                        <p key={`w${i}`} className="text-[10.5px] text-amber-700">⚠ {m}</p>
+                        <p key={`w${i}`} className="text-[10.5px] text-amber-700">⚠ {readableError(m)}</p>
                       ))}
                     </div>
                   ) : null}
@@ -1446,7 +1447,7 @@ function PreviewStep({
                                 <div className="min-w-0">
                                   {/* Box sized to the field: state/zip narrow, address/email/description wide. */}
                                   <div className={`max-w-full ${DETAIL_FIELD_W[k] ?? col.w ?? 'w-40'}`}>{cellFor(selected, col, fe)}</div>
-                                  {fe?.length ? <p className="mt-0.5 text-[9.5px] leading-snug text-rose-600">✗ {fe.join('; ')}</p> : null}
+                                  {fe?.length ? <p className="mt-0.5 text-[9.5px] leading-snug text-rose-600">✗ {fe.map(readableError).join('; ')}</p> : null}
                                 </div>
                               </div>
                             )
@@ -1473,7 +1474,7 @@ function PreviewStep({
                                       onCommit={(v) => onEdit(selected.rowNumber, { customFields: { ...(selected.customFields ?? {}), [k]: v } })}
                                     />
                                   </div>
-                                  {fe?.length ? <p className="mt-0.5 text-[9.5px] leading-snug text-rose-600">✗ {fe.join('; ')}</p> : null}
+                                  {fe?.length ? <p className="mt-0.5 text-[9.5px] leading-snug text-rose-600">✗ {fe.map(readableError).join('; ')}</p> : null}
                                 </div>
                               </div>
                             )
