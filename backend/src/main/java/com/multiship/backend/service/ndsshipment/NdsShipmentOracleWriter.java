@@ -190,6 +190,35 @@ public class NdsShipmentOracleWriter {
             }
         }
 
+        // G6 — OEHEAD.SHIPVIA_CD update when the original order came in as
+        // STD and got resolved to a real ERP code. Fires for outbound only
+        // (returns don't originate from STD). CLIENT schema.
+        if (!isReturn && p.stdReplacementErpCode() != null && !p.stdReplacementErpCode().isBlank()) {
+            int oeheadRows = 0;
+            for (WritebackPackagePayload pkg : p.packages()) {
+                if (pkg.orderNos() == null) continue;
+                Integer suffix = pkg.orderSuffix() == null ? 0 : pkg.orderSuffix();
+                for (Integer orderNo : pkg.orderNos()) {
+                    try {
+                        int rows = clientJdbc.update(
+                                "UPDATE OEHEAD SET SHIPVIA_CD = :shipvia "
+                                        + " WHERE TENANT_ID = :tenant "
+                                        + "   AND ORDER_NO = :orderNo "
+                                        + "   AND ORDER_SUFFIX = :suffix",
+                                new MapSqlParameterSource()
+                                        .addValue("shipvia", p.stdReplacementErpCode())
+                                        .addValue("tenant", p.clientCode())
+                                        .addValue("orderNo", orderNo)
+                                        .addValue("suffix", suffix));
+                        oeheadRows += rows;
+                    } catch (Exception e) {
+                        errors.add("OEHEAD(STD replacement): " + e.getMessage());
+                    }
+                }
+            }
+            if (oeheadRows > 0) touched.add("OEHEAD[STD→" + p.stdReplacementErpCode() + "]×" + oeheadRows);
+        }
+
         if (!errors.isEmpty() && touched.isEmpty()) {
             return WritebackAck.failed("nds: all updates failed — " + String.join(" | ", errors));
         }
@@ -484,6 +513,35 @@ public class NdsShipmentOracleWriter {
         }
         if (trackingRows > 0) touched.add("OE_TRACKING[BATCHSHIP]×" + trackingRows);
         if (containerRows > 0) touched.add("OE_SHIP_CONTAINER×" + containerRows);
+
+        // G6 (DTC surface, doc §6 step 3) — STD ship-method replacement
+        // writeback. Same UPDATE as the outbound path.
+        if (p.stdReplacementErpCode() != null && !p.stdReplacementErpCode().isBlank()) {
+            int oeheadRows = 0;
+            for (WritebackPackagePayload pkg : p.packages()) {
+                if (pkg.orderNos() == null) continue;
+                Integer suffix = pkg.orderSuffix() == null ? 0 : pkg.orderSuffix();
+                for (Integer orderNo : pkg.orderNos()) {
+                    try {
+                        int rows = jdbc.update(
+                                "UPDATE OEHEAD SET SHIPVIA_CD = :shipvia "
+                                        + " WHERE TENANT_ID = :tenant "
+                                        + "   AND ORDER_NO = :orderNo "
+                                        + "   AND ORDER_SUFFIX = :suffix",
+                                new MapSqlParameterSource()
+                                        .addValue("shipvia", p.stdReplacementErpCode())
+                                        .addValue("tenant", p.clientCode())
+                                        .addValue("orderNo", orderNo)
+                                        .addValue("suffix", suffix));
+                        oeheadRows += rows;
+                    } catch (Exception e) {
+                        errors.add("OEHEAD(STD replacement): " + e.getMessage());
+                    }
+                }
+            }
+            if (oeheadRows > 0) touched.add("OEHEAD[STD→" + p.stdReplacementErpCode() + "]×" + oeheadRows);
+        }
+
         if (!errors.isEmpty() && touched.isEmpty()) {
             return WritebackAck.failed("nds(DTC): all updates failed — " + String.join(" | ", errors));
         }

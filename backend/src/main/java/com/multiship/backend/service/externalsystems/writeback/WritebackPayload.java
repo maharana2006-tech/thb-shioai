@@ -50,7 +50,12 @@ public record WritebackPayload(
         String carrierDisplay,     // "FedEx" | "UPS" | "USPS" | "DHL"
         String serviceDescription, // "UPS Ground" — SHIP_SERVICE column value
         String thirdPartyAccount,
-        ShipTo shipTo
+        ShipTo shipTo,
+        /** G6 — non-null when the incoming order was shipvia=STD and we
+         *  resolved it to a concrete service. NdsShipmentOracleWriter uses
+         *  this to UPDATE OEHEAD.SHIPVIA_CD to the ERP code the client's
+         *  mapping produced on the way in. Null = no OEHEAD update. */
+        String stdReplacementErpCode
 ) {
     public static Builder builder() { return new Builder(); }
 
@@ -80,7 +85,9 @@ public record WritebackPayload(
                 shipmentMode, note,
                 keepCarrier ? carrierDisplay : null,
                 keepService ? serviceDescription : null,
-                thirdPartyAccount, shipTo);
+                thirdPartyAccount, shipTo,
+                // OEHEAD update is a service-side write; gate on writeback_service.
+                keepService ? stdReplacementErpCode : null);
     }
 
     public static final class Builder {
@@ -93,6 +100,7 @@ public record WritebackPayload(
         private List<WritebackPackagePayload> packages = List.of();
         private String shipmentMode, note, carrierDisplay, serviceDescription, thirdPartyAccount;
         private ShipTo shipTo = ShipTo.EMPTY;
+        private String stdReplacementErpCode;
 
         public Builder connectionName(String v) { this.connectionName = v; return this; }
         public Builder scannedValue(String v) { this.scannedValue = v; return this; }
@@ -117,12 +125,14 @@ public record WritebackPayload(
         public Builder serviceDescription(String v) { this.serviceDescription = v; return this; }
         public Builder thirdPartyAccount(String v) { this.thirdPartyAccount = v; return this; }
         public Builder shipTo(ShipTo v) { this.shipTo = v == null ? ShipTo.EMPTY : v; return this; }
+        public Builder stdReplacementErpCode(String v) { this.stdReplacementErpCode = v; return this; }
 
         public WritebackPayload build() {
             return new WritebackPayload(connectionName, scannedValue, clientCode, batchId,
                     orderNo, source, channel, trackingNumber, shipDate, status, carrierCode, serviceCode,
                     freightAmount, currency, packages,
-                    shipmentMode, note, carrierDisplay, serviceDescription, thirdPartyAccount, shipTo);
+                    shipmentMode, note, carrierDisplay, serviceDescription, thirdPartyAccount, shipTo,
+                    stdReplacementErpCode);
         }
     }
 }

@@ -97,6 +97,11 @@ public class CarrierServiceImpl implements CarrierService {
      *  belt-and-braces validation path so a shipment can't slip through
      *  when the pre-flight was bypassed. */
     private final com.multiship.backend.service.intl.ExportDeclarationPolicyRegistry exportDeclarationPolicyRegistry;
+    /** G6 — resolves shipvia='STD' to a concrete service via the client's
+     *  Shipping Service Mapping row. Nullable via @Autowired(required=false)
+     *  in test wiring; the STD detection block short-circuits when null. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private StdShipMethodResolver stdShipMethodResolver;
 
     /**
      * PR #550 — pre-fetches URL label bytes at persistence time so the DB
@@ -2316,6 +2321,7 @@ public class CarrierServiceImpl implements CarrierService {
                                 .serviceDescription(service != null ? service.getName() : null)
                                 .thirdPartyAccount(req.getDutiesAccount())
                                 .shipTo(shipTo)
+                                .stdReplacementErpCode(req.getStdReplacementErpCode())
                                 .build());
             }
         } catch (RuntimeException wbFail) {

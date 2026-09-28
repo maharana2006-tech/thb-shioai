@@ -294,6 +294,9 @@ export default function NewShipmentPage() {
   /** Tracks phone/email fields the backend flagged as `defaulted` so a
    *  later sender-side fill can override the fallback value. */
   const senderFallbackPendingRef = useRef<{ phone: boolean; email: boolean } | null>(null)
+  // G6 — STD-replacement erp_code from the NDS prefill; sent on submit so
+  // NdsShipmentOracleWriter can UPDATE OEHEAD.SHIPVIA_CD after label success.
+  const [ndsStdReplacementErpCode, setNdsStdReplacementErpCode] = useState<string | null>(null)
   // Sprint 35 — signature at delivery + insured value beyond the
   // carrier's free tier. Signature is a per-shipment enum; insured
   // value is a separate money amount from declared/customs value.
@@ -1364,6 +1367,9 @@ export default function NewShipmentPage() {
       phone: !!r?.phoneDefaulted,
       email: !!p.notifyBlock?.emailDefaulted,
     }
+    // G6 — stash the STD-replacement ERP code so submit can round-trip it
+    // to the backend for the NDS OEHEAD.SHIPVIA_CD writeback.
+    setNdsStdReplacementErpCode(p.stdReplacementErpCode ?? null)
   }
 
   /**
@@ -2390,6 +2396,7 @@ export default function NewShipmentPage() {
       // V76 — internal per-order ops note; omit when blank so the
       // wire only carries populated fields.
       ...(note.trim() ? { note: note.trim() } : {}),
+      ...(ndsStdReplacementErpCode ? { stdReplacementErpCode: ndsStdReplacementErpCode } : {}),
       carrierCode: carrier,
       accountNumber: accountNumber.trim(),
       accountId: matched?.id ?? null,

@@ -4,6 +4,7 @@ import com.multiship.backend.model.ClientShipviaCodeMap;
 import com.multiship.backend.model.ShipViaMapping;
 import com.multiship.backend.repository.ClientShipviaCodeMapRepository;
 import com.multiship.backend.repository.ShipViaMappingRepository;
+import com.multiship.backend.service.StdShipMethodResolver;
 import com.multiship.backend.service.externalsystems.ExternalSystemException;
 import com.multiship.backend.service.TenantScopeEnforcer;
 import lombok.RequiredArgsConstructor;
@@ -57,6 +58,9 @@ public class NdsShipmentLookupService {
     private final NdsShipmentLookupRepository repository;
     private final ClientShipviaCodeMapRepository clientShipviaRepo;
     private final ShipViaMappingRepository shipviaMappingRepo;
+    /** G6 — STD ship method resolver. Nullable in reduced-args test wiring. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.StdShipMethodResolver stdResolver;
     private final TenantScopeEnforcer tenantScopeEnforcer;
 
     /**
@@ -157,6 +161,10 @@ public class NdsShipmentLookupService {
         // Ship method resolution + hard blocks
         String shipvia = h.shipviaCd();
         Long mappedServiceId = null;
+        // G6 — remember the ERP code to write back to OEHEAD.SHIPVIA_CD when
+        // the original was STD. Non-null triggers the writer's OEHEAD update
+        // on label success. See ShipX_NDS_Orders_and_Tracking.docx §5 + §6.
+        String stdReplacementErpCode = null;
         if (shipvia == null || shipvia.isBlank()) {
             messages.add(new NdsShipmentPrefill.Message(
                     NdsShipmentPrefill.Message.Severity.BLOCKED,
@@ -167,6 +175,31 @@ public class NdsShipmentLookupService {
                     NdsShipmentPrefill.Message.Severity.BLOCKED,
                     "Order is on hold (SHIPVIA_CD = HLD)."));
             status = NdsShipmentPrefill.Status.BLOCKED;
+        } else if (StdShipMethodResolver.STD.equalsIgnoreCase(shipvia)) {
+            // G6 — STD ship method: substitute with the client's
+            // Shipping-Service-Mapping row keyed by shipvia_cd='STD'.
+            var resolved = stdResolver == null
+                    ? java.util.Optional.<StdShipMethodResolver.Result>empty()
+                    : stdResolver.resolveStdForClient(clientCode);
+            if (resolved.isEmpty()) {
+                messages.add(new NdsShipmentPrefill.Message(
+                        NdsShipmentPrefill.Message.Severity.BLOCKED,
+                        "Order ship method is STD but no STD mapping exists for "
+                                + clientCode + ". Add one in Settings → Shipping Service Mapping "
+                                + "(erp_code=STD, client=" + clientCode + ")."));
+                status = NdsShipmentPrefill.Status.BLOCKED;
+            } else {
+                mappedServiceId = resolved.get().service().getId();
+                stdReplacementErpCode = resolved.get().erpCodeForNds();
+                messages.add(new NdsShipmentPrefill.Message(
+                        NdsShipmentPrefill.Message.Severity.INFO,
+                        "STD ship method resolved to "
+                                + resolved.get().service().getName()
+                                + (stdReplacementErpCode != null
+                                        ? " (NDS SHIPVIA_CD will update to " + stdReplacementErpCode + " after label success)"
+                                        : "")
+                                + "."));
+            }
         } else {
             mappedServiceId = resolveServiceId(clientCode, shipvia);
             if (mappedServiceId == null) {
@@ -312,7 +345,7 @@ public class NdsShipmentLookupService {
 
         return new NdsShipmentPrefill(status, messages, scope, scan.scannedRaw(),
                 clientCode, batchId, orders, recipient, shipMethod, packages,
-                notifyBlock, international, defaultedFields);
+                notifyBlock, international, defaultedFields, stdReplacementErpCode);
     }
 
     // ═════════════════ helpers ═════════════════════════════════════
