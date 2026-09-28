@@ -104,6 +104,14 @@ public class ExternalSystemConnection {
     @Column(name = "writeback_channel_b2b", nullable = false, columnDefinition = "boolean default true")
     private Boolean writebackChannelB2b = true;
 
+    // ── V93 additional source gates (fetch-driven flows) ──────────────
+
+    @Column(name = "writeback_source_wms", nullable = false, columnDefinition = "boolean default true")
+    private Boolean writebackSourceWms = true;
+
+    @Column(name = "writeback_source_dtc", nullable = false, columnDefinition = "boolean default true")
+    private Boolean writebackSourceDtc = true;
+
     // ── V91 environment split ─────────────────────────────────────────
     // Two rows per connection name allowed: one PROD + one DEV. The
     // `use_dev` toggle is canonical on the PROD row: TRUE = resolver

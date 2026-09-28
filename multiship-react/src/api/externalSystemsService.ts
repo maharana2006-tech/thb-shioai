@@ -49,6 +49,8 @@ export interface ConnectionDetail {
   writebackSourceManual: boolean
   writebackSourceBulk: boolean
   writebackSourceApi: boolean
+  writebackSourceWms: boolean
+  writebackSourceDtc: boolean
   writebackChannelD2c: boolean
   writebackChannelB2b: boolean
   // V91 env split. environment is PROD | DEV (this row's env). useDev is
@@ -73,6 +75,8 @@ export interface ConnectionUpsertRequest {
   writebackSourceManual?: boolean
   writebackSourceBulk?: boolean
   writebackSourceApi?: boolean
+  writebackSourceWms?: boolean
+  writebackSourceDtc?: boolean
   writebackChannelD2c?: boolean
   writebackChannelB2b?: boolean
   // V91 env split — omit to leave alone.
