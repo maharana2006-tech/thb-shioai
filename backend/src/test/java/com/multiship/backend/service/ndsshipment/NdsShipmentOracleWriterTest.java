@@ -210,6 +210,55 @@ class NdsShipmentOracleWriterTest {
 
     // ── clear path ──────────────────────────────────────────────────
 
+    // ── G10 · FedEx return without note skips R row ─────────────────
+
+    @Test
+    void writeShipment_FedexReturn_NoNote_SkipsRRow() {
+        // FedEx returns write TB_MANUAL_SHIPMENT R row only when a note is
+        // present (ShipX_NDS_Orders_and_Tracking.docx §7). Without a note,
+        // NO row at all — not the R, not the Q.
+        writer.writeShipment(outboundBase()
+                .shipmentMode("RETURN")
+                .carrierCode("FEDEX")
+                .carrierDisplay("FedEx")
+                .note(null)
+                .build());
+        verify(prodJdbc, never()).update(anyString(), any(SqlParameterSource.class));
+    }
+
+    @Test
+    void writeShipment_FedexReturn_WithNote_WritesRPlusQ() {
+        writer.writeShipment(outboundBase()
+                .shipmentMode("RETURN")
+                .carrierCode("FEDEX")
+                .carrierDisplay("FedEx")
+                .note("Damaged on arrival")
+                .build());
+        ArgumentCaptor<SqlParameterSource> params = ArgumentCaptor.forClass(SqlParameterSource.class);
+        verify(prodJdbc, atLeast(2)).update(anyString(), params.capture());
+        boolean sawR = false, sawQ = false;
+        for (SqlParameterSource s : params.getAllValues()) {
+            MapSqlParameterSource m = (MapSqlParameterSource) s;
+            if ("R".equals(m.getValue("errorMode"))) sawR = true;
+            if ("Q".equals(m.getValue("errorMode"))) sawQ = true;
+        }
+        assertTrue(sawR && sawQ, "expected both R and Q rows for FedEx return with note");
+    }
+
+    @Test
+    void writeShipment_UpsReturn_NoNote_StillWritesRRow() {
+        writer.writeShipment(outboundBase()
+                .shipmentMode("RETURN")
+                .carrierCode("UPS")
+                .carrierDisplay("UPS")
+                .note(null)
+                .build());
+        ArgumentCaptor<SqlParameterSource> params = ArgumentCaptor.forClass(SqlParameterSource.class);
+        verify(prodJdbc, atLeastOnce()).update(anyString(), params.capture());
+        MapSqlParameterSource m = (MapSqlParameterSource) params.getValue();
+        assertEquals("R", m.getValue("errorMode"));
+    }
+
     // ── G1 · DTC write path ─────────────────────────────────────────
 
     @Test

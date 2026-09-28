@@ -166,11 +166,18 @@ public class NdsShipmentOracleWriter {
             String orderNoText = isReturn && p.orderNo() != null
                     ? ("REN -" + p.orderNo())
                     : (p.orderNo() != null ? String.valueOf(p.orderNo()) : null);
-            try {
-                int rows = insertTbManualShipment(prodJdbc, p, errorMode, orderNoText, p.note());
-                if (rows > 0) touched.add("TB_MANUAL_SHIPMENT[" + errorMode + "]×" + rows);
-            } catch (Exception e) {
-                errors.add("TB_MANUAL_SHIPMENT[" + errorMode + "]: " + e.getMessage());
+            // G10 — FedEx returns only write the R row when a note is entered;
+            // UPS returns always. Per ShipX_NDS_Orders_and_Tracking.docx §7.
+            boolean skipRRow = isReturn
+                    && "FEDEX".equalsIgnoreCase(p.carrierCode())
+                    && (p.note() == null || p.note().isBlank());
+            if (!skipRRow) {
+                try {
+                    int rows = insertTbManualShipment(prodJdbc, p, errorMode, orderNoText, p.note());
+                    if (rows > 0) touched.add("TB_MANUAL_SHIPMENT[" + errorMode + "]×" + rows);
+                } catch (Exception e) {
+                    errors.add("TB_MANUAL_SHIPMENT[" + errorMode + "]: " + e.getMessage());
+                }
             }
             // ERROR_MODE=Q — additional audit row when the operator entered a note.
             if (p.note() != null && !p.note().isBlank()) {

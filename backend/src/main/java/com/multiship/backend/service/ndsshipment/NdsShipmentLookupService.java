@@ -226,8 +226,16 @@ public class NdsShipmentLookupService {
         int seq = 1;
         for (NdsShipmentLookupRepository.ContainerRow c : containers) {
             boolean isScanned = scannedContainer != null && scannedContainer.equals(c.containerId());
-            BigDecimal weight = c.billableWeightLb();
-            String weightSource = weight != null ? "OE_SHIP_CONTAINER.GROSS_WT" : null;
+            // G8 — BackOrder Quick Ship treats a zero or missing container weight
+            // as 1 lb (ShipX_NDS_Orders_and_Tracking.docx §10). Carriers reject
+            // zero-weight shipments; a 1 lb default keeps the flow moving and
+            // the operator can override on-screen if the actual weight is known.
+            BigDecimal rawWeight = c.billableWeightLb();
+            boolean weightDefaulted = rawWeight == null || rawWeight.signum() <= 0;
+            BigDecimal weight = weightDefaulted ? BigDecimal.ONE : rawWeight;
+            String weightSource = weightDefaulted
+                    ? "DEFAULT_ONE_LB"
+                    : "OE_SHIP_CONTAINER.GROSS_WT";
             packages.add(new NdsShipmentPrefill.Package(
                     seq++,
                     c.containerId(),
@@ -242,10 +250,10 @@ public class NdsShipmentLookupService {
                     null,   // packDt — not queried in PR1
                     null,   // shippedFlag per container — not queried in PR1
                     isScanned));
-            if (weight == null) {
+            if (weightDefaulted) {
                 messages.add(new NdsShipmentPrefill.Message(
                         NdsShipmentPrefill.Message.Severity.WARNING,
-                        "Container " + c.containerId() + " has no billable weight in NDS."));
+                        "Container " + c.containerId() + " has no billable weight in NDS — defaulted to 1 lb."));
                 status = worse(status, NdsShipmentPrefill.Status.WARNING);
             }
         }
