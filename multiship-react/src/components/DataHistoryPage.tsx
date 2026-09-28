@@ -1826,9 +1826,9 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
           const st = rowStatus(r, orderReadyOf(r))
           const failed = (r.generatedStatus ?? '').toUpperCase() === 'FAILED'
           const { byField, rowLevel } = bucketRowErrors(r.errors ?? [])
-          // "UPS confirmed: …" is not a problem: it shows under the status, not in the ⓘ.
-          const confirmed = (r.warnings ?? []).find((w) => w.startsWith(UPS_CONFIRMED))
-          const warnings = (r.warnings ?? []).filter((w) => !w.startsWith(UPS_CONFIRMED))
+          // What the carrier confirmed is not a problem: it shows under the status, not in the ⓘ.
+          const confirmed = r.carrierNote ?? null
+          const warnings = r.warnings ?? []
           const explain = (r.errors?.length ?? 0) > 0 || (failed && !!r.generatedMessage) || warnings.length > 0
           const o = r.generatedOrderNo != null ? batchOrders[r.generatedOrderNo] : undefined
           const when = o?.orderDetails.createdDate ?? null
@@ -2577,9 +2577,6 @@ const BULK_TABS: { key: BulkTab; label: string }[] = [
 /** Import history's sortable columns ↔ the server's sort keys (the Filters menu's Sort). */
 const COLUMN_SORT: Record<string, HistorySortKey> = { labelBatch: 'labelBatch', file: 'fileName', created: 'created', status: 'status', rows: 'savedRows' }
 const SORT_COLUMN = Object.fromEntries(Object.entries(COLUMN_SORT).map(([col, key]) => [key, col])) as Record<HistorySortKey, string>
-
-/** Prefix of the note a row gets when UPS confirms its route (OrderImportServiceImpl.UPS_CONFIRMED). */
-const UPS_CONFIRMED = 'UPS confirmed: '
 
 /** A row's serviceType error for a ship via code with no carrier service mapped. */
 const UNMAPPED_SHIP_VIA = /serviceType '([^']+)' is (?:not mapped|mapped, but not)/

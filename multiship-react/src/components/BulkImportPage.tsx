@@ -47,7 +47,7 @@ export default function BulkImportPage() {
             onClick={() => toHistory(savedBatchSlug)}
             className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[12.5px] font-semibold text-[#f4eede] hover:bg-[#412d15]"
           >
-            Open batch #{savedBatchId}
+            Open import #{savedBatchId}
             <FiArrowRight className="h-3.5 w-3.5" />
           </button>
         </div>

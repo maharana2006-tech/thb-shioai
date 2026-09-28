@@ -32,6 +32,8 @@ export interface OrderImportRow {
   shipViaCode?: string | null
   /** What that rule did with the row, e.g. "U11 maps to UPS Ground (UPS 03)". */
   shipViaNote?: string | null
+  /** What the carrier said when the row was checked ("UPS confirmed UPS Ground (U11) · 2 business days"). */
+  carrierNote?: string | null
   packageType?: string | null
   weight?: number | null
   weightUnit?: string | null

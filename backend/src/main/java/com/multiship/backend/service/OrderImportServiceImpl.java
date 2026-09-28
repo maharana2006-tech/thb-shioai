@@ -369,7 +369,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                 addError(row, upsLaneMessage(row, result, codes));
             } else if (result != null) {
                 // Say that UPS was asked and what it said — a silent pass looked like no check at all.
-                addWarning(row, upsConfirmedNote(row, result.message()));
+                row.setCarrierNote(upsConfirmedNote(row, result.message()));
             }
         }
     }
@@ -395,10 +395,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                     : "Use " + String.join(" or ", usable) + " instead");
     }
 
-    /** Prefix of the note a row gets when UPS confirms its route; the grid shows it under the status. */
-    static final String UPS_CONFIRMED = "UPS confirmed: ";
-
-    /** "UPS confirmed: UPS Ground (U11) · 3 business days" from TiT's "UPS confirmed the lane for UPS Ground (3 business days transit)." */
+    /** "UPS confirmed UPS Ground (U11) · 3 business days" from TiT's "UPS confirmed the lane for UPS Ground (3 business days transit)." */
     static String upsConfirmedNote(OrderImportRowDTO row, String titMessage) {
         java.util.regex.Matcher m = java.util.regex.Pattern
                 .compile("UPS confirmed the lane for (.+?)(?: \\((\\d+) business days? transit\\))?\\.?$")
@@ -406,7 +403,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         String name = m.matches() ? m.group(1) : "the service";
         String days = m.matches() ? m.group(2) : null;
         String code = StringUtils.hasText(row.getShipViaCode()) ? " (" + row.getShipViaCode().trim() + ")" : "";
-        return UPS_CONFIRMED + name + code
+        return "UPS confirmed " + name + code
                 + (days == null ? "" : " · " + days + " business day" + ("1".equals(days) ? "" : "s"));
     }
 
@@ -675,6 +672,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         dto.setGeneratedTrackingNumber(row.getGeneratedTrackingNumber());
         dto.setGeneratedStatus(row.getGeneratedStatus());
         dto.setGeneratedMessage(row.getGeneratedMessage());
+        dto.setCarrierNote(row.getCarrierNote());
 
         // Parse custom fields if present
         if (row.getCustomFields() != null && !row.getCustomFields().isEmpty() && importObjectMapper != null) {
@@ -2549,6 +2547,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         for (OrderImportRowDTO row : rows) {
             row.setErrors(validateRow(row));
             row.setWarnings(List.of()); // clear warnings; will be re-added by validators below
+            row.setCarrierNote(null);   // a check of the row as it was; Validate all asks again
         }
         resolveNamesToCodes(rows, requireMapping);
         validateReferences(rows, requireMapping);
@@ -7126,7 +7125,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         // with "Upload anyway") would be saved a second time — ask first.
         if (!allowDuplicate) {
             java.util.LinkedHashMap<String, String> dups = new java.util.LinkedHashMap<>();
-            java.util.regex.Pattern importNo = java.util.regex.Pattern.compile("\\(#(\\d+)\\)");
+            java.util.regex.Pattern importNo = java.util.regex.Pattern.compile("\\(import #(\\d+)\\)");
             for (OrderImportRowDTO r : toSave) {
                 if (r.getWarnings() == null) continue;
                 for (String w : r.getWarnings()) {
@@ -7477,7 +7476,7 @@ public class OrderImportServiceImpl implements OrderImportService {
             Long batch = where.get(r.getOrderRef().trim().toUpperCase(Locale.ROOT));
             if (batch == null) continue;
             List<String> w = new ArrayList<>(r.getWarnings() == null ? List.of() : r.getWarnings());
-            w.add("orderRef " + r.getOrderRef().trim() + " " + IN_HISTORY_MARKER + " (#" + batch
+            w.add("Order " + r.getOrderRef().trim() + " " + IN_HISTORY_MARKER + " (import #" + batch
                     + ") — saving it again creates a duplicate order");
             r.setWarnings(w);
         }

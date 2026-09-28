@@ -33,7 +33,7 @@ import VirtualTable from '../VirtualTable'
 // the parsed CSV contains enough USPS rows to blow past ~1h at the
 // 55/hr platform cap. Both surfaces close audit gap U2 + U4.
 import BulkLabelQueueBadge from '../orders/BulkLabelQueueBadge'
-import { readableError, shipViaHint } from '../batchGrid'
+import { labelOfField, messageUnder, readableError, shipViaHint } from '../batchGrid'
 import { systemSettingsService } from '../../api/systemSettingsService'
 import { normalizeCarrierCode } from '../../utils/carrierUtils'
 
@@ -466,7 +466,7 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
                   <li key={u.id} className="flex flex-wrap items-center gap-2 px-3.5 py-2 text-[12px] text-[#3f3527]">
                     <FiFile className="h-3.5 w-3.5 shrink-0 text-[#6b5c42]" />
                     <span className="font-semibold text-[#1f150c]">
-                      #{u.id} · {u.fileName}
+                      Upload {u.id} · {u.fileName}
                     </span>
                     <span className="text-[11px] text-[#6b5c42]">
                       {u.readyOrders} ready · {u.invalidOrders} need{u.invalidOrders === 1 ? 's' : ''} fixes
@@ -533,7 +533,7 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
                   <FiFile className="h-3.5 w-3.5 text-[#6b5c42]" />
                   <span className="text-[12.5px] font-semibold text-[#1f150c]">{staging.fileName}</span>
                   <span className="text-[10.5px] text-[#b6a684]">
-                    Upload #{staging.id}
+                    Upload {staging.id}
                     {expires ? ` · kept until ${expires}` : ''}
                   </span>
                 </div>
@@ -1443,11 +1443,11 @@ function PreviewStep({
                             const fe = byField[k]
                             return (
                               <div key={k} className="grid grid-cols-[120px_minmax(0,1fr)] items-start gap-2">
-                                <span className="pt-1 text-[9.5px] uppercase tracking-[0.04em] text-[#a1906d]">{k}</span>
+                                <span className="pt-1 text-[9.5px] uppercase tracking-[0.04em] text-[#a1906d]">{labelOfField(k)}</span>
                                 <div className="min-w-0">
                                   {/* Box sized to the field: state/zip narrow, address/email/description wide. */}
                                   <div className={`max-w-full ${DETAIL_FIELD_W[k] ?? col.w ?? 'w-40'}`}>{cellFor(selected, col, fe)}</div>
-                                  {fe?.length ? <p className="mt-0.5 text-[9.5px] leading-snug text-rose-600">✗ {fe.map(readableError).join('; ')}</p> : null}
+                                  {fe?.length ? <p className="mt-0.5 text-[9.5px] leading-snug text-rose-600">✗ {fe.map((m) => messageUnder(k, m)).join('; ')}</p> : null}
                                 </div>
                               </div>
                             )
@@ -1463,7 +1463,7 @@ function PreviewStep({
                             const fe = byField[k]
                             return (
                               <div key={k} className="grid grid-cols-[120px_minmax(0,1fr)] items-start gap-2">
-                                <span className="pt-1 text-[9.5px] uppercase tracking-[0.04em] text-[#a1906d]">{k}</span>
+                                <span className="pt-1 text-[9.5px] uppercase tracking-[0.04em] text-[#a1906d]">{labelOfField(k)}</span>
                                 <div className="min-w-0">
                                   <div className="w-48 max-w-full">
                                     <EditCell
@@ -1474,7 +1474,7 @@ function PreviewStep({
                                       onCommit={(v) => onEdit(selected.rowNumber, { customFields: { ...(selected.customFields ?? {}), [k]: v } })}
                                     />
                                   </div>
-                                  {fe?.length ? <p className="mt-0.5 text-[9.5px] leading-snug text-rose-600">✗ {fe.map(readableError).join('; ')}</p> : null}
+                                  {fe?.length ? <p className="mt-0.5 text-[9.5px] leading-snug text-rose-600">✗ {fe.map((m) => messageUnder(k, m)).join('; ')}</p> : null}
                                 </div>
                               </div>
                             )

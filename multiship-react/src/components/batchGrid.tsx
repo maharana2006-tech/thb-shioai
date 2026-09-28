@@ -69,7 +69,7 @@ export function RowIssuesIcon({
   warnings: string[]
 }) {
   const items: IssueItem[] = [
-    ...Object.entries(byField).flatMap(([field, msgs]) => msgs.map((m) => ({ tag: labelOfField(field), text: readableError(m) }))),
+    ...Object.entries(byField).flatMap(([field, msgs]) => msgs.map((m) => ({ tag: labelOfField(field), text: messageUnder(field, m) }))),
     ...rowLevel.map((m) => ({ tag: 'row', text: readableError(m) })),
     ...(carrierMessage ? [{ tag: 'carrier', text: carrierMessage }] : []),
     ...warnings.map((w) => ({ tag: 'note', text: w, tone: 'warn' as const })),
@@ -148,14 +148,21 @@ export function labelOfField(key: string): string {
  * A plain word ("state", "weight") is replaced only where it opens the message.
  */
 export function readableError(msg: string): string {
-  return msg.replace(/\b[a-z][A-Za-z0-9]*\b/g, (w: string, at: number) =>
+  return msg.replace(/[®™]/g, '').replace(/\b[a-z][A-Za-z0-9]*\b/g, (w: string, at: number) =>
     (EDIT_FIELD_KEYS as readonly string[]).includes(w) && (at === 0 || /[A-Z0-9]/.test(w)) ? labelOfField(w) : w)
 }
 
 /** "U11 maps to UPS Ground (UPS 03)" → "U11 = UPS Ground": the carrier's own code means nothing to people. */
 export function shipViaHint(note: string | null | undefined): string | null {
   if (!note) return null
-  return note.replace(/ maps to /, ' = ').replace(/ \((UPS|FEDEX|USPS|DHL) [^)]*\)/i, '')
+  return note.replace(/[®™]/g, '').replace(/ maps to /, ' = ').replace(/ \((UPS|FEDEX|USPS|DHL) [^)]*\)/i, '')
+}
+
+/** A field's message shown under that field: "Service — UPS Ground …" → "UPS Ground …". */
+export function messageUnder(field: string, msg: string): string {
+  const text = readableError(msg)
+  const lead = `${labelOfField(field)} — `
+  return text.startsWith(lead) ? text.slice(lead.length) : text
 }
 
 /** The columns the grid shows by default — the same things the Orders page

@@ -77,9 +77,9 @@ class OrderImportAddressChecksTest {
     void aConfirmedRouteSaysWhatUpsSaid() {
         OrderImportRowDTO row = usRow("IL", "60606");
         row.setShipViaCode("U11");
-        assertEquals("UPS confirmed: UPS Ground (U11) · 3 business days",
+        assertEquals("UPS confirmed UPS Ground (U11) · 3 business days",
                 OrderImportServiceImpl.upsConfirmedNote(row, "UPS confirmed the lane for UPS Ground (3 business days transit)."));
-        assertEquals("UPS confirmed: UPS Ground (U11)",
+        assertEquals("UPS confirmed UPS Ground (U11)",
                 OrderImportServiceImpl.upsConfirmedNote(row, "UPS confirmed the lane for UPS Ground."));
     }
 

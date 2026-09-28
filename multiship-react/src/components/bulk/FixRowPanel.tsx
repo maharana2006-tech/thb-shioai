@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { FiAlertTriangle, FiX } from 'react-icons/fi'
 import type { OrderImportRow } from '../../api/orderImportService'
 import { shippingConfigService, type ShipViaCode } from '../../api/shippingConfigService'
-import { DH_COLUMNS, bucketRowErrors, fieldLabel, readableError, type DhColumn } from '../batchGrid'
+import { DH_COLUMNS, bucketRowErrors, fieldLabel, messageUnder, readableError, type DhColumn } from '../batchGrid'
 import { STATE_CODE_OPTIONS } from '../../utils/stateCodes'
 
 /** The import fields, grouped the way an order reads. orderRef stays out: it decides the grouping. */
@@ -130,7 +130,7 @@ export default function FixRowPanel({
           {labelOf(key)}
         </label>
         {input}
-        {errs.map((m) => <p key={m} className="mt-0.5 text-[11px] leading-snug text-rose-700">{readableError(m)}</p>)}
+        {errs.map((m) => <p key={m} className="mt-0.5 text-[11px] leading-snug text-rose-700">{messageUnder(key, m)}</p>)}
         {key === 'serviceType' && unmapped && canMap ? (
           <button type="button" onClick={() => onMap(unmapped)}
             className="mt-1 rounded-md border border-[#e3d9c4] bg-white px-2 py-0.5 text-[11px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]">
