@@ -200,11 +200,15 @@ public class NdsShipmentOracleWriter {
                 Integer suffix = pkg.orderSuffix() == null ? 0 : pkg.orderSuffix();
                 for (Integer orderNo : pkg.orderNos()) {
                     try {
+                        // V96 — read-before-write: only UPDATE when current
+                        // OEHEAD.SHIPVIA_CD differs from the resolved ERP.
+                        // Skips no-op writes; NDS's UPDATE_DT stays stable.
                         int rows = clientJdbc.update(
                                 "UPDATE OEHEAD SET SHIPVIA_CD = :shipvia "
                                         + " WHERE TENANT_ID = :tenant "
                                         + "   AND ORDER_NO = :orderNo "
-                                        + "   AND ORDER_SUFFIX = :suffix",
+                                        + "   AND ORDER_SUFFIX = :suffix "
+                                        + "   AND (SHIPVIA_CD IS NULL OR SHIPVIA_CD <> :shipvia)",
                                 new MapSqlParameterSource()
                                         .addValue("shipvia", p.stdReplacementErpCode())
                                         .addValue("tenant", p.clientCode())
@@ -212,7 +216,7 @@ public class NdsShipmentOracleWriter {
                                         .addValue("suffix", suffix));
                         oeheadRows += rows;
                     } catch (Exception e) {
-                        errors.add("OEHEAD(STD replacement): " + e.getMessage());
+                        errors.add("OEHEAD(shipvia): " + e.getMessage());
                     }
                 }
             }

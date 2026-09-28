@@ -1937,6 +1937,20 @@ public class CarrierServiceImpl implements CarrierService {
         order.setCustNo(firstNonBlank(req.getClientCode(), order.getCustNo(), "MANUAL"));
         order.setTenantId(StringUtils.hasText(req.getClientCode()) ? req.getClientCode().trim() : order.getTenantId());
         order.setShipviaCd(service != null ? service.getServiceCode() : serviceType);
+        // V96 / G6 — derive the canonical NDS ERP ship-via and stash it on
+        // the Order. Falls back to req.stdReplacementErpCode when the FE
+        // sent one (e.g. from NdsShipmentPrefill's STD detection) so we
+        // don't overwrite a caller-supplied value with a possibly-null
+        // resolver result.
+        String resolvedErpForOrder = req.getStdReplacementErpCode();
+        if ((resolvedErpForOrder == null || resolvedErpForOrder.isBlank())
+                && stdShipMethodResolver != null
+                && service != null && service.getId() != null
+                && StringUtils.hasText(req.getClientCode())) {
+            resolvedErpForOrder = stdShipMethodResolver
+                    .reverseErpCode(req.getClientCode().trim().toUpperCase(), service.getId());
+        }
+        order.setNdsResolvedShipviaCd(resolvedErpForOrder);
         order.setShipName(to.getName());
         order.setShipAttn(to.getCompany());
         order.setShipAddr1(to.getAddressLine1());
@@ -2321,7 +2335,13 @@ public class CarrierServiceImpl implements CarrierService {
                                 .serviceDescription(service != null ? service.getName() : null)
                                 .thirdPartyAccount(req.getDutiesAccount())
                                 .shipTo(shipTo)
-                                .stdReplacementErpCode(req.getStdReplacementErpCode())
+                                // V96 — persisted canonical ERP wins over the request field
+                                // so regenerate / async paths pick it up too.
+                                .stdReplacementErpCode(firstNonBlank(
+                                        orderRepository.findByOrderNo(orderNo)
+                                                .map(com.multiship.backend.model.Order::getNdsResolvedShipviaCd)
+                                                .orElse(null),
+                                        req.getStdReplacementErpCode()))
                                 .build());
             }
         } catch (RuntimeException wbFail) {

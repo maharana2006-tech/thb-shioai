@@ -76,7 +76,7 @@ public class StdShipMethodResolver {
      * First deterministic hit wins (ordered by mapping id). Null when no
      * non-STD row exists for this (client, service) pair.
      */
-    String reverseErpCode(String clientCode, Long serviceId) {
+    public String reverseErpCode(String clientCode, Long serviceId) {
         List<ShipViaMapping> candidates = mappingRepo.findByServiceId(serviceId);
         return candidates.stream()
                 .filter(m -> clientCode.equalsIgnoreCase(
