@@ -79,19 +79,21 @@ public class NdsShipmentOracleWriter {
                     // onto WritebackPackagePayload.
                     for (Integer orderNo : pkg.orderNos()) {
                         try {
-                            int rows = clientJdbc.update(
-                                    "UPDATE CLIPPER SET TRACKING_NUMBER = :tracking, FREIGHT_AMOUNT = :freight "
-                                            + " WHERE TENANT_ID = :tenant "
-                                            + "   AND ORDER_NO = :orderNo "
-                                            + "   AND CONTAINER_NO = :containerNo "
-                                            + "   AND ORDER_SUFFIX = :orderSuffix",
-                                    new MapSqlParameterSource()
-                                            .addValue("tracking", p.trackingNumber())
-                                            .addValue("freight", p.freightAmount())
-                                            .addValue("tenant", p.clientCode())
-                                            .addValue("orderNo", orderNo)
-                                            .addValue("containerNo", pkg.sequence())
-                                            .addValue("orderSuffix", pkg.orderSuffix() == null ? 0 : pkg.orderSuffix()));
+                            // ORACLE WRITE DISABLED — CLIPPER update commented out.
+                            int rows = 0;
+                            // int rows = clientJdbc.update(
+                            //         "UPDATE CLIPPER SET TRACKING_NUMBER = :tracking, FREIGHT_AMOUNT = :freight "
+                            //                 + " WHERE TENANT_ID = :tenant "
+                            //                 + "   AND ORDER_NO = :orderNo "
+                            //                 + "   AND CONTAINER_NO = :containerNo "
+                            //                 + "   AND ORDER_SUFFIX = :orderSuffix",
+                            //         new MapSqlParameterSource()
+                            //                 .addValue("tracking", p.trackingNumber())
+                            //                 .addValue("freight", p.freightAmount())
+                            //                 .addValue("tenant", p.clientCode())
+                            //                 .addValue("orderNo", orderNo)
+                            //                 .addValue("containerNo", pkg.sequence())
+                            //                 .addValue("orderSuffix", pkg.orderSuffix() == null ? 0 : pkg.orderSuffix()));
                             count += rows;
                         } catch (Exception e) {
                             errors.add("CLIPPER: " + e.getMessage());
@@ -109,11 +111,13 @@ public class NdsShipmentOracleWriter {
             for (WritebackPackagePayload pkg : p.packages()) {
                 if (pkg.orderNos() == null || pkg.orderNos().isEmpty()) continue;
                 try {
-                    int rows = clientJdbc.update(buildUpdateSql("OE_TRACKING", oetSets,
-                            "order_no IN (:orderNos)"),
-                            new MapSqlParameterSource()
-                                    .addValues(oetSets)
-                                    .addValue("orderNos", pkg.orderNos()));
+                    // ORACLE WRITE DISABLED — OE_TRACKING update commented out.
+                    int rows = 0;
+                    // int rows = clientJdbc.update(buildUpdateSql("OE_TRACKING", oetSets,
+                    //         "order_no IN (:orderNos)"),
+                    //         new MapSqlParameterSource()
+                    //                 .addValues(oetSets)
+                    //                 .addValue("orderNos", pkg.orderNos()));
                     count += rows;
                 } catch (Exception e) {
                     errors.add("OE_TRACKING: " + e.getMessage());
@@ -194,16 +198,18 @@ public class NdsShipmentOracleWriter {
                 .addValue("freight", freight == null ? null : freight.toPlainString())
                 .addValue("note", clamp(note, 255))
                 .addValue("errorMode", errorMode);
-        return jdbc.update(
-                "INSERT INTO TB_MANUAL_SHIPMENT (" +
-                        "TENANT_ID, CARRIER, SHIP_SERVICE, THIRD_PARTY, " +
-                        "SHIP_ATTN, COMPANY, ADDR1, ADDR2, CITY, STATE, COUNTRY, ZIP_CODE, " +
-                        "SHIP_DATE, TRACKING, EMAIL, VOID_YN, ORDER_NO, FREIGHT, NOTE, ERROR_MODE) " +
-                        "VALUES (" +
-                        ":tenant, :carrier, :service, :thirdParty, " +
-                        ":attn, :company, :addr1, :addr2, :city, :state, :country, :zip, " +
-                        ":shipDate, :tracking, :email, :voidYn, :orderNo, :freight, :note, :errorMode)",
-                params);
+        // ORACLE WRITE DISABLED — TB_MANUAL_SHIPMENT insert commented out.
+        return 0;
+        // return jdbc.update(
+        //         "INSERT INTO TB_MANUAL_SHIPMENT (" +
+        //                 "TENANT_ID, CARRIER, SHIP_SERVICE, THIRD_PARTY, " +
+        //                 "SHIP_ATTN, COMPANY, ADDR1, ADDR2, CITY, STATE, COUNTRY, ZIP_CODE, " +
+        //                 "SHIP_DATE, TRACKING, EMAIL, VOID_YN, ORDER_NO, FREIGHT, NOTE, ERROR_MODE) " +
+        //                 "VALUES (" +
+        //                 ":tenant, :carrier, :service, :thirdParty, " +
+        //                 ":attn, :company, :addr1, :addr2, :city, :state, :country, :zip, " +
+        //                 ":shipDate, :tracking, :email, :voidYn, :orderNo, :freight, :note, :errorMode)",
+        //         params);
     }
 
     /**
@@ -236,11 +242,13 @@ public class NdsShipmentOracleWriter {
             if (hasTracking) sets.put("TRACKING_NUMBER", null);
             if (hasFreight) sets.put("FREIGHT_AMOUNT", null);
             try {
-                int rows = clientJdbc.update(buildUpdateSql("CLIPPER", sets,
-                        "TENANT_ID = :tenant AND ORDER_NO IN (:orderNos)"),
-                        new MapSqlParameterSource()
-                                .addValue("tenant", req.clientCode())
-                                .addValue("orderNos", req.orderNos()));
+                // ORACLE WRITE DISABLED — CLIPPER clear commented out.
+                int rows = 0;
+                // int rows = clientJdbc.update(buildUpdateSql("CLIPPER", sets,
+                //         "TENANT_ID = :tenant AND ORDER_NO IN (:orderNos)"),
+                //         new MapSqlParameterSource()
+                //                 .addValue("tenant", req.clientCode())
+                //                 .addValue("orderNos", req.orderNos()));
                 if (rows > 0) touched.add("CLIPPER×" + rows);
             } catch (Exception e) {
                 errors.add("CLIPPER: " + e.getMessage());
@@ -256,11 +264,13 @@ public class NdsShipmentOracleWriter {
                     : (req.orderNo() != null ? List.of(req.orderNo()) : List.of());
             if (!orderNos.isEmpty()) {
                 try {
-                    int rows = clientJdbc.update(buildUpdateSql("OE_TRACKING", oetSets,
-                            "order_no IN (:orderNos)"),
-                            new MapSqlParameterSource()
-                                    .addValues(oetSets)
-                                    .addValue("orderNos", orderNos));
+                    // ORACLE WRITE DISABLED — OE_TRACKING clear commented out.
+                    int rows = 0;
+                    // int rows = clientJdbc.update(buildUpdateSql("OE_TRACKING", oetSets,
+                    //         "order_no IN (:orderNos)"),
+                    //         new MapSqlParameterSource()
+                    //                 .addValues(oetSets)
+                    //                 .addValue("orderNos", orderNos));
                     if (rows > 0) touched.add("OE_TRACKING×" + rows);
                 } catch (Exception e) {
                     errors.add("OE_TRACKING: " + e.getMessage());
@@ -271,12 +281,14 @@ public class NdsShipmentOracleWriter {
         // TB_MANUAL_SHIPMENT — stamp VOID_YN='Y' on the row matching this tracking.
         if (hasTracking && req.trackingNumber() != null && !req.trackingNumber().isBlank()) {
             try {
-                NamedParameterJdbcTemplate prodJdbc = templates.production();
-                int rows = prodJdbc.update(
-                        "UPDATE TB_MANUAL_SHIPMENT SET VOID_YN = :voidYn WHERE TRACKING = :tracking",
-                        new MapSqlParameterSource()
-                                .addValue("voidYn", "Y")
-                                .addValue("tracking", req.trackingNumber()));
+                // ORACLE WRITE DISABLED — TB_MANUAL_SHIPMENT void update commented out.
+                int rows = 0;
+                // NamedParameterJdbcTemplate prodJdbc = templates.production();
+                // int rows = prodJdbc.update(
+                //         "UPDATE TB_MANUAL_SHIPMENT SET VOID_YN = :voidYn WHERE TRACKING = :tracking",
+                //         new MapSqlParameterSource()
+                //                 .addValue("voidYn", "Y")
+                //                 .addValue("tracking", req.trackingNumber()));
                 if (rows > 0) touched.add("TB_MANUAL_SHIPMENT×" + rows);
             } catch (Exception e) {
                 errors.add("TB_MANUAL_SHIPMENT: " + e.getMessage());
