@@ -74,11 +74,25 @@ class OrderImportAddressChecksTest {
     }
 
     @Test
+    void anInternationalOnlyServiceToAUsAddressNamesTheDomesticCodes() {
+        List<Map<String, Object>> codes = List.of(
+                Map.of("code", "U11", "carrier", "UPS", "serviceCode", "03", "serviceName", "UPS Ground", "enabled", true),
+                Map.of("code", "U43", "carrier", "UPS", "serviceCode", "02", "serviceName", "UPS 2nd Day Air", "enabled", true),
+                Map.of("code", "U65", "carrier", "UPS", "serviceCode", "65", "serviceName", "UPS Worldwide Saver", "enabled", true));
+        Map<String, String> scope = Map.of("UPS|03", "DOMESTIC", "UPS|02", "DOMESTIC", "UPS|65", "INTERNATIONAL");
+        assertEquals("serviceType — UPS Worldwide Saver (U65) is for shipments abroad and can't ship within the US. "
+                        + "Use U11 (UPS Ground) or U43 (UPS 2nd Day Air) instead",
+                OrderImportServiceImpl.intlOnlyMessage("UPS", "U65", "DES875", "UPS Worldwide Saver", codes, scope));
+    }
+
+    @Test
     void aConfirmedRouteSaysWhatUpsSaid() {
         OrderImportRowDTO row = usRow("IL", "60606");
         row.setShipViaCode("U11");
         assertEquals("UPS confirmed UPS Ground (U11) · 3 business days",
                 OrderImportServiceImpl.upsConfirmedNote(row, "UPS confirmed the lane for UPS Ground (3 business days transit)."));
+        assertEquals("UPS confirmed UPS 2nd Day Air (U11) · 2 business days",
+                OrderImportServiceImpl.upsConfirmedNote(row, "UPS confirmed the lane for UPS 2nd Day Air® (2 business days transit)."));
         assertEquals("UPS confirmed UPS Ground (U11)",
                 OrderImportServiceImpl.upsConfirmedNote(row, "UPS confirmed the lane for UPS Ground."));
     }

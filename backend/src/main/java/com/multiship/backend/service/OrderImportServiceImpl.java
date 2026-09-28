@@ -374,6 +374,23 @@ public class OrderImportServiceImpl implements OrderImportService {
         }
     }
 
+    /** "serviceType — UPS Worldwide Saver (U65) is for shipments abroad and can't ship within the US. Use U11 (UPS Ground) or U43 (UPS 2nd Day Air) instead". */
+    static String intlOnlyMessage(String carrier, String shipVia, String client, String serviceName,
+                                  List<java.util.Map<String, Object>> clientCodes, Map<String, String> scopeByKey) {
+        List<String> usable = clientCodes.stream()
+                .filter(c -> carrier.equalsIgnoreCase(String.valueOf(c.get("carrier"))))
+                .filter(c -> !Boolean.FALSE.equals(c.get("enabled")))
+                .filter(c -> !"INTERNATIONAL".equals(scopeByKey.get(
+                        carrier + '|' + String.valueOf(c.get("serviceCode")).toUpperCase(Locale.ROOT))))
+                .map(c -> c.get("code") + " (" + c.get("serviceName") + ")")
+                .toList();
+        return "serviceType — " + serviceName + " (" + shipVia + ") is for shipments abroad and can't ship within the US. "
+                + (usable.isEmpty()
+                    ? "None of " + (client == null ? "this client" : client) + "'s ship via codes is domestic — "
+                        + "add one in Settings → Shipping Service Mapping"
+                    : "Use " + String.join(" or ", usable) + " instead");
+    }
+
     /** "serviceType — UPS Ground (U11) doesn't deliver to AK. Use U43 (UPS 2nd Day Air) instead". */
     static String laneMessage(OrderImportRowDTO row, String carrier, String service, String shipVia, String client,
                               String serviceName, List<java.util.Map<String, Object>> clientCodes) {
@@ -400,7 +417,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         java.util.regex.Matcher m = java.util.regex.Pattern
                 .compile("UPS confirmed the lane for (.+?)(?: \\((\\d+) business days? transit\\))?\\.?$")
                 .matcher(titMessage == null ? "" : titMessage.trim());
-        String name = m.matches() ? m.group(1) : "the service";
+        String name = m.matches() ? m.group(1).replaceAll("[®™]", "") : "the service";
         String days = m.matches() ? m.group(2) : null;
         String code = StringUtils.hasText(row.getShipViaCode()) ? " (" + row.getShipViaCode().trim() + ")" : "";
         return "UPS confirmed " + name + code
@@ -1424,13 +1441,14 @@ public class OrderImportServiceImpl implements OrderImportService {
         Map<String, java.util.Set<String>> servicesByCarrier = new LinkedHashMap<>();
         Map<String, java.util.Set<String>> offByCarrier = new LinkedHashMap<>();
         Map<String, String> serviceNameByKey = new java.util.HashMap<>();   // "UPS|03" → "UPS Ground"
+        Map<String, String> scopeByKey = new java.util.HashMap<>();         // "UPS|65" → "INTERNATIONAL"
         if (shippingServiceRepository != null) {
             for (com.multiship.backend.model.ShippingService s
                     : shippingServiceRepository.findAllByOrderByCarrierAscSortOrderAsc()) {
                 if (s.getCarrier() == null || s.getServiceCode() == null) continue;
-                if (s.getName() != null) {
-                    serviceNameByKey.put(s.getCarrier().toUpperCase(Locale.ROOT) + '|' + s.getServiceCode().toUpperCase(Locale.ROOT), s.getName());
-                }
+                String svcKey = s.getCarrier().toUpperCase(Locale.ROOT) + '|' + s.getServiceCode().toUpperCase(Locale.ROOT);
+                if (s.getName() != null) serviceNameByKey.put(svcKey, s.getName());
+                if (s.getScope() != null) scopeByKey.put(svcKey, s.getScope().trim().toUpperCase(Locale.ROOT));
                 (s.isEnabled() ? servicesByCarrier : offByCarrier)
                         .computeIfAbsent(s.getCarrier().toUpperCase(Locale.ROOT), k -> new java.util.HashSet<>())
                         .add(s.getServiceCode().toUpperCase(Locale.ROOT));
@@ -1607,7 +1625,16 @@ public class OrderImportServiceImpl implements OrderImportService {
             // here, after the mapping, so the upload screen and the saved batch agree, and
             // said in the client's own codes.
             String mappedCarrier = normalizeOrNull(row.getCarrierCode());
-            if (shipVia != null && service != null && mappedCarrier != null
+            String dest = normalizeOrNull(row.getCountryCode());
+            if (shipVia != null && service != null && mappedCarrier != null && "US".equals(dest)
+                    && "INTERNATIONAL".equals(scopeByKey.get(mappedCarrier + '|' + service))) {
+                // An international-only service to a US address: only UPS used to notice, at Validate all.
+                // ponytail: assumes a US warehouse, as the rest of the import does; origin-aware when needed.
+                List<java.util.Map<String, Object>> codes = shipViaCodesByClient.computeIfAbsent(
+                        client == null ? "" : client, this::shipViaCodesOrEmpty);
+                errors.add(intlOnlyMessage(mappedCarrier, shipVia, client,
+                        serviceNameByKey.getOrDefault(mappedCarrier + '|' + service, service), codes, scopeByKey));
+            } else if (shipVia != null && service != null && mappedCarrier != null
                     && com.multiship.backend.service.carriers.CarrierServiceLaneRules.checkLane(
                             mappedCarrier, service, row.getState(), row.getCountryCode()) != null) {
                 List<java.util.Map<String, Object>> codes = shipViaCodesByClient.computeIfAbsent(
@@ -2450,7 +2477,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                             .findFirstByFileNameIgnoreCaseAndDeletedAtIsNullOrderByIdDesc(normName).orElse(null);
                     if (byName != null) {
                         return failure(HttpStatus.CONFLICT,
-                                "A file named \"" + normName + "\" is already imported as #" + byName.getId()
+                                "A file named \"" + normName + "\" is already imported as import #" + byName.getId()
                                 + (byName.getCreatedAt() != null ? " on " + byName.getCreatedAt().toLocalDate() : "")
                                 + ". Delete it from Import history (or rename the file) before importing again.");
                     }
@@ -2461,7 +2488,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                             .findFirstByContentHashAndDeletedAtIsNullOrderByIdDesc(hash).orElse(null);
                     if (dup != null) {
                         return failure(HttpStatus.CONFLICT,
-                                "This file was already imported as #" + dup.getId()
+                                "This file was already imported as import #" + dup.getId()
                                 + " (" + (StringUtils.hasText(dup.getFileName()) ? dup.getFileName() : "Untitled") + ")"
                                 + ". Edit a value or upload a different file to import a changed version.");
                     }
@@ -3024,7 +3051,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                     .findFirstByFileNameIgnoreCaseAndDeletedAtIsNullOrderByIdDesc(normName).orElse(null);
             if (byName != null) {
                 return failure(HttpStatus.CONFLICT,
-                        "A file named \"" + normName + "\" is already imported as #" + byName.getId()
+                        "A file named \"" + normName + "\" is already imported as import #" + byName.getId()
                         + (byName.getCreatedAt() != null ? " on " + byName.getCreatedAt().toLocalDate() : "")
                         + ". Delete it from Import history (or rename the file) before importing again.");
             }
@@ -3034,7 +3061,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                 if (dup != null) {
                     String dupName = StringUtils.hasText(dup.getFileName()) ? dup.getFileName() : "Untitled";
                     return failure(HttpStatus.CONFLICT,
-                            "This file was already imported as #" + dup.getId() + " (" + dupName + ")"
+                            "This file was already imported as import #" + dup.getId() + " (" + dupName + ")"
                             + (dup.getCreatedAt() != null ? " on " + dup.getCreatedAt().toLocalDate() : "")
                             + ". Edit a value or upload a different file to import a changed version.");
                 }
@@ -3651,9 +3678,9 @@ public class OrderImportServiceImpl implements OrderImportService {
                                   List<OrderImportRowDTO> rowsToProcess, boolean platform, String previousStatus) {}
 
     /** Stored rows synced with live orders, and the subset still to send. */
-    private record GenerationRows(List<OrderImportRowDTO> rows, List<OrderImportRowDTO> rowsToProcess, boolean platform) {}
+    record GenerationRows(List<OrderImportRowDTO> rows, List<OrderImportRowDTO> rowsToProcess, boolean platform) {}
 
-    private GenerationRows toGenerationRows(com.multiship.backend.model.ImportBatch batch, Integer labelBatchId,
+    GenerationRows toGenerationRows(com.multiship.backend.model.ImportBatch batch, Integer labelBatchId,
                                             List<OrderImportRowDTO> rows, boolean usePlatformAccount) {
         // A row's status is frozen at generation time. If its order was since
         // repaired from the Orders grid (Edit → Fix & regenerate), it is live
@@ -3662,9 +3689,18 @@ public class OrderImportServiceImpl implements OrderImportService {
         // also what makes a re-queued job safe to run again after a crash.
         syncRowsWithLiveOrders(rows, labelBatchId);
         // Rows that already carry a label are never sent again — Generate as well
-        // as Retry.
+        // as Retry. Nor is an order any of whose rows holds an error: the stored
+        // errors are the last check (Validate all asks UPS too; the run itself does
+        // not), so re-checking here dropped UPS's "not offered to this address" and
+        // FT-07 went to UPS, got an order, and failed.
+        java.util.Set<String> broken = new java.util.HashSet<>();
+        for (OrderImportRowDTO r : rows) {
+            if (!"GENERATED".equalsIgnoreCase(r.getGeneratedStatus())
+                    && r.getErrors() != null && !r.getErrors().isEmpty()) broken.add(groupKeyOf(r));
+        }
         List<OrderImportRowDTO> rowsToProcess = rows.stream()
                 .filter(r -> !"GENERATED".equalsIgnoreCase(r.getGeneratedStatus()))
+                .filter(r -> !broken.contains(groupKeyOf(r)))
                 .toList();
         // A retry stays in the file's label batch: rows edited in the grid
         // may have lost their stamp, and the commit would mint a new batch
@@ -3723,12 +3759,12 @@ public class OrderImportServiceImpl implements OrderImportService {
         // Nothing the carrier can be asked for — every order is labelled already or
         // still needs fixes. Say so instead of starting an empty run.
         {
+            // rowsToProcess already leaves out orders with errors; count those from the unlabelled rows.
             int needFix = 0;
-            boolean anyEligible = false;
-            for (List<OrderImportRowDTO> g : stagingGroups(rowsToProcess).values()) {
-                boolean hasErrors = g.stream().anyMatch(r -> r.getErrors() != null && !r.getErrors().isEmpty());
-                if (hasErrors) needFix++;
-                else anyEligible = true;
+            boolean anyEligible = !rowsToProcess.isEmpty();
+            for (List<OrderImportRowDTO> g : stagingGroups(gen.rows().stream()
+                    .filter(r -> !"GENERATED".equalsIgnoreCase(r.getGeneratedStatus())).toList()).values()) {
+                if (g.stream().anyMatch(r -> r.getErrors() != null && !r.getErrors().isEmpty())) needFix++;
             }
             if (!anyEligible) {
                 throw new ImportBatchStateException(422, needFix > 0
@@ -6972,7 +7008,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                             .findFirstByFileNameIgnoreCaseAndDeletedAtIsNullOrderByIdDesc(normName).orElse(null);
                     if (byName != null) {
                         return stagingFailure(HttpStatus.CONFLICT,
-                                "A file named \"" + normName + "\" is already imported as #" + byName.getId()
+                                "A file named \"" + normName + "\" is already imported as import #" + byName.getId()
                                 + (byName.getCreatedAt() != null ? " on " + byName.getCreatedAt().toLocalDate() : "")
                                 + ". Delete it from Import history (or rename the file) before importing again.");
                     }
@@ -6982,7 +7018,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                             .findFirstByContentHashAndDeletedAtIsNullOrderByIdDesc(hash).orElse(null);
                     if (dup != null) {
                         return stagingFailure(HttpStatus.CONFLICT,
-                                "This file was already imported as #" + dup.getId()
+                                "This file was already imported as import #" + dup.getId()
                                 + " (" + (StringUtils.hasText(dup.getFileName()) ? dup.getFileName() : "Untitled") + ")"
                                 + ". Edit a value or upload a different file to import a changed version.");
                     }
@@ -7132,7 +7168,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                     if (w == null || !w.contains(IN_HISTORY_MARKER)) continue;
                     java.util.regex.Matcher m = importNo.matcher(w);
                     dups.putIfAbsent(StringUtils.hasText(r.getOrderRef()) ? r.getOrderRef().trim() : "row " + r.getRowNumber(),
-                            m.find() ? "#" + m.group(1) : "?");
+                            m.find() ? "import #" + m.group(1) : "?");
                 }
             }
             if (!dups.isEmpty()) {

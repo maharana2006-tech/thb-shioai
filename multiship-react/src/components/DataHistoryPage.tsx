@@ -1901,6 +1901,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
                 readOnly={generated || locked || (rowIsWms && c.key === 'orderRef')}
                 bad={(byField[c.key]?.length ?? 0) > 0}
                 errors={byField[c.key]}
+                field={c.key}
                 mono={c.mono}
                 onCommit={(v) => void commitCell(b.id, r, c, v)}
               />
@@ -2214,7 +2215,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
               <div className="min-w-0 flex-1">
                 <h1 className="flex min-w-0 items-baseline gap-2 text-[15px] font-semibold text-[#1f150c]">
                   <span className="truncate" title={b.fileName || undefined}>{b.fileName || 'Untitled import'}</span>
-                  <span className="shrink-0 rounded-md bg-[#f4eede] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[#412d15]">Batch #{b.id}</span>
+                  <span className="shrink-0 rounded-md bg-[#f4eede] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[#412d15]">Import #{b.id}</span>
                 </h1>
                 <p className="mt-0.5 truncate text-[11px] text-[#6b5c42]">
                   {src === 'WMS' || src === 'API' ? src : 'File import'}{b.deletedAt ? ' · In Trash' : ''}

@@ -173,7 +173,9 @@ export default function FixRowPanel({
                 {problems.map((p) => (
                   <li key={p.key + p.text}>
                     <button type="button" className="text-left hover:underline" onClick={() => document.getElementById(`fix-${row.rowNumber}-${p.key}`)?.focus()}>
-                      <b>{labelOf(p.key)}:</b> {p.text}
+                      {readableError(p.text).startsWith(labelOf(p.key))
+                        ? readableError(p.text)
+                        : <><b>{labelOf(p.key)}:</b> {readableError(p.text)}</>}
                     </button>
                   </li>
                 ))}

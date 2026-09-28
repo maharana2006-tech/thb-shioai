@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { fieldLabel, messageUnder, readableError, rowStatus, shipViaHint } from './batchGrid'
+import { fieldLabel, messageUnder, readableError, rowStatus, shipViaHint, shownValue } from './batchGrid'
 
 describe('rowStatus — the Orders-page pill for an import row', () => {
   it('maps every generation state', () => {
@@ -31,6 +31,13 @@ describe('messageUnder', () => {
     expect(messageUnder('serviceType', "serviceType — UPS Ground (U11) doesn't deliver to HI. Use U43 (UPS 2nd Day Air®) instead"))
       .toBe("UPS Ground (U11) doesn't deliver to HI. Use U43 (UPS 2nd Day Air) instead")
     expect(messageUnder('city', 'city is required')).toBe('City is required')
+  })
+})
+
+describe('shownValue', () => {
+  it('shows known codes in words and leaves the rest', () => {
+    expect(shownValue('YOUR_PACKAGING')).toBe('Your packaging')
+    expect(shownValue('02')).toBe('02')
   })
 })
 

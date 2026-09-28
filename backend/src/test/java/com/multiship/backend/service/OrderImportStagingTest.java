@@ -236,7 +236,7 @@ class OrderImportStagingTest {
 
         ApiResponse<StagingUploadDTO> blocked = service.saveStaging(s.getId(), "alice", false, false);
         assertEquals(409, blocked.getCode(), blocked.getMessage());
-        assertTrue(blocked.getMessage().contains("A-1 (#63)"), blocked.getMessage());
+        assertTrue(blocked.getMessage().contains("A-1 (import #63)"), blocked.getMessage());
         assertTrue(savedBatches.isEmpty(), "nothing is saved until the operator confirms");
 
         ApiResponse<StagingUploadDTO> anyway = service.saveStaging(s.getId(), "alice", false, true);

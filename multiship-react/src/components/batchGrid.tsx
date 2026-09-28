@@ -165,6 +165,12 @@ export function messageUnder(field: string, msg: string): string {
   return text.startsWith(lead) ? text.slice(lead.length) : text
 }
 
+/** A stored code shown to people ("YOUR_PACKAGING" → "Your packaging"); editing keeps the code. */
+const SHOWN_VALUES: Record<string, string> = { YOUR_PACKAGING: 'Your packaging' }
+export function shownValue(value: string): string {
+  return SHOWN_VALUES[value.trim().toUpperCase()] ?? value
+}
+
 /** The columns the grid shows by default — the same things the Orders page
  *  shows for an order (reference, customer, recipient, destination, carrier,
  *  service, account, weight). Everything else sits behind "All columns". */
@@ -173,7 +179,7 @@ export const DH_KEY_COLUMN_KEYS: ReadonlySet<string> = new Set([
   'carrierCode', 'serviceType', 'accountNumber', 'weight',
 ])
 export const DH_COLUMNS: DhColumn[] = [
-  { key: 'orderRef', label: 'Ref order #', mono: true, w: 'w-24' },
+  { key: 'orderRef', label: 'Order ref', mono: true, w: 'w-24' },
   { key: 'clientCode', label: 'Customer', mono: true, upper: true, w: 'w-24' },
   { key: 'billTo', mono: true, upper: true, w: 'w-24' },
   { key: 'warehouseCode', mono: true, upper: true, w: 'w-24' },
@@ -221,6 +227,7 @@ export function GridCell({
   mono = false,
   errors,
   readOnly = false,
+  field,
 }: {
   value: string
   onCommit: (v: string) => void
@@ -228,6 +235,8 @@ export function GridCell({
   mono?: boolean
   errors?: string[]
   readOnly?: boolean
+  /** The cell's field: its messages drop the field's own name ("Service — …"). */
+  field?: string
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(value)
@@ -262,7 +271,8 @@ export function GridCell({
       />
     )
   }
-  const tooltip = bad && errors && errors.length > 0 ? errors.map(readableError).join('\n') : value || undefined
+  const tooltip = bad && errors && errors.length > 0
+    ? errors.map((m) => (field ? messageUnder(field, m) : readableError(m))).join('\n') : value || undefined
   return (
     <button
       type="button"
@@ -274,7 +284,7 @@ export function GridCell({
           : 'cursor-text text-[#3f3527] hover:bg-[#efe7d4]'
       }`}
     >
-      {value || <span className="text-[#cdbf9f]">—</span>}
+      {shownValue(value) || <span className="text-[#cdbf9f]">—</span>}
     </button>
   )
 }

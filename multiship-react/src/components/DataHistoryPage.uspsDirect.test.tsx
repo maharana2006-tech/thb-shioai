@@ -648,7 +648,7 @@ describe('Bulk Mailer — layout', () => {
     getHistory.mockResolvedValue({ data: { ...batchSummary({ id: 121, fileName: 'acme_sept.csv', status: 'INITIATE' }), rows: [] } })
     await renderAt('/bulk/batches/121')
     const header = await screen.findByTestId('batch-page-header')
-    expect(header).toHaveTextContent('Batch #121')
+    expect(header).toHaveTextContent('Import #121')
     expect(header).toHaveTextContent('acme_sept.csv')
     expect(screen.getByRole('button', { name: /Bulk Mailer · Import history/i })).toBeInTheDocument()
     // The header and one page of rows — never the whole batch at once (a 50k-row batch was ~58 MB, twice).

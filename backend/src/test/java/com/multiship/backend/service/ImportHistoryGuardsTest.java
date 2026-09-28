@@ -119,6 +119,18 @@ class ImportHistoryGuardsTest {
     }
 
     @Test
+    void generateLeavesOutEveryOrderThatStillHasAnError_evenOneOnlyUpsFound() throws Exception {
+        OrderImportRowDTO ok = row(1, "FT-01");
+        // FT-07: passes every check of the app's own, but Validate all stored UPS's refusal.
+        OrderImportRowDTO upsRefused = row(2, "FT-07");
+        upsRefused.setErrors(new ArrayList<>(List.of("serviceType — UPS doesn't offer UPS Worldwide Saver (U65) to this address")));
+        OrderImportRowDTO sameOrder = row(3, "FT-07");   // a clean line of the refused order stays back too
+        ImportBatch b = batch(9, "DRAFT", List.of(ok, upsRefused, sameOrder));
+        var g = service.toGenerationRows(b, 214, new ArrayList<>(List.of(ok, upsRefused, sameOrder)), false);
+        assertEquals(List.of(1), g.rowsToProcess().stream().map(OrderImportRowDTO::getRowNumber).toList());
+    }
+
+    @Test
     void singleRowGenerateNamesTheFixesAnOrderNeeds() throws Exception {
         OrderImportRowDTO broken = row(1, "B");
         broken.setErrors(new ArrayList<>(List.of("postalCode is required")));

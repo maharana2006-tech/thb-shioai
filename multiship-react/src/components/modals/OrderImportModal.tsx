@@ -33,7 +33,7 @@ import VirtualTable from '../VirtualTable'
 // the parsed CSV contains enough USPS rows to blow past ~1h at the
 // 55/hr platform cap. Both surfaces close audit gap U2 + U4.
 import BulkLabelQueueBadge from '../orders/BulkLabelQueueBadge'
-import { labelOfField, messageUnder, readableError, shipViaHint } from '../batchGrid'
+import { labelOfField, messageUnder, readableError, shipViaHint, shownValue } from '../batchGrid'
 import { systemSettingsService } from '../../api/systemSettingsService'
 import { normalizeCarrierCode } from '../../utils/carrierUtils'
 
@@ -803,7 +803,7 @@ function UploadStep({
         <p className="mt-3 text-[13px] font-semibold text-[#1f150c]">
           Drag &amp; drop your file here, or <span className="text-[#412d15] underline underline-offset-2">browse</span>
         </p>
-        <p className="mt-1 text-[11px] text-[#6b5c42]">CSV or Excel (.csv, .xlsx, .xlsm) · one order per orderRef — extra item lines repeat the orderRef</p>
+        <p className="mt-1 text-[11px] text-[#6b5c42]">CSV or Excel (.csv, .xlsx, .xlsm) · one order per order ref — extra item lines repeat it (file column: orderRef)</p>
         <input
           type="file"
           accept=".csv,.xlsx,.xlsm,.txt"
@@ -939,6 +939,7 @@ function EditCell({
   errors,
   readOnly = false,
   hint,
+  field,
 }: {
   value: string
   onCommit: (v: string) => void
@@ -951,6 +952,8 @@ function EditCell({
   /** When present, shown as the cell's hover tooltip so the error text isn't
    *  printed inline — the cell just turns red and explains itself on hover. */
   errors?: string[]
+  /** The cell's field: its messages drop the field's own name ("Service — …"). */
+  field?: string
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(value)
@@ -981,7 +984,7 @@ function EditCell({
         title="Saved to Import history — edit it there"
         className={`block w-full cursor-default truncate rounded-[5px] px-1.5 py-0.5 text-left text-[11px] text-[#9a8a6c] ${mono ? 'font-mono' : ''}`}
       >
-        {value || <span className="text-[#cdbf9f]">—</span>}
+        {shownValue(value) || <span className="text-[#cdbf9f]">—</span>}
       </span>
     )
   }
@@ -1000,7 +1003,8 @@ function EditCell({
       />
     )
   }
-  const tooltip = bad && errors && errors.length > 0 ? errors.map(readableError).join('\n') : hint || value || undefined
+  const tooltip = bad && errors && errors.length > 0
+    ? errors.map((m) => (field ? messageUnder(field, m) : readableError(m))).join('\n') : hint || value || undefined
   return (
     <button
       type="button"
@@ -1012,7 +1016,7 @@ function EditCell({
           : 'text-[#3f3527] hover:bg-[#efe7d4]'
       }`}
     >
-      {value || <span className="text-[#cdbf9f]">—</span>}
+      {shownValue(value) || <span className="text-[#cdbf9f]">—</span>}
     </button>
   )
 }
@@ -1167,6 +1171,7 @@ function PreviewStep({
         bad={(errs?.length ?? 0) > 0}
         mono={col.mono}
         errors={errs}
+        field={col.key}
         hint={showShipVia ? (shipViaHint(r.shipViaNote) ?? undefined) : undefined}
         readOnly={savedSet.has(r.rowNumber)}
       />
@@ -1253,8 +1258,8 @@ function PreviewStep({
             <tr className="bg-[#faf7f0] text-[8.5px] uppercase tracking-[0.08em] text-[#6b5c42]">
               <th className="sticky left-0 z-20 border-b border-r border-[#e3d9c4] bg-[#faf7f0] px-2 py-1.5 text-left font-bold">Row</th>
               {PREVIEW_COLUMNS.map((c) => (
-                <th key={c.key} className="whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1.5 text-left font-bold">
-                  {c.key}
+                <th key={c.key} title={`File column: ${c.key}`} className="whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1.5 text-left font-bold">
+                  {labelOfField(c.key)}
                 </th>
               ))}
               {customCols.map((k) => (
