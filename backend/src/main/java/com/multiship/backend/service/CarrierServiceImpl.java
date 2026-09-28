@@ -2241,6 +2241,8 @@ public class CarrierServiceImpl implements CarrierService {
         // NPE can't fail the label.
         try {
             if (writebackDispatcher != null) {
+                com.multiship.backend.service.externalsystems.writeback.WritebackPayload.ShipTo shipTo =
+                        buildWritebackShipTo(req);
                 writebackDispatcher.dispatchOnGenerate(
                         com.multiship.backend.service.externalsystems.writeback.WritebackPayload.builder()
                                 .clientCode(req.getClientCode())
@@ -2254,6 +2256,12 @@ public class CarrierServiceImpl implements CarrierService {
                                 .serviceCode(service != null ? service.getServiceCode() : null)
                                 .freightAmount(markup.billable())
                                 .currency(markup.currency())
+                                .shipmentMode(Boolean.TRUE.equals(req.getIsReturn()) ? "RETURN" : "SHIPMENT")
+                                .note(req.getNote())
+                                .carrierDisplay(toNdsCarrier(carrier))
+                                .serviceDescription(service != null ? service.getName() : null)
+                                .thirdPartyAccount(req.getDutiesAccount())
+                                .shipTo(shipTo)
                                 .build());
             }
         } catch (RuntimeException wbFail) {
@@ -2262,6 +2270,32 @@ public class CarrierServiceImpl implements CarrierService {
         }
 
         return success("Label generated successfully.", response);
+    }
+
+    /** Human-readable carrier name for the NDS PRODUCTION.TB_MANUAL_SHIPMENT.CARRIER column
+     *  (NOT NULL). Mirrors the format NDS's own UI uses. */
+    private static String toNdsCarrier(String code) {
+        if (code == null) return "";
+        return switch (code.trim().toUpperCase()) {
+            case "FEDEX" -> "FedEx";
+            case "UPS" -> "UPS";
+            case "USPS", "USPS_DIRECT", "STAMPS_COM" -> "USPS";
+            case "DHL" -> "DHL";
+            default -> code.trim();
+        };
+    }
+
+    /** Flatten the manual request's recipient block into the WritebackPayload sub-record. */
+    private static com.multiship.backend.service.externalsystems.writeback.WritebackPayload.ShipTo
+            buildWritebackShipTo(com.multiship.backend.dto.ManualShipmentRequest req) {
+        var to = req == null ? null : req.getRecipient();
+        if (to == null) {
+            return com.multiship.backend.service.externalsystems.writeback.WritebackPayload.ShipTo.EMPTY;
+        }
+        return new com.multiship.backend.service.externalsystems.writeback.WritebackPayload.ShipTo(
+                to.getName(), to.getCompany(), to.getEmail(),
+                to.getAddressLine1(), to.getAddressLine2(),
+                to.getCity(), to.getState(), to.getCountryCode(), to.getPostalCode());
     }
 
     /** One shipment attempt against a resolved account; throws on carrier failure. */

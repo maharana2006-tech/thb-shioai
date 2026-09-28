@@ -15,34 +15,18 @@ import java.util.List;
  * to null before calling the connector — connectors never need to
  * consult the flags themselves.
  *
- * <p>Promoted out of {@code NdsShipmentWriteback} in V89 so all
- * external-system connectors share one shape. NDS-specific keys
- * (containerIds, clientCode, scannedValue) stay on the payload
- * because they're just row-lookup keys — connectors that don't
- * recognise them ignore them harmlessly.
- *
  * <p>V90 adds {@code source} + {@code channel} — routing keys used
  * by the dispatcher to decide whether the connection is even eligible
  * for this payload. They're stripped before {@code writeShipment} is
  * called (connectors don't need them).
  *
- * @param connectionName connection name for logging / audit
- * @param scannedValue   original {@code .X} / {@code .Y} value the shipper scanned
- *                       (null for orders that didn't originate from a WMS scan)
- * @param clientCode     tenant / client identifier (NDS FF_SCHEMA, REST tenant)
- * @param batchId        external batch id (WMS batch), null for direct
- * @param orderNo        multiship order number (always present)
- * @param source         V90 dispatch gate — MANUAL / BULK / API / null (auto path).
- *                       Gate off = skip; null = ungated
- * @param channel        V90 dispatch gate — D2C / B2B / null. Gate off = skip; null = ungated
- * @param trackingNumber carrier tracking, null when writeback_tracking flag is off
- * @param shipDate       label-generated timestamp, null when writeback_ship_date is off
- * @param status         "SHIPPED" on generate, null when writeback_status is off
- * @param carrierCode    UPS / FEDEX / …, null when writeback_carrier is off
- * @param serviceCode    carrier-side service code (FEDEX_GROUND), null when off
- * @param freightAmount  final freight, null when writeback_freight is off
- * @param currency       ISO-4217 for freightAmount, null when off
- * @param packages       one entry per FE package row; empty for single-piece
+ * <p>2026-09-28 adds the NDS TB_MANUAL_SHIPMENT INSERT payload:
+ * {@code shipmentMode} (SHIPMENT / RETURN), {@code note} (internal
+ * operator note; 255-char PRODUCTION.TB_MANUAL_SHIPMENT.NOTE column),
+ * {@code carrierDisplay} + {@code serviceDescription} (human-readable
+ * values NDS's UI shows), and a {@link ShipTo} sub-record with the
+ * recipient block. All optional — connectors that don't INSERT into
+ * TB_MANUAL_SHIPMENT ignore them.
  */
 public record WritebackPayload(
         String connectionName,
@@ -59,9 +43,24 @@ public record WritebackPayload(
         String serviceCode,
         BigDecimal freightAmount,
         String currency,
-        List<WritebackPackagePayload> packages
+        List<WritebackPackagePayload> packages,
+        /** NDS TB_MANUAL_SHIPMENT extras — populated by CarrierServiceImpl.generateManualLabel. */
+        String shipmentMode,       // "SHIPMENT" | "RETURN"
+        String note,               // Internal note; 255-char cap enforced downstream
+        String carrierDisplay,     // "FedEx" | "UPS" | "USPS" | "DHL"
+        String serviceDescription, // "UPS Ground" — SHIP_SERVICE column value
+        String thirdPartyAccount,
+        ShipTo shipTo
 ) {
     public static Builder builder() { return new Builder(); }
+
+    /** Recipient block for the NDS TB_MANUAL_SHIPMENT INSERT. */
+    public record ShipTo(
+            String attn, String company, String email,
+            String addr1, String addr2, String city, String state, String country, String postal
+    ) {
+        public static final ShipTo EMPTY = new ShipTo(null, null, null, null, null, null, null, null, null);
+    }
 
     /** Copy-with helper for the dispatcher's field-redaction step. */
     public WritebackPayload withRedacted(
@@ -77,7 +76,11 @@ public record WritebackPayload(
                 keepService ? serviceCode : null,
                 keepFreight ? freightAmount : null,
                 keepFreight ? currency : null,
-                packages);
+                packages,
+                shipmentMode, note,
+                keepCarrier ? carrierDisplay : null,
+                keepService ? serviceDescription : null,
+                thirdPartyAccount, shipTo);
     }
 
     public static final class Builder {
@@ -88,6 +91,8 @@ public record WritebackPayload(
         private LocalDateTime shipDate;
         private BigDecimal freightAmount;
         private List<WritebackPackagePayload> packages = List.of();
+        private String shipmentMode, note, carrierDisplay, serviceDescription, thirdPartyAccount;
+        private ShipTo shipTo = ShipTo.EMPTY;
 
         public Builder connectionName(String v) { this.connectionName = v; return this; }
         public Builder scannedValue(String v) { this.scannedValue = v; return this; }
@@ -106,11 +111,18 @@ public record WritebackPayload(
         public Builder packages(List<WritebackPackagePayload> v) {
             this.packages = v == null ? List.of() : v; return this;
         }
+        public Builder shipmentMode(String v) { this.shipmentMode = v; return this; }
+        public Builder note(String v) { this.note = v; return this; }
+        public Builder carrierDisplay(String v) { this.carrierDisplay = v; return this; }
+        public Builder serviceDescription(String v) { this.serviceDescription = v; return this; }
+        public Builder thirdPartyAccount(String v) { this.thirdPartyAccount = v; return this; }
+        public Builder shipTo(ShipTo v) { this.shipTo = v == null ? ShipTo.EMPTY : v; return this; }
 
         public WritebackPayload build() {
             return new WritebackPayload(connectionName, scannedValue, clientCode, batchId,
                     orderNo, source, channel, trackingNumber, shipDate, status, carrierCode, serviceCode,
-                    freightAmount, currency, packages);
+                    freightAmount, currency, packages,
+                    shipmentMode, note, carrierDisplay, serviceDescription, thirdPartyAccount, shipTo);
         }
     }
 }
