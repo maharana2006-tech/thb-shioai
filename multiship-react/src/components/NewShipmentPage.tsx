@@ -2619,6 +2619,21 @@ export default function NewShipmentPage() {
         return
       }
       notify.success(res.message || 'Shipment label generated.')
+      // (a) Auto-advance to the next queued NDS shipment. When the operator
+      // scanned multiple orders, drop the just-saved chip from the queue and
+      // load the next one in-place instead of navigating away. Empty queue
+      // → normal navigate.
+      if (ndsQueue.length > 1 && ndsActiveIdx >= 0) {
+        const rest = ndsQueue.filter((_, i) => i !== ndsActiveIdx)
+        const nextIdx = Math.min(ndsActiveIdx, rest.length - 1)
+        setNdsQueue(rest)
+        setNdsActiveIdx(nextIdx)
+        applyNdsPrefill(rest[nextIdx])
+        notify.info(rest.length === 1
+          ? 'Loaded the last queued shipment.'
+          : `${rest.length} queued shipments remaining — loaded the next one.`)
+        return
+      }
       navigate(orderNo ? `/label/${orderNo}` : '/orders')
     } catch (e) {
       // Commodity auto-split — 422 SPLIT_REQUIRED. Open the modal with
@@ -3019,36 +3034,54 @@ export default function NewShipmentPage() {
                     aria-busy={ndsLoading}
                   />
                   {ndsQueue.length > 1 ? (
-                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5" aria-label="Queued shipments">
-                      <span className="text-[11px] font-bold uppercase tracking-[0.1em] text-slate-500">Queued</span>
-                      {ndsQueue.map((p, i) => {
-                        const label = p.orders?.[0]?.orderNo != null
-                          ? `Order ${p.orders[0].orderNo}` : p.scannedValue
-                        const sub = p.recipient?.name ?? p.recipient?.attn ?? p.clientCode
-                        const active = i === ndsActiveIdx
-                        return (
-                          <span key={`${p.scannedValue}:${i}`}
-                                className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11.5px] ring-1 ${
-                                  active
-                                    ? 'bg-[#1f150c] text-[#f4eede] ring-[#1f150c]'
-                                    : 'bg-white text-slate-700 ring-slate-300 hover:bg-slate-50 cursor-pointer'
-                                }`}
-                                onClick={active ? undefined : () => activateQueued(i)}
-                                title={active ? 'Currently loaded' : `Click to swap in ${label}${sub ? ` (${sub})` : ''}`}>
-                            <span className="font-semibold">{label}</span>
-                            {sub ? <span className={active ? 'opacity-70' : 'text-slate-500'}>· {sub}</span> : null}
-                            <button
-                              type="button"
-                              className={`ml-0.5 rounded-full px-1 leading-none ${
-                                active ? 'hover:bg-[#412d15]' : 'hover:bg-slate-200'
-                              }`}
-                              onClick={(e) => { e.stopPropagation(); removeQueued(i) }}
-                              aria-label={`Remove ${label} from queue`}
-                              title="Remove from queue"
-                            >×</button>
-                          </span>
-                        )
-                      })}
+                    <div className="mt-1.5" aria-label="Queued shipments">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[11px] font-bold uppercase tracking-[0.1em] text-slate-500 whitespace-nowrap">
+                          Queued · {ndsQueue.length}
+                        </span>
+                        {/* (b) horizontal scroll handles arbitrarily long queues
+                            without a portal / drawer — scanner ops can whip
+                            through 50+ chips with the trackpad. */}
+                        <div className="flex-1 min-w-0 overflow-x-auto">
+                          <div className="flex items-center gap-1.5 pb-0.5">
+                            {ndsQueue.map((p, i) => {
+                              const label = p.orders?.[0]?.orderNo != null
+                                ? `Order ${p.orders[0].orderNo}` : p.scannedValue
+                              const sub = p.recipient?.name ?? p.recipient?.attn ?? p.clientCode
+                              const active = i === ndsActiveIdx
+                              // (c) per-chip tint by status — WARNING amber, BLOCKED rose,
+                              // OK slate. Active chip stays dark to signal "loaded".
+                              const inactiveTint =
+                                p.status === 'BLOCKED' ? 'bg-white text-rose-700 ring-rose-300 hover:bg-rose-50'
+                                : p.status === 'WARNING' ? 'bg-white text-amber-700 ring-amber-300 hover:bg-amber-50'
+                                : 'bg-white text-slate-700 ring-slate-300 hover:bg-slate-50'
+                              return (
+                                <span key={`${p.scannedValue}:${i}`}
+                                      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11.5px] ring-1 whitespace-nowrap ${
+                                        active
+                                          ? 'bg-[#1f150c] text-[#f4eede] ring-[#1f150c]'
+                                          : `${inactiveTint} cursor-pointer`
+                                      }`}
+                                      onClick={active ? undefined : () => activateQueued(i)}
+                                      title={active ? 'Currently loaded'
+                                        : `Click to swap in ${label}${sub ? ` (${sub})` : ''}${p.status !== 'OK' ? ` — ${p.status}` : ''}`}>
+                                  <span className="font-semibold">{label}</span>
+                                  {sub ? <span className={active ? 'opacity-70' : 'opacity-80'}>· {sub}</span> : null}
+                                  <button
+                                    type="button"
+                                    className={`ml-0.5 rounded-full px-1 leading-none ${
+                                      active ? 'hover:bg-[#412d15]' : 'hover:bg-black/10'
+                                    }`}
+                                    onClick={(e) => { e.stopPropagation(); removeQueued(i) }}
+                                    aria-label={`Remove ${label} from queue`}
+                                    title="Remove from queue"
+                                  >×</button>
+                                </span>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   ) : null}
                 </Field>
