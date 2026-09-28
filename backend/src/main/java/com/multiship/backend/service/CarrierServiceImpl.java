@@ -775,6 +775,11 @@ public class CarrierServiceImpl implements CarrierService {
         // dispatch as the manual path.
         try {
             if (writebackDispatcher != null) {
+                // V96 — carry Order.ndsResolvedShipviaCd through so the
+                // writer emits OEHEAD.SHIPVIA_CD updates on the auto/queue
+                // path too. Pre-V96 orders have this column null; those
+                // won't produce an OEHEAD write on the next regenerate,
+                // which is fine (ops backfill via SQL if needed).
                 writebackDispatcher.dispatchOnGenerate(
                         com.multiship.backend.service.externalsystems.writeback.WritebackPayload.builder()
                                 .clientCode(order.getCustNo())
@@ -787,6 +792,7 @@ public class CarrierServiceImpl implements CarrierService {
                                 .carrierCode(used.carrierCode())
                                 .serviceCode(order.getShipviaCd())
                                 .freightAmount(shipmentResult.shippingCost())
+                                .stdReplacementErpCode(order.getNdsResolvedShipviaCd())
                                 .build());
             }
         } catch (RuntimeException wbFail) {
