@@ -154,11 +154,12 @@ public class DtcService {
             r.setCountryCode(trimOrNull(rs.getString("SHIPTO_COUNTRY_CD")));
             r.setShipViaCode(trimOrNull(rs.getString("SHIPVIA_CD")));
             r.setReference(trimOrNull(rs.getString("CUST_PO")));
+            // G8 — DTC + BackOrder Quick Ship treat a zero (or missing) weight as
+            // 1 lb per ShipX_NDS_Orders_and_Tracking.docx §10. Carriers reject
+            // zero-weight shipments outright.
             BigDecimal w = rs.getBigDecimal("WEIGHT");
-            if (w != null && w.signum() > 0) {
-                r.setWeight(w);
-                r.setWeightUnit("LB");
-            }
+            r.setWeight(w != null && w.signum() > 0 ? w : BigDecimal.ONE);
+            r.setWeightUnit("LB");
             r.setItemDescription(trimOrNull(rs.getString("GOODS_DESC")));
             r.setItemUnitValue(rs.getBigDecimal("UNIT_VALUE"));
             out.add(r);

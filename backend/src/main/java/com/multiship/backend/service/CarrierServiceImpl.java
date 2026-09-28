@@ -987,6 +987,22 @@ public class CarrierServiceImpl implements CarrierService {
         com.multiship.backend.dto.ManualShipmentRequest.Address to = req.getRecipient();
         com.multiship.backend.dto.ManualShipmentRequest.Address from = req.getSender();
 
+        // G9 — Return Ship is US-only, FedEx + UPS only (no USPS or DHL) per
+        // ShipX_NDS_Orders_and_Tracking.docx §7. Enforce before we hit the
+        // carrier so the operator sees a clean 422 with the fix path.
+        if (Boolean.TRUE.equals(req.getIsReturn())) {
+            String returnCarrier = req.getCarrierCode() == null ? "" : req.getCarrierCode().trim().toUpperCase();
+            String toCountry = to.getCountryCode() == null ? "" : to.getCountryCode().trim().toUpperCase();
+            String fromCountry = from == null || from.getCountryCode() == null ? "" : from.getCountryCode().trim().toUpperCase();
+            if (!returnCarrier.equals("FEDEX") && !returnCarrier.equals("UPS")) {
+                return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
+                        "Return labels are only supported on FedEx and UPS.");
+            }
+            if (!"US".equals(toCountry) || !"US".equals(fromCountry)) {
+                return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
+                        "Return labels are only supported for US-to-US shipments.");
+            }
+        }
         if (!StringUtils.hasText(to.getName()) || !StringUtils.hasText(to.getAddressLine1())
                 || !StringUtils.hasText(to.getCity()) || !StringUtils.hasText(to.getPostalCode())
                 || !StringUtils.hasText(to.getCountryCode())) {

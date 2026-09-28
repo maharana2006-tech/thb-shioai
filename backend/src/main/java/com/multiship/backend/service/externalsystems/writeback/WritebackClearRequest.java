@@ -71,4 +71,17 @@ public record WritebackClearRequest(
                 true, true, true, true, true, true,
                 source, channel);
     }
+
+    /** G4 — DTC-scope clear needs orderNos threaded through; overload for that. */
+    public static WritebackClearRequest ofDtc(String connectionName, String trackingNumber,
+                                               Integer orderNo, String clientCode,
+                                               java.util.List<Integer> orderNos) {
+        return new WritebackClearRequest(connectionName, trackingNumber, orderNo,
+                clientCode,
+                java.util.List.of(),
+                orderNos == null ? java.util.List.of() : orderNos,
+                Map.of(),
+                true, true, true, true, true, true,
+                "DTC", null);
+    }
 }
