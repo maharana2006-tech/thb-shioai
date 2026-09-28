@@ -88,3 +88,6 @@ backend/backend-dev.log
 multiship_db_*.sql
 *.pg_dump
 *_pgdump.sql
+
+# Office lock/temp files
+~$*
