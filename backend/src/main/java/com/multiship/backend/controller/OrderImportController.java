@@ -556,7 +556,8 @@ public class OrderImportController {
         }
         return ResponseEntity.ok(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
                 .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
-                .message("All rows validated successfully.")
+                .message("Checked " + dto.getTotalRows() + " row" + (dto.getTotalRows() == 1 ? "" : "s") + " · "
+                        + (dto.getInvalidRows() > 0 ? dto.getInvalidRows() + " need" + (dto.getInvalidRows() == 1 ? "s" : "") + " fixes" : "all valid"))
                 .data(withRows(dto)).build());
     }
 

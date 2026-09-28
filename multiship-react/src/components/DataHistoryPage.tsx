@@ -31,7 +31,7 @@ import { wmsService } from '../api/wmsService'
 import { bulkService, type BulkSummary, type BulkView } from '../api/bulkService'
 import { AddShipViaMappingDialog, ShipViaCodesPanel } from './modals/ShipViaCodes'
 import DataHistoryFilterToolbar, { BulkFilterChips, statusMeta } from './DataHistoryFilterToolbar'
-import { GridCell, DH_COLUMNS, fieldLabel, RowIssuesIcon, RowChannelChip, bucketRowErrors, rowStatus, type DhColumn } from './batchGrid'
+import { GridCell, DH_COLUMNS, fieldLabel, RowIssuesIcon, RowChannelChip, bucketRowErrors, rowStatus, shipViaHint, type DhColumn } from './batchGrid'
 import AnimatedHeight from './ui/AnimatedHeight'
 import BatchLabelBar from './bulk/BatchLabelBar'
 import LabelPreviewModal from './bulk/LabelPreviewModal'
@@ -1811,7 +1811,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
           const sub = [r.state, r.postalCode].filter(Boolean).join(' · ')
           return (
             <span className="flex min-w-0 flex-col gap-0.5" title={[r.recipientName, r.addressLine1, r.city, r.state, r.postalCode, r.countryCode].filter(Boolean).join(' ') || 'No destination on file'}>
-              <span className="truncate text-[13.5px] text-[#3f3527]">{r.city || r.countryCode || '—'}</span>
+              <span className="truncate text-[13.5px] text-[#3f3527]">{r.city || '—'}</span>
               {sub ? <span className="truncate text-[11.5px] tabular-nums text-[#6b5c42]">{sub}</span> : null}
             </span>
           )
@@ -1826,7 +1826,9 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
           const st = rowStatus(r, orderReadyOf(r))
           const failed = (r.generatedStatus ?? '').toUpperCase() === 'FAILED'
           const { byField, rowLevel } = bucketRowErrors(r.errors ?? [])
-          const warnings = r.warnings ?? []
+          // "UPS confirmed: …" is not a problem: it shows under the status, not in the ⓘ.
+          const confirmed = (r.warnings ?? []).find((w) => w.startsWith(UPS_CONFIRMED))
+          const warnings = (r.warnings ?? []).filter((w) => !w.startsWith(UPS_CONFIRMED))
           const explain = (r.errors?.length ?? 0) > 0 || (failed && !!r.generatedMessage) || warnings.length > 0
           const o = r.generatedOrderNo != null ? batchOrders[r.generatedOrderNo] : undefined
           const when = o?.orderDetails.createdDate ?? null
@@ -1842,6 +1844,10 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
                 <span className="truncate text-[11.5px] text-[#6b5c42]" title={when}>{new Date(when).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
               ) : failed && r.generatedMessage ? (
                 <span className="truncate text-[11.5px] text-rose-700" title={r.generatedMessage}>{r.generatedMessage}</span>
+              ) : confirmed ? (
+                <span className="truncate text-[11px] font-semibold text-emerald-700" title={confirmed}>
+                  ✓ UPS: {confirmed.split(' · ')[1] ?? 'route confirmed'}
+                </span>
               ) : null}
             </span>
           )
@@ -1889,7 +1895,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
           const showShipVia = c.key === 'serviceType' && !!r.shipViaCode
           const unmapped = c.key === 'serviceType' ? (byField.serviceType ?? []).map((m) => m.match(UNMAPPED_SHIP_VIA)).find(Boolean) : null
           return (
-            <div title={showShipVia ? (r.shipViaNote ?? undefined) : undefined}>
+            <div title={showShipVia ? (shipViaHint(r.shipViaNote) ?? undefined) : undefined}>
               <GridCell
                 value={showShipVia ? String(r.shipViaCode) : raw == null ? '' : String(raw)}
                 readOnly={generated || locked || (rowIsWms && c.key === 'orderRef')}
@@ -1907,7 +1913,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
             </div>
           )
         },
-        meta: { headerLabel: c.label ?? c.key, exportValue: (r: OrderImportRow) => String((r as unknown as Record<string, unknown>)[c.key] ?? '') },
+        meta: { headerLabel: fieldLabel(c), exportValue: (r: OrderImportRow) => String((r as unknown as Record<string, unknown>)[c.key] ?? '') },
       })),
       {
         id: 'actions', header: () => <span className="block text-right">Actions</span>, size: 300, enableSorting: false,
@@ -2571,6 +2577,9 @@ const BULK_TABS: { key: BulkTab; label: string }[] = [
 /** Import history's sortable columns ↔ the server's sort keys (the Filters menu's Sort). */
 const COLUMN_SORT: Record<string, HistorySortKey> = { labelBatch: 'labelBatch', file: 'fileName', created: 'created', status: 'status', rows: 'savedRows' }
 const SORT_COLUMN = Object.fromEntries(Object.entries(COLUMN_SORT).map(([col, key]) => [key, col])) as Record<HistorySortKey, string>
+
+/** Prefix of the note a row gets when UPS confirms its route (OrderImportServiceImpl.UPS_CONFIRMED). */
+const UPS_CONFIRMED = 'UPS confirmed: '
 
 /** A row's serviceType error for a ship via code with no carrier service mapped. */
 const UNMAPPED_SHIP_VIA = /serviceType '([^']+)' is (?:not mapped|mapped, but not)/

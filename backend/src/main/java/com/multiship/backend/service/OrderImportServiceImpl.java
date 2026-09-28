@@ -367,8 +367,47 @@ public class OrderImportServiceImpl implements OrderImportService {
                 List<java.util.Map<String, Object>> codes = shipViaCodesByClient.computeIfAbsent(
                         clientCode.trim().toUpperCase(Locale.ROOT), this::shipViaCodesOrEmpty);
                 addError(row, upsLaneMessage(row, result, codes));
+            } else if (result != null) {
+                // Say that UPS was asked and what it said — a silent pass looked like no check at all.
+                addWarning(row, upsConfirmedNote(row, result.message()));
             }
         }
+    }
+
+    /** "serviceType — UPS Ground (U11) doesn't deliver to AK. Use U43 (UPS 2nd Day Air) instead". */
+    static String laneMessage(OrderImportRowDTO row, String carrier, String service, String shipVia, String client,
+                              String serviceName, List<java.util.Map<String, Object>> clientCodes) {
+        String country = normalizeOrNull(row.getCountryCode());
+        String where = "US".equals(country) && StringUtils.hasText(row.getState())
+                ? row.getState().trim().toUpperCase(Locale.ROOT) : country;
+        List<String> usable = clientCodes.stream()
+                .filter(c -> carrier.equalsIgnoreCase(String.valueOf(c.get("carrier"))))
+                .filter(c -> !Boolean.FALSE.equals(c.get("enabled")))
+                .filter(c -> !shipVia.equalsIgnoreCase(String.valueOf(c.get("code"))))
+                .filter(c -> com.multiship.backend.service.carriers.CarrierServiceLaneRules.checkLane(
+                        carrier, String.valueOf(c.get("serviceCode")), row.getState(), row.getCountryCode()) == null)
+                .map(c -> c.get("code") + " (" + c.get("serviceName") + ")")
+                .toList();
+        return "serviceType — " + serviceName + " (" + shipVia + ") doesn't deliver to " + where + ". "
+                + (usable.isEmpty()
+                    ? "None of " + (client == null ? "this client" : client) + "'s ship via codes does — "
+                        + "add one in Settings → Shipping Service Mapping"
+                    : "Use " + String.join(" or ", usable) + " instead");
+    }
+
+    /** Prefix of the note a row gets when UPS confirms its route; the grid shows it under the status. */
+    static final String UPS_CONFIRMED = "UPS confirmed: ";
+
+    /** "UPS confirmed: UPS Ground (U11) · 3 business days" from TiT's "UPS confirmed the lane for UPS Ground (3 business days transit)." */
+    static String upsConfirmedNote(OrderImportRowDTO row, String titMessage) {
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("UPS confirmed the lane for (.+?)(?: \\((\\d+) business days? transit\\))?\\.?$")
+                .matcher(titMessage == null ? "" : titMessage.trim());
+        String name = m.matches() ? m.group(1) : "the service";
+        String days = m.matches() ? m.group(2) : null;
+        String code = StringUtils.hasText(row.getShipViaCode()) ? " (" + row.getShipViaCode().trim() + ")" : "";
+        return UPS_CONFIRMED + name + code
+                + (days == null ? "" : " · " + days + " business day" + ("1".equals(days) ? "" : "s"));
     }
 
     private List<java.util.Map<String, Object>> shipViaCodesOrEmpty(String client) {
@@ -1386,10 +1425,14 @@ public class OrderImportServiceImpl implements OrderImportService {
         // already skip such services) and was bought anyway at label time.
         Map<String, java.util.Set<String>> servicesByCarrier = new LinkedHashMap<>();
         Map<String, java.util.Set<String>> offByCarrier = new LinkedHashMap<>();
+        Map<String, String> serviceNameByKey = new java.util.HashMap<>();   // "UPS|03" → "UPS Ground"
         if (shippingServiceRepository != null) {
             for (com.multiship.backend.model.ShippingService s
                     : shippingServiceRepository.findAllByOrderByCarrierAscSortOrderAsc()) {
                 if (s.getCarrier() == null || s.getServiceCode() == null) continue;
+                if (s.getName() != null) {
+                    serviceNameByKey.put(s.getCarrier().toUpperCase(Locale.ROOT) + '|' + s.getServiceCode().toUpperCase(Locale.ROOT), s.getName());
+                }
                 (s.isEnabled() ? servicesByCarrier : offByCarrier)
                         .computeIfAbsent(s.getCarrier().toUpperCase(Locale.ROOT), k -> new java.util.HashSet<>())
                         .add(s.getServiceCode().toUpperCase(Locale.ROOT));
@@ -1409,6 +1452,7 @@ public class OrderImportServiceImpl implements OrderImportService {
 
         // The account a blank accountNumber resolves to, once per client and carrier (it was per row).
         Map<String, BulkAccountPick> accountPicks = new java.util.HashMap<>();
+        Map<String, List<java.util.Map<String, Object>>> shipViaCodesByClient = new java.util.HashMap<>();
         // ---- per-row checks against the snapshot ----
         for (OrderImportRowDTO row : rows) {
             List<String> errors = new ArrayList<>(row.getErrors() == null ? List.of() : row.getErrors());
@@ -1560,6 +1604,18 @@ public class OrderImportServiceImpl implements OrderImportService {
             }
             if (row.getShipViaNote() != null && row.getShipViaNote().contains("the mapping wins")) {
                 warnings.add(row.getShipViaNote());
+            }
+            // The service must reach the destination (UPS Ground and Alaska, …). Checked
+            // here, after the mapping, so the upload screen and the saved batch agree, and
+            // said in the client's own codes.
+            String mappedCarrier = normalizeOrNull(row.getCarrierCode());
+            if (shipVia != null && service != null && mappedCarrier != null
+                    && com.multiship.backend.service.carriers.CarrierServiceLaneRules.checkLane(
+                            mappedCarrier, service, row.getState(), row.getCountryCode()) != null) {
+                List<java.util.Map<String, Object>> codes = shipViaCodesByClient.computeIfAbsent(
+                        client == null ? "" : client, this::shipViaCodesOrEmpty);
+                errors.add(laneMessage(row, mappedCarrier, service, shipVia, client,
+                        serviceNameByKey.getOrDefault(mappedCarrier + '|' + service, service), codes));
             }
 
             String pkg = normalizeOrNull(row.getPackageType());
@@ -5914,10 +5970,12 @@ public class OrderImportServiceImpl implements OrderImportService {
         // CarrierServiceLaneRules; ignored on non-US lanes and on
         // service/carrier combos we don't have a rule for (falls through
         // to the reactive carrier response, same as pre-fix behaviour).
-        String laneErr = com.multiship.backend.service.carriers.CarrierServiceLaneRules
-                .checkLane(row.getCarrierCode(), row.getServiceType(),
-                        row.getState(), row.getCountryCode());
-        if (laneErr != null) errors.add("serviceType: " + laneErr);
+        // A row a ship via rule resolved is checked after the mapping instead
+        // (validateReferences), in the client's own codes.
+        String laneErr = StringUtils.hasText(row.getShipViaCode()) ? null
+                : com.multiship.backend.service.carriers.CarrierServiceLaneRules
+                        .checkLane(row.getCarrierCode(), row.getServiceType(), row.getState(), row.getCountryCode());
+        if (laneErr != null) errors.add("serviceType — " + laneErr);
 
         // Batch #6 post-mortem (2026-09-12) — US exports to strategic-
         // country destinations (CN + others) require an EEI filing

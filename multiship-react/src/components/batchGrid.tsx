@@ -152,6 +152,12 @@ export function readableError(msg: string): string {
     (EDIT_FIELD_KEYS as readonly string[]).includes(w) && (at === 0 || /[A-Z0-9]/.test(w)) ? labelOfField(w) : w)
 }
 
+/** "U11 maps to UPS Ground (UPS 03)" → "U11 = UPS Ground": the carrier's own code means nothing to people. */
+export function shipViaHint(note: string | null | undefined): string | null {
+  if (!note) return null
+  return note.replace(/ maps to /, ' = ').replace(/ \((UPS|FEDEX|USPS|DHL) [^)]*\)/i, '')
+}
+
 /** The columns the grid shows by default — the same things the Orders page
  *  shows for an order (reference, customer, recipient, destination, carrier,
  *  service, account, weight). Everything else sits behind "All columns". */

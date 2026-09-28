@@ -62,6 +62,28 @@ class OrderImportAddressChecksTest {
     }
 
     @Test
+    void aServiceThatCannotReachTheStateNamesTheClientsOwnCodes() {
+        OrderImportRowDTO row = usRow("AK", "99501");
+        List<Map<String, Object>> codes = List.of(
+                Map.of("code", "U11", "carrier", "UPS", "serviceCode", "03", "serviceName", "UPS Ground", "enabled", true),
+                Map.of("code", "U43", "carrier", "UPS", "serviceCode", "02", "serviceName", "UPS 2nd Day Air", "enabled", true));
+        assertEquals("serviceType — UPS Ground (U11) doesn't deliver to AK. Use U43 (UPS 2nd Day Air) instead",
+                OrderImportServiceImpl.laneMessage(row, "UPS", "03", "U11", "DES875", "UPS Ground", codes));
+        assertTrue(OrderImportServiceImpl.laneMessage(row, "UPS", "03", "U11", "DES875", "UPS Ground", codes.subList(0, 1))
+                .endsWith("None of DES875's ship via codes does — add one in Settings → Shipping Service Mapping"));
+    }
+
+    @Test
+    void aConfirmedRouteSaysWhatUpsSaid() {
+        OrderImportRowDTO row = usRow("IL", "60606");
+        row.setShipViaCode("U11");
+        assertEquals("UPS confirmed: UPS Ground (U11) · 3 business days",
+                OrderImportServiceImpl.upsConfirmedNote(row, "UPS confirmed the lane for UPS Ground (3 business days transit)."));
+        assertEquals("UPS confirmed: UPS Ground (U11)",
+                OrderImportServiceImpl.upsConfirmedNote(row, "UPS confirmed the lane for UPS Ground."));
+    }
+
+    @Test
     void upsAnswersBecomePlainSentencesOnTheirField() {
         var currency = new ValidateShipmentResult(false, "ERROR", "SHIPMENT", List.of(), List.of(),
                 "UPS Time-in-Transit: invalid ShipmentContentsCurrencyCode", null);

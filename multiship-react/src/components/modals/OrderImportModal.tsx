@@ -33,7 +33,7 @@ import VirtualTable from '../VirtualTable'
 // the parsed CSV contains enough USPS rows to blow past ~1h at the
 // 55/hr platform cap. Both surfaces close audit gap U2 + U4.
 import BulkLabelQueueBadge from '../orders/BulkLabelQueueBadge'
-import { readableError } from '../batchGrid'
+import { readableError, shipViaHint } from '../batchGrid'
 import { systemSettingsService } from '../../api/systemSettingsService'
 import { normalizeCarrierCode } from '../../utils/carrierUtils'
 
@@ -1167,7 +1167,7 @@ function PreviewStep({
         bad={(errs?.length ?? 0) > 0}
         mono={col.mono}
         errors={errs}
-        hint={showShipVia ? r.shipViaNote : undefined}
+        hint={showShipVia ? (shipViaHint(r.shipViaNote) ?? undefined) : undefined}
         readOnly={savedSet.has(r.rowNumber)}
       />
     )

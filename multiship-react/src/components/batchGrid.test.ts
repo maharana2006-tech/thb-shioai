@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { fieldLabel, readableError, rowStatus } from './batchGrid'
+import { fieldLabel, readableError, rowStatus, shipViaHint } from './batchGrid'
 
 describe('rowStatus — the Orders-page pill for an import row', () => {
   it('maps every generation state', () => {
@@ -23,6 +23,13 @@ describe('readableError', () => {
     expect(readableError('addressLine1 is a PO Box')).toBe('Address line 1 is a PO Box')
     expect(readableError('state — UPS doesn\'t accept this state or province')).toBe('State — UPS doesn\'t accept this state or province')
     expect(readableError('itemUnitValue must be > 0 when itemQuantity is set')).toBe('Item unit value must be > 0 when Item quantity is set')
+  })
+})
+
+describe('shipViaHint', () => {
+  it('names the client code and the service, not the carrier code', () => {
+    expect(shipViaHint('U11 maps to UPS Ground (UPS 03)')).toBe('U11 = UPS Ground')
+    expect(shipViaHint(null)).toBeNull()
   })
 })
 

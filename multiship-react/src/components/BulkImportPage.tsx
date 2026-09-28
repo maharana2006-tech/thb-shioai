@@ -40,7 +40,7 @@ export default function BulkImportPage() {
         >
           <span className="inline-flex items-center gap-2 font-semibold">
             <FiCheckCircle className="h-4 w-4" />
-            Saved to batch #{savedBatchId} in Import history.
+            Saved to import #{savedBatchId} in Import history.
           </span>
           <button
             type="button"
