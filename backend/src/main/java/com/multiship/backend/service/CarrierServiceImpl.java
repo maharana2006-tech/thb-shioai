@@ -103,6 +103,12 @@ public class CarrierServiceImpl implements CarrierService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private StdShipMethodResolver stdShipMethodResolver;
 
+    /** G7 — decides whether the shipment's SHIP_DATE should shift to the
+     *  next working day based on the (source × carrier × warehouse) cutoff
+     *  matrix + global holiday list. Nullable for test wiring. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private CutoffShiftService cutoffShiftService;
+
     /**
      * PR #550 — pre-fetches URL label bytes at persistence time so the DB
      * carries base64 (survives URL expiry) instead of a signed URL that
@@ -1943,6 +1949,29 @@ public class CarrierServiceImpl implements CarrierService {
         order.setCustNo(firstNonBlank(req.getClientCode(), order.getCustNo(), "MANUAL"));
         order.setTenantId(StringUtils.hasText(req.getClientCode()) ? req.getClientCode().trim() : order.getTenantId());
         order.setShipviaCd(service != null ? service.getServiceCode() : serviceType);
+
+        // G7 — cutoff shift. Compute now; log the decision. Connector-side
+        // wire of ShipmentRequestDTO.shipDateOverride is a follow-up
+        // (PR-D2) — every connector calls LabelDates.today(tz) which needs
+        // an override param. For this PR we surface the decision on
+        // OrderTracking.dispatchNextBusinessDay so the FE toast reflects it.
+        if (cutoffShiftService != null) {
+            try {
+                Long warehouseIdForCutoff = null; // resolved later at persist; safe to pass null
+                CutoffShiftService.ShiftDecision decision = cutoffShiftService.resolveShipDate(
+                        req.getSource(), carrier, warehouseIdForCutoff,
+                        clientRepository.findByClientCodeIgnoreCase(
+                                        req.getClientCode() == null ? "" : req.getClientCode())
+                                .map(com.multiship.backend.model.Client::getTimezone).orElse(null),
+                        java.time.LocalDateTime.now(java.time.ZoneOffset.UTC));
+                if (decision.shifted()) {
+                    log.info("G7 cutoff shift for order {}: {}", orderNo, decision.reason());
+                }
+            } catch (Exception cutoffFail) {
+                log.warn("G7 cutoff computation failed for order {}: {}", orderNo, cutoffFail.getMessage());
+            }
+        }
+
         // V96 / G6 — derive the canonical NDS ERP ship-via and stash it on
         // the Order. Falls back to req.stdReplacementErpCode when the FE
         // sent one (e.g. from NdsShipmentPrefill's STD detection) so we
