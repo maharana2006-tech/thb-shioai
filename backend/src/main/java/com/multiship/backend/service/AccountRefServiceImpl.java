@@ -400,6 +400,17 @@ public class AccountRefServiceImpl implements AccountRefService {
             account.setClearanceOption(c.isEmpty() ? null : c.toUpperCase(Locale.ROOT));
         }
 
+        // V95 — return_scope. Same null-vs-empty semantics as above: null in
+        // request = keep persisted; empty string = clear (defaults to
+        // DOMESTIC_ONLY on the entity); non-empty = normalise + persist.
+        String returnScope = request.getReturnScope();
+        if (returnScope != null) {
+            String r = returnScope.trim();
+            account.setReturnScope(r.isEmpty()
+                    ? com.multiship.backend.model.CarrierAccountRef.RETURN_SCOPE_DOMESTIC_ONLY
+                    : r.toUpperCase(Locale.ROOT));
+        }
+
         // F6-B2 — per-account currency override. Same null-vs-empty-string
         // semantics as purpose/clearance: null in request = keep persisted;
         // empty string = clear (revert to carrier default); non-empty =
@@ -611,6 +622,7 @@ public class AccountRefServiceImpl implements AccountRefService {
                 .lastVerifiedAt(account.getLastVerifiedAt())
                 .shippingPurpose(account.getShippingPurpose())
                 .clearanceOption(account.getClearanceOption())
+                .returnScope(account.getReturnScope())
                 .currency(account.getCurrency())
                 .pickupType(account.getPickupType())
                 .labelImageFormat(account.getLabelImageFormat())

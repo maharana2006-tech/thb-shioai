@@ -987,20 +987,58 @@ public class CarrierServiceImpl implements CarrierService {
         com.multiship.backend.dto.ManualShipmentRequest.Address to = req.getRecipient();
         com.multiship.backend.dto.ManualShipmentRequest.Address from = req.getSender();
 
-        // G9 — Return Ship is US-only, FedEx + UPS only (no USPS or DHL) per
-        // ShipX_NDS_Orders_and_Tracking.docx §7. Enforce before we hit the
-        // carrier so the operator sees a clean 422 with the fix path.
+        // G9 (V95 refresh) — return eligibility is now driven by the carrier
+        // account's `return_scope` column (DOMESTIC_ONLY / DOMESTIC_AND_INTERNATIONAL /
+        // DISABLED) rather than a hardcoded FedEx/UPS list. Any carrier
+        // account can be marked return-capable in Settings → Carrier Accounts.
+        //
+        // Additionally, per operator direction 2026-09-28: on RETURN mode
+        // the RECIPIENT block is clamped to Client.effectiveReturnAddress()
+        // — either the client's configured returnAddress or its shipFrom
+        // fallback when returnSameAsShipFrom=true. Operator's typed values
+        // are ignored for returns; the address is a per-client config.
         if (Boolean.TRUE.equals(req.getIsReturn())) {
-            String returnCarrier = req.getCarrierCode() == null ? "" : req.getCarrierCode().trim().toUpperCase();
+            CarrierAccountRef acct = req.getAccountId() != null
+                    ? carrierAccountRefRepository.findById(req.getAccountId()).orElse(null)
+                    : null;
+            String scope = acct == null || acct.getReturnScope() == null
+                    ? CarrierAccountRef.RETURN_SCOPE_DOMESTIC_ONLY
+                    : acct.getReturnScope().trim().toUpperCase();
+            if (CarrierAccountRef.RETURN_SCOPE_DISABLED.equals(scope)) {
+                return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
+                        "Return labels are disabled on this carrier account. "
+                                + "Enable them under Settings → Carrier Accounts.");
+            }
             String toCountry = to.getCountryCode() == null ? "" : to.getCountryCode().trim().toUpperCase();
             String fromCountry = from == null || from.getCountryCode() == null ? "" : from.getCountryCode().trim().toUpperCase();
-            if (!returnCarrier.equals("FEDEX") && !returnCarrier.equals("UPS")) {
+            boolean sameCountry = !toCountry.isEmpty() && toCountry.equals(fromCountry);
+            if (CarrierAccountRef.RETURN_SCOPE_DOMESTIC_ONLY.equals(scope) && !sameCountry) {
                 return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
-                        "Return labels are only supported on FedEx and UPS.");
+                        "This carrier account only supports domestic returns. "
+                                + "Change return scope to Domestic & International under Settings → Carrier Accounts to allow this lane.");
             }
-            if (!"US".equals(toCountry) || !"US".equals(fromCountry)) {
-                return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
-                        "Return labels are only supported for US-to-US shipments.");
+            // Clamp recipient to client's configured return address. `to` was
+            // resolved above from req.getRecipient() (non-null; the null guard
+            // fires earlier) so mutating that instance is picked up by every
+            // downstream reader that already holds `to`.
+            String clientCodeForReturn = tenantScope.clampClientCode(req.getClientCode());
+            if (StringUtils.hasText(clientCodeForReturn)) {
+                final com.multiship.backend.dto.ManualShipmentRequest.Address recipientToClamp = to;
+                clientRepository.findByClientCodeIgnoreCase(clientCodeForReturn)
+                        .map(com.multiship.backend.model.Client::effectiveReturnAddress)
+                        .filter(a -> a != null && a.hasValue())
+                        .ifPresent(addr -> {
+                            if (StringUtils.hasText(addr.getName())) recipientToClamp.setName(addr.getName());
+                            if (StringUtils.hasText(addr.getLine1())) recipientToClamp.setAddressLine1(addr.getLine1());
+                            if (StringUtils.hasText(addr.getLine2())) recipientToClamp.setAddressLine2(addr.getLine2());
+                            if (StringUtils.hasText(addr.getCity())) recipientToClamp.setCity(addr.getCity());
+                            if (StringUtils.hasText(addr.getState())) recipientToClamp.setState(addr.getState());
+                            if (StringUtils.hasText(addr.getZip())) recipientToClamp.setPostalCode(addr.getZip());
+                            if (StringUtils.hasText(addr.getCountry())) recipientToClamp.setCountryCode(addr.getCountry());
+                            if (StringUtils.hasText(addr.getPhone())) recipientToClamp.setPhone(addr.getPhone());
+                            log.info("RETURN mode: recipient clamped to {}'s effective return address",
+                                    clientCodeForReturn);
+                        });
             }
         }
         if (!StringUtils.hasText(to.getName()) || !StringUtils.hasText(to.getAddressLine1())

@@ -26,6 +26,8 @@ export interface CarrierAccountRef {
    *  defaults when unset. */
   shippingPurpose?: string | null
   clearanceOption?: string | null
+  /** V95 — return-label scope. Nullable; server default = DOMESTIC_ONLY. */
+  returnScope?: 'DOMESTIC_ONLY' | 'DOMESTIC_AND_INTERNATIONAL' | 'DISABLED' | string | null
   /** F6-B2 — per-account billing currency (ISO 4217). NULL means "use
    *  carrier home currency" (USPS/UPS/FedEx → USD, DHL → EUR). Non-null
    *  overrides both carrier default AND client currency. */
@@ -143,6 +145,8 @@ export interface AccountRefUpsertPayload {
    *  frontend against the enum in ../utils/customsOptions. */
   shippingPurpose?: string | null
   clearanceOption?: string | null
+  /** V95 — return-label scope. DOMESTIC_ONLY | DOMESTIC_AND_INTERNATIONAL | DISABLED. */
+  returnScope?: 'DOMESTIC_ONLY' | 'DOMESTIC_AND_INTERNATIONAL' | 'DISABLED' | string | null
   /** F6-B2 — per-account billing currency (ISO 4217, e.g. USD / EUR). Null
    *  in the payload clears the persisted value; omitted keeps it. */
   currency?: string | null

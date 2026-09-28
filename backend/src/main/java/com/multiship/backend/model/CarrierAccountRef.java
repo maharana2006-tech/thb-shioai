@@ -107,6 +107,23 @@ public class CarrierAccountRef {
     private String clearanceOption;
 
     /**
+     * V95 — return-label eligibility. Replaces the hardcoded FedEx/UPS-only
+     * check from G9 with a data-driven gate. Values:
+     *   DOMESTIC_ONLY              — return only when from + to same country
+     *   DOMESTIC_AND_INTERNATIONAL — any lane
+     *   DISABLED                   — no returns allowed on this account
+     * Default DOMESTIC_ONLY on every row (safer for accounts that had no
+     * returns before).
+     */
+    public static final String RETURN_SCOPE_DOMESTIC_ONLY  = "DOMESTIC_ONLY";
+    public static final String RETURN_SCOPE_DOMESTIC_INTL  = "DOMESTIC_AND_INTERNATIONAL";
+    public static final String RETURN_SCOPE_DISABLED       = "DISABLED";
+
+    @Column(name = "return_scope", length = 30, nullable = false)
+    @Default
+    private String returnScope = RETURN_SCOPE_DOMESTIC_ONLY;
+
+    /**
      * Per-account label stock size, in inches. UPS Ship API v1 requires
      * this on every shipment (rejected 9120244 when omitted); FedEx / DHL /
      * USPS map it to their respective label-stock enums. Nullable — nulls

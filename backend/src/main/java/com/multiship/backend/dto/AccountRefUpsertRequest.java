@@ -57,6 +57,13 @@ public class AccountRefUpsertRequest {
     private String clearanceOption;
 
     /**
+     * V95 — return-label eligibility. DOMESTIC_ONLY | DOMESTIC_AND_INTERNATIONAL |
+     * DISABLED. Null on update = keep persisted value; explicit empty string
+     * = clear back to server default (DOMESTIC_ONLY).
+     */
+    private String returnScope;
+
+    /**
      * F6-B2 — per-account billing currency (ISO 4217, e.g. USD / EUR / GBP).
      * Nullable; NULL means "use the carrier's hardcoded home currency"
      * (USPS/UPS/FedEx → USD, DHL → EUR). Non-NULL overrides both the

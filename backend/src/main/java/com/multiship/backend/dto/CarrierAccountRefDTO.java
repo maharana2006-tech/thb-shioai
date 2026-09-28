@@ -37,6 +37,8 @@ public class CarrierAccountRefDTO {
      *  defaults when unset. */
     private String shippingPurpose;
     private String clearanceOption;
+    /** V95 — return-label eligibility: DOMESTIC_ONLY | DOMESTIC_AND_INTERNATIONAL | DISABLED. */
+    private String returnScope;
     /** F6-B2 — per-account billing currency override. ISO 4217. NULL means
      *  "use carrier home currency" (USPS/UPS/FedEx → USD, DHL → EUR). */
     private String currency;
