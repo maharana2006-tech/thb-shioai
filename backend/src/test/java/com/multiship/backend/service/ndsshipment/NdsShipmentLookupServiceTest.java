@@ -144,24 +144,32 @@ class NdsShipmentLookupServiceTest {
     @Test
     void batchLookupUsesLowestContainerAsAnchor() {
         String batchId = "B42";
+        // Legacy fallback path (no client hint on the scan) — service
+        // discovers the client via findBatchOwner and then runs Step 2.
         when(repository.findBatchOwner(batchId))
-                .thenReturn(Optional.of(new NdsShipmentLookupRepository.BatchOwner("FF", CLIENT)));
-        when(repository.findBatchContents(batchId))
+                .thenReturn(Optional.of(new NdsShipmentLookupRepository.BatchOwner(CLIENT, CLIENT)));
+        when(repository.findBillableBatchPackages(batchId, CLIENT))
                 .thenReturn(List.of(
-                        new NdsShipmentLookupRepository.BatchContainer("100", "999999", "1"),
-                        new NdsShipmentLookupRepository.BatchContainer("200", "888888", "2")));
+                        // Anchor row — lowest CONTAINER_NO=1, first order 999999
+                        new NdsShipmentLookupRepository.BillableBatchPackage(
+                                1, 1, new BigDecimal("2.5"), "100,150,", "999999,999999,"),
+                        new NdsShipmentLookupRepository.BillableBatchPackage(
+                                2, 2, new BigDecimal("3.0"), "200,", "888888,")));
         when(repository.findOrderHeader(CLIENT, "999999", "1"))
                 .thenReturn(Optional.of(headerFor("999999", "1", "P80", "N", "N", "US", "6165551212")));
-        when(repository.findBatchPackagesGrouped(CLIENT, List.of("100", "200")))
-                .thenReturn(List.of(
-                        pkg("100", "999999", "1"),
-                        pkg("200", "888888", "2")));
         NdsShipmentPrefill p = service.lookup(".Y" + batchId).orElseThrow();
         assertEquals(NdsShipmentPrefill.Scope.BATCH, p.scope());
         assertEquals(batchId, p.batchId());
         assertEquals(2, p.packages().size());
         assertEquals(999999, p.orders().get(0).orderNo(),
-                "anchor order (lowest container id) supplies the DTO");
+                "anchor order (lowest container_no's first CSV entry) supplies the DTO");
+        assertEquals("1", p.packages().get(0).containerNo(),
+                "package.containerNo carries CONTAINER_NO, not CONTAINER_ID");
+        assertEquals(List.of(100L, 150L), p.packages().get(0).containerIds(),
+                "container_ids parsed from CSV");
+        assertEquals(new BigDecimal("2.5"), p.packages().get(0).weight(),
+                "weight comes from TB_BILLABLE_CONTAINERS.WEIGHT, not GROSS_WT");
+        assertEquals("TB_BILLABLE_CONTAINERS.WEIGHT", p.packages().get(0).weightSource());
     }
 
     // ───── invalid-input path ─────
@@ -201,13 +209,6 @@ class NdsShipmentLookupServiceTest {
                 phone, "wile@acme.example",
                 shipvia, shipped, hold,
                 "PO-100", "SHIP", "DAP", "USD");
-    }
-
-    private NdsShipmentLookupRepository.BatchPackage pkg(String containerId, String orderNo, String suffix) {
-        return new NdsShipmentLookupRepository.BatchPackage(
-                containerId, orderNo, suffix,
-                new BigDecimal("1.0"), new BigDecimal("10"),
-                new BigDecimal("5"), new BigDecimal("3"), "BOX");
     }
 
     private ClientShipviaCodeMap newClientMap(long serviceId) {
