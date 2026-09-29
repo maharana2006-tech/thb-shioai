@@ -1998,7 +1998,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
         meta: { headerLabel: fieldLabel(c), exportValue: (r: OrderImportRow) => String((r as unknown as Record<string, unknown>)[c.key] ?? '') },
       })),
       {
-        id: 'actions', header: () => <span className="block text-right">Actions</span>, size: 300, enableSorting: false,
+        id: 'actions', header: () => <span className="block text-right">Actions</span>, size: 190, enableSorting: false,
         cell: ({ row }) => {
           const r = row.original
           const gen = (r.generatedStatus ?? '').toUpperCase()
@@ -2008,7 +2008,6 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
           const orderReady = orderReadyOf(r)
           const orderNo = r.generatedOrderNo ?? null
           const tn = r.generatedTrackingNumber ?? null
-          const isIntl = hasCommercialInvoice(r)
           const rowKey = `${b.id}-${r.rowNumber}`
           const rowBusy = genRowKey === rowKey
           return (
@@ -2029,16 +2028,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
                   <FiInfo className="h-3.5 w-3.5" />
                 </button>
               ) : null)}
-              {slot(generated && orderNo != null ? (
-                <button type="button" onClick={() => void printOrderLabel(orderNo)} title="Print the shipping label" aria-label={`Print label for order ${orderNo}`} className={`${ICON} ${NEUTRAL}`}>
-                  <FiPrinter className="h-3.5 w-3.5" />
-                </button>
-              ) : null)}
-              {slot(generated && orderNo != null && isIntl ? (
-                <button type="button" onClick={() => void printOrderInvoice(orderNo)} title="Print the commercial invoice" aria-label={`Print commercial invoice for order ${orderNo}`} className={`${ICON} ${NEUTRAL}`}>
-                  <FiFileText className="h-3.5 w-3.5" />
-                </button>
-              ) : null)}
+              {/* Printing the label or the invoice: the Print and Commercial Invoice columns. */}
               <span className="ml-1 flex min-w-7 shrink-0 justify-end">
                 {generated && orderNo != null ? (
                   <button type="button" onClick={() => navigate(`/label/${orderNo}`)} title="View label" aria-label={`View label for order ${orderNo}`}
