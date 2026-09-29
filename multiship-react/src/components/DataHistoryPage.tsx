@@ -1798,27 +1798,6 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
         meta: { headerLabel: 'Ref #', exportValue: (r: OrderImportRow) => r.reference ?? '' },
       },
       {
-        id: 'labelBatch', header: 'Batch', size: 80, enableSorting: false,
-        accessorFn: (r) => r.batchId ?? '',
-        cell: ({ row }) => <span className="block truncate font-mono text-[12px] text-[#5a4526]">{row.original.batchId ?? <span className="text-[#b3a583]">—</span>}</span>,
-        meta: { headerLabel: 'Batch', exportValue: (r: OrderImportRow) => r.batchId ?? '' },
-      },
-      {
-        id: 'dest', header: 'Dest', size: 170, enableSorting: false,
-        accessorFn: (r) => `${r.city ?? ''} ${r.state ?? ''}`,
-        cell: ({ row }) => {
-          const r = row.original
-          const sub = [r.state, r.postalCode].filter(Boolean).join(' · ')
-          return (
-            <span className="flex min-w-0 flex-col gap-0.5" title={[r.recipientName, r.addressLine1, r.city, r.state, r.postalCode, r.countryCode].filter(Boolean).join(' ') || 'No destination on file'}>
-              <span className="truncate text-[13.5px] text-[#3f3527]">{r.city || '—'}</span>
-              {sub ? <span className="truncate text-[11.5px] tabular-nums text-[#6b5c42]">{sub}</span> : null}
-            </span>
-          )
-        },
-        meta: { headerLabel: 'Destination', exportValue: (r: OrderImportRow) => [r.city, r.state, r.postalCode, r.countryCode].filter(Boolean).join(' ') },
-      },
-      {
         id: 'status', header: 'Status', size: 190, enableSorting: false,
         accessorFn: (r) => r.generatedStatus ?? '',
         cell: ({ row }) => {
@@ -2147,7 +2126,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
                 </div>
               }
               // Exactly the Orders page's columns; every imported field is one Columns click away (to edit it).
-              initialHiddenColumns={['reference', 'labelBatch', 'dest', ...DH_COLUMNS.map((c) => `f_${c.key}`)]}
+              initialHiddenColumns={['reference', ...DH_COLUMNS.map((c) => `f_${c.key}`)]}
               forceVisibleColumns={batchErrorColumns}
               manualPagination
               pageIndex={gridPage}
