@@ -69,6 +69,7 @@ public class ImportBatchRowStore {
             text("service_type", OrderImportRowDTO::getServiceType, OrderImportRowDTO::setServiceType),
             text("ship_via_code", OrderImportRowDTO::getShipViaCode, OrderImportRowDTO::setShipViaCode),
             text("ship_via_note", OrderImportRowDTO::getShipViaNote, OrderImportRowDTO::setShipViaNote),
+            text("carrier_note", OrderImportRowDTO::getCarrierNote, OrderImportRowDTO::setCarrierNote),
             text("package_type", OrderImportRowDTO::getPackageType, OrderImportRowDTO::setPackageType),
             number("weight", OrderImportRowDTO::getWeight, OrderImportRowDTO::setWeight),
             text("weight_unit", OrderImportRowDTO::getWeightUnit, OrderImportRowDTO::setWeightUnit),

@@ -41,6 +41,10 @@ public class ImportBatchRow {
     @Column(name = "ship_via_note", columnDefinition = "TEXT")
     private String shipViaNote;
 
+    /** What the carrier said when the row was checked (V93). */
+    @Column(name = "carrier_note", columnDefinition = "TEXT")
+    private String carrierNote;
+
     /** The carrier's tracking page for this row's label. */
     @Column(name = "tracking_url", columnDefinition = "TEXT")
     private String trackingUrl;

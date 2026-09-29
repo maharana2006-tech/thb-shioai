@@ -64,6 +64,12 @@ public class UpsConnector implements CarrierConnector {
     private final CarrierProperties carrierProperties;
     private final ObjectMapper objectMapper;
 
+    /** Optional so pure-Mockito unit tests that build the connector with the
+     *  two-arg constructor keep compiling. R-2 return-email fallback reads
+     *  the same nds.fallback_notify_email as NdsShipmentLookupService. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.TenantSettingsService tenantSettingsService;
+
     /**
      * PR C — env-configurable extension for the paperless-invoice deny
      * list. Comma-separated ISO alpha-2 codes; unioned with the built-in
@@ -820,6 +826,10 @@ public class UpsConnector implements CarrierConnector {
         if (!originCountry.equals(destCountry)) {
             java.math.BigDecimal invoiceTotal = commercialInvoiceTotal(request);
             body.put("shipmentContentsValue", invoiceTotal.toPlainString());
+            // The value needs its currency: without it UPS answers "invalid
+            // ShipmentContentsCurrencyCode" (a bulk row to Berlin, 2026-09-28).
+            body.put("shipmentContentsCurrencyCode",
+                    firstNonBlank(request.getDeclaredValueCurrency(), "USD").trim().toUpperCase(java.util.Locale.ROOT));
         }
         return body;
     }
@@ -849,7 +859,7 @@ public class UpsConnector implements CarrierConnector {
      *  returns alphabetic codes ("GND"). Translate the numeric input to
      *  the TiT alpha so equality holds. Unknown numeric → returns the
      *  original, and the fallback matcher below still tries direct equality. */
-    private static final java.util.Map<String, String> NUMERIC_TO_TIT_ALPHA =
+    public static final java.util.Map<String, String> NUMERIC_TO_TIT_ALPHA =
             java.util.Map.ofEntries(
                     java.util.Map.entry("01", "1DA"), // Next Day Air
                     java.util.Map.entry("02", "2DA"), // 2nd Day Air
@@ -2250,9 +2260,22 @@ public class UpsConnector implements CarrierConnector {
             // callers (unit tests, future scripted callers) without
             // silently producing an invalid UPS payload.
             if (org.springframework.util.StringUtils.hasText(customerEmail)) {
+                // R-2 — retailer address for the UPS "from" / undeliverable
+                // slot. Precedence: DTO recipient email → tenant setting
+                // (nds.fallback_notify_email, same key /settings/system
+                // "NDS fallbacks" writes) → platform default
+                // support@thbred.com. The prior noreply@<company> synth
+                // was per-carrier-only and never editable by ops.
+                String tenantFallback = null;
+                if (tenantSettingsService != null
+                        && org.springframework.util.StringUtils.hasText(request.getDepartmentNumber())) {
+                    tenantFallback = tenantSettingsService.getSetting(
+                            request.getDepartmentNumber().trim(),
+                            "nds.fallback_notify_email").orElse(null);
+                }
                 String retailerEmail = firstNonBlank(request.getRecipientEmail(),
-                        "noreply@" + firstNonBlank(carrierProperties.getShipper().getName(),
-                                "shipx.local").toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9.-]", ""));
+                        tenantFallback,
+                        com.multiship.backend.service.ndsshipment.NdsShipmentLookupService.DEFAULT_NOTIFY_EMAIL);
                 String fromName = firstNonBlank(request.getRecipientCompany(),
                         request.getRecipientName(),
                         carrierProperties.getShipper().getName(),
@@ -3716,7 +3739,13 @@ public class UpsConnector implements CarrierConnector {
         // returned rate matches what the actual label would cost.
         java.util.List<Map<String, Object>> packages = new java.util.ArrayList<>();
         for (com.multiship.backend.dto.PackageDetailDTO p : request.effectivePackages()) {
-            packages.add(buildPackage(request, p));
+            // The Rating API names the packaging "PackagingType" (the Shipping API, which
+            // buildPackage is written for, says "Packaging"). Sent as "Packaging", UPS saw
+            // no packaging and every rate answered HTTP 400 "Package Type unavailable".
+            Map<String, Object> pkg = new LinkedHashMap<>(buildPackage(request, p));
+            Object packaging = pkg.remove("Packaging");
+            if (packaging != null) pkg.put("PackagingType", packaging);
+            packages.add(pkg);
         }
         shipment.put("Package", packages);
         return shipment;

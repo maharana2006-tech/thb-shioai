@@ -40,14 +40,14 @@ export default function BulkImportPage() {
         >
           <span className="inline-flex items-center gap-2 font-semibold">
             <FiCheckCircle className="h-4 w-4" />
-            Saved to batch #{savedBatchId} in Import history.
+            Saved to import #{savedBatchId} in Import history.
           </span>
           <button
             type="button"
             onClick={() => toHistory(savedBatchSlug)}
             className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[12.5px] font-semibold text-[#f4eede] hover:bg-[#412d15]"
           >
-            Open batch #{savedBatchId}
+            Open import #{savedBatchId}
             <FiArrowRight className="h-3.5 w-3.5" />
           </button>
         </div>

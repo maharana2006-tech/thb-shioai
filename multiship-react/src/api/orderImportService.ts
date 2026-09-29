@@ -32,6 +32,8 @@ export interface OrderImportRow {
   shipViaCode?: string | null
   /** What that rule did with the row, e.g. "U11 maps to UPS Ground (UPS 03)". */
   shipViaNote?: string | null
+  /** What the carrier said when the row was checked ("UPS confirmed UPS Ground (U11) · 2 business days"). */
+  carrierNote?: string | null
   packageType?: string | null
   weight?: number | null
   weightUnit?: string | null
@@ -105,6 +107,14 @@ export interface StagingUpload {
   createdAt?: string | null
   expiresAt?: string | null
   rows: OrderImportRow[]
+  /** The file's own columns and names, each with the field it fills (null: not used / custom). */
+  fileColumns?: FileColumn[] | null
+}
+
+/** One column of the uploaded file: its name there, and our field for it. */
+export interface FileColumn {
+  name: string
+  field: string | null
 }
 
 export interface OrderImportPreview {
@@ -114,6 +124,7 @@ export interface OrderImportPreview {
   /** Id shared by every order this commit generated a label for. Null on preview. */
   batchId?: number | null
   rows: OrderImportRow[]
+  fileColumns?: FileColumn[] | null
 }
 
 /** Lifecycle status of a saved import.
@@ -487,6 +498,21 @@ export const orderImportService = {
     apiClient.post<ApiResponse<OrderImportPreview>>('/orders/import/validate-addresses', rows),
 
   templateUrl: () => `${BASE_URL}/orders/import/template.csv`,
+  /** The client layout (CLIENT_ID, ATTENTION, … SHIPVIA_CD, GROUP_ID …) as a CSV template. */
+  clientLayoutTemplateUrl: () => `${BASE_URL}/orders/import/template-client.csv`,
+
+  /** The client layout as an Excel template (client + ship via dropdowns). */
+  downloadClientLayoutXlsx: async (): Promise<void> => {
+    const response = await authFetch('/orders/import/template-client.xlsx')
+    const url = URL.createObjectURL(await response.blob())
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'order-import-client-layout.xlsx'
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
+  },
 
   /**
    * Sprint 48 — download the richer .xlsx template with data-validation

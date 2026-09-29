@@ -47,4 +47,9 @@ public class StagingUploadDTO {
     private LocalDateTime expiresAt;
 
     private List<OrderImportRowDTO> rows;
+
+    /** The file's columns in its own order and names, each with our field (null: not used / custom). */
+    private List<FileColumn> fileColumns;
+
+    public record FileColumn(String name, String field) {}
 }

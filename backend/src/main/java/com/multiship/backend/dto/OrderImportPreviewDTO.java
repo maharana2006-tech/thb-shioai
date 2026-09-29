@@ -24,4 +24,6 @@ public class OrderImportPreviewDTO {
     /** Id shared by every order generated from this commit's file upload. Null on preview. */
     private Integer batchId;
     private List<OrderImportRowDTO> rows;
+    /** The file's own column names, in order (CLIENT_ID, ATTENTION, … for a client-layout file). */
+    private List<String> fileColumns;
 }

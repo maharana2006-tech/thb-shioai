@@ -43,7 +43,12 @@ export function rowStatus(
   if (gen === 'VOIDED') return { short: 'VOID', dot: 'bg-slate-400', label: "Voided with the carrier — it can't ship" }
   if (gen === 'QUEUED_USPS') return { short: 'QUEUED', dot: 'bg-sky-500', label: 'Queued for USPS — the label is being made' }
   if (gen === 'FAILED') return { short: 'ERR', dot: 'bg-rose-500', label: r.generatedMessage || 'The carrier rejected this shipment' }
-  if (errors > 0) return { short: 'ERR', dot: 'bg-rose-500', label: `${errors} error${errors === 1 ? '' : 's'} — fix the red cells` }
+  if (errors > 0) {
+    // Name the fields: the red cell may sit in a hidden column.
+    const fields = Object.keys(bucketRowErrors(r.errors ?? []).byField).map((k) => labelOfField(k))
+    const n = `${errors} error${errors === 1 ? '' : 's'}`
+    return { short: 'ERR', dot: 'bg-rose-500', label: fields.length ? `${n} in ${fields.join(', ')}` : `${n} — see the ⓘ for details` }
+  }
   if (!orderReady) return { short: 'FIX', dot: 'bg-amber-500', label: `This line is fine, but another line of order ${r.orderRef ?? ''} needs fixes` }
   return { short: 'PEND', dot: 'bg-amber-500', label: "Valid — its label hasn't been generated yet" }
 }
@@ -64,8 +69,8 @@ export function RowIssuesIcon({
   warnings: string[]
 }) {
   const items: IssueItem[] = [
-    ...Object.entries(byField).flatMap(([field, msgs]) => msgs.map((m) => ({ tag: field, text: m }))),
-    ...rowLevel.map((m) => ({ tag: 'row', text: m })),
+    ...Object.entries(byField).flatMap(([field, msgs]) => msgs.map((m) => ({ tag: labelOfField(field), text: messageUnder(field, m) }))),
+    ...rowLevel.map((m) => ({ tag: 'row', text: readableError(m) })),
     ...(carrierMessage ? [{ tag: 'carrier', text: carrierMessage }] : []),
     ...warnings.map((w) => ({ tag: 'note', text: w, tone: 'warn' as const })),
   ]
@@ -126,8 +131,44 @@ export type DhColumn = { key: string; label?: string; mono?: boolean; upper?: bo
 /** A field's name for people: its own label, else "recipientPhone" → "Recipient phone". */
 export function fieldLabel(c: Pick<DhColumn, 'key' | 'label'>): string {
   if (c.label) return c.label
-  const words = c.key.replace(/([A-Z])/g, ' $1').toLowerCase()
+  const words = c.key.replace(/([A-Z]|\d+)/g, ' $1').toLowerCase()
   return words.charAt(0).toUpperCase() + words.slice(1)
+}
+
+/** A field key's name for people ("recipientName" → "Recipient"). */
+export function labelOfField(key: string): string {
+  const c = DH_COLUMNS.find((x) => x.key === key)
+  return fieldLabel(c ?? { key })
+}
+
+/**
+ * An error as people read it: field keys become their labels —
+ * "recipientName is required" → "Recipient is required". The stored message
+ * keeps the key (it decides which cell goes red); only what is shown changes.
+ * A plain word ("state", "weight") is replaced only where it opens the message.
+ */
+export function readableError(msg: string): string {
+  return msg.replace(/[®™]/g, '').replace(/\b[a-z][A-Za-z0-9]*\b/g, (w: string, at: number) =>
+    (EDIT_FIELD_KEYS as readonly string[]).includes(w) && (at === 0 || /[A-Z0-9]/.test(w)) ? labelOfField(w) : w)
+}
+
+/** "U11 maps to UPS Ground (UPS 03)" → "U11 = UPS Ground": the carrier's own code means nothing to people. */
+export function shipViaHint(note: string | null | undefined): string | null {
+  if (!note) return null
+  return note.replace(/[®™]/g, '').replace(/ maps to /, ' = ').replace(/ \((UPS|FEDEX|USPS|DHL) [^)]*\)/i, '')
+}
+
+/** A field's message shown under that field: "Service — UPS Ground …" → "UPS Ground …". */
+export function messageUnder(field: string, msg: string): string {
+  const text = readableError(msg)
+  const lead = `${labelOfField(field)} — `
+  return text.startsWith(lead) ? text.slice(lead.length) : text
+}
+
+/** A stored code shown to people ("YOUR_PACKAGING" → "Your packaging"); editing keeps the code. */
+const SHOWN_VALUES: Record<string, string> = { YOUR_PACKAGING: 'Your packaging' }
+export function shownValue(value: string): string {
+  return SHOWN_VALUES[value.trim().toUpperCase()] ?? value
 }
 
 /** The columns the grid shows by default — the same things the Orders page
@@ -138,7 +179,7 @@ export const DH_KEY_COLUMN_KEYS: ReadonlySet<string> = new Set([
   'carrierCode', 'serviceType', 'accountNumber', 'weight',
 ])
 export const DH_COLUMNS: DhColumn[] = [
-  { key: 'orderRef', label: 'Ref order #', mono: true, w: 'w-24' },
+  { key: 'orderRef', label: 'Order ref', mono: true, w: 'w-24' },
   { key: 'clientCode', label: 'Customer', mono: true, upper: true, w: 'w-24' },
   { key: 'billTo', mono: true, upper: true, w: 'w-24' },
   { key: 'warehouseCode', mono: true, upper: true, w: 'w-24' },
@@ -186,6 +227,7 @@ export function GridCell({
   mono = false,
   errors,
   readOnly = false,
+  field,
 }: {
   value: string
   onCommit: (v: string) => void
@@ -193,6 +235,8 @@ export function GridCell({
   mono?: boolean
   errors?: string[]
   readOnly?: boolean
+  /** The cell's field: its messages drop the field's own name ("Service — …"). */
+  field?: string
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(value)
@@ -227,7 +271,8 @@ export function GridCell({
       />
     )
   }
-  const tooltip = bad && errors && errors.length > 0 ? errors.join('\n') : value || undefined
+  const tooltip = bad && errors && errors.length > 0
+    ? errors.map((m) => (field ? messageUnder(field, m) : readableError(m))).join('\n') : value || undefined
   return (
     <button
       type="button"
@@ -239,7 +284,7 @@ export function GridCell({
           : 'cursor-text text-[#3f3527] hover:bg-[#efe7d4]'
       }`}
     >
-      {value || <span className="text-[#cdbf9f]">—</span>}
+      {shownValue(value) || <span className="text-[#cdbf9f]">—</span>}
     </button>
   )
 }

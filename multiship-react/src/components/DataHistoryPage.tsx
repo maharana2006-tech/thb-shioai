@@ -31,7 +31,7 @@ import { wmsService } from '../api/wmsService'
 import { bulkService, type BulkSummary, type BulkView } from '../api/bulkService'
 import { AddShipViaMappingDialog, ShipViaCodesPanel } from './modals/ShipViaCodes'
 import DataHistoryFilterToolbar, { BulkFilterChips, statusMeta } from './DataHistoryFilterToolbar'
-import { GridCell, DH_COLUMNS, fieldLabel, RowIssuesIcon, RowChannelChip, bucketRowErrors, rowStatus, type DhColumn } from './batchGrid'
+import { GridCell, DH_COLUMNS, fieldLabel, RowIssuesIcon, RowChannelChip, bucketRowErrors, rowStatus, shipViaHint, type DhColumn } from './batchGrid'
 import AnimatedHeight from './ui/AnimatedHeight'
 import BatchLabelBar from './bulk/BatchLabelBar'
 import LabelPreviewModal from './bulk/LabelPreviewModal'
@@ -226,7 +226,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
     from: filters.dateFrom || undefined,
     to: filters.dateTo || undefined,
     createdBy: filters.createdBy || undefined,
-    labelBatch: filters.batchPresence === 'ANY' ? undefined : filters.batchPresence,
+    labelBatch: filters.batchNo || (filters.batchPresence === 'ANY' ? undefined : filters.batchPresence),
     minSaved: filters.minSaved ? Number(filters.minSaved) : undefined,
     sort: filters.sortKey,
     dir: filters.sortDir,
@@ -362,6 +362,13 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
     return () => { gone = true }
     // rowsTick: re-read when the batch's rows change (a void, a retry), not on a page flip
   }, [batchPageLabelBatch, rowsTick])
+
+  /** Batches this page is writing: a live "batch-updated" for one is its own echo, until 3 s after the answer. */
+  const localWrites = useRef(new Set<number>())
+  const beginLocalWrite = (id: number) => { localWrites.current.add(id) }
+  const endLocalWrite = (id: number) => { window.setTimeout(() => localWrites.current.delete(id), 3000) }
+  /** Validate all runs for these batches — set before the request, so a quick second click is ignored. */
+  const validatingIds = useRef(new Set<number>())
 
   /** A batch's rows changed on the server: its page is read again, and the list's copy is dropped. */
   const reloadRows = (id: number) => {
@@ -571,7 +578,12 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
    * so the operator never sees stale state.
    */
   const sseHandlers = useMemo(() => ({
-    'batch-updated': () => { void reloadQuiet(); setRowsTick((t) => t + 1) },
+    'batch-updated': (p: unknown) => {
+      // A change this page just made itself: its own answer already re-read the rows.
+      const id = (p as { batchId?: number } | null)?.batchId
+      if (id != null && localWrites.current.has(id)) return
+      void reloadQuiet(); setRowsTick((t) => t + 1)
+    },
     'batch-created': () => { void reloadQuiet() },
     'batch-cancel-requested': () => { void reloadQuiet() },
   // eslint-disable-next-line react-hooks/exhaustive-deps -- reloadQuiet reads only stable refs; empty deps keeps the handler map identity stable across renders so useEventStream doesn't churn subscriptions
@@ -840,7 +852,9 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
   /** Validate all rows in a batch */
   const validateAll = async (id: number) => {
     const slug = batches.find((b) => b.id === id)?.slug
-    if (!slug) return
+    if (!slug || validatingIds.current.has(id)) return
+    validatingIds.current.add(id)
+    beginLocalWrite(id)
     setValidatingId(id)
     try {
       const res = await orderImportService.validateAllRows(slug)
@@ -855,11 +869,16 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
           ),
         )
         reloadRows(id)
-        notify.success('All rows validated successfully. Errors have been updated.')
+        const total = updated.totalRows ?? 0
+        const bad = updated.invalidRows ?? 0
+        if (bad > 0) notify.info({ title: 'Validation finished', body: `Checked ${total} row${total === 1 ? '' : 's'} · ${bad} need${bad === 1 ? 's' : ''} fixes` })
+        else notify.success(`Checked ${total} row${total === 1 ? '' : 's'} · all valid`)
       }
     } catch (e) {
       notify.apiError(e, 'Validation failed.')
     } finally {
+      validatingIds.current.delete(id)
+      endLocalWrite(id)
       setValidatingId(null)
     }
   }
@@ -940,6 +959,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
   const saveRow = async (batchId: number, edited: OrderImportRow): Promise<boolean> => {
     const slug = batches.find((b) => b.id === batchId)?.slug
     if (!slug) return false
+    beginLocalWrite(batchId)
     try {
       const res = await orderImportService.updateRow(slug, edited.rowNumber, edited)
       const updated = res.data
@@ -965,6 +985,8 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
       }
     } catch (e) {
       notify.apiError(e, 'Save failed.')
+    } finally {
+      endLocalWrite(batchId)
     }
     return false
   }
@@ -1190,6 +1212,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
                     type="button"
                     onClick={() => void validateAll(b.id)}
                     disabled={validatingId === b.id || (b.status || '').toUpperCase() === 'IN_PROGRESS'}
+                    aria-busy={validatingId === b.id}
                     title="Validate all rows in this batch and update their errors/warnings"
                     className={batchPageId == null
                       ? 'inline-flex items-center justify-center rounded-xl border border-emerald-100 bg-emerald-50 p-2 text-emerald-700 transition hover:border-emerald-200 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-40'
@@ -1716,9 +1739,9 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
         return { ...m, [b.id]: Array.from(cur) }
       })
     }
-    const ICON = 'flex h-7 w-7 items-center justify-center rounded-lg border transition'
+    const ICON = 'flex h-6 w-6 items-center justify-center rounded-md border transition'
     const NEUTRAL = 'border-[#e6dcc7] bg-[#faf7f0] text-[#5a4526] hover:border-[#dccfb4] hover:bg-[#f2ebda]'
-    const slot = (node: React.ReactNode) => <span className="flex h-7 w-7 shrink-0 items-center justify-center">{node}</span>
+    const slot = (node: React.ReactNode) => <span className="flex h-6 w-6 shrink-0 items-center justify-center">{node}</span>
 
     const defs: ColumnDef<OrderImportRow, unknown>[] = [
       {
@@ -1739,8 +1762,8 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
         meta: { headerLabel: 'Tick', exportValue: () => '', hideable: false },
       },
       {
-        id: 'order', header: 'Order', size: 190, enableSorting: false,
-        accessorFn: (r) => r.generatedOrderNo ?? r.rowNumber,
+        id: 'order', header: 'Container ID', size: 190, enableSorting: false,
+        accessorFn: (r) => r.orderRef ?? r.generatedOrderNo ?? r.rowNumber,
         cell: ({ row }) => {
           const r = row.original
           const gen = (r.generatedStatus ?? '').toUpperCase()
@@ -1761,39 +1784,18 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
                 {savingCell === `${b.id}-${r.rowNumber}` ? <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#5a4526]" /> : null}
               </span>
               <span className="truncate font-mono text-[11px] text-[#6b5c42]" title={`Row ${r.rowNumber} of the file`}>
-                {(r.clientCode || '—')} · {r.orderRef || '—'}
+                {r.orderRef || `Row ${r.rowNumber}`}
               </span>
             </span>
           )
         },
-        meta: { headerLabel: 'Order', exportValue: (r: OrderImportRow) => r.generatedOrderNo ?? '' },
+        meta: { headerLabel: 'Container ID', exportValue: (r: OrderImportRow) => r.orderRef ?? r.generatedOrderNo ?? '' },
       },
       {
         id: 'reference', header: 'Ref #', size: 120, enableSorting: false,
         accessorFn: (r) => r.reference ?? '',
         cell: ({ row }) => <span className="block truncate font-mono text-[12px] text-[#5a4526]" title={row.original.reference || undefined}>{row.original.reference || <span className="text-[#b3a583]">—</span>}</span>,
         meta: { headerLabel: 'Ref #', exportValue: (r: OrderImportRow) => r.reference ?? '' },
-      },
-      {
-        id: 'labelBatch', header: 'Batch', size: 80, enableSorting: false,
-        accessorFn: (r) => r.batchId ?? '',
-        cell: ({ row }) => <span className="block truncate font-mono text-[12px] text-[#5a4526]">{row.original.batchId ?? <span className="text-[#b3a583]">—</span>}</span>,
-        meta: { headerLabel: 'Batch', exportValue: (r: OrderImportRow) => r.batchId ?? '' },
-      },
-      {
-        id: 'dest', header: 'Dest', size: 170, enableSorting: false,
-        accessorFn: (r) => `${r.city ?? ''} ${r.state ?? ''}`,
-        cell: ({ row }) => {
-          const r = row.original
-          const sub = [r.state, r.postalCode].filter(Boolean).join(' · ')
-          return (
-            <span className="flex min-w-0 flex-col gap-0.5" title={[r.recipientName, r.addressLine1, r.city, r.state, r.postalCode, r.countryCode].filter(Boolean).join(' ') || 'No destination on file'}>
-              <span className="truncate text-[13.5px] text-[#3f3527]">{r.city || r.countryCode || '—'}</span>
-              {sub ? <span className="truncate text-[11.5px] tabular-nums text-[#6b5c42]">{sub}</span> : null}
-            </span>
-          )
-        },
-        meta: { headerLabel: 'Destination', exportValue: (r: OrderImportRow) => [r.city, r.state, r.postalCode, r.countryCode].filter(Boolean).join(' ') },
       },
       {
         id: 'status', header: 'Status', size: 190, enableSorting: false,
@@ -1803,6 +1805,8 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
           const st = rowStatus(r, orderReadyOf(r))
           const failed = (r.generatedStatus ?? '').toUpperCase() === 'FAILED'
           const { byField, rowLevel } = bucketRowErrors(r.errors ?? [])
+          // What the carrier confirmed is not a problem: it shows under the status, not in the ⓘ.
+          const confirmed = r.carrierNote ?? null
           const warnings = r.warnings ?? []
           const explain = (r.errors?.length ?? 0) > 0 || (failed && !!r.generatedMessage) || warnings.length > 0
           const o = r.generatedOrderNo != null ? batchOrders[r.generatedOrderNo] : undefined
@@ -1819,6 +1823,10 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
                 <span className="truncate text-[11.5px] text-[#6b5c42]" title={when}>{new Date(when).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
               ) : failed && r.generatedMessage ? (
                 <span className="truncate text-[11.5px] text-rose-700" title={r.generatedMessage}>{r.generatedMessage}</span>
+              ) : confirmed ? (
+                <span className="truncate text-[11px] font-semibold text-emerald-700" title={confirmed}>
+                  ✓ UPS: {confirmed.split(' · ')[1] ?? 'route confirmed'}
+                </span>
               ) : null}
             </span>
           )
@@ -1826,7 +1834,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
         meta: { headerLabel: 'Status', exportValue: (r: OrderImportRow) => r.generatedStatus ?? '' },
       },
       {
-        id: 'track', header: 'Track', size: 150, enableSorting: false,
+        id: 'track', header: 'Tracking ID', size: 190, enableSorting: false,
         accessorFn: (r) => r.generatedTrackingNumber ?? '',
         cell: ({ row }) => {
           const r = row.original
@@ -1836,7 +1844,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
           const url = o?.labelDetails.trackingUrl ?? r.trackingUrl ?? null
           const chip = (
             <span title={`Tracking ${tn}${url ? '\n(click to open carrier page)' : ''}`} className="inline-flex items-center rounded-full bg-sky-50 px-2 py-0.5 font-mono text-[11px] font-semibold text-sky-800 ring-1 ring-sky-200">
-              …{tn.length > 4 ? tn.slice(-4) : tn}
+              {tn}
             </span>
           )
           const ago = relativeTime(o?.labelDetails.generatedAt ?? null)
@@ -1849,7 +1857,72 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
             </span>
           )
         },
-        meta: { headerLabel: 'Tracking', exportValue: (r: OrderImportRow) => r.generatedTrackingNumber ?? '' },
+        meta: { headerLabel: 'Tracking ID', exportValue: (r: OrderImportRow) => r.generatedTrackingNumber ?? '' },
+      },
+      // The ShipX Bulk Mailer's columns (Container ID … Status, then our Actions).
+      {
+        id: 'clientCode', header: 'Client Code', size: 100, enableSorting: false,
+        accessorFn: (r) => r.clientCode ?? '',
+        cell: ({ row }) => <span className="block truncate font-mono text-[12px] text-[#3f3527]">{row.original.clientCode || <span className="text-[#b3a583]">—</span>}</span>,
+        meta: { headerLabel: 'Client Code', exportValue: (r: OrderImportRow) => r.clientCode ?? '' },
+      },
+      {
+        id: 'shipVia', header: 'Ship Via Code', size: 110, enableSorting: false,
+        accessorFn: (r) => r.shipViaCode ?? r.serviceType ?? '',
+        cell: ({ row }) => {
+          const r = row.original
+          const code = r.shipViaCode ?? r.serviceType
+          return <span className="block truncate font-mono text-[12px] font-semibold text-[#3f3527]" title={shipViaHint(r.shipViaNote) ?? undefined}>{code || <span className="text-[#b3a583]">—</span>}</span>
+        },
+        meta: { headerLabel: 'Ship Via Code', exportValue: (r: OrderImportRow) => r.shipViaCode ?? r.serviceType ?? '' },
+      },
+      {
+        id: 'attention', header: 'Ship Attention', size: 140, enableSorting: false,
+        accessorFn: (r) => r.recipientName ?? '',
+        cell: ({ row }) => <span className="block truncate text-[12.5px] text-[#3f3527]" title={row.original.recipientName || undefined}>{row.original.recipientName || <span className="text-[#b3a583]">—</span>}</span>,
+        meta: { headerLabel: 'Ship Attention', exportValue: (r: OrderImportRow) => r.recipientName ?? '' },
+      },
+      {
+        id: 'shipName', header: 'Ship Name', size: 170, enableSorting: false,
+        accessorFn: (r) => r.recipientCompany ?? '',
+        cell: ({ row }) => <span className="block truncate text-[12.5px] text-[#3f3527]" title={row.original.recipientCompany || undefined}>{row.original.recipientCompany || <span className="text-[#b3a583]">—</span>}</span>,
+        meta: { headerLabel: 'Ship Name', exportValue: (r: OrderImportRow) => r.recipientCompany ?? '' },
+      },
+      {
+        id: 'weight', header: 'Weight', size: 80, enableSorting: false,
+        accessorFn: (r) => r.weight ?? '',
+        cell: ({ row }) => {
+          const r = row.original
+          return <span className="block truncate tabular-nums text-[12.5px] text-[#3f3527]">{r.weight != null ? `${r.weight} ${(r.weightUnit ?? '').toLowerCase()}` : <span className="text-[#b3a583]">—</span>}</span>
+        },
+        meta: { headerLabel: 'Weight', exportValue: (r: OrderImportRow) => r.weight ?? '' },
+      },
+      {
+        id: 'thirdParty', header: 'Third Party AC', size: 120, enableSorting: false,
+        accessorFn: (r) => ((r.billTo ?? '').toUpperCase() === 'THIRD_PARTY' ? r.accountNumber ?? '' : ''),
+        cell: ({ row }) => {
+          const r = row.original
+          const tp = (r.billTo ?? '').toUpperCase() === 'THIRD_PARTY' ? r.accountNumber : null
+          return <span className="block truncate font-mono text-[12px] text-[#3f3527]">{tp || <span className="text-[#b3a583]">—</span>}</span>
+        },
+        meta: { headerLabel: 'Third Party AC', exportValue: (r: OrderImportRow) => ((r.billTo ?? '').toUpperCase() === 'THIRD_PARTY' ? r.accountNumber ?? '' : '') },
+      },
+      {
+        id: 'invoice', header: 'Commercial Invoice', size: 130, enableSorting: false,
+        cell: ({ row }) => {
+          const r = row.original
+          const orderNo = r.generatedOrderNo
+          if ((r.generatedStatus ?? '').toUpperCase() !== 'GENERATED' || orderNo == null || !hasCommercialInvoice(r)) {
+            return <span className="text-[#b3a583]">—</span>
+          }
+          return (
+            <button type="button" onClick={() => void printOrderInvoice(orderNo)} aria-label={`Print commercial invoice for order ${orderNo}`}
+              title="Print the commercial invoice" className={`${ICON} ${NEUTRAL}`}>
+              <FiFileText className="h-3.5 w-3.5" />
+            </button>
+          )
+        },
+        meta: { headerLabel: 'Commercial Invoice', exportValue: (r: OrderImportRow) => (hasCommercialInvoice(r) ? 'Yes' : '') },
       },
       // Every imported field, editable in place until the row is labelled.
       ...DH_COLUMNS.map((c): ColumnDef<OrderImportRow, unknown> => ({
@@ -1866,12 +1939,13 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
           const showShipVia = c.key === 'serviceType' && !!r.shipViaCode
           const unmapped = c.key === 'serviceType' ? (byField.serviceType ?? []).map((m) => m.match(UNMAPPED_SHIP_VIA)).find(Boolean) : null
           return (
-            <div title={showShipVia ? (r.shipViaNote ?? undefined) : undefined}>
+            <div title={showShipVia ? (shipViaHint(r.shipViaNote) ?? undefined) : undefined}>
               <GridCell
                 value={showShipVia ? String(r.shipViaCode) : raw == null ? '' : String(raw)}
                 readOnly={generated || locked || (rowIsWms && c.key === 'orderRef')}
                 bad={(byField[c.key]?.length ?? 0) > 0}
                 errors={byField[c.key]}
+                field={c.key}
                 mono={c.mono}
                 onCommit={(v) => void commitCell(b.id, r, c, v)}
               />
@@ -1884,10 +1958,10 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
             </div>
           )
         },
-        meta: { headerLabel: c.label ?? c.key, exportValue: (r: OrderImportRow) => String((r as unknown as Record<string, unknown>)[c.key] ?? '') },
+        meta: { headerLabel: fieldLabel(c), exportValue: (r: OrderImportRow) => String((r as unknown as Record<string, unknown>)[c.key] ?? '') },
       })),
       {
-        id: 'actions', header: () => <span className="block text-right">Actions</span>, size: 300, enableSorting: false,
+        id: 'actions', header: 'Actions', size: 170, enableSorting: false,
         cell: ({ row }) => {
           const r = row.original
           const gen = (r.generatedStatus ?? '').toUpperCase()
@@ -1897,42 +1971,39 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
           const orderReady = orderReadyOf(r)
           const orderNo = r.generatedOrderNo ?? null
           const tn = r.generatedTrackingNumber ?? null
-          const isIntl = hasCommercialInvoice(r)
           const rowKey = `${b.id}-${r.rowNumber}`
           const rowBusy = genRowKey === rowKey
           return (
-            <span className="flex w-full items-center justify-end gap-1">
+            <span className="flex w-full items-center justify-end gap-0.5">
               {slot(tn && orderNo != null ? (
                 <button type="button" onClick={() => setTrackingOrderNo(orderNo)} title={`Live tracking for ${tn}`} aria-label={`Track order ${orderNo}`} className={`${ICON} ${NEUTRAL}`}>
-                  <FiTruck className="h-3.5 w-3.5" />
+                  <FiTruck className="h-3 w-3" />
                 </button>
               ) : null)}
               {slot(tn && orderNo != null && generated && canWrite ? (
                 <button type="button" disabled={voidingOrderNo === orderNo || locked} onClick={() => void voidOrder(b.id, orderNo, tn)} title={`Void ${tn} at the carrier`} aria-label={`Void order ${orderNo}`}
                   className={`${ICON} border-rose-200 bg-rose-50 text-rose-700 hover:border-rose-300 hover:bg-rose-100 disabled:opacity-40`}>
-                  {voidingOrderNo === orderNo ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-rose-300 border-t-rose-700" /> : <FiXCircle className="h-3.5 w-3.5" />}
+                  {voidingOrderNo === orderNo ? <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-rose-300 border-t-rose-700" /> : <FiXCircle className="h-3 w-3" />}
                 </button>
               ) : null)}
               {slot(orderNo != null ? (
                 <button type="button" onClick={() => setDetailsOrderNo(orderNo)} title="Order details" aria-label={`Details for order ${orderNo}`} className={`${ICON} ${NEUTRAL}`}>
-                  <FiInfo className="h-3.5 w-3.5" />
+                  <FiInfo className="h-3 w-3" />
                 </button>
               ) : null)}
               {slot(generated && orderNo != null ? (
-                <button type="button" onClick={() => void printOrderLabel(orderNo)} title="Print the shipping label" aria-label={`Print label for order ${orderNo}`} className={`${ICON} ${NEUTRAL}`}>
-                  <FiPrinter className="h-3.5 w-3.5" />
+                <button type="button" onClick={() => void printOrderLabel(orderNo)} aria-label={`Print label for order ${orderNo}`}
+                  title={r.lastPrintedAt ? `Print the label — last printed ${formatPrinted(r.lastPrintedAt, true)}` : 'Print the shipping label'}
+                  className={`${ICON} ${r.lastPrintedAt ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : NEUTRAL}`}>
+                  <FiPrinter className="h-3 w-3" />
                 </button>
               ) : null)}
-              {slot(generated && orderNo != null && isIntl ? (
-                <button type="button" onClick={() => void printOrderInvoice(orderNo)} title="Print the commercial invoice" aria-label={`Print commercial invoice for order ${orderNo}`} className={`${ICON} ${NEUTRAL}`}>
-                  <FiFileText className="h-3.5 w-3.5" />
-                </button>
-              ) : null)}
-              <span className="ml-1 flex min-w-7 shrink-0 justify-end">
+              {/* The commercial invoice prints from its own column. */}
+              <span className="ml-1.5 flex min-w-6 shrink-0 justify-end">
                 {generated && orderNo != null ? (
                   <button type="button" onClick={() => navigate(`/label/${orderNo}`)} title="View label" aria-label={`View label for order ${orderNo}`}
                     className={`${ICON} border-[#1f150c] bg-[#1f150c] text-[#f4eede] hover:bg-[#412d15]`}>
-                    <FiEye className="h-3.5 w-3.5" />
+                    <FiEye className="h-3 w-3" />
                   </button>
                 ) : gen === 'VOIDED' ? (
                   <span className="text-[11px] text-slate-500" title="Voided with the carrier">Voided</span>
@@ -1944,8 +2015,8 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
                     aria-label={rowBusy ? `Generating row ${r.rowNumber}` : `${failed ? 'Retry' : 'Generate'} row ${r.rowNumber}`}
                     className={`${ICON} disabled:cursor-not-allowed disabled:opacity-50 ${
                       failed ? 'border-rose-200 bg-white text-rose-700 hover:border-rose-300 hover:bg-rose-50' : 'border-[#1f150c] bg-[#1f150c] text-[#f4eede] hover:bg-[#412d15]'}`}>
-                    {rowBusy ? <span className={`inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 ${failed ? 'border-rose-100 border-t-rose-600' : 'border-[#f4eede]/40 border-t-[#f4eede]'}`} />
-                      : failed ? <FiRotateCcw className="h-3.5 w-3.5" /> : <FiZap className="h-3.5 w-3.5" />}
+                    {rowBusy ? <span className={`inline-block h-3 w-3 animate-spin rounded-full border-2 ${failed ? 'border-rose-100 border-t-rose-600' : 'border-[#f4eede]/40 border-t-[#f4eede]'}`} />
+                      : failed ? <FiRotateCcw className="h-3 w-3" /> : <FiZap className="h-3 w-3" />}
                   </button>
                 ) : locked ? (
                   <span className="text-[11px] text-[#b6a684]">Fix errors first</span>
@@ -1955,7 +2026,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
                     onClick={() => openFix(b.id, ok ? (r.orderBlockedBy ?? r.rowNumber) : r.rowNumber)}
                     title={ok ? `Another line of order ${r.orderRef ?? ''} needs fixes — the order is labelled as one shipment` : 'Edit this row and re-check it'}
                     aria-label={`Fix row ${r.rowNumber}`}
-                    className="inline-flex items-center gap-1 whitespace-nowrap rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-rose-700 transition hover:border-rose-300 hover:bg-rose-50">
+                    className="inline-flex h-6 items-center gap-1 whitespace-nowrap rounded-md border border-rose-200 bg-white px-2 text-[11px] font-semibold text-rose-700 transition hover:border-rose-300 hover:bg-rose-50">
                     <FiEdit3 className="h-3 w-3" /> Fix
                   </button>
                 )}
@@ -1963,10 +2034,15 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
             </span>
           )
         },
-        meta: { headerLabel: 'Actions', hideable: false, exportable: false },
+        meta: { headerLabel: 'Actions', hideable: false, exportable: false, align: 'right' },
       },
     ]
-    return defs
+    const SHIPX_ORDER = ['pick', 'order', 'clientCode', 'shipVia', 'attention', 'shipName', 'weight', 'thirdParty', 'track', 'invoice', 'status']
+    const rank = (d: ColumnDef<OrderImportRow, unknown>) => {
+      const i = SHIPX_ORDER.indexOf(d.id ?? '')
+      return i >= 0 ? i : d.id === 'actions' ? 1000 : 100
+    }
+    return [...defs].sort((a, c) => rank(a) - rank(c))
     // Cells close over the picked rows, busy states and the batch's orders; the
     // handlers are stable enough (they read state through setters and refs).
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2030,7 +2106,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
               />
             ) : null}
             <AdvancedDataTable<OrderImportRow>
-              tableKey="bulk-batch-rows-v2"
+              tableKey="bulk-batch-rows-v3"
               columns={batchColumns}
               data={batchVisible}
               getRowId={(r) => String(r.rowNumber)}
@@ -2050,7 +2126,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
                 </div>
               }
               // Exactly the Orders page's columns; every imported field is one Columns click away (to edit it).
-              initialHiddenColumns={DH_COLUMNS.map((c) => `f_${c.key}`)}
+              initialHiddenColumns={['reference', ...DH_COLUMNS.map((c) => `f_${c.key}`)]}
               forceVisibleColumns={batchErrorColumns}
               manualPagination
               pageIndex={gridPage}
@@ -2185,7 +2261,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
               <div className="min-w-0 flex-1">
                 <h1 className="flex min-w-0 items-baseline gap-2 text-[15px] font-semibold text-[#1f150c]">
                   <span className="truncate" title={b.fileName || undefined}>{b.fileName || 'Untitled import'}</span>
-                  <span className="shrink-0 rounded-md bg-[#f4eede] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[#412d15]">Batch #{b.id}</span>
+                  <span className="shrink-0 rounded-md bg-[#f4eede] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[#412d15]">Import #{b.id}</span>
                 </h1>
                 <p className="mt-0.5 truncate text-[11px] text-[#6b5c42]">
                   {src === 'WMS' || src === 'API' ? src : 'File import'}{b.deletedAt ? ' · In Trash' : ''}
@@ -2404,7 +2480,19 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
             columns={dhColumns}
             data={batches}
             search={{ value: filters.search, onChange: filters.setSearch, placeholder: 'Search file name, batch #, or user…' }}
-            filterToggle={filterMenu}
+            filterToggle={<>
+              <select
+                aria-label="Batch"
+                title="Show one label batch"
+                value={filters.batchNo}
+                onChange={(e) => filters.setBatchNo(e.target.value)}
+                className={`h-[30px] rounded-lg border bg-[#fcfaf5] px-2 text-[12.5px] outline-none focus:border-[#412d15] ${filters.batchNo ? 'border-[#412d15] font-semibold text-[#1f150c]' : 'border-[#e3d9c4] text-slate-700'}`}
+              >
+                <option value="">All batches</option>
+                {(summary?.labelBatches ?? []).map((n) => <option key={n} value={String(n)}>Batch {n}</option>)}
+              </select>
+              {filterMenu}
+            </>}
             filterPanel={
               <BulkFilterChips
                 statusFilter={filters.statusFilter}

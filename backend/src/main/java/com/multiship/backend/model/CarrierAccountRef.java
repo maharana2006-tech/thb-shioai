@@ -32,6 +32,7 @@ import java.time.LocalDateTime;
  * the migration own it. See V82__carrier_account_ref_per_client.sql.
  */
 @Entity
+@jakarta.persistence.EntityListeners(ImportRevalidationListener.class)
 @Table(name = "carrier_account_ref")
 @Data
 @Builder

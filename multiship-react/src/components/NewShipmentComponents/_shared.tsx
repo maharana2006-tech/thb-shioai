@@ -8,7 +8,7 @@
  * tolerates strings alongside components). Types live in
  * {@link ./_types.ts}.
  */
-import { cloneElement, isValidElement, type ReactNode } from 'react'
+import { cloneElement, Fragment, isValidElement, type ReactNode } from 'react'
 
 export const inputCls =
   'w-full rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13px] text-[#1f150c] outline-none transition placeholder:text-[#b6a684] focus:border-[#cdbf9f] focus:ring-4 focus:ring-[#f4eede] disabled:cursor-not-allowed disabled:bg-[#faf7f0] disabled:text-[#6b5c42]'
@@ -80,7 +80,8 @@ export function Field({
         {label}
         {required ? <span className="text-rose-500"> *</span> : null}
       </span>
-      {error && isValidElement<{ 'aria-invalid'?: boolean }>(children)
+      {/* A Fragment takes no props (React warned on every render); its inputs keep the red border. */}
+      {error && isValidElement<{ 'aria-invalid'?: boolean }>(children) && children.type !== Fragment
         ? cloneElement(children, { 'aria-invalid': true })
         : children}
       {error ? (

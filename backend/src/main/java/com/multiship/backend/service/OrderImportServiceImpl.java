@@ -297,7 +297,11 @@ public class OrderImportServiceImpl implements OrderImportService {
         java.util.Map<String, com.multiship.backend.model.CarrierAccountRef> accountCache = new java.util.HashMap<>();
         java.util.Map<String, String> tokenCache = new java.util.HashMap<>();
 
+        java.util.Map<String, List<java.util.Map<String, Object>>> shipViaCodesByClient = new java.util.HashMap<>();
         for (OrderImportRowDTO row : rows) {
+            // A row the app's own checks already failed must be fixed first; asking UPS
+            // about it costs a call and piles a second, vaguer error on top.
+            if (row.getErrors() != null && !row.getErrors().isEmpty()) continue;
             String carrier = row.getCarrierCode();
             if (!StringUtils.hasText(carrier)) continue;
             String canonical = com.multiship.backend.service.ShippingConfigService.canonicalCarrierFor(carrier);
@@ -317,8 +321,8 @@ public class OrderImportServiceImpl implements OrderImportService {
             if (origin == null || origin.getAddress() == null
                     || !StringUtils.hasText(origin.getAddress().getZip())) continue;
 
-            String tupleKey = origin.getAddress().getZip() + "|" + row.getPostalCode()
-                    + "|" + row.getServiceType() + "|" + clientCode.trim().toUpperCase(Locale.ROOT);
+            String tupleKey = origin.getAddress().getZip() + "|" + row.getCountryCode() + "|" + row.getPostalCode()
+                    + "|" + row.getServiceType() + "|" + row.getCurrency() + "|" + clientCode.trim().toUpperCase(Locale.ROOT);
             com.multiship.backend.service.carriers.CarrierConnector.ValidateShipmentResult result =
                     titCache.get(tupleKey);
             if (result == null) {
@@ -360,12 +364,157 @@ public class OrderImportServiceImpl implements OrderImportService {
                 titCache.put(tupleKey, result);
             }
             if (result != null && !result.valid()) {
-                List<String> errors = new java.util.ArrayList<>(
-                        row.getErrors() == null ? List.of() : row.getErrors());
-                errors.add(result.message());
-                row.setErrors(errors);
+                List<java.util.Map<String, Object>> codes = shipViaCodesByClient.computeIfAbsent(
+                        clientCode.trim().toUpperCase(Locale.ROOT), this::shipViaCodesOrEmpty);
+                addError(row, upsLaneMessage(row, result, codes));
+            } else if (result != null) {
+                // Say that UPS was asked and what it said — a silent pass looked like no check at all.
+                row.setCarrierNote(upsConfirmedNote(row, result.message()));
             }
         }
+    }
+
+    /** "serviceType — UPS Worldwide Saver (U65) is for shipments abroad and can't ship within the US. Use U11 (UPS Ground) or U43 (UPS 2nd Day Air) instead". */
+    static String intlOnlyMessage(String carrier, String shipVia, String client, String serviceName,
+                                  List<java.util.Map<String, Object>> clientCodes, Map<String, String> scopeByKey) {
+        List<String> usable = clientCodes.stream()
+                .filter(c -> carrier.equalsIgnoreCase(String.valueOf(c.get("carrier"))))
+                .filter(c -> !Boolean.FALSE.equals(c.get("enabled")))
+                .filter(c -> !"INTERNATIONAL".equals(scopeByKey.get(
+                        carrier + '|' + String.valueOf(c.get("serviceCode")).toUpperCase(Locale.ROOT))))
+                .map(c -> c.get("code") + " (" + c.get("serviceName") + ")")
+                .toList();
+        return "serviceType — " + serviceName + " (" + shipVia + ") is for shipments abroad and can't ship within the US. "
+                + (usable.isEmpty()
+                    ? "None of " + (client == null ? "this client" : client) + "'s ship via codes is domestic — "
+                        + "add one in Settings → Shipping Service Mapping"
+                    : "Use " + String.join(" or ", usable) + " instead");
+    }
+
+    /** "serviceType — UPS Ground (U11) doesn't deliver to AK. Use U43 (UPS 2nd Day Air) instead". */
+    static String laneMessage(OrderImportRowDTO row, String carrier, String service, String shipVia, String client,
+                              String serviceName, List<java.util.Map<String, Object>> clientCodes) {
+        String country = normalizeOrNull(row.getCountryCode());
+        String where = "US".equals(country) && StringUtils.hasText(row.getState())
+                ? row.getState().trim().toUpperCase(Locale.ROOT) : country;
+        List<String> usable = clientCodes.stream()
+                .filter(c -> carrier.equalsIgnoreCase(String.valueOf(c.get("carrier"))))
+                .filter(c -> !Boolean.FALSE.equals(c.get("enabled")))
+                .filter(c -> !shipVia.equalsIgnoreCase(String.valueOf(c.get("code"))))
+                .filter(c -> com.multiship.backend.service.carriers.CarrierServiceLaneRules.checkLane(
+                        carrier, String.valueOf(c.get("serviceCode")), row.getState(), row.getCountryCode()) == null)
+                .map(c -> c.get("code") + " (" + c.get("serviceName") + ")")
+                .toList();
+        return "serviceType — " + serviceName + " (" + shipVia + ") doesn't deliver to " + where + ". "
+                + (usable.isEmpty()
+                    ? "None of " + (client == null ? "this client" : client) + "'s ship via codes does — "
+                        + "add one in Settings → Shipping Service Mapping"
+                    : "Use " + String.join(" or ", usable) + " instead");
+    }
+
+    /** "UPS confirmed UPS Ground (U11) · 3 business days" from TiT's "UPS confirmed the lane for UPS Ground (3 business days transit)." */
+    static String upsConfirmedNote(OrderImportRowDTO row, String titMessage) {
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("UPS confirmed the lane for (.+?)(?: \\((\\d+) business days? transit\\))?\\.?$")
+                .matcher(titMessage == null ? "" : titMessage.trim());
+        String name = m.matches() ? m.group(1).replaceAll("[®™]", "") : "the service";
+        String days = m.matches() ? m.group(2) : null;
+        String code = StringUtils.hasText(row.getShipViaCode()) ? " (" + row.getShipViaCode().trim() + ")" : "";
+        return "UPS confirmed " + name + code
+                + (days == null ? "" : " · " + days + " business day" + ("1".equals(days) ? "" : "s"));
+    }
+
+    private List<java.util.Map<String, Object>> shipViaCodesOrEmpty(String client) {
+        if (shippingConfigService == null) return List.of();
+        try {
+            return shippingConfigService.shipViaCodesFor(client);
+        } catch (RuntimeException e) {
+            return List.of();
+        }
+    }
+
+    /**
+     * What UPS said about a row, in the operator's words and on the cell it is
+     * about: the service by its name and the client's own code ("UPS Ground
+     * (U11)", not "03"), the codes the client can type instead, and a plain
+     * sentence in place of UPS's error text.
+     */
+    String upsLaneMessage(OrderImportRowDTO row,
+                          com.multiship.backend.service.carriers.CarrierConnector.ValidateShipmentResult result,
+                          List<java.util.Map<String, Object>> clientCodes) {
+        String shipVia = normalizeOrNull(row.getShipViaCode());
+        String service = null;
+        for (java.util.Map<String, Object> c : clientCodes) {
+            if (shipVia != null && shipVia.equalsIgnoreCase(String.valueOf(c.get("code")))) {
+                service = c.get("serviceName") + " (" + shipVia + ")";
+            }
+        }
+        if (service == null) service = shipVia != null ? shipVia : "UPS service " + row.getServiceType();
+
+        if ("NOT_FOUND".equals(result.matchLevel())) {
+            java.util.Set<String> offered = upsServicesOffered(result.rawResponse());
+            if (offered.isEmpty()) {
+                return "serviceType — UPS doesn't deliver from the warehouse to this address with any service";
+            }
+            List<String> usable = clientCodes.stream()
+                    .filter(c -> "UPS".equalsIgnoreCase(String.valueOf(c.get("carrier"))))
+                    .filter(c -> !Boolean.FALSE.equals(c.get("enabled")))
+                    .filter(c -> offered.contains(String.valueOf(c.get("serviceCode")).toUpperCase(Locale.ROOT)))
+                    .map(c -> c.get("code") + " (" + c.get("serviceName") + ")")
+                    .toList();
+            String client = normalizeOrNull(row.getClientCode());
+            return "serviceType — UPS doesn't offer " + service + " to this address. "
+                    + (usable.isEmpty()
+                        ? "None of " + (client == null ? "this client" : client) + "'s ship via codes works here — "
+                            + "add one in Settings → Shipping Service Mapping"
+                        : "Use " + String.join(" or ", usable) + " instead");
+        }
+        return plainUpsError(result);
+    }
+
+    /** The services UPS offers on the lane, as the numeric codes the mapping uses ("GND" → "03"). */
+    private java.util.Set<String> upsServicesOffered(String rawResponse) {
+        java.util.Set<String> out = new java.util.HashSet<>();
+        if (!StringUtils.hasText(rawResponse)) return out;
+        java.util.Map<String, String> toNumeric = new java.util.HashMap<>();
+        com.multiship.backend.service.carriers.UpsConnector.NUMERIC_TO_TIT_ALPHA
+                .forEach((numeric, alpha) -> toNumeric.put(alpha.toUpperCase(Locale.ROOT), numeric));
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper m = importObjectMapper != null
+                    ? importObjectMapper : new com.fasterxml.jackson.databind.ObjectMapper();
+            for (com.fasterxml.jackson.databind.JsonNode s : m.readTree(rawResponse).at("/emsResponse/services")) {
+                String code = s.path("serviceLevel").asText("").trim().toUpperCase(Locale.ROOT);
+                if (!code.isEmpty()) out.add(toNumeric.getOrDefault(code, code));
+            }
+        } catch (Exception e) {
+            // unreadable answer: no alternatives to offer
+        }
+        return out;
+    }
+
+    /** UPS's error text as a sentence the operator can act on, starting with the field it is about. */
+    static String plainUpsError(com.multiship.backend.service.carriers.CarrierConnector.ValidateShipmentResult result) {
+        String raw = ((result.message() == null ? "" : result.message()) + " "
+                + String.join(" ", result.errors() == null ? List.of() : result.errors())).trim();
+        String t = raw.toLowerCase(Locale.ROOT);
+        if (t.contains("currency")) {
+            return "currency — UPS needs the currency of the goods' value: fill the currency column (e.g. USD)";
+        }
+        if (t.contains("401") || t.contains("403") || t.contains("unauthor") || t.contains("credential")) {
+            return "accountNumber — UPS refused the account's credentials: check the client's UPS account "
+                    + "in Settings → Carrier Accounts";
+        }
+        if (t.contains("postal") || t.contains("zip")) {
+            return "postalCode — UPS doesn't recognise this postal code for the address: check the city, state and postal code";
+        }
+        if (t.contains("stateprovince") || t.contains("state province") || t.contains("state code")) {
+            return "state — UPS doesn't accept this state or province for the address";
+        }
+        if (t.contains("ship date") || t.contains("call failed") || t.contains("timed out") || t.contains("i/o error")) {
+            return "serviceType — UPS couldn't be asked about this shipment just now: run Validate all again";
+        }
+        String detail = raw.replaceFirst("(?i)^UPS Time-in-Transit( rejected the request)?:?\\s*", "").trim();
+        return "serviceType — UPS couldn't confirm this shipment" + (detail.isEmpty() ? "" : ": " + detail);
     }
 
     /** Resolve the row's origin warehouse — row's own warehouseCode wins, else
@@ -420,6 +569,11 @@ public class OrderImportServiceImpl implements OrderImportService {
         dto.setRecipientCountryCode(row.getCountryCode());
         java.math.BigDecimal w = row.getWeight() != null ? row.getWeight() : java.math.BigDecimal.ONE;
         dto.setWeight(w);
+        dto.setDeclaredValueCurrency(StringUtils.hasText(row.getCurrency()) ? row.getCurrency().trim() : "USD");
+        if (row.getItemUnitValue() != null && row.getItemUnitValue().signum() > 0) {
+            int qty = row.getItemQuantity() == null || row.getItemQuantity() < 1 ? 1 : row.getItemQuantity();
+            dto.setDeclaredValue(row.getItemUnitValue().multiply(java.math.BigDecimal.valueOf(qty)));
+        }
         dto.setWeightUnit(StringUtils.hasText(row.getWeightUnit()) ? row.getWeightUnit() : "LBS");
         return dto;
     }
@@ -535,6 +689,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         dto.setGeneratedTrackingNumber(row.getGeneratedTrackingNumber());
         dto.setGeneratedStatus(row.getGeneratedStatus());
         dto.setGeneratedMessage(row.getGeneratedMessage());
+        dto.setCarrierNote(row.getCarrierNote());
 
         // Parse custom fields if present
         if (row.getCustomFields() != null && !row.getCustomFields().isEmpty() && importObjectMapper != null) {
@@ -1285,10 +1440,15 @@ public class OrderImportServiceImpl implements OrderImportService {
         // already skip such services) and was bought anyway at label time.
         Map<String, java.util.Set<String>> servicesByCarrier = new LinkedHashMap<>();
         Map<String, java.util.Set<String>> offByCarrier = new LinkedHashMap<>();
+        Map<String, String> serviceNameByKey = new java.util.HashMap<>();   // "UPS|03" → "UPS Ground"
+        Map<String, String> scopeByKey = new java.util.HashMap<>();         // "UPS|65" → "INTERNATIONAL"
         if (shippingServiceRepository != null) {
             for (com.multiship.backend.model.ShippingService s
                     : shippingServiceRepository.findAllByOrderByCarrierAscSortOrderAsc()) {
                 if (s.getCarrier() == null || s.getServiceCode() == null) continue;
+                String svcKey = s.getCarrier().toUpperCase(Locale.ROOT) + '|' + s.getServiceCode().toUpperCase(Locale.ROOT);
+                if (s.getName() != null) serviceNameByKey.put(svcKey, s.getName());
+                if (s.getScope() != null) scopeByKey.put(svcKey, s.getScope().trim().toUpperCase(Locale.ROOT));
                 (s.isEnabled() ? servicesByCarrier : offByCarrier)
                         .computeIfAbsent(s.getCarrier().toUpperCase(Locale.ROOT), k -> new java.util.HashSet<>())
                         .add(s.getServiceCode().toUpperCase(Locale.ROOT));
@@ -1308,6 +1468,7 @@ public class OrderImportServiceImpl implements OrderImportService {
 
         // The account a blank accountNumber resolves to, once per client and carrier (it was per row).
         Map<String, BulkAccountPick> accountPicks = new java.util.HashMap<>();
+        Map<String, List<java.util.Map<String, Object>>> shipViaCodesByClient = new java.util.HashMap<>();
         // ---- per-row checks against the snapshot ----
         for (OrderImportRowDTO row : rows) {
             List<String> errors = new ArrayList<>(row.getErrors() == null ? List.of() : row.getErrors());
@@ -1334,6 +1495,16 @@ public class OrderImportServiceImpl implements OrderImportService {
             if (carrier != null && !KNOWN_CARRIERS.contains(carrier)) {
                 errors.add("carrierCode '" + carrier + "' is not supported (UPS, FEDEX, USPS, DHL)");
             }
+            // UPS does not deliver to PO Boxes: the label is bought and the parcel comes back.
+            if (carrier != null && "UPS".equalsIgnoreCase(
+                    com.multiship.backend.service.ShippingConfigService.canonicalCarrierFor(carrier))) {
+                if (StringUtils.hasText(row.getAddressLine1()) && PO_BOX.matcher(row.getAddressLine1()).find()) {
+                    errors.add("addressLine1 is a PO Box — UPS can't deliver to a PO Box, use a street address");
+                }
+                if (StringUtils.hasText(row.getAddressLine2()) && PO_BOX.matcher(row.getAddressLine2()).find()) {
+                    errors.add("addressLine2 is a PO Box — UPS can't deliver to a PO Box, use a street address");
+                }
+            }
 
             String account = normalizeOrNull(row.getAccountNumber());
             boolean thirdParty = "THIRD_PARTY".equalsIgnoreCase(
@@ -1349,8 +1520,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                 String rowClient = normalizeOrNull(row.getClientCode());
                 if (owner == null) {
                     errors.add("accountNumber " + account + " is not a registered " + carrier
-                            + " account for client " + (rowClient == null ? "(blank)" : rowClient)
-                            + " or the platform");
+                            + " account for client " + (rowClient == null ? "(blank)" : rowClient));
                 } else if (!owner.isEmpty() && rowClient != null && !owner.equals(rowClient)) {
                     errors.add("accountNumber " + account + " belongs to client " + owner
                             + ", not " + rowClient);
@@ -1450,6 +1620,27 @@ public class OrderImportServiceImpl implements OrderImportService {
             }
             if (row.getShipViaNote() != null && row.getShipViaNote().contains("the mapping wins")) {
                 warnings.add(row.getShipViaNote());
+            }
+            // The service must reach the destination (UPS Ground and Alaska, …). Checked
+            // here, after the mapping, so the upload screen and the saved batch agree, and
+            // said in the client's own codes.
+            String mappedCarrier = normalizeOrNull(row.getCarrierCode());
+            String dest = normalizeOrNull(row.getCountryCode());
+            if (shipVia != null && service != null && mappedCarrier != null && "US".equals(dest)
+                    && "INTERNATIONAL".equals(scopeByKey.get(mappedCarrier + '|' + service))) {
+                // An international-only service to a US address: only UPS used to notice, at Validate all.
+                // ponytail: assumes a US warehouse, as the rest of the import does; origin-aware when needed.
+                List<java.util.Map<String, Object>> codes = shipViaCodesByClient.computeIfAbsent(
+                        client == null ? "" : client, this::shipViaCodesOrEmpty);
+                errors.add(intlOnlyMessage(mappedCarrier, shipVia, client,
+                        serviceNameByKey.getOrDefault(mappedCarrier + '|' + service, service), codes, scopeByKey));
+            } else if (shipVia != null && service != null && mappedCarrier != null
+                    && com.multiship.backend.service.carriers.CarrierServiceLaneRules.checkLane(
+                            mappedCarrier, service, row.getState(), row.getCountryCode()) != null) {
+                List<java.util.Map<String, Object>> codes = shipViaCodesByClient.computeIfAbsent(
+                        client == null ? "" : client, this::shipViaCodesOrEmpty);
+                errors.add(laneMessage(row, mappedCarrier, service, shipVia, client,
+                        serviceNameByKey.getOrDefault(mappedCarrier + '|' + service, service), codes));
             }
 
             String pkg = normalizeOrNull(row.getPackageType());
@@ -1576,7 +1767,8 @@ public class OrderImportServiceImpl implements OrderImportService {
 
             // Anything left over matched no definition for this client.
             for (String unknown : provided.keySet()) {
-                addWarning(row, "column '" + unknown + "' is not a recognised field for "
+                String unused = ImportColumnAliases.unusedWarning(unknown);
+                addWarning(row, unused != null ? unused : "column '" + unknown + "' is not a recognised field for "
                         + (tenant == null ? "the platform" : tenant) + " — it will be ignored");
             }
             row.setCustomFields(resolved.isEmpty() ? null : resolved);
@@ -2090,7 +2282,8 @@ public class OrderImportServiceImpl implements OrderImportService {
                 if (lb != null && service.getMaxWeightLb() != null
                         && lb.compareTo(new BigDecimal(service.getMaxWeightLb())) > 0) {
                     addError(row, "weight " + lb.setScale(1, java.math.RoundingMode.HALF_UP)
-                            + " lb exceeds the " + service.getMaxWeightLb() + " lb limit for " + serviceCode);
+                            + " lb exceeds the " + service.getMaxWeightLb() + " lb limit for " + service.getName()
+                            + (row.getShipViaCode() != null ? " (" + row.getShipViaCode() + ")" : ""));
                 }
 
                 // Package must be one this service accepts.
@@ -2251,13 +2444,14 @@ public class OrderImportServiceImpl implements OrderImportService {
         String ext = filename == null ? "" : filename.toLowerCase(Locale.ROOT);
         try {
             List<OrderImportRowDTO> rows;
+            List<String> fileColumns = new ArrayList<>();
             // .xlsm is the same OOXML workbook as .xlsx plus a macro project,
             // and the template we hand out IS an .xlsm — refusing it sent
             // operators back to Save As for no reason. POI reads both.
             if (ext.endsWith(".xlsx") || ext.endsWith(".xlsm")) {
-                rows = parseXlsx(body);
+                rows = parseXlsx(body, fileColumns);
             } else if (ext.endsWith(".csv") || ext.endsWith(".txt")) {
-                rows = parseCsv(body);
+                rows = parseCsv(body, fileColumns);
             } else {
                 return failure(HttpStatus.UNSUPPORTED_MEDIA_TYPE,
                         "Only .csv, .txt, .xlsx and .xlsm files are supported.");
@@ -2285,7 +2479,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                             .findFirstByFileNameIgnoreCaseAndDeletedAtIsNullOrderByIdDesc(normName).orElse(null);
                     if (byName != null) {
                         return failure(HttpStatus.CONFLICT,
-                                "A file named \"" + normName + "\" is already imported as #" + byName.getId()
+                                "A file named \"" + normName + "\" is already imported as import #" + byName.getId()
                                 + (byName.getCreatedAt() != null ? " on " + byName.getCreatedAt().toLocalDate() : "")
                                 + ". Delete it from Import history (or rename the file) before importing again.");
                     }
@@ -2296,7 +2490,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                             .findFirstByContentHashAndDeletedAtIsNullOrderByIdDesc(hash).orElse(null);
                     if (dup != null) {
                         return failure(HttpStatus.CONFLICT,
-                                "This file was already imported as #" + dup.getId()
+                                "This file was already imported as import #" + dup.getId()
                                 + " (" + (StringUtils.hasText(dup.getFileName()) ? dup.getFileName() : "Untitled") + ")"
                                 + ". Edit a value or upload a different file to import a changed version.");
                     }
@@ -2350,6 +2544,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                 }
             }
             OrderImportPreviewDTO preview = buildPreview(rows);
+            preview.setFileColumns(fileColumns);
             preview.setBatchId(rows.isEmpty() ? null : rows.get(0).getBatchId());
             return success(preview, rows.size() + " row(s) parsed.");
         } catch (Exception ex) {
@@ -2382,6 +2577,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         for (OrderImportRowDTO row : rows) {
             row.setErrors(validateRow(row));
             row.setWarnings(List.of()); // clear warnings; will be re-added by validators below
+            row.setCarrierNote(null);   // a check of the row as it was; Validate all asks again
         }
         resolveNamesToCodes(rows, requireMapping);
         validateReferences(rows, requireMapping);
@@ -2858,7 +3054,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                     .findFirstByFileNameIgnoreCaseAndDeletedAtIsNullOrderByIdDesc(normName).orElse(null);
             if (byName != null) {
                 return failure(HttpStatus.CONFLICT,
-                        "A file named \"" + normName + "\" is already imported as #" + byName.getId()
+                        "A file named \"" + normName + "\" is already imported as import #" + byName.getId()
                         + (byName.getCreatedAt() != null ? " on " + byName.getCreatedAt().toLocalDate() : "")
                         + ". Delete it from Import history (or rename the file) before importing again.");
             }
@@ -2868,7 +3064,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                 if (dup != null) {
                     String dupName = StringUtils.hasText(dup.getFileName()) ? dup.getFileName() : "Untitled";
                     return failure(HttpStatus.CONFLICT,
-                            "This file was already imported as #" + dup.getId() + " (" + dupName + ")"
+                            "This file was already imported as import #" + dup.getId() + " (" + dupName + ")"
                             + (dup.getCreatedAt() != null ? " on " + dup.getCreatedAt().toLocalDate() : "")
                             + ". Edit a value or upload a different file to import a changed version.");
                 }
@@ -3485,9 +3681,9 @@ public class OrderImportServiceImpl implements OrderImportService {
                                   List<OrderImportRowDTO> rowsToProcess, boolean platform, String previousStatus) {}
 
     /** Stored rows synced with live orders, and the subset still to send. */
-    private record GenerationRows(List<OrderImportRowDTO> rows, List<OrderImportRowDTO> rowsToProcess, boolean platform) {}
+    record GenerationRows(List<OrderImportRowDTO> rows, List<OrderImportRowDTO> rowsToProcess, boolean platform) {}
 
-    private GenerationRows toGenerationRows(com.multiship.backend.model.ImportBatch batch, Integer labelBatchId,
+    GenerationRows toGenerationRows(com.multiship.backend.model.ImportBatch batch, Integer labelBatchId,
                                             List<OrderImportRowDTO> rows, boolean usePlatformAccount) {
         // A row's status is frozen at generation time. If its order was since
         // repaired from the Orders grid (Edit → Fix & regenerate), it is live
@@ -3496,9 +3692,18 @@ public class OrderImportServiceImpl implements OrderImportService {
         // also what makes a re-queued job safe to run again after a crash.
         syncRowsWithLiveOrders(rows, labelBatchId);
         // Rows that already carry a label are never sent again — Generate as well
-        // as Retry.
+        // as Retry. Nor is an order any of whose rows holds an error: the stored
+        // errors are the last check (Validate all asks UPS too; the run itself does
+        // not), so re-checking here dropped UPS's "not offered to this address" and
+        // FT-07 went to UPS, got an order, and failed.
+        java.util.Set<String> broken = new java.util.HashSet<>();
+        for (OrderImportRowDTO r : rows) {
+            if (!"GENERATED".equalsIgnoreCase(r.getGeneratedStatus())
+                    && r.getErrors() != null && !r.getErrors().isEmpty()) broken.add(groupKeyOf(r));
+        }
         List<OrderImportRowDTO> rowsToProcess = rows.stream()
                 .filter(r -> !"GENERATED".equalsIgnoreCase(r.getGeneratedStatus()))
+                .filter(r -> !broken.contains(groupKeyOf(r)))
                 .toList();
         // A retry stays in the file's label batch: rows edited in the grid
         // may have lost their stamp, and the commit would mint a new batch
@@ -3557,12 +3762,12 @@ public class OrderImportServiceImpl implements OrderImportService {
         // Nothing the carrier can be asked for — every order is labelled already or
         // still needs fixes. Say so instead of starting an empty run.
         {
+            // rowsToProcess already leaves out orders with errors; count those from the unlabelled rows.
             int needFix = 0;
-            boolean anyEligible = false;
-            for (List<OrderImportRowDTO> g : stagingGroups(rowsToProcess).values()) {
-                boolean hasErrors = g.stream().anyMatch(r -> r.getErrors() != null && !r.getErrors().isEmpty());
-                if (hasErrors) needFix++;
-                else anyEligible = true;
+            boolean anyEligible = !rowsToProcess.isEmpty();
+            for (List<OrderImportRowDTO> g : stagingGroups(gen.rows().stream()
+                    .filter(r -> !"GENERATED".equalsIgnoreCase(r.getGeneratedStatus())).toList()).values()) {
+                if (g.stream().anyMatch(r -> r.getErrors() != null && !r.getErrors().isEmpty())) needFix++;
             }
             if (!anyEligible) {
                 throw new ImportBatchStateException(422, needFix > 0
@@ -3916,9 +4121,42 @@ public class OrderImportServiceImpl implements OrderImportService {
      *
      * <p>Called from OrderImportController.cancelGeneration().
      */
+    /** Batches a Validate all is running for — a second click waits its turn with a 409. */
+    private final java.util.Set<Long> validatingBatchIds = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     @Override
     public com.multiship.backend.dto.ImportBatchDTO validateAllRows(Long id, String requestedBy) {
         if (importBatchRepository == null || id == null) return null;
+        if (!validatingBatchIds.add(id)) {
+            throw new ImportBatchStateException(409, "Validate all is already running for this import — wait for it to finish.");
+        }
+        try {
+            return validateAllRowsLocked(id, true);
+        } finally {
+            validatingBatchIds.remove(id);
+        }
+    }
+
+    /** An error only UPS gave (Validate all): "serviceType — UPS doesn't offer …", "currency — UPS needs …". */
+    private static final java.util.regex.Pattern UPS_ANSWER =
+            java.util.regex.Pattern.compile("^\\w+ — UPS (doesn't|couldn't|needs|refused) ");
+
+    /**
+     * Check a saved import again after settings it depends on changed (a client
+     * added, an account or ship via mapping edited) — the app's own checks only.
+     * UPS isn't asked: its last answers (errors and route confirmations) stay
+     * until the next Validate all. Skipped while a Validate all runs on it.
+     */
+    public void recheckInBackground(Long id) {
+        if (importBatchRepository == null || id == null || !validatingBatchIds.add(id)) return;
+        try {
+            validateAllRowsLocked(id, false);
+        } finally {
+            validatingBatchIds.remove(id);
+        }
+    }
+
+    private com.multiship.backend.dto.ImportBatchDTO validateAllRowsLocked(Long id, boolean askUps) {
         com.multiship.backend.model.ImportBatch batch = importBatchRepository.findById(id).orElse(null);
         if (batch == null) return null;
 
@@ -3932,15 +4170,33 @@ public class OrderImportServiceImpl implements OrderImportService {
         // Tenant match — enforce access control
         requireMatch(firstClientCode(rows));
 
+        // What UPS said last time, kept when this check doesn't ask it again.
+        Map<Integer, List<String>> upsErrors = new java.util.HashMap<>();
+        Map<Integer, String> upsNotes = new java.util.HashMap<>();
+        if (!askUps) {
+            for (OrderImportRowDTO r : rows) {
+                upsNotes.put(r.getRowNumber(), r.getCarrierNote());
+                upsErrors.put(r.getRowNumber(), (r.getErrors() == null ? List.<String>of() : r.getErrors()).stream()
+                        .filter(e -> e != null && UPS_ANSWER.matcher(e).find()).toList());
+            }
+        }
+
         // Re-validate all rows
-        log.info("Validating all {} rows in batch {}", rows.size(), id);
+        log.info("Validating all {} rows in batch {}{}", rows.size(), id, askUps ? "" : " (settings changed)");
         validate(rows, !isApiSource(batch.getSource()));
 
         // UPS Time-in-Transit lane check for UPS rows. Dedup by (warehouse,
         // destZip, service) so a 5k-row batch fires a handful of API calls,
         // not thousands. TiT unreachable on a UPS row → NEEDS_FIX per operator
         // spec (label would 400 later anyway); non-UPS rows unaffected.
-        applyUpsTitLaneCheck(rows);
+        if (askUps) {
+            applyUpsTitLaneCheck(rows);
+        } else {
+            for (OrderImportRowDTO r : rows) {
+                for (String e : upsErrors.getOrDefault(r.getRowNumber(), List.of())) addError(r, e);
+                if (r.getErrors() == null || r.getErrors().isEmpty()) r.setCarrierNote(upsNotes.get(r.getRowNumber()));
+            }
+        }
 
         // Update errors/warnings in import_batch_row for WMS/API batches
         boolean isWmsOrApi = batch.getSource() != null &&
@@ -5108,6 +5364,35 @@ public class OrderImportServiceImpl implements OrderImportService {
         return sb.toString().getBytes(StandardCharsets.UTF_8);
     }
 
+    @Override
+    public byte[] clientLayoutCsvTemplate() {
+        List<String> keys = ImportColumnAliases.clientLayoutKeys();
+        StringBuilder sb = new StringBuilder(String.join(",", ImportColumnAliases.CLIENT_LAYOUT)).append('\n');
+        for (Map<String, String> row : sampleRows(sampleClientCode())) {
+            // An extra item line joins its order by orderRef, which this layout doesn't have.
+            if (!StringUtils.hasText(row.get("recipientName"))) continue;
+            List<String> cells = new ArrayList<>(keys.size());
+            for (String k : keys) cells.add(csvCell(row.getOrDefault(k, "")));
+            sb.append(String.join(",", cells)).append('\n');
+        }
+        return sb.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    @Override
+    public byte[] clientLayoutXlsxTemplate() {
+        TemplateData d = templateData(null);
+        return OrderImportTemplateBuilder.build(
+                ImportColumnAliases.clientLayoutKeys(), ImportColumnAliases.clientHeaderNames(),
+                d.clients(), d.accounts(), d.clientWarehouseCodes(), d.services(), d.presets(),
+                shipViaCodesByClient(d.clients(), d.services()));
+    }
+
+    /** A CSV cell, quoted when it holds a comma, quote or line break. */
+    private static String csvCell(String v) {
+        if (v == null) return "";
+        return v.contains(",") || v.contains("\"") || v.contains("\n") ? "\"" + v.replace("\"", "\"\"") + "\"" : v;
+    }
+
     private static Map<String, String> sampleRow(String... kv) {
         Map<String, String> m = new LinkedHashMap<>();
         for (int i = 0; i + 1 < kv.length; i += 2) m.put(kv[i], kv[i + 1]);
@@ -5158,6 +5443,11 @@ public class OrderImportServiceImpl implements OrderImportService {
     /* -------------------------- Parsers -------------------------- */
 
     private List<OrderImportRowDTO> parseCsv(InputStream body) throws Exception {
+        return parseCsv(body, new ArrayList<>());
+    }
+
+    /** @param fileColumns filled with the file's own column names, in order. */
+    private List<OrderImportRowDTO> parseCsv(InputStream body, List<String> fileColumns) throws Exception {
         List<OrderImportRowDTO> out = new ArrayList<>();
         // Wrap in a PushbackInputStream so we can peek + swallow a UTF-8
         // BOM (0xEF 0xBB 0xBF) — Excel writes one when Save As CSV, and
@@ -5179,13 +5469,15 @@ public class OrderImportServiceImpl implements OrderImportService {
                      .setHeader().setSkipHeaderRecord(true)
                      .setIgnoreEmptyLines(true).setTrim(true)
                      .build().parse(reader)) {
+            parser.getHeaderNames().stream().filter(StringUtils::hasText).map(String::trim).forEach(fileColumns::add);
             Map<String, Integer> headerMap = lowerCasedHeaderMap(parser.getHeaderMap());
+            ImportColumnAliases.addFieldNames(headerMap);   // the client layout (CLIENT_ID, SHIPVIA_CD, …)
             Map<String, OrderImportRowDTO> leaders = new LinkedHashMap<>();
             int rowNo = 0;
             for (CSVRecord rec : parser) {
                 rowNo++;
                 if (isBlank(rec)) continue;
-                ColumnReader csvReader = name -> get(rec, headerMap, name);
+                ColumnReader csvReader = withLayoutDefaults(name -> get(rec, headerMap, name), headerMap);
                 OrderImportRowDTO built = buildRow(rowNo, csvReader);
                 inheritFromLeader(built, leaders);
                 captureExtraColumns(built, headerMap, csvReader);
@@ -5218,7 +5510,8 @@ public class OrderImportServiceImpl implements OrderImportService {
             if (header == null) continue;
             for (Cell cell : header) {
                 String label = fmt.formatCellValue(cell).trim().toLowerCase(Locale.ROOT);
-                if ("orderref".equals(label) || "clientcode".equals(label) || "recipientname".equals(label)) {
+                if ("orderref".equals(label) || "clientcode".equals(label) || "recipientname".equals(label)
+                        || "client_id".equals(label) || "shipvia_cd".equals(label)) {
                     return candidate;
                 }
             }
@@ -5227,6 +5520,11 @@ public class OrderImportServiceImpl implements OrderImportService {
     }
 
     private List<OrderImportRowDTO> parseXlsx(InputStream body) throws Exception {
+        return parseXlsx(body, new ArrayList<>());
+    }
+
+    /** @param fileColumns filled with the sheet's own column names, in order. */
+    private List<OrderImportRowDTO> parseXlsx(InputStream body, List<String> fileColumns) throws Exception {
         List<OrderImportRowDTO> out = new ArrayList<>();
         DataFormatter fmt = new DataFormatter();
         try (Workbook workbook = new XSSFWorkbook(body)) {
@@ -5240,9 +5538,11 @@ public class OrderImportServiceImpl implements OrderImportService {
                     String label = fmt.formatCellValue(cell).trim();
                     if (StringUtils.hasText(label)) {
                         headerMap.put(label.toLowerCase(Locale.ROOT), cell.getColumnIndex());
+                        fileColumns.add(label);
                     }
                 }
             }
+            ImportColumnAliases.addFieldNames(headerMap);   // the client layout (CLIENT_ID, SHIPVIA_CD, …)
 
             int rowNo = 0;
             Map<String, OrderImportRowDTO> xlsxLeaders = new LinkedHashMap<>();
@@ -5258,7 +5558,8 @@ public class OrderImportServiceImpl implements OrderImportService {
 
                 Map<String, Integer> capturedHeader = headerMap;
                 int finalI = i;
-                ColumnReader xlsxReader = name -> readCell(sheet, finalI, capturedHeader, name, fmt);
+                ColumnReader xlsxReader = withLayoutDefaults(
+                        name -> readCell(sheet, finalI, capturedHeader, name, fmt), capturedHeader);
                 OrderImportRowDTO built = buildRow(rowNo, xlsxReader);
                 inheritFromLeader(built, xlsxLeaders);
                 captureExtraColumns(built, capturedHeader, xlsxReader);
@@ -5349,7 +5650,8 @@ public class OrderImportServiceImpl implements OrderImportService {
         Map<String, String> extras = new LinkedHashMap<>();
         for (String header : headerMap.keySet()) {
             if (header == null || header.isBlank() || KNOWN_HEADERS_LOWER.contains(header)
-                    || IGNORED_HEADERS_LOWER.contains(header)) continue;
+                    || IGNORED_HEADERS_LOWER.contains(header)
+                    || (ImportColumnAliases.isClientColumn(header) && ImportColumnAliases.unusedWarning(header) == null)) continue;
             String value = sanitise(reader.read(header));
             if (StringUtils.hasText(value)) extras.put(header.trim(), value);
         }
@@ -5388,6 +5690,24 @@ public class OrderImportServiceImpl implements OrderImportService {
     @FunctionalInterface
     private interface ColumnReader {
         String read(String columnName);
+    }
+
+    /**
+     * What a file that lacks a column still says: no weightUnit column → pounds
+     * (the client layout has WEIGHT only); a THIRD_PARTY_ACC with no billTo
+     * column → billed to that third party.
+     */
+    private static ColumnReader withLayoutDefaults(ColumnReader r, Map<String, Integer> lowerHeaderMap) {
+        boolean noUnit = !lowerHeaderMap.containsKey("weightunit");
+        boolean thirdPartyAcc = lowerHeaderMap.containsKey("third_party_acc") && !lowerHeaderMap.containsKey("billto");
+        return name -> {
+            String v = r.read(name);
+            if (v != null) return v;
+            String n = name.toLowerCase(Locale.ROOT);
+            if (noUnit && "weightunit".equals(n) && r.read("weight") != null) return "LB";
+            if (thirdPartyAcc && "billto".equals(n) && r.read("third_party_acc") != null) return "THIRD_PARTY";
+            return null;
+        };
     }
 
     OrderImportRowDTO buildRow(int rowNumber, ColumnReader r) {
@@ -5604,6 +5924,42 @@ public class OrderImportServiceImpl implements OrderImportService {
             Map.entry("MX", java.util.regex.Pattern.compile("^\\d{5}$")),
             Map.entry("SG", java.util.regex.Pattern.compile("^\\d{6}$")));
 
+    /** First three ZIP digits → state, for the 50 states and DC (territories and military ZIPs are left out). */
+    private static final int[][] US_ZIP3_RANGES = {
+            {10, 27}, {28, 29}, {30, 38}, {39, 49}, {50, 54}, {55, 55}, {56, 59}, {60, 69}, {70, 89},
+            {100, 149}, {150, 196}, {197, 199}, {200, 200}, {201, 201}, {202, 205}, {206, 219}, {220, 246},
+            {247, 268}, {270, 289}, {290, 299}, {300, 319}, {320, 339}, {341, 349}, {350, 369}, {370, 385},
+            {386, 397}, {398, 399}, {400, 427}, {430, 459}, {460, 479}, {480, 499}, {500, 528}, {530, 549},
+            {550, 567}, {569, 569}, {570, 577}, {580, 588}, {590, 599}, {600, 629}, {630, 658}, {660, 679},
+            {680, 693}, {700, 714}, {716, 729}, {730, 731}, {733, 733}, {734, 749}, {750, 799}, {800, 816},
+            {820, 831}, {832, 838}, {840, 847}, {850, 865}, {870, 884}, {885, 885}, {889, 898}, {900, 961},
+            {967, 968}, {970, 979}, {980, 994}, {995, 999}};
+    private static final String[] US_ZIP3_STATES = {
+            "MA", "RI", "NH", "ME", "VT", "MA", "VT", "CT", "NJ",
+            "NY", "PA", "DE", "DC", "VA", "DC", "MD", "VA",
+            "WV", "NC", "SC", "GA", "FL", "FL", "AL", "TN",
+            "MS", "GA", "KY", "OH", "IN", "MI", "IA", "WI",
+            "MN", "DC", "SD", "ND", "MT", "IL", "MO", "KS",
+            "NE", "LA", "AR", "OK", "TX", "OK", "TX", "CO",
+            "WY", "ID", "UT", "AZ", "NM", "TX", "NV", "CA",
+            "HI", "OR", "WA", "AK"};
+
+    /** The state a US ZIP is in, from its first three digits; null when the prefix isn't a state's. */
+    public static String usStateForZip(String zip) {
+        if (zip == null || zip.length() < 3 || !Character.isDigit(zip.charAt(0))
+                || !Character.isDigit(zip.charAt(1)) || !Character.isDigit(zip.charAt(2))) return null;
+        int p = Integer.parseInt(zip.substring(0, 3));
+        if (p == 5) return "NY";   // 005 — Holtsville IRS
+        for (int i = 0; i < US_ZIP3_RANGES.length; i++) {
+            if (p >= US_ZIP3_RANGES[i][0] && p <= US_ZIP3_RANGES[i][1]) return US_ZIP3_STATES[i];
+        }
+        return null;
+    }
+
+    /** "PO Box 12", "P.O. Box", "Post Office Box". */
+    static final java.util.regex.Pattern PO_BOX = java.util.regex.Pattern.compile(
+            "\\bp\\.?\\s*o\\.?\\s*box\\b|\\bpost\\s+office\\s+box\\b", java.util.regex.Pattern.CASE_INSENSITIVE);
+
     public static List<String> validateRow(OrderImportRowDTO row) {
         List<String> errors = new ArrayList<>();
         // Sprint 51 — clientCode is the owning-client identifier; a blank one
@@ -5660,6 +6016,16 @@ public class OrderImportServiceImpl implements OrderImportService {
             } else if (p == null && !GENERIC_ZIP.matcher(zip.trim()).matches()) {
                 // Unmodelled country — still enforce a sane postal shape.
                 errors.add("postalCode '" + zip + "' is not a valid postal code");
+            }
+        }
+        // A US ZIP belongs to one state, and its first three digits say which:
+        // CA with ZIP 60606 (Chicago) used to pass and only failed at the carrier.
+        if ("US".equals(countryUp) && StringUtils.hasText(zip) && StringUtils.hasText(row.getState())) {
+            String zipState = usStateForZip(zip.trim());
+            String st = row.getState().trim().toUpperCase(Locale.ROOT);
+            if (zipState != null && US_STATES.contains(st) && !zipState.equals(st)) {
+                errors.add("postalCode " + zip.trim() + " is in " + zipState + ", not " + st
+                        + " — correct the state or the ZIP");
             }
         }
         String email = row.getRecipientEmail();
@@ -5754,10 +6120,12 @@ public class OrderImportServiceImpl implements OrderImportService {
         // CarrierServiceLaneRules; ignored on non-US lanes and on
         // service/carrier combos we don't have a rule for (falls through
         // to the reactive carrier response, same as pre-fix behaviour).
-        String laneErr = com.multiship.backend.service.carriers.CarrierServiceLaneRules
-                .checkLane(row.getCarrierCode(), row.getServiceType(),
-                        row.getState(), row.getCountryCode());
-        if (laneErr != null) errors.add("serviceType: " + laneErr);
+        // A row a ship via rule resolved is checked after the mapping instead
+        // (validateReferences), in the client's own codes.
+        String laneErr = StringUtils.hasText(row.getShipViaCode()) ? null
+                : com.multiship.backend.service.carriers.CarrierServiceLaneRules
+                        .checkLane(row.getCarrierCode(), row.getServiceType(), row.getState(), row.getCountryCode());
+        if (laneErr != null) errors.add("serviceType — " + laneErr);
 
         // Batch #6 post-mortem (2026-09-12) — US exports to strategic-
         // country destinations (CN + others) require an EEI filing
@@ -5876,9 +6244,13 @@ public class OrderImportServiceImpl implements OrderImportService {
         // that crosses a border, which otherwise defaults through and fails at
         // the carrier for a second, unrelated-looking reason.
         Map<String, Map<String, String>> serviceScope = new java.util.HashMap<>();
+        Map<String, String> serviceNames = new java.util.HashMap<>();   // "UPS|03" → "UPS Ground"
         if (shippingServiceRepository != null) {
             for (com.multiship.backend.model.ShippingService s
                     : shippingServiceRepository.findAllByOrderByCarrierAscSortOrderAsc()) {
+                if (s.getCarrier() != null && s.getServiceCode() != null && s.getName() != null) {
+                    serviceNames.put(s.getCarrier().toUpperCase(Locale.ROOT) + '|' + s.getServiceCode().toUpperCase(Locale.ROOT), s.getName());
+                }
                 if (s.getCarrier() == null || s.getServiceCode() == null || s.getScope() == null) continue;
                 serviceScope
                         .computeIfAbsent(s.getCarrier().toUpperCase(Locale.ROOT), k -> new java.util.HashMap<>())
@@ -5925,9 +6297,12 @@ public class OrderImportServiceImpl implements OrderImportService {
             } else if (carr != null) {
                 String scope = serviceScope.getOrDefault(carr, java.util.Map.of()).get(svc);
                 if ("DOMESTIC".equals(scope)) {
-                    errs.add("serviceType '" + svc + "' is a domestic-only service and cannot ship to "
-                            + country.trim().toUpperCase(Locale.ROOT)
-                            + "; choose an international service for this carrier");
+                    // Name the service the operator knows: "UPS Ground (U11)", not the carrier's "03".
+                    String name = serviceNames.getOrDefault(carr + '|' + svc, svc);
+                    String shipVia = leader.getShipViaCode();
+                    errs.add("serviceType " + name + (StringUtils.hasText(shipVia) ? " (" + shipVia.trim() + ")" : "")
+                            + " is domestic only and can't ship to " + country.trim().toUpperCase(Locale.ROOT)
+                            + " — use an international service for this carrier");
                 }
             }
 
@@ -6748,7 +7123,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                             .findFirstByFileNameIgnoreCaseAndDeletedAtIsNullOrderByIdDesc(normName).orElse(null);
                     if (byName != null) {
                         return stagingFailure(HttpStatus.CONFLICT,
-                                "A file named \"" + normName + "\" is already imported as #" + byName.getId()
+                                "A file named \"" + normName + "\" is already imported as import #" + byName.getId()
                                 + (byName.getCreatedAt() != null ? " on " + byName.getCreatedAt().toLocalDate() : "")
                                 + ". Delete it from Import history (or rename the file) before importing again.");
                     }
@@ -6758,7 +7133,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                             .findFirstByContentHashAndDeletedAtIsNullOrderByIdDesc(hash).orElse(null);
                     if (dup != null) {
                         return stagingFailure(HttpStatus.CONFLICT,
-                                "This file was already imported as #" + dup.getId()
+                                "This file was already imported as import #" + dup.getId()
                                 + " (" + (StringUtils.hasText(dup.getFileName()) ? dup.getFileName() : "Untitled") + ")"
                                 + ". Edit a value or upload a different file to import a changed version.");
                     }
@@ -6771,6 +7146,8 @@ public class OrderImportServiceImpl implements OrderImportService {
         up.setCreatedBy(requestedBy);
         up.setFileName(StringUtils.hasText(filename) ? clip(filename.trim(), 260) : "upload");
         up.setContentHash(hash);
+        List<String> fileColumns = parsed.getData().getFileColumns();
+        up.setFileColumns(fileColumns == null || fileColumns.isEmpty() ? null : String.join("\n", fileColumns));
         up.setStatus("OPEN");
         up.setCreatedAt(now);
         up.setUpdatedAt(now);
@@ -6901,14 +7278,14 @@ public class OrderImportServiceImpl implements OrderImportService {
         // with "Upload anyway") would be saved a second time — ask first.
         if (!allowDuplicate) {
             java.util.LinkedHashMap<String, String> dups = new java.util.LinkedHashMap<>();
-            java.util.regex.Pattern importNo = java.util.regex.Pattern.compile("\\(#(\\d+)\\)");
+            java.util.regex.Pattern importNo = java.util.regex.Pattern.compile("\\(import #(\\d+)\\)");
             for (OrderImportRowDTO r : toSave) {
                 if (r.getWarnings() == null) continue;
                 for (String w : r.getWarnings()) {
                     if (w == null || !w.contains(IN_HISTORY_MARKER)) continue;
                     java.util.regex.Matcher m = importNo.matcher(w);
                     dups.putIfAbsent(StringUtils.hasText(r.getOrderRef()) ? r.getOrderRef().trim() : "row " + r.getRowNumber(),
-                            m.find() ? "#" + m.group(1) : "?");
+                            m.find() ? "import #" + m.group(1) : "?");
                 }
             }
             if (!dups.isEmpty()) {
@@ -7147,7 +7524,17 @@ public class OrderImportServiceImpl implements OrderImportService {
                 .createdAt(up.getCreatedAt())
                 .expiresAt(up.getCreatedAt() == null ? null : up.getCreatedAt().plusDays(Math.max(1, stagingRetentionDays)))
                 .rows(rows)
+                .fileColumns(fileColumnsOf(up))
                 .build();
+    }
+
+    /** The upload's own columns with the field each one fills; null for an upload from before V94. */
+    private static List<StagingUploadDTO.FileColumn> fileColumnsOf(ImportStagingUpload up) {
+        if (!StringUtils.hasText(up.getFileColumns())) return null;
+        return java.util.Arrays.stream(up.getFileColumns().split("\n"))
+                .filter(StringUtils::hasText)
+                .map(n -> new StagingUploadDTO.FileColumn(n, ImportColumnAliases.fieldOf(n)))
+                .toList();
     }
 
     private List<OrderImportRowDTO> readStagingRows(List<ImportStagingRow> ents) {
@@ -7252,7 +7639,7 @@ public class OrderImportServiceImpl implements OrderImportService {
             Long batch = where.get(r.getOrderRef().trim().toUpperCase(Locale.ROOT));
             if (batch == null) continue;
             List<String> w = new ArrayList<>(r.getWarnings() == null ? List.of() : r.getWarnings());
-            w.add("orderRef " + r.getOrderRef().trim() + " " + IN_HISTORY_MARKER + " (#" + batch
+            w.add("Order " + r.getOrderRef().trim() + " " + IN_HISTORY_MARKER + " (import #" + batch
                     + ") — saving it again creates a duplicate order");
             r.setWarnings(w);
         }

@@ -87,6 +87,9 @@ public class OrderImportRowDTO {
      *  the review grid (and raised as a warning when the file disagreed with the
      *  rule). Null when there was nothing worth saying. */
     private String shipViaNote;
+    /** What the carrier said when the row was checked ("UPS confirmed UPS Ground (U11) · 2 business days").
+     *  Not a warning: set by Validate all, cleared whenever the row is checked again. */
+    private String carrierNote;
     private String packageType;
     private BigDecimal weight;
     private String weightUnit;

@@ -50,7 +50,7 @@ export function ShipViaCodesPanel({
       >
         {open ? <FiChevronDown className="h-3.5 w-3.5" /> : <FiChevronRight className="h-3.5 w-3.5" />}
         Ship via codes {clientCode ? `for ${clientCode}` : 'on this platform'}
-        <span className="font-normal text-[#8a7a5c]">— what goes in the serviceType column</span>
+        <span className="font-normal text-[#8a7a5c]">— what goes in the Service column (serviceType in the file)</span>
       </button>
       {open ? (
         <div className="border-t border-[#efe7d6] px-3 py-2">

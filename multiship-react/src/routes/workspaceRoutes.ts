@@ -247,7 +247,7 @@ export const resolveBreadcrumb = (
     return { section: 'Operations', label: 'Bulk Mailer', iconKey: 'bulk' }
   }
   if (pathname === workspacePaths.d2c || pathname.startsWith('/d2c/')) {
-    return { section: 'Operations', label: 'D2C History', iconKey: 'bulk' }
+    return { section: 'Operations', label: 'D2C History', iconKey: 'd2c' }
   }
   if (pathname.startsWith('/settings') || pathname === '/clients' || pathname === '/carrier') {
     const sub = settingsNavItems.find((i) => i.to === pathname)

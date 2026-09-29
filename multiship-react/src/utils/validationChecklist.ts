@@ -85,6 +85,14 @@ export function buildCheckGroups(result: ShipmentValidationResult): CheckGroup[]
     carrier.details.push(...(c.errors ?? []).filter((e) => !carrier.errors.includes(e)))
     carrier.warnings.push(...(c.warnings ?? []))
   }
+  // No price is something to look at, not a pass: every UPS rate failing (HTTP 400)
+  // still showed "Passed" beside an empty price.
+  const q = result.quote
+  if (q && q.status !== 'QUOTED') {
+    groups.get('service')!.warnings.push(q.status === 'NOT_OFFERED'
+      ? (q.message || 'The carrier does not offer this service on this route')
+      : `No price from the carrier${q.message ? `: ${q.message}` : ''}`)
+  }
   const customsRan = result.international
   return GROUPS.map(({ key }) => {
     const g = groups.get(key)!

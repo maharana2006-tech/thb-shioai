@@ -33,6 +33,8 @@ import VirtualTable from '../VirtualTable'
 // the parsed CSV contains enough USPS rows to blow past ~1h at the
 // 55/hr platform cap. Both surfaces close audit gap U2 + U4.
 import BulkLabelQueueBadge from '../orders/BulkLabelQueueBadge'
+import { fileLayoutColumns } from './fileLayoutColumns'
+import { labelOfField, messageUnder, readableError, shipViaHint, shownValue } from '../batchGrid'
 import { systemSettingsService } from '../../api/systemSettingsService'
 import { normalizeCarrierCode } from '../../utils/carrierUtils'
 
@@ -164,7 +166,8 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
 
   const step: 1 | 2 | 3 = lastSave && staging ? 3 : staging ? 2 : 1
   const preview: OrderImportPreview | null = staging
-    ? { totalRows: staging.totalRows, validRows: staging.validRows, invalidRows: staging.invalidRows, rows: staging.rows, batchId: null }
+    ? { totalRows: staging.totalRows, validRows: staging.validRows, invalidRows: staging.invalidRows, rows: staging.rows, batchId: null,
+        fileColumns: staging.fileColumns ?? null }
     : null
 
   /** Re-read the staged upload — opening it re-runs validation server-side, so
@@ -205,7 +208,7 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
     if (downloadingXlsx) return
     setDownloadingXlsx(true)
     try {
-      await orderImportService.downloadXlsxTemplate(null)
+      await orderImportService.downloadClientLayoutXlsx()
     } catch (e) {
       notify.apiError(e, 'Template download failed.')
     } finally {
@@ -452,7 +455,7 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
               uploading={uploading}
               downloadingXlsx={downloadingXlsx}
               onDownloadXlsx={() => void downloadXlsx()}
-              csvHref={orderImportService.templateUrl()}
+              csvHref={orderImportService.clientLayoutTemplateUrl()}
             />
           ) : null}
           {step === 1 && openUploads.length > 0 ? (
@@ -465,7 +468,7 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
                   <li key={u.id} className="flex flex-wrap items-center gap-2 px-3.5 py-2 text-[12px] text-[#3f3527]">
                     <FiFile className="h-3.5 w-3.5 shrink-0 text-[#6b5c42]" />
                     <span className="font-semibold text-[#1f150c]">
-                      #{u.id} · {u.fileName}
+                      Upload {u.id} · {u.fileName}
                     </span>
                     <span className="text-[11px] text-[#6b5c42]">
                       {u.readyOrders} ready · {u.invalidOrders} need{u.invalidOrders === 1 ? 's' : ''} fixes
@@ -532,7 +535,7 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
                   <FiFile className="h-3.5 w-3.5 text-[#6b5c42]" />
                   <span className="text-[12.5px] font-semibold text-[#1f150c]">{staging.fileName}</span>
                   <span className="text-[10.5px] text-[#b6a684]">
-                    Upload #{staging.id}
+                    Upload {staging.id}
                     {expires ? ` · kept until ${expires}` : ''}
                   </span>
                 </div>
@@ -802,7 +805,7 @@ function UploadStep({
         <p className="mt-3 text-[13px] font-semibold text-[#1f150c]">
           Drag &amp; drop your file here, or <span className="text-[#412d15] underline underline-offset-2">browse</span>
         </p>
-        <p className="mt-1 text-[11px] text-[#6b5c42]">CSV or Excel (.csv, .xlsx, .xlsm) · one order per orderRef — extra item lines repeat the orderRef</p>
+        <p className="mt-1 text-[11px] text-[#6b5c42]">CSV or Excel (.csv, .xlsx, .xlsm) · one row per shipment</p>
         <input
           type="file"
           accept=".csv,.xlsx,.xlsm,.txt"
@@ -849,10 +852,10 @@ function UploadStep({
       <div>
         <div className="rounded-xl border border-[#e3d9c4] bg-white p-4">
           <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.12em] text-[#6b5c42]">
-            <FiDownload className="h-3.5 w-3.5" /> Templates
+            <FiDownload className="h-3.5 w-3.5" /> Template
           </p>
           <p className="mt-1.5 text-[11.5px] text-[#6b5c42]">
-            The Excel template has cascading dropdowns to pick each row's client, carrier &amp; account.
+            One row per shipment: CLIENT_ID, ATTENTION, COMPANY_NAME, … SHIPVIA_CD, GROUP_ID. The Excel template has dropdowns for the client and its ship via codes.
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <button type="button" onClick={onDownloadXlsx} disabled={downloadingXlsx} className={GHOST_BTN}>
@@ -862,7 +865,7 @@ function UploadStep({
             <a
               href={csvHref}
               className="inline-flex items-center gap-1.5 text-[11.5px] font-semibold text-[#6b5c42] transition hover:text-[#1f150c]"
-              title="Flat CSV template — no validation, no dropdowns."
+              title="The same columns as a flat CSV — no dropdowns."
             >
               <FiDownload className="h-3 w-3" /> Plain CSV
             </a>
@@ -938,6 +941,7 @@ function EditCell({
   errors,
   readOnly = false,
   hint,
+  field,
 }: {
   value: string
   onCommit: (v: string) => void
@@ -950,6 +954,8 @@ function EditCell({
   /** When present, shown as the cell's hover tooltip so the error text isn't
    *  printed inline — the cell just turns red and explains itself on hover. */
   errors?: string[]
+  /** The cell's field: its messages drop the field's own name ("Service — …"). */
+  field?: string
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(value)
@@ -980,7 +986,7 @@ function EditCell({
         title="Saved to Import history — edit it there"
         className={`block w-full cursor-default truncate rounded-[5px] px-1.5 py-0.5 text-left text-[11px] text-[#9a8a6c] ${mono ? 'font-mono' : ''}`}
       >
-        {value || <span className="text-[#cdbf9f]">—</span>}
+        {shownValue(value) || <span className="text-[#cdbf9f]">—</span>}
       </span>
     )
   }
@@ -999,7 +1005,8 @@ function EditCell({
       />
     )
   }
-  const tooltip = bad && errors && errors.length > 0 ? errors.join('\n') : hint || value || undefined
+  const tooltip = bad && errors && errors.length > 0
+    ? errors.map((m) => (field ? messageUnder(field, m) : readableError(m))).join('\n') : hint || value || undefined
   return (
     <button
       type="button"
@@ -1011,7 +1018,7 @@ function EditCell({
           : 'text-[#3f3527] hover:bg-[#efe7d4]'
       }`}
     >
-      {value || <span className="text-[#cdbf9f]">—</span>}
+      {shownValue(value) || <span className="text-[#cdbf9f]">—</span>}
     </button>
   )
 }
@@ -1021,6 +1028,8 @@ function EditCell({
  *  room. Order mirrors the CSV/template. */
 type PreviewColumn = {
   key: string
+  /** The uploaded file's own name for this column (CLIENT_ID), shown instead of the field's label. */
+  name?: string
   mono?: boolean
   upper?: boolean
   numeric?: boolean
@@ -1119,6 +1128,7 @@ function PreviewStep({
   onOpenMapping?: () => void
 }) {
   const savedSet = new Set(savedRows)
+  const columns = fileLayoutColumns(preview.fileColumns, COL_BY_KEY) ?? PREVIEW_COLUMNS
   // The code to map, and which client's file it came from.
   const [mapping, setMapping] = useState<{ code: string; clientCode: string | null } | null>(null)
   const [codesTick, setCodesTick] = useState(0)
@@ -1166,7 +1176,8 @@ function PreviewStep({
         bad={(errs?.length ?? 0) > 0}
         mono={col.mono}
         errors={errs}
-        hint={showShipVia ? r.shipViaNote : undefined}
+        field={col.key}
+        hint={showShipVia ? (shipViaHint(r.shipViaNote) ?? undefined) : undefined}
         readOnly={savedSet.has(r.rowNumber)}
       />
     )
@@ -1242,7 +1253,7 @@ function PreviewStep({
       <VirtualTable
         rows={shown}
         rowKey={(r) => r.rowNumber}
-        colCount={1 + PREVIEW_COLUMNS.length + customCols.length}
+        colCount={1 + columns.length + customCols.length}
         maxHeight="60vh"
         className="rounded-xl border border-[#e3d9c4]"
         tableClassName="w-full border-collapse text-[11px]"
@@ -1251,9 +1262,10 @@ function PreviewStep({
           <thead className="sticky top-0 z-30">
             <tr className="bg-[#faf7f0] text-[8.5px] uppercase tracking-[0.08em] text-[#6b5c42]">
               <th className="sticky left-0 z-20 border-b border-r border-[#e3d9c4] bg-[#faf7f0] px-2 py-1.5 text-left font-bold">Row</th>
-              {PREVIEW_COLUMNS.map((c) => (
-                <th key={c.key} className="whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1.5 text-left font-bold">
-                  {c.key}
+              {columns.map((c) => (
+                <th key={c.key} title={c.name ? `${labelOfField(c.key)} (file column ${c.name})` : `File column: ${c.key}`}
+                  className="whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1.5 text-left font-bold">
+                  {c.name ?? labelOfField(c.key)}
                 </th>
               ))}
               {customCols.map((k) => (
@@ -1271,8 +1283,8 @@ function PreviewStep({
               // including the group-level customs rules that belong to no single
               // field — so hovering the status chip explains the whole row.
               const statusTitle = [
-                ...(r.errors ?? []).map((m) => '✗ ' + m),
-                ...(r.warnings ?? []).map((w) => '⚠ ' + w),
+                ...(r.errors ?? []).map((m) => '✗ ' + readableError(m)),
+                ...(r.warnings ?? []).map((w) => '⚠ ' + readableError(w)),
               ].join('\n') || undefined
               return (
                 <tr key={r.rowNumber} ref={measureRef} data-index={index} className={ok ? 'bg-white' : 'bg-rose-50/40'}>
@@ -1308,7 +1320,7 @@ function PreviewStep({
                       ) : null}
                     </div>
                   </td>
-                  {PREVIEW_COLUMNS.map((c) => (
+                  {columns.map((c) => (
                     <td key={c.key} className="border-b border-[#f2ecdf] px-1 py-1 align-top">
                       <div className={c.w}>
                         {cellFor(r, c, byField[c.key])}
@@ -1422,10 +1434,10 @@ function PreviewStep({
                   {rowLevel.length > 0 || (selected.warnings?.length ?? 0) > 0 ? (
                     <div className="mt-2 space-y-0.5">
                       {rowLevel.map((m, i) => (
-                        <p key={`e${i}`} className="text-[10.5px] text-rose-700">✗ {m}</p>
+                        <p key={`e${i}`} className="text-[10.5px] text-rose-700">✗ {readableError(m)}</p>
                       ))}
                       {(selected.warnings ?? []).map((m, i) => (
-                        <p key={`w${i}`} className="text-[10.5px] text-amber-700">⚠ {m}</p>
+                        <p key={`w${i}`} className="text-[10.5px] text-amber-700">⚠ {readableError(m)}</p>
                       ))}
                     </div>
                   ) : null}
@@ -1442,11 +1454,11 @@ function PreviewStep({
                             const fe = byField[k]
                             return (
                               <div key={k} className="grid grid-cols-[120px_minmax(0,1fr)] items-start gap-2">
-                                <span className="pt-1 text-[9.5px] uppercase tracking-[0.04em] text-[#a1906d]">{k}</span>
+                                <span className="pt-1 text-[9.5px] uppercase tracking-[0.04em] text-[#a1906d]">{labelOfField(k)}</span>
                                 <div className="min-w-0">
                                   {/* Box sized to the field: state/zip narrow, address/email/description wide. */}
                                   <div className={`max-w-full ${DETAIL_FIELD_W[k] ?? col.w ?? 'w-40'}`}>{cellFor(selected, col, fe)}</div>
-                                  {fe?.length ? <p className="mt-0.5 text-[9.5px] leading-snug text-rose-600">✗ {fe.join('; ')}</p> : null}
+                                  {fe?.length ? <p className="mt-0.5 text-[9.5px] leading-snug text-rose-600">✗ {fe.map((m) => messageUnder(k, m)).join('; ')}</p> : null}
                                 </div>
                               </div>
                             )
@@ -1462,7 +1474,7 @@ function PreviewStep({
                             const fe = byField[k]
                             return (
                               <div key={k} className="grid grid-cols-[120px_minmax(0,1fr)] items-start gap-2">
-                                <span className="pt-1 text-[9.5px] uppercase tracking-[0.04em] text-[#a1906d]">{k}</span>
+                                <span className="pt-1 text-[9.5px] uppercase tracking-[0.04em] text-[#a1906d]">{labelOfField(k)}</span>
                                 <div className="min-w-0">
                                   <div className="w-48 max-w-full">
                                     <EditCell
@@ -1473,7 +1485,7 @@ function PreviewStep({
                                       onCommit={(v) => onEdit(selected.rowNumber, { customFields: { ...(selected.customFields ?? {}), [k]: v } })}
                                     />
                                   </div>
-                                  {fe?.length ? <p className="mt-0.5 text-[9.5px] leading-snug text-rose-600">✗ {fe.join('; ')}</p> : null}
+                                  {fe?.length ? <p className="mt-0.5 text-[9.5px] leading-snug text-rose-600">✗ {fe.map((m) => messageUnder(k, m)).join('; ')}</p> : null}
                                 </div>
                               </div>
                             )

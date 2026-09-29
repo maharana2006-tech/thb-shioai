@@ -232,11 +232,11 @@ class OrderImportStagingTest {
                 .thenReturn(java.util.Collections.<Object[]>singletonList(new Object[]{"A-1", 63L}));
         StagingUploadDTO s = stage("orders.csv", csv(List.of(order("A-1", "10001"), order("C-1", "10001")))).getData();
         OrderImportRowDTO a = s.getRows().stream().filter(r -> "A-1".equals(r.getOrderRef())).findFirst().orElseThrow();
-        assertTrue(a.getWarnings().stream().anyMatch(w -> w.contains("already in Import history (#63)")), String.valueOf(a.getWarnings()));
+        assertTrue(a.getWarnings().stream().anyMatch(w -> w.contains("already in Import history (import #63)")), String.valueOf(a.getWarnings()));
 
         ApiResponse<StagingUploadDTO> blocked = service.saveStaging(s.getId(), "alice", false, false);
         assertEquals(409, blocked.getCode(), blocked.getMessage());
-        assertTrue(blocked.getMessage().contains("A-1 (#63)"), blocked.getMessage());
+        assertTrue(blocked.getMessage().contains("A-1 (import #63)"), blocked.getMessage());
         assertTrue(savedBatches.isEmpty(), "nothing is saved until the operator confirms");
 
         ApiResponse<StagingUploadDTO> anyway = service.saveStaging(s.getId(), "alice", false, true);

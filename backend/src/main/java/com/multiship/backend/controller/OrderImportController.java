@@ -556,7 +556,8 @@ public class OrderImportController {
         }
         return ResponseEntity.ok(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
                 .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
-                .message("All rows validated successfully.")
+                .message("Checked " + dto.getTotalRows() + " row" + (dto.getTotalRows() == 1 ? "" : "s") + " · "
+                        + (dto.getInvalidRows() > 0 ? dto.getInvalidRows() + " need" + (dto.getInvalidRows() == 1 ? "s" : "") + " fixes" : "all valid"))
                 .data(withRows(dto)).build());
     }
 
@@ -628,6 +629,31 @@ public class OrderImportController {
                 // Sprint 51 AC-L5 — canonical UTF-8 CSV media type.
                 .contentType(MediaType.parseMediaType(com.multiship.backend.common.CsvMediaType.CSV_UTF8))
                 .body(csv);
+    }
+
+    @Operation(summary = "Download the client-layout CSV template",
+            description = "The layout a client's own system writes: CLIENT_ID, ATTENTION, COMPANY_NAME, … "
+                    + "SHIPVIA_CD, THIRD_PARTY_ACC, GROUP_ID, ITEM_NUMBERS, QUANTITY, SHIP_DATE, HTSCode, THP_*. "
+                    + "Uploads in this layout import like the standard one.")
+    @GetMapping(value = "/template-client.csv", produces = com.multiship.backend.common.CsvMediaType.CSV_UTF8)
+    public ResponseEntity<byte[]> clientLayoutTemplate() {
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"order-import-client-layout.csv\"")
+                .contentType(MediaType.parseMediaType(com.multiship.backend.common.CsvMediaType.CSV_UTF8))
+                .body(orderImportService.clientLayoutCsvTemplate());
+    }
+
+    @Operation(summary = "Download the client-layout Excel template",
+            description = "The client layout with the client and ship via code dropdowns (no macros).")
+    @org.springframework.security.access.prepost.PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping(value = "/template-client.xlsx",
+            produces = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    public ResponseEntity<byte[]> clientLayoutTemplateXlsx() {
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"order-import-client-layout.xlsx\"")
+                .contentType(MediaType.parseMediaType(
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(orderImportService.clientLayoutXlsxTemplate());
     }
 
     @Operation(summary = "Download the XLSX template (data-validation dropdowns + samples)",

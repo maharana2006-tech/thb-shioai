@@ -130,8 +130,23 @@ final class OrderImportTemplateBuilder {
                         List<ShippingService> services,
                         List<PackagePreset> presets,
                         Map<String, Map<String, String>> shipViaByClient) {
+        return build(headers, Map.of(), clients, accounts, clientWarehouseCodes, services, presets, shipViaByClient);
+    }
+
+    /**
+     * @param headerNames what the header row says for a column (the client layout's
+     *        CLIENT_ID for clientCode, …); a column not in it shows its key.
+     */
+    static byte[] build(List<String> headers,
+                        Map<String, String> headerNames,
+                        List<Client> clients,
+                        List<CarrierAccountRef> accounts,
+                        Map<String, List<String>> clientWarehouseCodes,
+                        List<ShippingService> services,
+                        List<PackagePreset> presets,
+                        Map<String, Map<String, String>> shipViaByClient) {
         try (XSSFWorkbook wb = new XSSFWorkbook()) {
-            return populate(wb, headers, clients, accounts, clientWarehouseCodes, services, presets, shipViaByClient);
+            return populate(wb, headers, headerNames, clients, accounts, clientWarehouseCodes, services, presets, shipViaByClient);
         } catch (IOException e) {
             throw new IllegalStateException("Failed to build order-import .xlsx template", e);
         }
@@ -165,7 +180,7 @@ final class OrderImportTemplateBuilder {
             for (Name n : new java.util.ArrayList<>(wb.getAllNames())) {
                 wb.removeName(n);
             }
-            return populate(wb, headers, clients, accounts, clientWarehouseCodes, services, presets, shipViaByClient);
+            return populate(wb, headers, Map.of(), clients, accounts, clientWarehouseCodes, services, presets, shipViaByClient);
         } catch (IOException | RuntimeException e) {
             throw new IllegalStateException("Failed to build the macro-enabled order-import template", e);
         }
@@ -174,6 +189,7 @@ final class OrderImportTemplateBuilder {
     /** Writes the three generated sheets into {@code wb} and returns the bytes. */
     private static byte[] populate(XSSFWorkbook wb,
                                    List<String> headers,
+                                   Map<String, String> headerNames,
                                    List<Client> clients,
                                    List<CarrierAccountRef> accounts,
                                    Map<String, List<String>> clientWarehouseCodes,
@@ -200,7 +216,7 @@ final class OrderImportTemplateBuilder {
             Row headerRow = data.createRow(0);
             for (int i = 0; i < headers.size(); i++) {
                 Cell c = headerRow.createCell(i);
-                c.setCellValue(headers.get(i));
+                c.setCellValue(headerNames.getOrDefault(headers.get(i), headers.get(i)));
                 c.setCellStyle(headerStyle);
                 data.setColumnWidth(i, columnWidthFor(headers.get(i)));
             }
@@ -235,8 +251,9 @@ final class OrderImportTemplateBuilder {
             // as an operator.
             int clientCol = headers.indexOf("clientCode");
             int carrierCol = headers.indexOf("carrierCode");
-            String clientRef = colLetter(clientCol) + "2"; // first data row cell
-            String carrierRef = colLetter(carrierCol) + "2";
+            String clientRef = colLetter(Math.max(clientCol, 0)) + "2"; // first data row cell
+            String carrierRef = colLetter(Math.max(carrierCol, 0)) + "2";
+            boolean noCarrier = carrierCol < 0;   // the client layout: SHIPVIA_CD alone names the service
             String normalizedClient = "SUBSTITUTE(SUBSTITUTE(" + clientRef + ",\"-\",\"_\"),\".\",\"_\")";
 
             // Carrier code is a static list of every carrier the platform
@@ -250,9 +267,11 @@ final class OrderImportTemplateBuilder {
                     "INDIRECT(\"_Warehouses_\"&" + normalizedClient + ")", false);
             // accountNumber — WARN (info) not STOP so THIRD_PARTY free-text
             // works. Operator sees the client's account list as suggestions.
-            applyFormulaValidation(data, headers, "accountNumber",
-                    "INDIRECT(\"_Accounts_\"&" + normalizedClient + "&\"_\"&" + carrierRef + ")",
-                    /*stop=*/ false);
+            if (!noCarrier) {
+                applyFormulaValidation(data, headers, "accountNumber",
+                        "INDIRECT(\"_Accounts_\"&" + normalizedClient + "&\"_\"&" + carrierRef + ")",
+                        /*stop=*/ false);
+            }
             // Service + package cascade off carrier only (same for every client).
             // serviceType — the client's own ship via codes when that client
             // has a mapping, else the carrier's service names. ISREF picks
@@ -260,14 +279,21 @@ final class OrderImportTemplateBuilder {
             // clients, so an unmapped one silently keeps the old dropdown.
             boolean anyShipVia = shipViaByClient != null
                     && shipViaByClient.values().stream().anyMatch(m -> m != null && !m.isEmpty());
-            applyFormulaValidation(data, headers, "serviceType",
+            if (noCarrier) {
+                if (anyShipVia) {
+                    applyFormulaValidation(data, headers, "serviceType",
+                            "INDIRECT(\"_ShipVia_\"&" + normalizedClient + ")", false);
+                }
+            } else applyFormulaValidation(data, headers, "serviceType",
                     anyShipVia
                             ? "INDIRECT(IF(ISREF(INDIRECT(\"_ShipVia_\"&" + normalizedClient + ")),"
                                     + "\"_ShipVia_\"&" + normalizedClient + ",\"_Services_\"&" + carrierRef + "))"
                             : "INDIRECT(\"_Services_\"&" + carrierRef + ")",
                     true);
-            applyFormulaValidation(data, headers, "packageType",
-                    "INDIRECT(\"_Packages_\"&" + carrierRef + ")", true);
+            if (!noCarrier) {
+                applyFormulaValidation(data, headers, "packageType",
+                        "INDIRECT(\"_Packages_\"&" + carrierRef + ")", true);
+            }
 
             // ===== Conditional formatting — ship-to country vs service scope =====
             // Highlight serviceType + countryCode cells red when the picked

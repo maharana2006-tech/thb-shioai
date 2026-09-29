@@ -32,11 +32,13 @@ export function useHistoryFilters() {
   const [createdBy, setCreatedBy] = useState('')
   const [batchPresence, setBatchPresence] = useState<BatchPresenceKey>('ANY')
   const [minSaved, setMinSaved] = useState('')
+  /** One label batch number, from the Batch dropdown beside the search. */
+  const [batchNo, setBatchNo] = useState('')
 
   const dateFilterActive = dateFrom !== '' || dateTo !== ''
   const anyFilterActive =
     search.trim() !== '' || statusFilter !== 'ALL' || dateFilterActive
-    || createdBy !== '' || batchPresence !== 'ANY' || minSaved !== ''
+    || createdBy !== '' || batchPresence !== 'ANY' || minSaved !== '' || batchNo !== ''
 
   /** Every filter back to its default; the sort is a preference and stays. */
   const clearFilters = () => {
@@ -47,6 +49,7 @@ export function useHistoryFilters() {
     setCreatedBy('')
     setBatchPresence('ANY')
     setMinSaved('')
+    setBatchNo('')
   }
 
   return {
@@ -59,6 +62,7 @@ export function useHistoryFilters() {
     createdBy, setCreatedBy,
     batchPresence, setBatchPresence,
     minSaved, setMinSaved,
+    batchNo, setBatchNo,
     dateFilterActive,
     anyFilterActive,
     clearFilters,

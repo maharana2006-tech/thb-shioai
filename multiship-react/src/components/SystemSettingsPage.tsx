@@ -10,6 +10,7 @@ import {
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import UspsProviderReadinessTable from './settings/UspsProviderReadinessTable'
 import SystemChannelSection from './settings/SystemChannelSection'
+import NdsFallbacksSection from './settings/NdsFallbacksSection'
 
 /**
  * Sprint 49 Tier 0 — admin surface for encrypted system secrets.
@@ -201,6 +202,11 @@ export default function SystemSettingsPage() {
           encrypted secrets); this one calls tenantSettingsService and
           persists to tenant_settings. */}
       <SystemChannelSection />
+
+      {/* Audit X1/X2/X4 — per-tenant NDS prefill fallbacks (phone,
+          notify email, default weight, missing-weight policy). Same
+          tenant_settings-backed pattern as the channel gate. */}
+      <NdsFallbacksSection />
 
       {loading ? (
         <div className="rounded-xl border border-slate-200 bg-white p-6 text-[13px] text-slate-500">

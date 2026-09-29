@@ -5,16 +5,16 @@ package com.multiship.backend.service.ndsshipment;
  * <ol>
  *   <li>Strip whitespace characters from the raw NDS value.</li>
  *   <li>If the remaining length is 10–15 characters, keep the stripped value.</li>
- *   <li>Otherwise substitute {@code +1 616 772 3513} (the ops-provided default
- *       so labels don't get rejected upstream) and flag the field as
- *       {@code defaulted} on the prefill DTO.</li>
+ *   <li>Otherwise substitute the tenant-configured fallback (or the
+ *       platform default) and flag the field as {@code defaulted} on
+ *       the prefill DTO.</li>
  * </ol>
  * "Whitespace" here strips spaces, tabs, newlines, and non-breaking
  * spaces the ERP occasionally injects.
  */
 final class NdsPhoneNormalizer {
 
-    /** Ops-provided fallback used when the NDS phone can't be salvaged. */
+    /** Platform-default fallback when the tenant hasn't set one. */
     static final String DEFAULT_PHONE = "+1 616 772 3513";
 
     private NdsPhoneNormalizer() {}
@@ -23,14 +23,25 @@ final class NdsPhoneNormalizer {
     record Result(String phone, boolean defaulted) {}
 
     static Result normalize(String rawPhone) {
+        return normalize(rawPhone, null);
+    }
+
+    /**
+     * @param fallbackPhone tenant-configured fallback; null / blank falls
+     *                      through to {@link #DEFAULT_PHONE}.
+     */
+    static Result normalize(String rawPhone, String fallbackPhone) {
+        String fallback = fallbackPhone != null && !fallbackPhone.isBlank()
+                ? fallbackPhone.trim()
+                : DEFAULT_PHONE;
         if (rawPhone == null || rawPhone.isBlank()) {
-            return new Result(DEFAULT_PHONE, true);
+            return new Result(fallback, true);
         }
         String stripped = rawPhone.replaceAll("[\\s\\u00A0]", "");
         int len = stripped.length();
         if (len >= 10 && len <= 15) {
             return new Result(stripped, false);
         }
-        return new Result(DEFAULT_PHONE, true);
+        return new Result(fallback, true);
     }
 }

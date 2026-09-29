@@ -648,7 +648,7 @@ describe('Bulk Mailer — layout', () => {
     getHistory.mockResolvedValue({ data: { ...batchSummary({ id: 121, fileName: 'acme_sept.csv', status: 'INITIATE' }), rows: [] } })
     await renderAt('/bulk/batches/121')
     const header = await screen.findByTestId('batch-page-header')
-    expect(header).toHaveTextContent('Batch #121')
+    expect(header).toHaveTextContent('Import #121')
     expect(header).toHaveTextContent('acme_sept.csv')
     expect(screen.getByRole('button', { name: /Bulk Mailer · Import history/i })).toBeInTheDocument()
     // The header and one page of rows — never the whole batch at once (a 50k-row batch was ~58 MB, twice).
@@ -670,13 +670,13 @@ describe('Bulk Mailer — layout', () => {
     await waitFor(() => expect(historyRows).toHaveBeenCalledWith('121', expect.objectContaining({ view: 'attention', q: 'ZZ50K-12345', page: 0 })))
   })
 
-  it('shows exactly the Orders screen\'s columns; the imported fields stay in the Columns menu', async () => {
+  it('shows the ShipX Bulk Mailer columns; the imported fields stay in the Columns menu', async () => {
     getHistory.mockResolvedValue({ data: { ...batchSummary({ id: 121, fileName: 'acme_sept.csv', status: 'INITIATE' }),
       rows: [{ rowNumber: 1, recipientName: 'Ann', city: 'Austin', errors: {}, generatedStatus: 'GENERATED', generatedOrderNo: 906976 }] } })
     await renderAt('/bulk/batches/121')
     await screen.findByTestId('batch-page-header')
     // pick and actions have no text header; every imported f_* column is hidden by default
-    expect((await screen.findByTestId('visible-headers')).textContent).toBe('|Order|Ref #|Batch|Dest|Status|Track|')
+    expect((await screen.findByTestId('visible-headers')).textContent).toBe('|Container ID|Client Code|Ship Via Code|Ship Attention|Ship Name|Weight|Third Party AC|Tracking ID|Commercial Invoice|Status|Actions')
     // Print / void live in a floating bar that appears once rows are ticked, not in the toolbar
     expect(screen.queryByTestId('batch-label-bar')).toBeNull()
   })
