@@ -1739,9 +1739,9 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
         return { ...m, [b.id]: Array.from(cur) }
       })
     }
-    const ICON = 'flex h-7 w-7 items-center justify-center rounded-lg border transition'
+    const ICON = 'flex h-6 w-6 items-center justify-center rounded-md border transition'
     const NEUTRAL = 'border-[#e6dcc7] bg-[#faf7f0] text-[#5a4526] hover:border-[#dccfb4] hover:bg-[#f2ebda]'
-    const slot = (node: React.ReactNode) => <span className="flex h-7 w-7 shrink-0 items-center justify-center">{node}</span>
+    const slot = (node: React.ReactNode) => <span className="flex h-6 w-6 shrink-0 items-center justify-center">{node}</span>
 
     const defs: ColumnDef<OrderImportRow, unknown>[] = [
       {
@@ -1982,7 +1982,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
         meta: { headerLabel: fieldLabel(c), exportValue: (r: OrderImportRow) => String((r as unknown as Record<string, unknown>)[c.key] ?? '') },
       })),
       {
-        id: 'actions', header: () => <span className="block text-right">Actions</span>, size: 220, enableSorting: false,
+        id: 'actions', header: 'Actions', size: 170, enableSorting: false,
         cell: ({ row }) => {
           const r = row.original
           const gen = (r.generatedStatus ?? '').toUpperCase()
@@ -1995,36 +1995,36 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
           const rowKey = `${b.id}-${r.rowNumber}`
           const rowBusy = genRowKey === rowKey
           return (
-            <span className="flex w-full items-center justify-end gap-1">
+            <span className="flex w-full items-center justify-end gap-0.5">
               {slot(tn && orderNo != null ? (
                 <button type="button" onClick={() => setTrackingOrderNo(orderNo)} title={`Live tracking for ${tn}`} aria-label={`Track order ${orderNo}`} className={`${ICON} ${NEUTRAL}`}>
-                  <FiTruck className="h-3.5 w-3.5" />
+                  <FiTruck className="h-3 w-3" />
                 </button>
               ) : null)}
               {slot(tn && orderNo != null && generated && canWrite ? (
                 <button type="button" disabled={voidingOrderNo === orderNo || locked} onClick={() => void voidOrder(b.id, orderNo, tn)} title={`Void ${tn} at the carrier`} aria-label={`Void order ${orderNo}`}
                   className={`${ICON} border-rose-200 bg-rose-50 text-rose-700 hover:border-rose-300 hover:bg-rose-100 disabled:opacity-40`}>
-                  {voidingOrderNo === orderNo ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-rose-300 border-t-rose-700" /> : <FiXCircle className="h-3.5 w-3.5" />}
+                  {voidingOrderNo === orderNo ? <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-rose-300 border-t-rose-700" /> : <FiXCircle className="h-3 w-3" />}
                 </button>
               ) : null)}
               {slot(orderNo != null ? (
                 <button type="button" onClick={() => setDetailsOrderNo(orderNo)} title="Order details" aria-label={`Details for order ${orderNo}`} className={`${ICON} ${NEUTRAL}`}>
-                  <FiInfo className="h-3.5 w-3.5" />
+                  <FiInfo className="h-3 w-3" />
                 </button>
               ) : null)}
               {slot(generated && orderNo != null ? (
                 <button type="button" onClick={() => void printOrderLabel(orderNo)} aria-label={`Print label for order ${orderNo}`}
                   title={r.lastPrintedAt ? `Print the label — last printed ${formatPrinted(r.lastPrintedAt, true)}` : 'Print the shipping label'}
                   className={`${ICON} ${r.lastPrintedAt ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : NEUTRAL}`}>
-                  <FiPrinter className="h-3.5 w-3.5" />
+                  <FiPrinter className="h-3 w-3" />
                 </button>
               ) : null)}
               {/* The commercial invoice prints from its own column. */}
-              <span className="ml-1 flex min-w-7 shrink-0 justify-end">
+              <span className="ml-1.5 flex min-w-6 shrink-0 justify-end">
                 {generated && orderNo != null ? (
                   <button type="button" onClick={() => navigate(`/label/${orderNo}`)} title="View label" aria-label={`View label for order ${orderNo}`}
                     className={`${ICON} border-[#1f150c] bg-[#1f150c] text-[#f4eede] hover:bg-[#412d15]`}>
-                    <FiEye className="h-3.5 w-3.5" />
+                    <FiEye className="h-3 w-3" />
                   </button>
                 ) : gen === 'VOIDED' ? (
                   <span className="text-[11px] text-slate-500" title="Voided with the carrier">Voided</span>
@@ -2036,8 +2036,8 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
                     aria-label={rowBusy ? `Generating row ${r.rowNumber}` : `${failed ? 'Retry' : 'Generate'} row ${r.rowNumber}`}
                     className={`${ICON} disabled:cursor-not-allowed disabled:opacity-50 ${
                       failed ? 'border-rose-200 bg-white text-rose-700 hover:border-rose-300 hover:bg-rose-50' : 'border-[#1f150c] bg-[#1f150c] text-[#f4eede] hover:bg-[#412d15]'}`}>
-                    {rowBusy ? <span className={`inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 ${failed ? 'border-rose-100 border-t-rose-600' : 'border-[#f4eede]/40 border-t-[#f4eede]'}`} />
-                      : failed ? <FiRotateCcw className="h-3.5 w-3.5" /> : <FiZap className="h-3.5 w-3.5" />}
+                    {rowBusy ? <span className={`inline-block h-3 w-3 animate-spin rounded-full border-2 ${failed ? 'border-rose-100 border-t-rose-600' : 'border-[#f4eede]/40 border-t-[#f4eede]'}`} />
+                      : failed ? <FiRotateCcw className="h-3 w-3" /> : <FiZap className="h-3 w-3" />}
                   </button>
                 ) : locked ? (
                   <span className="text-[11px] text-[#b6a684]">Fix errors first</span>
@@ -2047,7 +2047,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
                     onClick={() => openFix(b.id, ok ? (r.orderBlockedBy ?? r.rowNumber) : r.rowNumber)}
                     title={ok ? `Another line of order ${r.orderRef ?? ''} needs fixes — the order is labelled as one shipment` : 'Edit this row and re-check it'}
                     aria-label={`Fix row ${r.rowNumber}`}
-                    className="inline-flex items-center gap-1 whitespace-nowrap rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-rose-700 transition hover:border-rose-300 hover:bg-rose-50">
+                    className="inline-flex h-6 items-center gap-1 whitespace-nowrap rounded-md border border-rose-200 bg-white px-2 text-[11px] font-semibold text-rose-700 transition hover:border-rose-300 hover:bg-rose-50">
                     <FiEdit3 className="h-3 w-3" /> Fix
                   </button>
                 )}
@@ -2055,7 +2055,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
             </span>
           )
         },
-        meta: { headerLabel: 'Actions', hideable: false, exportable: false },
+        meta: { headerLabel: 'Actions', hideable: false, exportable: false, align: 'right' },
       },
     ]
     const SHIPX_ORDER = ['pick', 'order', 'clientCode', 'shipVia', 'attention', 'shipName', 'weight', 'thirdParty', 'track', 'invoice', 'status']

@@ -951,7 +951,7 @@ export default function AdvancedDataTable<T>({
                             ? null
                             : (
                               <span
-                                className={`inline-flex items-center gap-1 ${canSort ? 'cursor-pointer' : ''}`}
+                                className={`${(header.column.columnDef.meta as { align?: string } | undefined)?.align === 'right' ? 'flex w-full justify-end' : 'inline-flex'} items-center gap-1 ${canSort ? 'cursor-pointer' : ''}`}
                                 onClick={(e) => {
                                   // Sort on click but don't trip the drag listener
                                   // when the user's actually clicking to sort.
