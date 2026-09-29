@@ -567,6 +567,16 @@ public class FedExConnector implements CarrierConnector {
         try {
             String validateUrl = getShipmentUrl(environment) + "/packages/validate";
             Map<String, Object> payload = buildShipmentPayload(request);
+            // /packages/validate is single-piece — rejects MPS with
+            // "The number of RequestedPackages in the RequestedShipment
+            // must be equal to 1". For multi-piece shipments strip to
+            // box 1 so shipment-level fields (addresses, service, customs,
+            // currency) still get validated; multi-piece assembly is
+            // verified at create time by /shipments itself.
+            // ponytail: box-1 subset; upgrade to /openshipments/validate
+            // if FedEx ever exposes a native MPS validate.
+            int totalBoxes = request.effectivePackages().size();
+            if (totalBoxes > 1) stripToBoxOne(payload);
             byte[] raw = HttpClients.newBuilder().baseUrl(validateUrl).build()
                     .post()
                     .contentType(MediaType.APPLICATION_JSON)
@@ -578,7 +588,16 @@ public class FedExConnector implements CarrierConnector {
                     .body(byte[].class);
             String response = raw == null ? "{}" : new String(raw, java.nio.charset.StandardCharsets.UTF_8);
             log.debug("FedEx validateShipment response: {}", response);
-            return parseFedExValidateShipmentResponse(response);
+            ValidateShipmentResult result = parseFedExValidateShipmentResponse(response);
+            if (totalBoxes > 1 && result.valid()) {
+                java.util.List<String> warnings = new java.util.ArrayList<>(
+                        result.warnings() != null ? result.warnings() : java.util.List.of());
+                warnings.add("Multi-package validate: FedEx only supports single-piece pre-flight; box 1 validated, boxes 2–"
+                        + totalBoxes + " verified at label create.");
+                result = new ValidateShipmentResult(result.valid(), result.matchLevel(), result.kind(),
+                        warnings, result.errors(), result.message(), result.rawResponse());
+            }
+            return result;
         } catch (org.springframework.web.client.RestClientResponseException ex) {
             String body = ex.getResponseBodyAsString();
             log.warn("FedEx validateShipment rejected (HTTP {}): {}",
@@ -604,6 +623,26 @@ public class FedExConnector implements CarrierConnector {
             return new ValidateShipmentResult(false, "ERROR", "SHIPMENT",
                     java.util.List.of(), java.util.List.of(ex.getMessage()),
                     "FedEx validateShipment call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /**
+     * Mutate an MPS shipment-payload map so it passes FedEx's single-piece
+     * {@code /packages/validate} endpoint: strip
+     * {@code requestedPackageLineItems} to box 1 only and set
+     * {@code totalPackageCount = "1"}. No-op if there's < 2 items.
+     * Package-visible for tests.
+     */
+    @SuppressWarnings("unchecked")
+    static void stripToBoxOne(Map<String, Object> payload) {
+        if (payload == null) return;
+        Object rs = payload.get("requestedShipment");
+        if (!(rs instanceof Map<?, ?> reqShipRaw)) return;
+        Map<String, Object> reqShip = (Map<String, Object>) reqShipRaw;
+        Object items = reqShip.get("requestedPackageLineItems");
+        if (items instanceof java.util.List<?> list && list.size() > 1) {
+            reqShip.put("totalPackageCount", "1");
+            reqShip.put("requestedPackageLineItems", java.util.List.of(list.get(0)));
         }
     }
 
