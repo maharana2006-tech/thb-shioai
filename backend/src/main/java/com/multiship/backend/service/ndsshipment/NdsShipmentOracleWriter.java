@@ -71,6 +71,10 @@ public class NdsShipmentOracleWriter {
         //   • OE_SHIP_CONTAINER.CONTAINER_ID = tracking#
         // No CLIPPER, no TB_MANUAL_SHIPMENT.
         if (isDtc) {
+            // Writeback page: DTC writes are tracking-only — honour the Tracking flag.
+            if (p.trackingNumber() == null) {
+                return WritebackAck.skipped("nds(DTC): Tracking writeback disabled on connection");
+            }
             return dtcWriteShipment(clientJdbc, p);
         }
 
@@ -113,7 +117,7 @@ public class NdsShipmentOracleWriter {
                 // via PROC_OE.INSERT_OE_TRACKING(source="CLIPPER", code="450") so
                 // the tracking still makes it to NDS. Fires when the CLIPPER
                 // UPDATE hit zero rows AND the carrier is a USPS variant.
-                if (count == 0 && isUsps(p.carrierCode())) {
+                if (count == 0 && p.trackingNumber() != null && isUsps(p.carrierCode())) {
                     int procCount = 0;
                     for (WritebackPackagePayload pkg : p.packages()) {
                         if (pkg.orderNos() == null) continue;
@@ -161,7 +165,9 @@ public class NdsShipmentOracleWriter {
             errors.add("TB_MANUAL_SHIPMENT: cannot open PRODUCTION pool: " + e.getMessage());
             prodJdbc = null;
         }
-        if (prodJdbc != null) {
+        // Writeback page: TB_MANUAL_SHIPMENT is the tracking log — only insert when the
+        // Tracking flag is on (mirrors the void side, which gates on hasTracking).
+        if (prodJdbc != null && p.trackingNumber() != null) {
             String errorMode = isReturn ? "R" : "M";
             String orderNoText = isReturn && p.orderNo() != null
                     ? ("REN -" + p.orderNo())
@@ -270,6 +276,9 @@ public class NdsShipmentOracleWriter {
         //   • UPDATE OE_SHIP_CONTAINER SET CONTAINER_ID = NULL
         // CLIPPER + TB_MANUAL_SHIPMENT are untouched on DTC (never written).
         if ("DTC".equalsIgnoreCase(req.source())) {
+            if (!hasTracking) {
+                return WritebackAck.skipped("nds(DTC): Tracking writeback disabled on connection");
+            }
             return dtcClearShipment(clientJdbc, req);
         }
 
