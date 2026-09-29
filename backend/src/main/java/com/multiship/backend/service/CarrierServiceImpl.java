@@ -97,6 +97,17 @@ public class CarrierServiceImpl implements CarrierService {
      *  belt-and-braces validation path so a shipment can't slip through
      *  when the pre-flight was bypassed. */
     private final com.multiship.backend.service.intl.ExportDeclarationPolicyRegistry exportDeclarationPolicyRegistry;
+    /** G6 — resolves shipvia='STD' to a concrete service via the client's
+     *  Shipping Service Mapping row. Nullable via @Autowired(required=false)
+     *  in test wiring; the STD detection block short-circuits when null. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private StdShipMethodResolver stdShipMethodResolver;
+
+    /** G7 — decides whether the shipment's SHIP_DATE should shift to the
+     *  next working day based on the (source × carrier × warehouse) cutoff
+     *  matrix + global holiday list. Nullable for test wiring. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private CutoffShiftService cutoffShiftService;
 
     /**
      * PR #550 — pre-fetches URL label bytes at persistence time so the DB
@@ -770,6 +781,11 @@ public class CarrierServiceImpl implements CarrierService {
         // dispatch as the manual path.
         try {
             if (writebackDispatcher != null) {
+                // V96 — carry Order.ndsResolvedShipviaCd through so the
+                // writer emits OEHEAD.SHIPVIA_CD updates on the auto/queue
+                // path too. Pre-V96 orders have this column null; those
+                // won't produce an OEHEAD write on the next regenerate,
+                // which is fine (ops backfill via SQL if needed).
                 writebackDispatcher.dispatchOnGenerate(
                         com.multiship.backend.service.externalsystems.writeback.WritebackPayload.builder()
                                 .clientCode(order.getCustNo())
@@ -782,6 +798,7 @@ public class CarrierServiceImpl implements CarrierService {
                                 .carrierCode(used.carrierCode())
                                 .serviceCode(order.getShipviaCd())
                                 .freightAmount(shipmentResult.shippingCost())
+                                .stdReplacementErpCode(order.getNdsResolvedShipviaCd())
                                 .build());
             }
         } catch (RuntimeException wbFail) {
@@ -1448,9 +1465,33 @@ public class CarrierServiceImpl implements CarrierService {
         // value here would stamp a different PO than the persisted order.
         int allocatedOrderNo = existingOrderNo != null
                 ? existingOrderNo : orderRepository.nextManualOrderNo();
+        // G7 — compute cutoff shift BEFORE building the carrier request so
+        // the shifted date lands on shipmentRequest.shipDateOverride, which
+        // FedEx / UPS / DHL / Stamps consume via LabelDates.today(tz, override).
+        java.time.LocalDate g7ShiftedDatePre = null;
+        if (cutoffShiftService != null) {
+            try {
+                CutoffShiftService.ShiftDecision decision = cutoffShiftService.resolveShipDate(
+                        req.getSource(), carrier, null,
+                        clientRepository.findByClientCodeIgnoreCase(
+                                        req.getClientCode() == null ? "" : req.getClientCode())
+                                .map(com.multiship.backend.model.Client::getTimezone).orElse(null),
+                        java.time.LocalDateTime.now(java.time.ZoneOffset.UTC));
+                if (decision.shifted()) {
+                    log.info("G7 cutoff shift for order {}: {}", allocatedOrderNo, decision.reason());
+                    g7ShiftedDatePre = decision.shipDate();
+                }
+            } catch (Exception cutoffFail) {
+                log.warn("G7 cutoff computation failed for order {}: {}",
+                        allocatedOrderNo, cutoffFail.getMessage());
+            }
+        }
         ShipmentRequestDTO shipmentRequest = buildManualShipmentRequestDto(
                 req, from, to, carrier, billToNumber, serviceType, packageType,
                 length, width, height, fromCountry, account, allocatedOrderNo);
+        if (g7ShiftedDatePre != null) {
+            shipmentRequest.setShipDateOverride(g7ShiftedDatePre);
+        }
 
         // International customs for the LABEL call. The manual path builds its
         // own ShipmentRequestDTO and previously never attached an intl block —
@@ -1932,6 +1973,25 @@ public class CarrierServiceImpl implements CarrierService {
         order.setCustNo(firstNonBlank(req.getClientCode(), order.getCustNo(), "MANUAL"));
         order.setTenantId(StringUtils.hasText(req.getClientCode()) ? req.getClientCode().trim() : order.getTenantId());
         order.setShipviaCd(service != null ? service.getServiceCode() : serviceType);
+
+        // G7 — cutoff shift was computed above (before ShipmentRequestDTO
+        // build) and threaded via shipmentRequest.shipDateOverride.
+        // Connectors consume it via LabelDates.today(tz, override).
+
+        // V96 / G6 — derive the canonical NDS ERP ship-via and stash it on
+        // the Order. Falls back to req.stdReplacementErpCode when the FE
+        // sent one (e.g. from NdsShipmentPrefill's STD detection) so we
+        // don't overwrite a caller-supplied value with a possibly-null
+        // resolver result.
+        String resolvedErpForOrder = req.getStdReplacementErpCode();
+        if ((resolvedErpForOrder == null || resolvedErpForOrder.isBlank())
+                && stdShipMethodResolver != null
+                && service != null && service.getId() != null
+                && StringUtils.hasText(req.getClientCode())) {
+            resolvedErpForOrder = stdShipMethodResolver
+                    .reverseErpCode(req.getClientCode().trim().toUpperCase(), service.getId());
+        }
+        order.setNdsResolvedShipviaCd(resolvedErpForOrder);
         order.setShipName(to.getName());
         order.setShipAttn(to.getCompany());
         order.setShipAddr1(to.getAddressLine1());
@@ -2316,6 +2376,13 @@ public class CarrierServiceImpl implements CarrierService {
                                 .serviceDescription(service != null ? service.getName() : null)
                                 .thirdPartyAccount(req.getDutiesAccount())
                                 .shipTo(shipTo)
+                                // V96 — persisted canonical ERP wins over the request field
+                                // so regenerate / async paths pick it up too.
+                                .stdReplacementErpCode(firstNonBlank(
+                                        orderRepository.findByOrderNo(orderNo)
+                                                .map(com.multiship.backend.model.Order::getNdsResolvedShipviaCd)
+                                                .orElse(null),
+                                        req.getStdReplacementErpCode()))
                                 .build());
             }
         } catch (RuntimeException wbFail) {

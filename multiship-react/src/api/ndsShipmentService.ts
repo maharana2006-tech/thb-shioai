@@ -126,13 +126,18 @@ export interface NdsShipmentPrefill {
    *  (e.g. `["recipient.phone", "notify.sendTo"]`). FE uses this to decide
    *  when to fall back to the sender/shipper block for the operator. */
   defaultedFields: string[]
+  /** G6 — non-null when order came in as shipvia=STD and got resolved via
+   *  the client's Shipping-Service-Mapping. Carries the ERP code NDS
+   *  OEHEAD.SHIPVIA_CD should be updated to after label success. */
+  stdReplacementErpCode: string | null
 }
 
 export const ndsShipmentService = {
-  lookup: (scan: string) =>
-    apiClient
-      .get<ApiResponse<NdsShipmentPrefill>>(
-        `/manual-shipment/nds-lookup?scan=${encodeURIComponent(scan)}`,
-      )
-      .then((res) => res.data as NdsShipmentPrefill),
+  lookup: (scan: string, clientCode?: string | null) => {
+    const q = `scan=${encodeURIComponent(scan)}`
+      + (clientCode ? `&clientCode=${encodeURIComponent(clientCode)}` : '')
+    return apiClient
+      .get<ApiResponse<NdsShipmentPrefill>>(`/manual-shipment/nds-lookup?${q}`)
+      .then((res) => res.data as NdsShipmentPrefill)
+  },
 }

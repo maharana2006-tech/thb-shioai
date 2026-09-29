@@ -184,4 +184,51 @@ class FedExConnectorValidateShipmentTest {
         ObjectMapper om = new ObjectMapper();
         assertEquals("", FedExConnector.buildFedExErrorPrefix(om.readTree("[]")));
     }
+
+    // ── stripToBoxOne: FedEx /packages/validate is single-piece,
+    //    reject MPS payloads with "must be equal to 1". Strip lets
+    //    shipment-level fields still validate.
+
+    @Test
+    void stripToBoxOne_multiPiece_dropsExtrasAndSetsCountOne() {
+        java.util.Map<String, Object> box1 = new java.util.LinkedHashMap<>();
+        box1.put("sequenceNumber", "1");
+        java.util.Map<String, Object> box2 = new java.util.LinkedHashMap<>();
+        box2.put("sequenceNumber", "2");
+        java.util.Map<String, Object> reqShip = new java.util.LinkedHashMap<>();
+        reqShip.put("totalPackageCount", "2");
+        reqShip.put("requestedPackageLineItems", new java.util.ArrayList<>(java.util.List.of(box1, box2)));
+        java.util.Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        payload.put("requestedShipment", reqShip);
+
+        FedExConnector.stripToBoxOne(payload);
+
+        assertEquals("1", reqShip.get("totalPackageCount"));
+        java.util.List<?> items = (java.util.List<?>) reqShip.get("requestedPackageLineItems");
+        assertEquals(1, items.size());
+        assertEquals(box1, items.get(0));
+    }
+
+    @Test
+    void stripToBoxOne_singlePiece_isNoOp() {
+        java.util.Map<String, Object> box1 = new java.util.LinkedHashMap<>();
+        box1.put("sequenceNumber", "1");
+        java.util.Map<String, Object> reqShip = new java.util.LinkedHashMap<>();
+        reqShip.put("totalPackageCount", "1");
+        reqShip.put("requestedPackageLineItems", new java.util.ArrayList<>(java.util.List.of(box1)));
+        java.util.Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        payload.put("requestedShipment", reqShip);
+
+        FedExConnector.stripToBoxOne(payload);
+
+        assertEquals("1", reqShip.get("totalPackageCount"));
+        assertEquals(1, ((java.util.List<?>) reqShip.get("requestedPackageLineItems")).size());
+    }
+
+    @Test
+    void stripToBoxOne_missingRequestedShipment_isNoOp() {
+        // Malformed / empty payload — should not throw.
+        FedExConnector.stripToBoxOne(new java.util.LinkedHashMap<>());
+        FedExConnector.stripToBoxOne(null);
+    }
 }

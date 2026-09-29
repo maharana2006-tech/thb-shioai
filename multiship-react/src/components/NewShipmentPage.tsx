@@ -294,6 +294,9 @@ export default function NewShipmentPage() {
   /** Tracks phone/email fields the backend flagged as `defaulted` so a
    *  later sender-side fill can override the fallback value. */
   const senderFallbackPendingRef = useRef<{ phone: boolean; email: boolean } | null>(null)
+  // G6 — STD-replacement erp_code from the NDS prefill; sent on submit so
+  // NdsShipmentOracleWriter can UPDATE OEHEAD.SHIPVIA_CD after label success.
+  const [ndsStdReplacementErpCode, setNdsStdReplacementErpCode] = useState<string | null>(null)
   // Sprint 35 — signature at delivery + insured value beyond the
   // carrier's free tier. Signature is a per-shipment enum; insured
   // value is a separate money amount from declared/customs value.
@@ -1364,6 +1367,9 @@ export default function NewShipmentPage() {
       phone: !!r?.phoneDefaulted,
       email: !!p.notifyBlock?.emailDefaulted,
     }
+    // G6 — stash the STD-replacement ERP code so submit can round-trip it
+    // to the backend for the NDS OEHEAD.SHIPVIA_CD writeback.
+    setNdsStdReplacementErpCode(p.stdReplacementErpCode ?? null)
   }
 
   /**
@@ -1385,7 +1391,7 @@ export default function NewShipmentPage() {
       // Parallel calls — one per token. Existing endpoint returns the full
       // order for every .X (all sibling packages), so multiple containers
       // of the same order collapse via dedup below.
-      const results = await Promise.allSettled(tokens.map((t) => ndsShipmentService.lookup(t)))
+      const results = await Promise.allSettled(tokens.map((t) => ndsShipmentService.lookup(t, clientCode || null)))
       const prefills: NdsShipmentPrefill[] = []
       const failures: { token: string; status?: number; msg?: string }[] = []
       results.forEach((r, i) => {
@@ -2390,6 +2396,7 @@ export default function NewShipmentPage() {
       // V76 — internal per-order ops note; omit when blank so the
       // wire only carries populated fields.
       ...(note.trim() ? { note: note.trim() } : {}),
+      ...(ndsStdReplacementErpCode ? { stdReplacementErpCode: ndsStdReplacementErpCode } : {}),
       carrierCode: carrier,
       accountNumber: accountNumber.trim(),
       accountId: matched?.id ?? null,
@@ -3018,7 +3025,9 @@ export default function NewShipmentPage() {
                 <Field label="Scan (NDS)"
                        hint={ndsQueue.length > 1
                          ? undefined
-                         : 'One or many — separate multiple containers by comma or space.'}>
+                         : clientCode
+                           ? 'One or many — separate multiple containers by comma or space.'
+                           : 'Pick a client below to enable scanning.'}>
                   <input
                     className={inputCls}
                     value={ndsScan}
@@ -3029,8 +3038,10 @@ export default function NewShipmentPage() {
                         onScanSubmit()
                       }
                     }}
-                    placeholder=".X<containerId>, .X<c2>… or .Y<batchId>"
-                    disabled={ndsLoading}
+                    placeholder={clientCode
+                      ? '.X<containerId>, .X<c2>… or .Y<batchId>'
+                      : 'Pick a client first'}
+                    disabled={ndsLoading || !clientCode}
                     aria-busy={ndsLoading}
                   />
                   {ndsQueue.length > 1 ? (

@@ -36,7 +36,7 @@ class NdsShipmentLookupControllerTest {
         NdsShipmentPrefill sample = new NdsShipmentPrefill(
                 NdsShipmentPrefill.Status.OK, List.of(),
                 NdsShipmentPrefill.Scope.DIRECT, ".X1", "ACME", null,
-                List.of(), null, null, List.of(), null, null, List.of());
+                List.of(), null, null, List.of(), null, null, List.of(), null);
         when(service.lookup(anyString())).thenReturn(Optional.of(sample));
         ResponseEntity<ApiResponse<NdsShipmentPrefill>> resp = controller.lookup(".X1");
         assertEquals(HttpStatus.OK, resp.getStatusCode());

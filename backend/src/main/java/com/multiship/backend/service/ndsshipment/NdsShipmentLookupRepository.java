@@ -279,18 +279,40 @@ public class NdsShipmentLookupRepository {
                              String primaryClientCode) {}
 
     public Optional<BatchOwner> findBatchOwner(String batchId) {
-        String sql = """
-                SELECT FF_SCHEMA,
-                       PRIMARY_CLIENT_CODE
-                  FROM TB_BILLABLE_CONTAINERS
-                 WHERE BATCH_ID = :batchId
-                   AND ROWNUM  = 1
-                """;
+        return findBatchOwner(batchId, null);
+    }
+
+    /**
+     * Real TB_BILLABLE_CONTAINERS shape (via /admin/nds-debug/describe):
+     * {@code BATCH_ID CONTAINER_ID WEIGHT CONTAINER_NO ORDER_NO
+     * ORDER_SUFFIX FF_SCHEMA}. No PRIMARY_CLIENT_CODE — {@code FF_SCHEMA}
+     * IS the tenant/client code (same string {@link NdsTemplates#forClient}
+     * accepts). When {@code clientCode} is non-blank the SQL narrows to
+     * that tenant so a batch id colliding across tenants can't leak.
+     */
+    public Optional<BatchOwner> findBatchOwner(String batchId, String clientCode) {
+        boolean hasClient = clientCode != null && !clientCode.isBlank();
+        String sql = hasClient
+                ? """
+                        SELECT FF_SCHEMA
+                          FROM TB_BILLABLE_CONTAINERS
+                         WHERE BATCH_ID  = :batchId
+                           AND FF_SCHEMA = :clientCode
+                           AND ROWNUM    = 1
+                        """
+                : """
+                        SELECT FF_SCHEMA
+                          FROM TB_BILLABLE_CONTAINERS
+                         WHERE BATCH_ID = :batchId
+                           AND ROWNUM  = 1
+                        """;
         MapSqlParameterSource p = new MapSqlParameterSource("batchId", batchId);
+        if (hasClient) p.addValue("clientCode", clientCode.trim());
         try {
-            return Optional.of(templates.production().queryForObject(sql, p, (rs, i) ->
-                    new BatchOwner(rs.getString("FF_SCHEMA"),
-                            rs.getString("PRIMARY_CLIENT_CODE"))));
+            return Optional.of(templates.production().queryForObject(sql, p, (rs, i) -> {
+                String ff = rs.getString("FF_SCHEMA");
+                return new BatchOwner(ff, ff);
+            }));
         } catch (EmptyResultDataAccessException empty) {
             return Optional.empty();
         }
@@ -307,15 +329,35 @@ public class NdsShipmentLookupRepository {
                                  String orderSuffix) {}
 
     public List<BatchContainer> findBatchContents(String batchId) {
-        String sql = """
-                SELECT CONTAINER_ID,
-                       ORDER_NO,
-                       ORDER_SUFFIX
-                  FROM TB_BILLABLE_CONTAINERS
-                 WHERE BATCH_ID = :batchId
-                 ORDER BY CONTAINER_ID
-                """;
+        return findBatchContents(batchId, null);
+    }
+
+    /**
+     * When {@code clientCode} is non-blank the SQL narrows by FF_SCHEMA so
+     * cross-tenant rows sharing a batch id can't leak.
+     */
+    public List<BatchContainer> findBatchContents(String batchId, String clientCode) {
+        boolean hasClient = clientCode != null && !clientCode.isBlank();
+        String sql = hasClient
+                ? """
+                        SELECT CONTAINER_ID,
+                               ORDER_NO,
+                               ORDER_SUFFIX
+                          FROM TB_BILLABLE_CONTAINERS
+                         WHERE BATCH_ID  = :batchId
+                           AND FF_SCHEMA = :clientCode
+                         ORDER BY CONTAINER_ID
+                        """
+                : """
+                        SELECT CONTAINER_ID,
+                               ORDER_NO,
+                               ORDER_SUFFIX
+                          FROM TB_BILLABLE_CONTAINERS
+                         WHERE BATCH_ID = :batchId
+                         ORDER BY CONTAINER_ID
+                        """;
         MapSqlParameterSource p = new MapSqlParameterSource("batchId", batchId);
+        if (hasClient) p.addValue("clientCode", clientCode.trim());
         return templates.production().query(sql, p, (rs, i) ->
                 new BatchContainer(
                         rs.getString("CONTAINER_ID"),
