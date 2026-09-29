@@ -676,7 +676,7 @@ describe('Bulk Mailer — layout', () => {
     await renderAt('/bulk/batches/121')
     await screen.findByTestId('batch-page-header')
     // pick and actions have no text header; every imported f_* column is hidden by default
-    expect((await screen.findByTestId('visible-headers')).textContent).toBe('|Container ID|Client Code|Ship Via Code|Ship Attention|Ship Name|Weight|Third Party AC|Tracking ID|Print|Commercial Invoice|Status|')
+    expect((await screen.findByTestId('visible-headers')).textContent).toBe('|Container ID|Client Code|Ship Via Code|Ship Attention|Ship Name|Weight|Third Party AC|Tracking ID|Commercial Invoice|Status|')
     // Print / void live in a floating bar that appears once rows are ticked, not in the toolbar
     expect(screen.queryByTestId('batch-label-bar')).toBeNull()
   })

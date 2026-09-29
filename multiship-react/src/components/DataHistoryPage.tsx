@@ -1929,22 +1929,6 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
         meta: { headerLabel: 'Third Party AC', exportValue: (r: OrderImportRow) => ((r.billTo ?? '').toUpperCase() === 'THIRD_PARTY' ? r.accountNumber ?? '' : '') },
       },
       {
-        id: 'print', header: 'Print', size: 70, enableSorting: false,
-        cell: ({ row }) => {
-          const r = row.original
-          const orderNo = r.generatedOrderNo
-          if ((r.generatedStatus ?? '').toUpperCase() !== 'GENERATED' || orderNo == null) return <span className="text-[#b3a583]">—</span>
-          return (
-            <button type="button" onClick={() => void printOrderLabel(orderNo)} aria-label={`Print label for order ${orderNo}`}
-              title={r.lastPrintedAt ? `Print the label — last printed ${formatPrinted(r.lastPrintedAt, true)}` : 'Print the label'}
-              className={`${ICON} ${r.lastPrintedAt ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : NEUTRAL}`}>
-              <FiPrinter className="h-3.5 w-3.5" />
-            </button>
-          )
-        },
-        meta: { headerLabel: 'Print', exportValue: (r: OrderImportRow) => (r.lastPrintedAt ? 'Printed' : '') },
-      },
-      {
         id: 'invoice', header: 'Commercial Invoice', size: 130, enableSorting: false,
         cell: ({ row }) => {
           const r = row.original
@@ -1998,7 +1982,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
         meta: { headerLabel: fieldLabel(c), exportValue: (r: OrderImportRow) => String((r as unknown as Record<string, unknown>)[c.key] ?? '') },
       })),
       {
-        id: 'actions', header: () => <span className="block text-right">Actions</span>, size: 190, enableSorting: false,
+        id: 'actions', header: () => <span className="block text-right">Actions</span>, size: 220, enableSorting: false,
         cell: ({ row }) => {
           const r = row.original
           const gen = (r.generatedStatus ?? '').toUpperCase()
@@ -2028,7 +2012,14 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
                   <FiInfo className="h-3.5 w-3.5" />
                 </button>
               ) : null)}
-              {/* Printing the label or the invoice: the Print and Commercial Invoice columns. */}
+              {slot(generated && orderNo != null ? (
+                <button type="button" onClick={() => void printOrderLabel(orderNo)} aria-label={`Print label for order ${orderNo}`}
+                  title={r.lastPrintedAt ? `Print the label — last printed ${formatPrinted(r.lastPrintedAt, true)}` : 'Print the shipping label'}
+                  className={`${ICON} ${r.lastPrintedAt ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : NEUTRAL}`}>
+                  <FiPrinter className="h-3.5 w-3.5" />
+                </button>
+              ) : null)}
+              {/* The commercial invoice prints from its own column. */}
               <span className="ml-1 flex min-w-7 shrink-0 justify-end">
                 {generated && orderNo != null ? (
                   <button type="button" onClick={() => navigate(`/label/${orderNo}`)} title="View label" aria-label={`View label for order ${orderNo}`}
@@ -2067,7 +2058,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
         meta: { headerLabel: 'Actions', hideable: false, exportable: false },
       },
     ]
-    const SHIPX_ORDER = ['pick', 'order', 'clientCode', 'shipVia', 'attention', 'shipName', 'weight', 'thirdParty', 'track', 'print', 'invoice', 'status']
+    const SHIPX_ORDER = ['pick', 'order', 'clientCode', 'shipVia', 'attention', 'shipName', 'weight', 'thirdParty', 'track', 'invoice', 'status']
     const rank = (d: ColumnDef<OrderImportRow, unknown>) => {
       const i = SHIPX_ORDER.indexOf(d.id ?? '')
       return i >= 0 ? i : d.id === 'actions' ? 1000 : 100
