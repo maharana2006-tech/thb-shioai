@@ -45,7 +45,7 @@ public class BulkBatchQueryService {
             LocalDate from,
             LocalDate to,
             String createdBy,
-            /** HAS · NONE — has a label batch yet. */
+            /** HAS · NONE — has a label batch yet — or one label batch number. */
             String labelBatch,
             Integer minSaved,
             /** created · fileName · savedRows · status · labelBatch */
@@ -60,7 +60,9 @@ public class BulkBatchQueryService {
             long needsFixes,
             long completedThisWeek,
             Map<String, Long> statusCounts,
-            List<String> creators) { }
+            List<String> creators,
+            /** Label batch numbers in this view, newest first — the "Batch" filter's choices. */
+            List<Integer> labelBatches) { }
 
     static final List<String> STATUSES =
             List.of("DRAFT", "INITIATE", "IN_PROGRESS", "PARTIAL_COMPLETE", "COMPLETE", "FAILED", "CANCELLED");
@@ -179,7 +181,7 @@ public class BulkBatchQueryService {
         byStatus.put("ALL", total);
         return new Summary(total, asLong(t.get("ready")), byStatus.getOrDefault("IN_PROGRESS", 0L),
                 asLong(t.get("needsFixes")), asLong(t.get("doneThisWeek")),
-                byStatus, creators(base));
+                byStatus, creators(base), labelBatches(base));
     }
 
     private static long asLong(Object v) {
@@ -280,6 +282,16 @@ public class BulkBatchQueryService {
         return entityManager.createQuery(cq).getResultList();
     }
 
+    private List<Integer> labelBatches(Specification<ImportBatch> where) {
+        CriteriaBuilder cb = entityManager.getCriteriaBuilder();
+        jakarta.persistence.criteria.CriteriaQuery<Integer> cq = cb.createQuery(Integer.class);
+        Root<ImportBatch> root = cq.from(ImportBatch.class);
+        cq.select(root.get("labelBatchId")).distinct(true)
+                .where(cb.and(where.toPredicate(root, cq, cb), cb.isNotNull(root.get("labelBatchId"))))
+                .orderBy(cb.desc(root.get("labelBatchId")));
+        return entityManager.createQuery(cq).getResultList();
+    }
+
     // ─── Specifications ───────────────────────────────────────────────────
 
     /** The view (live file / live API / Trash) and the caller's client. */
@@ -334,6 +346,9 @@ public class BulkBatchQueryService {
             if (StringUtils.hasText(f.createdBy())) p.add(cb.equal(root.get("createdBy"), f.createdBy()));
             if ("HAS".equalsIgnoreCase(f.labelBatch())) p.add(cb.isNotNull(root.get("labelBatchId")));
             if ("NONE".equalsIgnoreCase(f.labelBatch())) p.add(cb.isNull(root.get("labelBatchId")));
+            if (f.labelBatch() != null && f.labelBatch().trim().matches("\\d{1,9}")) {
+                p.add(cb.equal(root.get("labelBatchId"), Integer.parseInt(f.labelBatch().trim())));
+            }
             if (f.minSaved() != null) p.add(cb.greaterThanOrEqualTo(root.get("savedRows"), f.minSaved()));
             return cb.and(p.toArray(Predicate[]::new));
         };

@@ -226,7 +226,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
     from: filters.dateFrom || undefined,
     to: filters.dateTo || undefined,
     createdBy: filters.createdBy || undefined,
-    labelBatch: filters.batchPresence === 'ANY' ? undefined : filters.batchPresence,
+    labelBatch: filters.batchNo || (filters.batchPresence === 'ANY' ? undefined : filters.batchPresence),
     minSaved: filters.minSaved ? Number(filters.minSaved) : undefined,
     sort: filters.sortKey,
     dir: filters.sortDir,
@@ -2480,7 +2480,19 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
             columns={dhColumns}
             data={batches}
             search={{ value: filters.search, onChange: filters.setSearch, placeholder: 'Search file name, batch #, or user…' }}
-            filterToggle={filterMenu}
+            filterToggle={<>
+              <select
+                aria-label="Batch"
+                title="Show one label batch"
+                value={filters.batchNo}
+                onChange={(e) => filters.setBatchNo(e.target.value)}
+                className={`h-[30px] rounded-lg border bg-[#fcfaf5] px-2 text-[12.5px] outline-none focus:border-[#412d15] ${filters.batchNo ? 'border-[#412d15] font-semibold text-[#1f150c]' : 'border-[#e3d9c4] text-slate-700'}`}
+              >
+                <option value="">All batches</option>
+                {(summary?.labelBatches ?? []).map((n) => <option key={n} value={String(n)}>Batch {n}</option>)}
+              </select>
+              {filterMenu}
+            </>}
             filterPanel={
               <BulkFilterChips
                 statusFilter={filters.statusFilter}

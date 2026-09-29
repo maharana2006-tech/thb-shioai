@@ -15,7 +15,8 @@ export interface BulkBatchQuery {
   to?: string
   createdBy?: string
   /** HAS · NONE — has a label batch yet. */
-  labelBatch?: 'HAS' | 'NONE'
+  /** HAS · NONE, or one label batch number. */
+  labelBatch?: 'HAS' | 'NONE' | string
   minSaved?: number
   sort?: 'created' | 'fileName' | 'savedRows' | 'status' | 'labelBatch'
   dir?: 'ASC' | 'DESC'
@@ -41,6 +42,8 @@ export interface BulkSummary {
   completedThisWeek: number
   statusCounts: Record<string, number>
   creators: string[]
+  /** Label batch numbers in the view, newest first. */
+  labelBatches?: number[]
 }
 
 /** The query string, leaving blank filters out. */
