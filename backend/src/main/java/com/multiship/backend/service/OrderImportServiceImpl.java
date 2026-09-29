@@ -1767,7 +1767,8 @@ public class OrderImportServiceImpl implements OrderImportService {
 
             // Anything left over matched no definition for this client.
             for (String unknown : provided.keySet()) {
-                addWarning(row, "column '" + unknown + "' is not a recognised field for "
+                String unused = ImportColumnAliases.unusedWarning(unknown);
+                addWarning(row, unused != null ? unused : "column '" + unknown + "' is not a recognised field for "
                         + (tenant == null ? "the platform" : tenant) + " — it will be ignored");
             }
             row.setCustomFields(resolved.isEmpty() ? null : resolved);
@@ -2443,13 +2444,14 @@ public class OrderImportServiceImpl implements OrderImportService {
         String ext = filename == null ? "" : filename.toLowerCase(Locale.ROOT);
         try {
             List<OrderImportRowDTO> rows;
+            List<String> fileColumns = new ArrayList<>();
             // .xlsm is the same OOXML workbook as .xlsx plus a macro project,
             // and the template we hand out IS an .xlsm — refusing it sent
             // operators back to Save As for no reason. POI reads both.
             if (ext.endsWith(".xlsx") || ext.endsWith(".xlsm")) {
-                rows = parseXlsx(body);
+                rows = parseXlsx(body, fileColumns);
             } else if (ext.endsWith(".csv") || ext.endsWith(".txt")) {
-                rows = parseCsv(body);
+                rows = parseCsv(body, fileColumns);
             } else {
                 return failure(HttpStatus.UNSUPPORTED_MEDIA_TYPE,
                         "Only .csv, .txt, .xlsx and .xlsm files are supported.");
@@ -2542,6 +2544,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                 }
             }
             OrderImportPreviewDTO preview = buildPreview(rows);
+            preview.setFileColumns(fileColumns);
             preview.setBatchId(rows.isEmpty() ? null : rows.get(0).getBatchId());
             return success(preview, rows.size() + " row(s) parsed.");
         } catch (Exception ex) {
@@ -5324,6 +5327,35 @@ public class OrderImportServiceImpl implements OrderImportService {
         return sb.toString().getBytes(StandardCharsets.UTF_8);
     }
 
+    @Override
+    public byte[] clientLayoutCsvTemplate() {
+        List<String> keys = ImportColumnAliases.clientLayoutKeys();
+        StringBuilder sb = new StringBuilder(String.join(",", ImportColumnAliases.CLIENT_LAYOUT)).append('\n');
+        for (Map<String, String> row : sampleRows(sampleClientCode())) {
+            // An extra item line joins its order by orderRef, which this layout doesn't have.
+            if (!StringUtils.hasText(row.get("recipientName"))) continue;
+            List<String> cells = new ArrayList<>(keys.size());
+            for (String k : keys) cells.add(csvCell(row.getOrDefault(k, "")));
+            sb.append(String.join(",", cells)).append('\n');
+        }
+        return sb.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    @Override
+    public byte[] clientLayoutXlsxTemplate() {
+        TemplateData d = templateData(null);
+        return OrderImportTemplateBuilder.build(
+                ImportColumnAliases.clientLayoutKeys(), ImportColumnAliases.clientHeaderNames(),
+                d.clients(), d.accounts(), d.clientWarehouseCodes(), d.services(), d.presets(),
+                shipViaCodesByClient(d.clients(), d.services()));
+    }
+
+    /** A CSV cell, quoted when it holds a comma, quote or line break. */
+    private static String csvCell(String v) {
+        if (v == null) return "";
+        return v.contains(",") || v.contains("\"") || v.contains("\n") ? "\"" + v.replace("\"", "\"\"") + "\"" : v;
+    }
+
     private static Map<String, String> sampleRow(String... kv) {
         Map<String, String> m = new LinkedHashMap<>();
         for (int i = 0; i + 1 < kv.length; i += 2) m.put(kv[i], kv[i + 1]);
@@ -5374,6 +5406,11 @@ public class OrderImportServiceImpl implements OrderImportService {
     /* -------------------------- Parsers -------------------------- */
 
     private List<OrderImportRowDTO> parseCsv(InputStream body) throws Exception {
+        return parseCsv(body, new ArrayList<>());
+    }
+
+    /** @param fileColumns filled with the file's own column names, in order. */
+    private List<OrderImportRowDTO> parseCsv(InputStream body, List<String> fileColumns) throws Exception {
         List<OrderImportRowDTO> out = new ArrayList<>();
         // Wrap in a PushbackInputStream so we can peek + swallow a UTF-8
         // BOM (0xEF 0xBB 0xBF) — Excel writes one when Save As CSV, and
@@ -5395,13 +5432,15 @@ public class OrderImportServiceImpl implements OrderImportService {
                      .setHeader().setSkipHeaderRecord(true)
                      .setIgnoreEmptyLines(true).setTrim(true)
                      .build().parse(reader)) {
+            parser.getHeaderNames().stream().filter(StringUtils::hasText).map(String::trim).forEach(fileColumns::add);
             Map<String, Integer> headerMap = lowerCasedHeaderMap(parser.getHeaderMap());
+            ImportColumnAliases.addFieldNames(headerMap);   // the client layout (CLIENT_ID, SHIPVIA_CD, …)
             Map<String, OrderImportRowDTO> leaders = new LinkedHashMap<>();
             int rowNo = 0;
             for (CSVRecord rec : parser) {
                 rowNo++;
                 if (isBlank(rec)) continue;
-                ColumnReader csvReader = name -> get(rec, headerMap, name);
+                ColumnReader csvReader = withLayoutDefaults(name -> get(rec, headerMap, name), headerMap);
                 OrderImportRowDTO built = buildRow(rowNo, csvReader);
                 inheritFromLeader(built, leaders);
                 captureExtraColumns(built, headerMap, csvReader);
@@ -5434,7 +5473,8 @@ public class OrderImportServiceImpl implements OrderImportService {
             if (header == null) continue;
             for (Cell cell : header) {
                 String label = fmt.formatCellValue(cell).trim().toLowerCase(Locale.ROOT);
-                if ("orderref".equals(label) || "clientcode".equals(label) || "recipientname".equals(label)) {
+                if ("orderref".equals(label) || "clientcode".equals(label) || "recipientname".equals(label)
+                        || "client_id".equals(label) || "shipvia_cd".equals(label)) {
                     return candidate;
                 }
             }
@@ -5443,6 +5483,11 @@ public class OrderImportServiceImpl implements OrderImportService {
     }
 
     private List<OrderImportRowDTO> parseXlsx(InputStream body) throws Exception {
+        return parseXlsx(body, new ArrayList<>());
+    }
+
+    /** @param fileColumns filled with the sheet's own column names, in order. */
+    private List<OrderImportRowDTO> parseXlsx(InputStream body, List<String> fileColumns) throws Exception {
         List<OrderImportRowDTO> out = new ArrayList<>();
         DataFormatter fmt = new DataFormatter();
         try (Workbook workbook = new XSSFWorkbook(body)) {
@@ -5456,9 +5501,11 @@ public class OrderImportServiceImpl implements OrderImportService {
                     String label = fmt.formatCellValue(cell).trim();
                     if (StringUtils.hasText(label)) {
                         headerMap.put(label.toLowerCase(Locale.ROOT), cell.getColumnIndex());
+                        fileColumns.add(label);
                     }
                 }
             }
+            ImportColumnAliases.addFieldNames(headerMap);   // the client layout (CLIENT_ID, SHIPVIA_CD, …)
 
             int rowNo = 0;
             Map<String, OrderImportRowDTO> xlsxLeaders = new LinkedHashMap<>();
@@ -5474,7 +5521,8 @@ public class OrderImportServiceImpl implements OrderImportService {
 
                 Map<String, Integer> capturedHeader = headerMap;
                 int finalI = i;
-                ColumnReader xlsxReader = name -> readCell(sheet, finalI, capturedHeader, name, fmt);
+                ColumnReader xlsxReader = withLayoutDefaults(
+                        name -> readCell(sheet, finalI, capturedHeader, name, fmt), capturedHeader);
                 OrderImportRowDTO built = buildRow(rowNo, xlsxReader);
                 inheritFromLeader(built, xlsxLeaders);
                 captureExtraColumns(built, capturedHeader, xlsxReader);
@@ -5565,7 +5613,8 @@ public class OrderImportServiceImpl implements OrderImportService {
         Map<String, String> extras = new LinkedHashMap<>();
         for (String header : headerMap.keySet()) {
             if (header == null || header.isBlank() || KNOWN_HEADERS_LOWER.contains(header)
-                    || IGNORED_HEADERS_LOWER.contains(header)) continue;
+                    || IGNORED_HEADERS_LOWER.contains(header)
+                    || (ImportColumnAliases.isClientColumn(header) && ImportColumnAliases.unusedWarning(header) == null)) continue;
             String value = sanitise(reader.read(header));
             if (StringUtils.hasText(value)) extras.put(header.trim(), value);
         }
@@ -5604,6 +5653,24 @@ public class OrderImportServiceImpl implements OrderImportService {
     @FunctionalInterface
     private interface ColumnReader {
         String read(String columnName);
+    }
+
+    /**
+     * What a file that lacks a column still says: no weightUnit column → pounds
+     * (the client layout has WEIGHT only); a THIRD_PARTY_ACC with no billTo
+     * column → billed to that third party.
+     */
+    private static ColumnReader withLayoutDefaults(ColumnReader r, Map<String, Integer> lowerHeaderMap) {
+        boolean noUnit = !lowerHeaderMap.containsKey("weightunit");
+        boolean thirdPartyAcc = lowerHeaderMap.containsKey("third_party_acc") && !lowerHeaderMap.containsKey("billto");
+        return name -> {
+            String v = r.read(name);
+            if (v != null) return v;
+            String n = name.toLowerCase(Locale.ROOT);
+            if (noUnit && "weightunit".equals(n) && r.read("weight") != null) return "LB";
+            if (thirdPartyAcc && "billto".equals(n) && r.read("third_party_acc") != null) return "THIRD_PARTY";
+            return null;
+        };
     }
 
     OrderImportRowDTO buildRow(int rowNumber, ColumnReader r) {
@@ -7042,6 +7109,8 @@ public class OrderImportServiceImpl implements OrderImportService {
         up.setCreatedBy(requestedBy);
         up.setFileName(StringUtils.hasText(filename) ? clip(filename.trim(), 260) : "upload");
         up.setContentHash(hash);
+        List<String> fileColumns = parsed.getData().getFileColumns();
+        up.setFileColumns(fileColumns == null || fileColumns.isEmpty() ? null : String.join("\n", fileColumns));
         up.setStatus("OPEN");
         up.setCreatedAt(now);
         up.setUpdatedAt(now);
@@ -7418,7 +7487,17 @@ public class OrderImportServiceImpl implements OrderImportService {
                 .createdAt(up.getCreatedAt())
                 .expiresAt(up.getCreatedAt() == null ? null : up.getCreatedAt().plusDays(Math.max(1, stagingRetentionDays)))
                 .rows(rows)
+                .fileColumns(fileColumnsOf(up))
                 .build();
+    }
+
+    /** The upload's own columns with the field each one fills; null for an upload from before V94. */
+    private static List<StagingUploadDTO.FileColumn> fileColumnsOf(ImportStagingUpload up) {
+        if (!StringUtils.hasText(up.getFileColumns())) return null;
+        return java.util.Arrays.stream(up.getFileColumns().split("\n"))
+                .filter(StringUtils::hasText)
+                .map(n -> new StagingUploadDTO.FileColumn(n, ImportColumnAliases.fieldOf(n)))
+                .toList();
     }
 
     private List<OrderImportRowDTO> readStagingRows(List<ImportStagingRow> ents) {

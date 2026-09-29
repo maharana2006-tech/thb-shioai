@@ -20,6 +20,7 @@ import {
 } from 'react-icons/fi'
 import {
   orderImportService,
+  type FileColumn,
   type OrderImportPreview,
   type OrderImportRow,
   type StagingUpload,
@@ -165,7 +166,8 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
 
   const step: 1 | 2 | 3 = lastSave && staging ? 3 : staging ? 2 : 1
   const preview: OrderImportPreview | null = staging
-    ? { totalRows: staging.totalRows, validRows: staging.validRows, invalidRows: staging.invalidRows, rows: staging.rows, batchId: null }
+    ? { totalRows: staging.totalRows, validRows: staging.validRows, invalidRows: staging.invalidRows, rows: staging.rows, batchId: null,
+        fileColumns: staging.fileColumns ?? null }
     : null
 
   /** Re-read the staged upload — opening it re-runs validation server-side, so
@@ -202,11 +204,12 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
       .finally(() => setSavingCell(false))
   }
 
-  const downloadXlsx = async () => {
+  const downloadXlsx = async (layout: 'standard' | 'client' = 'standard') => {
     if (downloadingXlsx) return
     setDownloadingXlsx(true)
     try {
-      await orderImportService.downloadXlsxTemplate(null)
+      if (layout === 'client') await orderImportService.downloadClientLayoutXlsx()
+      else await orderImportService.downloadXlsxTemplate(null)
     } catch (e) {
       notify.apiError(e, 'Template download failed.')
     } finally {
@@ -453,7 +456,9 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
               uploading={uploading}
               downloadingXlsx={downloadingXlsx}
               onDownloadXlsx={() => void downloadXlsx()}
+              onDownloadClientXlsx={() => void downloadXlsx('client')}
               csvHref={orderImportService.templateUrl()}
+              clientCsvHref={orderImportService.clientLayoutTemplateUrl()}
             />
           ) : null}
           {step === 1 && openUploads.length > 0 ? (
@@ -764,7 +769,9 @@ function UploadStep({
   uploading,
   downloadingXlsx,
   onDownloadXlsx,
+  onDownloadClientXlsx,
   csvHref,
+  clientCsvHref,
 }: {
   file: File | null
   onFileChange: (f: File | null) => void
@@ -772,7 +779,9 @@ function UploadStep({
   uploading: boolean
   downloadingXlsx: boolean
   onDownloadXlsx: () => void
+  onDownloadClientXlsx: () => void
   csvHref: string
+  clientCsvHref: string
 }) {
   const [dragging, setDragging] = useState(false)
   const prettySize = (bytes: number) =>
@@ -867,6 +876,23 @@ function UploadStep({
             >
               <FiDownload className="h-3 w-3" /> Plain CSV
             </a>
+          </div>
+          <div className="mt-3 border-t border-[#f2ecdf] pt-3">
+            <p className="text-[11.5px] font-semibold text-[#1f150c]">Client layout</p>
+            <p className="mt-0.5 text-[11px] text-[#6b5c42]">
+              The columns a client's own system writes — CLIENT_ID, ATTENTION, COMPANY_NAME, … SHIPVIA_CD, GROUP_ID. Files in either layout upload the same way.
+            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <button type="button" onClick={onDownloadClientXlsx} disabled={downloadingXlsx} className={GHOST_BTN}>
+                {downloadingXlsx ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiDownload className="h-3.5 w-3.5" />}
+                Client layout (Excel)
+              </button>
+              <a href={clientCsvHref}
+                className="inline-flex items-center gap-1.5 text-[11.5px] font-semibold text-[#6b5c42] transition hover:text-[#1f150c]"
+                title="The client layout as a flat CSV — no dropdowns.">
+                <FiDownload className="h-3 w-3" /> Client layout (CSV)
+              </a>
+            </div>
           </div>
         </div>
       </div>
@@ -1026,6 +1052,8 @@ function EditCell({
  *  room. Order mirrors the CSV/template. */
 type PreviewColumn = {
   key: string
+  /** The uploaded file's own name for this column (CLIENT_ID), shown instead of the field's label. */
+  name?: string
   mono?: boolean
   upper?: boolean
   numeric?: boolean
@@ -1091,6 +1119,26 @@ const DETAIL_FIELD_W: Record<string, string> = {
   hsCode: 'w-28',
 }
 
+/**
+ * The grid's columns for an uploaded file: in the file's own order and names when
+ * it isn't in our layout (CLIENT_ID, ATTENTION, … for the client layout). Columns
+ * with no field of ours show under the file's extra columns, as before.
+ */
+export function fileLayoutColumns(fileColumns: FileColumn[] | null | undefined): PreviewColumn[] | null {
+  if (!fileColumns?.length) return null
+  const ourLayout = fileColumns.every((c) => !c.field || c.field.toLowerCase() === c.name.trim().toLowerCase())
+  if (ourLayout) return null
+  const seen = new Set<string>()
+  const cols: PreviewColumn[] = []
+  for (const c of fileColumns) {
+    const base = c.field ? COL_BY_KEY[c.field] : undefined
+    if (!base || seen.has(base.key)) continue
+    seen.add(base.key)
+    cols.push({ ...base, name: c.name })
+  }
+  return cols.length ? cols : null
+}
+
 /** Field groups for the detail view. Every editable column must appear in a
  *  group, otherwise its value AND its validation error have nowhere to render. */
 const CARD_GROUPS: { title: string; keys: string[] }[] = [
@@ -1124,6 +1172,7 @@ function PreviewStep({
   onOpenMapping?: () => void
 }) {
   const savedSet = new Set(savedRows)
+  const columns = fileLayoutColumns(preview.fileColumns) ?? PREVIEW_COLUMNS
   // The code to map, and which client's file it came from.
   const [mapping, setMapping] = useState<{ code: string; clientCode: string | null } | null>(null)
   const [codesTick, setCodesTick] = useState(0)
@@ -1248,7 +1297,7 @@ function PreviewStep({
       <VirtualTable
         rows={shown}
         rowKey={(r) => r.rowNumber}
-        colCount={1 + PREVIEW_COLUMNS.length + customCols.length}
+        colCount={1 + columns.length + customCols.length}
         maxHeight="60vh"
         className="rounded-xl border border-[#e3d9c4]"
         tableClassName="w-full border-collapse text-[11px]"
@@ -1257,9 +1306,10 @@ function PreviewStep({
           <thead className="sticky top-0 z-30">
             <tr className="bg-[#faf7f0] text-[8.5px] uppercase tracking-[0.08em] text-[#6b5c42]">
               <th className="sticky left-0 z-20 border-b border-r border-[#e3d9c4] bg-[#faf7f0] px-2 py-1.5 text-left font-bold">Row</th>
-              {PREVIEW_COLUMNS.map((c) => (
-                <th key={c.key} title={`File column: ${c.key}`} className="whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1.5 text-left font-bold">
-                  {labelOfField(c.key)}
+              {columns.map((c) => (
+                <th key={c.key} title={c.name ? `${labelOfField(c.key)} (file column ${c.name})` : `File column: ${c.key}`}
+                  className="whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1.5 text-left font-bold">
+                  {c.name ?? labelOfField(c.key)}
                 </th>
               ))}
               {customCols.map((k) => (
@@ -1314,7 +1364,7 @@ function PreviewStep({
                       ) : null}
                     </div>
                   </td>
-                  {PREVIEW_COLUMNS.map((c) => (
+                  {columns.map((c) => (
                     <td key={c.key} className="border-b border-[#f2ecdf] px-1 py-1 align-top">
                       <div className={c.w}>
                         {cellFor(r, c, byField[c.key])}

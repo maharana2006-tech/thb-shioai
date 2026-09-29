@@ -182,6 +182,7 @@ public class SecurityConfig {
                         // to expose publicly so the browser can download it via a plain
                         // <a href>, no Bearer header to attach.
                         .requestMatchers(HttpMethod.GET, "/api/v1/orders/import/template.csv").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/orders/import/template-client.csv").permitAll()
                         // Sprint 36 — carrier webhook receiver: no JWT (carriers can't
                         // produce our tokens). Signature verification per carrier via
                         // HMAC-SHA256 in the request header.

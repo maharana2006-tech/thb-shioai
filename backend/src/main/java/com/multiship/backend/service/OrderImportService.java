@@ -268,6 +268,12 @@ public interface OrderImportService {
      *  sample row. Returned as a byte[] with UTF-8 encoding. */
     byte[] csvTemplate();
 
+    /** The client layout (CLIENT_ID, ATTENTION, … SHIPVIA_CD, GROUP_ID …) as a CSV template. */
+    default byte[] clientLayoutCsvTemplate() { throw new UnsupportedOperationException(); }
+
+    /** The client layout as an Excel template, with the client and ship via dropdowns. */
+    default byte[] clientLayoutXlsxTemplate() { throw new UnsupportedOperationException(); }
+
     /**
      * Sprint 48 — .xlsx template with data validation dropdowns, sample
      * rows, and an operator-facing instructions block. When {@code accountId}

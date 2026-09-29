@@ -58,6 +58,10 @@ public class ImportStagingUpload {
     @Column(name = "saved_orders", nullable = false)
     private int savedOrders;
 
+    /** The file's own column names, one per line (V94). */
+    @Column(name = "file_columns", columnDefinition = "TEXT")
+    private String fileColumns;
+
     @Column(name = "last_saved_batch_id")
     private Long lastSavedBatchId;
 

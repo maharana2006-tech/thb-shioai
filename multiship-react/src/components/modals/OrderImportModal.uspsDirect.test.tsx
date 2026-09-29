@@ -44,6 +44,8 @@ vi.mock('../../api/orderImportService', () => ({
     downloadXlsxTemplate: (...a: unknown[]) => downloadXlsxTemplate(...a),
     discardStaging: (...a: unknown[]) => discardStaging(...a),
     templateUrl: () => '/orders/import/template',
+    clientLayoutTemplateUrl: () => '/orders/import/template-client.csv',
+    downloadClientLayoutXlsx: vi.fn(),
   },
 }))
 
