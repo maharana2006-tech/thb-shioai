@@ -17,6 +17,31 @@ import java.util.Optional;
 public interface DtcOrderRepository extends JpaRepository<DtcOrder, Long> {
 
     /**
+     * D2C History list — paged, optional tenant filter, and a free-text search
+     * over batch, tote, order #, customer PO and ship-to name/city.
+     * Empty strings mean "no filter".
+     */
+    @Query("""
+        SELECT d FROM DtcOrder d
+        WHERE (:tenantId = '' OR d.tenantId = :tenantId)
+          AND (:q = ''
+               OR STR(d.batchId) LIKE CONCAT('%', :q, '%')
+               OR STR(d.orderNo) LIKE CONCAT('%', :q, '%')
+               OR LOWER(d.toteNumber) LIKE LOWER(CONCAT('%', :q, '%'))
+               OR LOWER(d.custPo)     LIKE LOWER(CONCAT('%', :q, '%'))
+               OR LOWER(d.shipName)   LIKE LOWER(CONCAT('%', :q, '%'))
+               OR LOWER(d.shipToCity) LIKE LOWER(CONCAT('%', :q, '%')))
+    """)
+    org.springframework.data.domain.Page<DtcOrder> search(
+            @Param("tenantId") String tenantId,
+            @Param("q") String q,
+            org.springframework.data.domain.Pageable pageable);
+
+    /** Distinct tenants present, for the page's tenant filter. */
+    @Query("SELECT DISTINCT d.tenantId FROM DtcOrder d ORDER BY d.tenantId")
+    List<String> findDistinctTenantIds();
+
+    /**
      * Find a DTC order by batch ID (Oracle external ID).
      */
     Optional<DtcOrder> findByBatchId(Long batchId);
