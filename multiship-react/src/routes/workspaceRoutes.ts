@@ -82,6 +82,10 @@ export const settingsPaths = {
    *  external_system_connection table + secrets + client-login
    *  overrides + Test-connection dial. ADMIN role only. */
   externalSystems: '/settings/external-systems',
+  /** G7 — (source × carrier × warehouse) cutoff-shift rule matrix +
+   *  global holiday list. Shipments past cutoff or on a holiday get
+   *  their SHIP_DATE pushed to next working day. ADMIN role only. */
+  cutoffs: '/settings/cutoffs',
 } as const
 
 export const workspaceNavItems: Array<{
@@ -158,6 +162,9 @@ export const settingsNavItems: Array<{
     roles: ['ADMIN'] },
   { key: 'external-systems', label: 'External Systems', to: settingsPaths.externalSystems, iconKey: 'apiKey',
     description: 'DB-driven connection manager for external systems (Oracle WMS today, REST/gRPC/SFTP later). Set host/port/creds/pool params + per-tenant login overrides + test the connection live.',
+    roles: ['ADMIN'] },
+  { key: 'cutoffs', label: 'Cutoffs & Holidays', to: settingsPaths.cutoffs, iconKey: 'dashboard',
+    description: 'Per (source × carrier × warehouse) cutoff rules + global holiday list. Shipments past cutoff or on a holiday get their SHIP_DATE pushed to the next working day.',
     roles: ['ADMIN'] },
   // ===== Hidden from the Settings menu =====
   // Routes below still resolve so direct URLs and any hard-coded links keep

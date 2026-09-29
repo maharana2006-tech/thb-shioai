@@ -81,6 +81,17 @@ public class ManualShipmentRequest {
     private String note;
 
     /**
+     * G6 — carries the ERP code that the NDS prefill selected via the
+     * client's Shipping-Service-Mapping row keyed by shipvia_cd='STD'.
+     * Non-null on shipments that originated with shipvia=STD; the
+     * backend threads it into WritebackPayload so
+     * NdsShipmentOracleWriter can UPDATE OEHEAD.SHIPVIA_CD after label
+     * success, per ShipX_NDS_Orders_and_Tracking.docx §5 + §6. Null =
+     * no OEHEAD update.
+     */
+    private String stdReplacementErpCode;
+
+    /**
      * Optional ship-from warehouse code (must be attached to
      * {@link #clientCode}). When set, its address wins over the {@link #sender}
      * block. Ignored for ad-hoc shipments with no client.

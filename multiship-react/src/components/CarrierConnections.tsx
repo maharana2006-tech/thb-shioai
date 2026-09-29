@@ -149,6 +149,8 @@ interface DrawerState {
    *  their own defaults when unset. Values come from ../utils/customsOptions. */
   shippingPurpose: string
   clearanceOption: string
+  /** V95 — return-label scope. Empty = server default (DOMESTIC_ONLY). */
+  returnScope: string
   /** F6-B2 — per-account billing currency (ISO 4217). Blank string means
    *  "use carrier home currency" (USPS/UPS/FedEx → USD, DHL → EUR). */
   currency: string
@@ -201,6 +203,7 @@ const emptyDrawer: DrawerState = {
   clientDefault: false,
   shippingPurpose: '',
   clearanceOption: '',
+  returnScope: 'DOMESTIC_ONLY',
   currency: '',
   pickupType: null,
   labelImageFormat: null,
@@ -541,6 +544,7 @@ export default function CarrierConnections({
         clientDefault: Boolean(account.clientDefault),
         shippingPurpose: account.shippingPurpose || '',
         clearanceOption: account.clearanceOption || '',
+        returnScope: account.returnScope || 'DOMESTIC_ONLY',
         currency: account.currency || '',
         pickupType: account.pickupType ?? null,
         labelImageFormat: account.labelImageFormat ?? null,
@@ -788,6 +792,7 @@ export default function CarrierConnections({
         // "unset", empty string as "keep" — this matches the credentials rule).
         shippingPurpose: drawer.shippingPurpose || null,
         clearanceOption: drawer.clearanceOption || null,
+        returnScope: drawer.returnScope || 'DOMESTIC_ONLY',
         // F6-B2 — per-account billing currency. Uppercased for ISO 4217;
         // null = clear the override (revert to carrier home currency).
         currency: drawer.currency ? drawer.currency.trim().toUpperCase() : null,
@@ -1733,6 +1738,29 @@ export default function CarrierConnections({
                         ))}
                       </Select>
                     </Field>
+                  </div>
+
+                  {/* V95 — return-label scope. Gates the /orders/new RETURN
+                      flow at the account level. DOMESTIC_ONLY = must ship
+                      within the same country; DOMESTIC_AND_INTERNATIONAL =
+                      any lane; DISABLED = returns rejected outright on this
+                      account. Default DOMESTIC_ONLY on every existing row. */}
+                  <div className="mt-2">
+                    <Field label="Return-label scope">
+                      <Select
+                        value={drawer.returnScope || 'DOMESTIC_ONLY'}
+                        onChange={(e) => setDrawer((c) => ({ ...c, returnScope: e.target.value }))}
+                      >
+                        <option value="DOMESTIC_ONLY">Domestic only</option>
+                        <option value="DOMESTIC_AND_INTERNATIONAL">Domestic and international</option>
+                        <option value="DISABLED">Disabled — no returns</option>
+                      </Select>
+                    </Field>
+                    <p className="-mt-1 mb-2 text-[10.5px] leading-4 text-slate-400">
+                      Which lanes this carrier account supports return labels on. Domestic
+                      only matches the pre-V95 default. Set to Domestic and international
+                      only when the carrier account actually supports intl returns.
+                    </p>
                   </div>
 
                   {/* F6-B2 — per-account billing currency override. Blank means

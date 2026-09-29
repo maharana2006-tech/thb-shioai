@@ -344,6 +344,8 @@ public class ExternalSystemsAdminController {
             boolean writebackSourceManual,
             boolean writebackSourceBulk,
             boolean writebackSourceApi,
+            boolean writebackSourceWms,
+            boolean writebackSourceDtc,
             boolean writebackChannelD2c,
             boolean writebackChannelB2b,
             // V91 env split — this row is PROD or DEV. useDev is canonical
@@ -369,6 +371,8 @@ public class ExternalSystemsAdminController {
         public Boolean writebackSourceManual;
         public Boolean writebackSourceBulk;
         public Boolean writebackSourceApi;
+        public Boolean writebackSourceWms;
+        public Boolean writebackSourceDtc;
         public Boolean writebackChannelD2c;
         public Boolean writebackChannelB2b;
         // V91 env split — null = don't touch.
@@ -430,6 +434,8 @@ public class ExternalSystemsAdminController {
         if (req.writebackSourceManual != null) c.setWritebackSourceManual(req.writebackSourceManual);
         if (req.writebackSourceBulk   != null) c.setWritebackSourceBulk(req.writebackSourceBulk);
         if (req.writebackSourceApi    != null) c.setWritebackSourceApi(req.writebackSourceApi);
+        if (req.writebackSourceWms    != null) c.setWritebackSourceWms(req.writebackSourceWms);
+        if (req.writebackSourceDtc    != null) c.setWritebackSourceDtc(req.writebackSourceDtc);
         if (req.writebackChannelD2c   != null) c.setWritebackChannelD2c(req.writebackChannelD2c);
         if (req.writebackChannelB2b   != null) c.setWritebackChannelB2b(req.writebackChannelB2b);
         // V91 env split. Environment is PROD/DEV; useDev flip valid only on PROD row.
@@ -463,6 +469,8 @@ public class ExternalSystemsAdminController {
                 Boolean.TRUE.equals(c.getWritebackSourceManual()),
                 Boolean.TRUE.equals(c.getWritebackSourceBulk()),
                 Boolean.TRUE.equals(c.getWritebackSourceApi()),
+                Boolean.TRUE.equals(c.getWritebackSourceWms()),
+                Boolean.TRUE.equals(c.getWritebackSourceDtc()),
                 Boolean.TRUE.equals(c.getWritebackChannelD2c()),
                 Boolean.TRUE.equals(c.getWritebackChannelB2b()),
                 c.getEnvironment() == null ? ExternalSystemConnection.ENV_PROD : c.getEnvironment(),

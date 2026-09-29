@@ -2855,7 +2855,8 @@ public class UpsConnector implements CarrierConnector {
         // Pre-F6-E UTC produced a 1-day-earlier date for shippers printing
         // in APAC before 08:00 local, which UPS's paperless invoice service
         // silently accepts but the destination customs office may reject.
-        forms.put("InvoiceDate", com.multiship.backend.util.LabelDates.today(request.getShipperTimezone())
+        forms.put("InvoiceDate", com.multiship.backend.util.LabelDates.today(
+                        request.getShipperTimezone(), request.getShipDateOverride())
                 .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd")));
         forms.put("PurchaseOrderNumber", firstNonBlank(request.getReferenceNumber(), ""));
         forms.put("TermsOfShipment", firstNonBlank(intl.getIncoterms(), "DAP").toUpperCase());

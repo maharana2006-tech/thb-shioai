@@ -324,6 +324,16 @@ public class ShipmentRequestDTO {
     private String shipperTimezone;
 
     /**
+     * G7 — cutoff-shift override. When non-null, connectors stamp this
+     * date on SHIP_DATE / shipDatestamp / etc. instead of "today in the
+     * shipper's timezone". Populated by
+     * {@code CarrierServiceImpl.generateManualLabel} when the
+     * {@link com.multiship.backend.service.CutoffShiftService} matches
+     * a rule + past-cutoff / holiday.
+     */
+    private java.time.LocalDate shipDateOverride;
+
+    /**
      * FDX-H2 — FedEx pickupType (drives which driver fleet picks up the
      * label). Populated by
      * {@link com.multiship.backend.service.ShipmentDefaultsResolver} from

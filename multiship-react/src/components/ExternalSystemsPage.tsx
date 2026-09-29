@@ -337,6 +337,8 @@ function EditDrawer({
   const [wbSrcManual, setWbSrcManual] = useState<boolean>(initial?.writebackSourceManual ?? true)
   const [wbSrcBulk,   setWbSrcBulk]   = useState<boolean>(initial?.writebackSourceBulk   ?? true)
   const [wbSrcApi,    setWbSrcApi]    = useState<boolean>(initial?.writebackSourceApi    ?? true)
+  const [wbSrcWms,    setWbSrcWms]    = useState<boolean>(initial?.writebackSourceWms    ?? true)
+  const [wbSrcDtc,    setWbSrcDtc]    = useState<boolean>(initial?.writebackSourceDtc    ?? true)
   const [wbChanD2c,   setWbChanD2c]   = useState<boolean>(initial?.writebackChannelD2c   ?? true)
   const [wbChanB2b,   setWbChanB2b]   = useState<boolean>(initial?.writebackChannelB2b   ?? true)
   // V91 env split. environment picks which env this row IS (PROD/DEV); useDev
@@ -373,6 +375,8 @@ function EditDrawer({
         writebackSourceManual: wbSrcManual,
         writebackSourceBulk:   wbSrcBulk,
         writebackSourceApi:    wbSrcApi,
+        writebackSourceWms:    wbSrcWms,
+        writebackSourceDtc:    wbSrcDtc,
         writebackChannelD2c:   wbChanD2c,
         writebackChannelB2b:   wbChanB2b,
         environment,
@@ -458,6 +462,8 @@ function EditDrawer({
               wbSrcManual={wbSrcManual} setWbSrcManual={setWbSrcManual}
               wbSrcBulk={wbSrcBulk}     setWbSrcBulk={setWbSrcBulk}
               wbSrcApi={wbSrcApi}       setWbSrcApi={setWbSrcApi}
+              wbSrcWms={wbSrcWms}       setWbSrcWms={setWbSrcWms}
+              wbSrcDtc={wbSrcDtc}       setWbSrcDtc={setWbSrcDtc}
               wbChanD2c={wbChanD2c}     setWbChanD2c={setWbChanD2c}
               wbChanB2b={wbChanB2b}     setWbChanB2b={setWbChanB2b}
             />
@@ -630,6 +636,8 @@ function WritebackTab({
   wbSrcManual, setWbSrcManual,
   wbSrcBulk,   setWbSrcBulk,
   wbSrcApi,    setWbSrcApi,
+  wbSrcWms,    setWbSrcWms,
+  wbSrcDtc,    setWbSrcDtc,
   wbChanD2c,   setWbChanD2c,
   wbChanB2b,   setWbChanB2b,
 }: {
@@ -643,6 +651,8 @@ function WritebackTab({
   wbSrcManual: boolean; setWbSrcManual: (v: boolean) => void
   wbSrcBulk:   boolean; setWbSrcBulk:   (v: boolean) => void
   wbSrcApi:    boolean; setWbSrcApi:    (v: boolean) => void
+  wbSrcWms:    boolean; setWbSrcWms:    (v: boolean) => void
+  wbSrcDtc:    boolean; setWbSrcDtc:    (v: boolean) => void
   wbChanD2c:   boolean; setWbChanD2c:   (v: boolean) => void
   wbChanB2b:   boolean; setWbChanB2b:   (v: boolean) => void
 }) {
@@ -684,6 +694,12 @@ function WritebackTab({
     { key: 'src-api', label: 'External API (v2)',
       desc: 'Labels generated via /api/v2/shipments.',
       checked: wbSrcApi, onChange: setWbSrcApi },
+    { key: 'src-wms', label: 'WMS fetch',
+      desc: 'Batches pulled via "Fetch from WMS" on /orders/api-batches.',
+      checked: wbSrcWms, onChange: setWbSrcWms },
+    { key: 'src-dtc', label: 'D2C History (Fetch from NDS)',
+      desc: 'Batches pulled via "Fetch from NDS" on /d2c/history.',
+      checked: wbSrcDtc, onChange: setWbSrcDtc },
   ]
   const channelRows: Array<{ key: string; label: string; desc: string; checked: boolean; onChange: (v: boolean) => void }> = [
     { key: 'ch-d2c', label: 'D2C — Direct to consumer',
@@ -706,6 +722,16 @@ function WritebackTab({
             after a label is voided. Same flag gates both sides —
             leaving a field off means we neither send it on generate
             nor null it on void.
+          </p>
+          <p className="mt-1 text-slate-600">
+            <span className="font-semibold text-slate-700">On void:</span> for
+            the NDS connector specifically, the flagged CLIPPER + OE_TRACKING
+            columns are NULL'd (with <code className="rounded bg-slate-200 px-1">status='VOIDED'</code>{' '}
+            when the status flag is on), and the TB_MANUAL_SHIPMENT row that
+            was inserted on generate has its <code className="rounded bg-slate-200 px-1">VOID_YN</code>{' '}
+            flipped to <code className="rounded bg-slate-200 px-1">'Y'</code>.
+            The Sources + Channels gates below also apply on void — a void
+            never fires for a source/channel that's turned off here.
           </p>
           <p className="mt-1 text-slate-500">
             All flags default off. Enabling any flag is a per-connection change.

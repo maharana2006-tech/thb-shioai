@@ -33,6 +33,17 @@ public final class LabelDates {
     }
 
     /**
+     * G7 — cutoff-shift aware variant. When {@code override} is non-null,
+     * returns it verbatim; otherwise falls back to today-in-timezone.
+     * Connectors pass {@code ShipmentRequestDTO.getShipDateOverride()}
+     * so a shipment past cutoff / on a holiday stamps the next working
+     * day on the carrier's SHIP_DATE field.
+     */
+    public static LocalDate today(String timezone, LocalDate override) {
+        return override != null ? override : LocalDate.now(resolveZone(timezone));
+    }
+
+    /**
      * Same as {@link #today(String)} but shifted by {@code days} whole days.
      * Used by connectors that stamp a "planned ship date" of tomorrow (DHL
      * plannedShippingDateAndTime is next-business-day at 13:00).

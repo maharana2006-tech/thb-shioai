@@ -39,7 +39,11 @@ public record NdsShipmentPrefill(
         List<Package> packages,
         Notify notifyBlock,
         International international,  // null when SHIPTO_COUNTRY_CD = US
-        List<String> defaultedFields  // e.g. ["recipient.phone", "notify.sendTo"]
+        List<String> defaultedFields, // e.g. ["recipient.phone", "notify.sendTo"]
+        /** G6 — non-null when order came in as shipvia=STD and we resolved
+         *  it. Carries the client's ERP code that NDS OEHEAD.SHIPVIA_CD
+         *  should be updated to after label success. */
+        String stdReplacementErpCode
 ) {
 
     public enum Status { OK, WARNING, BLOCKED }

@@ -217,6 +217,8 @@ public class ExternalSystemWritebackDispatcher {
             case "MANUAL" -> Boolean.TRUE.equals(row.getWritebackSourceManual());
             case "BULK"   -> Boolean.TRUE.equals(row.getWritebackSourceBulk());
             case "API"    -> Boolean.TRUE.equals(row.getWritebackSourceApi());
+            case "WMS"    -> Boolean.TRUE.equals(row.getWritebackSourceWms());
+            case "DTC"    -> Boolean.TRUE.equals(row.getWritebackSourceDtc());
             default -> true;
         };
     }

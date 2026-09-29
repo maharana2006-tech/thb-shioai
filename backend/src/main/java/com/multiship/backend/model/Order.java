@@ -33,6 +33,16 @@ public class Order {
     @Column(name = "shipvia_cd")
     private String shipviaCd;
 
+    /**
+     * V96 — canonical ERP ship-via, derived by resolving the incoming
+     * SHIPVIA through the client's Shipping Service Mapping. Written
+     * on every Order save; read by NdsShipmentOracleWriter to UPDATE
+     * OEHEAD.SHIPVIA_CD after label success (skipped when the ERP
+     * matches what NDS already had, or when this column is null).
+     */
+    @Column(name = "nds_resolved_shipvia_cd", length = 20)
+    private String ndsResolvedShipviaCd;
+
     @Column(name = "ship_addr1")
     private String shipAddr1;
 

@@ -61,8 +61,18 @@ public class NdsShipmentOracleWriter {
                     + ": " + e.getMessage());
         }
         boolean isReturn = "RETURN".equalsIgnoreCase(p.shipmentMode());
+        boolean isDtc    = "DTC".equalsIgnoreCase(p.source());
         List<String> touched = new ArrayList<>();
         List<String> errors = new ArrayList<>();
+
+        // G1 — DTC surface writes to a DIFFERENT set of tables than
+        // Quick-Ship / BackOrder / Manual (per ShipX_NDS_Orders_and_Tracking.docx §6):
+        //   • OE_TRACKING via <client>.PROC_OE.INSERT_OE_TRACKING (BATCHSHIP marker)
+        //   • OE_SHIP_CONTAINER.CONTAINER_ID = tracking#
+        // No CLIPPER, no TB_MANUAL_SHIPMENT.
+        if (isDtc) {
+            return dtcWriteShipment(clientJdbc, p);
+        }
 
         // CLIPPER — CLIENT schema, composite-key UPDATE. Returns skip this
         // table (physical CLIPPER row is the outbound; return doesn't overwrite).
@@ -99,6 +109,27 @@ public class NdsShipmentOracleWriter {
                     }
                 }
                 if (count > 0) touched.add("CLIPPER×" + count);
+                // G2 — USPS parcels with no CLIPPER row on file need OE_TRACKING
+                // via PROC_OE.INSERT_OE_TRACKING(source="CLIPPER", code="450") so
+                // the tracking still makes it to NDS. Fires when the CLIPPER
+                // UPDATE hit zero rows AND the carrier is a USPS variant.
+                if (count == 0 && isUsps(p.carrierCode())) {
+                    int procCount = 0;
+                    for (WritebackPackagePayload pkg : p.packages()) {
+                        if (pkg.orderNos() == null) continue;
+                        for (Integer orderNo : pkg.orderNos()) {
+                            try {
+                                insertOeTrackingViaProc(clientJdbc, orderNo,
+                                        pkg.orderSuffix() == null ? 0 : pkg.orderSuffix(),
+                                        "CLIPPER", "450", p.trackingNumber());
+                                procCount++;
+                            } catch (Exception e) {
+                                errors.add("OE_TRACKING(USPS proc): " + e.getMessage());
+                            }
+                        }
+                    }
+                    if (procCount > 0) touched.add("OE_TRACKING[PROC USPS]×" + procCount);
+                }
             }
         }
 
@@ -135,11 +166,18 @@ public class NdsShipmentOracleWriter {
             String orderNoText = isReturn && p.orderNo() != null
                     ? ("REN -" + p.orderNo())
                     : (p.orderNo() != null ? String.valueOf(p.orderNo()) : null);
-            try {
-                int rows = insertTbManualShipment(prodJdbc, p, errorMode, orderNoText, p.note());
-                if (rows > 0) touched.add("TB_MANUAL_SHIPMENT[" + errorMode + "]×" + rows);
-            } catch (Exception e) {
-                errors.add("TB_MANUAL_SHIPMENT[" + errorMode + "]: " + e.getMessage());
+            // G10 — FedEx returns only write the R row when a note is entered;
+            // UPS returns always. Per ShipX_NDS_Orders_and_Tracking.docx §7.
+            boolean skipRRow = isReturn
+                    && "FEDEX".equalsIgnoreCase(p.carrierCode())
+                    && (p.note() == null || p.note().isBlank());
+            if (!skipRRow) {
+                try {
+                    int rows = insertTbManualShipment(prodJdbc, p, errorMode, orderNoText, p.note());
+                    if (rows > 0) touched.add("TB_MANUAL_SHIPMENT[" + errorMode + "]×" + rows);
+                } catch (Exception e) {
+                    errors.add("TB_MANUAL_SHIPMENT[" + errorMode + "]: " + e.getMessage());
+                }
             }
             // ERROR_MODE=Q — additional audit row when the operator entered a note.
             if (p.note() != null && !p.note().isBlank()) {
@@ -150,6 +188,39 @@ public class NdsShipmentOracleWriter {
                     errors.add("TB_MANUAL_SHIPMENT[Q]: " + e.getMessage());
                 }
             }
+        }
+
+        // G6 — OEHEAD.SHIPVIA_CD update when the original order came in as
+        // STD and got resolved to a real ERP code. Fires for outbound only
+        // (returns don't originate from STD). CLIENT schema.
+        if (!isReturn && p.stdReplacementErpCode() != null && !p.stdReplacementErpCode().isBlank()) {
+            int oeheadRows = 0;
+            for (WritebackPackagePayload pkg : p.packages()) {
+                if (pkg.orderNos() == null) continue;
+                Integer suffix = pkg.orderSuffix() == null ? 0 : pkg.orderSuffix();
+                for (Integer orderNo : pkg.orderNos()) {
+                    try {
+                        // V96 — read-before-write: only UPDATE when current
+                        // OEHEAD.SHIPVIA_CD differs from the resolved ERP.
+                        // Skips no-op writes; NDS's UPDATE_DT stays stable.
+                        int rows = clientJdbc.update(
+                                "UPDATE OEHEAD SET SHIPVIA_CD = :shipvia "
+                                        + " WHERE TENANT_ID = :tenant "
+                                        + "   AND ORDER_NO = :orderNo "
+                                        + "   AND ORDER_SUFFIX = :suffix "
+                                        + "   AND (SHIPVIA_CD IS NULL OR SHIPVIA_CD <> :shipvia)",
+                                new MapSqlParameterSource()
+                                        .addValue("shipvia", p.stdReplacementErpCode())
+                                        .addValue("tenant", p.clientCode())
+                                        .addValue("orderNo", orderNo)
+                                        .addValue("suffix", suffix));
+                        oeheadRows += rows;
+                    } catch (Exception e) {
+                        errors.add("OEHEAD(shipvia): " + e.getMessage());
+                    }
+                }
+            }
+            if (oeheadRows > 0) touched.add("OEHEAD[STD→" + p.stdReplacementErpCode() + "]×" + oeheadRows);
         }
 
         if (!errors.isEmpty() && touched.isEmpty()) {
@@ -226,6 +297,15 @@ public class NdsShipmentOracleWriter {
             return WritebackAck.failed("nds: cannot open CLIENT pool for " + req.clientCode()
                     + ": " + e.getMessage());
         }
+
+        // G4 — DTC void reverses the DTC generate writes:
+        //   • DELETE FROM OE_TRACKING WHERE TRACK_CD='BATCHSHIP' + order keys
+        //   • UPDATE OE_SHIP_CONTAINER SET CONTAINER_ID = NULL
+        // CLIPPER + TB_MANUAL_SHIPMENT are untouched on DTC (never written).
+        if ("DTC".equalsIgnoreCase(req.source())) {
+            return dtcClearShipment(clientJdbc, req);
+        }
+
         List<String> touched = new ArrayList<>();
         List<String> errors = new ArrayList<>();
 
@@ -338,6 +418,184 @@ public class NdsShipmentOracleWriter {
         }
         sb.append(" WHERE ").append(whereClause);
         return sb.toString();
+    }
+
+    // ── G4 — DTC-specific clear (void) path ─────────────────────────
+
+    private WritebackAck dtcClearShipment(NamedParameterJdbcTemplate jdbc, WritebackClearRequest req) {
+        java.util.List<Integer> orderNos = req.orderNos() != null && !req.orderNos().isEmpty()
+                ? req.orderNos()
+                : (req.orderNo() != null ? java.util.List.of(req.orderNo()) : java.util.List.of());
+        if (orderNos.isEmpty()) {
+            return WritebackAck.skipped("nds(DTC): no orderNos to clear");
+        }
+        List<String> touched = new ArrayList<>();
+        List<String> errors = new ArrayList<>();
+        int deleted = 0, nulled = 0;
+        for (Integer orderNo : orderNos) {
+            try {
+                int rows = jdbc.update(
+                        "DELETE FROM OE_TRACKING "
+                                + " WHERE TRACK_CD = :trackCd "
+                                + "   AND TENANT_ID = :tenant "
+                                + "   AND ORDER_NO = :orderNo",
+                        new MapSqlParameterSource()
+                                .addValue("trackCd", "BATCHSHIP")
+                                .addValue("tenant", req.clientCode())
+                                .addValue("orderNo", orderNo));
+                deleted += rows;
+            } catch (Exception e) {
+                errors.add("OE_TRACKING(BATCHSHIP delete): " + e.getMessage());
+            }
+            try {
+                int rows = jdbc.update(
+                        "UPDATE OE_SHIP_CONTAINER SET CONTAINER_ID = NULL "
+                                + " WHERE TENANT_ID = :tenant "
+                                + "   AND ORDER_NO = :orderNo",
+                        new MapSqlParameterSource()
+                                .addValue("tenant", req.clientCode())
+                                .addValue("orderNo", orderNo));
+                nulled += rows;
+            } catch (Exception e) {
+                errors.add("OE_SHIP_CONTAINER: " + e.getMessage());
+            }
+        }
+        if (deleted > 0) touched.add("OE_TRACKING[BATCHSHIP delete]×" + deleted);
+        if (nulled > 0) touched.add("OE_SHIP_CONTAINER[null]×" + nulled);
+        if (!errors.isEmpty() && touched.isEmpty()) {
+            return WritebackAck.failed("nds(DTC): all clear updates failed — " + String.join(" | ", errors));
+        }
+        if (touched.isEmpty()) {
+            return WritebackAck.skipped("nds(DTC): no rows matched any lookup keys");
+        }
+        String detail = "nds(DTC): cleared " + String.join(", ", touched);
+        if (!errors.isEmpty()) detail += " (errors: " + String.join(" | ", errors) + ")";
+        return WritebackAck.ok(detail);
+    }
+
+    // ── G1 — DTC-specific write path ────────────────────────────────
+
+    /**
+     * DTC surface writeback per doc §6:
+     *   • For every package's orderNo: call PROC_OE.INSERT_OE_TRACKING
+     *     with source="BATCHSHIP", code="450".
+     *   • For every package's orderNo: UPDATE OE_SHIP_CONTAINER SET
+     *     CONTAINER_ID = tracking# WHERE TENANT_ID + ORDER_NO + ORDER_SUFFIX.
+     * No CLIPPER, no TB_MANUAL_SHIPMENT.
+     */
+    private WritebackAck dtcWriteShipment(NamedParameterJdbcTemplate jdbc, WritebackPayload p) {
+        List<String> touched = new ArrayList<>();
+        List<String> errors = new ArrayList<>();
+        int trackingRows = 0, containerRows = 0;
+        for (WritebackPackagePayload pkg : p.packages()) {
+            if (pkg.orderNos() == null || pkg.orderNos().isEmpty()) continue;
+            Integer suffix = pkg.orderSuffix() == null ? 0 : pkg.orderSuffix();
+            for (Integer orderNo : pkg.orderNos()) {
+                try {
+                    insertOeTrackingViaProc(jdbc, orderNo, suffix,
+                            "BATCHSHIP", "450", p.trackingNumber());
+                    trackingRows++;
+                } catch (Exception e) {
+                    errors.add("OE_TRACKING(BATCHSHIP): " + e.getMessage());
+                }
+                try {
+                    int rows = jdbc.update(
+                            "UPDATE OE_SHIP_CONTAINER SET CONTAINER_ID = :tracking "
+                                    + " WHERE TENANT_ID = :tenant "
+                                    + "   AND ORDER_NO = :orderNo "
+                                    + "   AND ORDER_SUFFIX = :suffix",
+                            new MapSqlParameterSource()
+                                    .addValue("tracking", p.trackingNumber())
+                                    .addValue("tenant", p.clientCode())
+                                    .addValue("orderNo", orderNo)
+                                    .addValue("suffix", suffix));
+                    containerRows += rows;
+                } catch (Exception e) {
+                    errors.add("OE_SHIP_CONTAINER: " + e.getMessage());
+                }
+            }
+        }
+        if (trackingRows > 0) touched.add("OE_TRACKING[BATCHSHIP]×" + trackingRows);
+        if (containerRows > 0) touched.add("OE_SHIP_CONTAINER×" + containerRows);
+
+        // G6 (DTC surface, doc §6 step 3) — STD ship-method replacement
+        // writeback. Same UPDATE as the outbound path.
+        if (p.stdReplacementErpCode() != null && !p.stdReplacementErpCode().isBlank()) {
+            int oeheadRows = 0;
+            for (WritebackPackagePayload pkg : p.packages()) {
+                if (pkg.orderNos() == null) continue;
+                Integer suffix = pkg.orderSuffix() == null ? 0 : pkg.orderSuffix();
+                for (Integer orderNo : pkg.orderNos()) {
+                    try {
+                        int rows = jdbc.update(
+                                "UPDATE OEHEAD SET SHIPVIA_CD = :shipvia "
+                                        + " WHERE TENANT_ID = :tenant "
+                                        + "   AND ORDER_NO = :orderNo "
+                                        + "   AND ORDER_SUFFIX = :suffix",
+                                new MapSqlParameterSource()
+                                        .addValue("shipvia", p.stdReplacementErpCode())
+                                        .addValue("tenant", p.clientCode())
+                                        .addValue("orderNo", orderNo)
+                                        .addValue("suffix", suffix));
+                        oeheadRows += rows;
+                    } catch (Exception e) {
+                        errors.add("OEHEAD(STD replacement): " + e.getMessage());
+                    }
+                }
+            }
+            if (oeheadRows > 0) touched.add("OEHEAD[STD→" + p.stdReplacementErpCode() + "]×" + oeheadRows);
+        }
+
+        if (!errors.isEmpty() && touched.isEmpty()) {
+            return WritebackAck.failed("nds(DTC): all updates failed — " + String.join(" | ", errors));
+        }
+        if (touched.isEmpty()) {
+            return WritebackAck.skipped("nds(DTC): no rows matched any lookup keys");
+        }
+        String detail = "nds(DTC): " + String.join(", ", touched);
+        if (!errors.isEmpty()) detail += " (errors: " + String.join(" | ", errors) + ")";
+        return WritebackAck.ok(detail);
+    }
+
+    /**
+     * G1/G2 — call <client>.PROC_OE.INSERT_OE_TRACKING. Signature per doc:
+     * (SYSDATE, ORDER_NO, ORDER_SUFFIX, source, code, tracking#). SYSDATE
+     * is server-side default; we pass only the 5 caller-supplied params.
+     *
+     * ponytail: parameter names inferred (P_ORDER_NO etc.) from Oracle
+     * convention because we can't reach the live procedure metadata from
+     * dev (CLIENT login ORA-01017). If the first prod call fails with
+     * "invalid identifier / wrong parameter", ops updates the names here.
+     */
+    private void insertOeTrackingViaProc(NamedParameterJdbcTemplate jdbc,
+                                          Integer orderNo, Integer orderSuffix,
+                                          String source, String code, String tracking) {
+        org.springframework.jdbc.core.simple.SimpleJdbcCall call =
+                new org.springframework.jdbc.core.simple.SimpleJdbcCall(jdbc.getJdbcTemplate())
+                        .withCatalogName("PROC_OE")
+                        .withProcedureName("INSERT_OE_TRACKING")
+                        .withoutProcedureColumnMetaDataAccess()
+                        .declareParameters(
+                                new org.springframework.jdbc.core.SqlParameter("P_ORDER_NO", java.sql.Types.NUMERIC),
+                                new org.springframework.jdbc.core.SqlParameter("P_ORDER_SUFFIX", java.sql.Types.NUMERIC),
+                                new org.springframework.jdbc.core.SqlParameter("P_SOURCE", java.sql.Types.VARCHAR),
+                                new org.springframework.jdbc.core.SqlParameter("P_CODE", java.sql.Types.VARCHAR),
+                                new org.springframework.jdbc.core.SqlParameter("P_TRACKING", java.sql.Types.VARCHAR));
+        call.execute(new MapSqlParameterSource()
+                .addValue("P_ORDER_NO", orderNo)
+                .addValue("P_ORDER_SUFFIX", orderSuffix)
+                .addValue("P_SOURCE", source)
+                .addValue("P_CODE", code)
+                .addValue("P_TRACKING", tracking));
+    }
+
+    /** Any USPS-family carrier. Used by G2 fallback in the generate path. */
+    private static boolean isUsps(String carrierCode) {
+        if (carrierCode == null) return false;
+        return switch (carrierCode.trim().toUpperCase()) {
+            case "USPS", "USPS_DIRECT", "STAMPS_COM" -> true;
+            default -> false;
+        };
     }
 
     /** Truncate v to len chars so we never blow Oracle's VARCHAR2(N) limits. */

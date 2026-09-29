@@ -101,6 +101,8 @@ const CONN_DETAIL: ConnectionDetail = {
   writebackSourceManual: true,
   writebackSourceBulk: true,
   writebackSourceApi: true,
+  writebackSourceWms: true,
+  writebackSourceDtc: true,
   writebackChannelD2c: true,
   writebackChannelB2b: true,
   environment: 'PROD',

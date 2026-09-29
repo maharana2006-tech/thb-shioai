@@ -3844,8 +3844,19 @@ public class OrderImportServiceImpl implements OrderImportService {
         // finally block below always clears it on exit so a subsequent
         // Generate starts with a clean slate.
         if (!rowsToProcess.isEmpty()) {
-            // WMS/API batches persist their generated orders as source=API.
-            String sourceOverride = isApiSource(batch.getSource()) ? "API" : null;
+            // Thread the batch's origin into ManualShipmentRequest.source so the
+            // V90/V93 writeback source gates can distinguish per-flow:
+            //   WMS  → Fetch from WMS on /orders/api-batches
+            //   DTC  → Fetch from NDS on /d2c/history
+            //   API  → external v2 API pushes that landed as bulk rows
+            //   null → default "BULK" (file import)
+            String bs = batch.getSource() == null ? "" : batch.getSource().trim().toUpperCase();
+            String sourceOverride = switch (bs) {
+                case "WMS" -> "WMS";
+                case "DTC" -> "DTC";
+                case "API" -> "API";
+                default    -> null;
+            };
             // Register a live progress counter (total = groups, since one label
             // covers a whole orderRef group) that a concurrent poll can read, and
             // pass a per-group tick into commit. Always removed when the run ends.

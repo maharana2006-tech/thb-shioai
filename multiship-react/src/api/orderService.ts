@@ -576,6 +576,11 @@ export interface ManualShipmentPayload {
    *  Not printed on labels / commercial invoice; not on external
    *  API; surfaced in /orders list as an icon-popover. */
   note?: string
+  /** G6 — carries the ERP code that NDS prefill selected via the client's
+   *  Shipping-Service-Mapping row (shipvia_cd='STD'). Non-null on shipments
+   *  that originated as shipvia=STD; backend threads it into WritebackPayload
+   *  so OEHEAD.SHIPVIA_CD is updated to this value after label success. */
+  stdReplacementErpCode?: string
   // International (cross-border) only:
   items?: ManualShipmentItem[]
   incoterms?: string

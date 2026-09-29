@@ -126,6 +126,10 @@ export interface NdsShipmentPrefill {
    *  (e.g. `["recipient.phone", "notify.sendTo"]`). FE uses this to decide
    *  when to fall back to the sender/shipper block for the operator. */
   defaultedFields: string[]
+  /** G6 — non-null when order came in as shipvia=STD and got resolved via
+   *  the client's Shipping-Service-Mapping. Carries the ERP code NDS
+   *  OEHEAD.SHIPVIA_CD should be updated to after label success. */
+  stdReplacementErpCode: string | null
 }
 
 export const ndsShipmentService = {

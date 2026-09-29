@@ -212,8 +212,22 @@ class ExternalSystemWritebackDispatcherTest {
         assertTrue(ExternalSystemWritebackDispatcher.isSourceAllowed("manual", row)); // case-insensitive
         assertFalse(ExternalSystemWritebackDispatcher.isSourceAllowed("BULK", row));
         assertFalse(ExternalSystemWritebackDispatcher.isSourceAllowed("API", row));
-        // Unknown values pass through so new origins don't silently drop.
+        // WMS + DTC (V93) — default TRUE on the entity, so gating is on
+        // unless explicitly disabled.
         assertTrue(ExternalSystemWritebackDispatcher.isSourceAllowed("WMS", row));
+        assertTrue(ExternalSystemWritebackDispatcher.isSourceAllowed("DTC", row));
+        // Truly unknown values still pass through.
+        assertTrue(ExternalSystemWritebackDispatcher.isSourceAllowed("SOMETHING_NEW", row));
+    }
+
+    @Test
+    void isSourceAllowedGatesWmsAndDtc() {
+        ExternalSystemConnection row = conn("nds-default", true, true, true, true, true, true);
+        row.setWritebackSourceWms(false);
+        row.setWritebackSourceDtc(false);
+        assertFalse(ExternalSystemWritebackDispatcher.isSourceAllowed("WMS", row));
+        assertFalse(ExternalSystemWritebackDispatcher.isSourceAllowed("DTC", row));
+        assertFalse(ExternalSystemWritebackDispatcher.isSourceAllowed("dtc", row));
     }
 
     @Test
