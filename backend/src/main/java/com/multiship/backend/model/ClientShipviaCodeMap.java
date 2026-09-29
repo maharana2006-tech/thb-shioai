@@ -59,6 +59,12 @@ public class ClientShipviaCodeMap {
     @Column(name = "service_id", nullable = false)
     private Long serviceId;
 
+    /** V98 — when true, NDS prefill treats this ERP code as an "on hold"
+     *  marker and blocks the order (replaces the hardcoded "HLD" literal). */
+    @Column(name = "is_hold", nullable = false)
+    @Builder.Default
+    private Boolean isHold = Boolean.FALSE;
+
     /** ISO-2 destination country (nullable = "any country in the region"). */
     @Column(name = "dest_country", length = 2)
     private String destCountry;

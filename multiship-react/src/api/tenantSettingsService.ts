@@ -25,6 +25,12 @@ export interface EnabledChannelsRequest {
   enabledChannels: ShippingChannel[]
 }
 
+export interface KvSetting {
+  tenantCode: string
+  key: string
+  value: string
+}
+
 export const tenantSettingsService = {
   /**
    * Fetch the tenant's enabled channels. Returns the same shape as
@@ -48,6 +54,30 @@ export const tenantSettingsService = {
       .put<ApiResponse<EnabledChannelsResponse>>(
         `/tenants/${encodeURIComponent(tenantCode)}/settings/enabled-channels`,
         { enabledChannels: channels } as EnabledChannelsRequest,
+      )
+      .then((res) => res.data),
+
+  /**
+   * Generic KV get. Returns null on 404 (unset) so callers can render
+   * a placeholder without try/catching each field.
+   */
+  getKv: async (tenantCode: string, key: string): Promise<string | null> => {
+    try {
+      const res = await apiClient.get<ApiResponse<KvSetting>>(
+        `/tenants/${encodeURIComponent(tenantCode)}/settings/${encodeURIComponent(key)}`,
+      )
+      return res.data?.value ?? null
+    } catch (e) {
+      if ((e as { status?: number }).status === 404) return null
+      throw e
+    }
+  },
+
+  putKv: (tenantCode: string, key: string, value: string) =>
+    apiClient
+      .put<ApiResponse<KvSetting>>(
+        `/tenants/${encodeURIComponent(tenantCode)}/settings/${encodeURIComponent(key)}`,
+        { value },
       )
       .then((res) => res.data),
 }

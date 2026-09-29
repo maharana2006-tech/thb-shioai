@@ -66,6 +66,54 @@ public class TenantSettingsController {
                 .build());
     }
 
+    /**
+     * Generic KV read for tenant settings. Returns the raw string
+     * value or 404 if unset. Used by /settings/system for the NDS
+     * fallbacks card and any future single-key preferences.
+     */
+    @Operation(summary = "Get a raw tenant setting by key. 404 when unset.")
+    @GetMapping("/{key}")
+    public ResponseEntity<ApiResponse<KvSettingResponse>> getKv(
+            @PathVariable String tenantCode,
+            @PathVariable String key) {
+        scope.requireTenantMatch(tenantCode);
+        String v = settings.getSetting(tenantCode, key).orElse(null);
+        if (v == null) {
+            return ResponseEntity.status(org.springframework.http.HttpStatus.NOT_FOUND)
+                    .body(ApiResponse.<KvSettingResponse>builder()
+                            .status("ERROR").code(404).timestamp(LocalDateTime.now())
+                            .message("setting not found")
+                            .build());
+        }
+        return ResponseEntity.ok(ApiResponse.<KvSettingResponse>builder()
+                .status("SUCCESS").code(200).timestamp(LocalDateTime.now())
+                .data(new KvSettingResponse(tenantCode, key, v))
+                .build());
+    }
+
+    @Operation(summary = "Upsert a raw tenant setting.")
+    @PutMapping("/{key}")
+    public ResponseEntity<ApiResponse<KvSettingResponse>> putKv(
+            @PathVariable String tenantCode,
+            @PathVariable String key,
+            @RequestBody KvSettingRequest body,
+            Authentication auth) {
+        scope.requireTenantMatch(tenantCode);
+        if (body == null || body.value() == null) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST,
+                    "value is required");
+        }
+        settings.putSetting(tenantCode, key, body.value(), auth != null ? auth.getName() : null);
+        return ResponseEntity.ok(ApiResponse.<KvSettingResponse>builder()
+                .status("SUCCESS").code(200).timestamp(LocalDateTime.now())
+                .data(new KvSettingResponse(tenantCode, key, body.value()))
+                .build());
+    }
+
+    public record KvSettingRequest(String value) {}
+    public record KvSettingResponse(String tenantCode, String key, String value) {}
+
     @Operation(summary = "Set enabled shipping channels for this tenant. "
             + "Must include at least one of D2C, B2B.")
     @PutMapping("/enabled-channels")
