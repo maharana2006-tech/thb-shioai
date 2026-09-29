@@ -13,7 +13,11 @@ import java.time.LocalDateTime;
  * Maps all columns from the Oracle view for complete data synchronization.
  */
 @Entity
-@Table(name = "dtc_orders", indexes = {
+@Table(name = "dtc_orders", uniqueConstraints = {
+    // Same name as the V83 unique index so ddl-auto sees it as existing
+    @UniqueConstraint(name = "uk_dtc_orders_batch_tote_tenant",
+                      columnNames = {"batch_id", "tote_number", "tenant_id"})
+}, indexes = {
     @Index(name = "idx_batch_id", columnList = "batch_id"),
     @Index(name = "idx_tote_number", columnList = "tote_number"),
     @Index(name = "idx_tenant_id", columnList = "tenant_id"),
@@ -26,8 +30,14 @@ import java.time.LocalDateTime;
 public class DtcOrder {
 
     // ═══════════════════════════ Primary Keys ═══════════════════════════
+    // Surrogate key (V98). batch_id is NOT unique — one batch spans many
+    // totes; uniqueness is (batch_id, tote_number, tenant_id), see V83.
     @Id
-    @Column(name = "batch_id")
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @Column(name = "id")
+    private Long id;
+
+    @Column(name = "batch_id", nullable = false)
     private BigDecimal batchId;
 
     // ═══════════════════════════ Order Information ═══════════════════════════

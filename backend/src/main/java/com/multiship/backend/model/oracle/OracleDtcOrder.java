@@ -9,18 +9,18 @@ import java.time.LocalDateTime;
 /**
  * Oracle DTC View: TB_SHIPX_DTC_UVW / TB_SHIPX_DTC_UVW_TEST
  * Maps pending DTC orders from Oracle NDS.
- * Read-only entity — no writes to Oracle.
+ * Plain read-only DTO, not a JPA entity: the view has no unique key, and
+ * mapping it as an entity with BATCH_ID as @Id made Hibernate collapse every
+ * tote of a batch into copies of the first row. Rows are filled by
+ * OracleDtcOrderRepositoryImpl, matching each field's @Column name.
  *
  * View name is configurable via oracle.dtc.view-name property.
  */
-@Entity
-@Table(name = "TB_SHIPX_DTC_UVW_TEST")
 @Data
 @NoArgsConstructor
 public class OracleDtcOrder {
 
-    // ═══════════════════════════ Primary Keys ═══════════════════════════
-    @Id
+    // ═══════════════════════════ Keys ═══════════════════════════
     @Column(name = "BATCH_ID")
     private BigDecimal batchId;
 
