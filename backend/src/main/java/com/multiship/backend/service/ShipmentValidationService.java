@@ -816,6 +816,17 @@ public class ShipmentValidationService {
                     "Recipient state/province is required for " + country + " addresses.",
                     "recipient.state"));
         }
+        // A US ZIP belongs to one state (the same rule as the bulk import): CA with 60606 passed.
+        if ("US".equals(country) && StringUtils.hasText(to.getState()) && StringUtils.hasText(to.getPostalCode())) {
+            String zip = to.getPostalCode().trim();
+            String zipState = OrderImportServiceImpl.usStateForZip(zip);
+            String st = to.getState().trim().toUpperCase(java.util.Locale.ROOT);
+            if (zipState != null && st.length() == 2 && !zipState.equals(st)) {
+                errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                        "ZIP " + zip + " is in " + zipState + ", not " + st + " — correct the state or the ZIP.",
+                        "recipient.postalCode"));
+            }
+        }
         // Phone — most carriers require a recipient phone for delivery
         // exceptions. Downgraded to a warning because some domestic ground
         // services accept a blank phone; the label call will surface the

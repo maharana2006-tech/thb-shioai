@@ -25,6 +25,18 @@ const result = (over: Partial<ShipmentValidationResult> = {}): ShipmentValidatio
   ...over,
 })
 
+describe('a missing price', () => {
+  it('is a thing to review in Account, service & price, not a pass', () => {
+    const groups = buildCheckGroups(result({
+      overall: 'PASS', localErrors: [], localWarnings: [], carrier: null,
+      quote: { status: 'UNAVAILABLE', message: 'UPS answered HTTP 400: Package Type unavailable' },
+    } as Partial<ShipmentValidationResult>))
+    const service = groups.find((g) => g.key === 'service')!
+    expect(service.status).toBe('warn')
+    expect(service.warnings).toEqual(['No price from the carrier: UPS answered HTTP 400: Package Type unavailable'])
+  })
+})
+
 describe('buildCheckGroups', () => {
   it('sorts each issue into its area and moves carrier errors to the carrier row', () => {
     const g = Object.fromEntries(buildCheckGroups(result()).map((x) => [x.key, x]))
@@ -35,7 +47,7 @@ describe('buildCheckGroups', () => {
     // One problem, one line — the raw carrier reply is a detail, not a second error.
     expect(g.carrier.errors).toEqual(["Couldn't sign in to FedEx with this account's login keys."])
     expect(g.carrier.details).toEqual(['Token acquisition failed: FedEx rejected the credentials (NOT.AUTHORIZED.ERROR)'])
-    expect(checklistHeadline(Object.values(g))).toBe('3 issues to fix before the label can be bought · 1 to review')
+    expect(checklistHeadline(Object.values(g))).toBe('3 issues to fix before the label can be bought · 2 to review')
     expect(g.customs.status).toBe('skipped')
   })
 
@@ -57,7 +69,7 @@ describe('ValidationChecklist', () => {
     const addresses = screen.getByTestId('check-addresses')
     expect(within(addresses).getByText('1 to fix')).toBeInTheDocument()
     expect(within(addresses).getByText(/can't deliver to a PO box/)).toBeInTheDocument()
-    expect(within(screen.getByTestId('check-service')).getByText('1 to review')).toBeInTheDocument()
+    expect(within(screen.getByTestId('check-service')).getByText('2 to review')).toBeInTheDocument()
     expect(screen.getByText(/The form changed — check again/)).toBeInTheDocument()
     // The customs row is closed until opened, then explains why it wasn't checked.
     const customs = screen.getByTestId('check-customs')
@@ -78,6 +90,6 @@ describe('ValidationChecklist', () => {
     expect(within(carrierRow).getByText(/NOT.AUTHORIZED/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Minimise' }))
     expect(screen.queryByTestId('check-carrier')).toBeNull()
-    expect(screen.getByText(/3 to fix · 1 to review — the rows are hidden while you edit/)).toBeInTheDocument()
+    expect(screen.getByText(/3 to fix · 2 to review — the rows are hidden while you edit/)).toBeInTheDocument()
   })
 })

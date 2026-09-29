@@ -174,6 +174,21 @@ class ShipmentValidationServiceTest {
     }
 
     @Test
+    void aUsZipInAnotherStateIsAnError() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.getRecipient().setCountryCode("US");
+        req.getRecipient().setState("CA");
+        req.getRecipient().setPostalCode("60606");
+        stubServiceAndPreset();
+
+        ApiResponse<ShipmentValidationResult> res = service.validate(req);
+
+        assertTrue(res.getData().getLocalErrors().stream().anyMatch(e -> "recipient.postalCode".equals(e.getField())
+                        && e.getMessage().contains("60606 is in IL, not CA")),
+                String.valueOf(res.getData().getLocalErrors()));
+    }
+
+    @Test
     void blankRecipientPhone_warnsButDoesNotError() {
         ManualShipmentRequest req = fullDomesticRequest();
         req.getRecipient().setPhone("");

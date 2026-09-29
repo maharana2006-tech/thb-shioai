@@ -1149,9 +1149,11 @@ export default function NewShipmentPage() {
        form-field defaults when the resolved account changes; cannot be
        derived at render because the operator can subsequently edit these
        values within the same account. */
-    setLabelImageType(matchedAccount?.labelImageType ?? '')
-    setLabelStockType(matchedAccount?.labelStockType ?? '')
-    setLabelImageFormat(matchedAccount?.labelImageFormat ?? '')
+    // The account's saved default wins; an account without one keeps what the
+    // operator already picked instead of silently blanking it.
+    setLabelImageType((cur) => matchedAccount?.labelImageType ?? cur)
+    setLabelStockType((cur) => matchedAccount?.labelStockType ?? cur)
+    setLabelImageFormat((cur) => matchedAccount?.labelImageFormat ?? cur)
     setPickupType(matchedAccount?.pickupType ?? 'USE_SCHEDULED_PICKUP')
     setReasonForExport(matchedAccount?.shippingPurpose ?? '')
     const saved = matchedAccount?.clearanceOption
@@ -1822,8 +1824,16 @@ export default function NewShipmentPage() {
     }
     // The same form rules Generate label enforces (lengths, phone digits,
     // HS format, insured ≤ declared…) — highlighted in red, as on Generate.
+    // Busy from the click on: the form check itself takes a moment, and a click
+    // that showed nothing meanwhile read as ignored.
     setSubmitAttempted(true)
-    const formErrors = flattenErrors(await formik.validateForm(formValues as unknown as ShipmentFormValues))
+    setCarrierValidating(true)
+    let formErrors: string[]
+    try {
+      formErrors = flattenErrors(await formik.validateForm(formValues as unknown as ShipmentFormValues))
+    } finally {
+      setCarrierValidating(false)
+    }
     if (formErrors.length > 0) {
       // The server check didn't run on this form: an older result would mislead.
       setShipmentValidationResult(null)

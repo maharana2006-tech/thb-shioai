@@ -3720,7 +3720,13 @@ public class UpsConnector implements CarrierConnector {
         // returned rate matches what the actual label would cost.
         java.util.List<Map<String, Object>> packages = new java.util.ArrayList<>();
         for (com.multiship.backend.dto.PackageDetailDTO p : request.effectivePackages()) {
-            packages.add(buildPackage(request, p));
+            // The Rating API names the packaging "PackagingType" (the Shipping API, which
+            // buildPackage is written for, says "Packaging"). Sent as "Packaging", UPS saw
+            // no packaging and every rate answered HTTP 400 "Package Type unavailable".
+            Map<String, Object> pkg = new LinkedHashMap<>(buildPackage(request, p));
+            Object packaging = pkg.remove("Packaging");
+            if (packaging != null) pkg.put("PackagingType", packaging);
+            packages.add(pkg);
         }
         shipment.put("Package", packages);
         return shipment;

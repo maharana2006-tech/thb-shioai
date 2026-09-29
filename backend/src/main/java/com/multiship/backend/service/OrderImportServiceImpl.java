@@ -5841,7 +5841,7 @@ public class OrderImportServiceImpl implements OrderImportService {
             "HI", "OR", "WA", "AK"};
 
     /** The state a US ZIP is in, from its first three digits; null when the prefix isn't a state's. */
-    static String usStateForZip(String zip) {
+    public static String usStateForZip(String zip) {
         if (zip == null || zip.length() < 3 || !Character.isDigit(zip.charAt(0))
                 || !Character.isDigit(zip.charAt(1)) || !Character.isDigit(zip.charAt(2))) return null;
         int p = Integer.parseInt(zip.substring(0, 3));
