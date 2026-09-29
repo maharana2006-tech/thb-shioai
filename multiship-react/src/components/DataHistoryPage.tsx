@@ -1762,8 +1762,8 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
         meta: { headerLabel: 'Tick', exportValue: () => '', hideable: false },
       },
       {
-        id: 'order', header: 'Order', size: 190, enableSorting: false,
-        accessorFn: (r) => r.generatedOrderNo ?? r.rowNumber,
+        id: 'order', header: 'Container ID', size: 190, enableSorting: false,
+        accessorFn: (r) => r.orderRef ?? r.generatedOrderNo ?? r.rowNumber,
         cell: ({ row }) => {
           const r = row.original
           const gen = (r.generatedStatus ?? '').toUpperCase()
@@ -1784,12 +1784,12 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
                 {savingCell === `${b.id}-${r.rowNumber}` ? <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#5a4526]" /> : null}
               </span>
               <span className="truncate font-mono text-[11px] text-[#6b5c42]" title={`Row ${r.rowNumber} of the file`}>
-                {(r.clientCode || '—')} · {r.orderRef || '—'}
+                {r.orderRef || `Row ${r.rowNumber}`}
               </span>
             </span>
           )
         },
-        meta: { headerLabel: 'Order', exportValue: (r: OrderImportRow) => r.generatedOrderNo ?? '' },
+        meta: { headerLabel: 'Container ID', exportValue: (r: OrderImportRow) => r.orderRef ?? r.generatedOrderNo ?? '' },
       },
       {
         id: 'reference', header: 'Ref #', size: 120, enableSorting: false,
@@ -1855,7 +1855,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
         meta: { headerLabel: 'Status', exportValue: (r: OrderImportRow) => r.generatedStatus ?? '' },
       },
       {
-        id: 'track', header: 'Track', size: 150, enableSorting: false,
+        id: 'track', header: 'Tracking ID', size: 190, enableSorting: false,
         accessorFn: (r) => r.generatedTrackingNumber ?? '',
         cell: ({ row }) => {
           const r = row.original
@@ -1865,7 +1865,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
           const url = o?.labelDetails.trackingUrl ?? r.trackingUrl ?? null
           const chip = (
             <span title={`Tracking ${tn}${url ? '\n(click to open carrier page)' : ''}`} className="inline-flex items-center rounded-full bg-sky-50 px-2 py-0.5 font-mono text-[11px] font-semibold text-sky-800 ring-1 ring-sky-200">
-              …{tn.length > 4 ? tn.slice(-4) : tn}
+              {tn}
             </span>
           )
           const ago = relativeTime(o?.labelDetails.generatedAt ?? null)
@@ -1878,7 +1878,88 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
             </span>
           )
         },
-        meta: { headerLabel: 'Tracking', exportValue: (r: OrderImportRow) => r.generatedTrackingNumber ?? '' },
+        meta: { headerLabel: 'Tracking ID', exportValue: (r: OrderImportRow) => r.generatedTrackingNumber ?? '' },
+      },
+      // The ShipX Bulk Mailer's columns (Container ID … Status, then our Actions).
+      {
+        id: 'clientCode', header: 'Client Code', size: 100, enableSorting: false,
+        accessorFn: (r) => r.clientCode ?? '',
+        cell: ({ row }) => <span className="block truncate font-mono text-[12px] text-[#3f3527]">{row.original.clientCode || <span className="text-[#b3a583]">—</span>}</span>,
+        meta: { headerLabel: 'Client Code', exportValue: (r: OrderImportRow) => r.clientCode ?? '' },
+      },
+      {
+        id: 'shipVia', header: 'Ship Via Code', size: 110, enableSorting: false,
+        accessorFn: (r) => r.shipViaCode ?? r.serviceType ?? '',
+        cell: ({ row }) => {
+          const r = row.original
+          const code = r.shipViaCode ?? r.serviceType
+          return <span className="block truncate font-mono text-[12px] font-semibold text-[#3f3527]" title={shipViaHint(r.shipViaNote) ?? undefined}>{code || <span className="text-[#b3a583]">—</span>}</span>
+        },
+        meta: { headerLabel: 'Ship Via Code', exportValue: (r: OrderImportRow) => r.shipViaCode ?? r.serviceType ?? '' },
+      },
+      {
+        id: 'attention', header: 'Ship Attention', size: 140, enableSorting: false,
+        accessorFn: (r) => r.recipientName ?? '',
+        cell: ({ row }) => <span className="block truncate text-[12.5px] text-[#3f3527]" title={row.original.recipientName || undefined}>{row.original.recipientName || <span className="text-[#b3a583]">—</span>}</span>,
+        meta: { headerLabel: 'Ship Attention', exportValue: (r: OrderImportRow) => r.recipientName ?? '' },
+      },
+      {
+        id: 'shipName', header: 'Ship Name', size: 170, enableSorting: false,
+        accessorFn: (r) => r.recipientCompany ?? '',
+        cell: ({ row }) => <span className="block truncate text-[12.5px] text-[#3f3527]" title={row.original.recipientCompany || undefined}>{row.original.recipientCompany || <span className="text-[#b3a583]">—</span>}</span>,
+        meta: { headerLabel: 'Ship Name', exportValue: (r: OrderImportRow) => r.recipientCompany ?? '' },
+      },
+      {
+        id: 'weight', header: 'Weight', size: 80, enableSorting: false,
+        accessorFn: (r) => r.weight ?? '',
+        cell: ({ row }) => {
+          const r = row.original
+          return <span className="block truncate tabular-nums text-[12.5px] text-[#3f3527]">{r.weight != null ? `${r.weight} ${(r.weightUnit ?? '').toLowerCase()}` : <span className="text-[#b3a583]">—</span>}</span>
+        },
+        meta: { headerLabel: 'Weight', exportValue: (r: OrderImportRow) => r.weight ?? '' },
+      },
+      {
+        id: 'thirdParty', header: 'Third Party AC', size: 120, enableSorting: false,
+        accessorFn: (r) => ((r.billTo ?? '').toUpperCase() === 'THIRD_PARTY' ? r.accountNumber ?? '' : ''),
+        cell: ({ row }) => {
+          const r = row.original
+          const tp = (r.billTo ?? '').toUpperCase() === 'THIRD_PARTY' ? r.accountNumber : null
+          return <span className="block truncate font-mono text-[12px] text-[#3f3527]">{tp || <span className="text-[#b3a583]">—</span>}</span>
+        },
+        meta: { headerLabel: 'Third Party AC', exportValue: (r: OrderImportRow) => ((r.billTo ?? '').toUpperCase() === 'THIRD_PARTY' ? r.accountNumber ?? '' : '') },
+      },
+      {
+        id: 'print', header: 'Print', size: 70, enableSorting: false,
+        cell: ({ row }) => {
+          const r = row.original
+          const orderNo = r.generatedOrderNo
+          if ((r.generatedStatus ?? '').toUpperCase() !== 'GENERATED' || orderNo == null) return <span className="text-[#b3a583]">—</span>
+          return (
+            <button type="button" onClick={() => void printOrderLabel(orderNo)} aria-label={`Print label for order ${orderNo}`}
+              title={r.lastPrintedAt ? `Print the label — last printed ${formatPrinted(r.lastPrintedAt, true)}` : 'Print the label'}
+              className={`${ICON} ${r.lastPrintedAt ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : NEUTRAL}`}>
+              <FiPrinter className="h-3.5 w-3.5" />
+            </button>
+          )
+        },
+        meta: { headerLabel: 'Print', exportValue: (r: OrderImportRow) => (r.lastPrintedAt ? 'Printed' : '') },
+      },
+      {
+        id: 'invoice', header: 'Commercial Invoice', size: 130, enableSorting: false,
+        cell: ({ row }) => {
+          const r = row.original
+          const orderNo = r.generatedOrderNo
+          if ((r.generatedStatus ?? '').toUpperCase() !== 'GENERATED' || orderNo == null || !hasCommercialInvoice(r)) {
+            return <span className="text-[#b3a583]">—</span>
+          }
+          return (
+            <button type="button" onClick={() => void printOrderInvoice(orderNo)} aria-label={`Print commercial invoice for order ${orderNo}`}
+              title="Print the commercial invoice" className={`${ICON} ${NEUTRAL}`}>
+              <FiFileText className="h-3.5 w-3.5" />
+            </button>
+          )
+        },
+        meta: { headerLabel: 'Commercial Invoice', exportValue: (r: OrderImportRow) => (hasCommercialInvoice(r) ? 'Yes' : '') },
       },
       // Every imported field, editable in place until the row is labelled.
       ...DH_COLUMNS.map((c): ColumnDef<OrderImportRow, unknown> => ({
@@ -1996,7 +2077,12 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
         meta: { headerLabel: 'Actions', hideable: false, exportable: false },
       },
     ]
-    return defs
+    const SHIPX_ORDER = ['pick', 'order', 'clientCode', 'shipVia', 'attention', 'shipName', 'weight', 'thirdParty', 'track', 'print', 'invoice', 'status']
+    const rank = (d: ColumnDef<OrderImportRow, unknown>) => {
+      const i = SHIPX_ORDER.indexOf(d.id ?? '')
+      return i >= 0 ? i : d.id === 'actions' ? 1000 : 100
+    }
+    return [...defs].sort((a, c) => rank(a) - rank(c))
     // Cells close over the picked rows, busy states and the batch's orders; the
     // handlers are stable enough (they read state through setters and refs).
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2060,7 +2146,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
               />
             ) : null}
             <AdvancedDataTable<OrderImportRow>
-              tableKey="bulk-batch-rows-v2"
+              tableKey="bulk-batch-rows-v3"
               columns={batchColumns}
               data={batchVisible}
               getRowId={(r) => String(r.rowNumber)}
@@ -2080,7 +2166,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
                 </div>
               }
               // Exactly the Orders page's columns; every imported field is one Columns click away (to edit it).
-              initialHiddenColumns={DH_COLUMNS.map((c) => `f_${c.key}`)}
+              initialHiddenColumns={['reference', 'labelBatch', 'dest', ...DH_COLUMNS.map((c) => `f_${c.key}`)]}
               forceVisibleColumns={batchErrorColumns}
               manualPagination
               pageIndex={gridPage}
