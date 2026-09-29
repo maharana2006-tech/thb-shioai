@@ -73,22 +73,35 @@ public class NdsShipmentLookupService {
      * @throws ExternalSystemException  on registry/connectivity issues (→ 503)
      */
     public Optional<NdsShipmentPrefill> lookup(String rawScan) {
+        return lookup(rawScan, null);
+    }
+
+    /**
+     * Lookup with an operator-supplied client-code gate. When
+     * {@code expectedClientCode} is non-blank, the value NDS reports for
+     * the scan's owning tenant (TENANT_ID for .X, FF_SCHEMA for .Y) must
+     * match — mismatch throws {@link IllegalArgumentException} (→ 422)
+     * with a message naming both codes. Null / blank skips the check.
+     */
+    public Optional<NdsShipmentPrefill> lookup(String rawScan, String expectedClientCode) {
         NdsScanValue scan = NdsScanValueParser.parse(rawScan);
+        String expected = expectedClientCode == null ? null : expectedClientCode.trim();
         return switch (scan.scope()) {
-            case DIRECT -> lookupDirect(scan);
-            case BATCH  -> lookupBatch(scan);
+            case DIRECT -> lookupDirect(scan, expected);
+            case BATCH  -> lookupBatch(scan, expected);
         };
     }
 
     // ═════════════════ .X — DIRECT container lookup ══════════════════
 
-    private Optional<NdsShipmentPrefill> lookupDirect(NdsScanValue scan) {
+    private Optional<NdsShipmentPrefill> lookupDirect(NdsScanValue scan, String expectedClientCode) {
         Optional<NdsShipmentLookupRepository.ContainerOwner> owner =
                 repository.findContainerOwner(scan.stripped());
         if (owner.isEmpty()) {
             log.info("nds-lookup DIRECT: container {} not found", scan.stripped());
             return Optional.empty();
         }
+        assertClientCodeMatches(expectedClientCode, owner.get().clientCode(), "container", scan.stripped());
         String clientCode = tenantScopeEnforcer.clampClientCode(owner.get().clientCode());
         NdsShipmentLookupRepository.ContainerOwner o = owner.get();
 
@@ -107,19 +120,21 @@ public class NdsShipmentLookupService {
 
     // ═════════════════ .Y — BATCH lookup ════════════════════════════
 
-    private Optional<NdsShipmentPrefill> lookupBatch(NdsScanValue scan) {
+    private Optional<NdsShipmentPrefill> lookupBatch(NdsScanValue scan, String expectedClientCode) {
         Optional<NdsShipmentLookupRepository.BatchOwner> owner =
-                repository.findBatchOwner(scan.stripped());
+                repository.findBatchOwner(scan.stripped(), expectedClientCode);
         if (owner.isEmpty()) {
-            log.info("nds-lookup BATCH: batch {} not found", scan.stripped());
+            log.info("nds-lookup BATCH: batch {} not found (clientCode={})",
+                    scan.stripped(), expectedClientCode);
             return Optional.empty();
         }
         List<NdsShipmentLookupRepository.BatchContainer> contents =
-                repository.findBatchContents(scan.stripped());
+                repository.findBatchContents(scan.stripped(), expectedClientCode);
         if (contents.isEmpty()) {
             log.info("nds-lookup BATCH: batch {} has no containers", scan.stripped());
             return Optional.empty();
         }
+        assertClientCodeMatches(expectedClientCode, owner.get().primaryClientCode(), "batch", scan.stripped());
         String clientCode = tenantScopeEnforcer.clampClientCode(owner.get().primaryClientCode());
         // ShipX rule: address = order with the lowest container id.
         NdsShipmentLookupRepository.BatchContainer anchor = contents.get(0);
@@ -349,6 +364,23 @@ public class NdsShipmentLookupService {
     }
 
     // ═════════════════ helpers ═════════════════════════════════════
+
+    /**
+     * Cross-check operator-picked client-code against the tenant NDS
+     * reports for the scan. Blank expected = skip (legacy callers).
+     * Mismatch → 422 with both codes named so the operator can pick the
+     * right client and rescan.
+     */
+    private static void assertClientCodeMatches(String expected, String actual,
+                                                String kind, String scanned) {
+        if (expected == null || expected.isBlank()) return;
+        if (actual == null || !expected.equalsIgnoreCase(actual.trim())) {
+            throw new IllegalArgumentException(
+                    "Scanned " + kind + " " + scanned + " belongs to client "
+                            + (actual == null ? "(unknown)" : actual)
+                            + ", not the picked client " + expected + ".");
+        }
+    }
 
     /** Client-scoped code map first (exact match), fall back to global rule. */
     private Long resolveServiceId(String clientCode, String shipviaCd) {

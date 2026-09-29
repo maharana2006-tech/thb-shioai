@@ -133,10 +133,11 @@ export interface NdsShipmentPrefill {
 }
 
 export const ndsShipmentService = {
-  lookup: (scan: string) =>
-    apiClient
-      .get<ApiResponse<NdsShipmentPrefill>>(
-        `/manual-shipment/nds-lookup?scan=${encodeURIComponent(scan)}`,
-      )
-      .then((res) => res.data as NdsShipmentPrefill),
+  lookup: (scan: string, clientCode?: string | null) => {
+    const q = `scan=${encodeURIComponent(scan)}`
+      + (clientCode ? `&clientCode=${encodeURIComponent(clientCode)}` : '')
+    return apiClient
+      .get<ApiResponse<NdsShipmentPrefill>>(`/manual-shipment/nds-lookup?${q}`)
+      .then((res) => res.data as NdsShipmentPrefill)
+  },
 }

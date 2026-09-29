@@ -51,10 +51,12 @@ public class NdsShipmentLookupController {
     private final NdsShipmentLookupService service;
 
     @GetMapping("/nds-lookup")
-    public ResponseEntity<ApiResponse<NdsShipmentPrefill>> lookup(@RequestParam("scan") String scan) {
+    public ResponseEntity<ApiResponse<NdsShipmentPrefill>> lookup(
+            @RequestParam("scan") String scan,
+            @RequestParam(value = "clientCode", required = false) String clientCode) {
         long t0 = System.nanoTime();
         try {
-            Optional<NdsShipmentPrefill> maybe = service.lookup(scan);
+            Optional<NdsShipmentPrefill> maybe = service.lookup(scan, clientCode);
             if (maybe.isEmpty()) {
                 log.info("nds-lookup: NOT_FOUND scan='{}' elapsedMs={}",
                         scan, elapsedMs(t0));
