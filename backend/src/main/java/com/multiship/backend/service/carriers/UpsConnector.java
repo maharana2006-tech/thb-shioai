@@ -64,6 +64,12 @@ public class UpsConnector implements CarrierConnector {
     private final CarrierProperties carrierProperties;
     private final ObjectMapper objectMapper;
 
+    /** Optional so pure-Mockito unit tests that build the connector with the
+     *  two-arg constructor keep compiling. R-2 return-email fallback reads
+     *  the same nds.fallback_notify_email as NdsShipmentLookupService. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.TenantSettingsService tenantSettingsService;
+
     /**
      * PR C — env-configurable extension for the paperless-invoice deny
      * list. Comma-separated ISO alpha-2 codes; unioned with the built-in
@@ -2254,9 +2260,22 @@ public class UpsConnector implements CarrierConnector {
             // callers (unit tests, future scripted callers) without
             // silently producing an invalid UPS payload.
             if (org.springframework.util.StringUtils.hasText(customerEmail)) {
+                // R-2 — retailer address for the UPS "from" / undeliverable
+                // slot. Precedence: DTO recipient email → tenant setting
+                // (nds.fallback_notify_email, same key /settings/system
+                // "NDS fallbacks" writes) → platform default
+                // support@thbred.com. The prior noreply@<company> synth
+                // was per-carrier-only and never editable by ops.
+                String tenantFallback = null;
+                if (tenantSettingsService != null
+                        && org.springframework.util.StringUtils.hasText(request.getDepartmentNumber())) {
+                    tenantFallback = tenantSettingsService.getSetting(
+                            request.getDepartmentNumber().trim(),
+                            "nds.fallback_notify_email").orElse(null);
+                }
                 String retailerEmail = firstNonBlank(request.getRecipientEmail(),
-                        "noreply@" + firstNonBlank(carrierProperties.getShipper().getName(),
-                                "shipx.local").toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9.-]", ""));
+                        tenantFallback,
+                        com.multiship.backend.service.ndsshipment.NdsShipmentLookupService.DEFAULT_NOTIFY_EMAIL);
                 String fromName = firstNonBlank(request.getRecipientCompany(),
                         request.getRecipientName(),
                         carrierProperties.getShipper().getName(),
