@@ -4,12 +4,20 @@ import com.multiship.backend.config.OracleDtcConfig;
 import com.multiship.backend.model.oracle.OracleDtcOrder;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
+import jakarta.persistence.Column;
 import jakarta.persistence.Query;
+import jakarta.persistence.Tuple;
+import jakarta.persistence.TupleElement;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Repository;
 
+import java.lang.reflect.Field;
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Custom repository for Oracle DTC orders with dynamic view name.
@@ -52,8 +60,8 @@ public class OracleDtcOrderRepositoryImpl {
                      "  AND COALESCE(o.ORDER_SUFFIX, 0) = 0 " +
                      "ORDER BY o.BATCH_ID DESC";
 
-        Query query = entityManager.createNativeQuery(sql, OracleDtcOrder.class);
-        return query.getResultList();
+        Query query = entityManager.createNativeQuery(sql, Tuple.class);
+        return toOrders(query.getResultList());
     }
 
     /**
@@ -75,13 +83,13 @@ public class OracleDtcOrderRepositoryImpl {
                      "WHERE o.TENANT_ID = :tenantId " +
                      "  AND o.BATCH_ID != 0 " +
                      "  AND o.TOTE_NUMBER IS NOT NULL " +
-                     "  AND TRIM(o.TOTE_NUMBER) != '' " +
+                     "  AND TRIM(o.TOTE_NUMBER) IS NOT NULL " +
                      "  AND COALESCE(o.ORDER_SUFFIX, 0) = 0 " +
                      "ORDER BY o.BATCH_ID DESC";
 
-        Query query = entityManager.createNativeQuery(sql, OracleDtcOrder.class)
+        Query query = entityManager.createNativeQuery(sql, Tuple.class)
                 .setParameter("tenantId", tenantId);
-        return query.getResultList();
+        return toOrders(query.getResultList());
     }
 
     /**
@@ -103,7 +111,7 @@ public class OracleDtcOrderRepositoryImpl {
                      "WHERE o.TENANT_ID = :tenantId " +
                      "  AND o.BATCH_ID != 0 " +
                      "  AND o.TOTE_NUMBER IS NOT NULL " +
-                     "  AND TRIM(o.TOTE_NUMBER) != '' " +
+                     "  AND TRIM(o.TOTE_NUMBER) IS NOT NULL " +
                      "  AND COALESCE(o.ORDER_SUFFIX, 0) = 0";
 
         Query query = entityManager.createNativeQuery(sql)
@@ -124,12 +132,12 @@ public class OracleDtcOrderRepositoryImpl {
         String sql = "SELECT * FROM " + viewName + " o " +
                      "WHERE o.BATCH_ID = :batchId " +
                      "  AND o.TOTE_NUMBER IS NOT NULL " +
-                     "  AND TRIM(o.TOTE_NUMBER) != '' " +
+                     "  AND TRIM(o.TOTE_NUMBER) IS NOT NULL " +
                      "ORDER BY o.TOTE_NUMBER";
 
-        Query query = entityManager.createNativeQuery(sql, OracleDtcOrder.class)
+        Query query = entityManager.createNativeQuery(sql, Tuple.class)
                 .setParameter("batchId", batchId);
-        return query.getResultList();
+        return toOrders(query.getResultList());
     }
 
     /**
@@ -146,8 +154,53 @@ public class OracleDtcOrderRepositoryImpl {
                      "WHERE o.ORDER_NO = :orderNo " +
                      "  AND o.BATCH_ID != 0";
 
-        Query query = entityManager.createNativeQuery(sql, OracleDtcOrder.class)
+        Query query = entityManager.createNativeQuery(sql, Tuple.class)
                 .setParameter("orderNo", orderNo);
-        return query.getResultList();
+        return toOrders(query.getResultList());
+    }
+
+    /** OracleDtcOrder fields keyed by their @Column name (upper case). */
+    private static final Map<String, Field> COLUMN_FIELDS = new HashMap<>();
+    static {
+        for (Field f : OracleDtcOrder.class.getDeclaredFields()) {
+            Column col = f.getAnnotation(Column.class);
+            if (col != null) {
+                f.setAccessible(true);
+                COLUMN_FIELDS.put(col.name().toUpperCase(), f);
+            }
+        }
+    }
+
+    /**
+     * Map raw view rows to OracleDtcOrder by column name. Every row becomes its
+     * own object — no entity identity, so rows sharing a BATCH_ID stay distinct.
+     * View columns without a matching field are ignored.
+     */
+    @SuppressWarnings("unchecked")
+    private List<OracleDtcOrder> toOrders(List<?> rows) {
+        List<OracleDtcOrder> orders = new ArrayList<>(rows.size());
+        for (Tuple row : (List<Tuple>) rows) {
+            OracleDtcOrder order = new OracleDtcOrder();
+            for (TupleElement<?> el : row.getElements()) {
+                Field field = COLUMN_FIELDS.get(el.getAlias().toUpperCase());
+                Object value = row.get(el);
+                if (field == null || value == null) continue;
+                try {
+                    field.set(order, convert(value, field.getType()));
+                } catch (IllegalAccessException e) {
+                    throw new IllegalStateException("Cannot set " + field.getName(), e);
+                }
+            }
+            orders.add(order);
+        }
+        return orders;
+    }
+
+    private static Object convert(Object value, Class<?> type) {
+        if (type == String.class) return value.toString();
+        if (type == BigDecimal.class) {
+            return value instanceof BigDecimal bd ? bd : new BigDecimal(value.toString());
+        }
+        return value;
     }
 }
