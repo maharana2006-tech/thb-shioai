@@ -73,22 +73,35 @@ public class NdsShipmentLookupService {
      * @throws ExternalSystemException  on registry/connectivity issues (→ 503)
      */
     public Optional<NdsShipmentPrefill> lookup(String rawScan) {
+        return lookup(rawScan, null);
+    }
+
+    /**
+     * Lookup with an operator-supplied client-code gate. When
+     * {@code expectedClientCode} is non-blank, the value NDS reports for
+     * the scan's owning tenant (TENANT_ID for .X, FF_SCHEMA for .Y) must
+     * match — mismatch throws {@link IllegalArgumentException} (→ 422)
+     * with a message naming both codes. Null / blank skips the check.
+     */
+    public Optional<NdsShipmentPrefill> lookup(String rawScan, String expectedClientCode) {
         NdsScanValue scan = NdsScanValueParser.parse(rawScan);
+        String expected = expectedClientCode == null ? null : expectedClientCode.trim();
         return switch (scan.scope()) {
-            case DIRECT -> lookupDirect(scan);
-            case BATCH  -> lookupBatch(scan);
+            case DIRECT -> lookupDirect(scan, expected);
+            case BATCH  -> lookupBatch(scan, expected);
         };
     }
 
     // ═════════════════ .X — DIRECT container lookup ══════════════════
 
-    private Optional<NdsShipmentPrefill> lookupDirect(NdsScanValue scan) {
+    private Optional<NdsShipmentPrefill> lookupDirect(NdsScanValue scan, String expectedClientCode) {
         Optional<NdsShipmentLookupRepository.ContainerOwner> owner =
                 repository.findContainerOwner(scan.stripped());
         if (owner.isEmpty()) {
             log.info("nds-lookup DIRECT: container {} not found", scan.stripped());
             return Optional.empty();
         }
+        assertClientCodeMatches(expectedClientCode, owner.get().clientCode(), "container", scan.stripped());
         String clientCode = tenantScopeEnforcer.clampClientCode(owner.get().clientCode());
         NdsShipmentLookupRepository.ContainerOwner o = owner.get();
 
@@ -101,48 +114,134 @@ public class NdsShipmentLookupService {
         }
         List<NdsShipmentLookupRepository.ContainerRow> containers =
                 repository.findContainers(clientCode, o.orderNo(), o.orderSuffix());
+        List<NdsShipmentPrefill.Package> packages = buildDirectPackages(containers, scan.stripped());
         return Optional.of(buildResponse(scan, NdsShipmentPrefill.Scope.DIRECT, clientCode,
-                null, header.get(), containers, scan.stripped()));
+                null, header.get(), packages));
+    }
+
+    private List<NdsShipmentPrefill.Package> buildDirectPackages(
+            List<NdsShipmentLookupRepository.ContainerRow> containers,
+            String scannedContainer) {
+        List<NdsShipmentPrefill.Package> out = new ArrayList<>(containers.size());
+        int seq = 1;
+        for (NdsShipmentLookupRepository.ContainerRow c : containers) {
+            // G8 — carriers reject zero-weight shipments; default to 1 lb
+            // so backorder Quick Ship stays unblocked (§10).
+            BigDecimal rawWeight = c.billableWeightLb();
+            boolean weightDefaulted = rawWeight == null || rawWeight.signum() <= 0;
+            out.add(new NdsShipmentPrefill.Package(
+                    seq++,
+                    c.containerId(),
+                    Stream.of(safeParseLong(c.containerId())).filter(Objects::nonNull).toList(),
+                    Stream.of(parseIntOrNull(c.orderNo())).filter(Objects::nonNull).toList(),
+                    parseIntOrNull(c.orderSuffix()),
+                    weightDefaulted ? BigDecimal.ONE : rawWeight,
+                    weightDefaulted ? "DEFAULT_ONE_LB" : "OE_SHIP_CONTAINER.GROSS_WT",
+                    c.lengthIn(), c.widthIn(), c.heightIn(),
+                    null, null,
+                    scannedContainer != null && scannedContainer.equals(c.containerId())));
+        }
+        return out;
     }
 
     // ═════════════════ .Y — BATCH lookup ════════════════════════════
 
-    private Optional<NdsShipmentPrefill> lookupBatch(NdsScanValue scan) {
-        Optional<NdsShipmentLookupRepository.BatchOwner> owner =
-                repository.findBatchOwner(scan.stripped());
-        if (owner.isEmpty()) {
-            log.info("nds-lookup BATCH: batch {} not found", scan.stripped());
+    private Optional<NdsShipmentPrefill> lookupBatch(NdsScanValue scan, String expectedClientCode) {
+        String batchId = scan.stripped();
+        // Discover client code if the caller didn't supply one (legacy tests).
+        String discoveredClient = expectedClientCode;
+        if (discoveredClient == null || discoveredClient.isBlank()) {
+            Optional<NdsShipmentLookupRepository.BatchOwner> owner =
+                    repository.findBatchOwner(batchId);
+            if (owner.isEmpty()) {
+                log.info("nds-lookup BATCH: batch {} not found (no client hint)", batchId);
+                return Optional.empty();
+            }
+            discoveredClient = owner.get().primaryClientCode();
+        }
+        String clientCode = tenantScopeEnforcer.clampClientCode(discoveredClient);
+        // Legacy Step 2 — one row per (batch, container_no, order_suffix)
+        // via the ShipX GetMultiContainerByOrders join. Runs on client login.
+        List<NdsShipmentLookupRepository.BillableBatchPackage> rows =
+                repository.findBillableBatchPackages(batchId, clientCode);
+        if (rows.isEmpty()) {
+            log.info("nds-lookup BATCH: batch {} has no packages for client {}", batchId, clientCode);
             return Optional.empty();
         }
-        List<NdsShipmentLookupRepository.BatchContainer> contents =
-                repository.findBatchContents(scan.stripped());
-        if (contents.isEmpty()) {
-            log.info("nds-lookup BATCH: batch {} has no containers", scan.stripped());
+        // Anchor = lowest CONTAINER_NO (SQL ORDER BY b.Container_No ASC) →
+        // its first order in the CSV supplies the ship-to header.
+        NdsShipmentLookupRepository.BillableBatchPackage anchor = rows.get(0);
+        Integer anchorOrder = firstFromCsv(anchor.orderNosCsv());
+        if (anchorOrder == null) {
+            log.info("nds-lookup BATCH: anchor row missing order_no for batch {}", batchId);
             return Optional.empty();
         }
-        String clientCode = tenantScopeEnforcer.clampClientCode(owner.get().primaryClientCode());
-        // ShipX rule: address = order with the lowest container id.
-        NdsShipmentLookupRepository.BatchContainer anchor = contents.get(0);
-        Optional<NdsShipmentLookupRepository.OrderHeader> header =
-                repository.findOrderHeader(clientCode, anchor.orderNo(), anchor.orderSuffix());
+        Optional<NdsShipmentLookupRepository.OrderHeader> header = repository.findOrderHeader(
+                clientCode, String.valueOf(anchorOrder),
+                anchor.orderSuffix() == null ? "0" : String.valueOf(anchor.orderSuffix()));
         if (header.isEmpty()) {
             log.info("nds-lookup BATCH: anchor order {}/{} missing for client {}",
-                    anchor.orderNo(), anchor.orderSuffix(), clientCode);
+                    anchorOrder, anchor.orderSuffix(), clientCode);
             return Optional.empty();
         }
-        List<String> containerIds = contents.stream().map(
-                NdsShipmentLookupRepository.BatchContainer::containerId).toList();
-        List<NdsShipmentLookupRepository.BatchPackage> pkgRows =
-                repository.findBatchPackagesGrouped(clientCode, containerIds);
-        // Reshape BatchPackage rows to ContainerRow so buildResponse handles both flows.
-        List<NdsShipmentLookupRepository.ContainerRow> asContainers = pkgRows.stream()
-                .map(b -> new NdsShipmentLookupRepository.ContainerRow(
-                        b.containerId(), b.orderNo(), b.orderSuffix(),
-                        b.billableWeightLb(), b.lengthIn(), b.widthIn(), b.heightIn(),
-                        b.packageTypeCd()))
-                .toList();
+        List<NdsShipmentPrefill.Package> packages = buildBatchPackages(rows);
         return Optional.of(buildResponse(scan, NdsShipmentPrefill.Scope.BATCH, clientCode,
-                scan.stripped(), header.get(), asContainers, /*scannedContainer*/ null));
+                batchId, header.get(), packages));
+    }
+
+    private List<NdsShipmentPrefill.Package> buildBatchPackages(
+            List<NdsShipmentLookupRepository.BillableBatchPackage> rows) {
+        List<NdsShipmentPrefill.Package> out = new ArrayList<>(rows.size());
+        int seq = 1;
+        for (NdsShipmentLookupRepository.BillableBatchPackage r : rows) {
+            List<Long> containerIds = parseCsvLongs(r.containerIdsCsv());
+            List<Integer> orderNos = parseCsvInts(r.orderNosCsv());
+            BigDecimal rawWeight = r.weight();
+            boolean weightDefaulted = rawWeight == null || rawWeight.signum() <= 0;
+            out.add(new NdsShipmentPrefill.Package(
+                    seq++,
+                    r.containerNo() == null ? null : String.valueOf(r.containerNo()),
+                    containerIds,
+                    orderNos,
+                    r.orderSuffix(),
+                    weightDefaulted ? BigDecimal.ONE : rawWeight,
+                    weightDefaulted ? "DEFAULT_ONE_LB" : "TB_BILLABLE_CONTAINERS.WEIGHT",
+                    null, null, null,           // dims not carried on the billable path
+                    null, null,
+                    false));
+        }
+        return out;
+    }
+
+    /** First integer token from a CSV like {@code "999999,888888,"}; null if none. */
+    private static Integer firstFromCsv(String csv) {
+        if (csv == null || csv.isBlank()) return null;
+        String[] parts = csv.split(",");
+        for (String s : parts) {
+            Integer v = parseIntOrNull(s);
+            if (v != null) return v;
+        }
+        return null;
+    }
+
+    private static List<Long> parseCsvLongs(String csv) {
+        if (csv == null || csv.isBlank()) return List.of();
+        List<Long> out = new ArrayList<>();
+        for (String s : csv.split(",")) {
+            Long v = safeParseLong(s);
+            if (v != null) out.add(v);
+        }
+        return out;
+    }
+
+    private static List<Integer> parseCsvInts(String csv) {
+        if (csv == null || csv.isBlank()) return List.of();
+        List<Integer> out = new ArrayList<>();
+        for (String s : csv.split(",")) {
+            Integer v = parseIntOrNull(s);
+            if (v != null) out.add(v);
+        }
+        return out;
     }
 
     // ═════════════════ shared DTO assembly ══════════════════════════
@@ -152,8 +251,7 @@ public class NdsShipmentLookupService {
                                              String clientCode,
                                              String batchId,
                                              NdsShipmentLookupRepository.OrderHeader h,
-                                             List<NdsShipmentLookupRepository.ContainerRow> containers,
-                                             String scannedContainer) {
+                                             List<NdsShipmentPrefill.Package> packages) {
         List<NdsShipmentPrefill.Message> messages = new ArrayList<>();
         List<String> defaultedFields = new ArrayList<>();
         NdsShipmentPrefill.Status status = NdsShipmentPrefill.Status.OK;
@@ -210,10 +308,9 @@ public class NdsShipmentLookupService {
                 status = worse(status, NdsShipmentPrefill.Status.WARNING);
             }
         }
-        // Already-shipped block — either OEHEAD or any container.
-        if ("Y".equalsIgnoreCase(h.shippedFlag())
-                || containers.stream().anyMatch(c -> c.orderSuffix() != null
-                    && "Y".equalsIgnoreCase(safeShippedFlag(c)))) {
+        // Already-shipped block — OEHEAD flag (per-container shipped flag not
+        // currently projected on the prebuilt Package DTO).
+        if ("Y".equalsIgnoreCase(h.shippedFlag())) {
             messages.add(new NdsShipmentPrefill.Message(
                     NdsShipmentPrefill.Message.Severity.BLOCKED,
                     "Order or container already marked shipped in NDS."));
@@ -254,39 +351,13 @@ public class NdsShipmentLookupService {
                         methodDesc.map(NdsShipmentLookupRepository.ShipMethod::description).orElse(null),
                         mappedServiceId);
 
-        // Packages — one per container row
-        List<NdsShipmentPrefill.Package> packages = new ArrayList<>(containers.size());
-        int seq = 1;
-        for (NdsShipmentLookupRepository.ContainerRow c : containers) {
-            boolean isScanned = scannedContainer != null && scannedContainer.equals(c.containerId());
-            // G8 — BackOrder Quick Ship treats a zero or missing container weight
-            // as 1 lb (ShipX_NDS_Orders_and_Tracking.docx §10). Carriers reject
-            // zero-weight shipments; a 1 lb default keeps the flow moving and
-            // the operator can override on-screen if the actual weight is known.
-            BigDecimal rawWeight = c.billableWeightLb();
-            boolean weightDefaulted = rawWeight == null || rawWeight.signum() <= 0;
-            BigDecimal weight = weightDefaulted ? BigDecimal.ONE : rawWeight;
-            String weightSource = weightDefaulted
-                    ? "DEFAULT_ONE_LB"
-                    : "OE_SHIP_CONTAINER.GROSS_WT";
-            packages.add(new NdsShipmentPrefill.Package(
-                    seq++,
-                    c.containerId(),
-                    Stream.of(safeParseLong(c.containerId())).filter(Objects::nonNull).toList(),
-                    Stream.of(parseIntOrNull(c.orderNo())).filter(Objects::nonNull).toList(),
-                    parseIntOrNull(c.orderSuffix()),
-                    weight,
-                    weightSource,
-                    c.lengthIn(),
-                    c.widthIn(),
-                    c.heightIn(),
-                    null,   // packDt — not queried in PR1
-                    null,   // shippedFlag per container — not queried in PR1
-                    isScanned));
-            if (weightDefaulted) {
+        // Weight-defaulted WARNING: derived from Package.weightSource so
+        // both .X (per container_id) and .Y (per container_no) share it.
+        for (NdsShipmentPrefill.Package p : packages) {
+            if ("DEFAULT_ONE_LB".equals(p.weightSource())) {
                 messages.add(new NdsShipmentPrefill.Message(
                         NdsShipmentPrefill.Message.Severity.WARNING,
-                        "Container " + c.containerId() + " has no billable weight in NDS — defaulted to 1 lb."));
+                        "Container " + p.containerNo() + " has no billable weight in NDS — defaulted to 1 lb."));
                 status = worse(status, NdsShipmentPrefill.Status.WARNING);
             }
         }
@@ -349,6 +420,23 @@ public class NdsShipmentLookupService {
     }
 
     // ═════════════════ helpers ═════════════════════════════════════
+
+    /**
+     * Cross-check operator-picked client-code against the tenant NDS
+     * reports for the scan. Blank expected = skip (legacy callers).
+     * Mismatch → 422 with both codes named so the operator can pick the
+     * right client and rescan.
+     */
+    private static void assertClientCodeMatches(String expected, String actual,
+                                                String kind, String scanned) {
+        if (expected == null || expected.isBlank()) return;
+        if (actual == null || !expected.equalsIgnoreCase(actual.trim())) {
+            throw new IllegalArgumentException(
+                    "Scanned " + kind + " " + scanned + " belongs to client "
+                            + (actual == null ? "(unknown)" : actual)
+                            + ", not the picked client " + expected + ".");
+        }
+    }
 
     /** Client-scoped code map first (exact match), fall back to global rule. */
     private Long resolveServiceId(String clientCode, String shipviaCd) {

@@ -279,94 +279,117 @@ public class NdsShipmentLookupRepository {
                              String primaryClientCode) {}
 
     public Optional<BatchOwner> findBatchOwner(String batchId) {
-        String sql = """
-                SELECT FF_SCHEMA,
-                       PRIMARY_CLIENT_CODE
-                  FROM TB_BILLABLE_CONTAINERS
-                 WHERE BATCH_ID = :batchId
-                   AND ROWNUM  = 1
-                """;
+        return findBatchOwner(batchId, null);
+    }
+
+    /**
+     * Real TB_BILLABLE_CONTAINERS shape (via /admin/nds-debug/describe):
+     * {@code BATCH_ID CONTAINER_ID WEIGHT CONTAINER_NO ORDER_NO
+     * ORDER_SUFFIX FF_SCHEMA}. No PRIMARY_CLIENT_CODE — {@code FF_SCHEMA}
+     * IS the tenant/client code (same string {@link NdsTemplates#forClient}
+     * accepts). When {@code clientCode} is non-blank the SQL narrows to
+     * that tenant so a batch id colliding across tenants can't leak.
+     */
+    public Optional<BatchOwner> findBatchOwner(String batchId, String clientCode) {
+        boolean hasClient = clientCode != null && !clientCode.isBlank();
+        String sql = hasClient
+                ? """
+                        SELECT FF_SCHEMA
+                          FROM TB_BILLABLE_CONTAINERS
+                         WHERE BATCH_ID  = :batchId
+                           AND FF_SCHEMA = :clientCode
+                           AND ROWNUM    = 1
+                        """
+                : """
+                        SELECT FF_SCHEMA
+                          FROM TB_BILLABLE_CONTAINERS
+                         WHERE BATCH_ID = :batchId
+                           AND ROWNUM  = 1
+                        """;
         MapSqlParameterSource p = new MapSqlParameterSource("batchId", batchId);
+        if (hasClient) p.addValue("clientCode", clientCode.trim());
         try {
-            return Optional.of(templates.production().queryForObject(sql, p, (rs, i) ->
-                    new BatchOwner(rs.getString("FF_SCHEMA"),
-                            rs.getString("PRIMARY_CLIENT_CODE"))));
+            return Optional.of(templates.production().queryForObject(sql, p, (rs, i) -> {
+                String ff = rs.getString("FF_SCHEMA");
+                return new BatchOwner(ff, ff);
+            }));
         } catch (EmptyResultDataAccessException empty) {
             return Optional.empty();
         }
     }
 
-    /**
-     * Full batch content — every {@code (orderNo, orderSuffix,
-     * containerId)} triple that composes the batch, ordered by
-     * container so the service's "lowest-container order supplies
-     * the ship-to" rule is trivial to apply.
-     */
-    public record BatchContainer(String containerId,
-                                 String orderNo,
-                                 String orderSuffix) {}
-
-    public List<BatchContainer> findBatchContents(String batchId) {
-        String sql = """
-                SELECT CONTAINER_ID,
-                       ORDER_NO,
-                       ORDER_SUFFIX
-                  FROM TB_BILLABLE_CONTAINERS
-                 WHERE BATCH_ID = :batchId
-                 ORDER BY CONTAINER_ID
-                """;
-        MapSqlParameterSource p = new MapSqlParameterSource("batchId", batchId);
-        return templates.production().query(sql, p, (rs, i) ->
-                new BatchContainer(
-                        rs.getString("CONTAINER_ID"),
-                        rs.getString("ORDER_NO"),
-                        rs.getString("ORDER_SUFFIX")));
-    }
-
     // ═════════════════ .Y (per-client) — CLIENT login ═════════════════
 
     /**
-     * Aggregated package view for a batch — one row per container id
-     * with the billable weight already joined from OE_SHIP_CONTAINER.
-     * The service pastes each row 1:1 into the FE's package list.
+     * One physical box in a billable batch — one row per
+     * {@code (batch_id, container_no, order_suffix)}. Container IDs +
+     * order numbers within the box arrive as CSV strings (XMLAGG in
+     * SQL); the service splits them into typed lists.
+     *
+     * <p>Weight is {@code TB_BILLABLE_CONTAINERS.WEIGHT} — legacy
+     * ShipX ProcessBillableShipments explicitly reads this, not
+     * {@code OE_SHIP_CONTAINER.GROSS_WT}, because billable weight is
+     * the pre-computed rated weight for the box.
      */
-    public record BatchPackage(String containerId,
-                               String orderNo,
-                               String orderSuffix,
-                               BigDecimal billableWeightLb,
-                               BigDecimal lengthIn,
-                               BigDecimal widthIn,
-                               BigDecimal heightIn,
-                               String packageTypeCd) {}
+    public record BillableBatchPackage(Integer containerNo,
+                                       Integer orderSuffix,
+                                       BigDecimal weight,
+                                       String containerIdsCsv,
+                                       String orderNosCsv) {}
 
-    public List<BatchPackage> findBatchPackagesGrouped(String clientCode,
-                                                       List<String> containerIds) {
-        if (containerIds == null || containerIds.isEmpty()) {
-            return List.of();
-        }
+    /**
+     * Step 2 — one row per physical box in the batch. Runs on the
+     * CLIENT login. Joins {@code oe_ship_container} (the client's
+     * per-order shipping containers, tenant-scoped by login) to
+     * {@code tb_billable_containers} (batch definition, reachable
+     * via synonym) on {@code (Order_NO, Order_Suffix)}.
+     *
+     * <p>Legacy ShipX doc names {@code tb_ship_container} for the
+     * join partner, but real data lives in {@code oe_ship_container}
+     * on the client login (confirmed via /admin/nds-debug/billable-batch).
+     * The tenant filter is redundant here — client login is already
+     * tenant-scoped — so only {@code b.FF_SCHEMA} narrows the batch.
+     *
+     * <p>The two aggregate subqueries collect the container_ids /
+     * order_nos that share a {@code container_no} within the batch
+     * (XMLAGG works on Oracle 10g+ where LISTAGG isn't available).
+     * {@code DISTINCT} collapses the row set to one per
+     * (batch, container_no, order_suffix).
+     */
+    public List<BillableBatchPackage> findBillableBatchPackages(String batchId, String clientCode) {
         String sql = """
-                SELECT CONTAINER_ID,
-                       ORDER_NO,
-                       ORDER_SUFFIX,
-                       GROSS_WT,
-                       LENGTH,
-                       WIDTH,
-                       HEIGHT,
-                       CONTAINER_TYPE
-                  FROM OE_SHIP_CONTAINER
-                 WHERE CONTAINER_ID IN (:containerIds)
-                 ORDER BY CONTAINER_ID
+                SELECT DISTINCT
+                       b.Container_No,
+                       a.Order_Suffix,
+                       b.WEIGHT,
+                       (SELECT CAST(RTRIM(XMLAGG(XMLELEMENT(E, c.Container_ID || ',').EXTRACT('//text()')
+                                          ORDER BY c.Container_ID).GetClobVal(), ',') AS VARCHAR2(4000))
+                          FROM tb_billable_containers c
+                         WHERE c.batch_id = b.batch_id AND c.Container_No = b.Container_No) AS Container_ID_CSV,
+                       (SELECT CAST(RTRIM(XMLAGG(XMLELEMENT(E, o.Order_NO || ',').EXTRACT('//text()')
+                                          ORDER BY o.Order_NO).GetClobVal(), ',') AS VARCHAR2(4000))
+                          FROM tb_billable_containers o
+                         WHERE o.batch_id = b.batch_id AND o.Container_No = b.Container_No) AS Order_NO_CSV
+                  FROM oe_ship_container a
+                  JOIN tb_billable_containers b ON a.Order_NO = b.Order_NO AND a.Order_Suffix = b.Order_Suffix
+                 WHERE b.batch_id  = :batchId
+                   AND b.FF_SCHEMA = :clientCode
+                 ORDER BY b.Container_No, a.Order_Suffix
                 """;
-        MapSqlParameterSource p = new MapSqlParameterSource("containerIds", containerIds);
-        return templates.forClient(clientCode).query(sql, p, (rs, i) ->
-                new BatchPackage(
-                        rs.getString("CONTAINER_ID"),
-                        rs.getString("ORDER_NO"),
-                        rs.getString("ORDER_SUFFIX"),
-                        rs.getBigDecimal("GROSS_WT"),
-                        rs.getBigDecimal("LENGTH"),
-                        rs.getBigDecimal("WIDTH"),
-                        rs.getBigDecimal("HEIGHT"),
-                        rs.getString("CONTAINER_TYPE")));
+        MapSqlParameterSource p = new MapSqlParameterSource()
+                .addValue("batchId", batchId)
+                .addValue("clientCode", clientCode);
+        return templates.forClient(clientCode).query(sql, p, (rs, i) -> {
+            // Oracle NUMBER → BigDecimal via JDBC; can't (Integer)-cast directly.
+            java.math.BigDecimal cn = rs.getBigDecimal("Container_No");
+            java.math.BigDecimal os = rs.getBigDecimal("Order_Suffix");
+            return new BillableBatchPackage(
+                    cn == null ? null : cn.intValue(),
+                    os == null ? null : os.intValue(),
+                    rs.getBigDecimal("WEIGHT"),
+                    rs.getString("Container_ID_CSV"),
+                    rs.getString("Order_NO_CSV"));
+        });
     }
+
 }

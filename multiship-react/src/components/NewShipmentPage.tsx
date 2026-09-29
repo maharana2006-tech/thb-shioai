@@ -1393,7 +1393,7 @@ export default function NewShipmentPage() {
       // Parallel calls — one per token. Existing endpoint returns the full
       // order for every .X (all sibling packages), so multiple containers
       // of the same order collapse via dedup below.
-      const results = await Promise.allSettled(tokens.map((t) => ndsShipmentService.lookup(t)))
+      const results = await Promise.allSettled(tokens.map((t) => ndsShipmentService.lookup(t, clientCode || null)))
       const prefills: NdsShipmentPrefill[] = []
       const failures: { token: string; status?: number; msg?: string }[] = []
       results.forEach((r, i) => {
@@ -3035,7 +3035,9 @@ export default function NewShipmentPage() {
                 <Field label="Scan (NDS)"
                        hint={ndsQueue.length > 1
                          ? undefined
-                         : 'One or many — separate multiple containers by comma or space.'}>
+                         : clientCode
+                           ? 'One or many — separate multiple containers by comma or space.'
+                           : 'Pick a client below to enable scanning.'}>
                   <input
                     className={inputCls}
                     value={ndsScan}
@@ -3046,8 +3048,10 @@ export default function NewShipmentPage() {
                         onScanSubmit()
                       }
                     }}
-                    placeholder=".X<containerId>, .X<c2>… or .Y<batchId>"
-                    disabled={ndsLoading}
+                    placeholder={clientCode
+                      ? '.X<containerId>, .X<c2>… or .Y<batchId>'
+                      : 'Pick a client first'}
+                    disabled={ndsLoading || !clientCode}
                     aria-busy={ndsLoading}
                   />
                   {ndsQueue.length > 1 ? (

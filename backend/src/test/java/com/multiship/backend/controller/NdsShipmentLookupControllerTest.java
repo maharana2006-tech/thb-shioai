@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
@@ -37,8 +38,8 @@ class NdsShipmentLookupControllerTest {
                 NdsShipmentPrefill.Status.OK, List.of(),
                 NdsShipmentPrefill.Scope.DIRECT, ".X1", "ACME", null,
                 List.of(), null, null, List.of(), null, null, List.of(), null);
-        when(service.lookup(anyString())).thenReturn(Optional.of(sample));
-        ResponseEntity<ApiResponse<NdsShipmentPrefill>> resp = controller.lookup(".X1");
+        when(service.lookup(anyString(), any())).thenReturn(Optional.of(sample));
+        ResponseEntity<ApiResponse<NdsShipmentPrefill>> resp = controller.lookup(".X1", null);
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         assertNotNull(resp.getBody());
         assertEquals(NdsShipmentPrefill.Status.OK, resp.getBody().getData().status());
@@ -46,27 +47,27 @@ class NdsShipmentLookupControllerTest {
 
     @Test
     void returns404WhenServiceReturnsEmpty() {
-        when(service.lookup(anyString())).thenReturn(Optional.empty());
-        ResponseEntity<ApiResponse<NdsShipmentPrefill>> resp = controller.lookup(".X0");
+        when(service.lookup(anyString(), any())).thenReturn(Optional.empty());
+        ResponseEntity<ApiResponse<NdsShipmentPrefill>> resp = controller.lookup(".X0", null);
         assertEquals(HttpStatus.NOT_FOUND, resp.getStatusCode());
         assertEquals("NOT_FOUND", resp.getBody().getErrorCode());
     }
 
     @Test
     void returns422OnUnparseableScan() {
-        when(service.lookup(anyString()))
+        when(service.lookup(anyString(), any()))
                 .thenThrow(new IllegalArgumentException("Scan must start with .X or .Y"));
-        ResponseEntity<ApiResponse<NdsShipmentPrefill>> resp = controller.lookup(".Z");
+        ResponseEntity<ApiResponse<NdsShipmentPrefill>> resp = controller.lookup(".Z", null);
         assertEquals(HttpStatus.UNPROCESSABLE_ENTITY, resp.getStatusCode());
         assertTrue(resp.getBody().getMessage().contains(".X or .Y"));
     }
 
     @Test
     void returns503WhenNdsUnreachable() {
-        when(service.lookup(anyString()))
+        when(service.lookup(anyString(), any()))
                 .thenThrow(new ExternalSystemException(Kind.UNREACHABLE, "nds-default",
                         "TNS-12541"));
-        ResponseEntity<ApiResponse<NdsShipmentPrefill>> resp = controller.lookup(".X1");
+        ResponseEntity<ApiResponse<NdsShipmentPrefill>> resp = controller.lookup(".X1", null);
         assertEquals(HttpStatus.SERVICE_UNAVAILABLE, resp.getStatusCode());
         assertTrue(resp.getBody().getMessage().contains("NDS is unavailable"));
     }
