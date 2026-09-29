@@ -20,7 +20,6 @@ import {
 } from 'react-icons/fi'
 import {
   orderImportService,
-  type FileColumn,
   type OrderImportPreview,
   type OrderImportRow,
   type StagingUpload,
@@ -34,6 +33,7 @@ import VirtualTable from '../VirtualTable'
 // the parsed CSV contains enough USPS rows to blow past ~1h at the
 // 55/hr platform cap. Both surfaces close audit gap U2 + U4.
 import BulkLabelQueueBadge from '../orders/BulkLabelQueueBadge'
+import { fileLayoutColumns } from './fileLayoutColumns'
 import { labelOfField, messageUnder, readableError, shipViaHint, shownValue } from '../batchGrid'
 import { systemSettingsService } from '../../api/systemSettingsService'
 import { normalizeCarrierCode } from '../../utils/carrierUtils'
@@ -204,12 +204,11 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
       .finally(() => setSavingCell(false))
   }
 
-  const downloadXlsx = async (layout: 'standard' | 'client' = 'standard') => {
+  const downloadXlsx = async () => {
     if (downloadingXlsx) return
     setDownloadingXlsx(true)
     try {
-      if (layout === 'client') await orderImportService.downloadClientLayoutXlsx()
-      else await orderImportService.downloadXlsxTemplate(null)
+      await orderImportService.downloadClientLayoutXlsx()
     } catch (e) {
       notify.apiError(e, 'Template download failed.')
     } finally {
@@ -456,9 +455,7 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
               uploading={uploading}
               downloadingXlsx={downloadingXlsx}
               onDownloadXlsx={() => void downloadXlsx()}
-              onDownloadClientXlsx={() => void downloadXlsx('client')}
-              csvHref={orderImportService.templateUrl()}
-              clientCsvHref={orderImportService.clientLayoutTemplateUrl()}
+              csvHref={orderImportService.clientLayoutTemplateUrl()}
             />
           ) : null}
           {step === 1 && openUploads.length > 0 ? (
@@ -769,9 +766,7 @@ function UploadStep({
   uploading,
   downloadingXlsx,
   onDownloadXlsx,
-  onDownloadClientXlsx,
   csvHref,
-  clientCsvHref,
 }: {
   file: File | null
   onFileChange: (f: File | null) => void
@@ -779,9 +774,7 @@ function UploadStep({
   uploading: boolean
   downloadingXlsx: boolean
   onDownloadXlsx: () => void
-  onDownloadClientXlsx: () => void
   csvHref: string
-  clientCsvHref: string
 }) {
   const [dragging, setDragging] = useState(false)
   const prettySize = (bytes: number) =>
@@ -812,7 +805,7 @@ function UploadStep({
         <p className="mt-3 text-[13px] font-semibold text-[#1f150c]">
           Drag &amp; drop your file here, or <span className="text-[#412d15] underline underline-offset-2">browse</span>
         </p>
-        <p className="mt-1 text-[11px] text-[#6b5c42]">CSV or Excel (.csv, .xlsx, .xlsm) · one order per order ref — extra item lines repeat it (file column: orderRef)</p>
+        <p className="mt-1 text-[11px] text-[#6b5c42]">CSV or Excel (.csv, .xlsx, .xlsm) · one row per shipment</p>
         <input
           type="file"
           accept=".csv,.xlsx,.xlsm,.txt"
@@ -859,10 +852,10 @@ function UploadStep({
       <div>
         <div className="rounded-xl border border-[#e3d9c4] bg-white p-4">
           <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.12em] text-[#6b5c42]">
-            <FiDownload className="h-3.5 w-3.5" /> Templates
+            <FiDownload className="h-3.5 w-3.5" /> Template
           </p>
           <p className="mt-1.5 text-[11.5px] text-[#6b5c42]">
-            The Excel template has cascading dropdowns to pick each row's client, carrier &amp; account.
+            One row per shipment: CLIENT_ID, ATTENTION, COMPANY_NAME, … SHIPVIA_CD, GROUP_ID. The Excel template has dropdowns for the client and its ship via codes.
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <button type="button" onClick={onDownloadXlsx} disabled={downloadingXlsx} className={GHOST_BTN}>
@@ -872,27 +865,10 @@ function UploadStep({
             <a
               href={csvHref}
               className="inline-flex items-center gap-1.5 text-[11.5px] font-semibold text-[#6b5c42] transition hover:text-[#1f150c]"
-              title="Flat CSV template — no validation, no dropdowns."
+              title="The same columns as a flat CSV — no dropdowns."
             >
               <FiDownload className="h-3 w-3" /> Plain CSV
             </a>
-          </div>
-          <div className="mt-3 border-t border-[#f2ecdf] pt-3">
-            <p className="text-[11.5px] font-semibold text-[#1f150c]">Client layout</p>
-            <p className="mt-0.5 text-[11px] text-[#6b5c42]">
-              The columns a client's own system writes — CLIENT_ID, ATTENTION, COMPANY_NAME, … SHIPVIA_CD, GROUP_ID. Files in either layout upload the same way.
-            </p>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <button type="button" onClick={onDownloadClientXlsx} disabled={downloadingXlsx} className={GHOST_BTN}>
-                {downloadingXlsx ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiDownload className="h-3.5 w-3.5" />}
-                Client layout (Excel)
-              </button>
-              <a href={clientCsvHref}
-                className="inline-flex items-center gap-1.5 text-[11.5px] font-semibold text-[#6b5c42] transition hover:text-[#1f150c]"
-                title="The client layout as a flat CSV — no dropdowns.">
-                <FiDownload className="h-3 w-3" /> Client layout (CSV)
-              </a>
-            </div>
           </div>
         </div>
       </div>
@@ -1119,26 +1095,6 @@ const DETAIL_FIELD_W: Record<string, string> = {
   hsCode: 'w-28',
 }
 
-/**
- * The grid's columns for an uploaded file: in the file's own order and names when
- * it isn't in our layout (CLIENT_ID, ATTENTION, … for the client layout). Columns
- * with no field of ours show under the file's extra columns, as before.
- */
-export function fileLayoutColumns(fileColumns: FileColumn[] | null | undefined): PreviewColumn[] | null {
-  if (!fileColumns?.length) return null
-  const ourLayout = fileColumns.every((c) => !c.field || c.field.toLowerCase() === c.name.trim().toLowerCase())
-  if (ourLayout) return null
-  const seen = new Set<string>()
-  const cols: PreviewColumn[] = []
-  for (const c of fileColumns) {
-    const base = c.field ? COL_BY_KEY[c.field] : undefined
-    if (!base || seen.has(base.key)) continue
-    seen.add(base.key)
-    cols.push({ ...base, name: c.name })
-  }
-  return cols.length ? cols : null
-}
-
 /** Field groups for the detail view. Every editable column must appear in a
  *  group, otherwise its value AND its validation error have nowhere to render. */
 const CARD_GROUPS: { title: string; keys: string[] }[] = [
@@ -1172,7 +1128,7 @@ function PreviewStep({
   onOpenMapping?: () => void
 }) {
   const savedSet = new Set(savedRows)
-  const columns = fileLayoutColumns(preview.fileColumns) ?? PREVIEW_COLUMNS
+  const columns = fileLayoutColumns(preview.fileColumns, COL_BY_KEY) ?? PREVIEW_COLUMNS
   // The code to map, and which client's file it came from.
   const [mapping, setMapping] = useState<{ code: string; clientCode: string | null } | null>(null)
   const [codesTick, setCodesTick] = useState(0)
