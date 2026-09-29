@@ -88,6 +88,7 @@ const PrintersPage = lazy(() => import('../components/PrintersPage'))
 // S3 — DB-driven external-system connection manager (Oracle WMS today,
 // REST/gRPC/SFTP later). ADMIN-only.
 const ExternalSystemsPage = lazy(() => import('../components/ExternalSystemsPage'))
+const CutoffsPage = lazy(() => import('../components/CutoffsPage'))
 // PR-F4 Agent-2 — USPS Direct admin dashboard (queue + quota + retries + reconciliation).
 const UspsDirectDashboardPage = lazy(() => import('../pages/UspsDirectDashboardPage'))
 // Lazy — one-shot flows (bulky but not on every page load).
@@ -184,6 +185,7 @@ export default function AppRoutes() {
                   <Route path="output-destinations" element={<OutputDestinationsPage />} />
                   <Route path="printers" element={<PrintersPage />} />
                   <Route path="external-systems" element={<ExternalSystemsPage />} />
+                  <Route path="cutoffs" element={<CutoffsPage />} />
                   {/* PR-F4 Agent-2 — USPS Direct admin dashboard: composite
                       view of queue depth, quota headroom, retry buckets and
                       void reconciliation. ADMIN only (RequireRole above +

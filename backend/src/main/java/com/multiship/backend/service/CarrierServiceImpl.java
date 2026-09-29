@@ -1465,9 +1465,33 @@ public class CarrierServiceImpl implements CarrierService {
         // value here would stamp a different PO than the persisted order.
         int allocatedOrderNo = existingOrderNo != null
                 ? existingOrderNo : orderRepository.nextManualOrderNo();
+        // G7 — compute cutoff shift BEFORE building the carrier request so
+        // the shifted date lands on shipmentRequest.shipDateOverride, which
+        // FedEx / UPS / DHL / Stamps consume via LabelDates.today(tz, override).
+        java.time.LocalDate g7ShiftedDatePre = null;
+        if (cutoffShiftService != null) {
+            try {
+                CutoffShiftService.ShiftDecision decision = cutoffShiftService.resolveShipDate(
+                        req.getSource(), carrier, null,
+                        clientRepository.findByClientCodeIgnoreCase(
+                                        req.getClientCode() == null ? "" : req.getClientCode())
+                                .map(com.multiship.backend.model.Client::getTimezone).orElse(null),
+                        java.time.LocalDateTime.now(java.time.ZoneOffset.UTC));
+                if (decision.shifted()) {
+                    log.info("G7 cutoff shift for order {}: {}", allocatedOrderNo, decision.reason());
+                    g7ShiftedDatePre = decision.shipDate();
+                }
+            } catch (Exception cutoffFail) {
+                log.warn("G7 cutoff computation failed for order {}: {}",
+                        allocatedOrderNo, cutoffFail.getMessage());
+            }
+        }
         ShipmentRequestDTO shipmentRequest = buildManualShipmentRequestDto(
                 req, from, to, carrier, billToNumber, serviceType, packageType,
                 length, width, height, fromCountry, account, allocatedOrderNo);
+        if (g7ShiftedDatePre != null) {
+            shipmentRequest.setShipDateOverride(g7ShiftedDatePre);
+        }
 
         // International customs for the LABEL call. The manual path builds its
         // own ShipmentRequestDTO and previously never attached an intl block —
@@ -1950,27 +1974,9 @@ public class CarrierServiceImpl implements CarrierService {
         order.setTenantId(StringUtils.hasText(req.getClientCode()) ? req.getClientCode().trim() : order.getTenantId());
         order.setShipviaCd(service != null ? service.getServiceCode() : serviceType);
 
-        // G7 — cutoff shift. Compute now; log the decision. Connector-side
-        // wire of ShipmentRequestDTO.shipDateOverride is a follow-up
-        // (PR-D2) — every connector calls LabelDates.today(tz) which needs
-        // an override param. For this PR we surface the decision on
-        // OrderTracking.dispatchNextBusinessDay so the FE toast reflects it.
-        if (cutoffShiftService != null) {
-            try {
-                Long warehouseIdForCutoff = null; // resolved later at persist; safe to pass null
-                CutoffShiftService.ShiftDecision decision = cutoffShiftService.resolveShipDate(
-                        req.getSource(), carrier, warehouseIdForCutoff,
-                        clientRepository.findByClientCodeIgnoreCase(
-                                        req.getClientCode() == null ? "" : req.getClientCode())
-                                .map(com.multiship.backend.model.Client::getTimezone).orElse(null),
-                        java.time.LocalDateTime.now(java.time.ZoneOffset.UTC));
-                if (decision.shifted()) {
-                    log.info("G7 cutoff shift for order {}: {}", orderNo, decision.reason());
-                }
-            } catch (Exception cutoffFail) {
-                log.warn("G7 cutoff computation failed for order {}: {}", orderNo, cutoffFail.getMessage());
-            }
-        }
+        // G7 — cutoff shift was computed above (before ShipmentRequestDTO
+        // build) and threaded via shipmentRequest.shipDateOverride.
+        // Connectors consume it via LabelDates.today(tz, override).
 
         // V96 / G6 — derive the canonical NDS ERP ship-via and stash it on
         // the Order. Falls back to req.stdReplacementErpCode when the FE

@@ -1565,7 +1565,8 @@ public class DhlConnector implements CarrierConnector {
         ed.put("invoice", Map.of(
                 "number", firstNonBlank(request.getReferenceNumber(), "INV-" + System.currentTimeMillis()),
                 // F6-E — invoice date follows the shipper's local calendar day.
-                "date", com.multiship.backend.util.LabelDates.today(request.getShipperTimezone())
+                "date", com.multiship.backend.util.LabelDates.today(
+                        request.getShipperTimezone(), request.getShipDateOverride())
                         .format(DateTimeFormatter.ISO_LOCAL_DATE)));
         ed.put("exportReason", mapExportReason(intl.getReasonForExport()));
 

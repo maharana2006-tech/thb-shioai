@@ -2182,7 +2182,8 @@ public class FedExConnector implements CarrierConnector {
         // date; SLA counters (Ground business-day math, Express AM/PM
         // deadlines) all key off it. Use the shipper's local day, not UTC.
         requestedShipment.put("shipDatestamp",
-                com.multiship.backend.util.LabelDates.today(request.getShipperTimezone()).toString());
+                com.multiship.backend.util.LabelDates.today(
+                        request.getShipperTimezone(), request.getShipDateOverride()).toString());
         requestedShipment.put("serviceType", request.getServiceType());
         requestedShipment.put("packagingType", request.getPackageType());
         // FDX-H2 — pickupType from the resolver (account default →
