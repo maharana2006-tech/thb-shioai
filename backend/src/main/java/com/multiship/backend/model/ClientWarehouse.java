@@ -29,6 +29,7 @@ import java.time.LocalDateTime;
  * service picks the default (this row where isDefault=true).
  */
 @Entity
+@jakarta.persistence.EntityListeners(ImportRevalidationListener.class)
 @Table(name = "client_warehouse",
         uniqueConstraints = @UniqueConstraint(name = "uq_client_warehouse_client_wh",
                 columnNames = {"client_code", "warehouse_id"}),

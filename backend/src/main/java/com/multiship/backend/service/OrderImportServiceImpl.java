@@ -4131,13 +4131,32 @@ public class OrderImportServiceImpl implements OrderImportService {
             throw new ImportBatchStateException(409, "Validate all is already running for this import — wait for it to finish.");
         }
         try {
-            return validateAllRowsLocked(id);
+            return validateAllRowsLocked(id, true);
         } finally {
             validatingBatchIds.remove(id);
         }
     }
 
-    private com.multiship.backend.dto.ImportBatchDTO validateAllRowsLocked(Long id) {
+    /** An error only UPS gave (Validate all): "serviceType — UPS doesn't offer …", "currency — UPS needs …". */
+    private static final java.util.regex.Pattern UPS_ANSWER =
+            java.util.regex.Pattern.compile("^\\w+ — UPS (doesn't|couldn't|needs|refused) ");
+
+    /**
+     * Check a saved import again after settings it depends on changed (a client
+     * added, an account or ship via mapping edited) — the app's own checks only.
+     * UPS isn't asked: its last answers (errors and route confirmations) stay
+     * until the next Validate all. Skipped while a Validate all runs on it.
+     */
+    public void recheckInBackground(Long id) {
+        if (importBatchRepository == null || id == null || !validatingBatchIds.add(id)) return;
+        try {
+            validateAllRowsLocked(id, false);
+        } finally {
+            validatingBatchIds.remove(id);
+        }
+    }
+
+    private com.multiship.backend.dto.ImportBatchDTO validateAllRowsLocked(Long id, boolean askUps) {
         com.multiship.backend.model.ImportBatch batch = importBatchRepository.findById(id).orElse(null);
         if (batch == null) return null;
 
@@ -4151,15 +4170,33 @@ public class OrderImportServiceImpl implements OrderImportService {
         // Tenant match — enforce access control
         requireMatch(firstClientCode(rows));
 
+        // What UPS said last time, kept when this check doesn't ask it again.
+        Map<Integer, List<String>> upsErrors = new java.util.HashMap<>();
+        Map<Integer, String> upsNotes = new java.util.HashMap<>();
+        if (!askUps) {
+            for (OrderImportRowDTO r : rows) {
+                upsNotes.put(r.getRowNumber(), r.getCarrierNote());
+                upsErrors.put(r.getRowNumber(), (r.getErrors() == null ? List.<String>of() : r.getErrors()).stream()
+                        .filter(e -> e != null && UPS_ANSWER.matcher(e).find()).toList());
+            }
+        }
+
         // Re-validate all rows
-        log.info("Validating all {} rows in batch {}", rows.size(), id);
+        log.info("Validating all {} rows in batch {}{}", rows.size(), id, askUps ? "" : " (settings changed)");
         validate(rows, !isApiSource(batch.getSource()));
 
         // UPS Time-in-Transit lane check for UPS rows. Dedup by (warehouse,
         // destZip, service) so a 5k-row batch fires a handful of API calls,
         // not thousands. TiT unreachable on a UPS row → NEEDS_FIX per operator
         // spec (label would 400 later anyway); non-UPS rows unaffected.
-        applyUpsTitLaneCheck(rows);
+        if (askUps) {
+            applyUpsTitLaneCheck(rows);
+        } else {
+            for (OrderImportRowDTO r : rows) {
+                for (String e : upsErrors.getOrDefault(r.getRowNumber(), List.of())) addError(r, e);
+                if (r.getErrors() == null || r.getErrors().isEmpty()) r.setCarrierNote(upsNotes.get(r.getRowNumber()));
+            }
+        }
 
         // Update errors/warnings in import_batch_row for WMS/API batches
         boolean isWmsOrApi = batch.getSource() != null &&

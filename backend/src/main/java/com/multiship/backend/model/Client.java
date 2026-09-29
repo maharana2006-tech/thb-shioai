@@ -31,6 +31,7 @@ import java.time.LocalDateTime;
  * addresses become their ship-from with no migration.
  */
 @Entity
+@jakarta.persistence.EntityListeners(ImportRevalidationListener.class)
 @Table(name = "clients")
 @Data
 @Builder

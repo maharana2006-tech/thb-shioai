@@ -58,6 +58,17 @@ public interface ImportBatchRepository extends JpaRepository<ImportBatch, Long>,
      *  numeric {@link ImportBatch#getId() id} never leaves the server. */
     Optional<ImportBatch> findBySlug(String slug);
 
+    /** Imports a settings change can alter: live, not generating, not fully labelled. */
+    @Query("select b.id from ImportBatch b where b.deletedAt is null "
+            + "and (b.status is null or b.status not in ('IN_PROGRESS', 'COMPLETE')) order by b.id")
+    List<Long> findIdsToRecheck();
+
+    /** The same, for these clients' imports (upper-case client codes). */
+    @Query("select b.id from ImportBatch b where b.deletedAt is null "
+            + "and (b.status is null or b.status not in ('IN_PROGRESS', 'COMPLETE')) "
+            + "and upper(b.clientCode) in :clients order by b.id")
+    List<Long> findIdsToRecheckForClients(@Param("clients") java.util.Collection<String> clients);
+
     /** Soft-deleted imports, newest first — the Trash view. */
     List<ImportBatch> findAllByDeletedAtIsNotNullOrderByIdDesc();
 

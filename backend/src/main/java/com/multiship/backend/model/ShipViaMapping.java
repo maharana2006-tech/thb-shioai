@@ -33,6 +33,7 @@ import java.time.LocalDateTime;
  * (Table name kept from the original single-mapping version.)
  */
 @Entity
+@jakarta.persistence.EntityListeners(ImportRevalidationListener.class)
 @Table(name = "shipvia_service_mapping",
         indexes = {
                 @Index(name = "idx_shipvia_rule_code", columnList = "shipvia_cd"),
