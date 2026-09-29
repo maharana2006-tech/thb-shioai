@@ -15,6 +15,15 @@ export const navIcons: Record<string, ReactNode> = {
       <path d="M10 2.5v4m0 0-1.75-1.75M10 6.5l1.75-1.75" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   ),
+  // A house with a parcel at its door — D2C, orders shipped straight to the consumer.
+  d2c: (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-[18px] w-[18px]" aria-hidden="true">
+      <path d="M2.75 9 10 3.25 17.25 9" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M4.5 7.75v8.5h11v-8.5" strokeLinejoin="round" />
+      <path d="M7.75 12h4.5v4.25h-4.5V12Z" strokeLinejoin="round" />
+      <path d="M10 12v1.75" strokeLinecap="round" />
+    </svg>
+  ),
   orders: (
     <svg viewBox="0 0 20 20" fill="currentColor" className="h-[18px] w-[18px]" aria-hidden="true">
       <path d="M4 4h12v3H4V4Zm0 4.5h12V16H4V8.5Zm2 1.5v1.5h4V10H6Z" />
