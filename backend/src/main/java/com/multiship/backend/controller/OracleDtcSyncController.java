@@ -36,7 +36,7 @@ public class OracleDtcSyncController {
      * @param tenantId optional tenant filter
      * @return sync result with counts
      */
-    @PreAuthorize("permitAll()")
+    @PreAuthorize("hasRole('ADMIN')")
     @PostMapping("/sync/oracle")
     public ResponseEntity<ApiResponse<Map<String, Object>>> syncOracleDtcOrders(
             @RequestParam(value = "tenantId", defaultValue = "") String tenantId) {
@@ -67,7 +67,7 @@ public class OracleDtcSyncController {
      * @param tenantId tenant code
      * @return count of pending orders
      */
-    @PreAuthorize("permitAll()")
+    @PreAuthorize("hasRole('ADMIN')")
     @GetMapping("/pending-count")
     public ResponseEntity<ApiResponse<Map<String, Object>>> getPendingCount(
             @RequestParam String tenantId) {
