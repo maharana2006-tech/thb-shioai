@@ -113,11 +113,9 @@ public class PasswordService {
                 .build();
         resetRepo.save(row);
 
-        // TODO wire to SMTP before enabling in prod — the default MailSender
-        // impl is LoggingMailSender which INFO-logs the token. That's fine
-        // for dev but must be swapped for a real SmtpMailSender in prod
-        // (see MailSender javadoc). The invite flow lives with the same
-        // caveat; this endpoint inherits it.
+        // MailSender falls back to INFO-logging the token when no mail
+        // provider is configured at /settings/mail (A4.1). Configure a
+        // provider before enabling reset in prod.
         String link = resetLinkBaseUrl + "?token=" + plaintext;
         mailSender.send(user.getEmail(),
                 "Password reset request",

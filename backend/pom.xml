@@ -47,6 +47,15 @@
 			<artifactId>spring-boot-starter-web</artifactId>
 		</dependency>
 
+		<!-- A4.1 — JavaMailSenderImpl + jakarta.mail for SmtpMailProvider.
+		     Autoconfig only kicks in when spring.mail.host is set (we don't
+		     set it; the SmtpMailProvider builds a sender per-send from DB
+		     config). Inert until an admin activates an SMTP row. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-mail</artifactId>
+		</dependency>
+
 		<dependency>
 			<groupId>org.postgresql</groupId>
 			<artifactId>postgresql</artifactId>
