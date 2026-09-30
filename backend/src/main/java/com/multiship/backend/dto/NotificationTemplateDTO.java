@@ -17,6 +17,8 @@ public class NotificationTemplateDTO {
     private String description;
     private String subjectTemplate;
     private String bodyTemplate;
+    /** A4.5 — when true, users can opt out from /settings/notifications. */
+    private boolean optOutAllowed;
     private LocalDateTime updatedAt;
     private String updatedBy;
 }

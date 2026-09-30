@@ -95,6 +95,9 @@ export const settingsPaths = {
    *  template / status / recipient; retry any row. Backing table
    *  notification_delivery_log. */
   notificationDeliveryLog: '/settings/notification-delivery-log',
+  /** A4.5 — self-serve per-user opt-out for alert-style email templates.
+   *  Any authenticated role; transactional templates are never listed. */
+  mySubscriptions: '/settings/notifications',
   /** G7 — (source × carrier × warehouse) cutoff-shift rule matrix +
    *  global holiday list. Shipments past cutoff or on a holiday get
    *  their SHIP_DATE pushed to next working day. ADMIN role only. */
@@ -185,6 +188,9 @@ export const settingsNavItems: Array<{
   { key: 'notification-delivery-log', label: 'Email Delivery Log', to: settingsPaths.notificationDeliveryLog, iconKey: 'dashboard',
     description: 'Every outbound-email dispatch — SENT and FAILED — with template, provider, latency, and error. Retry any row to re-send the same message.',
     roles: ['ADMIN'] },
+  { key: 'my-subscriptions', label: 'Notifications', to: settingsPaths.mySubscriptions, iconKey: 'mail',
+    description: 'Turn off alert-style emails you don\'t want to receive. Transactional emails (invite, verify, password reset) always send.',
+    roles: ['ADMIN', 'USER'] },
   { key: 'cutoffs', label: 'Cutoffs & Holidays', to: settingsPaths.cutoffs, iconKey: 'dashboard',
     description: 'Per (source × carrier × warehouse) cutoff rules + global holiday list. Shipments past cutoff or on a holiday get their SHIP_DATE pushed to the next working day.',
     roles: ['ADMIN'] },

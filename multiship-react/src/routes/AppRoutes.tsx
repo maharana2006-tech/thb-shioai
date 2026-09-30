@@ -94,6 +94,8 @@ const MailSettingsPage = lazy(() => import('../components/MailSettingsPage'))
 const NotificationTemplatesPage = lazy(() => import('../components/NotificationTemplatesPage'))
 // A4.4 — dispatch journal with filter + retry.
 const NotificationDeliveryLogPage = lazy(() => import('../components/NotificationDeliveryLogPage'))
+// A4.5 — self-serve per-user email opt-out toggles.
+const MyNotificationSubscriptionsPage = lazy(() => import('../components/MyNotificationSubscriptionsPage'))
 const CutoffsPage = lazy(() => import('../components/CutoffsPage'))
 // PR-F4 Agent-2 — USPS Direct admin dashboard (queue + quota + retries + reconciliation).
 const UspsDirectDashboardPage = lazy(() => import('../pages/UspsDirectDashboardPage'))
@@ -184,6 +186,10 @@ export default function AppRoutes() {
                     sidebar shows the entry. */}
                 <Route path="carriers" element={<CarrierPage />} />
                 <Route path="audit-log" element={<AuditLogPage />} />
+                {/* A4.5 — self-serve email opt-outs. USER + ADMIN so any
+                    authenticated user can silence alert-style templates
+                    without touching admin surfaces. */}
+                <Route path="notifications" element={<MyNotificationSubscriptionsPage />} />
                 <Route element={<RequireRole roles={['ADMIN']} />}>
                   <Route path="api-keys" element={<ApiKeysPage />} />
                   <Route path="api-reference" element={<ApiReferencePage />} />

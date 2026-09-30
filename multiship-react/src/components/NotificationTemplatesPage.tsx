@@ -103,6 +103,7 @@ export default function NotificationTemplatesPage() {
         description: draft.description ?? undefined,
         subjectTemplate: draft.subjectTemplate,
         bodyTemplate: draft.bodyTemplate,
+        optOutAllowed: draft.optOutAllowed,
       })
       notify.success('Template saved.')
       // Refresh list + keep selection.
@@ -159,6 +160,7 @@ export default function NotificationTemplatesPage() {
         description: '',
         subjectTemplate: '',
         bodyTemplate: '',
+        optOutAllowed: false,
         updatedAt: null,
         updatedBy: null,
       },
@@ -243,6 +245,22 @@ export default function NotificationTemplatesPage() {
                   onChange={(e) => setDraft({ ...draft, description: e.target.value })}
                   className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-1.5 text-[13px]"
                 />
+              </label>
+
+              <label className="mt-3 flex items-start gap-2 text-[12px] font-semibold text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={draft.optOutAllowed}
+                  onChange={(e) => setDraft({ ...draft, optOutAllowed: e.target.checked })}
+                  className="mt-0.5 h-4 w-4 rounded border-slate-400"
+                />
+                <span>
+                  Users can opt out
+                  <span className="ml-1 font-normal text-slate-500">
+                    — visible under /settings/notifications with an on/off toggle.
+                    Keep OFF for transactional events (invite, verify, password reset).
+                  </span>
+                </span>
               </label>
 
               <label className="mt-3 block text-[12px] font-semibold text-slate-700">

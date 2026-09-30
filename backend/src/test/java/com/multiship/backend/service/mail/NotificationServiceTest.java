@@ -1,7 +1,9 @@
 package com.multiship.backend.service.mail;
 
 import com.multiship.backend.model.NotificationTemplateEntity;
+import com.multiship.backend.model.User;
 import com.multiship.backend.repository.NotificationTemplateRepository;
+import com.multiship.backend.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -27,6 +29,8 @@ class NotificationServiceTest {
     private MailSender mailSender;
     private MailConfigService mailConfig;
     private NotificationDeliveryLogService deliveryLog;
+    private NotificationSubscriptionService subscriptions;
+    private UserRepository userRepository;
     private NotificationService service;
 
     @BeforeEach
@@ -35,8 +39,11 @@ class NotificationServiceTest {
         mailSender = mock(MailSender.class);
         mailConfig = mock(MailConfigService.class);
         deliveryLog = mock(NotificationDeliveryLogService.class);
+        subscriptions = mock(NotificationSubscriptionService.class);
+        userRepository = mock(UserRepository.class);
         when(mailConfig.activeProvider()).thenReturn(Optional.empty());
-        service = new NotificationService(repo, new TemplateRenderer(), mailSender, mailConfig, deliveryLog);
+        service = new NotificationService(repo, new TemplateRenderer(), mailSender, mailConfig,
+                deliveryLog, subscriptions, userRepository);
     }
 
     @Test
@@ -107,5 +114,82 @@ class NotificationServiceTest {
         when(repo.findById("BOGUS")).thenReturn(Optional.empty());
         assertThrows(TemplateNotFoundException.class,
                 () -> service.send("BOGUS", "x@ex", Map.of()));
+    }
+
+    /* ==================== A4.5 subscription gate ==================== */
+
+    @Test
+    void optOutAllowedTemplateSkipsWhenUserUnsubscribed() {
+        NotificationTemplateEntity tpl = new NotificationTemplateEntity();
+        tpl.setTemplateKey("OPS.LOW_FUNDS");
+        tpl.setSubjectTemplate("s");
+        tpl.setBodyTemplate("b");
+        tpl.setOptOutAllowed(true);
+        when(repo.findById("OPS.LOW_FUNDS")).thenReturn(Optional.of(tpl));
+
+        User user = new User();
+        user.setId(7L);
+        user.setEmail("alice@example.com");
+        when(userRepository.findByEmailIgnoreCase("alice@example.com")).thenReturn(Optional.of(user));
+        when(subscriptions.isSubscribed(7L, "OPS.LOW_FUNDS")).thenReturn(false);
+
+        service.send("OPS.LOW_FUNDS", "alice@example.com", Map.of());
+
+        verify(mailSender, never()).send(any(), any(), any());
+        verify(deliveryLog, never()).recordSent(any(), any(), any(), any(),
+                any(), any(), any(), any());
+    }
+
+    @Test
+    void optOutAllowedTemplateSendsWhenUserSubscribed() {
+        NotificationTemplateEntity tpl = new NotificationTemplateEntity();
+        tpl.setTemplateKey("OPS.LOW_FUNDS");
+        tpl.setSubjectTemplate("s");
+        tpl.setBodyTemplate("b");
+        tpl.setOptOutAllowed(true);
+        when(repo.findById("OPS.LOW_FUNDS")).thenReturn(Optional.of(tpl));
+
+        User user = new User();
+        user.setId(7L);
+        user.setEmail("alice@example.com");
+        when(userRepository.findByEmailIgnoreCase("alice@example.com")).thenReturn(Optional.of(user));
+        when(subscriptions.isSubscribed(7L, "OPS.LOW_FUNDS")).thenReturn(true);
+
+        service.send("OPS.LOW_FUNDS", "alice@example.com", Map.of());
+
+        verify(mailSender).send("alice@example.com", "s", "b");
+    }
+
+    @Test
+    void transactionalTemplateAlwaysSendsIgnoringSubscription() {
+        NotificationTemplateEntity tpl = new NotificationTemplateEntity();
+        tpl.setTemplateKey("AUTH.PASSWORD_RESET");
+        tpl.setSubjectTemplate("s");
+        tpl.setBodyTemplate("b");
+        tpl.setOptOutAllowed(false);  // transactional
+        when(repo.findById("AUTH.PASSWORD_RESET")).thenReturn(Optional.of(tpl));
+
+        service.send("AUTH.PASSWORD_RESET", "alice@example.com", Map.of());
+
+        verify(mailSender).send("alice@example.com", "s", "b");
+        verify(subscriptions, never()).isSubscribed(any(), any());
+        verify(userRepository, never()).findByEmailIgnoreCase(any());
+    }
+
+    @Test
+    void optOutAllowedTemplateSendsWhenRecipientIsNotAKnownUser() {
+        NotificationTemplateEntity tpl = new NotificationTemplateEntity();
+        tpl.setTemplateKey("OPS.LOW_FUNDS");
+        tpl.setSubjectTemplate("s");
+        tpl.setBodyTemplate("b");
+        tpl.setOptOutAllowed(true);
+        when(repo.findById("OPS.LOW_FUNDS")).thenReturn(Optional.of(tpl));
+        when(userRepository.findByEmailIgnoreCase("noone@example.com")).thenReturn(Optional.empty());
+
+        service.send("OPS.LOW_FUNDS", "noone@example.com", Map.of());
+
+        // No user row → can't opt out → send anyway.
+        verify(mailSender).send("noone@example.com", "s", "b");
+        verify(subscriptions, never()).isSubscribed(any(), any());
     }
 }

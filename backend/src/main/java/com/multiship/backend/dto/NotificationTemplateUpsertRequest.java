@@ -20,4 +20,8 @@ public class NotificationTemplateUpsertRequest {
 
     @NotBlank(message = "bodyTemplate required")
     private String bodyTemplate;
+
+    /** A4.5 — defaults to false (transactional). Set true for alert-style
+     *  templates that users can silence from /settings/notifications. */
+    private boolean optOutAllowed;
 }

@@ -73,6 +73,7 @@ public class AdminNotificationTemplateController {
         row.setDescription(req.getDescription());
         row.setSubjectTemplate(req.getSubjectTemplate());
         row.setBodyTemplate(req.getBodyTemplate());
+        row.setOptOutAllowed(req.isOptOutAllowed());
         row.setUpdatedAt(LocalDateTime.now(ZoneOffset.UTC));
         row.setUpdatedBy(auth == null ? "system" : auth.getName());
         return ok(toDto(repo.save(row)), "Template saved");
@@ -133,6 +134,7 @@ public class AdminNotificationTemplateController {
                 .description(row.getDescription())
                 .subjectTemplate(row.getSubjectTemplate())
                 .bodyTemplate(row.getBodyTemplate())
+                .optOutAllowed(row.isOptOutAllowed())
                 .updatedAt(row.getUpdatedAt())
                 .updatedBy(row.getUpdatedBy())
                 .build();

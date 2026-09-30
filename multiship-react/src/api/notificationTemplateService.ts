@@ -10,6 +10,8 @@ export interface NotificationTemplate {
   description: string | null
   subjectTemplate: string
   bodyTemplate: string
+  /** A4.5 — when true, users can silence this from /settings/notifications. */
+  optOutAllowed: boolean
   updatedAt: string | null
   updatedBy: string | null
 }
@@ -18,6 +20,7 @@ export interface NotificationTemplateUpsertRequest {
   description?: string
   subjectTemplate: string
   bodyTemplate: string
+  optOutAllowed?: boolean
 }
 
 export interface NotificationTemplatePreviewRequest {

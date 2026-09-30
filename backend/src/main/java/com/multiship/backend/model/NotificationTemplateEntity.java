@@ -38,6 +38,15 @@ public class NotificationTemplateEntity {
     @Column(name = "body_template", nullable = false, columnDefinition = "TEXT")
     private String bodyTemplate;
 
+    /**
+     * A4.5 — when TRUE, users can opt out via /settings/notifications and
+     * {@link com.multiship.backend.service.mail.NotificationService} skips
+     * their sends. Transactional keys (invite, password reset) stay FALSE
+     * — you can't opt out of a password reset for yourself.
+     */
+    @Column(name = "opt_out_allowed", nullable = false)
+    private boolean optOutAllowed;
+
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 
