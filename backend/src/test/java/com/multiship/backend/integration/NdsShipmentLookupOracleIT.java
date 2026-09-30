@@ -214,6 +214,52 @@ class NdsShipmentLookupOracleIT extends AbstractIntegrationTest {
         assertTrue(service.lookup(".YNONESUCH").isEmpty());
     }
 
+    /**
+     * C-audit Group E1 — locks in the per-package shape a {@code .Y}
+     * batch lookup produces, so B6 (thread batchId + packages through
+     * the label path) can assemble the writeback payload correctly.
+     *
+     * <p>Both sibling containers of batch B42 must surface as separate
+     * Package rows, each carrying the sibling's containerNo + orderNos.
+     * When B6 lands, {@code NdsShipmentOracleWriter#writeShipment} will
+     * iterate these rows and fire one {@code UPDATE CLIPPER} per row —
+     * the writer's per-package loop is already tested in
+     * {@code NdsShipmentOracleWriterTest#writeShipmentUpdatesClipperOncePerPackage}.
+     */
+    @Test
+    void batchLookupPopulatesPerContainerPackageRows() {
+        seedContainer("ACME", "123456", "1", "77778", 1.5);
+        jdbc.update(
+                "INSERT INTO TB_BILLABLE_CONTAINERS (BATCH_ID, CONTAINER_ID, ORDER_NO, "
+                        + "ORDER_SUFFIX, FF_SCHEMA, PRIMARY_CLIENT_CODE) VALUES (?, ?, ?, ?, ?, ?)",
+                "B99", "77777", "123456", "1", "FF", "ACME");
+        jdbc.update(
+                "INSERT INTO TB_BILLABLE_CONTAINERS (BATCH_ID, CONTAINER_ID, ORDER_NO, "
+                        + "ORDER_SUFFIX, FF_SCHEMA, PRIMARY_CLIENT_CODE) VALUES (?, ?, ?, ?, ?, ?)",
+                "B99", "77778", "123456", "1", "FF", "ACME");
+
+        NdsShipmentPrefill p = service.lookup(".YB99").orElseThrow();
+        assertEquals("B99", p.batchId());
+        assertEquals(2, p.packages().size());
+
+        // Both containers land as distinct Package rows with distinct
+        // containerNo values — the identifier B6 must key on for CLIPPER.
+        var containerNos = p.packages().stream()
+                .map(NdsShipmentPrefill.Package::containerNo)
+                .sorted()
+                .toList();
+        assertEquals(java.util.List.of("77777", "77778"), containerNos);
+
+        // Every package carries at least one orderNo — the collection B6
+        // will feed to WritebackPackagePayload.orderNos so the writer's
+        // per-sibling loop can hit each order's CLIPPER row.
+        for (NdsShipmentPrefill.Package pkg : p.packages()) {
+            assertNotNull(pkg.orderNos());
+            assertFalse(pkg.orderNos().isEmpty(),
+                    "package " + pkg.containerNo() + " must expose its parent orderNos");
+        }
+    }
+
     // ═════════════════ notify email defaulting ══════════════════════
 
     @Test

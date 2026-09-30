@@ -145,6 +145,48 @@ class NdsShipmentOracleWriterTest {
         assertTrue(foundClipper, "expected an UPDATE CLIPPER call");
     }
 
+    /**
+     * C-audit Group E2 — a {@code .X} scan that expands to N containers
+     * under UPS MPS fans out one CLIPPER row per container. Verify the
+     * writer fires {@code UPDATE CLIPPER} once per package with the
+     * package's own containerNo — never collapses to a single write
+     * that would leave sibling boxes with the previous scan's tracking
+     * number.
+     */
+    @Test
+    void writeShipmentUpdatesClipperOncePerPackage() {
+        WritebackPayload payload = outboundBase()
+                .packages(List.of(
+                        new WritebackPackagePayload(1, "77", List.of(77L), List.of(933786),
+                                0, null, "LB", null),
+                        new WritebackPackagePayload(2, "78", List.of(78L), List.of(933786),
+                                0, null, "LB", null),
+                        new WritebackPackagePayload(3, "79", List.of(79L), List.of(933786),
+                                0, null, "LB", null)))
+                .build();
+
+        writer.writeShipment(payload);
+
+        ArgumentCaptor<String> sqls = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<SqlParameterSource> params = ArgumentCaptor.forClass(SqlParameterSource.class);
+        verify(clientJdbc, atLeastOnce()).update(sqls.capture(), params.capture());
+
+        java.util.List<String> clipperContainerNos = new java.util.ArrayList<>();
+        for (int i = 0; i < sqls.getAllValues().size(); i++) {
+            String sql = sqls.getAllValues().get(i);
+            if (!sql.contains("UPDATE CLIPPER")) continue;
+            MapSqlParameterSource m = (MapSqlParameterSource) params.getAllValues().get(i);
+            clipperContainerNos.add(String.valueOf(m.getValue("containerNo")));
+        }
+        // One CLIPPER UPDATE per package, distinct containerNo each — no
+        // collapse to a single write that would clobber sibling boxes.
+        assertEquals(3, clipperContainerNos.size(),
+                "expected one UPDATE CLIPPER per package, got " + clipperContainerNos);
+        assertEquals(java.util.List.of("77", "78", "79"),
+                clipperContainerNos.stream().sorted().toList(),
+                "each package should carry its own containerNo in the WHERE clause");
+    }
+
     @Test
     void writeShipmentInsertsTbManualShipmentWithErrorModeM() {
         writer.writeShipment(outboundBase().build());
