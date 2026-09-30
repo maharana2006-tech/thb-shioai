@@ -92,6 +92,8 @@ const ExternalSystemsPage = lazy(() => import('../components/ExternalSystemsPage
 const MailSettingsPage = lazy(() => import('../components/MailSettingsPage'))
 // A4.2 — Handlebars templates for outbound-email events.
 const NotificationTemplatesPage = lazy(() => import('../components/NotificationTemplatesPage'))
+// A4.4 — dispatch journal with filter + retry.
+const NotificationDeliveryLogPage = lazy(() => import('../components/NotificationDeliveryLogPage'))
 const CutoffsPage = lazy(() => import('../components/CutoffsPage'))
 // PR-F4 Agent-2 — USPS Direct admin dashboard (queue + quota + retries + reconciliation).
 const UspsDirectDashboardPage = lazy(() => import('../pages/UspsDirectDashboardPage'))
@@ -193,6 +195,7 @@ export default function AppRoutes() {
                   <Route path="external-systems" element={<ExternalSystemsPage />} />
                   <Route path="mail" element={<MailSettingsPage />} />
                   <Route path="notification-templates" element={<NotificationTemplatesPage />} />
+                  <Route path="notification-delivery-log" element={<NotificationDeliveryLogPage />} />
                   <Route path="cutoffs" element={<CutoffsPage />} />
                   {/* PR-F4 Agent-2 — USPS Direct admin dashboard: composite
                       view of queue depth, quota headroom, retry buckets and
