@@ -188,8 +188,15 @@ public class NdsShipmentOracleWriter {
                     errors.add("TB_MANUAL_SHIPMENT[" + errorMode + "]: " + e.getMessage());
                 }
             }
-            // ERROR_MODE=Q — additional audit row when the operator entered a note.
-            if (p.note() != null && !p.note().isBlank()) {
+            // B8 — ERROR_MODE=Q is ShipX's Quick-Ship / BackOrder audit trail
+            // (12c-nds-manual-list.md step 1 table). shioai's Manual / Bulk /
+            // API / WMS / DTC flows shouldn't write it: the M / R row already
+            // covers the audit and doubling up made NDS reports count twice.
+            // When Quick-Ship / BackOrder lands, this gate flips on.
+            boolean isQuickShipFamily = "QUICK_SHIP".equalsIgnoreCase(p.source())
+                    || "BACKORDER".equalsIgnoreCase(p.source())
+                    || "BACK_ORDER".equalsIgnoreCase(p.source());
+            if (isQuickShipFamily && p.note() != null && !p.note().isBlank()) {
                 try {
                     int rows = insertTbManualShipment(prodJdbc, p, "Q", orderNoText, p.note());
                     if (rows > 0) touched.add("TB_MANUAL_SHIPMENT[Q]×" + rows);

@@ -178,7 +178,7 @@ class NdsShipmentLookupOracleIT extends AbstractIntegrationTest {
     void directLookupInternationalPopulatesItems() {
         jdbc.update("UPDATE OEHEAD SET SHIPTO_COUNTRY_CD = 'GB' WHERE ORDER_NO = ?", "123456");
         jdbc.update(
-                "INSERT INTO OE_INTL_ITEMS (ORDER_NO, ORDER_SUFFIX, LINE_NO, DESCRIPTION, "
+                "INSERT INTO TB_CLIPPER_ITEM_DETL (ORDER_NO, ORDER_SUFFIX, LINE_NO, DESCRIPTION, "
                         + "QUANTITY, UNIT_VALUE, CURRENCY_CD, HS_CODE, COUNTRY_OF_ORIGIN, UNIT_WEIGHT_LB) "
                         + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 "123456", "1", 1, "Widget", 3, 12.50, "USD", "8471.30", "US", 0.5);
@@ -282,7 +282,7 @@ class NdsShipmentLookupOracleIT extends AbstractIntegrationTest {
     // ═════════════════ helpers ═════════════════════════════════════
 
     private void wipeAllTables() {
-        for (String t : new String[]{"OE_SEND_TO", "OE_INTL_ITEMS", "OE_SHIP_CONTAINER",
+        for (String t : new String[]{"OE_SEND_TO", "TB_CLIPPER_ITEM_DETL", "OE_SHIP_CONTAINER",
                 "OEHEAD", "SHIPVIA", "TB_SHIP_CONTAINER", "TB_BILLABLE_CONTAINERS"}) {
             jdbc.update("DELETE FROM " + t);
         }

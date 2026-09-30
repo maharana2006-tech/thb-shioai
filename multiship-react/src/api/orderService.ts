@@ -607,6 +607,15 @@ export interface ManualShipmentPayload {
    *  Null / omitted → backend synthesises a single-package list from the
    *  top-level weight/length/width/height fields (existing behavior). */
   packages?: PackageDetail[]
+  /** B6 — NDS batch id when the shipment originated from a `.Y` scan.
+   *  Null on non-NDS or `.X` shipments. Threaded to `NdsShipmentOracleWriter`
+   *  so CLIPPER updates fan across every sibling order in the batch. */
+  ndsBatchId?: string | null
+  /** B6 — per-container package rows from `NdsShipmentPrefill.packages`.
+   *  Null on non-NDS shipments. Each row carries `containerNo` + `orderNos`
+   *  so the writer keys its CLIPPER update on the real NDS row identifier
+   *  instead of the FE's package sequence. */
+  ndsPackages?: NdsPackagePayload[]
   /** Sprint 35 — signature at delivery. NONE | INDIRECT | DIRECT | ADULT.
    *  Null / omitted → carrier default (usually no signature on domestic
    *  ground, indirect on air). */
@@ -661,6 +670,19 @@ export interface SplitRequiredPayload {
     trackingCount: number
     note: string
   }[]
+}
+
+/** B6 — per-container NDS package row that flows through to the writeback.
+ *  Only populated when the shipment originated from a `.X` / `.Y` NDS scan;
+ *  manual entry leaves the array off entirely. */
+export interface NdsPackagePayload {
+  sequence: number
+  containerNo: string | null
+  containerIds: number[]
+  orderNos: number[]
+  orderSuffix: number | null
+  weight: number | null
+  weightUnit: string
 }
 
 /** One box in a multi-package shipment — mirrors backend PackageDetailDTO. */

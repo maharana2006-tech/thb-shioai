@@ -2548,6 +2548,26 @@ export default function NewShipmentPage() {
         ...(exportDeclarationReference ? { exportDeclarationReference } : {}),
       } : {}),
       ...(isInternational && override ? { importer: override.importer, broker: override.broker } : {}),
+      // B6 — thread the NDS batch id + per-container package rows through
+      // to the writeback so NdsShipmentOracleWriter can fan CLIPPER updates
+      // across every sibling order in the batch. Only when the shipment
+      // came from an NDS scan; manual entry leaves both null.
+      ...(ndsQueue[ndsActiveIdx]?.batchId
+          ? { ndsBatchId: ndsQueue[ndsActiveIdx]!.batchId }
+          : {}),
+      ...(ndsQueue[ndsActiveIdx]?.packages?.length
+          ? {
+              ndsPackages: ndsQueue[ndsActiveIdx]!.packages.map((pk, idx) => ({
+                sequence: idx + 1,
+                containerNo: pk.containerNo ?? null,
+                containerIds: pk.containerIds ?? [],
+                orderNos: pk.orderNos ?? [],
+                orderSuffix: pk.orderSuffix ?? null,
+                weight: pk.weight != null ? Number(pk.weight) : null,
+                weightUnit: 'LB',
+              })),
+            }
+          : {}),
     }
     return payload
   }

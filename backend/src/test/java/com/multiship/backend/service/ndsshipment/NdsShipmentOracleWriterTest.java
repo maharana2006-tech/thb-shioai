@@ -222,17 +222,36 @@ class NdsShipmentOracleWriterTest {
         assertEquals("REN -933786", m.getValue("orderNo"));
     }
 
+    /** B8 — the Q row is Quick-Ship / BackOrder specific. Manual flows write M only. */
     @Test
-    void writeShipmentWithNote_InsertsAdditionalQRow() {
-        writer.writeShipment(outboundBase().note("Fragile — leave at back door").build());
+    void writeShipmentManualWithNote_WritesMOnlyNoQRow() {
+        writer.writeShipment(outboundBase()
+                .source("MANUAL")
+                .note("Fragile — leave at back door").build());
+
+        ArgumentCaptor<String> sqls = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<SqlParameterSource> params = ArgumentCaptor.forClass(SqlParameterSource.class);
+        verify(prodJdbc, atLeastOnce()).update(sqls.capture(), params.capture());
+        long qRows = params.getAllValues().stream()
+                .map(s -> ((MapSqlParameterSource) s).getValue("errorMode"))
+                .filter("Q"::equals).count();
+        assertEquals(0, qRows,
+                "Manual flow with a note must NOT double-write a Q row — M row already covers the audit");
+    }
+
+    /** B8 — the Q row STILL writes for Quick-Ship / BackOrder shipments with a note. */
+    @Test
+    void writeShipmentQuickShipWithNote_InsertsAdditionalQRow() {
+        writer.writeShipment(outboundBase()
+                .source("QUICK_SHIP")
+                .note("Fragile — leave at back door").build());
 
         ArgumentCaptor<String> sqls = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<SqlParameterSource> params = ArgumentCaptor.forClass(SqlParameterSource.class);
         verify(prodJdbc, atLeast(2)).update(sqls.capture(), params.capture());
         long inserts = sqls.getAllValues().stream()
                 .filter(s -> s.contains("INSERT INTO TB_MANUAL_SHIPMENT")).count();
-        assertEquals(2, inserts, "expected M row + Q row");
-        // The two rows differ by ERROR_MODE.
+        assertEquals(2, inserts, "expected M row + Q row on Quick-Ship");
         boolean sawM = false, sawQ = false;
         for (SqlParameterSource s : params.getAllValues()) {
             MapSqlParameterSource m = (MapSqlParameterSource) s;
@@ -274,6 +293,7 @@ class NdsShipmentOracleWriterTest {
                 .shipmentMode("RETURN")
                 .carrierCode("FEDEX")
                 .carrierDisplay("FedEx")
+                .source("QUICK_SHIP")       // B8 — Q row only writes on Quick-Ship / BackOrder
                 .note("Damaged on arrival")
                 .build());
         ArgumentCaptor<SqlParameterSource> params = ArgumentCaptor.forClass(SqlParameterSource.class);
@@ -362,6 +382,41 @@ class NdsShipmentOracleWriterTest {
         // the ack detail acknowledges the fallback attempt via touched/errors.
         // Structural check: CLIPPER attempted 0 rows, TB_MANUAL_SHIPMENT still inserted.
         verify(prodJdbc, atLeastOnce()).update(anyString(), any(SqlParameterSource.class));
+    }
+
+    /**
+     * B10 — cancelling a return must leave the 'R' row void-stamped. The
+     * writer's clear path is keyed on TRACKING, which is unique across
+     * both directions, so voiding a return-tracking hits its R row and
+     * only its R row. This test writes a return then clears it and
+     * asserts the composite behavior.
+     */
+    @Test
+    void clearShipmentStampsVoidYnOnReturnRow() {
+        // Step 1: write a return (produces R row with tracking=1Z999).
+        writer.writeShipment(outboundBase().shipmentMode("RETURN").build());
+        // Step 2: cancel it — same tracking targets the same row.
+        WritebackClearRequest req = new WritebackClearRequest(
+                "nds-default", "1Z999", 933786, "ACME",
+                List.of(77L), List.of(933786), Map.of(),
+                true, false, true, false, false, false,
+                null, null);
+        writer.clearShipment(req, true, false, true, false, false, false);
+
+        ArgumentCaptor<String> sqls = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<SqlParameterSource> params = ArgumentCaptor.forClass(SqlParameterSource.class);
+        verify(prodJdbc, atLeastOnce()).update(sqls.capture(), params.capture());
+        boolean foundVoidStamp = false;
+        for (int i = 0; i < sqls.getAllValues().size(); i++) {
+            String sql = sqls.getAllValues().get(i);
+            if (!sql.contains("UPDATE TB_MANUAL_SHIPMENT SET VOID_YN")) continue;
+            MapSqlParameterSource m = (MapSqlParameterSource) params.getAllValues().get(i);
+            if ("Y".equals(m.getValue("voidYn")) && "1Z999".equals(m.getValue("tracking"))) {
+                foundVoidStamp = true;
+            }
+        }
+        assertTrue(foundVoidStamp,
+                "clear path must UPDATE TB_MANUAL_SHIPMENT SET VOID_YN='Y' keyed on the return's tracking");
     }
 
     @Test

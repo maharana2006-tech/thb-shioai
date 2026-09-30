@@ -277,6 +277,40 @@ public class ManualShipmentRequest {
     @JsonIgnore
     private String internalAuditActor;
 
+    /**
+     * B6 — the NDS batch id when the shipment came from a {@code .Y}
+     * batch scan on /orders/new. Null on non-batch shipments. Passed
+     * through to the writeback so {@code NdsShipmentOracleWriter} can
+     * fan its CLIPPER UPDATE across every sibling order in the batch.
+     */
+    private String ndsBatchId;
+
+    /**
+     * B6 — the per-container package rows returned by the NDS prefill
+     * ({@code NdsShipmentPrefill.Package}). Null on non-NDS shipments.
+     * Carries the real {@code containerNo} + {@code orderNos} the
+     * writer needs to key each CLIPPER row on — otherwise the writer's
+     * fan-out defaults to package-sequence and misses siblings.
+     */
+    private List<NdsPackage> ndsPackages;
+
+    /**
+     * B6 — projection of {@code NdsShipmentPrefill.Package} that only
+     * carries what the writer needs. Names match
+     * {@link com.multiship.backend.service.externalsystems.writeback.WritebackPackagePayload}
+     * so mapping is one-to-one.
+     */
+    @Data
+    public static class NdsPackage {
+        private Integer sequence;
+        private String containerNo;
+        private List<Long> containerIds;
+        private List<Integer> orderNos;
+        private Integer orderSuffix;
+        private BigDecimal weight;
+        private String weightUnit;
+    }
+
     @Data
     public static class Address {
         private String name;

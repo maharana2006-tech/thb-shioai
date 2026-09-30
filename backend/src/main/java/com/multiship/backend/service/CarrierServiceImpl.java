@@ -2000,6 +2000,10 @@ public class CarrierServiceImpl implements CarrierService {
                     .reverseErpCode(req.getClientCode().trim().toUpperCase(), service.getId());
         }
         order.setNdsResolvedShipviaCd(resolvedErpForOrder);
+        // B7 — persist the NDS batch id so a later cancel or admin view can
+        // find every sibling order in the batch. Only populated when the
+        // request came from a `.Y` scan (B6 threading).
+        order.setBillableBatchId(req.getNdsBatchId());
         order.setShipName(to.getName());
         order.setShipAttn(to.getCompany());
         order.setShipAddr1(to.getAddressLine1());
@@ -2365,6 +2369,12 @@ public class CarrierServiceImpl implements CarrierService {
             if (writebackDispatcher != null) {
                 com.multiship.backend.service.externalsystems.writeback.WritebackPayload.ShipTo shipTo =
                         buildWritebackShipTo(req);
+                // B6 — thread the NDS batch id + per-container package rows
+                // when the shipment came from a .Y or multi-package .X scan.
+                // Null on non-NDS shipments; the writer skips the batch loop
+                // in that case. Consumed by NdsShipmentOracleWriter fan-out.
+                java.util.List<com.multiship.backend.service.externalsystems.writeback.WritebackPackagePayload> ndsPkgs =
+                        buildNdsWritebackPackages(req);
                 writebackDispatcher.dispatchOnGenerate(
                         com.multiship.backend.service.externalsystems.writeback.WritebackPayload.builder()
                                 .clientCode(req.getClientCode())
@@ -2384,6 +2394,8 @@ public class CarrierServiceImpl implements CarrierService {
                                 .serviceDescription(service != null ? service.getName() : null)
                                 .thirdPartyAccount(req.getDutiesAccount())
                                 .shipTo(shipTo)
+                                .batchId(req.getNdsBatchId())
+                                .packages(ndsPkgs)
                                 // V96 — persisted canonical ERP wins over the request field
                                 // so regenerate / async paths pick it up too.
                                 .stdReplacementErpCode(firstNonBlank(
@@ -2412,6 +2424,35 @@ public class CarrierServiceImpl implements CarrierService {
             case "DHL" -> "DHL";
             default -> code.trim();
         };
+    }
+
+    /**
+     * B6 — map the NDS prefill's per-container package rows to the writer's
+     * WritebackPackagePayload shape. Null / empty when the request wasn't
+     * populated from an NDS scan; the writer skips its per-container loop
+     * in that case and the single-package label path stays unchanged.
+     */
+    private static java.util.List<com.multiship.backend.service.externalsystems.writeback.WritebackPackagePayload>
+            buildNdsWritebackPackages(com.multiship.backend.dto.ManualShipmentRequest req) {
+        if (req == null || req.getNdsPackages() == null || req.getNdsPackages().isEmpty()) {
+            return null;
+        }
+        java.util.List<com.multiship.backend.service.externalsystems.writeback.WritebackPackagePayload> out =
+                new java.util.ArrayList<>(req.getNdsPackages().size());
+        int seq = 1;
+        for (com.multiship.backend.dto.ManualShipmentRequest.NdsPackage p : req.getNdsPackages()) {
+            out.add(new com.multiship.backend.service.externalsystems.writeback.WritebackPackagePayload(
+                    p.getSequence() != null ? p.getSequence() : seq,
+                    p.getContainerNo(),
+                    p.getContainerIds(),
+                    p.getOrderNos(),
+                    p.getOrderSuffix(),
+                    p.getWeight(),
+                    p.getWeightUnit(),
+                    null));
+            seq++;
+        }
+        return out;
     }
 
     /** Flatten the manual request's recipient block into the WritebackPayload sub-record. */

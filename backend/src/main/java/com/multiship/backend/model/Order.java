@@ -43,6 +43,16 @@ public class Order {
     @Column(name = "nds_resolved_shipvia_cd", length = 20)
     private String ndsResolvedShipviaCd;
 
+    /**
+     * B7 — NDS billable batch id when the shipment came from a `.Y` scan.
+     * Populated by CarrierServiceImpl.generateManualLabel from
+     * {@code ManualShipmentRequest.ndsBatchId}. Null on non-batch
+     * shipments. Enables sibling-order lookup on cancel and future
+     * "batch is in flight" admin views.
+     */
+    @Column(name = "billable_batch_id", length = 50)
+    private String billableBatchId;
+
     @Column(name = "ship_addr1")
     private String shipAddr1;
 
