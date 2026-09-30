@@ -2,6 +2,7 @@ package com.multiship.backend.config;
 
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
 import org.springframework.core.env.Profiles;
@@ -46,6 +47,10 @@ public class CryptoService {
     private final Environment env;
     private final SecureRandom rng = new SecureRandom();
 
+    // @Autowired required because a second (test-only) constructor exists —
+    // Spring can't otherwise disambiguate which ctor to use for injection.
+    // Precedent: G3b hotfix acb49066 (feedback_component_ctor_overload_needs_autowired).
+    @Autowired
     public CryptoService(@Value("${secrets.encryption-key:}") String base64Key,
                          Environment env) {
         this.keyBytes = decodeKeyIfPresent(base64Key);
