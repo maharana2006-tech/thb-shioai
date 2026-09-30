@@ -3,7 +3,7 @@ package com.multiship.backend.service;
 import com.multiship.backend.config.AccessScopePolicy;
 import com.multiship.backend.config.JwtAuthenticationFilter;
 import com.multiship.backend.repository.UserInviteRepository;
-import com.multiship.backend.service.mail.MailSender;
+import com.multiship.backend.service.mail.NotificationService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.access.AccessDeniedException;
@@ -39,7 +39,7 @@ class UserInviteServiceTest {
 
         UserInviteService service = new UserInviteService(
                 mock(UserInviteRepository.class),
-                mock(MailSender.class),
+                mock(NotificationService.class),
                 new TenantScopeEnforcer(new AccessScopePolicy(true)));
 
         assertThrows(AccessDeniedException.class,

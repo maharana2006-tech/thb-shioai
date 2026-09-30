@@ -86,6 +86,11 @@ export const settingsPaths = {
    *  Postmark in A4.3). Ops picks the active provider + sends a test
    *  email without a redeploy. Backing tables mail_provider + mail_config. */
   mail: '/settings/mail',
+  /** A4.2 — Handlebars templates for every outbound email event
+   *  (AUTH.VERIFY_EMAIL, AUTH.PASSWORD_RESET, AUTH.USER_INVITE today;
+   *  OPS.* / BILLING.* come as new send-sites are wired). Backing table
+   *  notification_template. Live preview against a JSON var map. */
+  notificationTemplates: '/settings/notification-templates',
   /** G7 — (source × carrier × warehouse) cutoff-shift rule matrix +
    *  global holiday list. Shipments past cutoff or on a holiday get
    *  their SHIP_DATE pushed to next working day. ADMIN role only. */
@@ -169,6 +174,9 @@ export const settingsNavItems: Array<{
     roles: ['ADMIN'] },
   { key: 'mail', label: 'Mail', to: settingsPaths.mail, iconKey: 'mail',
     description: 'Outbound email provider — pick SMTP today (SendGrid/SES/Postmark coming), edit host/port/creds, and send a live test message. Config lives in mail_provider + mail_config.',
+    roles: ['ADMIN'] },
+  { key: 'notification-templates', label: 'Email Templates', to: settingsPaths.notificationTemplates, iconKey: 'apiDocs',
+    description: 'Handlebars templates for every outbound email event (invite, verify, password reset, and future alerts). Live preview against a JSON var map before saving.',
     roles: ['ADMIN'] },
   { key: 'cutoffs', label: 'Cutoffs & Holidays', to: settingsPaths.cutoffs, iconKey: 'dashboard',
     description: 'Per (source × carrier × warehouse) cutoff rules + global holiday list. Shipments past cutoff or on a holiday get their SHIP_DATE pushed to the next working day.',

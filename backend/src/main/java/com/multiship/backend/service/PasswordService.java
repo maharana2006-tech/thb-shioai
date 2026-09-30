@@ -7,7 +7,7 @@ import com.multiship.backend.model.PasswordResetToken;
 import com.multiship.backend.model.User;
 import com.multiship.backend.repository.PasswordResetTokenRepository;
 import com.multiship.backend.repository.UserRepository;
-import com.multiship.backend.service.mail.MailSender;
+import com.multiship.backend.service.mail.NotificationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -34,8 +34,9 @@ import java.util.Optional;
  *   <li><b>forgot</b> — unauthenticated. Mints a 32-byte one-shot token,
  *       stores its SHA-256 hash + 30-min expiry in
  *       {@code password_reset_tokens}, dispatches the plaintext via
- *       {@link MailSender}. Returns unconditionally so an attacker cannot
- *       enumerate registered emails.</li>
+ *       {@link NotificationService} using template {@code AUTH.PASSWORD_RESET}.
+ *       Returns unconditionally so an attacker cannot enumerate registered
+ *       emails.</li>
  *   <li><b>reset</b> — unauthenticated. Consumes the token (single-use:
  *       row deleted on success), updates the password, bumps
  *       {@code token_version}. Rejects expired + already-used tokens.</li>
@@ -58,7 +59,7 @@ public class PasswordService {
     private final PasswordResetTokenRepository resetRepo;
     private final PasswordEncoder passwordEncoder;
     private final TokenRevocationService tokenRevocation;
-    private final MailSender mailSender;
+    private final NotificationService notifications;
 
     @Value("${app.password-reset.link-base-url:http://localhost:5173/reset-password}")
     private String resetLinkBaseUrl;
@@ -113,17 +114,12 @@ public class PasswordService {
                 .build();
         resetRepo.save(row);
 
-        // MailSender falls back to INFO-logging the token when no mail
-        // provider is configured at /settings/mail (A4.1). Configure a
-        // provider before enabling reset in prod.
+        // Template AUTH.PASSWORD_RESET; if no mail provider is active at
+        // /settings/mail the send is INFO-logged rather than dropped.
         String link = resetLinkBaseUrl + "?token=" + plaintext;
-        mailSender.send(user.getEmail(),
-                "Password reset request",
-                "A password reset was requested for your Multiship account.\n\n"
-                        + "Reset your password (link expires in "
-                        + RESET_TOKEN_TTL_MINUTES + " minutes):\n"
-                        + link + "\n\n"
-                        + "If you didn't request this, ignore this email — your password will not change.");
+        notifications.send("AUTH.PASSWORD_RESET", user.getEmail(), java.util.Map.of(
+                "resetLink", link,
+                "ttlMinutes", RESET_TOKEN_TTL_MINUTES));
     }
 
     /**

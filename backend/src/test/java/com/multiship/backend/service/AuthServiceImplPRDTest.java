@@ -9,7 +9,7 @@ import com.multiship.backend.model.User;
 import com.multiship.backend.model.UserInvite;
 import com.multiship.backend.repository.ClientRepository;
 import com.multiship.backend.repository.UserRepository;
-import com.multiship.backend.service.mail.MailSender;
+import com.multiship.backend.service.mail.NotificationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -47,7 +47,7 @@ class AuthServiceImplPRDTest {
     private SignupRateLimiter rateLimiter;
     private UserInviteService inviteService;
     private ClientRepository clientRepository;
-    private MailSender mailSender;
+    private NotificationService notifications;
     private AuthServiceImpl service;
 
     @BeforeEach
@@ -59,7 +59,7 @@ class AuthServiceImplPRDTest {
         rateLimiter = mock(SignupRateLimiter.class);
         inviteService = mock(UserInviteService.class);
         clientRepository = mock(ClientRepository.class);
-        mailSender = mock(MailSender.class);
+        notifications = mock(NotificationService.class);
         service = new AuthServiceImpl();
 
         injectField("userRepository", userRepository);
@@ -69,7 +69,7 @@ class AuthServiceImplPRDTest {
         injectField("rateLimiter", rateLimiter);
         injectField("inviteService", inviteService);
         injectField("clientRepository", clientRepository);
-        injectField("mailSender", mailSender);
+        injectField("notifications", notifications);
         injectField("emailVerifyTtlHours", 24);
         // Sprint 51 T2 finding #6 — loginUser now checks the auth-failure
         // limiter before running bcrypt. Inject a mock that always allows.
@@ -175,8 +175,9 @@ class AuthServiceImplPRDTest {
         assertNotNull(u.getEmailVerifyExpiresAt());
         // Rate-limit records the successful attempt so the cap counts probes + real signups.
         verify(rateLimiter).record("new@example.com", "1.2.3.4", true);
-        // Verification email fired.
-        verify(mailSender).send(anyString(), anyString(), anyString());
+        // Verification email fired via the AUTH.VERIFY_EMAIL template.
+        verify(notifications).send(org.mockito.ArgumentMatchers.eq("AUTH.VERIFY_EMAIL"),
+                anyString(), org.mockito.ArgumentMatchers.any());
     }
 
     /* -------- login rejects unverified accounts -------- */
