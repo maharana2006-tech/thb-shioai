@@ -1939,6 +1939,57 @@ public class StampsConnector implements CarrierConnector {
      * <p>{@code -local-*} tokens short-circuit to NOT_SUPPORTED matching
      * the sibling-parity guard every other SERA branch uses.
      */
+
+    /**
+     * D5 — Stamps SERA {@code POST /balance/add-funds}. Purchases {@code amount}
+     * of postage. {@code Idempotency-Key} header prevents double-buy under
+     * concurrent retries — use {@link com.multiship.backend.service.carriers.usps.queue.IdempotencyKeys#forStampsTopup(long, String)}
+     * to mint one keyed on (accountId, hour bucket).
+     *
+     * @return same {@link BalanceResult} shape as {@link #getAccountBalance};
+     *         status "OK" carries the post-top-up available balance.
+     *         Any HTTP or parse error surfaces as status "ERROR" with the
+     *         raw response body attached — callers alert on that.
+     */
+    public BalanceResult addFundsSera(String accessToken, java.math.BigDecimal amount,
+                                      String currency, String idempotencyKey, String environment) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new BalanceResult(CARRIER_CODE, null, null, currency, "NOT_SUPPORTED",
+                    "SERA add-funds needs live credentials; account is on a fallback token.", null);
+        }
+        if (amount == null || amount.signum() <= 0) {
+            return new BalanceResult(CARRIER_CODE, null, null, currency, "ERROR",
+                    "SERA add-funds: amount must be positive.", null);
+        }
+        String cur = currency == null || currency.isBlank() ? "usd" : currency.trim().toLowerCase(java.util.Locale.ROOT);
+        String baseUrl = seraApiBaseUrl(environment);
+        java.util.Map<String, Object> body = java.util.Map.of("amount", amount, "currency", cur);
+        try {
+            String response = HttpClients.newBuilder().baseUrl(baseUrl + "/balance/add-funds").build()
+                    .post()
+                    .accept(MediaType.APPLICATION_JSON)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .header("Idempotency-Key", idempotencyKey == null ? "" : idempotencyKey)
+                    .body(body)
+                    .retrieve()
+                    .body(String.class);
+            // Response echoes the new balance in the same shape as GET /balance.
+            return parseSeraBalanceResponse(response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            int status = ex.getStatusCode().value();
+            String err = extractSeraError(ex.getResponseBodyAsString());
+            log.warn("Stamps SERA /balance/add-funds rejected (HTTP {}): {}", status, err);
+            return new BalanceResult(CARRIER_CODE, null, null, cur, "ERROR",
+                    "SERA add-funds rejected (HTTP " + status + "): " + err,
+                    ex.getResponseBodyAsString());
+        } catch (Exception ex) {
+            log.warn("Stamps SERA /balance/add-funds call failed: {}", ex.getMessage());
+            return new BalanceResult(CARRIER_CODE, null, null, cur, "ERROR",
+                    "SERA add-funds call failed: " + ex.getMessage(), null);
+        }
+    }
+
     BalanceResult getAccountBalanceSera(String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new BalanceResult(
