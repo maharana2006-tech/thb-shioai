@@ -1,16 +1,16 @@
 /**
  * A4.1 — /settings/mail admin page.
  *
- * Ops picks the active mail provider, edits its config, and sends a live
- * test email. Secret values never come back from the server (redacted to
- * "•••"); editing a secret field with a blank input leaves it unchanged,
- * a new value replaces it.
- *
- * Later phases: A4.2 templates + backfill; A4.3 SendGrid/SES/Postmark
- * connectors; A4.4 delivery log; A4.5 per-user × per-template subs.
+ * Sections:
+ *  1. Active-provider banner (green/amber).
+ *  2. Provider list. Add/Edit both open MailProviderFormModal (themed).
+ *  3. Notification templates — quick access to the notification_template
+ *     rows without leaving the mail page. Deep edits still happen on
+ *     /settings/notification-templates.
+ *  4. Test-send — sends via the active provider through the delivery log.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useOutletContext } from 'react-router-dom'
+import { useNavigate, useOutletContext } from 'react-router-dom'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import { notify } from '../utils/notify'
 import {
@@ -18,45 +18,44 @@ import {
   type MailKindDescriptor,
   type MailProviderSummary,
 } from '../api/mailProviderService'
-
-const REDACTED = '•••'
+import {
+  notificationTemplateService,
+  type NotificationTemplate,
+} from '../api/notificationTemplateService'
+import MailProviderFormModal from './mail/MailProviderFormModal'
 
 export default function MailSettingsPage() {
   const outlet = useOutletContext<SettingsOutletContext>()
+  const navigate = useNavigate()
 
   const [kinds, setKinds] = useState<MailKindDescriptor[]>([])
   const [providers, setProviders] = useState<MailProviderSummary[]>([])
+  const [templates, setTemplates] = useState<NotificationTemplate[]>([])
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
 
-  // Provider being edited. `null` = "add new provider" form; a number = existing id.
-  const [selectedId, setSelectedId] = useState<number | 'new' | null>(null)
-  const [draftKind, setDraftKind] = useState<string>('')
-  const [draftDisplayName, setDraftDisplayName] = useState<string>('')
-  const [draftConfig, setDraftConfig] = useState<Record<string, string>>({})
+  // Modal state.
+  const [modalOpen, setModalOpen] = useState(false)
+  const [editing, setEditing] = useState<MailProviderSummary | null>(null)
 
-  // Test-send form
+  // Test-send form.
   const [testTo, setTestTo] = useState('')
   const [testSubject, setTestSubject] = useState('')
   const [testBody, setTestBody] = useState('')
 
   const activeProvider = useMemo(() => providers.find((p) => p.active) ?? null, [providers])
 
-  const kindDescriptor = useMemo(
-    () => kinds.find((k) => k.kind === draftKind) ?? null,
-    [kinds, draftKind],
-  )
-
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [kindsResp, listResp] = await Promise.all([
+      const [kindsResp, listResp, templatesResp] = await Promise.all([
         mailProviderService.listKinds(),
         mailProviderService.list(),
+        notificationTemplateService.list().catch(() => [] as NotificationTemplate[]),
       ])
       setKinds(kindsResp)
       setProviders(listResp)
+      setTemplates(templatesResp)
     } catch (err) {
       notify.apiError(err, 'Failed to load mail providers.')
     } finally {
@@ -73,55 +72,28 @@ export default function MailSettingsPage() {
     return () => outlet.registerRefresh(null)
   }, [outlet, load])
 
-  /** Populate the edit form when the operator picks an existing row. */
-  const openExisting = (p: MailProviderSummary) => {
-    setSelectedId(p.id)
-    setDraftKind(p.kind)
-    setDraftDisplayName(p.displayName)
-    setDraftConfig({ ...p.config })
+  const openAddModal = () => {
+    setEditing(null)
+    setModalOpen(true)
+  }
+  const openEditModal = (p: MailProviderSummary) => {
+    setEditing(p)
+    setModalOpen(true)
   }
 
-  const openNew = () => {
-    setSelectedId('new')
-    setDraftKind(kinds[0]?.kind ?? '')
-    setDraftDisplayName('')
-    setDraftConfig({})
-  }
-
-  const cancelEdit = () => {
-    setSelectedId(null)
-    setDraftKind('')
-    setDraftDisplayName('')
-    setDraftConfig({})
-  }
-
-  const save = async () => {
-    if (!draftKind || !draftDisplayName.trim()) {
-      notify.error('Kind and display name are required.')
-      return
-    }
-    // Never resend the redacted marker back to the server — it would
-    // overwrite a real secret with the placeholder.
-    const cleanConfig: Record<string, string> = {}
-    for (const [k, v] of Object.entries(draftConfig)) {
-      if (v === REDACTED) continue
-      cleanConfig[k] = v
-    }
-    setSaving(true)
+  const submitForm = async (payload: {
+    id?: number
+    kind: string
+    displayName: string
+    config: Record<string, string>
+  }) => {
     try {
-      const saved = await mailProviderService.upsert({
-        id: selectedId === 'new' ? undefined : (selectedId as number),
-        kind: draftKind,
-        displayName: draftDisplayName.trim(),
-        config: cleanConfig,
-      })
-      notify.success('Provider saved.')
+      await mailProviderService.upsert(payload)
+      notify.success(payload.id ? 'Provider updated.' : 'Provider added.')
       await load()
-      openExisting(saved)
     } catch (err) {
       notify.apiError(err, 'Failed to save provider.')
-    } finally {
-      setSaving(false)
+      throw err
     }
   }
 
@@ -140,7 +112,6 @@ export default function MailSettingsPage() {
     try {
       await mailProviderService.remove(id)
       notify.success('Provider deleted.')
-      if (selectedId === id) cancelEdit()
       await load()
     } catch (err) {
       notify.apiError(err, 'Failed to delete.')
@@ -162,7 +133,7 @@ export default function MailSettingsPage() {
       if (res.delivered) {
         notify.success(`Test email sent to ${testTo.trim()}.`)
       } else {
-        notify.error('Test send returned but reported not delivered — check the delivery log (coming in A4.4).')
+        notify.error('Test send returned but reported not delivered — check the delivery log.')
       }
     } catch (err) {
       notify.apiError(err, 'Test send failed.')
@@ -173,13 +144,13 @@ export default function MailSettingsPage() {
 
   return (
     <div className="space-y-4">
-      {/* Header banner: active provider at a glance. */}
-      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      {/* Active-provider banner. */}
+      <section className="rounded-xl border border-[#e3d9c4] bg-white p-4 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <div className="text-[13px] font-semibold text-slate-800">Active mail provider</div>
+            <div className="text-[13px] font-semibold text-[#1f150c]">Active mail provider</div>
             {activeProvider ? (
-              <div className="mt-1 text-[13px] text-slate-600">
+              <div className="mt-1 text-[13px] text-[#5a4526]">
                 <span className="rounded bg-emerald-100 px-2 py-0.5 font-semibold text-emerald-800">
                   {activeProvider.kind}
                 </span>{' '}
@@ -187,33 +158,35 @@ export default function MailSettingsPage() {
               </div>
             ) : (
               <div className="mt-1 text-[13px] text-amber-700">
-                No provider active — outbound emails are logged only. Configure one below.
+                No provider active — outbound emails are logged only. Add + activate one below.
               </div>
             )}
           </div>
           <button
             type="button"
-            onClick={openNew}
-            className="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-slate-700"
+            onClick={openAddModal}
+            className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-4 py-2 text-[12px] font-semibold text-white transition hover:bg-[#412d15]"
           >
             + Add provider
           </button>
         </div>
       </section>
 
-      {/* Provider list */}
-      <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div className="border-b border-slate-200 px-4 py-2 text-[13px] font-semibold text-slate-800">
+      {/* Provider list. */}
+      <section className="rounded-xl border border-[#e3d9c4] bg-white shadow-sm">
+        <div className="border-b border-[#eee6d6] px-4 py-2 text-[13px] font-semibold text-[#1f150c]">
           Registered providers
         </div>
         {loading ? (
-          <div className="px-4 py-6 text-center text-[13px] text-slate-500">Loading…</div>
+          <div className="px-4 py-6 text-center text-[13px] text-[#5a4526]">Loading…</div>
         ) : providers.length === 0 ? (
-          <div className="px-4 py-6 text-center text-[13px] text-slate-500">No providers yet.</div>
+          <div className="px-4 py-6 text-center text-[13px] text-[#5a4526]">
+            No providers yet. Click <span className="font-semibold">Add provider</span> above.
+          </div>
         ) : (
           <table className="w-full text-[13px]">
             <thead>
-              <tr className="text-left text-slate-500">
+              <tr className="text-left text-[#5a4526]">
                 <th className="px-4 py-2 font-semibold">Kind</th>
                 <th className="px-4 py-2 font-semibold">Name</th>
                 <th className="px-4 py-2 font-semibold">Active</th>
@@ -223,25 +196,25 @@ export default function MailSettingsPage() {
             </thead>
             <tbody>
               {providers.map((p) => (
-                <tr key={p.id} className="border-t border-slate-100">
-                  <td className="px-4 py-2 font-semibold text-slate-800">{p.kind}</td>
-                  <td className="px-4 py-2 text-slate-700">{p.displayName}</td>
+                <tr key={p.id} className="border-t border-[#eee6d6]">
+                  <td className="px-4 py-2 font-semibold text-[#1f150c]">{p.kind}</td>
+                  <td className="px-4 py-2 text-[#5a4526]">{p.displayName}</td>
                   <td className="px-4 py-2">
                     {p.active ? (
                       <span className="rounded bg-emerald-100 px-2 py-0.5 text-emerald-800">Active</span>
                     ) : (
-                      <span className="rounded bg-slate-100 px-2 py-0.5 text-slate-600">Inactive</span>
+                      <span className="rounded bg-[#faf7f0] px-2 py-0.5 text-[#5a4526]">Inactive</span>
                     )}
                   </td>
-                  <td className="px-4 py-2 text-slate-500">
+                  <td className="px-4 py-2 text-[#b6a684]">
                     {p.updatedAt ? new Date(p.updatedAt).toLocaleString() : '—'}
                   </td>
                   <td className="px-4 py-2 text-right">
                     <div className="inline-flex gap-2">
                       <button
                         type="button"
-                        onClick={() => openExisting(p)}
-                        className="rounded border border-slate-300 px-2 py-1 text-[12px] hover:bg-slate-50"
+                        onClick={() => openEditModal(p)}
+                        className="rounded border border-[#e3d9c4] px-2 py-1 text-[12px] text-[#5a4526] hover:bg-[#faf7f0]"
                       >
                         Edit
                       </button>
@@ -270,169 +243,121 @@ export default function MailSettingsPage() {
         )}
       </section>
 
-      {/* Editor */}
-      {selectedId !== null && (
-        <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="mb-3 flex items-center justify-between">
-            <div className="text-[13px] font-semibold text-slate-800">
-              {selectedId === 'new' ? 'New provider' : `Edit provider #${selectedId}`}
-            </div>
-            <button
-              type="button"
-              onClick={cancelEdit}
-              className="text-[12px] text-slate-500 hover:text-slate-800"
-            >
-              Cancel
-            </button>
+      {/* Notification templates — quick view. */}
+      <section className="rounded-xl border border-[#e3d9c4] bg-white shadow-sm">
+        <div className="flex items-center justify-between border-b border-[#eee6d6] px-4 py-2">
+          <div className="text-[13px] font-semibold text-[#1f150c]">Notification templates</div>
+          <button
+            type="button"
+            onClick={() => navigate('/settings/notification-templates')}
+            className="text-[11.5px] font-semibold text-[#412d15] hover:underline"
+          >
+            Open editor →
+          </button>
+        </div>
+        {loading ? (
+          <div className="px-4 py-4 text-center text-[13px] text-[#5a4526]">Loading…</div>
+        ) : templates.length === 0 ? (
+          <div className="px-4 py-4 text-center text-[13px] text-[#5a4526]">
+            No templates yet. Templates seed with the first backend boot after V103.
           </div>
+        ) : (
+          <ul className="divide-y divide-[#eee6d6] text-[13px]">
+            {templates.map((t) => (
+              <li key={t.templateKey} className="flex items-center justify-between gap-4 px-4 py-2">
+                <div className="min-w-0">
+                  <div className="font-mono text-[12px] font-semibold text-[#1f150c]">{t.templateKey}</div>
+                  {t.description && (
+                    <div className="mt-0.5 truncate text-[11.5px] text-[#5a4526]" title={t.description}>
+                      {t.description}
+                    </div>
+                  )}
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  {t.optOutAllowed ? (
+                    <span className="rounded bg-amber-100 px-2 py-0.5 text-[10px] text-amber-800">opt-out</span>
+                  ) : (
+                    <span className="rounded bg-[#faf7f0] px-2 py-0.5 text-[10px] text-[#5a4526]">
+                      transactional
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      navigate(`/settings/notification-templates?key=${encodeURIComponent(t.templateKey)}`)
+                    }
+                    className="rounded border border-[#e3d9c4] px-2 py-1 text-[11.5px] text-[#5a4526] hover:bg-[#faf7f0]"
+                  >
+                    Edit
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <label className="text-[12px] font-semibold text-slate-700">
-              Kind
-              <select
-                value={draftKind}
-                onChange={(e) => {
-                  setDraftKind(e.target.value)
-                  setDraftConfig({})  // config keys are kind-specific
-                }}
-                disabled={selectedId !== 'new'}
-                className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-[13px]"
-              >
-                {kinds.map((k) => (
-                  <option key={k.kind} value={k.kind}>
-                    {k.kind}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="text-[12px] font-semibold text-slate-700">
-              Display name
-              <input
-                value={draftDisplayName}
-                onChange={(e) => setDraftDisplayName(e.target.value)}
-                className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-[13px]"
-                placeholder="e.g. Company SMTP"
-              />
-            </label>
-          </div>
-
-          {kindDescriptor && (
-            <div className="mt-4 space-y-2">
-              <div className="text-[12px] font-semibold text-slate-700">Configuration</div>
-              {kindDescriptor.requiredKeys.map((key) => (
-                <ConfigInput
-                  key={key}
-                  keyName={key}
-                  isSecret={false}
-                  value={draftConfig[key] ?? ''}
-                  onChange={(v) => setDraftConfig({ ...draftConfig, [key]: v })}
-                />
-              ))}
-              {kindDescriptor.secretKeys.map((key) => (
-                <ConfigInput
-                  key={key}
-                  keyName={key}
-                  isSecret={true}
-                  value={draftConfig[key] ?? ''}
-                  onChange={(v) => setDraftConfig({ ...draftConfig, [key]: v })}
-                />
-              ))}
-            </div>
-          )}
-
-          <div className="mt-4 flex justify-end">
-            <button
-              type="button"
-              onClick={() => void save()}
-              disabled={saving}
-              className="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-4 py-2 text-[12px] font-semibold text-white hover:bg-slate-700 disabled:opacity-60"
-            >
-              {saving ? 'Saving…' : 'Save'}
-            </button>
-          </div>
-        </section>
-      )}
-
-      {/* Test send */}
-      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="mb-3 text-[13px] font-semibold text-slate-800">
+      {/* Test send. */}
+      <section className="rounded-xl border border-[#e3d9c4] bg-white p-4 shadow-sm">
+        <div className="mb-3 text-[13px] font-semibold text-[#1f150c]">
           Send test email — via the currently active provider
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <label className="text-[12px] font-semibold text-slate-700">
+          <label className="text-[12px] font-semibold text-[#5a4526]">
             To
             <input
               type="email"
               value={testTo}
               onChange={(e) => setTestTo(e.target.value)}
               placeholder="you@example.com"
-              className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-[13px]"
+              className="mt-1 block w-full rounded-lg border border-[#e3d9c4] px-3 py-2 text-[13px] text-[#1f150c]"
             />
           </label>
-          <label className="text-[12px] font-semibold text-slate-700 sm:col-span-2">
+          <label className="text-[12px] font-semibold text-[#5a4526] sm:col-span-2">
             Subject (optional)
             <input
               value={testSubject}
               onChange={(e) => setTestSubject(e.target.value)}
               placeholder="shioai mail test"
-              className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-[13px]"
+              className="mt-1 block w-full rounded-lg border border-[#e3d9c4] px-3 py-2 text-[13px] text-[#1f150c]"
             />
           </label>
         </div>
-        <label className="mt-3 block text-[12px] font-semibold text-slate-700">
+        <label className="mt-3 block text-[12px] font-semibold text-[#5a4526]">
           Body (optional)
           <textarea
             value={testBody}
             onChange={(e) => setTestBody(e.target.value)}
             rows={3}
             placeholder="This is a test message sent from /settings/mail — you can delete it."
-            className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-[13px]"
+            className="mt-1 block w-full rounded-lg border border-[#e3d9c4] px-3 py-2 text-[13px] text-[#1f150c]"
           />
         </label>
         <div className="mt-3 flex items-center justify-between">
-          <div className="text-[11px] text-slate-500">
+          <div className="text-[11px] text-[#5a4526]">
             {activeProvider
               ? `Will send via ${activeProvider.kind} — ${activeProvider.displayName}.`
-              : 'No active provider — configure one above first.'}
+              : 'No active provider — add + activate one above first.'}
           </div>
           <button
             type="button"
             onClick={() => void runTestSend()}
             disabled={testing || !activeProvider}
-            className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-4 py-2 text-[12px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+            className="inline-flex items-center gap-1 rounded-xl bg-emerald-600 px-4 py-2 text-[12px] font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-60"
           >
             {testing ? 'Sending…' : 'Send test'}
           </button>
         </div>
       </section>
-    </div>
-  )
-}
 
-function ConfigInput({
-  keyName,
-  isSecret,
-  value,
-  onChange,
-}: {
-  keyName: string
-  isSecret: boolean
-  value: string
-  onChange: (v: string) => void
-}) {
-  return (
-    <label className="grid grid-cols-[10rem_1fr] items-center gap-3 text-[12px]">
-      <span className="font-mono text-slate-600">
-        {keyName}
-        {isSecret && <span className="ml-1 rounded bg-amber-100 px-1 text-[10px] text-amber-800">secret</span>}
-      </span>
-      <input
-        type={isSecret ? 'password' : 'text'}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={isSecret && value === REDACTED ? 'unchanged — type to replace' : ''}
-        className="rounded-lg border border-slate-300 px-3 py-1.5 font-mono text-[12px]"
+      {/* Add/Edit modal. */}
+      <MailProviderFormModal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        initial={editing}
+        kinds={kinds}
+        onSubmit={submitForm}
       />
-    </label>
+    </div>
   )
 }

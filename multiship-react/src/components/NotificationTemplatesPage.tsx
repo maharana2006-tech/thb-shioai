@@ -6,7 +6,7 @@
  * against a JSON var map without sending. Save persists the edit.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useOutletContext } from 'react-router-dom'
+import { useOutletContext, useSearchParams } from 'react-router-dom'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import { notify } from '../utils/notify'
 import {
@@ -14,6 +14,7 @@ import {
   type NotificationTemplate,
   type NotificationTemplatePreviewResponse,
 } from '../api/notificationTemplateService'
+import Modal, { ModalActions } from './common/Modal'
 
 /** Reasonable starter var-maps per key so operators aren't hunting for
  *  variable names on first open. New template keys default to `{}`. */
@@ -31,10 +32,14 @@ const DEFAULT_VARS: Record<string, Record<string, unknown>> = {
 
 export default function NotificationTemplatesPage() {
   const outlet = useOutletContext<SettingsOutletContext>()
+  const [searchParams] = useSearchParams()
 
   const [templates, setTemplates] = useState<NotificationTemplate[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
+  // New-key modal state.
+  const [newModalOpen, setNewModalOpen] = useState(false)
+  const [newKeyInput, setNewKeyInput] = useState('')
   const [draft, setDraft] = useState<NotificationTemplate | null>(null)
   const [varsJson, setVarsJson] = useState('{}')
   const [preview, setPreview] = useState<NotificationTemplatePreviewResponse | null>(null)
@@ -46,8 +51,13 @@ export default function NotificationTemplatesPage() {
     try {
       const list = await notificationTemplateService.list()
       setTemplates(list)
-      // Keep selection if the key still exists; otherwise fall back to first.
-      if (selectedKey && !list.some((t) => t.templateKey === selectedKey)) {
+      // Deep-link precedence: ?key=X wins if present + resolvable.
+      // Then keep existing selection if still valid.
+      // Otherwise fall back to the first row.
+      const deepLink = searchParams.get('key')
+      if (deepLink && list.some((t) => t.templateKey === deepLink)) {
+        setSelectedKey(deepLink)
+      } else if (selectedKey && !list.some((t) => t.templateKey === selectedKey)) {
         setSelectedKey(list[0]?.templateKey ?? null)
       } else if (!selectedKey && list.length > 0) {
         setSelectedKey(list[0].templateKey)
@@ -57,7 +67,7 @@ export default function NotificationTemplatesPage() {
     } finally {
       setLoading(false)
     }
-  }, [selectedKey])
+  }, [selectedKey, searchParams])
 
   useEffect(() => {
     void load()
@@ -142,13 +152,20 @@ export default function NotificationTemplatesPage() {
     }
   }
 
-  const promptNewKey = async () => {
-    const key = window.prompt(
-      'New template key (uppercase dotted, e.g. OPS.LOW_FUNDS):',
-      'DOMAIN.EVENT',
-    )
-    if (!key) return
-    const normalized = key.trim().toUpperCase()
+  const openNewModal = () => {
+    setNewKeyInput('')
+    setNewModalOpen(true)
+  }
+  const confirmNewKey = () => {
+    const normalized = newKeyInput.trim().toUpperCase()
+    if (!normalized) {
+      notify.error('Template key is required.')
+      return
+    }
+    if (!/^[A-Z0-9._]+$/.test(normalized)) {
+      notify.error('Use uppercase letters, digits, dots and underscores only.')
+      return
+    }
     if (templates.some((t) => t.templateKey === normalized)) {
       notify.error('That key already exists.')
       return
@@ -166,6 +183,7 @@ export default function NotificationTemplatesPage() {
       },
     ])
     setSelectedKey(normalized)
+    setNewModalOpen(false)
   }
 
   const remove = async (key: string) => {
@@ -188,7 +206,7 @@ export default function NotificationTemplatesPage() {
           <span className="text-[12px] font-semibold text-slate-800">Templates</span>
           <button
             type="button"
-            onClick={() => void promptNewKey()}
+            onClick={openNewModal}
             title="New template key"
             className="rounded border border-slate-300 px-2 py-0.5 text-[11px] hover:bg-slate-50"
           >
@@ -344,6 +362,40 @@ export default function NotificationTemplatesPage() {
           </div>
         )}
       </section>
+
+      {/* New-key modal (replaces window.prompt). */}
+      <Modal
+        open={newModalOpen}
+        onClose={() => setNewModalOpen(false)}
+        title="New notification template"
+        subtitle="Key uses UPPERCASE.DOTTED convention (e.g. OPS.LOW_FUNDS)."
+        size="md"
+        footer={
+          <ModalActions
+            onCancel={() => setNewModalOpen(false)}
+            onConfirm={confirmNewKey}
+            confirmLabel="Create"
+          />
+        }
+      >
+        <label className="block text-[12px] font-semibold text-[#5a4526]">
+          Template key
+          <input
+            autoFocus
+            value={newKeyInput}
+            onChange={(e) => setNewKeyInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') confirmNewKey()
+            }}
+            placeholder="DOMAIN.EVENT"
+            className="mt-1 block w-full rounded-lg border border-[#e3d9c4] px-3 py-2 font-mono text-[13px] text-[#1f150c]"
+          />
+        </label>
+        <p className="mt-2 text-[11.5px] text-[#5a4526]">
+          After creating, fill in the subject + body templates on the right and click Save. Uppercase letters,
+          digits, dots and underscores only.
+        </p>
+      </Modal>
     </div>
   )
 }
