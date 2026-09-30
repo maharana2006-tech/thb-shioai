@@ -91,4 +91,68 @@ public interface DtcOrderRepository extends JpaRepository<DtcOrder, Long> {
         WHERE d.tenantId = :tenantId
     """)
     long countByTenantId(@Param("tenantId") String tenantId);
+
+    // ═════════════ DTC History (V102) — batch summary + lines ═════════════
+
+    /**
+     * Distinct (tenant, batch) keys for the Dtcal-style summary page, with
+     * optional tenant and ship-date filters. Empty strings mean "no filter".
+     */
+    @Query(value = """
+        SELECT DISTINCT new com.multiship.backend.dto.DtcBatchKey(d.tenantId, d.batchId)
+        FROM DtcOrder d
+        WHERE (:tenantId = '' OR d.tenantId = :tenantId)
+          AND (:shipDate = '' OR d.shipDate = :shipDate)
+        ORDER BY d.batchId DESC
+        """,
+        countQuery = """
+        SELECT COUNT(g.batchId) FROM (
+            SELECT d.batchId AS batchId FROM DtcOrder d
+            WHERE (:tenantId = '' OR d.tenantId = :tenantId)
+              AND (:shipDate = '' OR d.shipDate = :shipDate)
+            GROUP BY d.tenantId, d.batchId
+        ) g
+        """)
+    org.springframework.data.domain.Page<com.multiship.backend.dto.DtcBatchKey> findBatchKeys(
+            @Param("tenantId") String tenantId,
+            @Param("shipDate") String shipDate,
+            org.springframework.data.domain.Pageable pageable);
+
+    /** Aggregate over one batch — one row, always present when the key is. */
+    @Query("""
+        SELECT new com.multiship.backend.dto.DtcBatchStats(
+            d.tenantId, d.batchId,
+            COUNT(d),
+            MIN(d.orderNo), MAX(d.orderNo),
+            MIN(d.toteNumber), MAX(d.toteNumber),
+            MAX(d.shipDate),
+            SUM(CASE WHEN d.generatedStatus = 'GENERATED' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN d.generatedStatus = 'FAILED' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN d.generatedStatus = 'QUEUED_USPS' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN d.generatedStatus IS NULL THEN 1 ELSE 0 END),
+            MAX(d.createdAt))
+        FROM DtcOrder d
+        WHERE d.tenantId = :tenantId AND d.batchId = :batchId
+        GROUP BY d.tenantId, d.batchId
+        """)
+    java.util.Optional<com.multiship.backend.dto.DtcBatchStats> summarizeBatch(
+            @Param("tenantId") String tenantId,
+            @Param("batchId") java.math.BigDecimal batchId);
+
+    /** Paged lines of one batch (the HstDetails-style detail page). */
+    org.springframework.data.domain.Page<DtcOrder> findByTenantIdAndBatchId(
+            String tenantId, java.math.BigDecimal batchId,
+            org.springframework.data.domain.Pageable pageable);
+
+    /** All rows of one batch in stable order — the generation worker's input. */
+    java.util.List<DtcOrder> findByTenantIdAndBatchIdOrderByIdAsc(
+            String tenantId, java.math.BigDecimal batchId);
+
+    /** Distinct ship dates present (summary-page date filter options). */
+    @Query("""
+        SELECT DISTINCT d.shipDate FROM DtcOrder d
+        WHERE d.shipDate IS NOT NULL AND d.shipDate <> ''
+        ORDER BY d.shipDate DESC
+        """)
+    java.util.List<String> findDistinctShipDates();
 }

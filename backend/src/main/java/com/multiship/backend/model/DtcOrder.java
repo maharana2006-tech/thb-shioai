@@ -147,6 +147,29 @@ public class DtcOrder {
     @Column(name = "ff_schema_substr")
     private String ffSchemaSubstr;
 
+    // ═══════════════════════ Label Generation (V102) ═══════════════════════
+    // Stamped by the DTC batch-generation worker ("Automatic label"). The
+    // order_no of the minted Order lets Print/Void reuse the existing
+    // /orders/{orderNo}/label + /orders/{orderNo}/void endpoints.
+    @Column(name = "generated_order_no")
+    private Integer generatedOrderNo;
+
+    @Column(name = "generated_tracking_number")
+    private String generatedTrackingNumber;
+
+    @Column(name = "generated_carrier_code")
+    private String generatedCarrierCode;
+
+    /** PENDING / GENERATED / FAILED / QUEUED_USPS. NULL = never attempted. */
+    @Column(name = "generated_status")
+    private String generatedStatus;
+
+    @Column(name = "generated_message")
+    private String generatedMessage;
+
+    @Column(name = "generated_at")
+    private LocalDateTime generatedAt;
+
     // ═══════════════════════════ Audit Fields ═══════════════════════════
     @Column(name = "created_at", columnDefinition = "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     private LocalDateTime createdAt;

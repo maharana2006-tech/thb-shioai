@@ -18,14 +18,14 @@ import java.util.regex.Pattern;
  * task's proposed baseline. Adjust if carrier rejects surface a
  * missing-character symptom.</i>
  */
-final class NdsAddressSanitizer {
+public final class NdsAddressSanitizer {
 
     /** Match any character NOT in the whitelist. */
     private static final Pattern DISALLOWED = Pattern.compile("[^A-Za-z0-9 .,\\-#/&']");
 
     private NdsAddressSanitizer() {}
 
-    static String sanitize(String raw) {
+    public static String sanitize(String raw) {
         if (raw == null) return null;
         String stripped = DISALLOWED.matcher(raw).replaceAll("");
         // Trim so a leading `<` that got stripped doesn't leave a leading space.

@@ -12,7 +12,7 @@ package com.multiship.backend.service.ndsshipment;
  * "Whitespace" here strips spaces, tabs, newlines, and non-breaking
  * spaces the ERP occasionally injects.
  */
-final class NdsPhoneNormalizer {
+public final class NdsPhoneNormalizer {
 
     /** Platform-default fallback when the tenant hasn't set one. */
     static final String DEFAULT_PHONE = "+1 616 772 3513";
@@ -20,9 +20,9 @@ final class NdsPhoneNormalizer {
     private NdsPhoneNormalizer() {}
 
     /** Value shape so callers get both the phone + the "defaulted" flag in one call. */
-    record Result(String phone, boolean defaulted) {}
+    public record Result(String phone, boolean defaulted) {}
 
-    static Result normalize(String rawPhone) {
+    public static Result normalize(String rawPhone) {
         return normalize(rawPhone, null);
     }
 
@@ -30,7 +30,7 @@ final class NdsPhoneNormalizer {
      * @param fallbackPhone tenant-configured fallback; null / blank falls
      *                      through to {@link #DEFAULT_PHONE}.
      */
-    static Result normalize(String rawPhone, String fallbackPhone) {
+    public static Result normalize(String rawPhone, String fallbackPhone) {
         String fallback = fallbackPhone != null && !fallbackPhone.isBlank()
                 ? fallbackPhone.trim()
                 : DEFAULT_PHONE;
