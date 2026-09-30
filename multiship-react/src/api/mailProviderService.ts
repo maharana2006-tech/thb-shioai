@@ -44,23 +44,23 @@ const base = '/admin/mail-providers'
 
 export const mailProviderService = {
   async listKinds(): Promise<MailKindDescriptor[]> {
-    const { data } = await apiClient.get<ApiResponse<MailKindDescriptor[]>>(`${base}/kinds`)
-    return data.data ?? []
+    const res = await apiClient.get<ApiResponse<MailKindDescriptor[]>>(`${base}/kinds`)
+    return res.data ?? []
   },
 
   async list(): Promise<MailProviderSummary[]> {
-    const { data } = await apiClient.get<ApiResponse<MailProviderSummary[]>>(base)
-    return data.data ?? []
+    const res = await apiClient.get<ApiResponse<MailProviderSummary[]>>(base)
+    return res.data ?? []
   },
 
   async upsert(req: MailProviderUpsertRequest): Promise<MailProviderSummary> {
-    const { data } = await apiClient.post<ApiResponse<MailProviderSummary>>(base, req)
-    return data.data!
+    const res = await apiClient.post<ApiResponse<MailProviderSummary>>(base, req)
+    return res.data!
   },
 
   async activate(id: number): Promise<MailProviderSummary> {
-    const { data } = await apiClient.post<ApiResponse<MailProviderSummary>>(`${base}/${id}/activate`)
-    return data.data!
+    const res = await apiClient.post<ApiResponse<MailProviderSummary>>(`${base}/${id}/activate`)
+    return res.data!
   },
 
   async remove(id: number): Promise<void> {
@@ -69,7 +69,7 @@ export const mailProviderService = {
 
   /** Server returns 422 with errorCode=MAIL_SEND_FAILED on provider errors. */
   async testSend(req: MailTestSendRequest): Promise<{ delivered: boolean }> {
-    const { data } = await apiClient.post<ApiResponse<{ delivered: boolean }>>(`${base}/test-send`, req)
-    return data.data ?? { delivered: false }
+    const res = await apiClient.post<ApiResponse<{ delivered: boolean }>>(`${base}/test-send`, req)
+    return res.data ?? { delivered: false }
   },
 }

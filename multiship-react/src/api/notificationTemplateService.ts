@@ -43,19 +43,19 @@ const base = '/admin/notification-templates'
 
 export const notificationTemplateService = {
   async list(): Promise<NotificationTemplate[]> {
-    const { data } = await apiClient.get<ApiResponse<NotificationTemplate[]>>(base)
-    return data.data ?? []
+    const res = await apiClient.get<ApiResponse<NotificationTemplate[]>>(base)
+    return res.data ?? []
   },
 
   async get(key: string): Promise<NotificationTemplate> {
-    const { data } = await apiClient.get<ApiResponse<NotificationTemplate>>(`${base}/${encodeURIComponent(key)}`)
-    return data.data!
+    const res = await apiClient.get<ApiResponse<NotificationTemplate>>(`${base}/${encodeURIComponent(key)}`)
+    return res.data!
   },
 
   async upsert(key: string, req: NotificationTemplateUpsertRequest): Promise<NotificationTemplate> {
-    const { data } = await apiClient.put<ApiResponse<NotificationTemplate>>(
+    const res = await apiClient.put<ApiResponse<NotificationTemplate>>(
       `${base}/${encodeURIComponent(key)}`, req)
-    return data.data!
+    return res.data!
   },
 
   async remove(key: string): Promise<void> {
@@ -63,8 +63,8 @@ export const notificationTemplateService = {
   },
 
   async preview(req: NotificationTemplatePreviewRequest): Promise<NotificationTemplatePreviewResponse> {
-    const { data } = await apiClient.post<ApiResponse<NotificationTemplatePreviewResponse>>(
+    const res = await apiClient.post<ApiResponse<NotificationTemplatePreviewResponse>>(
       `${base}/preview`, req)
-    return data.data!
+    return res.data!
   },
 }

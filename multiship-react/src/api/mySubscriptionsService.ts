@@ -17,15 +17,16 @@ const base = '/me/notification-subscriptions'
 
 export const mySubscriptionsService = {
   async list(): Promise<MyNotificationSubscription[]> {
-    const { data } = await apiClient.get<ApiResponse<MyNotificationSubscription[]>>(base)
-    return data.data ?? []
+    const res = await apiClient.get<ApiResponse<MyNotificationSubscription[]>>(base)
+    return res.data ?? []
   },
 
   async set(templateKey: string, enabled: boolean): Promise<void> {
+    // Backend reads `enabled` as @RequestParam, so it must go in the query
+    // string. apiClient is a fetch wrapper with no axios-style `params` option.
     await apiClient.put<ApiResponse<unknown>>(
-      `${base}/${encodeURIComponent(templateKey)}`,
+      `${base}/${encodeURIComponent(templateKey)}?enabled=${enabled}`,
       null,
-      { params: { enabled } },
     )
   },
 }
