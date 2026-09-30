@@ -72,6 +72,8 @@ import { CarrierAddressBanner } from './NewShipmentComponents/CarrierAddressBann
 import ValidationChecklist from './ValidationChecklist'
 import { fieldLabelFor } from '../utils/fieldLabels'
 import { useKnownCarriers, toCarrierLabelMap } from '../hooks/useKnownCarriers'
+import { useShipperDefault } from '../hooks/useShipperDefault'
+import type { ResolvedShipper } from '../api/shipperResolveService'
 
 /** Canonicalise a carrier code (ERP aliases → UPS/FEDEX/USPS).
  *  C4: closed-set 4-carrier line removed — the DB-driven carrier_alias
@@ -134,12 +136,29 @@ const blankAddress = (): ManualShipmentAddress => ({
   phoneCountryCode: dialCodeFor('US') || '',
 })
 
-/** A sensible default ship-from so operators don't retype the warehouse each time. */
-const defaultSender = (): ManualShipmentAddress => ({
-  name: 'MultiShip Fulfillment', company: 'MultiShip', phone: '2125550100', email: '',
-  addressLine1: '350 5th Ave', addressLine2: '', city: 'New York', state: 'NY', postalCode: '10118', countryCode: 'US',
-  phoneCountryCode: dialCodeFor('US') || '',
-})
+/**
+ * C2 — build a ship-from address from the DB-driven resolved shipper.
+ * When the resolve hasn't returned yet (or fails), returns a blank
+ * address so the form starts empty rather than showing a stale
+ * hardcoded NYC address that never applies to any real tenant.
+ */
+const defaultSenderFrom = (resolved: ResolvedShipper | null): ManualShipmentAddress => {
+  if (!resolved) return blankAddress()
+  const country = (resolved.countryCode ?? '').trim() || 'US'
+  return {
+    name:            resolved.name ?? '',
+    company:         '',
+    phone:           resolved.phone ?? '',
+    email:           '',
+    addressLine1:    resolved.addressLine1 ?? '',
+    addressLine2:    resolved.addressLine2 ?? '',
+    city:            resolved.city ?? '',
+    state:           resolved.state ?? '',
+    postalCode:      resolved.postalCode ?? '',
+    countryCode:     country,
+    phoneCountryCode: dialCodeFor(country) || '',
+  }
+}
 
 
 const CUSTOM_PKG = 'CUSTOM'
@@ -205,7 +224,26 @@ export default function NewShipmentPage() {
     mpsPieceCount: number | null
   } | null>(null)
 
-  const [sender, setSender] = useState<ManualShipmentAddress>(defaultSender())
+  // C2 — seed blank; the effect below fills in from resolvedShipper as
+  // soon as the /me/shipper-default resolve returns (if the operator
+  // hasn't started typing already).
+  const [sender, setSender] = useState<ManualShipmentAddress>(blankAddress())
+
+  // C2 — apply the DB-driven shipper default once the /me/shipper-default
+  // resolve returns. Skip when the operator has already typed anything into
+  // sender / recipient so we never clobber their input.
+  useEffect(() => {
+    if (!resolvedShipper) return
+    const filled = defaultSenderFrom(resolvedShipper)
+    const untouched = (a: ManualShipmentAddress) =>
+      !a.name && !a.addressLine1 && !a.city && !a.postalCode
+    if (isReturn) {
+      setRecipient((cur) => (untouched(cur) ? filled : cur))
+    } else {
+      setSender((cur) => (untouched(cur) ? filled : cur))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately reactive to resolvedShipper only; sender/recipient are checked inside the setter.
+  }, [resolvedShipper, isReturn])
   const [recipient, setRecipient] = useState<ManualShipmentAddress>(blankAddress())
   /** V76 — internal per-order ops note (500 char, multi-line). Placed
    *  under the Ship From section for lack of a better home; the data
@@ -283,6 +321,11 @@ export default function NewShipmentPage() {
    *  and what the importer's duplicate guard matches on. */
   const [reference, setReference] = useState('')
   const [clientCode, setClientCode] = useState('')
+
+  // C2 — DB-driven ship-from default (tenant_settings.shipper.*). Retires
+  // the hardcoded 350 5th Ave NYC block. Refetches whenever the operator
+  // picks a different client, so cross-tenant users get the right defaults.
+  const resolvedShipper = useShipperDefault(clientCode || undefined)
   // NDS Shipment prefill (PR #735 backend / PR2 FE): operator scans
   // .X<containerId> or .Y<batchId>; response prefills client + recipient
   // + packages + notify + international items. Banner colours mirror
@@ -1235,17 +1278,18 @@ export default function NewShipmentPage() {
       // client's company and warehouse as the shipper. Back to the default
       // ship-from (fix-order mode keeps the order's own sender, as below).
       if (!fixOrderNo) {
-        if (isReturn) setRecipient(defaultSender())
-        else setSender(defaultSender())
+        if (isReturn) setRecipient(defaultSenderFrom(resolvedShipper))
+        else setSender(defaultSenderFrom(resolvedShipper))
       }
       return
     }
     const yourAddr = isReturn ? client.returnAddress ?? client.shipFrom : client.shipFrom
-    // Always reset to defaultSender() before overlay — otherwise switching
-    // from Client A (with shipFrom) to Client B (without) would leave A's
-    // address in place. The subsequent warehouse-change effect re-overlays
-    // if the newly-picked client has warehouses attached.
-    const base = defaultSender()
+    // Always reset to defaultSenderFrom(resolvedShipper) before overlay —
+    // otherwise switching from Client A (with shipFrom) to Client B (without)
+    // would leave A's address in place. C2 — base comes from tenant_settings
+    // instead of hardcoded NYC. The subsequent warehouse-change effect
+    // re-overlays if the newly-picked client has warehouses attached.
+    const base = defaultSenderFrom(resolvedShipper)
     const mergedCountry = yourAddr ? (yourAddr.country || base.countryCode) : base.countryCode
     const merged: ManualShipmentAddress = yourAddr
       ? {
