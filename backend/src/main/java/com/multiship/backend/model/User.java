@@ -170,12 +170,7 @@ public class User {
         if (preferredCarrier == null) {
             return "No Carrier";
         }
-
-        return switch (preferredCarrier.toUpperCase()) {
-            case "P80", "UPS" -> "UPS";
-            case "F77", "FEDEX" -> "FedEx";
-            case "L01", "USPS" -> "USPS";
-            default -> preferredCarrier;
-        };
+        // C4 — display label sourced from carrier_alias.
+        return com.multiship.backend.service.carrier.CarrierAliasHolder.display(preferredCarrier);
     }
 }

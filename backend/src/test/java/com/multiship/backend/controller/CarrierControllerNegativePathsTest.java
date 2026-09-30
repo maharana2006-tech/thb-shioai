@@ -74,7 +74,8 @@ class CarrierControllerNegativePathsTest {
     @BeforeEach
     void setUp() {
         carrierService = mock(CarrierService.class);
-        controller = new CarrierController(carrierService);
+        controller = new CarrierController(carrierService,
+                mock(com.multiship.backend.service.carrier.CarrierAliasService.class));
         adminActor = User.withUsername("admin@acme").password("x").roles("ADMIN").build();
         userActor  = User.withUsername("user@acme").password("x").roles("USER").build();
     }

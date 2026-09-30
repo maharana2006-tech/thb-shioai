@@ -71,14 +71,19 @@ import { AddressBlock } from './NewShipmentComponents/AddressBlock'
 import { CarrierAddressBanner } from './NewShipmentComponents/CarrierAddressBanner'
 import ValidationChecklist from './ValidationChecklist'
 import { fieldLabelFor } from '../utils/fieldLabels'
+import { useKnownCarriers, toCarrierLabelMap } from '../hooks/useKnownCarriers'
 
-/** Canonicalise a carrier code (ERP aliases → UPS/FEDEX/USPS). */
+/** Canonicalise a carrier code (ERP aliases → UPS/FEDEX/USPS).
+ *  C4: closed-set 4-carrier line removed — the DB-driven carrier_alias
+ *  registry is the source of truth for canonical codes. This function
+ *  keeps the ERP shortcuts (P80/F77/L01/STAMPS) and the service-code
+ *  prefix heuristics because they're smart-defaults for user input,
+ *  not authoritative canonicalisation. */
 const canon = (c?: string | null) => {
   const v = (c || '').trim().toUpperCase()
   if (v === 'P80') return 'UPS'
   if (v === 'F77') return 'FEDEX'
   if (v === 'L01') return 'USPS'
-  if (['UPS', 'FEDEX', 'USPS', 'DHL'].includes(v)) return v
   if (v === 'STAMPS') return 'USPS'
   // Carrier-prefixed SERVICE codes (e.g. INTERNATIONAL_ECONOMY, FEDEX_2_DAY)
   // map back to their carrier — the fix/edit form derives the carrier from the
@@ -93,8 +98,6 @@ const canon = (c?: string | null) => {
   if (/^\d{2}$/.test(v)) return 'UPS'
   return v
 }
-
-const KNOWN_CARRIERS = ['UPS', 'FEDEX', 'USPS', 'DHL']
 
 // F5-C — COUNTRIES / COUNTRY_NAME / REGION_NAMES / countryNameFor +
 // CountrySelect component moved to ./NewShipmentComponents/CountrySelect.tsx.
@@ -124,8 +127,6 @@ const writeSticky = (key: string, value: string) => {
     /* ignore storage errors */
   }
 }
-
-const CARRIER_LABEL: Record<string, string> = { UPS: 'UPS', FEDEX: 'FedEx', USPS: 'USPS' }
 
 const blankAddress = (): ManualShipmentAddress => ({
   name: '', company: '', phone: '', email: '',
@@ -243,6 +244,13 @@ export default function NewShipmentPage() {
    * also throws on this to catch programmatic callers.
    */
   const returnEmailMissing = isReturn && !sender.email?.trim()
+
+  // C4 — DB-driven carrier registry (carrier_alias). Retires the hardcoded
+  // KNOWN_CARRIERS + CARRIER_LABEL constants. First render uses a fallback
+  // (4 canonicals); the DB list overrides on the next tick.
+  const knownCarriers = useKnownCarriers()
+  const knownCarrierCodes = useMemo(() => knownCarriers.map((c) => c.code), [knownCarriers])
+  const carrierLabelMap = useMemo(() => toCarrierLabelMap(knownCarriers), [knownCarriers])
 
   const [carrier, setCarrier] = useState('')
   const [accountNumber, setAccountNumber] = useState('') // bill-to account, manually editable
@@ -1039,9 +1047,9 @@ export default function NewShipmentPage() {
         // "Carrier default" and the order could not be repaired.
         const fromShipVia = canon(String(o.shipviaCd ?? ''))
         const fromAccount = canon(details.data.carrierAccount?.carrierCode ?? '')
-        const carrierCanon = KNOWN_CARRIERS.includes(fromShipVia)
+        const carrierCanon = knownCarrierCodes.includes(fromShipVia)
           ? fromShipVia
-          : KNOWN_CARRIERS.includes(fromAccount) ? fromAccount : fromShipVia
+          : knownCarrierCodes.includes(fromAccount) ? fromAccount : fromShipVia
         if (carrierCanon) setCarrier(carrierCanon)
         if (customs) {
           if (customs.currency) setCurrency(customs.currency)
@@ -3149,14 +3157,14 @@ export default function NewShipmentPage() {
                     {clientCarriers.length > 0 ? (
                       <optgroup label={`${clientCode || 'Client'} accounts`}>
                         {clientCarriers.map((c) => (
-                          <option key={c} value={c}>{CARRIER_LABEL[c] || c}</option>
+                          <option key={c} value={c}>{carrierLabelMap[c] || c}</option>
                         ))}
                       </optgroup>
                     ) : null}
                     {platformCarriers.length > 0 ? (
                       <optgroup label="Platform (verified)">
                         {platformCarriers.map((c) => (
-                          <option key={c} value={c}>{CARRIER_LABEL[c] || c}</option>
+                          <option key={c} value={c}>{carrierLabelMap[c] || c}</option>
                         ))}
                       </optgroup>
                     ) : null}
@@ -3890,7 +3898,7 @@ export default function NewShipmentPage() {
                            : undefined}>
                     <select className={inputCls} value={packageChoice} onChange={(e) => { setPackageChoice(e.target.value); clearFixKey('package') }}>
                       {packagesForCarrier.length ? (
-                        <optgroup label={`${CARRIER_LABEL[carrier] || carrier} packaging`}>
+                        <optgroup label={`${carrierLabelMap[carrier] || carrier} packaging`}>
                           {packagesForCarrier.map((p) => (
                             <option key={p.id} value={String(p.id)}>{p.name}</option>
                           ))}

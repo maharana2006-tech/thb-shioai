@@ -223,19 +223,10 @@ public class ShippingConfigService {
     public static String canonicalCarrierFor(String shipviaCd) {
         if (shipviaCd == null || shipviaCd.isBlank()) return "";
         String s = shipviaCd.trim().toUpperCase(Locale.ROOT);
-        // Legacy ERP carrier codes.
-        switch (s) {
-            case "P80": return "UPS";
-            case "F77": return "FEDEX";
-            case "L01": return "USPS";
-            case "UPS":
-            case "FEDEX":
-            case "USPS":
-            case "DHL":
-            case "STAMPS":
-                return s;
-            default: break;
-        }
+        // C4 — DB-driven canonical + ERP alias lookup (carrier_alias table).
+        // Adding UPS_DIRECT / STAMPS_COM etc. is a data-only change now.
+        String mapped = com.multiship.backend.service.carrier.CarrierAliasHolder.canonicalize(s);
+        if (mapped != null) return mapped;
         // Carrier-prefixed service codes (order matters — most specific first).
         if (s.startsWith("FEDEX_") || s.startsWith("FEDEX ")) return "FEDEX";
         if (s.startsWith("UPS_") || s.startsWith("UPS ")) return "UPS";

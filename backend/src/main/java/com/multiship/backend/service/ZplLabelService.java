@@ -682,12 +682,11 @@ public class ZplLabelService {
         if (!StringUtils.hasText(carrierCode)) {
             return "CARRIER";
         }
-        return switch (carrierCode.toUpperCase(Locale.ROOT)) {
-            case "P80", "UPS" -> "UPS";
-            case "F77", "FEDEX" -> "FEDEX";
-            case "L01", "USPS" -> "USPS";
-            default -> carrierCode.toUpperCase(Locale.ROOT);
-        };
+        // C4 — display label sourced from carrier_alias. Upper-case the
+        // result so ZPL rendering matches the legacy screaming-caps style
+        // (the display_label seed uses "FedEx" mixed-case for the FE).
+        return com.multiship.backend.service.carrier.CarrierAliasHolder
+                .display(carrierCode).toUpperCase(Locale.ROOT);
     }
 
     private String firstNonBlank(String first, String fallback) {
