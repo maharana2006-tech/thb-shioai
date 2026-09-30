@@ -80,4 +80,63 @@ export const tenantSettingsService = {
         { value },
       )
       .then((res) => res.data),
+
+  /**
+   * C1 — bulk get for the 8 shipper.* keys. Each value is annotated
+   * with whether it's a tenant override or the platform fallback,
+   * plus the platform value shown as placeholder.
+   */
+  getShipperDefaults: (
+    tenantCode: string,
+  ): Promise<Record<string, ShipperDefaultField>> =>
+    apiClient
+      .get<ApiResponse<Record<string, ShipperDefaultField>>>(
+        `/tenants/${encodeURIComponent(tenantCode)}/settings/shipper-defaults`,
+      )
+      .then((res) => res.data ?? {}),
+
+  /**
+   * C1 — bulk put for the 8 shipper.* keys. Blank string deletes the
+   * override (falls back to platform default at read time).
+   */
+  putShipperDefaults: (
+    tenantCode: string,
+    values: Record<string, string>,
+  ): Promise<Record<string, ShipperDefaultField>> =>
+    apiClient
+      .put<ApiResponse<Record<string, ShipperDefaultField>>>(
+        `/tenants/${encodeURIComponent(tenantCode)}/settings/shipper-defaults`,
+        values,
+      )
+      .then((res) => res.data ?? {}),
+}
+
+export interface ShipperDefaultField {
+  resolved: string | null
+  isTenantOverride: boolean
+  platformValue: string | null
+}
+
+export const SHIPPER_KEYS = [
+  'shipper.name',
+  'shipper.phone',
+  'shipper.addressLine1',
+  'shipper.addressLine2',
+  'shipper.city',
+  'shipper.state',
+  'shipper.postalCode',
+  'shipper.countryCode',
+] as const
+
+export type ShipperKey = (typeof SHIPPER_KEYS)[number]
+
+export const SHIPPER_KEY_LABEL: Record<ShipperKey, string> = {
+  'shipper.name':          'Name',
+  'shipper.phone':         'Phone',
+  'shipper.addressLine1':  'Address line 1',
+  'shipper.addressLine2':  'Address line 2',
+  'shipper.city':          'City',
+  'shipper.state':         'State / Region',
+  'shipper.postalCode':    'Postal code',
+  'shipper.countryCode':   'Country code (ISO-2)',
 }

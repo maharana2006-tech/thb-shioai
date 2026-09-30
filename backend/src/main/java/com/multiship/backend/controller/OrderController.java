@@ -81,6 +81,10 @@ public class OrderController {
     @Autowired
     private CarrierProperties carrierProperties;
 
+    // C1 — resolves tenant_settings.shipper.* on top of the platform default.
+    @Autowired
+    private com.multiship.backend.service.carrier.ShipperDefaultsService shipperDefaultsService;
+
     @Autowired
     private com.multiship.backend.repository.OrderTrackingRepository orderTrackingRepository;
 
@@ -611,7 +615,9 @@ public class OrderController {
             shipper = addressMap(client.getShipFrom(), client.getName());
             returnTo = addressMap(client.effectiveReturnAddress(), client.getName());
         } else {
-            CarrierProperties.ShipperDefaults d = carrierProperties.getShipper();
+            // C1 — tenant-scoped shipper defaults keyed on the order's tenant.
+            String orderTenant = order.getTenantId() != null ? order.getTenantId() : order.getCustNo();
+            CarrierProperties.ShipperDefaults d = shipperDefaultsService.resolveFor(orderTenant);
             shipper = new LinkedHashMap<>();
             shipper.put("name", d.getName());
             shipper.put("phone", d.getPhone());

@@ -68,6 +68,10 @@ public class CarrierServiceImpl implements CarrierService {
     private final OrderRepository orderRepository;
     private final OrderTrackingRepository orderTrackingRepository;
     private final CarrierProperties carrierProperties;
+    // C1 — resolves tenant_settings.shipper.* overrides on top of the
+    // platform carrier.shipper.* defaults. Every call site that used to
+    // call carrierProperties.getShipper() directly now goes through this.
+    private final com.multiship.backend.service.carrier.ShipperDefaultsService shipperDefaults;
     private final OrderCarrierDetailsRepository orderCarrierDetailsRepository;
     private final CarrierAccountRefRepository carrierAccountRefRepository;
     private final ClientRepository clientRepository;
@@ -1442,7 +1446,11 @@ public class CarrierServiceImpl implements CarrierService {
         BigDecimal width = req.getWidth() != null ? req.getWidth() : (preset != null ? preset.getWidth() : null);
         BigDecimal height = req.getHeight() != null ? req.getHeight() : (preset != null ? preset.getHeight() : null);
 
-        CarrierProperties.ShipperDefaults dflt = carrierProperties.getShipper();
+        // C1 — per-tenant shipper overrides via tenant_settings.shipper.*
+        // on top of the platform carrier.shipper.* defaults. When neither the
+        // request sender nor the tenant have set countryCode, we still fall
+        // back to the platform default (dev bootability).
+        CarrierProperties.ShipperDefaults dflt = shipperDefaults.resolveFor(req.getClientCode());
         String fromCountry = firstNonBlank(from != null ? from.getCountryCode() : null, dflt.getCountryCode());
 
         // PR #534 — DTO build extracted to buildManualShipmentRequestDto
@@ -3537,7 +3545,8 @@ public class CarrierServiceImpl implements CarrierService {
             String fromCountry,
             CarrierAccountRef account,
             Integer orderNoForPo) {
-        CarrierProperties.ShipperDefaults dflt = carrierProperties.getShipper();
+        // C1 — tenant-scoped shipper defaults (see the shipperDefaults dep).
+        CarrierProperties.ShipperDefaults dflt = shipperDefaults.resolveFor(req.getClientCode());
         // PR #543 — PO / DEPT for label printing. Manual shipments always
         // resolve here via `generateManualLabel` with req.source in
         // {null, MANUAL} → prefix MAN{orderNo}. Non-manual sources
@@ -3637,13 +3646,14 @@ public class CarrierServiceImpl implements CarrierService {
     }
 
     private ShipmentRequestDTO buildShipmentRequest(Order order, String accountNumber, CarrierConnector connector) {
-        CarrierProperties.ShipperDefaults shipper = carrierProperties.getShipper();
-
         // Service: the ship-method RULE engine (client + destination aware,
         // most-specific wins) → enabled catalog service; the old connector
         // default is only the last-resort fallback. International here =
         // COUNTRY difference (service level, not customs).
         String orderClient = firstNonBlank(order.getTenantId(), order.getCustNo());
+        // C1 — tenant-scoped shipper defaults keyed on the same identifier
+        // resolveWarehouse uses below.
+        CarrierProperties.ShipperDefaults shipper = shipperDefaults.resolveFor(orderClient);
         // Origin warehouse: use the client's default attachment when we can
         // find one, otherwise null (unrestricted rules still match). This is
         // what feeds ShipMethodRuleWarehouse-based rule filtering — AND the
