@@ -23,6 +23,7 @@ import {
   type ConnectionSummary,
   type ConnectorSummary,
   type HealthSnapshot,
+  type WritebackProbeResponse,
 } from '../api/externalSystemsService'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 
@@ -1215,8 +1216,168 @@ function TestDrawer({ conn, onClose }: { conn: ConnectionSummary; onClose: () =>
               <p className="mt-1 whitespace-pre-wrap">{result.message}</p>
             </div>
           ) : null}
+
+          {/* D4 — Writeback probe. Same drawer, below Test connection.
+              Sends a synthetic dispatch through the real V90 gate matrix
+              so admins can prove routing without shipping a label. */}
+          <WritebackProbeSection connectionId={conn.id} />
         </div>
       </div>
+    </div>
+  )
+}
+
+// ─────────────────────────── Writeback probe ──────────────────────────
+
+function WritebackProbeSection({ connectionId }: { connectionId: number }) {
+  const [mode, setMode] = useState<'GENERATE' | 'CLEAR'>('GENERATE')
+  const [source, setSource] = useState<string>('MANUAL')
+  const [channel, setChannel] = useState<string>('D2C')
+  const [clientCode, setClientCode] = useState<string>('PROBE')
+  const [orderNo, setOrderNo] = useState<string>('')
+  const [probing, setProbing] = useState(false)
+  const [result, setResult] = useState<WritebackProbeResponse | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const run = async () => {
+    setProbing(true)
+    setResult(null)
+    setError(null)
+    try {
+      const parsedOrderNo = orderNo.trim() ? Number(orderNo.trim()) : undefined
+      if (orderNo.trim() && !Number.isInteger(parsedOrderNo)) {
+        setError('orderNo must be an integer.')
+        return
+      }
+      const res = await externalSystemsService.writebackProbe(connectionId, {
+        mode,
+        source: source.trim() || undefined,
+        channel: channel.trim() || undefined,
+        clientCode: clientCode.trim() || undefined,
+        orderNo: parsedOrderNo,
+      })
+      setResult(res)
+    } catch (e) {
+      const err = e as { message?: string }
+      setError(err.message ?? 'Probe failed.')
+    } finally {
+      setProbing(false)
+    }
+  }
+
+  return (
+    <div className="mt-6 border-t border-slate-200 pt-4">
+      <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">
+        Writeback probe
+      </p>
+      <p className="mb-3 text-[11.5px] leading-snug text-slate-600">
+        Fire a synthetic writeback through the real V90 gate matrix — no label bought,
+        no carrier called. Watch backend.log for <span className="font-mono text-[11px]">
+          writeback[generate]
+        </span> / <span className="font-mono text-[11px]">writeback[clear]</span> or{' '}
+        <span className="font-mono text-[11px]">skipping</span> lines.
+      </p>
+
+      <div className="grid grid-cols-2 gap-2">
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">
+            Mode
+          </span>
+          <div className="inline-flex overflow-hidden rounded-lg border border-slate-300">
+            {(['GENERATE', 'CLEAR'] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setMode(m)}
+                className={`px-3 py-1 text-[11.5px] font-semibold ${
+                  mode === m ? 'bg-slate-900 text-white' : 'bg-white text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">
+            Source
+          </span>
+          <select
+            value={source}
+            onChange={(e) => setSource(e.target.value)}
+            className="w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 font-mono text-[11.5px]"
+          >
+            {['MANUAL', 'BULK', 'API', 'WMS', 'DTC', 'QUICK_SHIP', 'BACKORDER'].map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">
+            Channel
+          </span>
+          <select
+            value={channel}
+            onChange={(e) => setChannel(e.target.value)}
+            className="w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 font-mono text-[11.5px]"
+          >
+            {['D2C', 'B2B'].map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">
+            Client code
+          </span>
+          <input
+            value={clientCode}
+            onChange={(e) => setClientCode(e.target.value)}
+            placeholder="PROBE"
+            className="w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 font-mono text-[11.5px]"
+          />
+        </label>
+        <label className="col-span-2 block">
+          <span className="mb-1 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">
+            Order # (optional — 999999999 default)
+          </span>
+          <input
+            value={orderNo}
+            onChange={(e) => setOrderNo(e.target.value)}
+            inputMode="numeric"
+            placeholder="999999999"
+            className="w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 font-mono text-[11.5px]"
+          />
+        </label>
+      </div>
+
+      <button
+        type="button"
+        onClick={() => void run()}
+        disabled={probing}
+        className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-slate-800 disabled:opacity-40"
+      >
+        <FiZap className="h-3.5 w-3.5" />
+        {probing ? 'Probing…' : 'Fire probe'}
+      </button>
+
+      {error ? (
+        <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 p-2 text-[11.5px] text-rose-900">
+          {error}
+        </div>
+      ) : null}
+      {result ? (
+        <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-2 text-[11.5px] text-emerald-900">
+          <p className="font-semibold">
+            ✓ Dispatched {result.mode} through {result.connectionName}
+          </p>
+          <p className="mt-1 font-mono text-[10.5px]">
+            source={result.sent.source} · channel={result.sent.channel}
+            {' · '}clientCode={result.sent.clientCode} · orderNo={result.sent.orderNo}
+          </p>
+          <p className="mt-1 text-[11px] text-emerald-800/80">{result.note}</p>
+        </div>
+      ) : null}
     </div>
   )
 }

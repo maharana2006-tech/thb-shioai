@@ -195,4 +195,36 @@ export const externalSystemsService = {
     apiClient
       .post<ApiResponse<Record<string, unknown>>>(`${BASE}/${id}/test-connection`, req)
       .then((res) => res),
+
+  /**
+   * D4 — Fire a synthetic writeback dispatch to prove the V90 gate matrix
+   * without actually shipping a label. Response describes what was sent;
+   * routing decision + skipped-vs-fired lines land in backend.log.
+   */
+  writebackProbe: (id: number, req: WritebackProbeRequest) =>
+    apiClient
+      .post<ApiResponse<WritebackProbeResponse>>(`${BASE}/${id}/writeback-probe`, req)
+      .then((res) => res.data as WritebackProbeResponse),
+}
+
+/** Payload for /writeback-probe. All fields optional; sensible defaults on the server. */
+export interface WritebackProbeRequest {
+  clientCode?: string
+  source?: string       // MANUAL | BULK | API | WMS | DTC | QUICK_SHIP | BACKORDER
+  channel?: string      // D2C | B2B
+  orderNo?: number
+  mode?: 'GENERATE' | 'CLEAR'
+}
+
+export interface WritebackProbeResponse {
+  connectionName: string
+  systemType: string
+  mode: string
+  sent: {
+    clientCode: string
+    orderNo: number
+    source: string
+    channel: string
+  }
+  note: string
 }
