@@ -1511,11 +1511,24 @@ export default function OrdersWorkspace() {
       cell: ({ row }) => {
         const o = row.original.orderDetails
         const ref = o.refOrderNumber
+        // Returns F12 — clickable "return of #N" chip. Jumping to the
+        // outbound row is the cheapest way to reach its Reprint CI icon.
+        const originalNo = o.originalOrderNo
         return (
           <span className="flex min-w-0 flex-col gap-0.5">
             <span className="flex items-center gap-1.5">
               <span className="font-mono text-[13.5px] font-bold tabular-nums text-[#1f150c]">#{o.orderNo}</span>
               {sourceChips(row.original)}
+              {originalNo ? (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); navigate(`/orders?orderNo=${originalNo}`) }}
+                  title={`Return of outbound order #${originalNo} — click to open it`}
+                  className="inline-flex items-center rounded border border-[#e3d9c4] bg-[#faf7f0] px-1.5 py-[1px] font-mono text-[10.5px] font-semibold text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#f3eddc]"
+                >
+                  ↩ #{originalNo}
+                </button>
+              ) : null}
             </span>
             <span
               className="truncate font-mono text-[11.5px] text-[#6b5c42]"
