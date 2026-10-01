@@ -233,6 +233,8 @@ export default function AppRoutes() {
 
             <Route path={workspacePaths.orders} element={<OrdersPage />} />
             <Route path="/orders/new" element={<NewShipmentPage />} />
+            {/* Returns F4 — same component; pathname check inside pre-selects mode=RETURN. */}
+            <Route path="/orders/new/return" element={<NewShipmentPage />} />
             {/* Bulk Mailer — opens on Import history; the tab is in the URL. */}
             <Route path={workspacePaths.bulk} element={<Navigate to={bulkPaths.imports} replace />} />
             <Route path={bulkPaths.importFile} element={<BulkImportPage />} />

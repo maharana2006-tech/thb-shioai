@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import MpsProgressCard from './orders/MpsProgressCard'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { notify } from '../utils/notify'
 import { FiZap, FiArrowRight, FiArrowLeft, FiTruck, FiPackage, FiMapPin, FiHome, FiUsers, FiFileText, FiPlus, FiTrash2, FiRotateCcw, FiGlobe, FiEdit3, FiCheckCircle, FiAlertTriangle, FiSearch, FiX, FiCopy, FiClipboard, FiAlertCircle, FiBookmark } from 'react-icons/fi'
 import { ApiError } from '../api/apiClient'
@@ -176,6 +176,11 @@ const US_TERRITORY_CODES = new Set(['PR', 'VI', 'GU', 'AS', 'MP', 'UM'])
 export default function NewShipmentPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
+  // Returns F4 — /orders/new/return opens the form with mode preselected
+  // to RETURN so operators have a direct link instead of filling in and
+  // then flipping the toggle.
+  const location = useLocation()
+  const isReturnPath = location.pathname.endsWith('/return')
   // Fix-a-failed-order mode: /orders/new?fixOrder=900046 pre-fills this form
   // with the failed order's data + carrier error, and submitting regenerates
   // that same order in place instead of creating a new one.
@@ -261,7 +266,9 @@ export default function NewShipmentPage() {
    */
   const [residentialOrigin, setResidentialOrigin] = useState<'auto' | 'manual' | undefined>(undefined)
   // SHIPMENT = outbound (you → customer); RETURN = reverse (customer → you).
-  const [mode, setMode] = useState<'SHIPMENT' | 'RETURN'>('SHIPMENT')
+  // Returns F4 — initial mode comes from the URL path when the user lands
+  // via /orders/new/return; the mode toggle still works after that.
+  const [mode, setMode] = useState<'SHIPMENT' | 'RETURN'>(isReturnPath ? 'RETURN' : 'SHIPMENT')
   const isReturn = mode === 'RETURN'
   /**
    * How the carrier should deliver the return label — only meaningful when

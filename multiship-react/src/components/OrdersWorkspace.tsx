@@ -35,6 +35,7 @@ import {
   FiSend,
   FiChevronDown,
   FiSettings,
+  FiRotateCcw,
 } from 'react-icons/fi'
 import { ApiError, isAbortError } from '../api/apiClient'
 import { normalizeCarrierCode } from '../utils/carrierUtils'
@@ -2029,6 +2030,13 @@ export default function OrdersWorkspace() {
             <button type="button" onClick={() => navigate('/orders/new')} className={BTN_PRIMARY_SM}>
               <FiPlus className="h-3 w-3" />
               New shipment
+            </button>
+            <button type="button"
+                    onClick={() => navigate('/orders/new/return')}
+                    className={BTN_GHOST_SM}
+                    title="Returns F4 — opens /orders/new with mode preselected to RETURN">
+              <FiRotateCcw className="h-3 w-3" />
+              New return
             </button>
       </div>
 
