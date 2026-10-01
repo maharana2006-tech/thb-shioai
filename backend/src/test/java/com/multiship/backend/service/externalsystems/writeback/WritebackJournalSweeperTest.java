@@ -27,6 +27,9 @@ class WritebackJournalSweeperTest {
         repo = mock(WritebackJournalRepository.class);
         journal = mock(WritebackJournalService.class);
         dispatcher = mock(ExternalSystemWritebackDispatcher.class);
+        // D1b multi-node — pg_try_advisory_xact_lock defaults to "acquired"
+        // for every test; the lock-contested test overrides to false.
+        when(repo.tryAcquireSweeperLock()).thenReturn(true);
         sweeper = new WritebackJournalSweeper(repo, journal, dispatcher);
     }
 
@@ -74,5 +77,20 @@ class WritebackJournalSweeperTest {
         sweeper.sweep();  // must not throw
 
         verify(dispatcher).redispatch(r2);  // row 2 still dispatched
+    }
+
+    @Test
+    void sweepSkipsEntirelyWhenAnotherNodeHoldsTheClusterLock() throws Exception {
+        // D1b multi-node — pg_try_advisory_xact_lock returned false (someone
+        // else is already sweeping on another JVM). We MUST NOT even query
+        // the due-rows list because that + a potential later tick could
+        // cause a double-dispatch window.
+        when(repo.tryAcquireSweeperLock()).thenReturn(false);
+
+        sweeper.sweep();
+
+        verify(repo, never()).findDueForRetry(any(), any(Pageable.class));
+        verify(journal, never()).reserveForRetry(any());
+        verify(dispatcher, never()).redispatch(any());
     }
 }

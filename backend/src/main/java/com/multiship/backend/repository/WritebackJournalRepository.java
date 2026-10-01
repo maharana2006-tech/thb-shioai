@@ -48,4 +48,14 @@ public interface WritebackJournalRepository extends JpaRepository<WritebackJourn
     @Query("UPDATE WritebackJournalEntity j SET j.nextRetryAt = NULL "
             + "WHERE j.id = :id AND j.nextRetryAt IS NOT NULL")
     int clearNextRetryAt(@Param("id") Long id);
+
+    /**
+     * D1b multi-node — cluster-wide sweep lock. One node per tick holds
+     * it; parallel nodes {@code false} and skip. Transaction-scoped so
+     * the lock auto-releases on commit / rollback. Lock key 4831276 is
+     * unique to the writeback sweeper (sibling to DTC sync's 4831175,
+     * see jobs-db audit G3).
+     */
+    @Query(value = "SELECT pg_try_advisory_xact_lock(4831276)", nativeQuery = true)
+    Boolean tryAcquireSweeperLock();
 }

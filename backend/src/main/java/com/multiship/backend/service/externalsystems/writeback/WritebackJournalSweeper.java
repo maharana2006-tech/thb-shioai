@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -44,7 +45,16 @@ public class WritebackJournalSweeper {
 
     @Scheduled(fixedDelayString = "${multiship.writeback.sweeper.interval-ms:60000}",
                initialDelayString = "${multiship.writeback.sweeper.initial-delay-ms:30000}")
+    @Transactional
     public void sweep() {
+        // D1b multi-node — cluster-wide advisory lock so only one node
+        // sweeps per tick. Transaction-scoped: releases automatically on
+        // method exit. Single-node + mocked-DB tests see null (repo mock
+        // returns null for the SELECT) and treat it as "lock acquired".
+        Boolean acquired = repo.tryAcquireSweeperLock();
+        if (Boolean.FALSE.equals(acquired)) {
+            return;
+        }
         List<WritebackJournalEntity> due = repo.findDueForRetry(
                 LocalDateTime.now(ZoneOffset.UTC), PageRequest.of(0, BATCH_LIMIT));
         if (due.isEmpty()) return;
