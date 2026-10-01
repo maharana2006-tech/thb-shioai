@@ -54,6 +54,11 @@ public class AdminUserService {
      *  cosmetic — the user kept full API access until the 24h JWT expired. */
     private final TokenRevocationService tokenRevocationService;
 
+    /** V115 — DB-driven role allow-list (Auth Gap-5-A). Replaces the
+     *  Set.of("USER","TENANT","ADMIN") literal; bootstrap default inside
+     *  the service still covers DB outages. */
+    private final com.multiship.backend.service.role.RolePlatformService rolePlatformService;
+
     public enum ActionResult {
         OK,
         USER_NOT_FOUND,
@@ -210,7 +215,7 @@ public class AdminUserService {
             return new MutationOutcome(ActionResult.USER_NOT_FOUND, null);
         }
         String normalized = requestedRole == null ? "" : requestedRole.trim().toUpperCase(Locale.ROOT);
-        if (!java.util.Set.of("USER", "TENANT", "ADMIN").contains(normalized)) {
+        if (!rolePlatformService.isValidRole(normalized)) {
             return new MutationOutcome(ActionResult.UNKNOWN_ROLE, null);
         }
         User u = found.get();
