@@ -59,7 +59,8 @@ import {
   type NdsPrefillStatus,
   type NdsMessage,
 } from '../api/ndsShipmentService'
-import { SHIPPING_PURPOSES, clearanceOptionsForCarrier, FTR_EXEMPTIONS, EEI_THRESHOLD_USD } from '../utils/customsOptions'
+import { SHIPPING_PURPOSES, clearanceOptionsForCarrier, FTR_EXEMPTIONS, EEI_THRESHOLD_USD, setDbClearanceByCarrier } from '../utils/customsOptions'
+import { carrierDropdownsService } from '../api/carrierDropdownsService'
 import { isServiceAllowedForUsTerritory, usTerritoryBannerHint, isUpsDdpDisallowedForTerritory } from '../utils/usTerritoryServices'
 import {
   Field,
@@ -236,6 +237,26 @@ export default function NewShipmentPage() {
 
   // C2 — apply the DB-driven shipper default once the /me/shipper-default
   // resolve returns. Skip when the operator has already typed anything into
+  // V120 swap seam — prefetch the DB-driven clearance-option vocab once
+  // per mount. Admin-only route (401 for non-admin — swallowed; clearance
+  // picker falls through to the bootstrap defaults in customsOptions.ts).
+  useEffect(() => {
+    void (async () => {
+      try {
+        const rows = await carrierDropdownsService.clearanceOptions()
+        const byCarrier: Record<string, Array<{ value: string; label: string }>> = {}
+        for (const r of rows) {
+          const key = r.carrier.toUpperCase()
+          if (!byCarrier[key]) byCarrier[key] = []
+          byCarrier[key].push({ value: r.code, label: r.label })
+        }
+        setDbClearanceByCarrier(byCarrier)
+      } catch {
+        // Non-admin users 401 here — bootstrap stays authoritative.
+      }
+    })()
+  }, [])
+
   // sender / recipient so we never clobber their input.
   useEffect(() => {
     if (!resolvedShipper) return

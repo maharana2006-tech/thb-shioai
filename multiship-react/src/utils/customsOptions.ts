@@ -37,6 +37,9 @@ export type ShippingPurpose = typeof SHIPPING_PURPOSES[number]['value']
  */
 export type ClearanceOption = { value: string; label: string }
 
+/** V120 bootstrap default — mirrors `carrier_clearance_option` seed. Kept
+ *  as the fallback when the DB hasn't been prefetched yet (first paint)
+ *  OR the admin server is unreachable (offline FE, dev-mode mock). */
 const CLEARANCE_BY_CARRIER: Record<string, ReadonlyArray<ClearanceOption>> = {
   UPS: [
     { value: 'SENDER',      label: 'Sender pays' },
@@ -59,9 +62,31 @@ const CLEARANCE_BY_CARRIER: Record<string, ReadonlyArray<ClearanceOption>> = {
   ],
 }
 
+/** V120 swap seam — DB-driven vocab loaded from
+ *  /admin/carrier-dropdowns/clearance-options. Non-null = prefer this
+ *  over the bootstrap; null = use bootstrap. Promoted via
+ *  {@link setDbClearanceByCarrier} by any caller that has prefetched
+ *  the DB (today only NewShipmentPage; others fall through to bootstrap).
+ *  Volatile-ish module-local — identical to the Java platform-service
+ *  loader pattern. */
+let dbClearanceByCarrier: Record<string, ReadonlyArray<ClearanceOption>> | null = null
+
+/** V120 setter — called once after /admin/carrier-dropdowns/clearance-options
+ *  resolves. Null / empty arg leaves the current map in place so a failed
+ *  fetch doesn't erase a prior successful load. */
+export function setDbClearanceByCarrier(byCarrier: Record<string, ReadonlyArray<ClearanceOption>> | null) {
+  if (!byCarrier) return
+  const keys = Object.keys(byCarrier)
+  if (keys.length === 0) return
+  dbClearanceByCarrier = byCarrier
+}
+
 export function clearanceOptionsForCarrier(carrier: string | null | undefined): ReadonlyArray<ClearanceOption> {
   if (!carrier) return []
-  return CLEARANCE_BY_CARRIER[carrier.toUpperCase()] ?? []
+  const key = carrier.toUpperCase()
+  const dbHit = dbClearanceByCarrier?.[key]
+  if (dbHit && dbHit.length > 0) return dbHit
+  return CLEARANCE_BY_CARRIER[key] ?? []
 }
 
 /** Human-readable label for a persisted value. Falls back to the raw value
