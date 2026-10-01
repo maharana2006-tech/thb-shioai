@@ -130,6 +130,8 @@ export default function OrdersWorkspace() {
   const [sourceFilter, setSourceFilter] = useState('')
   const [channelFilter, setChannelFilter] = useState('')
   const [carrierFilter, setCarrierFilter] = useState('')
+  // Returns F3 — is-return tri-state: '' = all, 'Y' = returns only, 'N' = shipments only.
+  const [isReturnFilter, setIsReturnFilter] = useState<'' | 'Y' | 'N'>('')
   const [clientCodes, setClientCodes] = useState<string[]>([])
   // Sprint 51 migration — sort is owned by the shared AdvancedDataTable now.
   // sortBy / sortDirection remain the fetch-effect inputs (derived below).
@@ -281,6 +283,7 @@ export default function OrdersWorkspace() {
           source: sourceFilter || undefined,
           channel: channelFilter || undefined,
           carrier: carrierFilter || undefined,
+          isReturn: isReturnFilter || undefined,
         })
         if (!cancelled) setBatchesForPicker(res.data ?? [])
       } catch {
@@ -301,8 +304,8 @@ export default function OrdersWorkspace() {
    */
   const filterSignature = useMemo(() => JSON.stringify({
     view, q: debouncedQuery, client: clientFilter, from: dateFrom, to: dateTo,
-    filters: debouncedFilters, source: sourceFilter, channel: channelFilter, carrier: carrierFilter,
-  }), [view, debouncedQuery, clientFilter, dateFrom, dateTo, debouncedFilters, sourceFilter, channelFilter, carrierFilter])
+    filters: debouncedFilters, source: sourceFilter, channel: channelFilter, carrier: carrierFilter, isReturn: isReturnFilter,
+  }), [view, debouncedQuery, clientFilter, dateFrom, dateTo, debouncedFilters, sourceFilter, channelFilter, carrierFilter, isReturnFilter])
 
   // Filter change → invalidate the all-filtered cache, but KEEP rows the
   // operator ticked by hand: they pick orders across several searches and
@@ -423,6 +426,7 @@ export default function OrdersWorkspace() {
       source: sourceFilter || undefined,
       channel: channelFilter || undefined,
       carrier: carrierFilter || undefined,
+      isReturn: isReturnFilter || undefined,
       page: page - 1,
       size: pageSize,
       sortBy,
@@ -684,6 +688,7 @@ export default function OrdersWorkspace() {
       source: sourceFilter || undefined,
       channel: channelFilter || undefined,
       carrier: carrierFilter || undefined,
+      isReturn: isReturnFilter || undefined,
     }
   }, [view, clientFilter, debouncedQuery, debouncedFilters, dateFrom, dateTo, sourceFilter, channelFilter, carrierFilter])
 
@@ -2463,6 +2468,21 @@ export default function OrdersWorkspace() {
                           <option value="FEDEX">FedEx</option>
                           <option value="USPS">USPS</option>
                           <option value="DHL">DHL</option>
+                        </select>,
+                      )}
+                      {/* Returns F3 — surface the hidden return rows that today only
+                          live inside a batch. Tri-state so operators can pivot either way. */}
+                      {advField(
+                        <FiRotateCcw className="h-3 w-3" />,
+                        'Shipment vs return',
+                        <select
+                          value={isReturnFilter}
+                          onChange={(e) => setIsReturnFilter(e.target.value as '' | 'Y' | 'N')}
+                          className={advInputCls}
+                        >
+                          <option value="">Any</option>
+                          <option value="N">Shipments only</option>
+                          <option value="Y">Returns only</option>
                         </select>,
                       )}
                     </div>

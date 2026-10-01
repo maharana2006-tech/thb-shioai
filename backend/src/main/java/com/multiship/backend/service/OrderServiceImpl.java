@@ -178,6 +178,8 @@ public class OrderServiceImpl implements OrderService {
         // Shipping channel: D2C | B2B. '' = all channels.
         String channelFilter = trimmed(filters.getChannel()).toUpperCase(java.util.Locale.ROOT);
         String carrierFilter = trimmed(filters.getCarrier()).toUpperCase(java.util.Locale.ROOT);
+        // Returns F3 — 'Y' / 'N' / '' = all. Matches label_batch.is_return.
+        String isReturnFilter = trimmed(filters.getIsReturn()).toUpperCase(java.util.Locale.ROOT);
 
         if (!isValidDateFilter(createdFrom) || !isValidDateFilter(createdTo)) {
             return ApiResponse.<PageResponseDTO<OrderResponseDTO>>builder()
@@ -218,13 +220,13 @@ public class OrderServiceImpl implements OrderService {
                 statusFilter, tenantFilter, keywordFilter, resolutionFilter,
                 customerFilter, cityFilter, orderNoFilter, trackingFilter,
                 batchIdFilter,
-                createdFrom, createdTo, sourceFilter, channelFilter, carrierFilter,
+                createdFrom, createdTo, sourceFilter, channelFilter, carrierFilter, isReturnFilter,
                 page * size, size, sortBy, sortDirection);
         long totalRecords = orderRepository.countOrdersUnified(
                 statusFilter, tenantFilter, keywordFilter, resolutionFilter,
                 customerFilter, cityFilter, orderNoFilter, trackingFilter,
                 batchIdFilter,
-                createdFrom, createdTo, sourceFilter, channelFilter, carrierFilter);
+                createdFrom, createdTo, sourceFilter, channelFilter, carrierFilter, isReturnFilter);
 
         List<OrderResponseDTO> orders = results.stream()
                 .map(this::mapToOrderResponseDTO)
@@ -284,6 +286,8 @@ public class OrderServiceImpl implements OrderService {
         String sourceFilter = trimmed(filters.getSource()).toUpperCase(java.util.Locale.ROOT);
         String channelFilter = trimmed(filters.getChannel()).toUpperCase(java.util.Locale.ROOT);
         String carrierFilter = trimmed(filters.getCarrier()).toUpperCase(java.util.Locale.ROOT);
+        // Returns F3 — 'Y' / 'N' / '' = all. Matches label_batch.is_return.
+        String isReturnFilter = trimmed(filters.getIsReturn()).toUpperCase(java.util.Locale.ROOT);
 
         if (!isValidDateFilter(createdFrom) || !isValidDateFilter(createdTo)) {
             return ApiResponse.<java.util.List<Integer>>builder()
@@ -314,7 +318,7 @@ public class OrderServiceImpl implements OrderService {
                 statusFilter, tenantFilter, keywordFilter, resolutionFilter,
                 customerFilter, cityFilter, orderNoFilter, trackingFilter,
                 batchIdFilter,
-                createdFrom, createdTo, sourceFilter, channelFilter, carrierFilter);
+                createdFrom, createdTo, sourceFilter, channelFilter, carrierFilter, isReturnFilter);
 
         return ApiResponse.<java.util.List<Integer>>builder()
                 .status("SUCCESS").code(200)
@@ -359,6 +363,8 @@ public class OrderServiceImpl implements OrderService {
         String sourceFilter = trimmed(filters.getSource()).toUpperCase(java.util.Locale.ROOT);
         String channelFilter = trimmed(filters.getChannel()).toUpperCase(java.util.Locale.ROOT);
         String carrierFilter = trimmed(filters.getCarrier()).toUpperCase(java.util.Locale.ROOT);
+        // Returns F3 — 'Y' / 'N' / '' = all. Matches label_batch.is_return.
+        String isReturnFilter = trimmed(filters.getIsReturn()).toUpperCase(java.util.Locale.ROOT);
 
         if (!isValidDateFilter(createdFrom) || !isValidDateFilter(createdTo)) {
             return ApiResponse.<java.util.List<java.util.Map<String, Object>>>builder()
@@ -373,7 +379,7 @@ public class OrderServiceImpl implements OrderService {
                 statusFilter, tenantFilter, keywordFilter, resolutionFilter,
                 customerFilter, cityFilter, orderNoFilter, trackingFilter,
                 batchIdFilter,
-                createdFrom, createdTo, sourceFilter, channelFilter, carrierFilter);
+                createdFrom, createdTo, sourceFilter, channelFilter, carrierFilter, isReturnFilter);
 
         java.util.List<java.util.Map<String, Object>> out = rows.stream()
                 .map(r -> {

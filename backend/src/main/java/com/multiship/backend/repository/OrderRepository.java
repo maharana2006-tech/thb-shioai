@@ -350,6 +350,7 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
                   WHERE UPPER(r.account_number) = UPPER(t.account_number) LIMIT 1),
                 (SELECT s2.carrier FROM shipping_service s2
                   WHERE UPPER(s2.service_code) = UPPER(b.shipvia_cd) LIMIT 1))) = :carrier)
+          AND (:isReturn = '' OR UPPER(COALESCE(b.is_return, 'N')) = :isReturn)
           AND (:resolution = ''
                OR (:resolution = 'READY' AND """ + RESOLUTION_READY_SQL + """
                )
@@ -443,6 +444,7 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("source") String source,
             @Param("channel") String channel,
             @Param("carrier") String carrier,
+            @Param("isReturn") String isReturn,
             @Param("offset") int offset,
             @Param("limit") int limit,
             @Param("sortBy") String sortBy,
@@ -468,7 +470,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("createdTo") String createdTo,
             @Param("source") String source,
             @Param("channel") String channel,
-            @Param("carrier") String carrier
+            @Param("carrier") String carrier,
+            @Param("isReturn") String isReturn
     );
 
     /**
@@ -499,7 +502,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("createdTo") String createdTo,
             @Param("source") String source,
             @Param("channel") String channel,
-            @Param("carrier") String carrier
+            @Param("carrier") String carrier,
+            @Param("isReturn") String isReturn
     );
 
     /**
@@ -532,7 +536,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("createdTo") String createdTo,
             @Param("source") String source,
             @Param("channel") String channel,
-            @Param("carrier") String carrier
+            @Param("carrier") String carrier,
+            @Param("isReturn") String isReturn
     );
 
     /** Tab counts for the Labels work queue, computed in one pass. */

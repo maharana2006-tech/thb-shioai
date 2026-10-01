@@ -814,6 +814,8 @@ export interface OrderListParams {
   channel?: string
   /** Carrier: UPS | FEDEX | USPS | DHL. Empty = all carriers. */
   carrier?: string
+  /** Returns F3 — 'Y' = returns only, 'N' = shipments only, empty = all. */
+  isReturn?: 'Y' | 'N' | ''
 }
 
 /** Tab counts for the Labels work queue. */
@@ -934,6 +936,7 @@ export const orderService = {
     if (params.source) query.set('source', params.source)
     if (params.channel) query.set('channel', params.channel)
     if (params.carrier) query.set('carrier', params.carrier)
+    if (params.isReturn) query.set('isReturn', params.isReturn)
 
     return apiClient.get<ApiResponse<PaginatedOrderData>>(`/orders?${query.toString()}`)
   },
@@ -961,6 +964,7 @@ export const orderService = {
     if (params.source) query.set('source', params.source)
     if (params.channel) query.set('channel', params.channel)
     if (params.carrier) query.set('carrier', params.carrier)
+    if (params.isReturn) query.set('isReturn', params.isReturn)
     return apiClient.get<ApiResponse<number[]>>(`/orders/ids?${query.toString()}`)
   },
 
@@ -986,6 +990,7 @@ export const orderService = {
     if (params.source) query.set('source', params.source)
     if (params.channel) query.set('channel', params.channel)
     if (params.carrier) query.set('carrier', params.carrier)
+    if (params.isReturn) query.set('isReturn', params.isReturn)
     return apiClient.get<ApiResponse<Array<{ batchId: number; count: number }>>>(
       `/orders/batches?${query.toString()}`,
     )
