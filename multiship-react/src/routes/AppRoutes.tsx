@@ -94,6 +94,8 @@ const MailSettingsPage = lazy(() => import('../components/MailSettingsPage'))
 const NotificationTemplatesPage = lazy(() => import('../components/NotificationTemplatesPage'))
 // A4.4 — dispatch journal with filter + retry.
 const NotificationDeliveryLogPage = lazy(() => import('../components/NotificationDeliveryLogPage'))
+// D1 — framework-wide external-system writeback dispatch journal.
+const WritebackJournalPage = lazy(() => import('../components/WritebackJournalPage'))
 // A4.5 — self-serve per-user email opt-out toggles.
 const MyNotificationSubscriptionsPage = lazy(() => import('../components/MyNotificationSubscriptionsPage'))
 const CutoffsPage = lazy(() => import('../components/CutoffsPage'))
@@ -203,6 +205,7 @@ export default function AppRoutes() {
                   <Route path="mail" element={<MailSettingsPage />} />
                   <Route path="notification-templates" element={<NotificationTemplatesPage />} />
                   <Route path="notification-delivery-log" element={<NotificationDeliveryLogPage />} />
+                  <Route path="writeback-journal" element={<WritebackJournalPage />} />
                   <Route path="cutoffs" element={<CutoffsPage />} />
                   {/* PR-F4 Agent-2 — USPS Direct admin dashboard: composite
                       view of queue depth, quota headroom, retry buckets and

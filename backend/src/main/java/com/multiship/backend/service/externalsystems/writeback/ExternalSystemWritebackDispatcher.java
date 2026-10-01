@@ -60,6 +60,8 @@ public class ExternalSystemWritebackDispatcher {
     private final ExternalSystemRegistry registry;
     private final ExternalSystemConfigService config;
     private final TenantSettingsService tenantSettings;
+    // D1 — every dispatch attempt persists to external_system_writeback_journal.
+    private final WritebackJournalService journal;
 
     /**
      * Async post-generate hook. The caller (CarrierServiceImpl) invokes
@@ -103,8 +105,23 @@ public class ExternalSystemWritebackDispatcher {
                 log.debug("writeback: skipping generate on '{}' — no flags enabled", name);
                 return;
             }
-            WritebackAck ack = registry.writeShipment(name, redacted);
-            logAck("generate", name, payload.orderNo(), ack);
+            // D1 — journal the attempt around the connector call. Failure
+            // inside the connector still updates the journal to FAILED
+            // (WritebackAck.Status.FAILED path); an exception thrown out
+            // is caught below and journalled via recordFailure.
+            Long journalId = null;
+            long start = System.currentTimeMillis();
+            try {
+                journalId = journal.recordPending(name, row.get().getSystemType(),
+                        WritebackJournalService.MODE_GENERATE, redacted).getId();
+                WritebackAck ack = registry.writeShipment(name, redacted);
+                journal.recordAck(journalId, ack, (int)(System.currentTimeMillis() - start));
+                logAck("generate", name, payload.orderNo(), ack);
+            } catch (RuntimeException connErr) {
+                journal.recordFailure(journalId, connErr.getMessage(),
+                        (int)(System.currentTimeMillis() - start));
+                throw connErr;  // fall through to the outer catch for logging
+            }
         } catch (Exception e) {
             // Ponytail rule: writeback failure MUST NOT bubble. Log at
             // WARN so ops sees it, then swallow.
@@ -160,8 +177,19 @@ public class ExternalSystemWritebackDispatcher {
                     Boolean.TRUE.equals(r.getWritebackFreight()),
                     req.source(),
                     req.channel());
-            WritebackAck ack = registry.clearShipment(name, named);
-            logAck("clear", name, req.orderNo(), ack);
+            // D1 — same journal-around-call pattern as generate.
+            Long journalId = null;
+            long start = System.currentTimeMillis();
+            try {
+                journalId = journal.recordPending(name, r.getSystemType(), named).getId();
+                WritebackAck ack = registry.clearShipment(name, named);
+                journal.recordAck(journalId, ack, (int)(System.currentTimeMillis() - start));
+                logAck("clear", name, req.orderNo(), ack);
+            } catch (RuntimeException connErr) {
+                journal.recordFailure(journalId, connErr.getMessage(),
+                        (int)(System.currentTimeMillis() - start));
+                throw connErr;
+            }
         } catch (Exception e) {
             log.warn("writeback: clear dispatch failed for order={}: {}",
                     req.orderNo(), e.getMessage());

@@ -103,6 +103,10 @@ export const settingsPaths = {
    *  global holiday list. Shipments past cutoff or on a holiday get
    *  their SHIP_DATE pushed to next working day. ADMIN role only. */
   cutoffs: '/settings/cutoffs',
+  /** D1 — framework-wide external-system writeback dispatch journal
+   *  (PENDING / OK / SKIPPED / FAILED) with filter + per-row Retry.
+   *  Backing table external_system_writeback_journal. ADMIN only. */
+  writebackJournal: '/settings/writeback-journal',
 } as const
 
 export const workspaceNavItems: Array<{
@@ -194,6 +198,9 @@ export const settingsNavItems: Array<{
     roles: ['ADMIN', 'USER'] },
   { key: 'cutoffs', label: 'Cutoffs & Holidays', to: settingsPaths.cutoffs, iconKey: 'dashboard',
     description: 'Per (source × carrier × warehouse) cutoff rules + global holiday list. Shipments past cutoff or on a holiday get their SHIP_DATE pushed to the next working day.',
+    roles: ['ADMIN'] },
+  { key: 'writeback-journal', label: 'Writeback Journal', to: settingsPaths.writebackJournal, iconKey: 'dashboard',
+    description: 'Every external-system writeback dispatch — PENDING, OK, SKIPPED and FAILED — with connection, order and latency. Retry any failed row to re-fire through the dispatcher.',
     roles: ['ADMIN'] },
   // ===== Hidden from the Settings menu =====
   // Routes below still resolve so direct URLs and any hard-coded links keep

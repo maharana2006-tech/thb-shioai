@@ -28,6 +28,7 @@ class ExternalSystemWritebackDispatcherTest {
     private ExternalSystemRegistry registry;
     private ExternalSystemConfigService config;
     private TenantSettingsService tenantSettings;
+    private WritebackJournalService journal;
     private ExternalSystemWritebackDispatcher dispatcher;
 
     @BeforeEach
@@ -35,7 +36,16 @@ class ExternalSystemWritebackDispatcherTest {
         registry = mock(ExternalSystemRegistry.class);
         config = mock(ExternalSystemConfigService.class);
         tenantSettings = mock(TenantSettingsService.class);
-        dispatcher = new ExternalSystemWritebackDispatcher(registry, config, tenantSettings);
+        journal = mock(WritebackJournalService.class);
+        // D1 — journal.recordPending must return a non-null entity so the
+        // dispatcher can pull its id for the subsequent recordAck call.
+        com.multiship.backend.model.WritebackJournalEntity row =
+                com.multiship.backend.model.WritebackJournalEntity.builder().id(1L).build();
+        when(journal.recordPending(any(String.class), any(), any(String.class),
+                any(WritebackPayload.class))).thenReturn(row);
+        when(journal.recordPending(any(String.class), any(),
+                any(WritebackClearRequest.class))).thenReturn(row);
+        dispatcher = new ExternalSystemWritebackDispatcher(registry, config, tenantSettings, journal);
     }
 
     private static ExternalSystemConnection conn(String name, boolean tr, boolean sd,
