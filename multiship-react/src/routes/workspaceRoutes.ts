@@ -117,6 +117,12 @@ export const settingsPaths = {
   roles: '/settings/roles',
   /** V111 — country table + is_us_territory flag (read-only). */
   countries: '/settings/countries',
+  /** V117 — reason-for-export registry (read-only). */
+  reasonsForExport: '/settings/reasons-for-export',
+  /** V117 — ISO 4217 currency catalog (read-only). */
+  currencies: '/settings/currencies',
+  /** V118 — carrier-error-message pattern → humanized rules (read-only). */
+  carrierErrorMessages: '/settings/carrier-error-messages',
 } as const
 
 export const workspaceNavItems: Array<{
@@ -226,6 +232,15 @@ export const settingsNavItems: Array<{
     roles: ['ADMIN'] },
   { key: 'countries', label: 'Countries', to: settingsPaths.countries, iconKey: 'mapping',
     description: 'ISO country list + is_us_territory flag. Read-only; edit via SQL today.',
+    roles: ['ADMIN'] },
+  { key: 'reasons-for-export', label: 'Reasons for Export', to: settingsPaths.reasonsForExport, iconKey: 'customs',
+    description: 'Reason-for-export codes used on commercial invoices (Sale / Gift / Sample / …). Read-only; edit via SQL today.',
+    roles: ['ADMIN'] },
+  { key: 'currencies', label: 'Currencies', to: settingsPaths.currencies, iconKey: 'apiDocs',
+    description: 'ISO 4217 currency catalog. Read-only; per-tenant allowlist layered via tenant_settings.currency.allowlist.',
+    roles: ['ADMIN'] },
+  { key: 'carrier-error-messages', label: 'Carrier Error Messages', to: settingsPaths.carrierErrorMessages, iconKey: 'dashboard',
+    description: 'Pattern → humanized sentence rules CarrierErrorMessages applies to raw carrier payloads. Read-only; edit via SQL today.',
     roles: ['ADMIN'] },
   // ===== Hidden from the Settings menu =====
   // Routes below still resolve so direct URLs and any hard-coded links keep

@@ -106,6 +106,12 @@ const CarrierApiLogPage = lazy(() => import('../components/CarrierApiLogPage'))
 const RolesPage = lazy(() => import('../components/RolesPage'))
 // V111 — read-only country / is_us_territory table.
 const CountriesPage = lazy(() => import('../components/CountriesPage'))
+// V117 — read-only reason-for-export registry.
+const ReasonsForExportPage = lazy(() => import('../components/ReasonsForExportPage'))
+// V117 — read-only ISO 4217 currency catalog.
+const CurrenciesPage = lazy(() => import('../components/CurrenciesPage'))
+// V118 — read-only carrier-error-message rules.
+const CarrierErrorMessagesPage = lazy(() => import('../components/CarrierErrorMessagesPage'))
 // A4.5 — self-serve per-user email opt-out toggles.
 const MyNotificationSubscriptionsPage = lazy(() => import('../components/MyNotificationSubscriptionsPage'))
 const CutoffsPage = lazy(() => import('../components/CutoffsPage'))
@@ -221,6 +227,9 @@ export default function AppRoutes() {
                   <Route path="carrier-api-log" element={<CarrierApiLogPage />} />
                   <Route path="roles" element={<RolesPage />} />
                   <Route path="countries" element={<CountriesPage />} />
+                  <Route path="reasons-for-export" element={<ReasonsForExportPage />} />
+                  <Route path="currencies" element={<CurrenciesPage />} />
+                  <Route path="carrier-error-messages" element={<CarrierErrorMessagesPage />} />
                   <Route path="cutoffs" element={<CutoffsPage />} />
                   {/* PR-F4 Agent-2 — USPS Direct admin dashboard: composite
                       view of queue depth, quota headroom, retry buckets and
