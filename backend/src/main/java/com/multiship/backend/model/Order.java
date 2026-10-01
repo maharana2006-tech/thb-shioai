@@ -129,6 +129,13 @@ public class Order {
     @Column(name = "tenant_id")
     private String tenantId;
 
+    /** V116 — ad-hoc shipment flag. Replaces the "MANUAL" literal custNo
+     *  sentinel for ad-hoc shipments (Manual F-18). Co-exists during
+     *  migration; CarrierServiceImpl sets both so legacy readers that
+     *  check {@code "MANUAL".equals(custNo)} keep working. */
+    @Column(name = "ad_hoc", nullable = false, columnDefinition = "boolean default false")
+    private Boolean adHoc = false;
+
     @Column(name = "location")
     private String location;
 

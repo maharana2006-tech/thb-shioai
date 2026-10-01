@@ -1802,6 +1802,9 @@ public class CarrierServiceImpl implements CarrierService {
                     errOrder.setCustomerRef(truncate(firstNonBlank(req.getReference(), errOrder.getCustomerRef()), 80));
                     errOrder.setCustNo(firstNonBlank(req.getClientCode(), "MANUAL"));
                     errOrder.setTenantId(StringUtils.hasText(req.getClientCode()) ? req.getClientCode().trim() : null);
+                    // V116 — Manual F-18: set the dedicated ad-hoc flag alongside the
+                    // legacy custNo="MANUAL" sentinel so new readers can prefer the boolean.
+                    errOrder.setAdHoc(!StringUtils.hasText(req.getClientCode()));
                     errOrder.setShipviaCd( finalService != null ? finalService.getServiceCode() : serviceType);
                     errOrder.setShipName(to.getName());
                     errOrder.setShipAttn(to.getCompany());
@@ -1984,6 +1987,10 @@ public class CarrierServiceImpl implements CarrierService {
         order.setCustomerRef(truncate(firstNonBlank(req.getReference(), order.getCustomerRef()), 80));
         order.setCustNo(firstNonBlank(req.getClientCode(), order.getCustNo(), "MANUAL"));
         order.setTenantId(StringUtils.hasText(req.getClientCode()) ? req.getClientCode().trim() : order.getTenantId());
+        // V116 — Manual F-18: ad-hoc flag parity with the legacy custNo="MANUAL" sentinel.
+        if (!StringUtils.hasText(req.getClientCode()) && !StringUtils.hasText(order.getCustNo())) {
+            order.setAdHoc(true);
+        }
         order.setShipviaCd(service != null ? service.getServiceCode() : serviceType);
 
         // G7 — cutoff shift was computed above (before ShipmentRequestDTO

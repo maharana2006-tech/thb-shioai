@@ -50,6 +50,14 @@ public class Client {
     @Column(name = "client_code", unique = true, nullable = false, length = 50)
     private String clientCode;
 
+    /** V116 — reserved for QuickShip F18's wrong-client-scan THB-override.
+     *  Feature itself not shipped in shioai today (ShipX had it as a flag
+     *  on SPX_tblClient); the column is here so when ops needs the
+     *  override they can SQL-flip without a migration. */
+    @Column(name = "is_master_account", nullable = false,
+            columnDefinition = "boolean default false")
+    private Boolean isMasterAccount = false;
+
     @Column(nullable = false, length = 255)
     private String name;
 
