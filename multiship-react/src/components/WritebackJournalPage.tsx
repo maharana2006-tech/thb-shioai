@@ -200,7 +200,15 @@ export default function WritebackJournalPage() {
                           <span className="ml-1 rounded bg-slate-100 px-1 text-[10px] text-slate-600">{row.systemType}</span>
                         )}
                       </td>
-                      <td className="px-3 py-2 text-slate-700">{row.mode}</td>
+                      <td className="px-3 py-2 text-slate-700">
+                        {row.mode}
+                        {row.retryOfId != null && (
+                          <span className="ml-1 rounded bg-amber-100 px-1 text-[10px] text-amber-800"
+                                title={`Retry of #${row.retryOfId} · attempt ${row.attemptNumber}`}>
+                            retry #{row.attemptNumber}
+                          </span>
+                        )}
+                      </td>
                       <td className="px-3 py-2 tabular-nums text-slate-700">{row.orderNo ?? '—'}</td>
                       <td className="px-3 py-2">
                         <span className={`rounded px-2 py-0.5 ${badge}`}>{row.status}</span>

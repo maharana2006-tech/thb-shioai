@@ -43,12 +43,32 @@ public class WritebackJournalService {
     public static final String STATUS_SKIPPED = "SKIPPED";
     public static final String STATUS_FAILED = "FAILED";
 
+    // D1b — retry policy. ponytail: global cap + exponential backoff;
+    // promote to a retry_policy table if per-connection tuning is ever
+    // asked for. Values picked to match the ops-stated feel for the NDS
+    // writer (first retry minutes, giving a transient Oracle hiccup
+    // time to recover) and cap at an hour so no row sits idle for days.
+    static final int MAX_ATTEMPTS = 5;
+    static final int BACKOFF_CAP_MINUTES = 60;
+
     private final WritebackJournalRepository repo;
     private final ObjectMapper objectMapper;
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public WritebackJournalEntity recordPending(String connectionName, String systemType,
                                                 String mode, WritebackPayload payload) {
+        return recordPending(connectionName, systemType, mode, payload, null);
+    }
+
+    public WritebackJournalEntity recordPending(String connectionName, String systemType,
+                                                WritebackClearRequest req) {
+        return recordPending(connectionName, systemType, req, null);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public WritebackJournalEntity recordPending(String connectionName, String systemType,
+                                                String mode, WritebackPayload payload,
+                                                Long retryOfId) {
+        int attempt = nextAttempt(retryOfId);
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         return repo.save(WritebackJournalEntity.builder()
                 .connectionName(connectionName)
@@ -61,7 +81,8 @@ public class WritebackJournalService {
                 .source(payload == null ? null : payload.source())
                 .channel(payload == null ? null : payload.channel())
                 .payloadJson(safeSerialize(payload))
-                .attemptNumber(1)
+                .attemptNumber(attempt)
+                .retryOfId(retryOfId)
                 .createdAt(now)
                 .updatedAt(now)
                 .build());
@@ -69,7 +90,8 @@ public class WritebackJournalService {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public WritebackJournalEntity recordPending(String connectionName, String systemType,
-                                                WritebackClearRequest req) {
+                                                WritebackClearRequest req, Long retryOfId) {
+        int attempt = nextAttempt(retryOfId);
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         return repo.save(WritebackJournalEntity.builder()
                 .connectionName(connectionName)
@@ -82,7 +104,8 @@ public class WritebackJournalService {
                 .source(req == null ? null : req.source())
                 .channel(req == null ? null : req.channel())
                 .payloadJson(safeSerialize(req))
-                .attemptNumber(1)
+                .attemptNumber(attempt)
+                .retryOfId(retryOfId)
                 .createdAt(now)
                 .updatedAt(now)
                 .build());
@@ -108,9 +131,42 @@ public class WritebackJournalService {
             row.setStatus(STATUS_FAILED);
             row.setErrorMessage(clamp(errorMessage, 4000));
             row.setLatencyMs(latencyMs);
+            // D1b — schedule the sweeper to pick this row up again when
+            // the backoff window closes, as long as we're under the
+            // attempt ceiling. Terminal failure (attempt >= MAX) leaves
+            // next_retry_at null so the sweeper ignores it; manual
+            // admin retry still works via the controller.
+            if (row.getAttemptNumber() != null && row.getAttemptNumber() < MAX_ATTEMPTS) {
+                row.setNextRetryAt(nextRetryAt(row.getAttemptNumber()));
+            }
             row.setUpdatedAt(LocalDateTime.now(ZoneOffset.UTC));
             repo.save(row);
         });
+    }
+
+    /**
+     * D1b — null the row's {@code next_retry_at} atomically so a second
+     * sweeper tick (or multi-node cluster) won't re-pick the same row
+     * while a retry is in-flight. ponytail: single-UPDATE optimistic
+     * reservation; add a {@code pg_advisory_xact_lock} if multi-node
+     * contention ever shows up as duplicate retries.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean reserveForRetry(Long journalId) {
+        if (journalId == null) return false;
+        return repo.clearNextRetryAt(journalId) == 1;
+    }
+
+    private int nextAttempt(Long retryOfId) {
+        if (retryOfId == null) return 1;
+        return repo.findById(retryOfId)
+                .map(r -> r.getAttemptNumber() == null ? 2 : r.getAttemptNumber() + 1)
+                .orElse(1);
+    }
+
+    private static LocalDateTime nextRetryAt(int attemptNumber) {
+        long minutes = Math.min(1L << Math.min(attemptNumber, 30), BACKOFF_CAP_MINUTES);
+        return LocalDateTime.now(ZoneOffset.UTC).plusMinutes(minutes);
     }
 
     private static String mapAckStatus(WritebackAck ack) {

@@ -1,6 +1,8 @@
 package com.multiship.backend.service.externalsystems.writeback;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.multiship.backend.model.ExternalSystemConnection;
+import com.multiship.backend.model.WritebackJournalEntity;
 import com.multiship.backend.service.TenantSettingsService;
 import com.multiship.backend.service.externalsystems.ExternalSystemConfigService;
 import com.multiship.backend.service.externalsystems.ExternalSystemRegistry;
@@ -62,6 +64,8 @@ public class ExternalSystemWritebackDispatcher {
     private final TenantSettingsService tenantSettings;
     // D1 — every dispatch attempt persists to external_system_writeback_journal.
     private final WritebackJournalService journal;
+    // D1b — redispatch() deserializes stored payloads for sweeper + admin retry.
+    private final ObjectMapper objectMapper;
 
     /**
      * Async post-generate hook. The caller (CarrierServiceImpl) invokes
@@ -73,6 +77,12 @@ public class ExternalSystemWritebackDispatcher {
      */
     @Async
     public void dispatchOnGenerate(WritebackPayload payload) {
+        dispatchOnGenerate(payload, null);
+    }
+
+    /** D1b — chaining overload used by the retry sweeper + admin retry. */
+    @Async
+    public void dispatchOnGenerate(WritebackPayload payload, Long retryOfId) {
         if (payload == null) return;
         try {
             String name = resolveConnectionName(payload.clientCode());
@@ -113,7 +123,7 @@ public class ExternalSystemWritebackDispatcher {
             long start = System.currentTimeMillis();
             try {
                 journalId = journal.recordPending(name, row.get().getSystemType(),
-                        WritebackJournalService.MODE_GENERATE, redacted).getId();
+                        WritebackJournalService.MODE_GENERATE, redacted, retryOfId).getId();
                 WritebackAck ack = registry.writeShipment(name, redacted);
                 journal.recordAck(journalId, ack, (int)(System.currentTimeMillis() - start));
                 logAck("generate", name, payload.orderNo(), ack);
@@ -136,6 +146,12 @@ public class ExternalSystemWritebackDispatcher {
      */
     @Async
     public void dispatchOnClear(WritebackClearRequest req) {
+        dispatchOnClear(req, null);
+    }
+
+    /** D1b — chaining overload used by the retry sweeper + admin retry. */
+    @Async
+    public void dispatchOnClear(WritebackClearRequest req, Long retryOfId) {
         if (req == null) return;
         try {
             String name = resolveConnectionName(req.clientCode());
@@ -181,7 +197,7 @@ public class ExternalSystemWritebackDispatcher {
             Long journalId = null;
             long start = System.currentTimeMillis();
             try {
-                journalId = journal.recordPending(name, r.getSystemType(), named).getId();
+                journalId = journal.recordPending(name, r.getSystemType(), named, retryOfId).getId();
                 WritebackAck ack = registry.clearShipment(name, named);
                 journal.recordAck(journalId, ack, (int)(System.currentTimeMillis() - start));
                 logAck("clear", name, req.orderNo(), ack);
@@ -193,6 +209,30 @@ public class ExternalSystemWritebackDispatcher {
         } catch (Exception e) {
             log.warn("writeback: clear dispatch failed for order={}: {}",
                     req.orderNo(), e.getMessage());
+        }
+    }
+
+    /**
+     * D1b — deserialize a stored journal row's payload and re-fire it
+     * through the correct dispatch entry point, with the chain linkage
+     * ({@code retryOfId = row.id}, {@code attemptNumber = row.attemptNumber+1})
+     * applied by {@link WritebackJournalService#recordPending}.
+     *
+     * <p>Shared by the admin controller's manual retry and the
+     * {@link WritebackJournalSweeper} scheduled bean. Any deserialization
+     * failure throws — callers decide how to surface (controller returns
+     * 422; sweeper logs and skips).
+     */
+    public void redispatch(WritebackJournalEntity row) throws com.fasterxml.jackson.core.JsonProcessingException {
+        if (row == null || row.getPayloadJson() == null || row.getPayloadJson().isBlank()) {
+            throw new IllegalArgumentException("Journal row has no persisted payload");
+        }
+        if (WritebackJournalService.MODE_GENERATE.equals(row.getMode())) {
+            WritebackPayload payload = objectMapper.readValue(row.getPayloadJson(), WritebackPayload.class);
+            dispatchOnGenerate(payload, row.getId());
+        } else {
+            WritebackClearRequest req = objectMapper.readValue(row.getPayloadJson(), WritebackClearRequest.class);
+            dispatchOnClear(req, row.getId());
         }
     }
 

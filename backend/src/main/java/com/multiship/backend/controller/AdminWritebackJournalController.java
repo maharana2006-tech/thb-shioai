@@ -1,13 +1,9 @@
 package com.multiship.backend.controller;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.model.WritebackJournalEntity;
 import com.multiship.backend.repository.WritebackJournalRepository;
 import com.multiship.backend.service.externalsystems.writeback.ExternalSystemWritebackDispatcher;
-import com.multiship.backend.service.externalsystems.writeback.WritebackClearRequest;
-import com.multiship.backend.service.externalsystems.writeback.WritebackJournalService;
-import com.multiship.backend.service.externalsystems.writeback.WritebackPayload;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -28,8 +24,8 @@ import java.util.Map;
  *
  * <p>List every dispatch attempt across every connector with filters,
  * and re-fire any FAILED attempt through the same dispatcher. Retry
- * writes a fresh row (attempt_number=1 on the new row; retry linkage
- * via timestamp for now — full retry chain in Phase D1b).
+ * writes a fresh chained row (D1b) — {@code retry_of_id} points at the
+ * prior row and {@code attempt_number} increments.
  */
 @Tag(name = "Writeback journal",
         description = "Every external-system writeback dispatch — SENT, SKIPPED, FAILED — with per-row retry.")
@@ -43,7 +39,6 @@ public class AdminWritebackJournalController {
 
     private final WritebackJournalRepository repo;
     private final ExternalSystemWritebackDispatcher dispatcher;
-    private final ObjectMapper objectMapper;
 
     @Operation(summary = "Paginated dispatch attempts, sorted newest first. All filters optional.")
     @GetMapping
@@ -70,7 +65,7 @@ public class AdminWritebackJournalController {
     }
 
     @Operation(summary = "Re-dispatch a journal row through the writeback dispatcher. "
-            + "Async; a fresh row appears once the dispatch completes.")
+            + "Async; a fresh chained row appears once the dispatch completes.")
     @PostMapping("/{id}/retry")
     public ResponseEntity<ApiResponse<Map<String, Object>>> retry(@PathVariable Long id) {
         WritebackJournalEntity row = repo.findById(id).orElse(null);
@@ -81,23 +76,8 @@ public class AdminWritebackJournalController {
                             .message("Row " + id + " not found")
                             .timestamp(LocalDateTime.now()).build());
         }
-        if (row.getPayloadJson() == null || row.getPayloadJson().isBlank()) {
-            return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(
-                    ApiResponse.<Map<String, Object>>builder()
-                            .status("ERROR").code(422).errorCode("JOURNAL_ROW_NO_PAYLOAD")
-                            .message("Row has no persisted payload — was written by an older dispatcher.")
-                            .timestamp(LocalDateTime.now()).build());
-        }
         try {
-            if (WritebackJournalService.MODE_GENERATE.equals(row.getMode())) {
-                WritebackPayload payload = objectMapper.readValue(
-                        row.getPayloadJson(), WritebackPayload.class);
-                dispatcher.dispatchOnGenerate(payload);
-            } else {
-                WritebackClearRequest req = objectMapper.readValue(
-                        row.getPayloadJson(), WritebackClearRequest.class);
-                dispatcher.dispatchOnClear(req);
-            }
+            dispatcher.redispatch(row);
         } catch (Exception ex) {
             return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(
                     ApiResponse.<Map<String, Object>>builder()
@@ -106,7 +86,7 @@ public class AdminWritebackJournalController {
                             .timestamp(LocalDateTime.now()).build());
         }
         return ok(Map.of("retriedFrom", id,
-                "note", "Dispatch queued; a fresh journal row will appear once the async attempt completes."),
+                "note", "Dispatch queued; a fresh chained journal row will appear once the async attempt completes."),
                 "Retry queued");
     }
 

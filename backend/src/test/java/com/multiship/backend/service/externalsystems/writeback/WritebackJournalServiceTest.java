@@ -100,4 +100,52 @@ class WritebackJournalServiceTest {
         service.recordFailure(null, "won't matter", 0);
         verify(repo, org.mockito.Mockito.never()).findById(any());
     }
+
+    @Test
+    void recordFailureSchedulesNextRetryWhenUnderAttemptCap() {
+        WritebackJournalEntity existing = WritebackJournalEntity.builder()
+                .id(1L).attemptNumber(1).build();
+        when(repo.findById(1L)).thenReturn(Optional.of(existing));
+        service.recordFailure(1L, "transient oracle hiccup", 500);
+        assertEquals("FAILED", existing.getStatus());
+        assertNotNull(existing.getNextRetryAt(), "nextRetryAt must be set for sweeper pickup");
+        assertTrue(existing.getNextRetryAt().isAfter(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusSeconds(1)),
+                "nextRetryAt should be in the future");
+    }
+
+    @Test
+    void recordFailureLeavesNextRetryNullAtAttemptCap() {
+        WritebackJournalEntity existing = WritebackJournalEntity.builder()
+                .id(1L).attemptNumber(WritebackJournalService.MAX_ATTEMPTS).build();
+        when(repo.findById(1L)).thenReturn(Optional.of(existing));
+        service.recordFailure(1L, "giving up", 1);
+        assertEquals("FAILED", existing.getStatus());
+        assertEquals(null, existing.getNextRetryAt(),
+                "terminal attempt must stay next_retry_at=null so sweeper ignores it");
+    }
+
+    @Test
+    void recordPendingChainsAttemptNumberWhenRetryOfIdSupplied() {
+        WritebackJournalEntity previous = WritebackJournalEntity.builder()
+                .id(42L).attemptNumber(2).build();
+        when(repo.findById(42L)).thenReturn(Optional.of(previous));
+        WritebackPayload p = WritebackPayload.builder().orderNo(7).build();
+        WritebackJournalEntity row = service.recordPending(
+                "nds-default", "NDS_ORACLE",
+                WritebackJournalService.MODE_GENERATE, p, 42L);
+        assertEquals(Integer.valueOf(3), row.getAttemptNumber());
+        assertEquals(Long.valueOf(42L), row.getRetryOfId());
+    }
+
+    @Test
+    void reserveForRetryReturnsTrueWhenUpdateHitsOneRow() {
+        when(repo.clearNextRetryAt(5L)).thenReturn(1);
+        assertTrue(service.reserveForRetry(5L));
+    }
+
+    @Test
+    void reserveForRetryReturnsFalseWhenAlreadyClaimed() {
+        when(repo.clearNextRetryAt(5L)).thenReturn(0);
+        assertEquals(false, service.reserveForRetry(5L));
+    }
 }

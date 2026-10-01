@@ -29,6 +29,7 @@ class ExternalSystemWritebackDispatcherTest {
     private ExternalSystemConfigService config;
     private TenantSettingsService tenantSettings;
     private WritebackJournalService journal;
+    private com.fasterxml.jackson.databind.ObjectMapper objectMapper;
     private ExternalSystemWritebackDispatcher dispatcher;
 
     @BeforeEach
@@ -37,15 +38,18 @@ class ExternalSystemWritebackDispatcherTest {
         config = mock(ExternalSystemConfigService.class);
         tenantSettings = mock(TenantSettingsService.class);
         journal = mock(WritebackJournalService.class);
-        // D1 — journal.recordPending must return a non-null entity so the
-        // dispatcher can pull its id for the subsequent recordAck call.
+        objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        // D1 + D1b — journal.recordPending must return a non-null entity
+        // so the dispatcher can pull its id for the subsequent recordAck
+        // call. The 5/4-arg overloads with retryOfId are what the
+        // dispatcher actually calls after D1b.
         com.multiship.backend.model.WritebackJournalEntity row =
                 com.multiship.backend.model.WritebackJournalEntity.builder().id(1L).build();
         when(journal.recordPending(any(String.class), any(), any(String.class),
-                any(WritebackPayload.class))).thenReturn(row);
+                any(WritebackPayload.class), any())).thenReturn(row);
         when(journal.recordPending(any(String.class), any(),
-                any(WritebackClearRequest.class))).thenReturn(row);
-        dispatcher = new ExternalSystemWritebackDispatcher(registry, config, tenantSettings, journal);
+                any(WritebackClearRequest.class), any())).thenReturn(row);
+        dispatcher = new ExternalSystemWritebackDispatcher(registry, config, tenantSettings, journal, objectMapper);
     }
 
     private static ExternalSystemConnection conn(String name, boolean tr, boolean sd,
