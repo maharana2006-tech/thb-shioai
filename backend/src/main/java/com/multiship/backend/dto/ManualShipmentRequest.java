@@ -35,6 +35,9 @@ public class ManualShipmentRequest {
      *  carrier. UPS / FedEx / USPS ignore the field. */
     private Boolean returnPickupRequested;
 
+    /** Returns F10 — RMA number the operator issued for this return. */
+    private String rmaNumber;
+
     /** carrier_account_ref id to bill — optional credential hint. */
     private Long accountId;
 

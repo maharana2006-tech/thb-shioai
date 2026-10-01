@@ -559,6 +559,9 @@ export interface ManualShipmentPayload {
    *  pickup (prior default); false = customer drops at ServicePoint. UPS /
    *  FedEx / USPS ignore the field. */
   returnPickupRequested?: boolean
+  /** Returns F10 — operator-issued RMA number for this return. 60-char cap;
+   *  omit when blank. Persisted on label_batch.rma_number. */
+  rmaNumber?: string
   /** Optional credential-account hint; resolved from accountNumber + carrierCode when absent. */
   accountId?: number | null
   /** Carrier (UPS/FEDEX/USPS) — needed to resolve credentials for a manually-typed account. */

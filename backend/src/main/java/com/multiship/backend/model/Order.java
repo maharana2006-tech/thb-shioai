@@ -196,6 +196,12 @@ public class Order {
     @Column(name = "is_return")
     private String isReturn;
 
+    /** Returns F10 — RMA number the operator issued for this return. Null
+     *  for outbound labels and for returns created before RMA capture.
+     *  Carrier wire (which reference slot it goes in) is a follow-up. */
+    @Column(name = "rma_number", length = 60)
+    private String rmaNumber;
+
     /** V76 — internal per-order ops note (driver instructions / pickup
      *  hints / handling flags). 500-char cap. Deliberately INTERNAL:
      *  not on external API / label / webhook. Rendered on /orders/new

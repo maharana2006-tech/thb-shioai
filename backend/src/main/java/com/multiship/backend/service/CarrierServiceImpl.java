@@ -1987,6 +1987,9 @@ public class CarrierServiceImpl implements CarrierService {
         order.setIsError(false);
         order.setIsManual("Y");
         order.setIsReturn(isReturn ? "Y" : "N");
+        // Returns F10 — persist RMA only on returns; outbound regens must
+        // not inherit a stale RMA from a prior manual save.
+        order.setRmaNumber(isReturn ? truncate(req.getRmaNumber(), 60) : null);
         // On regenerate (existingOrderNo) preserve the order's own source /
         // client so fixing a failed BULK/API order doesn't reclassify it as
         // MANUAL (which would move it to another partition and wipe its client).
@@ -3685,6 +3688,8 @@ public class CarrierServiceImpl implements CarrierService {
                 .returnType(req.getReturnType())
                 // Returns F8 — passes through to DhlConnector; null stays null.
                 .returnPickupRequested(req.getReturnPickupRequested())
+                // Returns F10 — operator-issued RMA; persisted on label_batch.
+                .rmaNumber(req.getRmaNumber())
                 .dangerousGoods(req.getDangerousGoods())
                 .signatureOption(req.getSignatureOption())
                 .insuredValue(req.getInsuredValue())
@@ -4039,6 +4044,9 @@ public class CarrierServiceImpl implements CarrierService {
                 // with Y (case-insensitive) counts as a return.
                 .isReturn("Y".equalsIgnoreCase(
                         order.getIsReturn() == null ? "" : order.getIsReturn().trim()))
+                // Returns F10 — carry the stored RMA so a reissue hits the
+                // connector with the same value the operator typed first time.
+                .rmaNumber(order.getRmaNumber())
                 .build();
 
         // F6-D — if the resolved client currency differs from the carrier

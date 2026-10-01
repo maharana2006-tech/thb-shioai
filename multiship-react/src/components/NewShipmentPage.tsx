@@ -319,6 +319,9 @@ export default function NewShipmentPage() {
   // schedules collection (prior behaviour); false = customer drops at a
   // DHL ServicePoint. UI only shows when isReturn && carrier=DHL.
   const [returnPickupRequested, setReturnPickupRequested] = useState<boolean>(true)
+  // Returns F10 — RMA number operator issued for this return. Persisted on
+  // label_batch.rma_number so warehouse can reconcile. UI only on return mode.
+  const [rmaNumber, setRmaNumber] = useState<string>('')
   /**
    * UPS rejects return labels with 9120145 "Missing label delivery
    * information" when the LabelDelivery.EMail block is absent — and we
@@ -2499,7 +2502,16 @@ export default function NewShipmentPage() {
       // Carrier connectors key off this: UPS ReturnService.Code 8/9
       // (with LabelDelivery.EMail block), FedEx returnedShipmentDetail
       // .returnType (PRINT_RETURN_LABEL / EMAIL_LABEL), etc.
-      ...(isReturn ? { returnType, returnPickupRequested } : {}),
+      ...(isReturn
+        ? {
+            returnType,
+            returnPickupRequested,
+            // Returns F10 — only wire rmaNumber when operator typed one;
+            // blank/trim-empty stays off the payload so the server-side
+            // null-vs-"" distinction holds.
+            ...(rmaNumber.trim() ? { rmaNumber: rmaNumber.trim() } : {}),
+          }
+        : {}),
       reference: reference.trim() || undefined,
       // V76 — internal per-order ops note; omit when blank so the
       // wire only carries populated fields.
@@ -2621,7 +2633,7 @@ export default function NewShipmentPage() {
   // Every value the label request is built from — when it differs from the
   // one taken at the last check, the form changed since.
   const formSnapshot = JSON.stringify([
-    sender, recipient, isReturn, returnType, reference, carrier, accountNumber, serviceId,
+    sender, recipient, isReturn, returnType, rmaNumber, reference, carrier, accountNumber, serviceId,
     packageChoice, length, width, height, dimUnit, weight, weightUnit, clientCode, warehouseCode,
     declaredValue, currency, dgBlock, signatureOption, insuredValue, labelImageType, labelStockType,
     labelImageFormat, pickupType, extraPackages, items, reasonForExport, incoterms, clearanceOption,
@@ -3062,6 +3074,19 @@ export default function NewShipmentPage() {
                         Request DHL pickup
                       </label>
                     ) : null}
+                    {/* Returns F10 — operator-issued RMA. Free-form,
+                        capped at the DB column width. Blank is fine. */}
+                    <label className="inline-flex cursor-text items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11.5px] font-semibold text-[#5a4526] shadow-sm">
+                      <span className="whitespace-nowrap">RMA #</span>
+                      <input
+                        type="text"
+                        value={rmaNumber}
+                        onChange={(e) => setRmaNumber(e.target.value.slice(0, 60))}
+                        placeholder="optional"
+                        maxLength={60}
+                        className="w-28 border-0 bg-transparent p-0 text-[11.5px] font-semibold text-[#1f150c] placeholder:font-normal placeholder:text-[#a08f6c] focus:outline-none focus:ring-0"
+                      />
+                    </label>
                   </div>
                 ) : null}
               </div>

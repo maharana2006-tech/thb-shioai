@@ -256,6 +256,14 @@ public class ShipmentRequestDTO {
     private Boolean returnPickupRequested;
 
     /**
+     * Returns F10 — RMA number the operator issued (null for outbound).
+     * Persisted on {@code label_batch.rma_number} so warehouse staff can
+     * reconcile the return when the box arrives. Carrier reference-slot
+     * wire is a deliberate follow-up PR.
+     */
+    private String rmaNumber;
+
+    /**
      * Optional dangerous goods declaration. When present + ready for
      * carrier (see {@link DangerousGoodsBlockDTO#isReadyForCarrier}),
      * connectors emit the carrier-specific hazmat wire format on top of
