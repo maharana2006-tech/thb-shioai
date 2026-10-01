@@ -189,6 +189,28 @@ class ExternalSystemRegistryTest {
     }
 
     @Test
+    void orphanedConnectionNamesListsRowsWithoutRegisteredConnector() {
+        // L1 — only STUB_JDBC + STUB_REST connectors are wired; a row
+        // typed STUB_MYSTERY should surface as orphaned.
+        ExternalSystemRegistry reg = newRegistry(jdbc, rest);
+        when(config.listActive()).thenReturn(List.of(
+                row("nds", "STUB_JDBC", true, "{}"),
+                row("mystery-row", "STUB_MYSTERY", true, "{}"),
+                row("sap", "STUB_REST", true, "{}")));
+        List<String> orphans = reg.orphanedConnectionNames();
+        assertEquals(List.of("mystery-row"), orphans);
+    }
+
+    @Test
+    void orphanedConnectionNamesEmptyWhenAllCovered() {
+        ExternalSystemRegistry reg = newRegistry(jdbc, rest);
+        when(config.listActive()).thenReturn(List.of(
+                row("nds", "STUB_JDBC", true, "{}"),
+                row("sap", "STUB_REST", true, "{}")));
+        assertTrue(reg.orphanedConnectionNames().isEmpty());
+    }
+
+    @Test
     void healthCheckNeverThrowsEvenForBrokenConnector() {
         ExternalSystemRegistry reg = newRegistry(broken);
         when(config.findByName("broken")).thenReturn(Optional.of(

@@ -17,6 +17,12 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.stream.Collectors;
 
 /**
  * Auto-discovers every {@link ExternalSystemConnector} bean at startup
@@ -80,6 +86,8 @@ public class ExternalSystemRegistry {
                         c.getClass().getSimpleName(), e.getMessage());
             }
         }
+        // L4 — drop the daemon healthcheck pool so JVM exit isn't held.
+        healthCheckPool.shutdownNow();
     }
 
     /** All registered connectors — for diagnostics / admin listing. */
@@ -153,13 +161,63 @@ public class ExternalSystemRegistry {
         }
     }
 
-    /** Health of every active connection. Used by the Actuator indicator. */
+    /** L4 — per-connection healthcheck timeout cap. 10s is well under the
+     *  Actuator's own typical 30s probe window; prior sequential impl could
+     *  block 10 × 30s = 5 min on a slow carrier. */
+    private static final int PER_CONNECTION_HEALTHCHECK_TIMEOUT_SECONDS = 10;
+
+    /** L4 — bounded pool for parallel healthchecks. Sized at 8: enough for
+     *  the typical install (1-3 connections) with headroom; a larger install
+     *  still parallelises in waves of 8. */
+    private final ExecutorService healthCheckPool = Executors.newFixedThreadPool(8, r -> {
+        Thread t = new Thread(r, "ext-sys-healthcheck");
+        t.setDaemon(true);
+        return t;
+    });
+
+    /**
+     * Health of every active connection. Used by the Actuator indicator.
+     *
+     * <p>L4 — connections are dialled in parallel on a bounded pool with a
+     * per-connection timeout cap. 10 connections × a 30s TCP timeout no
+     * longer blocks /actuator/health for 5 min; worst-case latency is
+     * {@value #PER_CONNECTION_HEALTHCHECK_TIMEOUT_SECONDS}s per wave.
+     */
     public List<HealthCheckResult> healthCheckAll() {
-        List<HealthCheckResult> out = new ArrayList<>();
-        for (ExternalSystemConnection row : config.listActive()) {
-            out.add(healthCheck(row.getName()));
+        List<ExternalSystemConnection> active = config.listActive();
+        if (active.isEmpty()) return List.of();
+        List<CompletableFuture<HealthCheckResult>> futures = new ArrayList<>(active.size());
+        for (ExternalSystemConnection row : active) {
+            final String name = row.getName();
+            final String type = row.getSystemType();
+            futures.add(CompletableFuture
+                    .supplyAsync(() -> healthCheck(name), healthCheckPool)
+                    .orTimeout(PER_CONNECTION_HEALTHCHECK_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                    .exceptionally(ex -> {
+                        Throwable root = ex instanceof java.util.concurrent.CompletionException ? ex.getCause() : ex;
+                        String msg = root instanceof TimeoutException
+                                ? "healthCheck timed out after " + PER_CONNECTION_HEALTHCHECK_TIMEOUT_SECONDS + "s"
+                                : "healthCheck threw: " + (root == null ? ex.getMessage() : root.getMessage());
+                        return HealthCheckResult.down(name, type, msg);
+                    }));
         }
+        List<HealthCheckResult> out = new ArrayList<>(futures.size());
+        for (CompletableFuture<HealthCheckResult> f : futures) out.add(f.join());
         return out;
+    }
+
+    /**
+     * L1 — active connection rows whose {@code system_type} has no
+     * matching registered connector. Logged WARN at startup; now also
+     * surfaced on {@code /actuator/health} so a connector removed by
+     * a redeploy is visible to monitoring, not just the boot log.
+     */
+    public List<String> orphanedConnectionNames() {
+        return config.listActive().stream()
+                .filter(row -> !byType.containsKey(normalizeType(row.getSystemType())))
+                .map(ExternalSystemConnection::getName)
+                .sorted()
+                .collect(Collectors.toUnmodifiableList());
     }
 
     /**
