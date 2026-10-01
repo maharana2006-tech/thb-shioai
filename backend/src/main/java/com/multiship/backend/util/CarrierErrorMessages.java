@@ -2,6 +2,7 @@ package com.multiship.backend.util;
 
 import org.springframework.util.StringUtils;
 
+import java.util.List;
 import java.util.Locale;
 
 /**
@@ -10,8 +11,43 @@ import java.util.Locale;
  * messages and the Logs page's CARRIER_REJECTED notes so the same failure
  * reads identically everywhere; the raw payload belongs in server logs /
  * tooltips, never in operator-facing text.
+ *
+ * <p>V118 — the five "clean" pattern→sentence mappings live in the
+ * {@code carrier_error_message} table and are DB-tunable.
+ * {@code CarrierErrorMessagePlatformService} swaps the live list via
+ * {@link #setPatternRules} at ApplicationReadyEvent. Bootstrap defaults
+ * match the pre-V118 hardcoded switch, so a DB outage never degrades to
+ * raw payloads reaching the operator.
  */
 public final class CarrierErrorMessages {
+
+    /** One pattern-rule row. {@code matchAnyOf} is pipe-separated OR
+     *  tokens; {@code humanized} may contain the literal {@code {carrier}}
+     *  placeholder, substituted at runtime with the pretty carrier name. */
+    public record PatternRule(String matchAnyOf, String humanized) {}
+
+    /** Bootstrap defaults mirror the pre-V118 hardcoded switch. */
+    private static final List<PatternRule> BOOTSTRAP_RULES = List.of(
+            new PatternRule("NOTSERVED|NOT SERVED|DESTINATION.COUNTRY|ORIGIN.COUNTRY",
+                    "{carrier} doesn't serve this lane on the selected service."),
+            new PatternRule("PHONENUMBER|PHONE NUMBER|PHONE.",
+                    "{carrier} needs a valid recipient phone number for this shipment."),
+            new PatternRule("NOT A REGISTERED|NOT AUTHORIZED|NOT AUTHORISED|UNAUTHORIZED",
+                    "{carrier} rejected the billing account. The account isn't authorised for this carrier — check Settings → Carriers."),
+            new PatternRule("POSTAL|ZIP",
+                    "{carrier} rejected the postal code for this address."),
+            new PatternRule("CUSTOMS|COMMODITY|TOTALCUSTOMSVALUE",
+                    "{carrier} rejected the customs details for this international shipment."));
+
+    private static volatile List<PatternRule> patternRules = BOOTSTRAP_RULES;
+
+    /** V118 hook — {@code CarrierErrorMessagePlatformService} swaps the
+     *  live list at startup with DB rows. Null / empty input leaves the
+     *  bootstrap default in place. */
+    public static void setPatternRules(List<PatternRule> rules) {
+        if (rules == null || rules.isEmpty()) return;
+        patternRules = List.copyOf(rules);
+    }
 
     private CarrierErrorMessages() {}
 
@@ -39,24 +75,13 @@ public final class CarrierErrorMessages {
         if (m.find()) tail = " " + m.group(1);
         String up = raw.toUpperCase(Locale.ROOT);
 
-        if (up.contains("NOTSERVED") || up.contains("NOT SERVED") || up.contains("DESTINATION.COUNTRY")
-                || up.contains("ORIGIN.COUNTRY")) {
-            return carrierName + " doesn't serve this lane on the selected service." + tail;
+        // V118 — walk the DB-driven rules (bootstrap default when empty).
+        for (PatternRule rule : patternRules) {
+            if (matchesAnyToken(up, rule.matchAnyOf())) {
+                return rule.humanized().replace("{carrier}", carrierName) + tail;
+            }
         }
-        if (up.contains("PHONENUMBER") || up.contains("PHONE NUMBER") || up.contains("PHONE.")) {
-            return carrierName + " needs a valid recipient phone number for this shipment." + tail;
-        }
-        if (up.contains("NOT A REGISTERED") || up.contains("NOT AUTHORIZED") || up.contains("NOT AUTHORISED")
-                || up.contains("UNAUTHORIZED")
-                || (up.contains("ACCOUNT") && (up.contains("HTTP 400") || up.contains("HTTP 401") || up.contains("HTTP 403")))) {
-            return carrierName + " rejected the billing account. The account isn't authorised for this carrier — check Settings → Carriers." + tail;
-        }
-        if (up.contains("POSTAL") || up.contains("ZIP")) {
-            return carrierName + " rejected the postal code for this address." + tail;
-        }
-        if (up.contains("CUSTOMS") || up.contains("COMMODITY") || up.contains("TOTALCUSTOMSVALUE")) {
-            return carrierName + " rejected the customs details for this international shipment." + tail;
-        }
+
         // Not a recognised code. Only a raw carrier PAYLOAD is worth hiding — a
         // JSON body or a bare "…HTTP 4xx: {…}" dump is debug output, not an
         // operator message. A short, clean cause (a transport error, a timeout)
@@ -71,6 +96,19 @@ public final class CarrierErrorMessages {
             return carrierName + " rejected this shipment" + (reason != null ? ": " + reason : ".") + tail;
         }
         return raw;
+    }
+
+    /** True when any pipe-separated token from {@code anyOf} is a substring of
+     *  the already-uppercased {@code upperHaystack}. */
+    private static boolean matchesAnyToken(String upperHaystack, String anyOf) {
+        if (anyOf == null || anyOf.isBlank()) return false;
+        for (String token : anyOf.split("\\|")) {
+            String t = token.trim();
+            if (!t.isEmpty() && upperHaystack.contains(t.toUpperCase(Locale.ROOT))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static final java.util.regex.Pattern[] REASON_PATTERNS = {
