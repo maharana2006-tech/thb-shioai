@@ -123,6 +123,8 @@ export const settingsPaths = {
   currencies: '/settings/currencies',
   /** V118 — carrier-error-message pattern → humanized rules (read-only). */
   carrierErrorMessages: '/settings/carrier-error-messages',
+  /** V120 — per-carrier dropdown vocabularies (label format / pickup / clearance). */
+  carrierDropdowns: '/settings/carrier-dropdowns',
 } as const
 
 export const workspaceNavItems: Array<{
@@ -241,6 +243,9 @@ export const settingsNavItems: Array<{
     roles: ['ADMIN'] },
   { key: 'carrier-error-messages', label: 'Carrier Error Messages', to: settingsPaths.carrierErrorMessages, iconKey: 'dashboard',
     description: 'Pattern → humanized sentence rules CarrierErrorMessages applies to raw carrier payloads. Read-only; edit via SQL today.',
+    roles: ['ADMIN'] },
+  { key: 'carrier-dropdowns', label: 'Carrier Dropdowns', to: settingsPaths.carrierDropdowns, iconKey: 'carrier',
+    description: 'Per-carrier vocabularies the /orders/new wizard uses — label formats, pickup types, clearance options. Read-only.',
     roles: ['ADMIN'] },
   // ===== Hidden from the Settings menu =====
   // Routes below still resolve so direct URLs and any hard-coded links keep

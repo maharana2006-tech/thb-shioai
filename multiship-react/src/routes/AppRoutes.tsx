@@ -112,6 +112,8 @@ const ReasonsForExportPage = lazy(() => import('../components/ReasonsForExportPa
 const CurrenciesPage = lazy(() => import('../components/CurrenciesPage'))
 // V118 — read-only carrier-error-message rules.
 const CarrierErrorMessagesPage = lazy(() => import('../components/CarrierErrorMessagesPage'))
+// V120 — read-only per-carrier dropdown vocabularies.
+const CarrierDropdownsPage = lazy(() => import('../components/CarrierDropdownsPage'))
 // A4.5 — self-serve per-user email opt-out toggles.
 const MyNotificationSubscriptionsPage = lazy(() => import('../components/MyNotificationSubscriptionsPage'))
 const CutoffsPage = lazy(() => import('../components/CutoffsPage'))
@@ -230,6 +232,7 @@ export default function AppRoutes() {
                   <Route path="reasons-for-export" element={<ReasonsForExportPage />} />
                   <Route path="currencies" element={<CurrenciesPage />} />
                   <Route path="carrier-error-messages" element={<CarrierErrorMessagesPage />} />
+                  <Route path="carrier-dropdowns" element={<CarrierDropdownsPage />} />
                   <Route path="cutoffs" element={<CutoffsPage />} />
                   {/* PR-F4 Agent-2 — USPS Direct admin dashboard: composite
                       view of queue depth, quota headroom, retry buckets and
