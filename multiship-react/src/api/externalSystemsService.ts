@@ -25,6 +25,8 @@ export interface ConnectionSummary {
   // V91 env split. Shows PROD or DEV chip + a "using DEV" marker on PROD rows.
   environment: 'PROD' | 'DEV' | string
   useDev: boolean
+  // X1 — list shows a "DEFAULT" chip on the row holding this flag.
+  isDefaultWritebackTarget: boolean
 }
 
 export interface ConnectionDetail {
@@ -57,6 +59,9 @@ export interface ConnectionDetail {
   // canonical on the PROD row: TRUE = resolver picks the DEV row.
   environment: 'PROD' | 'DEV' | string
   useDev: boolean
+  // X1 / V110 — at most one row across the table has this flag; it's
+  // the fallback writeback target when no per-tenant override is set.
+  isDefaultWritebackTarget: boolean
 }
 
 export interface ConnectionUpsertRequest {
@@ -138,6 +143,12 @@ export const externalSystemsService = {
 
   delete: (id: number) =>
     apiClient.delete<ApiResponse<void>>(`${BASE}/${id}`),
+
+  /** X1 — flip the DB-flagged default writeback target to this row. */
+  setDefaultWritebackTarget: (id: number) =>
+    apiClient
+      .put<ApiResponse<ConnectionDetail>>(`${BASE}/${id}/default-writeback-target`, {})
+      .then((res) => res.data as ConnectionDetail),
 
   /** Passing null / empty plaintext deletes the secret row. */
   putSecret: (id: number, key: string, plaintext: string | null) =>

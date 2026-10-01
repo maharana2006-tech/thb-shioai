@@ -124,4 +124,14 @@ public class ExternalSystemConnection {
     /** Canonical on the PROD row (ignored on DEV). TRUE = pick the DEV row. */
     @Column(name = "use_dev", nullable = false, columnDefinition = "boolean default false")
     private Boolean useDev = false;
+
+    /**
+     * X1 (V110) — at most one row across the whole table may hold TRUE
+     * (partial unique index). The writeback dispatcher's fallback when
+     * no per-tenant writebackConnection override is set. Prior to this
+     * the dispatcher looked up the hardcoded literal "nds-default".
+     */
+    @Column(name = "is_default_writeback_target", nullable = false,
+            columnDefinition = "boolean default false")
+    private Boolean isDefaultWritebackTarget = false;
 }

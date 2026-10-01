@@ -174,6 +174,14 @@ export default function ExternalSystemsPage() {
                             → DEV
                           </span>
                         ) : null}
+                        {row.isDefaultWritebackTarget ? (
+                          <span
+                            title="X1 — default writeback target. Fallback when a tenant has no writebackConnection override."
+                            className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-emerald-800 ring-1 ring-emerald-200"
+                          >
+                            default
+                          </span>
+                        ) : null}
                       </div>
                     </td>
                     <td className="px-3 py-2">
@@ -213,6 +221,26 @@ export default function ExternalSystemsPage() {
                         >
                           <FiZap className="h-3 w-3" /> Test
                         </button>
+                        {!row.isDefaultWritebackTarget ? (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (!(await notify.confirm(
+                                  `Make '${row.name}' the default writeback target? Any current default will be cleared.`))) return
+                              try {
+                                await externalSystemsService.setDefaultWritebackTarget(row.id)
+                                notify.success(`'${row.name}' is now the default writeback target.`)
+                                await load()
+                              } catch (e) {
+                                notify.apiError(e, 'Could not change default writeback target.')
+                              }
+                            }}
+                            title="X1 — flip this row to the default writeback target (atomic swap)"
+                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11.5px] font-semibold text-slate-700 hover:bg-emerald-50 hover:text-emerald-800"
+                          >
+                            Make default
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           onClick={async () => {

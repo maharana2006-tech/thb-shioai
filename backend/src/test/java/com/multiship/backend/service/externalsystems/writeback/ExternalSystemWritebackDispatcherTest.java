@@ -49,6 +49,12 @@ class ExternalSystemWritebackDispatcherTest {
                 any(WritebackPayload.class), any())).thenReturn(row);
         when(journal.recordPending(any(String.class), any(),
                 any(WritebackClearRequest.class), any())).thenReturn(row);
+        // X1 — default writeback target is "nds-default" for every
+        // existing test (the resolver reads .getName() from this row);
+        // tests that assert "no default wired" override to empty.
+        ExternalSystemConnection defaultRow = new ExternalSystemConnection();
+        defaultRow.setName("nds-default");
+        when(config.findDefaultWritebackTarget()).thenReturn(Optional.of(defaultRow));
         dispatcher = new ExternalSystemWritebackDispatcher(registry, config, tenantSettings, journal, objectMapper);
     }
 
@@ -125,22 +131,21 @@ class ExternalSystemWritebackDispatcherTest {
                 .thenReturn(Optional.of("acme-sap"));
         String name = dispatcher.resolveConnectionName("ACME");
         assertEquals("acme-sap", name);
-        // Default lookup NOT consulted — save a DB hit on the hot path.
-        verify(config, never()).findByName(anyString());
+        // X1 — Default lookup NOT consulted when the tenant setting hits
+        // (save a DB round-trip on the hot path).
+        verify(config, never()).findDefaultWritebackTarget();
     }
 
     @Test
     void resolveConnectionNameFallsBackToDefaultWhenNoTenantSetting() {
         when(tenantSettings.getSetting(anyString(), anyString())).thenReturn(Optional.empty());
-        ExternalSystemConnection def = conn("nds-default", true, true, true, true, true, true);
-        when(config.findByName("nds-default")).thenReturn(Optional.of(def));
         assertEquals("nds-default", dispatcher.resolveConnectionName("ACME"));
     }
 
     @Test
     void resolveConnectionNameReturnsNullWhenNothingWired() {
         when(tenantSettings.getSetting(anyString(), anyString())).thenReturn(Optional.empty());
-        when(config.findByName(anyString())).thenReturn(Optional.empty());
+        when(config.findDefaultWritebackTarget()).thenReturn(Optional.empty());
         assertNull(dispatcher.resolveConnectionName("ACME"));
         assertNull(dispatcher.resolveConnectionName(""));
         assertNull(dispatcher.resolveConnectionName(null));

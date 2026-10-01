@@ -86,6 +86,47 @@ public class ExternalSystemConfigService {
         return findByName("nds-default");
     }
 
+    /**
+     * X1 — the DB-flagged default writeback target. Replaces the
+     * compile-time {@code DEFAULT_CONNECTION_NAME = "nds-default"} in
+     * {@link com.multiship.backend.service.externalsystems.writeback.ExternalSystemWritebackDispatcher}.
+     * Resolves PROD/DEV via {@link #findByName} so the V91 {@code use_dev}
+     * toggle on the PROD row still routes to DEV correctly.
+     */
+    public Optional<ExternalSystemConnection> findDefaultWritebackTarget() {
+        return connectionRepo.findByIsDefaultWritebackTargetTrue()
+                .flatMap(row -> findByName(row.getName()));
+    }
+
+    /**
+     * X1 — flip the default writeback target to the given row atomically
+     * (null out the prior default, then set the new one). The partial
+     * unique index on {@code is_default_writeback_target = TRUE}
+     * guarantees invariant even against concurrent calls.
+     */
+    @Transactional
+    public void setDefaultWritebackTarget(Long newDefaultId, String actor) {
+        if (newDefaultId == null) {
+            throw new IllegalArgumentException("Connection id required.");
+        }
+        ExternalSystemConnection target = connectionRepo.findById(newDefaultId)
+                .orElseThrow(() -> new IllegalArgumentException("Connection " + newDefaultId + " not found."));
+        connectionRepo.findByIsDefaultWritebackTargetTrue().ifPresent(prior -> {
+            if (!prior.getId().equals(newDefaultId)) {
+                prior.setIsDefaultWritebackTarget(false);
+                prior.setUpdatedAt(LocalDateTime.now(ZoneOffset.UTC));
+                prior.setUpdatedBy(actor);
+                connectionRepo.save(prior);
+            }
+        });
+        target.setIsDefaultWritebackTarget(true);
+        target.setUpdatedAt(LocalDateTime.now(ZoneOffset.UTC));
+        target.setUpdatedBy(actor);
+        connectionRepo.save(target);
+        log.info("external-system-connection: default writeback target set to id={} name={} actor={}",
+                target.getId(), target.getName(), actor);
+    }
+
     @Transactional
     public ExternalSystemConnection saveConnection(ExternalSystemConnection c, String actor) {
         if (c.getName() == null || c.getName().isBlank()) {

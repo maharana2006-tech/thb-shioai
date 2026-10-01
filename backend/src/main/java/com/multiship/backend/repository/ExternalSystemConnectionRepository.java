@@ -24,4 +24,7 @@ public interface ExternalSystemConnectionRepository extends JpaRepository<Extern
     List<ExternalSystemConnection> findBySystemType(String systemType);
 
     List<ExternalSystemConnection> findByActiveTrue();
+
+    /** X1 — the (at most one) row flagged as the default writeback target. */
+    Optional<ExternalSystemConnection> findByIsDefaultWritebackTargetTrue();
 }

@@ -36,9 +36,11 @@ import java.util.Optional;
  * <ol>
  *   <li>tenant setting {@code writebackConnection} for the order's
  *       clientCode (via {@link TenantSettingsService})</li>
- *   <li>{@code nds-default} — the S4 well-known seed connection</li>
+ *   <li>whichever row has {@code is_default_writeback_target = TRUE}
+ *       (X1 / V110 — admin-flipped from /settings/external-systems;
+ *       prior to V110 this was a compile-time literal "nds-default")</li>
  * </ol>
- * A blank clientCode + missing default = silent skip (no external
+ * A blank clientCode + no default-marked row = silent skip (no external
  * system wired). No side effects — this is the common case for the
  * many tenants that don't use writeback at all.
  *
@@ -55,9 +57,6 @@ public class ExternalSystemWritebackDispatcher {
 
     /** Tenant-setting key naming the writeback connection for this client. */
     public static final String SETTING_WRITEBACK_CONNECTION = "writebackConnection";
-
-    /** Fallback connection name when no per-tenant override is set. */
-    public static final String DEFAULT_CONNECTION_NAME = "nds-default";
 
     private final ExternalSystemRegistry registry;
     private final ExternalSystemConfigService config;
@@ -250,10 +249,9 @@ public class ExternalSystemWritebackDispatcher {
                 return perTenant.get().trim();
             }
         }
-        // Default only fires when it actually exists — an install that
-        // never seeded nds-default gets null (silent skip), not a
-        // per-label WARN.
-        return config.findByName(DEFAULT_CONNECTION_NAME).map(ExternalSystemConnection::getName).orElse(null);
+        // X1 — DB-flagged default. Null when no row is marked (silent
+        // skip is correct for installs that never set one).
+        return config.findDefaultWritebackTarget().map(ExternalSystemConnection::getName).orElse(null);
     }
 
     WritebackPayload redactByFlags(WritebackPayload src, ExternalSystemConnection row) {
