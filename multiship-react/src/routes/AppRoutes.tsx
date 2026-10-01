@@ -96,6 +96,16 @@ const NotificationTemplatesPage = lazy(() => import('../components/NotificationT
 const NotificationDeliveryLogPage = lazy(() => import('../components/NotificationDeliveryLogPage'))
 // D1 — framework-wide external-system writeback dispatch journal.
 const WritebackJournalPage = lazy(() => import('../components/WritebackJournalPage'))
+// V112 — carriers platform registry (enabled + mode + family).
+const CarriersPlatformPage = lazy(() => import('../components/CarriersPlatformPage'))
+// V113 — durable alert history.
+const AlertHistoryPage = lazy(() => import('../components/AlertHistoryPage'))
+// V114 — per-request carrier API log.
+const CarrierApiLogPage = lazy(() => import('../components/CarrierApiLogPage'))
+// V115 — read-only role registry.
+const RolesPage = lazy(() => import('../components/RolesPage'))
+// V111 — read-only country / is_us_territory table.
+const CountriesPage = lazy(() => import('../components/CountriesPage'))
 // A4.5 — self-serve per-user email opt-out toggles.
 const MyNotificationSubscriptionsPage = lazy(() => import('../components/MyNotificationSubscriptionsPage'))
 const CutoffsPage = lazy(() => import('../components/CutoffsPage'))
@@ -206,6 +216,11 @@ export default function AppRoutes() {
                   <Route path="notification-templates" element={<NotificationTemplatesPage />} />
                   <Route path="notification-delivery-log" element={<NotificationDeliveryLogPage />} />
                   <Route path="writeback-journal" element={<WritebackJournalPage />} />
+                  <Route path="carriers-platform" element={<CarriersPlatformPage />} />
+                  <Route path="alerts-history" element={<AlertHistoryPage />} />
+                  <Route path="carrier-api-log" element={<CarrierApiLogPage />} />
+                  <Route path="roles" element={<RolesPage />} />
+                  <Route path="countries" element={<CountriesPage />} />
                   <Route path="cutoffs" element={<CutoffsPage />} />
                   {/* PR-F4 Agent-2 — USPS Direct admin dashboard: composite
                       view of queue depth, quota headroom, retry buckets and

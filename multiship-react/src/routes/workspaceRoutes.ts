@@ -107,6 +107,16 @@ export const settingsPaths = {
    *  (PENDING / OK / SKIPPED / FAILED) with filter + per-row Retry.
    *  Backing table external_system_writeback_journal. ADMIN only. */
   writebackJournal: '/settings/writeback-journal',
+  /** V112 — platform-wide carrier registry (Auth Gap-6-A). */
+  carriersPlatform: '/settings/carriers-platform',
+  /** V113 — durable record of fired alerts. */
+  alertsHistory: '/settings/alerts-history',
+  /** V114 — per-request carrier API log. */
+  carrierApiLog: '/settings/carrier-api-log',
+  /** V115 — role registry (read-only). */
+  roles: '/settings/roles',
+  /** V111 — country table + is_us_territory flag (read-only). */
+  countries: '/settings/countries',
 } as const
 
 export const workspaceNavItems: Array<{
@@ -201,6 +211,21 @@ export const settingsNavItems: Array<{
     roles: ['ADMIN'] },
   { key: 'writeback-journal', label: 'Writeback Journal', to: settingsPaths.writebackJournal, iconKey: 'dashboard',
     description: 'Every external-system writeback dispatch — PENDING, OK, SKIPPED and FAILED — with connection, order and latency. Retry any failed row to re-fire through the dispatcher.',
+    roles: ['ADMIN'] },
+  { key: 'carriers-platform', label: 'Carriers (platform)', to: settingsPaths.carriersPlatform, iconKey: 'carrier',
+    description: 'Platform-wide carrier registry — toggle enabled org-wide and flip LIVE/TEST mode without a code deploy.',
+    roles: ['ADMIN'] },
+  { key: 'alerts-history', label: 'Alerts History', to: settingsPaths.alertsHistory, iconKey: 'dashboard',
+    description: 'Durable record of fired alerts (USPS fallback, Stamps SERA, future). Filter by source, tenant and order.',
+    roles: ['ADMIN'] },
+  { key: 'carrier-api-log', label: 'Carrier API Log', to: settingsPaths.carrierApiLog, iconKey: 'dashboard',
+    description: 'Per-request carrier API round-trips with request / response bodies. Infrastructure present; connector wiring lands as follow-ups.',
+    roles: ['ADMIN'] },
+  { key: 'roles', label: 'Roles', to: settingsPaths.roles, iconKey: 'clients',
+    description: 'Platform-wide role registry. Read-only; add roles via SQL today.',
+    roles: ['ADMIN'] },
+  { key: 'countries', label: 'Countries', to: settingsPaths.countries, iconKey: 'mapping',
+    description: 'ISO country list + is_us_territory flag. Read-only; edit via SQL today.',
     roles: ['ADMIN'] },
   // ===== Hidden from the Settings menu =====
   // Routes below still resolve so direct URLs and any hard-coded links keep
