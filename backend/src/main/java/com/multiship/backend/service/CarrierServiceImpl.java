@@ -55,6 +55,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -3366,7 +3367,29 @@ public class CarrierServiceImpl implements CarrierService {
 
     private ShipVia resolveShipVia(String carrierCode) {
         return shipViaRepository.findByShipviaCdIgnoreCase(carrierCode)
-                .orElseThrow(() -> new CarrierConnectionException("ShipVia row not found for carrier " + carrierCode));
+                .orElseThrow(() -> new CarrierConnectionException(buildShipViaNotFoundMessage(carrierCode)));
+    }
+
+    /** G-7.1 (carrier-choice-vs-shipx) — enrich the "ShipVia not found"
+     *  error with up to 5 similar codes from ship_vias so the operator
+     *  gets a fix hint instead of a dead-end message. Prefix match on
+     *  the first two chars; falls back to substring. Empty tables and
+     *  blank input both fall through to the plain message. */
+    private String buildShipViaNotFoundMessage(String carrierCode) {
+        String base = "ShipVia row not found for carrier " + carrierCode;
+        if (carrierCode == null || carrierCode.isBlank()) return base + ".";
+        String trimmed = carrierCode.trim();
+        var page = org.springframework.data.domain.PageRequest.of(0, 5);
+        List<ShipVia> hits = List.of();
+        if (trimmed.length() >= 2) {
+            hits = shipViaRepository.findByCodePrefixIgnoreCase(trimmed.substring(0, 2), page);
+        }
+        if (hits.isEmpty()) {
+            hits = shipViaRepository.findByCodeSubstringIgnoreCase(trimmed, page);
+        }
+        if (hits.isEmpty()) return base + ".";
+        String suggestions = hits.stream().map(ShipVia::getShipviaCd).collect(Collectors.joining(", "));
+        return base + ". Did you mean: " + suggestions + "?";
     }
 
     private String resolveCarrierCode(User user) {

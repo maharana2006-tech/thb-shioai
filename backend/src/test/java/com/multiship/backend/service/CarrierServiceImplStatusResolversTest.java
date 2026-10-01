@@ -250,9 +250,45 @@ class CarrierServiceImplStatusResolversTest {
     @Test
     void resolveShipVia_missing_throwsCarrierConnectionExceptionWithCode() {
         when(shipViaRepository.findByShipviaCdIgnoreCase(anyString())).thenReturn(Optional.empty());
+        // G-7.1 — empty hints table ends message with a period; no "Did you mean".
         CarrierConnectionException ex = assertThrows(CarrierConnectionException.class,
                 () -> ReflectionTestUtils.invokeMethod(impl, "resolveShipVia", "ZZZ"));
-        assertEquals("ShipVia row not found for carrier ZZZ", ex.getMessage());
+        assertEquals("ShipVia row not found for carrier ZZZ.", ex.getMessage());
+    }
+
+    @Test
+    void resolveShipVia_missing_appendsPrefixMatchSuggestions() {
+        // G-7.1 — operator typed "UPS01"; repo doesn't have it, but a prefix
+        // scan on "UP" finds UPS1DA + UPSGND. Message carries both.
+        when(shipViaRepository.findByShipviaCdIgnoreCase(anyString())).thenReturn(Optional.empty());
+        ShipVia a = new ShipVia(); a.setShipviaCd("UPS1DA");
+        ShipVia b = new ShipVia(); b.setShipviaCd("UPSGND");
+        when(shipViaRepository.findByCodePrefixIgnoreCase(org.mockito.ArgumentMatchers.eq("UP"),
+                org.mockito.ArgumentMatchers.any(org.springframework.data.domain.Pageable.class)))
+                .thenReturn(List.of(a, b));
+
+        CarrierConnectionException ex = assertThrows(CarrierConnectionException.class,
+                () -> ReflectionTestUtils.invokeMethod(impl, "resolveShipVia", "UPS01"));
+        assertEquals("ShipVia row not found for carrier UPS01. Did you mean: UPS1DA, UPSGND?",
+                ex.getMessage());
+    }
+
+    @Test
+    void resolveShipVia_missing_fallsBackToSubstringMatch() {
+        // G-7.1 — prefix pulls nothing; substring on "SGN" catches UPSGND.
+        when(shipViaRepository.findByShipviaCdIgnoreCase(anyString())).thenReturn(Optional.empty());
+        ShipVia hit = new ShipVia(); hit.setShipviaCd("UPSGND");
+        when(shipViaRepository.findByCodePrefixIgnoreCase(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any(org.springframework.data.domain.Pageable.class)))
+                .thenReturn(List.of());
+        when(shipViaRepository.findByCodeSubstringIgnoreCase(org.mockito.ArgumentMatchers.eq("SGN"),
+                org.mockito.ArgumentMatchers.any(org.springframework.data.domain.Pageable.class)))
+                .thenReturn(List.of(hit));
+
+        CarrierConnectionException ex = assertThrows(CarrierConnectionException.class,
+                () -> ReflectionTestUtils.invokeMethod(impl, "resolveShipVia", "SGN"));
+        assertEquals("ShipVia row not found for carrier SGN. Did you mean: UPSGND?",
+                ex.getMessage());
     }
 
     // ==================================================================
