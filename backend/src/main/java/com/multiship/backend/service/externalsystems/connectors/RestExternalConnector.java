@@ -66,6 +66,13 @@ public class RestExternalConnector implements ExternalSystemConnector<RestExtern
 
     @Override public Class<RestExternalConfig> configType() { return RestExternalConfig.class; }
 
+    /** M3 — static-header auth needs {@code apiKey}. OAuth mode would
+     *  need {@code oauthClientSecret} but S4 refuses OAuth at validate
+     *  time, so only the one key is live today. */
+    @Override public java.util.List<String> secretKeys() {
+        return java.util.List.of(SECRET_API_KEY);
+    }
+
     @Override
     public RestClient connect(String connectionName, RestExternalConfig cfg,
                               LoginContext ctx, ConnectorSecretAccess secrets) {

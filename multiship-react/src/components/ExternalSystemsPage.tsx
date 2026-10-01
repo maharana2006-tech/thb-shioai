@@ -497,7 +497,10 @@ function EditDrawer({
               wbChanB2b={wbChanB2b}     setWbChanB2b={setWbChanB2b}
             />
           ) : tab === 'secrets' ? (
-            <SecretsTab id={initial!.id} />
+            <SecretsTab
+              id={initial!.id}
+              secretKeys={connectors.find((c) => c.systemType === initial!.systemType)?.secretKeys ?? []}
+            />
           ) : (
             <OverridesTab id={initial!.id} />
           )}
@@ -939,11 +942,12 @@ function RoutedTenantsSection({ connectionId }: { connectionId: number }) {
   )
 }
 
-function SecretsTab({ id }: { id: number }) {
-  // NDS connector expects one secret key: productionPassword. Other
-  // connectors may add more — for MVP we treat this as a single-secret
-  // form; expand to a table if a future connector needs many.
-  const [key, setKey] = useState<string>('productionPassword')
+function SecretsTab({ id, secretKeys }: { id: number; secretKeys: string[] }) {
+  // M3 — key list comes from the connector SPI (GET /connectors), not a
+  // hardcoded "productionPassword". When the list is non-empty the FE
+  // offers a dropdown of the declared keys; empty list keeps the free-
+  // text input so forward-compat with un-declared keys still works.
+  const [key, setKey] = useState<string>(secretKeys[0] ?? 'productionPassword')
   const [plaintext, setPlaintext] = useState<string>('')
   const [saving, setSaving] = useState(false)
 
@@ -968,12 +972,22 @@ function SecretsTab({ id }: { id: number }) {
       </div>
       <label className="block">
         <span className="mb-1 block text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Secret key</span>
-        <input
-          value={key}
-          onChange={(e) => setKey(e.target.value)}
-          placeholder="e.g. productionPassword"
-          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-[12.5px]"
-        />
+        {secretKeys.length > 0 ? (
+          <select
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-[12.5px]"
+          >
+            {secretKeys.map((k) => <option key={k} value={k}>{k}</option>)}
+          </select>
+        ) : (
+          <input
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+            placeholder="e.g. productionPassword"
+            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-[12.5px]"
+          />
+        )}
       </label>
       <label className="block">
         <span className="mb-1 block text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Plaintext (never stored)</span>

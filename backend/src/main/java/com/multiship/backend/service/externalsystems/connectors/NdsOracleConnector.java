@@ -103,6 +103,12 @@ public class NdsOracleConnector implements ExternalSystemConnector<NdsOracleConf
     @Override
     public Class<NdsOracleConfig> configType() { return NdsOracleConfig.class; }
 
+    /** M3 — the single secret key the admin Secrets form must offer. */
+    @Override
+    public java.util.List<String> secretKeys() {
+        return java.util.List.of(SECRET_PRODUCTION_PASSWORD);
+    }
+
     @Override
     public DataSource connect(String connectionName, NdsOracleConfig cfg,
                               LoginContext ctx, ConnectorSecretAccess secrets) {

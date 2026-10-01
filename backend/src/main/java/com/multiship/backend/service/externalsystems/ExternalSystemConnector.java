@@ -139,4 +139,18 @@ public interface ExternalSystemConnector<C, H> {
                                        WritebackClearRequest req) {
         return WritebackAck.skipped("clearShipment not implemented by " + getClass().getSimpleName());
     }
+
+    /**
+     * M3 — secret keys this connector reads via {@link ConnectorSecretAccess}.
+     * Powers the dynamic Secrets form on {@code /settings/external-systems}
+     * so the FE no longer hardcodes {@code "productionPassword"} as a
+     * single-key assumption. Default empty = "no secrets required"
+     * (e.g. a stub connector with public-API access only).
+     *
+     * <p>Connectors MUST return a stable list — the FE caches by
+     * {@code systemType}, and reordering elsewhere forces a refetch.
+     */
+    default java.util.List<String> secretKeys() {
+        return java.util.List.of();
+    }
 }

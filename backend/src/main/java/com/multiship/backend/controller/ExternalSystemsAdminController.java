@@ -57,6 +57,9 @@ public class ExternalSystemsAdminController {
                     Map<String, Object> row = new HashMap<>();
                     row.put("systemType", c.systemType());
                     row.put("configType", c.configType().getSimpleName());
+                    // M3 — exposed so the FE Secrets form renders the right
+                    // key list dynamically instead of hardcoding "productionPassword".
+                    row.put("secretKeys", c.secretKeys());
                     return row;
                 })
                 .toList();

@@ -13,6 +13,9 @@ import type { ApiResponse } from './orderService'
 export interface ConnectorSummary {
   systemType: string
   configType: string
+  /** M3 — secret keys this connector reads. FE Secrets form renders one
+   *  password input per entry. Empty = connector needs no secrets. */
+  secretKeys?: string[]
 }
 
 export interface ConnectionSummary {
