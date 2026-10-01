@@ -562,6 +562,10 @@ export interface ManualShipmentPayload {
   /** Returns F10 — operator-issued RMA number for this return. 60-char cap;
    *  omit when blank. Persisted on label_batch.rma_number. */
   rmaNumber?: string
+  /** Returns F11 — canonical reason code. One of WRONG_ITEM / DEFECTIVE /
+   *  NO_LONGER_NEEDED / SIZE / OTHER. Server quietly drops unknown codes
+   *  to null so a picklist mismatch doesn't block the label. */
+  returnReason?: string
   /** Optional credential-account hint; resolved from accountNumber + carrierCode when absent. */
   accountId?: number | null
   /** Carrier (UPS/FEDEX/USPS) — needed to resolve credentials for a manually-typed account. */

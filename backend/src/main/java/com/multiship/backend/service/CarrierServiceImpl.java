@@ -1990,6 +1990,11 @@ public class CarrierServiceImpl implements CarrierService {
         // Returns F10 — persist RMA only on returns; outbound regens must
         // not inherit a stale RMA from a prior manual save.
         order.setRmaNumber(isReturn ? truncate(req.getRmaNumber(), 60) : null);
+        // Returns F11 — persist reason only on returns. Enum validation at
+        // the boundary: unknown codes drop to null rather than 400 so a
+        // picklist mismatch doesn't block the label; analytics shows them
+        // under "Unknown".
+        order.setReturnReason(isReturn ? canonReturnReason(req.getReturnReason()) : null);
         // On regenerate (existingOrderNo) preserve the order's own source /
         // client so fixing a failed BULK/API order doesn't reclassify it as
         // MANUAL (which would move it to another partition and wipe its client).
@@ -3507,6 +3512,18 @@ public class CarrierServiceImpl implements CarrierService {
             return value;
         }
         return value.substring(0, maxLength);
+    }
+
+    /** Returns F11 — canonical return-reason codes. Keep in sync with the
+     *  FE picklist in NewShipmentPage; the enum lives here (not in the
+     *  entity) so changing values ships without a Flyway migration. */
+    private static final java.util.Set<String> RETURN_REASON_CODES = java.util.Set.of(
+            "WRONG_ITEM", "DEFECTIVE", "NO_LONGER_NEEDED", "SIZE", "OTHER");
+
+    private static String canonReturnReason(String raw) {
+        if (!StringUtils.hasText(raw)) return null;
+        String v = raw.trim().toUpperCase(java.util.Locale.ROOT);
+        return RETURN_REASON_CODES.contains(v) ? v : null;
     }
 
     /** Shared for packages_json round-trip. Reuse instead of allocating per call. */

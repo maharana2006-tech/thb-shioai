@@ -322,6 +322,10 @@ export default function NewShipmentPage() {
   // Returns F10 — RMA number operator issued for this return. Persisted on
   // label_batch.rma_number so warehouse can reconcile. UI only on return mode.
   const [rmaNumber, setRmaNumber] = useState<string>('')
+  // Returns F11 — canonical reason code. Empty = unselected (will persist
+  // as NULL and roll up under "Unknown"). Enum must stay in sync with
+  // CarrierServiceImpl.RETURN_REASON_CODES.
+  const [returnReason, setReturnReason] = useState<string>('')
   /**
    * UPS rejects return labels with 9120145 "Missing label delivery
    * information" when the LabelDelivery.EMail block is absent — and we
@@ -2510,6 +2514,8 @@ export default function NewShipmentPage() {
             // blank/trim-empty stays off the payload so the server-side
             // null-vs-"" distinction holds.
             ...(rmaNumber.trim() ? { rmaNumber: rmaNumber.trim() } : {}),
+            // Returns F11 — same contract for the reason picklist.
+            ...(returnReason ? { returnReason } : {}),
           }
         : {}),
       reference: reference.trim() || undefined,
@@ -2633,7 +2639,7 @@ export default function NewShipmentPage() {
   // Every value the label request is built from — when it differs from the
   // one taken at the last check, the form changed since.
   const formSnapshot = JSON.stringify([
-    sender, recipient, isReturn, returnType, rmaNumber, reference, carrier, accountNumber, serviceId,
+    sender, recipient, isReturn, returnType, rmaNumber, returnReason, reference, carrier, accountNumber, serviceId,
     packageChoice, length, width, height, dimUnit, weight, weightUnit, clientCode, warehouseCode,
     declaredValue, currency, dgBlock, signatureOption, insuredValue, labelImageType, labelStockType,
     labelImageFormat, pickupType, extraPackages, items, reasonForExport, incoterms, clearanceOption,
@@ -3086,6 +3092,23 @@ export default function NewShipmentPage() {
                         maxLength={60}
                         className="w-28 border-0 bg-transparent p-0 text-[11.5px] font-semibold text-[#1f150c] placeholder:font-normal placeholder:text-[#a08f6c] focus:outline-none focus:ring-0"
                       />
+                    </label>
+                    {/* Returns F11 — canonical reason picklist. Codes must
+                        match CarrierServiceImpl.RETURN_REASON_CODES. */}
+                    <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11.5px] font-semibold text-[#5a4526] shadow-sm">
+                      <span className="whitespace-nowrap">Reason</span>
+                      <select
+                        value={returnReason}
+                        onChange={(e) => setReturnReason(e.target.value)}
+                        className="border-0 bg-transparent p-0 pr-5 text-[11.5px] font-semibold text-[#1f150c] focus:outline-none focus:ring-0"
+                      >
+                        <option value="">—</option>
+                        <option value="WRONG_ITEM">Wrong item</option>
+                        <option value="DEFECTIVE">Defective</option>
+                        <option value="NO_LONGER_NEEDED">No longer needed</option>
+                        <option value="SIZE">Size</option>
+                        <option value="OTHER">Other</option>
+                      </select>
                     </label>
                   </div>
                 ) : null}

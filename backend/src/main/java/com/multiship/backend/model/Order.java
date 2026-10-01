@@ -202,6 +202,14 @@ public class Order {
     @Column(name = "rma_number", length = 60)
     private String rmaNumber;
 
+    /** Returns F11 — operator-picked reason this return was created.
+     *  One of WRONG_ITEM / DEFECTIVE / NO_LONGER_NEEDED / SIZE / OTHER;
+     *  null on outbound labels and on returns created before capture.
+     *  Enum lives in the app layer (no CHECK on the column) so new
+     *  reasons ship without a migration. */
+    @Column(name = "return_reason", length = 32)
+    private String returnReason;
+
     /** V76 — internal per-order ops note (driver instructions / pickup
      *  hints / handling flags). 500-char cap. Deliberately INTERNAL:
      *  not on external API / label / webhook. Rendered on /orders/new

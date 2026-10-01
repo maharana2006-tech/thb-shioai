@@ -38,6 +38,11 @@ public class ManualShipmentRequest {
     /** Returns F10 — RMA number the operator issued for this return. */
     private String rmaNumber;
 
+    /** Returns F11 — canonical return reason code. One of WRONG_ITEM /
+     *  DEFECTIVE / NO_LONGER_NEEDED / SIZE / OTHER. Only consulted when
+     *  {@link #isReturn} = true. Validated at the service boundary. */
+    private String returnReason;
+
     /** carrier_account_ref id to bill — optional credential hint. */
     private Long accountId;
 
