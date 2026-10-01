@@ -18,10 +18,24 @@ public final class CountryRegions {
             "North America", "Europe", "Middle East", "Asia", "Oceania",
             "South America", "Africa", "Other");
 
-    private static final Map<String, String> REGION_BY_CODE = new HashMap<>();
+    /** V117 — DB region_code → human label mapping. Bootstrap defaults
+     *  mirror the regions above so first boot keeps working before
+     *  CountryRegionPlatformService swaps the live map on
+     *  ApplicationReadyEvent. */
+    private static final Map<String, String> REGION_LABEL_BY_CODE = Map.ofEntries(
+            Map.entry("NORTH_AMERICA", "North America"),
+            Map.entry("EUROPE",        "Europe"),
+            Map.entry("MIDDLE_EAST",   "Middle East"),
+            Map.entry("ASIA",          "Asia"),
+            Map.entry("OCEANIA",       "Oceania"),
+            Map.entry("SOUTH_AMERICA", "South America"),
+            Map.entry("AFRICA",        "Africa"),
+            Map.entry("OTHER",         "Other"));
+
+    private static final Map<String, String> BOOTSTRAP = new HashMap<>();
 
     private static void put(String region, String codes) {
-        for (String c : codes.split(" ")) REGION_BY_CODE.put(c, region);
+        for (String c : codes.split(" ")) BOOTSTRAP.put(c, region);
     }
 
     static {
@@ -33,6 +47,25 @@ public final class CountryRegions {
         put("South America", "AR BO BR CL CO EC FK GF GY PE PY SR UY VE");
         put("Africa", "ZA AO BF BI BJ BW CD CF CG CI CM CV DJ DZ EG EH ER ET GA GH GM GN GQ GW KE KM LR LS LY MA MG ML MR MU MW MZ NA NE NG RE RW SC SD SH SL SN SO SS ST SZ TD TG TN TZ UG YT ZM ZW");
         put("Other", "AQ BV CC CX GS HM IO PN TF UM");
+    }
+
+    /** Live map (volatile). Swapped from the DB by the platform service. */
+    private static volatile Map<String, String> REGION_BY_CODE = Map.copyOf(BOOTSTRAP);
+
+    /** V117 hook — {@code CountryRegionPlatformService} swaps the live
+     *  map at {@link org.springframework.boot.context.event.ApplicationReadyEvent}
+     *  with a DB-driven set. Null / empty input leaves bootstrap in place. */
+    public static void setRegionByCode(Map<String, String> codeToLabel) {
+        if (codeToLabel == null || codeToLabel.isEmpty()) return;
+        REGION_BY_CODE = Map.copyOf(codeToLabel);
+    }
+
+    /** DB → bootstrap label-code translator — the DB stores NORTH_AMERICA,
+     *  the util has always returned "North America". Keeps callers'
+     *  string comparisons working across the swap. */
+    public static String labelFor(String regionCode) {
+        if (regionCode == null) return "Other";
+        return REGION_LABEL_BY_CODE.getOrDefault(regionCode.trim().toUpperCase(Locale.ROOT), regionCode);
     }
 
     private CountryRegions() {}
