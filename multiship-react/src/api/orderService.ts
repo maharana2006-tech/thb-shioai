@@ -34,6 +34,9 @@ export interface OrderDetails {
    *  Edit / Reissue button to /orders/new/return?fixOrder=N so prefill
    *  opens in RETURN mode. */
   isReturn?: boolean | null
+  /** Returns F12 — outbound order this return came from. Null when
+   *  unlinked. Drives the "return of #N" chip. */
+  originalOrderNo?: number | null
 }
 
 export interface ShippingDetails {
@@ -566,6 +569,9 @@ export interface ManualShipmentPayload {
    *  NO_LONGER_NEEDED / SIZE / OTHER. Server quietly drops unknown codes
    *  to null so a picklist mismatch doesn't block the label. */
   returnReason?: string
+  /** Returns F12 — outbound order number this is a return of. Server
+   *  drops to null when the referenced order doesn't exist. */
+  originalOrderNo?: number
   /** Optional credential-account hint; resolved from accountNumber + carrierCode when absent. */
   accountId?: number | null
   /** Carrier (UPS/FEDEX/USPS) — needed to resolve credentials for a manually-typed account. */

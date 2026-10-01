@@ -43,6 +43,10 @@ public class ManualShipmentRequest {
      *  {@link #isReturn} = true. Validated at the service boundary. */
     private String returnReason;
 
+    /** Returns F12 — the outbound order this is a return of. Dropped to
+     *  null when the referenced order doesn't exist. */
+    private Integer originalOrderNo;
+
     /** carrier_account_ref id to bill — optional credential hint. */
     private Long accountId;
 

@@ -885,6 +885,12 @@ public class OrderServiceImpl implements OrderService {
                         .isReturn(row.length > 26
                                 && row[26] != null
                                 && "Y".equalsIgnoreCase(String.valueOf(row[26]).trim()))
+                        // Returns F12 — the outbound order this return
+                        // came from. Null when unlinked (outbound rows,
+                        // legacy returns).
+                        .originalOrderNo(row.length > 27 && row[27] != null
+                                ? ((Number) row[27]).intValue()
+                                : null)
                         .build())
                 .shippingDetails(OrderResponseDTO.ShippingDetails.builder()
                         .city((String) row[4])

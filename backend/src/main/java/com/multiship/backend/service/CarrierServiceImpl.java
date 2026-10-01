@@ -1995,6 +1995,12 @@ public class CarrierServiceImpl implements CarrierService {
         // picklist mismatch doesn't block the label; analytics shows them
         // under "Unknown".
         order.setReturnReason(isReturn ? canonReturnReason(req.getReturnReason()) : null);
+        // Returns F12 — link to the outbound order this return came from.
+        // Existence check drops stale typed values to null — same boundary
+        // contract as rma / reason. Guards against self-linkage.
+        order.setOriginalOrderNo(isReturn
+                ? canonOriginalOrderNo(req.getOriginalOrderNo(), orderNo)
+                : null);
         // On regenerate (existingOrderNo) preserve the order's own source /
         // client so fixing a failed BULK/API order doesn't reclassify it as
         // MANUAL (which would move it to another partition and wipe its client).
@@ -3524,6 +3530,15 @@ public class CarrierServiceImpl implements CarrierService {
         if (!StringUtils.hasText(raw)) return null;
         String v = raw.trim().toUpperCase(java.util.Locale.ROOT);
         return RETURN_REASON_CODES.contains(v) ? v : null;
+    }
+
+    /** Returns F12 — drop invalid outbound-order references to null:
+     *  blank, self-linkage, or no matching row. Analytics / UI treats
+     *  null as "untracked"; a stale typed value never 400s. */
+    private Integer canonOriginalOrderNo(Integer raw, Integer selfOrderNo) {
+        if (raw == null || raw <= 0) return null;
+        if (selfOrderNo != null && raw.equals(selfOrderNo)) return null;
+        return orderRepository.findByOrderNo(raw).isPresent() ? raw : null;
     }
 
     /** Shared for packages_json round-trip. Reuse instead of allocating per call. */

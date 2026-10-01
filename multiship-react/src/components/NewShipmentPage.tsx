@@ -326,6 +326,9 @@ export default function NewShipmentPage() {
   // as NULL and roll up under "Unknown"). Enum must stay in sync with
   // CarrierServiceImpl.RETURN_REASON_CODES.
   const [returnReason, setReturnReason] = useState<string>('')
+  // Returns F12 — outbound order no this return came from. Server drops
+  // invalid refs to null so a typo doesn't block the label.
+  const [originalOrderNo, setOriginalOrderNo] = useState<string>('')
   /**
    * UPS rejects return labels with 9120145 "Missing label delivery
    * information" when the LabelDelivery.EMail block is absent — and we
@@ -2516,6 +2519,11 @@ export default function NewShipmentPage() {
             ...(rmaNumber.trim() ? { rmaNumber: rmaNumber.trim() } : {}),
             // Returns F11 — same contract for the reason picklist.
             ...(returnReason ? { returnReason } : {}),
+            // Returns F12 — only wire when numeric; server validates
+            // existence and drops bad refs to null.
+            ...(originalOrderNo.trim() && Number.isFinite(Number(originalOrderNo))
+                ? { originalOrderNo: Number(originalOrderNo) }
+                : {}),
           }
         : {}),
       reference: reference.trim() || undefined,
@@ -2639,7 +2647,7 @@ export default function NewShipmentPage() {
   // Every value the label request is built from — when it differs from the
   // one taken at the last check, the form changed since.
   const formSnapshot = JSON.stringify([
-    sender, recipient, isReturn, returnType, rmaNumber, returnReason, reference, carrier, accountNumber, serviceId,
+    sender, recipient, isReturn, returnType, rmaNumber, returnReason, originalOrderNo, reference, carrier, accountNumber, serviceId,
     packageChoice, length, width, height, dimUnit, weight, weightUnit, clientCode, warehouseCode,
     declaredValue, currency, dgBlock, signatureOption, insuredValue, labelImageType, labelStockType,
     labelImageFormat, pickupType, extraPackages, items, reasonForExport, incoterms, clearanceOption,
@@ -3091,6 +3099,19 @@ export default function NewShipmentPage() {
                         placeholder="optional"
                         maxLength={60}
                         className="w-28 border-0 bg-transparent p-0 text-[11.5px] font-semibold text-[#1f150c] placeholder:font-normal placeholder:text-[#a08f6c] focus:outline-none focus:ring-0"
+                      />
+                    </label>
+                    {/* Returns F12 — original order no this is a return of.
+                        Server validates existence; a typo lands as NULL. */}
+                    <label className="inline-flex cursor-text items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11.5px] font-semibold text-[#5a4526] shadow-sm">
+                      <span className="whitespace-nowrap">Return of #</span>
+                      <input
+                        type="number"
+                        value={originalOrderNo}
+                        onChange={(e) => setOriginalOrderNo(e.target.value)}
+                        placeholder="optional"
+                        min={1}
+                        className="w-24 border-0 bg-transparent p-0 text-[11.5px] font-semibold text-[#1f150c] placeholder:font-normal placeholder:text-[#a08f6c] focus:outline-none focus:ring-0"
                       />
                     </label>
                     {/* Returns F11 — canonical reason picklist. Codes must

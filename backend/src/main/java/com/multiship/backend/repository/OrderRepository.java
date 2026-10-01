@@ -146,7 +146,10 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             -- Returns F9 — surface the legacy 'Y'/'N' is_return flag so
             -- OrdersWorkspace can route the row-level Edit button to
             -- /orders/new/return?fixOrder=N (prefill in return mode).
-            b.is_return
+            b.is_return,
+            -- Returns F12 — outbound order this return came from; drives
+            -- the "return of #N" chip + reprint-of-original-CI link.
+            b.original_order_no
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
         LEFT JOIN ship_vias s ON b.shipvia_cd = s.shipvia_cd
@@ -413,7 +416,10 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             -- Returns F9 — surface the legacy 'Y'/'N' is_return flag so
             -- OrdersWorkspace can route the row-level Edit button to
             -- /orders/new/return?fixOrder=N (prefill in return mode).
-            b.is_return
+            b.is_return,
+            -- Returns F12 — outbound order this return came from; drives
+            -- the "return of #N" chip + reprint-of-original-CI link.
+            b.original_order_no
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
         LEFT JOIN ship_vias s ON b.shipvia_cd = s.shipvia_cd

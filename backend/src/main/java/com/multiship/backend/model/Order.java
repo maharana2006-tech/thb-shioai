@@ -210,6 +210,12 @@ public class Order {
     @Column(name = "return_reason", length = 32)
     private String returnReason;
 
+    /** Returns F12 — the outbound order number this is a return of.
+     *  Nullable: outbound labels and legacy returns stay NULL. No DB
+     *  FK; the manual-shipment boundary drops invalid refs to null. */
+    @Column(name = "original_order_no")
+    private Integer originalOrderNo;
+
     /** V76 — internal per-order ops note (driver instructions / pickup
      *  hints / handling flags). 500-char cap. Deliberately INTERNAL:
      *  not on external API / label / webhook. Rendered on /orders/new
