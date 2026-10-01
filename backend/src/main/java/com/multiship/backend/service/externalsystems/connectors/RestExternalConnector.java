@@ -230,6 +230,16 @@ public class RestExternalConnector implements ExternalSystemConnector<RestExtern
             throw new ExternalSystemException(Kind.INVALID_CONFIG, connectionName,
                     "healthCheckPath required for REST_JSON connection.");
         }
+        // S4 — refuse OAuth mode at config-validation. Prior behaviour was
+        // to WARN-log and return a client with no auth header; requests
+        // then silently went unauthenticated until the carrier 401'd. Fail
+        // fast at admin save-time so the misconfig is impossible to miss.
+        if (cfg.getOauthTokenUrl() != null && !cfg.getOauthTokenUrl().isBlank()) {
+            throw new ExternalSystemException(Kind.INVALID_CONFIG, connectionName,
+                    "OAuth 2.0 mode (oauthTokenUrl set) is declared but not implemented by this "
+                            + "stub connector. Clear oauthTokenUrl to use static-header auth, "
+                            + "or wire a vendor-specific OAuth interceptor (S5b).");
+        }
     }
 
     private RestClient buildClient(String connectionName, RestExternalConfig cfg,
