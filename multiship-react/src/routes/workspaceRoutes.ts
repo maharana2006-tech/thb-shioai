@@ -107,6 +107,8 @@ export const settingsPaths = {
    *  (PENDING / OK / SKIPPED / FAILED) with filter + per-row Retry.
    *  Backing table external_system_writeback_journal. ADMIN only. */
   writebackJournal: '/settings/writeback-journal',
+  /** Returns F11 payoff — reason-by-week rollup. ADMIN only. */
+  returnsAnalytics: '/settings/returns-analytics',
   /** V112 — platform-wide carrier registry (Auth Gap-6-A). */
   carriersPlatform: '/settings/carriers-platform',
   /** V113 — durable record of fired alerts. */
@@ -219,6 +221,9 @@ export const settingsNavItems: Array<{
     roles: ['ADMIN'] },
   { key: 'writeback-journal', label: 'Writeback Journal', to: settingsPaths.writebackJournal, iconKey: 'dashboard',
     description: 'Every external-system writeback dispatch — PENDING, OK, SKIPPED and FAILED — with connection, order and latency. Retry any failed row to re-fire through the dispatcher.',
+    roles: ['ADMIN'] },
+  { key: 'returns-analytics', label: 'Returns Analytics', to: settingsPaths.returnsAnalytics, iconKey: 'dashboard',
+    description: 'Weekly rollup of return reasons (Wrong item, Defective, No longer needed, Size, Other, Unknown) over a chosen lookback window.',
     roles: ['ADMIN'] },
   { key: 'carriers-platform', label: 'Carriers (platform)', to: settingsPaths.carriersPlatform, iconKey: 'carrier',
     description: 'Platform-wide carrier registry — toggle enabled org-wide and flip LIVE/TEST mode without a code deploy.',

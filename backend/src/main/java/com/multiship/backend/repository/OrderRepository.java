@@ -227,6 +227,23 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
     """, nativeQuery = true)
     List<Object[]> getAverageWeightForTenant(@Param("tenantId") String tenantId);
 
+    /** Returns F11 payoff — weekly rollup of return_reason counts since
+     *  :sinceDate. Null reason bucket surfaces as 'UNKNOWN'. Returns one
+     *  row per (week_start, reason). Sorted newest week first, then
+     *  reason alpha for a stable UI render. */
+    @Query(value = """
+        SELECT
+            date_trunc('week', created_date)::date AS week_start,
+            COALESCE(return_reason, 'UNKNOWN')     AS reason,
+            COUNT(*)                               AS cnt
+        FROM label_batch
+        WHERE UPPER(COALESCE(is_return, 'N')) = 'Y'
+          AND created_date >= :sinceDate
+        GROUP BY week_start, reason
+        ORDER BY week_start DESC, reason ASC
+    """, nativeQuery = true)
+    List<Object[]> getReturnsReasonRollup(@Param("sinceDate") java.time.LocalDate sinceDate);
+
     /**
      * Pending (unlabelled) order count for a client — powers the
      * client-disable cascade guard. Match by tenant_id when set,

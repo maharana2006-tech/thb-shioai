@@ -96,6 +96,8 @@ const NotificationTemplatesPage = lazy(() => import('../components/NotificationT
 const NotificationDeliveryLogPage = lazy(() => import('../components/NotificationDeliveryLogPage'))
 // D1 — framework-wide external-system writeback dispatch journal.
 const WritebackJournalPage = lazy(() => import('../components/WritebackJournalPage'))
+// Returns F11 payoff — reason-by-week rollup.
+const ReturnsAnalyticsPage = lazy(() => import('../components/ReturnsAnalyticsPage'))
 // V112 — carriers platform registry (enabled + mode + family).
 const CarriersPlatformPage = lazy(() => import('../components/CarriersPlatformPage'))
 // V113 — durable alert history.
@@ -224,6 +226,7 @@ export default function AppRoutes() {
                   <Route path="notification-templates" element={<NotificationTemplatesPage />} />
                   <Route path="notification-delivery-log" element={<NotificationDeliveryLogPage />} />
                   <Route path="writeback-journal" element={<WritebackJournalPage />} />
+                  <Route path="returns-analytics" element={<ReturnsAnalyticsPage />} />
                   <Route path="carriers-platform" element={<CarriersPlatformPage />} />
                   <Route path="alerts-history" element={<AlertHistoryPage />} />
                   <Route path="carrier-api-log" element={<CarrierApiLogPage />} />
