@@ -62,6 +62,10 @@ import java.util.Optional;
 public class CarrierServiceImpl implements CarrierService {
 
     private final List<CarrierConnector> carrierConnectors;
+    // V112 — platform-wide enabled / mode / family cache. getCarrierConnector
+    // consults isEnabled before resolving the bean so admin can disable a
+    // carrier org-wide without a redeploy (Auth Gap-6-A).
+    private final com.multiship.backend.service.carriers.platform.CarrierPlatformService carrierPlatformService;
     private final UserRepository userRepository;
     private final CarrierConfigRepository carrierConfigRepository;
     private final ShipViaRepository shipViaRepository;
@@ -3160,6 +3164,15 @@ public class CarrierServiceImpl implements CarrierService {
         }
 
         String canonicalCarrierCode = resolveCanonicalCarrierCode(carrierCode);
+
+        // V112 — Auth Gap-6-A: refuse dispatch when admin has disabled this
+        // carrier org-wide. Unknown codes (not in the carriers table) default
+        // to enabled=true so pre-seed installs don't fail closed.
+        if (!carrierPlatformService.isEnabled(canonicalCarrierCode)) {
+            throw new CarrierConnectionException(
+                    "Carrier '" + canonicalCarrierCode + "' is disabled org-wide. "
+                            + "Re-enable at /settings/carriers (platform) to dispatch again.");
+        }
 
         // USPS Direct - two connectors share carrierCode="USPS" (the legacy
         // StampsConnector and the new UspsDirectConnector). Branch on the
