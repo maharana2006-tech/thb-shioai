@@ -142,7 +142,11 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             -- note — V76 internal per-order ops note. Rendered as an
             -- icon-popover on the /orders list row. Empty/null hides
             -- the icon. Both queries feed mapToOrderResponseDTO.
-            b.note
+            b.note,
+            -- Returns F9 — surface the legacy 'Y'/'N' is_return flag so
+            -- OrdersWorkspace can route the row-level Edit button to
+            -- /orders/new/return?fixOrder=N (prefill in return mode).
+            b.is_return
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
         LEFT JOIN ship_vias s ON b.shipvia_cd = s.shipvia_cd
@@ -405,7 +409,11 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             -- note — V76 internal per-order ops note. Rendered as an
             -- icon-popover on the /orders list row. Empty/null hides
             -- the icon. Both queries feed mapToOrderResponseDTO.
-            b.note
+            b.note,
+            -- Returns F9 — surface the legacy 'Y'/'N' is_return flag so
+            -- OrdersWorkspace can route the row-level Edit button to
+            -- /orders/new/return?fixOrder=N (prefill in return mode).
+            b.is_return
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
         LEFT JOIN ship_vias s ON b.shipvia_cd = s.shipvia_cd

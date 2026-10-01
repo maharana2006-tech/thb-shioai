@@ -1206,14 +1206,21 @@ export default function OrdersWorkspace() {
       // carrier error, so the operator corrects it and regenerates IN PLACE.
       // (The old "Retry" re-ran from stored data and could bounce to a Settings
       // page when the cause was a missing client / customs profile.)
+      // Returns F9 — if the row is a return, route to the return path so
+      // the shipment form opens in RETURN mode (same component, same fix
+      // behaviour, with the mode toggle pre-set).
+      const isReturn = order.orderDetails?.isReturn === true
+      const target = isReturn
+        ? `/orders/new/return?fixOrder=${orderNo}`
+        : `/orders/new?fixOrder=${orderNo}`
       return (
         <button
           type="button"
-          onClick={() => navigate(`/orders/new?fixOrder=${orderNo}`)}
+          onClick={() => navigate(target)}
           className={`${ACTION_BASE} ${ACTION_RETRY}`}
         >
           <FiEdit3 className="h-3 w-3" />
-          Edit
+          {isReturn ? 'Retry return' : 'Edit'}
         </button>
       )
     }
@@ -1267,15 +1274,20 @@ export default function OrdersWorkspace() {
       // The label was cancelled: the way back is the reissue form (adjust,
       // then regenerate under the same number, with the void on its history)
       // — not a bare re-generate through the account chooser.
+      // Returns F9 — same return-aware routing as the ERROR branch above.
+      const isReturn = order.orderDetails?.isReturn === true
+      const target = isReturn
+        ? `/orders/new/return?fixOrder=${orderNo}`
+        : `/orders/new?fixOrder=${orderNo}`
       return (
         <button
           type="button"
-          onClick={() => navigate(`/orders/new?fixOrder=${orderNo}`)}
+          onClick={() => navigate(target)}
           className={`${ACTION_BASE} ${ACTION_RETRY}`}
           title="Reopen this order pre-filled and regenerate a new label"
         >
           <FiEdit3 className="h-3 w-3" />
-          Reissue label
+          {isReturn ? 'Reissue return' : 'Reissue label'}
         </button>
       )
     }

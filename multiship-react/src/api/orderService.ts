@@ -30,6 +30,10 @@ export interface OrderDetails {
   /** V76 — internal per-order ops note (500 char). Null / empty
    *  hides the row-icon in the orders list. */
   note?: string | null
+  /** Returns F9 — true when this is a return label. Routes the row-level
+   *  Edit / Reissue button to /orders/new/return?fixOrder=N so prefill
+   *  opens in RETURN mode. */
+  isReturn?: boolean | null
 }
 
 export interface ShippingDetails {

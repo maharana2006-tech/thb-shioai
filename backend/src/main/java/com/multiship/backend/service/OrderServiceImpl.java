@@ -879,6 +879,12 @@ public class OrderServiceImpl implements OrderService {
                         // OrderRepository that share this mapper). Null / blank
                         // hides the FE row-icon popover.
                         .note(row.length > 25 ? (String) row[25] : null)
+                        // Returns F9 — is_return legacy 'Y'/'N' column, index 26.
+                        // Routes the row-level Edit button to the return path
+                        // when 'Y'. Null tolerated → treated as not-return.
+                        .isReturn(row.length > 26
+                                && row[26] != null
+                                && "Y".equalsIgnoreCase(String.valueOf(row[26]).trim()))
                         .build())
                 .shippingDetails(OrderResponseDTO.ShippingDetails.builder()
                         .city((String) row[4])
