@@ -3683,6 +3683,8 @@ public class CarrierServiceImpl implements CarrierService {
                 .declaredValue(req.getDeclaredValue())
                 .isReturn(req.getIsReturn())
                 .returnType(req.getReturnType())
+                // Returns F8 — passes through to DhlConnector; null stays null.
+                .returnPickupRequested(req.getReturnPickupRequested())
                 .dangerousGoods(req.getDangerousGoods())
                 .signatureOption(req.getSignatureOption())
                 .insuredValue(req.getInsuredValue())

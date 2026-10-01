@@ -1220,7 +1220,13 @@ public class DhlConnector implements CarrierConnector {
         // depot as shipper (billing is on the shipper's account); we flip
         // pickup.isRequested=true so DHL Express Global Return schedules
         // collection from the customer.
-        payload.put("pickup", Map.of("isRequested", isReturn));
+        // Returns F8 — operator can now override to drop-off via
+        // request.returnPickupRequested=false (defaults to true for backward
+        // compat with every pre-F8 caller). Outbound shipments ignore the
+        // field (pickup.isRequested stays false).
+        boolean pickupRequested = isReturn
+                && !Boolean.FALSE.equals(request.getReturnPickupRequested());
+        payload.put("pickup", Map.of("isRequested", pickupRequested));
         // Per-account/per-shipment label format override (request →
         // account → hardcoded PDF, matching the pre-existing behavior).
         // ZPL uses the label-only thermal template (no A4 doc page);

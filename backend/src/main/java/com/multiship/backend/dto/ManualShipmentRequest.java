@@ -29,6 +29,12 @@ public class ManualShipmentRequest {
     /** Return label delivery type — PRINT | EMAIL (informational for now; finalised against the carrier sandbox). */
     private String returnType;
 
+    /** Returns F8 — DHL Global Return pickup toggle. Null / true = carrier
+     *  schedules pickup (prior default); false = customer drops at a DHL
+     *  ServicePoint. Only consulted when {@link #isReturn} = true + DHL
+     *  carrier. UPS / FedEx / USPS ignore the field. */
+    private Boolean returnPickupRequested;
+
     /** carrier_account_ref id to bill — optional credential hint. */
     private Long accountId;
 

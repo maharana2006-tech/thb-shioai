@@ -364,6 +364,8 @@ public class ShipmentSplitter {
                 .specialInstructions(src.getSpecialInstructions())
                 .declaredValue(declaredValue)
                 .isReturn(src.getIsReturn())
+                // Returns F8 — carry DHL pickup toggle through MPS split.
+                .returnPickupRequested(src.getReturnPickupRequested())
                 .dangerousGoods(src.getDangerousGoods())
                 .signatureOption(src.getSignatureOption())
                 .insuredValue(src.getInsuredValue())

@@ -551,6 +551,10 @@ export interface ManualShipmentPayload {
   isReturn?: boolean
   /** Return delivery type — PRINT | EMAIL. */
   returnType?: string
+  /** Returns F8 — DHL Global Return pickup toggle. true/omitted = schedule
+   *  pickup (prior default); false = customer drops at ServicePoint. UPS /
+   *  FedEx / USPS ignore the field. */
+  returnPickupRequested?: boolean
   /** Optional credential-account hint; resolved from accountNumber + carrierCode when absent. */
   accountId?: number | null
   /** Carrier (UPS/FEDEX/USPS) — needed to resolve credentials for a manually-typed account. */

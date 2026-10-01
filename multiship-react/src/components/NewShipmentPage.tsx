@@ -280,6 +280,10 @@ export default function NewShipmentPage() {
    * on FedEx (Code 9 = ELECTRONIC_SHIPPING_INFORMATION emails the label).
    */
   const [returnType, setReturnType] = useState<'PRINT' | 'EMAIL'>('PRINT')
+  // Returns F8 — DHL Global Return pickup toggle. Default true = carrier
+  // schedules collection (prior behaviour); false = customer drops at a
+  // DHL ServicePoint. UI only shows when isReturn && carrier=DHL.
+  const [returnPickupRequested, setReturnPickupRequested] = useState<boolean>(true)
   /**
    * UPS rejects return labels with 9120145 "Missing label delivery
    * information" when the LabelDelivery.EMail block is absent — and we
@@ -2460,7 +2464,7 @@ export default function NewShipmentPage() {
       // Carrier connectors key off this: UPS ReturnService.Code 8/9
       // (with LabelDelivery.EMail block), FedEx returnedShipmentDetail
       // .returnType (PRINT_RETURN_LABEL / EMAIL_LABEL), etc.
-      ...(isReturn ? { returnType } : {}),
+      ...(isReturn ? { returnType, returnPickupRequested } : {}),
       reference: reference.trim() || undefined,
       // V76 — internal per-order ops note; omit when blank so the
       // wire only carries populated fields.
@@ -3009,6 +3013,20 @@ export default function NewShipmentPage() {
                         </button>
                       ))}
                     </div>
+                    {/* Returns F8 — DHL-only pickup toggle. DHL Express
+                        historically forced pickup.isRequested=true on every
+                        return; some returns are drop-off at a ServicePoint. */}
+                    {canon(carrier) === 'DHL' ? (
+                      <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[#5a4526] shadow-sm">
+                        <input
+                          type="checkbox"
+                          checked={returnPickupRequested}
+                          onChange={(e) => setReturnPickupRequested(e.target.checked)}
+                          className="h-3.5 w-3.5"
+                        />
+                        Request DHL pickup
+                      </label>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
