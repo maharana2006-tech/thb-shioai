@@ -8,6 +8,7 @@ import com.multiship.backend.model.RoutingRule.ActionType;
 import com.multiship.backend.model.ShippingService;
 import com.multiship.backend.repository.RoutingRuleRepository;
 import com.multiship.backend.repository.ShippingServiceRepository;
+import com.multiship.backend.repository.WarehouseRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -34,6 +35,16 @@ public class RoutingRuleServiceImpl implements RoutingRuleService {
      */
     @Autowired(required = false)
     private TenantScopeEnforcer tenantScope;
+
+    /**
+     * Audit B4 (#352) — target-row existence check on save. Field +
+     * {@code @Autowired(required=false)} + null-guard pattern so pure-
+     * Mockito ctor-arg tests built against the two-arg constructor keep
+     * compiling. If the field is null the check is skipped (pre-fix
+     * behaviour), so the audit regression test suite is additive.
+     */
+    @Autowired(required = false)
+    private WarehouseRepository warehouseRepo;
 
     @Autowired
     public RoutingRuleServiceImpl(RoutingRuleRepository ruleRepo,
@@ -72,6 +83,21 @@ public class RoutingRuleServiceImpl implements RoutingRuleService {
             // G2: REROUTE now accepts service, warehouse, or both. At least one must be set
             // or the rule matches but does nothing.
             throw new IllegalArgumentException("REROUTE rules require targetServiceId, targetWarehouseId, or both");
+        }
+        // Audit B4 (#352) — target existence. Pre-fix, deleting the shipping
+        // service or warehouse a rule pointed at left the rule saved with a
+        // dangling id; evaluate() then matched but routed to a ghost. Verify
+        // the pointer still resolves before save. Skipped when the field is
+        // null (test harnesses using the two-arg ctor).
+        if (rule.getTargetServiceId() != null
+                && !serviceRepo.existsById(rule.getTargetServiceId())) {
+            throw new IllegalArgumentException(
+                    "targetServiceId " + rule.getTargetServiceId() + " does not exist");
+        }
+        if (rule.getTargetWarehouseId() != null && warehouseRepo != null
+                && !warehouseRepo.existsById(rule.getTargetWarehouseId())) {
+            throw new IllegalArgumentException(
+                    "targetWarehouseId " + rule.getTargetWarehouseId() + " does not exist");
         }
         if (rule.getActionType() == ActionType.BLOCK
                 && (rule.getBlockReason() == null || rule.getBlockReason().isBlank())) {

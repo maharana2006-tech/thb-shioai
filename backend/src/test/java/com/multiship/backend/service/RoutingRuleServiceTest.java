@@ -16,6 +16,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.*;
 
 /**
@@ -34,6 +35,10 @@ class RoutingRuleServiceTest {
         ruleRepo = mock(RoutingRuleRepository.class);
         serviceRepo = mock(ShippingServiceRepository.class);
         service = new RoutingRuleServiceImpl(ruleRepo, serviceRepo);
+        // Audit B4 (#352) — tests that save with a targetServiceId expect
+        // the pointer to resolve; stub existsById → true as the default.
+        // The negative test overrides this.
+        when(serviceRepo.existsById(anyLong())).thenReturn(true);
     }
 
     // ===== save() validation =====
@@ -116,6 +121,21 @@ class RoutingRuleServiceTest {
         r.setActionType(ActionType.BLOCK);
         r.setBlockReason("   ");
         assertThrows(IllegalArgumentException.class, () -> service.save(r));
+    }
+
+    @Test
+    void save_rejectsRerouteWithMissingTargetService() {
+        // Audit B4 (#352) — if the shipping service referenced by
+        // targetServiceId has since been deleted, save MUST refuse
+        // rather than persisting a rule pointing at a ghost row.
+        when(serviceRepo.existsById(42L)).thenReturn(false);
+        RoutingRule r = base();
+        r.setActionType(ActionType.REROUTE);
+        r.setTargetServiceId(42L);
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> service.save(r));
+        assertTrue(ex.getMessage().contains("42"), "message must name the missing id");
+        verify(ruleRepo, never()).save(any());
     }
 
     @Test
