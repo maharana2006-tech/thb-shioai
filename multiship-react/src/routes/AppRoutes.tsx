@@ -102,9 +102,10 @@ const UspsDirectDashboardPage = lazy(() => import('../pages/UspsDirectDashboardP
 // Lazy — one-shot flows (bulky but not on every page load).
 const NewShipmentPage = lazy(() => import('../components/NewShipmentPage'))
 const DataHistoryPage = lazy(() => import('../components/DataHistoryPage'))
-// D2C History now shows the dtc_orders table (Oracle sync). The old batch page,
-// components/DtcHistoryPage.tsx, is kept but no longer routed.
+// D2C History — two levels: batch summary (Dtcal-style) + per-batch shipment
+// history (HstDetails-style) with label generation, Print and Void.
 const DtcOrdersPage = lazy(() => import('../components/DtcOrdersPage'))
+const DtcBatchDetailPage = lazy(() => import('../components/DtcBatchDetailPage'))
 const LabelsInvoicesPage = lazy(() => import('../components/LabelsInvoicesPage'))
 const BulkImportPage = lazy(() => import('../components/BulkImportPage'))
 
@@ -222,9 +223,9 @@ export default function AppRoutes() {
             <Route path="/bulk/api" element={<Navigate to={apiBatchesPath} replace />} />
             <Route path={apiBatchesPath} element={<DataHistoryPage apiBatches />} />
             <Route path={`${apiBatchesPath}/:batchId`} element={<DataHistoryPage apiBatches />} />
-            {/* D2C History — orders synced from the Oracle NDS view into dtc_orders. */}
+            {/* D2C History — Dtcal-style batch summary + HstDetails-style shipment history. */}
             <Route path={workspacePaths.d2c} element={<DtcOrdersPage />} />
-            <Route path={`${workspacePaths.d2c}/:batchId`} element={<DtcOrdersPage />} />
+            <Route path={`${workspacePaths.d2c}/:batchId`} element={<DtcBatchDetailPage />} />
             {/* Labels & Invoices — its own page, opened from Bulk Mailer (was the Documents tab). */}
             <Route path={bulkPaths.labels} element={<LabelsInvoicesPage />} />
             <Route path="/bulk/documents" element={<Navigate to={bulkPaths.labels} replace />} />
