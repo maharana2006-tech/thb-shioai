@@ -62,6 +62,47 @@ const CLEARANCE_BY_CARRIER: Record<string, ReadonlyArray<ClearanceOption>> = {
   ],
 }
 
+/** Shape shared across all three per-carrier dropdown vocabularies. */
+export type CarrierOption = { value: string; label: string }
+
+/** V120 bootstrap — pickup types mirror the hardcoded FEDEX dropdown in
+ *  NewShipmentPage.tsx + the V121-reconciled seed. UPS / DHL / USPS
+ *  rows exist in the DB but the FE doesn't render them yet; the swap
+ *  seam supports them for future callers. */
+const PICKUP_BY_CARRIER: Record<string, ReadonlyArray<CarrierOption>> = {
+  FEDEX: [
+    { value: 'USE_SCHEDULED_PICKUP',    label: 'Use scheduled pickup' },
+    { value: 'REGULAR_PICKUP',          label: 'Regular pickup' },
+    { value: 'REQUEST_COURIER',         label: 'Request courier' },
+    { value: 'DROP_BOX',                label: 'Drop box' },
+    { value: 'BUSINESS_SERVICE_CENTER', label: 'Business service center' },
+    { value: 'STATION',                 label: 'Station' },
+  ],
+}
+
+/** V120 bootstrap — label formats mirror the current per-carrier
+ *  hardcoded options at NewShipmentPage.tsx line ~3443 onward. V121 adds
+ *  UPS EPL + USPS JPG to the DB so swap-seam parity holds. */
+const LABEL_FORMAT_BY_CARRIER: Record<string, ReadonlyArray<CarrierOption>> = {
+  UPS: [
+    { value: 'GIF', label: 'GIF (raster)' },
+    { value: 'PDF', label: 'PDF (vector, sharp)' },
+    { value: 'PNG', label: 'PNG (raster)' },
+    { value: 'ZPL', label: 'ZPL (Zebra)' },
+    { value: 'EPL', label: 'EPL (Eltron/legacy Zebra)' },
+  ],
+  DHL: [
+    { value: 'PDF', label: 'PDF (label + A4 doc)' },
+    { value: 'ZPL', label: 'ZPL (thermal label only)' },
+  ],
+  USPS: [
+    { value: 'PNG', label: 'PNG (raster)' },
+    { value: 'PDF', label: 'PDF (vector, sharp)' },
+    { value: 'GIF', label: 'GIF (raster)' },
+    { value: 'JPG', label: 'JPG (raster)' },
+  ],
+}
+
 /** V120 swap seam — DB-driven vocab loaded from
  *  /admin/carrier-dropdowns/clearance-options. Non-null = prefer this
  *  over the bootstrap; null = use bootstrap. Promoted via
@@ -70,6 +111,8 @@ const CLEARANCE_BY_CARRIER: Record<string, ReadonlyArray<ClearanceOption>> = {
  *  Volatile-ish module-local — identical to the Java platform-service
  *  loader pattern. */
 let dbClearanceByCarrier: Record<string, ReadonlyArray<ClearanceOption>> | null = null
+let dbPickupByCarrier: Record<string, ReadonlyArray<CarrierOption>> | null = null
+let dbLabelFormatByCarrier: Record<string, ReadonlyArray<CarrierOption>> | null = null
 
 /** V120 setter — called once after /admin/carrier-dropdowns/clearance-options
  *  resolves. Null / empty arg leaves the current map in place so a failed
@@ -87,6 +130,37 @@ export function clearanceOptionsForCarrier(carrier: string | null | undefined): 
   const dbHit = dbClearanceByCarrier?.[key]
   if (dbHit && dbHit.length > 0) return dbHit
   return CLEARANCE_BY_CARRIER[key] ?? []
+}
+
+/** V120 — same setter contract as {@link setDbClearanceByCarrier}. */
+export function setDbPickupByCarrier(byCarrier: Record<string, ReadonlyArray<CarrierOption>> | null) {
+  if (!byCarrier) return
+  const keys = Object.keys(byCarrier)
+  if (keys.length === 0) return
+  dbPickupByCarrier = byCarrier
+}
+
+export function setDbLabelFormatByCarrier(byCarrier: Record<string, ReadonlyArray<CarrierOption>> | null) {
+  if (!byCarrier) return
+  const keys = Object.keys(byCarrier)
+  if (keys.length === 0) return
+  dbLabelFormatByCarrier = byCarrier
+}
+
+export function pickupTypesForCarrier(carrier: string | null | undefined): ReadonlyArray<CarrierOption> {
+  if (!carrier) return []
+  const key = carrier.toUpperCase()
+  const dbHit = dbPickupByCarrier?.[key]
+  if (dbHit && dbHit.length > 0) return dbHit
+  return PICKUP_BY_CARRIER[key] ?? []
+}
+
+export function labelFormatsForCarrier(carrier: string | null | undefined): ReadonlyArray<CarrierOption> {
+  if (!carrier) return []
+  const key = carrier.toUpperCase()
+  const dbHit = dbLabelFormatByCarrier?.[key]
+  if (dbHit && dbHit.length > 0) return dbHit
+  return LABEL_FORMAT_BY_CARRIER[key] ?? []
 }
 
 /** Human-readable label for a persisted value. Falls back to the raw value

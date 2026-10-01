@@ -59,7 +59,11 @@ import {
   type NdsPrefillStatus,
   type NdsMessage,
 } from '../api/ndsShipmentService'
-import { SHIPPING_PURPOSES, clearanceOptionsForCarrier, FTR_EXEMPTIONS, EEI_THRESHOLD_USD, setDbClearanceByCarrier } from '../utils/customsOptions'
+import {
+  SHIPPING_PURPOSES, clearanceOptionsForCarrier, FTR_EXEMPTIONS, EEI_THRESHOLD_USD,
+  setDbClearanceByCarrier, setDbPickupByCarrier, setDbLabelFormatByCarrier,
+  pickupTypesForCarrier, labelFormatsForCarrier,
+} from '../utils/customsOptions'
 import { carrierDropdownsService } from '../api/carrierDropdownsService'
 import { isServiceAllowedForUsTerritory, usTerritoryBannerHint, isUpsDdpDisallowedForTerritory } from '../utils/usTerritoryServices'
 import {
@@ -237,20 +241,30 @@ export default function NewShipmentPage() {
 
   // C2 — apply the DB-driven shipper default once the /me/shipper-default
   // resolve returns. Skip when the operator has already typed anything into
-  // V120 swap seam — prefetch the DB-driven clearance-option vocab once
-  // per mount. Admin-only route (401 for non-admin — swallowed; clearance
-  // picker falls through to the bootstrap defaults in customsOptions.ts).
+  // V120 + V121 swap seam — prefetch all three per-carrier dropdown
+  // vocabularies once per mount. Admin-only route (401 for non-admin
+  // swallowed; each picker falls through to bootstrap defaults in
+  // customsOptions.ts). Three calls fire in parallel.
   useEffect(() => {
     void (async () => {
-      try {
-        const rows = await carrierDropdownsService.clearanceOptions()
-        const byCarrier: Record<string, Array<{ value: string; label: string }>> = {}
+      const groupByCarrier = <T extends { carrier: string; code: string; label: string }>(rows: T[]) => {
+        const out: Record<string, Array<{ value: string; label: string }>> = {}
         for (const r of rows) {
           const key = r.carrier.toUpperCase()
-          if (!byCarrier[key]) byCarrier[key] = []
-          byCarrier[key].push({ value: r.code, label: r.label })
+          if (!out[key]) out[key] = []
+          out[key].push({ value: r.code, label: r.label })
         }
-        setDbClearanceByCarrier(byCarrier)
+        return out
+      }
+      try {
+        const [clearance, pickups, labelFormats] = await Promise.all([
+          carrierDropdownsService.clearanceOptions(),
+          carrierDropdownsService.pickupTypes(),
+          carrierDropdownsService.labelFormats(),
+        ])
+        setDbClearanceByCarrier(groupByCarrier(clearance))
+        setDbPickupByCarrier(groupByCarrier(pickups))
+        setDbLabelFormatByCarrier(groupByCarrier(labelFormats))
       } catch {
         // Non-admin users 401 here — bootstrap stays authoritative.
       }
@@ -3422,12 +3436,12 @@ export default function NewShipmentPage() {
                         <select className={inputCls}
                                 value={pickupType}
                                 onChange={(e) => setPickupType(e.target.value)}>
-                          <option value="USE_SCHEDULED_PICKUP">Use scheduled pickup</option>
-                          <option value="REGULAR_PICKUP">Regular pickup</option>
-                          <option value="REQUEST_COURIER">Request courier</option>
-                          <option value="DROP_BOX">Drop box</option>
-                          <option value="BUSINESS_SERVICE_CENTER">Business service center</option>
-                          <option value="STATION">Station</option>
+                          {/* V120 — options come from carrier_pickup_type
+                              (via pickupTypesForCarrier). Bootstrap mirrors
+                              the pre-V120 hardcoded set when DB is empty. */}
+                          {pickupTypesForCarrier('FEDEX').map((opt) => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                          ))}
                         </select>
                       </Field>
                     ) : null}
@@ -3440,29 +3454,12 @@ export default function NewShipmentPage() {
                             value={labelImageFormat}
                             onChange={(e) => setLabelImageFormat(e.target.value)}>
                       <option value="">-- Select --</option>
-                      {canon(carrier) === 'UPS' ? (
-                        <>
-                          <option value="GIF">GIF (raster)</option>
-                          <option value="PDF">PDF (vector, sharp)</option>
-                          <option value="PNG">PNG (raster)</option>
-                          <option value="ZPL">ZPL (Zebra)</option>
-                          <option value="EPL">EPL (Eltron/legacy Zebra)</option>
-                        </>
-                      ) : null}
-                      {canon(carrier) === 'DHL' ? (
-                        <>
-                          <option value="PDF">PDF (label + A4 doc)</option>
-                          <option value="ZPL">ZPL (thermal label only)</option>
-                        </>
-                      ) : null}
-                      {canon(carrier) === 'USPS' ? (
-                        <>
-                          <option value="PNG">PNG (raster)</option>
-                          <option value="PDF">PDF (vector, sharp)</option>
-                          <option value="GIF">GIF (raster)</option>
-                          <option value="JPG">JPG (raster)</option>
-                        </>
-                      ) : null}
+                      {/* V120 — options come from carrier_label_format (via
+                          labelFormatsForCarrier). Bootstrap in customsOptions.ts
+                          mirrors the pre-V120 per-carrier hardcoded sets. */}
+                      {labelFormatsForCarrier(canon(carrier)).map((opt) => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
                     </select>
                   </Field>
                 ) : null}
