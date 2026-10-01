@@ -43,6 +43,25 @@ public final class HttpClients {
     }
 
     /**
+     * S2 — per-caller read-timeout override. Used by
+     * {@code RestExternalConnector} so the admin-editable
+     * {@code readTimeoutSeconds} + {@code healthCheckTimeoutSeconds}
+     * fields on {@code external_system_connection.config_json} actually
+     * take effect (before S2 they were silently ignored).
+     *
+     * <p>Shares the global connect timeout — connect is per-TCP-handshake,
+     * not per-request, and the global default (5s) is a reasonable
+     * ceiling for any REST connector.
+     */
+    public static RestClient.Builder newBuilder(int readSeconds) {
+        int safe = Math.max(1, readSeconds);
+        HttpClient client = HttpClient.newBuilder().connectTimeout(connectTimeout).build();
+        JdkClientHttpRequestFactory jdk = new JdkClientHttpRequestFactory(client);
+        jdk.setReadTimeout(Duration.ofSeconds(safe));
+        return RestClient.builder().requestFactory(jdk);
+    }
+
+    /**
      * Ops override for the defaults. Rebuilds the shared factory so
      * subsequent {@link #newBuilder()} calls pick up the new timeouts.
      * Not thread-safe with an in-flight request that's already grabbed
