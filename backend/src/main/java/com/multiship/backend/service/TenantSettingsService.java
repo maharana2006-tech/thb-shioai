@@ -38,6 +38,17 @@ public class TenantSettingsService {
     /** Setting key for the B2B/D2C tenant channel-gate feature. */
     public static final String KEY_ENABLED_CHANNELS = "enabledChannels";
 
+    /** Manual F-11 — per-tenant default Incoterms for international labels.
+     *  CarrierServiceImpl's prefill falls back to the global "DAP" literal
+     *  only when neither this setting nor the destination's customs profile
+     *  carries a value. */
+    public static final String KEY_CUSTOMS_DEFAULT_INCOTERMS = "customs.default_incoterms";
+
+    /** Manual F-11 — per-tenant default reason-for-export (SHIPPING_PURPOSE).
+     *  Precedence mirrors incoterms: req → customs profile → this setting
+     *  → "SALE" literal. */
+    public static final String KEY_CUSTOMS_DEFAULT_REASON = "customs.default_reason";
+
     /** Shipping channel enum. Must match values used on the Order /
      *  ManualShipmentRequest / ExternalShipmentRequest {@code channel}
      *  field (documented in-place as "D2C | B2B"). */

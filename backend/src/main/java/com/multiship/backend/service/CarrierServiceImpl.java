@@ -66,6 +66,10 @@ public class CarrierServiceImpl implements CarrierService {
     // consults isEnabled before resolving the bean so admin can disable a
     // carrier org-wide without a redeploy (Auth Gap-6-A).
     private final com.multiship.backend.service.carriers.platform.CarrierPlatformService carrierPlatformService;
+    // Manual F-11 — tenant_settings-driven incoterms / reason-for-export
+    // defaults. Prefill falls through: req → customs profile → tenant_setting
+    // → "DAP"/"SALE" literal.
+    private final com.multiship.backend.service.TenantSettingsService tenantSettingsService;
     private final UserRepository userRepository;
     private final CarrierConfigRepository carrierConfigRepository;
     private final ShipViaRepository shipViaRepository;
@@ -1568,10 +1572,24 @@ public class CarrierServiceImpl implements CarrierService {
                             .orElse(null);
                 }
                 if (!StringUtils.hasText(req.getIncoterms())) {
-                    req.setIncoterms(firstNonBlank(defaultsProfile == null ? null : defaultsProfile.getIncoterms(), "DAP"));
+                    // Manual F-11 — tenant_settings override (customs.default_incoterms)
+                    // sits between the client-destination profile and the "DAP" literal.
+                    String tenantDefault = StringUtils.hasText(resolvedClient)
+                            ? tenantSettingsService.getSetting(resolvedClient,
+                                    com.multiship.backend.service.TenantSettingsService.KEY_CUSTOMS_DEFAULT_INCOTERMS).orElse(null)
+                            : null;
+                    req.setIncoterms(firstNonBlank(
+                            defaultsProfile == null ? null : defaultsProfile.getIncoterms(),
+                            tenantDefault, "DAP"));
                 }
                 if (!StringUtils.hasText(req.getReasonForExport())) {
-                    req.setReasonForExport(firstNonBlank(defaultsProfile == null ? null : defaultsProfile.getReasonForExport(), "SALE"));
+                    String tenantDefault = StringUtils.hasText(resolvedClient)
+                            ? tenantSettingsService.getSetting(resolvedClient,
+                                    com.multiship.backend.service.TenantSettingsService.KEY_CUSTOMS_DEFAULT_REASON).orElse(null)
+                            : null;
+                    req.setReasonForExport(firstNonBlank(
+                            defaultsProfile == null ? null : defaultsProfile.getReasonForExport(),
+                            tenantDefault, "SALE"));
                 }
             }
             // Third-party duties need a payer: the form's account, else the
