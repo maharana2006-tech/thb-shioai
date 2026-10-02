@@ -5,6 +5,7 @@ import com.multiship.backend.dto.RoutingEvaluationRequest;
 import com.multiship.backend.dto.RoutingEvaluationResult;
 import com.multiship.backend.dto.RoutingRuleDTO;
 import com.multiship.backend.model.RoutingRule;
+import com.multiship.backend.repository.RoutingRuleRepository;
 import com.multiship.backend.service.RoutingRuleService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -14,6 +15,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 
 import java.util.List;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -57,12 +59,18 @@ import static org.mockito.Mockito.when;
 class RoutingRuleControllerTest {
 
     private RoutingRuleService service;
+    private RoutingRuleRepository ruleRepo;
     private RoutingRuleController controller;
 
     @BeforeEach
     void setUp() {
         service = mock(RoutingRuleService.class);
-        controller = new RoutingRuleController(service);
+        ruleRepo = mock(RoutingRuleRepository.class);
+        controller = new RoutingRuleController(service, ruleRepo);
+        // Audit B7 (#353) default: no collision → "Rule saved" message
+        // unchanged. Collision test overrides.
+        when(ruleRepo.findFirstByClientCodeIgnoreCaseAndPriorityAndIdNotOrderByIdAsc(
+                anyString(), any(), any())).thenReturn(Optional.empty());
     }
 
     // ─── list — controller does entity → DTO mapping ───────────────────────
@@ -230,6 +238,45 @@ class RoutingRuleControllerTest {
         assertSame(result, resp.getBody().getData());
         assertEquals("Dry-run complete", resp.getBody().getMessage());
         verify(service, times(1)).evaluate("ACME", req);
+    }
+
+    // ─── Audit B7 (#353) priority-collision warning ───────────────────────
+
+    @Test
+    void save_collidingPriority_returnsSuccessWithWarning() {
+        // Audit B7 (#353) — operator saves rule at priority 100; an older
+        // rule already lives at that priority. The save succeeds (ties
+        // break deterministically on rule id), but the response message
+        // names the colliding row so the operator sees it before refresh.
+        RoutingRule existing = ruleEntity(42L, "ACME", "Rule A", 100);
+        RoutingRule saved = ruleEntity(99L, "ACME", "Rule B", 100);
+        when(service.save(any())).thenReturn(saved);
+        when(ruleRepo.findFirstByClientCodeIgnoreCaseAndPriorityAndIdNotOrderByIdAsc(
+                eq("ACME"), eq(100), eq(99L))).thenReturn(Optional.of(existing));
+
+        RoutingRuleDTO body = RoutingRuleDTO.from(saved);
+        ResponseEntity<ApiResponse<RoutingRuleDTO>> resp = controller.save("ACME", body);
+
+        assertEquals(HttpStatus.OK, resp.getStatusCode());
+        String message = resp.getBody().getMessage();
+        assertNotNull(message);
+        // Shape: "Rule saved. Priority 100 collides with rule 'Rule A' (id 42); ..."
+        assertEquals(true, message.contains("Rule saved"), "preserves success prefix");
+        assertEquals(true, message.contains("100"), "names the priority");
+        assertEquals(true, message.contains("Rule A"), "names the colliding rule");
+        assertEquals(true, message.contains("42"), "names the colliding id");
+    }
+
+    @Test
+    void save_noPriorityCollision_returnsPlainMessage() {
+        // Baseline — repo returns empty, message is unchanged.
+        RoutingRule saved = ruleEntity(99L, "ACME", "Rule B", 100);
+        when(service.save(any())).thenReturn(saved);
+
+        RoutingRuleDTO body = RoutingRuleDTO.from(saved);
+        ResponseEntity<ApiResponse<RoutingRuleDTO>> resp = controller.save("ACME", body);
+
+        assertEquals("Rule saved", resp.getBody().getMessage());
     }
 
     // ─── helpers ───────────────────────────────────────────────────────────

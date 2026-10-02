@@ -5,6 +5,7 @@ import com.multiship.backend.dto.RoutingEvaluationRequest;
 import com.multiship.backend.dto.RoutingEvaluationResult;
 import com.multiship.backend.dto.RoutingRuleDTO;
 import com.multiship.backend.model.RoutingRule;
+import com.multiship.backend.repository.RoutingRuleRepository;
 import com.multiship.backend.service.RoutingRuleService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -27,6 +28,7 @@ import java.util.List;
 public class RoutingRuleController {
 
     private final RoutingRuleService service;
+    private final RoutingRuleRepository ruleRepo;
 
     @Operation(summary = "List a client's routing rules ordered by priority")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #clientCode)")
@@ -49,9 +51,24 @@ public class RoutingRuleController {
             body.setClientCode(clientCode);
             RoutingRule saved = service.save(body.toEntity());
             HttpStatus code = body.getId() == null ? HttpStatus.CREATED : HttpStatus.OK;
+            // Audit B7 (#353) — flag priority collision after save so the
+            // operator notices before relying on an ambiguous evaluation
+            // order. Non-fatal: the rule still saves, warning rides on the
+            // success message. Ties break on rule id ascending.
+            String message = "Rule saved";
+            if (saved.getPriority() != null) {
+                var collider = ruleRepo.findFirstByClientCodeIgnoreCaseAndPriorityAndIdNotOrderByIdAsc(
+                        clientCode, saved.getPriority(), saved.getId());
+                if (collider.isPresent()) {
+                    var other = collider.get();
+                    message = "Rule saved. Priority " + saved.getPriority()
+                            + " collides with rule '" + other.getName() + "' (id " + other.getId()
+                            + "); ties break on rule id (oldest first).";
+                }
+            }
             return ResponseEntity.status(code).body(ApiResponse.<RoutingRuleDTO>builder()
                     .status("success").code(code.value())
-                    .message("Rule saved")
+                    .message(message)
                     .data(RoutingRuleDTO.from(saved))
                     .build());
         } catch (IllegalArgumentException validation) {
