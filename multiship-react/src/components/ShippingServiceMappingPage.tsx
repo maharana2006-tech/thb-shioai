@@ -1370,7 +1370,14 @@ export default function ShippingServiceMappingPage() {
                     value={newRule.warehouseIds.map(String)}
                     onChange={(e) => {
                       const next = Array.from(e.target.selectedOptions).map((o) => Number(o.value))
-                      setNewRule((c) => ({ ...c, warehouseIds: next, presetIds: [] }))
+                      // Audit F19 (#300) — warehouse pick narrows the carrier
+                      // lane set (service UPS Ground may have no JPN lane).
+                      // Reset serviceId so the operator picks fresh instead
+                      // of saving a mapping whose service doesn't actually
+                      // service the chosen warehouse's origin. Matches the
+                      // client-picker + platform-account-picker cascade
+                      // semantics already in place above.
+                      setNewRule((c) => ({ ...c, warehouseIds: next, presetIds: [], serviceId: '' }))
                     }}
                     aria-label="Warehouses"
                     title={
