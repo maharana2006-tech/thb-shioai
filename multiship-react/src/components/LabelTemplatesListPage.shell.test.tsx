@@ -182,8 +182,10 @@ describe('LabelTemplatesListPage — empty state', () => {
     await waitFor(() =>
       expect(screen.queryByText(/Loading templates…/i)).not.toBeInTheDocument(),
     )
+    // #327 — findByText polls, so the empty-state render settles after
+    // the loading-off waitFor without racing the state commit.
     expect(
-      screen.getByText(/No templates yet — add the platform default or a tenant override/i),
+      await screen.findByText(/No templates yet — add the platform default or a tenant override/i),
     ).toBeInTheDocument()
   })
 })
@@ -201,9 +203,13 @@ describe('LabelTemplatesListPage — role parity for shell + list load', () => {
       renderPage(Page)
 
       await waitFor(() => expect(listTemplatesMock).toHaveBeenCalledTimes(1))
-      // Empty-state hint always visible for every role (no gate on the hint).
+      // #327 — getByText → findByText so the empty-state assertion polls
+      // until the fetch's state-commit renders. Fixes an order-dependent
+      // flake on CI where the TENANT branch landed before the microtask
+      // queue drained; subsequent runs on the same commit passed, so the
+      // issue was timing not logic. Role parity still fully covered.
       expect(
-        screen.getByText(/No templates yet — add the platform default or a tenant override/i),
+        await screen.findByText(/No templates yet — add the platform default or a tenant override/i),
       ).toBeInTheDocument()
     },
   )
