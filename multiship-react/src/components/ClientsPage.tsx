@@ -454,7 +454,14 @@ export default function ClientsPage() {
   return (
     <div className="space-y-4">
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        {loading && !clients.length ? (
+        {/* #199 — narrowed loading gate. Pre-fix, a re-fetch triggered
+            by a filter edit on a zero-result page unmounted the whole
+            toolbar (loading && !clients.length matched) and the operator
+            lost input focus mid-type. Now only the FIRST mount (no
+            filter active) swaps to the full-page placeholder; later
+            re-fetches keep the toolbar mounted and let the table body
+            render its own empty state. */}
+        {loading && !clients.length && !search.trim() && !activeFilterCount ? (
           <p className="py-10 text-center text-sm text-slate-500">Loading clients…</p>
         ) : (
           <AdvancedDataTable<Client>
