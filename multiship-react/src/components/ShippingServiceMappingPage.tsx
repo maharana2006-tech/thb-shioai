@@ -286,7 +286,19 @@ export default function ShippingServiceMappingPage() {
    *  the mapping can actually ship on. */
   const [accounts, setAccounts] = useState<CarrierAccountRef[]>([])
   const [loading, setLoading] = useState(true)
-  const [newRule, setNewRule] = useState({ ...blankRule })
+  // #302 F12 — explicit lazy initialiser + mount-time reset so the
+  // draft can't bleed in from a prior render if this page ever becomes
+  // a root (today it unmounts between visits because it's tabbed under
+  // /settings/shipping-catalog, which clears the local state). Defensive
+  // for a future refactor that elevates it; harmless today.
+  const [newRule, setNewRule] = useState(() => ({ ...blankRule }))
+  useEffect(() => {
+    setNewRule({ ...blankRule })
+    // Empty deps — fires once on mount. Explicit reset so a hypothetical
+    // KeepAlive wrapper that preserves this component across route
+    // navigations starts each visit with a clean draft.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   /** Platform account the operator picked to seed / extend the new-rule
    *  Ship Via carrier filter. Reset whenever the client changes. */
   const [newRulePlatformAccountId, setNewRulePlatformAccountId] = useState<number | null>(null)
