@@ -268,6 +268,12 @@ public enum ErrorCode {
     /** The webhook subscription id in the path or body does not resolve for the caller. */
     WEBHOOK_SUBSCRIPTION_NOT_FOUND,
 
+    /** Audit W5 (#334) — another subscription already exists with the
+     *  same (apiKeyId, event, url). The unique index on
+     *  external_webhook_subscription (V125) raised a DB constraint
+     *  violation on save; the controller surfaces it as 409 CONFLICT. */
+    WEBHOOK_SUBSCRIPTION_DUPLICATE,
+
     // ===== Sprint 52 line-item caps =====
     /**
      * Shipment carries more commodity lines than the resolved carrier

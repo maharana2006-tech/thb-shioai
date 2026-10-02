@@ -115,7 +115,17 @@ public class ExternalWebhookController {
         }
         entity.setActive(body.getActive() == null ? Boolean.TRUE : body.getActive());
         entity.setUpdatedAt(LocalDateTime.now());
-        ExternalWebhookSubscription saved = subscriptionRepo.save(entity);
+        ExternalWebhookSubscription saved;
+        try {
+            saved = subscriptionRepo.save(entity);
+        } catch (org.springframework.dao.DataIntegrityViolationException ex) {
+            // Audit W5 (#334) — V125 unique index on (api_key_id, event,
+            // url). Translate the DB-side rejection to 409 so partners
+            // get a clear "already subscribed" rather than a 500.
+            String msg = ex.getMostSpecificCause() == null ? "" : ex.getMostSpecificCause().getMessage();
+            if (msg != null && msg.contains("uq_ext_webhook_key_event_url")) return duplicate();
+            throw ex;
+        }
         dispatcher.invalidateSubscriptionCache();
 
         HttpStatus code = body.getId() == null ? HttpStatus.CREATED : HttpStatus.OK;
@@ -123,6 +133,13 @@ public class ExternalWebhookController {
                 .status("success").code(code.value()).message("Subscription saved")
                 .data(ExternalWebhookSubscriptionDTO.from(saved, true))
                 .build());
+    }
+
+    private static <T> ResponseEntity<ApiResponse<T>> duplicate() {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ApiResponse.<T>builder()
+                .status("error").code(HttpStatus.CONFLICT.value())
+                .message("Another subscription already exists for this event and URL on your API key.")
+                .errorCode(ErrorCode.WEBHOOK_SUBSCRIPTION_DUPLICATE.name()).build());
     }
 
     @Operation(summary = "Delete a subscription")

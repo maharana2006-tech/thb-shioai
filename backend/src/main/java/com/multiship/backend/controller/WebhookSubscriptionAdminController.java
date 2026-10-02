@@ -106,7 +106,17 @@ public class WebhookSubscriptionAdminController {
         }
         entity.setActive(body.getActive() == null ? Boolean.TRUE : body.getActive());
         entity.setUpdatedAt(LocalDateTime.now());
-        ExternalWebhookSubscription saved = subscriptionRepo.save(entity);
+        ExternalWebhookSubscription saved;
+        try {
+            saved = subscriptionRepo.save(entity);
+        } catch (org.springframework.dao.DataIntegrityViolationException ex) {
+            // Audit W5 (#334) — UNIQUE(api_key_id, event, url) collision.
+            // Pre-fix, nothing stopped two rows at the same triple and the
+            // dispatcher fired twice per event. V125 added the index, so
+            // the second save now blows up at the DB; translate to 409.
+            if (isSubscriptionUniqueViolation(ex)) return duplicate();
+            throw ex;
+        }
         dispatcher.invalidateSubscriptionCache();
 
         HttpStatus code = body.getId() == null ? HttpStatus.CREATED : HttpStatus.OK;
@@ -114,6 +124,22 @@ public class WebhookSubscriptionAdminController {
                 .status("success").code(code.value()).message("Subscription saved")
                 .data(ExternalWebhookSubscriptionDTO.from(saved, true))
                 .build());
+    }
+
+    /** Narrow the DIVE match to our own unique index. Prevents a swallow
+     *  of unrelated integrity failures (an FK violation, say) that would
+     *  mask a different bug behind a bogus 409. */
+    private static boolean isSubscriptionUniqueViolation(
+            org.springframework.dao.DataIntegrityViolationException ex) {
+        String msg = ex.getMostSpecificCause() == null ? "" : ex.getMostSpecificCause().getMessage();
+        return msg != null && msg.contains("uq_ext_webhook_key_event_url");
+    }
+
+    private static <T> ResponseEntity<ApiResponse<T>> duplicate() {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ApiResponse.<T>builder()
+                .status("error").code(HttpStatus.CONFLICT.value())
+                .message("Another subscription already exists for this api key, event and URL.")
+                .errorCode(ErrorCode.WEBHOOK_SUBSCRIPTION_DUPLICATE.name()).build());
     }
 
     @Operation(summary = "Delete a subscription")
