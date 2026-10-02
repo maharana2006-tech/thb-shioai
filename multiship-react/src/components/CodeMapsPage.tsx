@@ -290,6 +290,21 @@ export default function CodeMapsPage() {
             <p className="mt-0.5 text-[11.5px] text-slate-500">
               Per-client aliases for the raw codes ERPs send us. Order intake reads these before rule resolution.
             </p>
+            {/* Resolution pipeline — three pages, each fires at a different
+                stage. Named so operators stop opening the wrong one. */}
+            <nav aria-label="Routing resolution pipeline" className="mt-2 flex items-center gap-1 text-[10.5px]">
+              <span className="rounded bg-[#1f150c] px-2 py-0.5 font-semibold text-white">Code maps</span>
+              <span className="text-slate-400">·</span>
+              <span className="text-slate-500">translate ERP strings on intake</span>
+              <span className="mx-1 text-slate-300">→</span>
+              <a href="/settings/shipping-service-mapping" className="rounded border border-slate-200 bg-white px-2 py-0.5 font-semibold text-slate-600 hover:bg-slate-50">
+                Shipping Service Mapping
+              </a>
+              <span className="mx-1 text-slate-300">→</span>
+              <a href="/settings/routing-rules" className="rounded border border-slate-200 bg-white px-2 py-0.5 font-semibold text-slate-600 hover:bg-slate-50">
+                Routing Rules
+              </a>
+            </nav>
           </div>
           <div className="min-w-[220px]">
             <label className="mb-1 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">

@@ -166,6 +166,21 @@ export default function RoutingRulesPage() {
 
   return (
     <div className="space-y-4">
+      {/* Resolution pipeline — three pages, each fires at a different
+          stage. Named so operators stop opening the wrong one. */}
+      <nav aria-label="Routing resolution pipeline" className="flex items-center gap-1 text-[10.5px]">
+        <a href="/settings/code-maps" className="rounded border border-slate-200 bg-white px-2 py-0.5 font-semibold text-slate-600 hover:bg-slate-50">
+          Code Maps
+        </a>
+        <span className="mx-1 text-slate-300">→</span>
+        <a href="/settings/shipping-service-mapping" className="rounded border border-slate-200 bg-white px-2 py-0.5 font-semibold text-slate-600 hover:bg-slate-50">
+          Shipping Service Mapping
+        </a>
+        <span className="mx-1 text-slate-300">→</span>
+        <span className="rounded bg-[#1f150c] px-2 py-0.5 font-semibold text-white">Routing Rules</span>
+        <span className="text-slate-400">·</span>
+        <span className="text-slate-500">post-rate-shop REROUTE / BLOCK by priority</span>
+      </nav>
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-[300px]">
           <label htmlFor={clientScopeId} className={fieldLabel}>Client scope</label>

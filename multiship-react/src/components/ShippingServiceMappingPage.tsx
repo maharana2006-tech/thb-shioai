@@ -1137,6 +1137,21 @@ export default function ShippingServiceMappingPage() {
 
   return (
     <div className="space-y-4 pb-16">
+      {/* Resolution pipeline — three pages, each fires at a different
+          stage. Named so operators stop opening the wrong one. */}
+      <nav aria-label="Routing resolution pipeline" className="flex items-center gap-1 text-[10.5px]">
+        <a href="/settings/code-maps" className="rounded border border-slate-200 bg-white px-2 py-0.5 font-semibold text-slate-600 hover:bg-slate-50">
+          Code Maps
+        </a>
+        <span className="mx-1 text-slate-300">→</span>
+        <span className="rounded bg-[#1f150c] px-2 py-0.5 font-semibold text-white">Shipping Service Mapping</span>
+        <span className="text-slate-400">·</span>
+        <span className="text-slate-500">route (client, shipvia, warehouse, dest) → carrier service</span>
+        <span className="mx-1 text-slate-300">→</span>
+        <a href="/settings/routing-rules" className="rounded border border-slate-200 bg-white px-2 py-0.5 font-semibold text-slate-600 hover:bg-slate-50">
+          Routing Rules
+        </a>
+      </nav>
       {pendingPackagesForRules.size > 0 ? (
         <div
           role="alert"
