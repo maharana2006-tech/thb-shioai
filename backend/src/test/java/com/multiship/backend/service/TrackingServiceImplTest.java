@@ -44,11 +44,42 @@ class TrackingServiceImplTest {
 
     @BeforeEach
     void setUp() {
+        // Install a stub CarrierAliasService in CarrierAliasHolder so
+        // canonicalizeCarrierCode("P80") → UPS resolves. The holder is
+        // normally populated at @PostConstruct from DB; pure-util tests
+        // need an explicit init or P80/F77/L01 fall through as null +
+        // the carrierService.getCarrierConnector(null) call returns null
+        // from the unstubbed mock, and the service NPEs trying to call
+        // connector.trackShipment. Same pattern as the Carrier unit tests.
+        try {
+            var aliasStub = mock(com.multiship.backend.service.carrier.CarrierAliasService.class);
+            when(aliasStub.canonicalize("P80")).thenReturn("UPS");
+            when(aliasStub.canonicalize("F77")).thenReturn("FEDEX");
+            when(aliasStub.canonicalize("L01")).thenReturn("USPS");
+            when(aliasStub.canonicalize("UPS")).thenReturn("UPS");
+            when(aliasStub.canonicalize("FEDEX")).thenReturn("FEDEX");
+            when(aliasStub.canonicalize("USPS")).thenReturn("USPS");
+            when(aliasStub.canonicalize("DHL")).thenReturn("DHL");
+            java.lang.reflect.Method setMethod =
+                    com.multiship.backend.service.carrier.CarrierAliasHolder.class
+                            .getDeclaredMethod("set",
+                                    com.multiship.backend.service.carrier.CarrierAliasService.class);
+            setMethod.setAccessible(true);
+            setMethod.invoke(null, aliasStub);
+        } catch (Exception e) {
+            throw new AssertionError("Unable to install CarrierAliasHolder stub", e);
+        }
+
         trackingRepo = mock(OrderTrackingRepository.class);
         accountRepo = mock(CarrierAccountRefRepository.class);
         carrierService = mock(CarrierService.class);
         orderRepo = mock(OrderRepository.class);
         connector = mock(CarrierConnector.class);
+        // getCarrierConnector is unstubbed on the mock → returns null by
+        // default → NPE at trackShipment. Pin it to the shared mock
+        // connector so every test method inherits the happy-path wiring;
+        // individual tests that exercise failure override as needed.
+        when(carrierService.getCarrierConnector(anyString())).thenReturn(connector);
         // Sprint 50 Tier 0.5 PR E - enforcer with flag OFF is a pure
         // pass-through, so existing test behavior is unchanged.
         service = new TrackingServiceImpl(trackingRepo, accountRepo, carrierService,
