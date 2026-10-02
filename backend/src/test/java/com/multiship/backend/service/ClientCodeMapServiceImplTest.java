@@ -5,6 +5,7 @@ import com.multiship.backend.config.JwtAuthenticationFilter;
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.ClientCodeMapDTO;
 import com.multiship.backend.dto.ErrorCode;
+import com.multiship.backend.dto.UpsertClientCodeMapRequest;
 import com.multiship.backend.model.ClientShipviaCodeMap;
 import com.multiship.backend.repository.ClientDestCountryMapRepository;
 import com.multiship.backend.repository.ClientPackageCodeMapRepository;
@@ -113,6 +114,50 @@ class ClientCodeMapServiceImplTest {
         assertEquals(400, resp.getCode());
         assertEquals(ErrorCode.VALIDATION_ERROR.name(), resp.getErrorCode());
         verify(shipviaRepo, never()).delete(any());
+    }
+
+    // ===== Audit B3 (#372) — erp casing normalisation on upsert =====
+
+    @Test
+    void upsert_normalisesErpCodeToUppercaseBeforeSave() {
+        // Pre-fix: a save of "p80" stored the row with lowercase, then a
+        // save of "P80" matched case-insensitively but inherited the
+        // original casing. Case-sensitive audit queries then missed rows.
+        // Post-fix: both saves land at "P80".
+        ClientRepository clientRepo = mock(ClientRepository.class);
+        when(clientRepo.existsByClientCodeIgnoreCase("ACME")).thenReturn(true);
+
+        ShippingServiceRepository serviceRepo = mock(ShippingServiceRepository.class);
+        // Target id must resolve or upsertShipvia short-circuits with 400.
+        when(serviceRepo.findById(99L)).thenReturn(Optional.of(
+                new com.multiship.backend.model.ShippingService()));
+
+        ClientShipviaCodeMapRepository shipviaRepo = mock(ClientShipviaCodeMapRepository.class);
+        when(shipviaRepo.findByClientCodeIgnoreCaseOrderByErpCodeAsc("ACME")).thenReturn(List.of());
+        when(shipviaRepo.save(any())).thenAnswer(inv -> {
+            ClientShipviaCodeMap r = inv.getArgument(0);
+            r.setId(1L);
+            return r;
+        });
+
+        ClientCodeMapServiceImpl service = new ClientCodeMapServiceImpl(
+                clientRepo, shipviaRepo,
+                mock(ClientServiceCodeMapRepository.class),
+                mock(ClientDestCountryMapRepository.class),
+                mock(ClientPackageCodeMapRepository.class),
+                serviceRepo,
+                mock(PackagePresetRepository.class),
+                new TenantScopeEnforcer(new AccessScopePolicy(true)));
+
+        UpsertClientCodeMapRequest req = new UpsertClientCodeMapRequest();
+        req.setErpCode("  p80  ");
+        req.setTargetId(99L);
+        service.upsert("ACME", ClientCodeMapDTO.Kind.SHIPVIA, req);
+
+        var captor = org.mockito.ArgumentCaptor.forClass(ClientShipviaCodeMap.class);
+        verify(shipviaRepo).save(captor.capture());
+        assertEquals("P80", captor.getValue().getErpCode(),
+                "erpCode must be trimmed + uppercased before save");
     }
 
     @Test

@@ -80,7 +80,11 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
         if (!StringUtils.hasText(request.getErpCode())) {
             return failure(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR, "erpCode is required.");
         }
-        String erp = request.getErpCode().trim();
+        // Audit B3 (#372) — normalise erp casing so sequential saves of
+        // "p80" + "P80" don't drift (the equalsIgnoreCase match said the
+        // row existed, but the stored casing came from whichever write
+        // landed first). Case-sensitive audit queries now stay consistent.
+        String erp = normalize(request.getErpCode());
 
         String destCountry = normaliseDest(request.getDestCountry());
         String destRegion = normaliseDest(request.getDestRegion());
