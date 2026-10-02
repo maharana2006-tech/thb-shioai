@@ -1075,7 +1075,9 @@ export default function ClientEditorPage() {
           }
         }
       }
-      notify.success(`Client ${response.data.clientCode} updated.`)
+      // Audit 2.2 (#282) — be precise about what landed. Carrier /
+      // mapping / importer edits are on their own save paths.
+      notify.success(`Client ${response.data.clientCode} identity + addresses saved.`)
     } catch (error) {
       notify.apiError(error, 'Failed to save the client.')
     } finally {
@@ -1134,6 +1136,20 @@ export default function ClientEditorPage() {
         </div>
         {isEdit && (activeStep === 'identity' || activeStep === 'shipFrom' || activeStep === 'return') ? (
           <div className="flex shrink-0 items-center gap-2">
+            {/* Audit 2.2 (#282) — "Save changes" only commits identity +
+                ship-from + return-address + per-tenant defaults; carrier /
+                mapping / importer-broker steps use embedded child
+                components with their own save paths. Hint keeps the
+                operator from assuming one green toast means everything on
+                the page landed. Full coordinator-pattern refactor is
+                tracked separately — this is the interim mitigation the
+                audit recommends. */}
+            <span
+              title="Save on this button covers identity + addresses + defaults. Carrier accounts, mapping rules, and importer/broker edits save from their own forms."
+              className="hidden items-center text-[11px] text-slate-500 md:inline-flex"
+            >
+              Identity + addresses only
+            </span>
             <button
               type="button"
               onClick={() => void onClose()}
