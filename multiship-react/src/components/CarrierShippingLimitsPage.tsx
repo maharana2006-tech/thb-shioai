@@ -22,6 +22,8 @@ import IconButton from './ui/IconButton'
  * delete-with-confirm. See CarrierLimitAdminController for the API
  * shape.
  */
+const PAGE_SIZE = 50
+
 export default function CarrierShippingLimitsPage() {
   const [rows, setRows] = useState<CarrierShippingLimit[]>([])
   const [loading, setLoading] = useState(true)
@@ -29,18 +31,26 @@ export default function CarrierShippingLimitsPage() {
   const [creating, setCreating] = useState(false)
   const [filterCarrier, setFilterCarrier] = useState('')
   const [filterScope, setFilterScope] = useState('')
+  // Audit L3/B3 (#375) — pagination replaces the pre-fix size=200 blind
+  // fetch. Catalog can now outgrow a page without silent data loss.
+  const [pageIndex, setPageIndex] = useState(0)
+  const [totalElements, setTotalElements] = useState(0)
+  const [totalPages, setTotalPages] = useState(0)
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await carrierShippingLimitService.list({ size: 200 })
-      setRows(res.data ?? [])
+      const res = await carrierShippingLimitService.list({ page: pageIndex, size: PAGE_SIZE })
+      const body = res.data
+      setRows(body?.content ?? [])
+      setTotalElements(body?.totalElements ?? 0)
+      setTotalPages(body?.totalPages ?? 0)
     } catch (e) {
       notify.apiError(e, 'Failed to load carrier limits.')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [pageIndex])
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- initial fetch on mount; load() owns setLoading + setRows
   useEffect(() => { void load() }, [load])
@@ -219,6 +229,33 @@ export default function CarrierShippingLimitsPage() {
             ))}
           </tbody>
         </table>
+        {/* Audit L3/B3 (#375) — pagination controls. Hidden on the first
+            page when the whole catalog fits in one page (totalPages<=1). */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between gap-3 border-t border-slate-100 px-3 py-2 text-[12px] text-slate-600">
+            <span>
+              Showing {rows.length} of {totalElements} rows · page {pageIndex + 1} / {totalPages}
+            </span>
+            <span className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setPageIndex((p) => Math.max(0, p - 1))}
+                disabled={pageIndex === 0 || loading}
+                className="rounded border border-slate-300 bg-white px-2 py-1 text-[11.5px] font-semibold disabled:opacity-40"
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                onClick={() => setPageIndex((p) => Math.min(totalPages - 1, p + 1))}
+                disabled={pageIndex >= totalPages - 1 || loading}
+                className="rounded border border-slate-300 bg-white px-2 py-1 text-[11.5px] font-semibold disabled:opacity-40"
+              >
+                Next
+              </button>
+            </span>
+          </div>
+        )}
       </section>
 
       {(editing || creating) && (

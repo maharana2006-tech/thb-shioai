@@ -54,14 +54,21 @@ class CarrierLimitAdminServiceTest {
     @Test
     void list_returnsMappedRows_andClampsPageSize() {
         CarrierShippingLimit row = fixture();
-        Page<CarrierShippingLimit> page = new PageImpl<>(List.of(row));
+        // Audit L3/B3 (#375) — PageImpl carries the total so the service's
+        // new PageResponseDTO wrapper surfaces it to callers.
+        Page<CarrierShippingLimit> page = new PageImpl<>(List.of(row),
+                org.springframework.data.domain.PageRequest.of(0, 200), 1L);
         when(repository.findAll(any(Pageable.class))).thenReturn(page);
 
         // size well beyond MAX_PAGE_SIZE — service clamps internally
-        List<CarrierShippingLimitResponse> out = service.list(0, 5000);
+        com.multiship.backend.dto.PageResponseDTO<CarrierShippingLimitResponse> out =
+                service.list(0, 5000);
 
-        assertEquals(1, out.size());
-        assertEquals("UPS", out.get(0).getCarrierCode());
+        assertEquals(1, out.getContent().size());
+        assertEquals("UPS", out.getContent().get(0).getCarrierCode());
+        assertEquals(1L, out.getTotalElements());
+        // Clamped from 5000 to MAX_PAGE_SIZE=200.
+        assertEquals(200, out.getPageSize());
     }
 
     // ===== get =====

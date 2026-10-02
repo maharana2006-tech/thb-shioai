@@ -4,6 +4,7 @@ import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.CarrierShippingLimitActiveRequest;
 import com.multiship.backend.dto.CarrierShippingLimitRequest;
 import com.multiship.backend.dto.CarrierShippingLimitResponse;
+import com.multiship.backend.dto.PageResponseDTO;
 import com.multiship.backend.service.CarrierLimitAdminService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -23,7 +24,6 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDateTime;
-import java.util.List;
 import java.util.Optional;
 
 /**
@@ -48,16 +48,18 @@ public class CarrierLimitAdminController {
     private final CarrierLimitAdminService service;
 
     @Operation(summary = "List rows",
-            description = "Paginated (default 50 per page, max 200). Sorted by carrier, service, scope.")
+            description = "Paginated (default 50 per page, max 200). Sorted by carrier, service, scope. "
+                    + "Audit L3/B3 (#375) — response is a PageResponseDTO carrying totalElements / totalPages "
+                    + "so the FE can page through catalogs larger than one page.")
     @GetMapping
-    public ResponseEntity<ApiResponse<List<CarrierShippingLimitResponse>>> list(
+    public ResponseEntity<ApiResponse<PageResponseDTO<CarrierShippingLimitResponse>>> list(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "50") int size) {
-        List<CarrierShippingLimitResponse> data = service.list(page, size);
-        return ResponseEntity.ok(ApiResponse.<List<CarrierShippingLimitResponse>>builder()
+        PageResponseDTO<CarrierShippingLimitResponse> body = service.list(page, size);
+        return ResponseEntity.ok(ApiResponse.<PageResponseDTO<CarrierShippingLimitResponse>>builder()
                 .status("SUCCESS").code(200).timestamp(LocalDateTime.now())
-                .message(data.size() + " limit row(s).")
-                .data(data).build());
+                .message(body.getContent().size() + " of " + body.getTotalElements() + " limit row(s).")
+                .data(body).build());
     }
 
     @Operation(summary = "Fetch one row")
