@@ -52,6 +52,28 @@ public final class WebhookHmacUtil {
     }
 
     /**
+     * Audit W4 (#333) — timestamped signature variant. Signs
+     * {@code timestampSecs + "." + body} instead of {@code body}
+     * alone so a receiver that enforces a timestamp window can
+     * reject replays of a captured valid delivery.
+     *
+     * <p>Industry pattern (Stripe / GitHub / Slack all do this).
+     * Receiver verifies by:
+     * <ol>
+     *   <li>Reject if {@code |now - timestamp| > 5min}.</li>
+     *   <li>Compute {@code hmac(timestamp + "." + body, secret)}
+     *       and constant-time compare against the sig header.</li>
+     * </ol>
+     *
+     * <p>Returns null on the same failure modes as
+     * {@link #hmacSha256Hex(String, String)}.
+     */
+    public static String hmacSha256HexTimestamped(String body, String secret, long timestampSecs) {
+        if (body == null) return null;
+        return hmacSha256Hex(timestampSecs + "." + body, secret);
+    }
+
+    /**
      * Constant-time comparison of two signatures — prevents timing
      * attacks that would leak the correct signature by measuring how
      * long the comparison takes.

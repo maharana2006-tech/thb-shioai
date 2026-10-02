@@ -168,7 +168,24 @@ public class ExternalWebhookDispatcher {
         // row is in a broken state (no ciphertext + no plaintext, or key
         // rotated without a re-encrypt); WebhookHmacUtil emits null on
         // null secret so the header ends up empty and the receiver rejects.
-        String signature = WebhookHmacUtil.hmacSha256Hex(body, secretCipher.resolveForDispatch(sub));
+        String secret = secretCipher.resolveForDispatch(sub);
+        // Audit W4 (#333) — timestamped signature replaces body-only
+        // signing so partners can reject replay attacks via a timestamp
+        // window. X-Multiship-Signature now signs "timestamp + '.' + body";
+        // X-Multiship-Timestamp carries the epoch seconds the signature
+        // was computed at.
+        //
+        // Phase 1 (this commit): emit BOTH headers.
+        //   * X-Multiship-Signature                — new timestamped sig
+        //   * X-Multiship-Timestamp                — epoch seconds
+        //   * X-Multiship-Signature-Legacy         — old body-only sig
+        //                                            for partners that
+        //                                            haven't upgraded.
+        // Phase 2 (follow-up PR after partner outreach): drop the
+        // -Legacy header; new signature stays.
+        long timestampSecs = java.time.Instant.now().getEpochSecond();
+        String timestampedSig = WebhookHmacUtil.hmacSha256HexTimestamped(body, secret, timestampSecs);
+        String legacySig = WebhookHmacUtil.hmacSha256Hex(body, secret);
         RestClient client = testRestClient != null ? testRestClient : sharedRestClient;
 
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -182,7 +199,9 @@ public class ExternalWebhookDispatcher {
                         .uri(sub.getUrl())
                         .header("Content-Type", "application/json")
                         .header("X-Multiship-Event", event.name())
-                        .header("X-Multiship-Signature", signature == null ? "" : signature)
+                        .header("X-Multiship-Timestamp", String.valueOf(timestampSecs))
+                        .header("X-Multiship-Signature", timestampedSig == null ? "" : timestampedSig)
+                        .header("X-Multiship-Signature-Legacy", legacySig == null ? "" : legacySig)
                         .body(body)
                         .retrieve()
                         .toBodilessEntity();
