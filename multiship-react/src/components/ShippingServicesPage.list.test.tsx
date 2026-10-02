@@ -333,14 +333,13 @@ describe('ShippingServicesPage — origin filter', () => {
 
 // ===================== Empty state (pin current bug) =====================
 
-describe('ShippingServicesPage — empty state (behavior pinned)', () => {
-  it('has NO top-level empty state — always renders 3 per-carrier tiles even with zero services', async () => {
-    // TODO: `page-tests-bug` — the page has no cross-carrier empty state.
-    // Even when the entire catalog is empty, three per-carrier tiles render
-    // (with their own per-tile empty messages). Confusing when the operator
-    // just wants to see "no catalog yet, sync a carrier" up-top. Follow-up
-    // issue tracks a proper unified empty state; this test pins the current
-    // behavior so the follow-up fix is easy to gate.
+describe('ShippingServicesPage — empty state (#222)', () => {
+  it('zero services with a synced origin → per-carrier tiles, no unified banner', async () => {
+    // #222 — unified banner only fires on TRULY-empty catalog (zero
+    // services AND zero origin countries). When at least one origin
+    // has been synced, the per-carrier tiles are the right surface:
+    // the operator should see the empty "US" column for UPS/FedEx/USPS
+    // rather than a blanket "nothing here yet" that would be wrong.
     catalogMock.mockResolvedValue({
       services: [], links: [], rules: [], rulePackages: [],
       ruleWarehouses: [], originCountries: ['US'],
@@ -352,10 +351,25 @@ describe('ShippingServicesPage — empty state (behavior pinned)', () => {
 
     await waitFor(() => expect(screen.getByText(/UPS · from US/i)).toBeInTheDocument())
 
-    // NO cross-carrier "No services synced yet" copy — pinned behavior.
     expect(screen.queryByText(/no services synced yet/i)).not.toBeInTheDocument()
-    // Only per-tile empty messages instead.
     expect(screen.getByText(/No UPS services from United States yet\./i)).toBeInTheDocument()
+  })
+
+  it('zero services AND zero origins → unified "No services synced yet" banner', async () => {
+    // #222 — the real first-run case. One semantic region for screen
+    // readers + a clear "sync a carrier under /settings/carriers" cue.
+    catalogMock.mockResolvedValue({
+      services: [], links: [], rules: [], rulePackages: [],
+      ruleWarehouses: [], originCountries: [],
+    })
+    listPresetsMock.mockResolvedValue([])
+
+    const Page = await loadPage()
+    renderPage(Page)
+
+    await waitFor(() => expect(screen.getByText(/No services synced yet/i)).toBeInTheDocument())
+    const banner = screen.getByRole('region', { name: /shipping services empty state/i })
+    expect(banner).toBeInTheDocument()
   })
 })
 
