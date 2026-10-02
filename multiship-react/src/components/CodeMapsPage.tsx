@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { FiPlus, FiTrash2 } from 'react-icons/fi'
+import { FiCheck, FiEdit2, FiPlus, FiTrash2, FiX } from 'react-icons/fi'
 import { notify } from '../utils/notify'
 import {
   clientCodeMapService,
@@ -95,6 +95,14 @@ export default function CodeMapsPage() {
    *  A client with 100+ aliases becomes tedious to scroll; filter
    *  narrows by erpCode OR targetLabel. Client-side so no round-trip. */
   const [rowFilter, setRowFilter] = useState<string>('')
+  /** Audit R2 #370 — inline-edit state. id of the row currently in edit
+   *  mode (null = none). editTargetId holds the picker's working value;
+   *  editIso2 the DEST_COUNTRY tab's working value. Saving flips to
+   *  true while the upsert is in flight so the Save button is disabled. */
+  const [editingRowId, setEditingRowId] = useState<number | null>(null)
+  const [editTargetId, setEditTargetId] = useState<string>('')
+  const [editIso2, setEditIso2] = useState<string>('')
+  const [editSaving, setEditSaving] = useState(false)
 
   // Bootstrap the catalogs once.
   useEffect(() => {
@@ -193,6 +201,54 @@ export default function CodeMapsPage() {
       notify.apiError(error, 'Failed to save alias.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const beginEdit = (row: ClientCodeMap) => {
+    // Audit R2 #370 — load the existing target into the picker working
+    // state. DEST_COUNTRY tab uses iso2 instead of targetId.
+    setEditingRowId(row.id)
+    setEditTargetId(row.targetId != null ? String(row.targetId) : '')
+    setEditIso2(row.iso2 ?? '')
+  }
+
+  const cancelEdit = () => {
+    setEditingRowId(null)
+    setEditTargetId('')
+    setEditIso2('')
+  }
+
+  const saveEdit = async (row: ClientCodeMap) => {
+    // Backend upsert matches on (clientCode, erpCode, destCountry,
+    // destRegion) — same keys as add — so posting with the same erpCode
+    // + per-tab target update IS the edit. No new endpoint needed.
+    const payload =
+      tab === 'DEST_COUNTRY'
+        ? { erpCode: row.erpCode, iso2: editIso2.trim().toUpperCase() }
+        : {
+            erpCode: row.erpCode,
+            targetId: Number(editTargetId),
+            destCountry: row.destCountry ?? null,
+            destRegion: row.destRegion ?? null,
+          }
+    if (tab !== 'DEST_COUNTRY' && !Number.isFinite(payload.targetId)) {
+      notify.error('Pick a target before saving.')
+      return
+    }
+    if (tab === 'DEST_COUNTRY' && !payload.iso2) {
+      notify.error('Enter an ISO-2 country before saving.')
+      return
+    }
+    setEditSaving(true)
+    try {
+      await clientCodeMapService.upsert(selectedClient, tab, payload)
+      notify.success(`${TAB_META[tab].label} alias updated.`)
+      cancelEdit()
+      await load()
+    } catch (error) {
+      notify.apiError(error, 'Failed to update alias.')
+    } finally {
+      setEditSaving(false)
     }
   }
 
@@ -405,32 +461,85 @@ export default function CodeMapsPage() {
               No aliases match &quot;{rowFilter}&quot;.
             </p>
           ) : (
-            filteredRows.map((row) => (
-              <div
-                key={row.id}
-                className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2"
-              >
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-[12px] text-slate-800">
-                    <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-slate-700">
-                      {row.erpCode}
-                    </span>
-                    <span className="mx-2 text-slate-400">→</span>
-                    <span className="font-semibold text-slate-950">
-                      {row.targetLabel || (row.iso2 ?? row.targetId ?? '—')}
-                    </span>
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => void remove(row)}
-                  aria-label={`Remove ${row.erpCode}`}
-                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-transparent text-slate-400 transition hover:border-rose-100 hover:text-rose-600"
+            filteredRows.map((row) => {
+              const isEditing = editingRowId === row.id
+              return (
+                <div
+                  key={row.id}
+                  className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2"
                 >
-                  <FiTrash2 className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            ))
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[12px] text-slate-800">
+                      <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-slate-700">
+                        {row.erpCode}
+                      </span>
+                      <span className="mx-2 text-slate-400">→</span>
+                      {isEditing ? (
+                        /* Audit R2 #370 — inline target picker reuses the
+                           same TargetPicker component as the add form. */
+                        <span className="inline-flex items-center gap-2 align-middle">
+                          <TargetPicker
+                            tab={tab}
+                            services={services}
+                            presets={presets}
+                            targetId={editTargetId}
+                            onTargetId={setEditTargetId}
+                            iso2={editIso2}
+                            onIso2={setEditIso2}
+                          />
+                        </span>
+                      ) : (
+                        <span className="font-semibold text-slate-950">
+                          {row.targetLabel || (row.iso2 ?? row.targetId ?? '—')}
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                  {isEditing ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => void saveEdit(row)}
+                        disabled={editSaving}
+                        aria-label={`Save ${row.erpCode}`}
+                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-emerald-200 text-emerald-700 transition hover:bg-emerald-50 disabled:opacity-50"
+                      >
+                        <FiCheck className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={cancelEdit}
+                        disabled={editSaving}
+                        aria-label="Cancel edit"
+                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-transparent text-slate-400 transition hover:border-slate-200 disabled:opacity-50"
+                      >
+                        <FiX className="h-3.5 w-3.5" />
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => beginEdit(row)}
+                        aria-label={`Edit ${row.erpCode}`}
+                        title="Change target without delete + re-add"
+                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-transparent text-slate-400 transition hover:border-slate-200 hover:text-slate-700"
+                      >
+                        <FiEdit2 className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void remove(row)}
+                        aria-label={`Remove ${row.erpCode}`}
+                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-transparent text-slate-400 transition hover:border-rose-100 hover:text-rose-600"
+                      >
+                        <FiTrash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </>
+                  )}
+                </div>
+              )
+            })
           )}
         </div>
       </section>
