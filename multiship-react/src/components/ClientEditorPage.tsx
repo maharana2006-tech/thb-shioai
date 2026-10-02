@@ -476,6 +476,28 @@ export default function ClientEditorPage() {
     return () => { cancelled = true }
   }, [editingCode])
 
+  /** Audit 4.1 (#284) — refresh accounts when the operator lands on a
+   *  step whose render depends on addressCaps / enabledCarrierCodes.
+   *  Catches the stale-caps race: operator adds a carrier in the
+   *  embedded CarrierConnections drawer, drawer saves, operator steps
+   *  back to Ship From — pre-fix the caps intersection still used the
+   *  pre-save accounts list because the drawer never notified the
+   *  parent. Audit recommends Option 3 ("poll on tab switch") as the
+   *  simplest fix with no API change to CarrierConnections. */
+  useEffect(() => {
+    if (!isEdit || !editingCode) return
+    if (activeStep !== 'shipFrom' && activeStep !== 'return') return
+    let cancelled = false
+    clientService
+      .getClient(editingCode)
+      .then((resp) => {
+        if (cancelled || !resp.data) return
+        setAccounts(resp.data.carrierAccounts ?? [])
+      })
+      .catch(() => { /* re-fetch is best-effort; stale caps better than crash */ })
+    return () => { cancelled = true }
+  }, [activeStep, isEdit, editingCode])
+
   // ===== Per-user draft persistence =====
   // Only in create mode — edit already carries a persisted server row. Writes
   // on every relevant change so a browser close mid-wizard restores exactly
