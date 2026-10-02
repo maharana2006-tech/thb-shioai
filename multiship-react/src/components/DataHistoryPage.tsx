@@ -11,6 +11,7 @@ import {
   FiCheckCircle,
   FiDownloadCloud,
   FiArrowLeft,
+  FiDownload,
   FiFileText,
   FiHome,
   FiRefreshCw,
@@ -1393,6 +1394,19 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
                         </button>
                       ) : null}
                     </>
+                  ) : null}
+                  {/* #331 — Download the saved batch rows as CSV. <a href>
+                      lets the browser handle Content-Disposition; the
+                      backend caps at 5000 rows + emits a truncation note. */}
+                  {b.slug ? (
+                    <a
+                      href={`/api/v1/orders/import/history/${encodeURIComponent(b.slug)}/export`}
+                      title="Download this batch's rows as CSV (capped at 5000)"
+                      aria-label="Download CSV"
+                      className="inline-flex items-center justify-center rounded-xl border border-[#e3d9c4] bg-white p-2 text-[#6b5c42] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] hover:text-[#1f150c]"
+                    >
+                      <FiDownload className="h-3.5 w-3.5" />
+                    </a>
                   ) : null}
                   {canWrite ? (
                     <button

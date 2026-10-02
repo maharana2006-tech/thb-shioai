@@ -380,6 +380,98 @@ public class OrderImportController {
                 .message(dto.getTotal() + " row(s).").data(dto).build());
     }
 
+    @Operation(summary = "Download a batch's rows as CSV",
+            description = "#331 — same view / q filters as the paged rows endpoint; capped at "
+                    + "EXPORT_ROW_CAP rows so an operator doesn't accidentally stream a 500k-row dump. "
+                    + "RFC 4180 quoting; filename includes the slug + today's date.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping(value = "/history/{slug}/export", produces = "text/csv")
+    public void historyRowsExport(
+            @org.springframework.web.bind.annotation.PathVariable String slug,
+            @RequestParam(defaultValue = "all") String view,
+            @RequestParam(required = false) String q,
+            jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
+        Long id = resolveBatchId(slug).orElse(null);
+        if (id == null) {
+            response.setStatus(404);
+            response.setContentType(MediaType.TEXT_PLAIN_VALUE);
+            response.getWriter().write("Import not found.");
+            return;
+        }
+        // Fetch one big page. Cap matches the existing historyRows row cap
+        // so the two surfaces behave consistently; the operator who wanted
+        // "everything" via the UI's row list gets the same N on export.
+        com.multiship.backend.dto.ImportBatchRowsPageDTO page =
+                orderImportService.historyRows(id, view, q, null, 0, EXPORT_ROW_CAP);
+        if (page == null) {
+            response.setStatus(404);
+            response.setContentType(MediaType.TEXT_PLAIN_VALUE);
+            response.getWriter().write("Import not found.");
+            return;
+        }
+
+        String filename = "import-batch-" + slug + "-"
+                + java.time.LocalDate.now().toString().replace("-", "") + ".csv";
+        response.setContentType("text/csv; charset=utf-8");
+        response.setCharacterEncoding(java.nio.charset.StandardCharsets.UTF_8.name());
+        response.setHeader("Content-Disposition", "attachment; filename=\"" + filename + "\"");
+
+        java.io.PrintWriter out = response.getWriter();
+        out.println("rowNumber,orderRef,clientCode,billTo,warehouseCode,"
+                + "recipientName,recipientCompany,recipientPhone,recipientEmail,"
+                + "addressLine1,addressLine2,city,state,postalCode,countryCode,"
+                + "carrierCode,accountNumber,serviceType,shipViaCode,packageType,"
+                + "weight,weightUnit,length,width,height,dimUnit");
+        for (OrderImportRowDTO r : page.getRows()) {
+            out.print(r.getRowNumber()); out.print(',');
+            out.print(csv(r.getOrderRef())); out.print(',');
+            out.print(csv(r.getClientCode())); out.print(',');
+            out.print(csv(r.getBillTo())); out.print(',');
+            out.print(csv(r.getWarehouseCode())); out.print(',');
+            out.print(csv(r.getRecipientName())); out.print(',');
+            out.print(csv(r.getRecipientCompany())); out.print(',');
+            out.print(csv(r.getRecipientPhone())); out.print(',');
+            out.print(csv(r.getRecipientEmail())); out.print(',');
+            out.print(csv(r.getAddressLine1())); out.print(',');
+            out.print(csv(r.getAddressLine2())); out.print(',');
+            out.print(csv(r.getCity())); out.print(',');
+            out.print(csv(r.getState())); out.print(',');
+            out.print(csv(r.getPostalCode())); out.print(',');
+            out.print(csv(r.getCountryCode())); out.print(',');
+            out.print(csv(r.getCarrierCode())); out.print(',');
+            out.print(csv(r.getAccountNumber())); out.print(',');
+            out.print(csv(r.getServiceType())); out.print(',');
+            out.print(csv(r.getShipViaCode())); out.print(',');
+            out.print(csv(r.getPackageType())); out.print(',');
+            out.print(r.getWeight() == null ? "" : r.getWeight()); out.print(',');
+            out.print(csv(r.getWeightUnit())); out.print(',');
+            out.print(r.getLength() == null ? "" : r.getLength()); out.print(',');
+            out.print(r.getWidth() == null ? "" : r.getWidth()); out.print(',');
+            out.print(r.getHeight() == null ? "" : r.getHeight()); out.print(',');
+            out.println(csv(r.getDimUnit()));
+        }
+        if (page.getTotal() > EXPORT_ROW_CAP) {
+            out.println();
+            out.println("# NOTE: truncated at " + EXPORT_ROW_CAP + " of " + page.getTotal()
+                    + " rows — narrow the view/filter and re-export.");
+        }
+        out.flush();
+    }
+
+    /** #331 — cap matches the historyRows UI limit so the two surfaces
+     *  stay consistent. 5000 rows at ~500 bytes each = ~2.5 MB CSV. */
+    private static final int EXPORT_ROW_CAP = 5000;
+
+    /** RFC 4180 — same pattern as AuditLogController.csv (#357). */
+    private static String csv(Object v) {
+        if (v == null) return "";
+        String s = v.toString();
+        if (s.indexOf(',') < 0 && s.indexOf('"') < 0 && s.indexOf('\n') < 0 && s.indexOf('\r') < 0) {
+            return s;
+        }
+        return "\"" + s.replace("\"", "\"\"") + "\"";
+    }
+
     @Operation(summary = "Generate carrier labels for a saved import batch",
             description = "Advances the batch status INITIATE → IN_PROGRESS → COMPLETE / " +
                     "PARTIAL_COMPLETE as it generates a label per saved row.")
