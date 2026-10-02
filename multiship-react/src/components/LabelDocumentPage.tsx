@@ -1255,7 +1255,31 @@ export default function LabelDocumentPage() {
               <div className="flex items-stretch gap-1.5 px-2 py-1.5">
                 <div className="h-[122px] min-w-0 flex-1">
                   {generated ? (
-                    <Pdf417Symbol seed={`${trackingNumber}:${order.orderNo}`} />
+                    <div className="relative h-full">
+                      <Pdf417Symbol seed={`${trackingNumber}:${order.orderNo}`} />
+                      {/* Audit L3 (#389) — Pdf417Symbol renders a visually-
+                          PDF417-like grid from a hash of the seed; it is
+                          NOT a real PDF417 codeword sequence and real
+                          scanners won't decode it. Fine for on-screen
+                          preview; the DO-NOT-SCAN watermark warns an
+                          operator who prints a browser screenshot as a
+                          fallback. Sandbox-only so production labels
+                          (which print this same preview but are backed by
+                          a real carrier label elsewhere) aren't noisy. */}
+                      {isSandbox ? (
+                        <span
+                          className="pointer-events-none absolute inset-0 flex items-center justify-center"
+                          aria-hidden
+                        >
+                          <span
+                            className="rounded border border-rose-700 bg-white/70 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider text-rose-800"
+                            style={{ transform: 'rotate(-6deg)' }}
+                          >
+                            Preview — do not scan
+                          </span>
+                        </span>
+                      ) : null}
+                    </div>
                   ) : (
                     <div className="flex h-full items-center justify-center border border-dashed border-slate-400 text-[10px] text-slate-500">
                       2D BARCODE AFTER GENERATION
