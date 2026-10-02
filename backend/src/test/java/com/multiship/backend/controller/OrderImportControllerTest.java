@@ -25,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -388,5 +389,113 @@ class OrderImportControllerTest {
                 controller.validateAddresses(Collections.emptyList());
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
+    }
+
+    // ─── historyRowsExport (#331) — CSV writer coverage ────────────────────
+
+    @Test
+    void historyRowsExport_writesHeaderAndEachRow() throws Exception {
+        // #331 — happy path: 2 rows out, header + 2 data lines + the right
+        // Content-Disposition filename.
+        String slug = slugFor(42L);
+        OrderImportRowDTO row1 = new OrderImportRowDTO();
+        row1.setRowNumber(1);
+        row1.setOrderRef("ORD-001");
+        row1.setClientCode("ACME");
+        row1.setRecipientName("Alice");
+        row1.setCity("Los Angeles");
+        row1.setCountryCode("US");
+        OrderImportRowDTO row2 = new OrderImportRowDTO();
+        row2.setRowNumber(2);
+        row2.setOrderRef("ORD-002");
+        row2.setClientCode("ACME");
+        row2.setRecipientName("Bob");
+        row2.setCity("Portland");
+        row2.setCountryCode("US");
+        com.multiship.backend.dto.ImportBatchRowsPageDTO page =
+                com.multiship.backend.dto.ImportBatchRowsPageDTO.builder()
+                        .rows(List.of(row1, row2))
+                        .total(2L).all(2L).attention(0L).pending(0L).clientCodes(List.of("ACME"))
+                        .build();
+        when(orderImportService.historyRows(eq(42L), eq("all"), any(), any(), eq(0), anyInt()))
+                .thenReturn(page);
+
+        var response = new org.springframework.mock.web.MockHttpServletResponse();
+        controller.historyRowsExport(slug, "all", null, response);
+
+        assertEquals(200, response.getStatus());
+        assertTrue(response.getContentType().startsWith("text/csv"));
+        String disposition = response.getHeader("Content-Disposition");
+        assertNotNull(disposition);
+        assertTrue(disposition.contains("import-batch-" + slug + "-"));
+        assertTrue(disposition.endsWith(".csv\""));
+        String body = response.getContentAsString();
+        assertTrue(body.startsWith("rowNumber,orderRef,clientCode,"), "header first");
+        assertTrue(body.contains("1,ORD-001,ACME,"), "row 1");
+        assertTrue(body.contains("2,ORD-002,ACME,"), "row 2");
+    }
+
+    @Test
+    void historyRowsExport_appendsTruncationNoteWhenOverCap() throws Exception {
+        // #331 — total > EXPORT_ROW_CAP (5000). Last line is the "truncated
+        // at … of …" comment so the operator sees they got a partial dump.
+        String slug = slugFor(42L);
+        OrderImportRowDTO one = new OrderImportRowDTO();
+        one.setRowNumber(1);
+        one.setClientCode("ACME");
+        com.multiship.backend.dto.ImportBatchRowsPageDTO page =
+                com.multiship.backend.dto.ImportBatchRowsPageDTO.builder()
+                        .rows(List.of(one))
+                        .total(12345L) // over the cap
+                        .all(12345L).attention(0L).pending(0L).clientCodes(List.of("ACME"))
+                        .build();
+        when(orderImportService.historyRows(anyLong(), anyString(), any(), any(), eq(0), anyInt()))
+                .thenReturn(page);
+
+        var response = new org.springframework.mock.web.MockHttpServletResponse();
+        controller.historyRowsExport(slug, "all", null, response);
+
+        String body = response.getContentAsString();
+        assertTrue(body.contains("# NOTE: truncated at 5000 of 12345 rows"),
+                "truncation note names both numbers");
+    }
+
+    @Test
+    void historyRowsExport_404WhenSlugUnknown() throws Exception {
+        // #331 — unresolvable slug returns 404 text/plain. Mirrors the
+        // enumeration-oracle gate used across the rest of /history/*.
+        var response = new org.springframework.mock.web.MockHttpServletResponse();
+        controller.historyRowsExport("no-such-slug", "all", null, response);
+
+        assertEquals(404, response.getStatus());
+        assertEquals("text/plain", response.getContentType());
+        assertTrue(response.getContentAsString().contains("Import not found"));
+    }
+
+    @Test
+    void historyRowsExport_quotesCommasAndQuotesInRowData() throws Exception {
+        // #331 — RFC 4180: a recipient name like 'Smith, Jr. "the"' must
+        // land as "Smith, Jr. ""the""" so Excel/Numbers parse the row
+        // correctly. One of the real reasons operators audit the CSV.
+        String slug = slugFor(42L);
+        OrderImportRowDTO quoted = new OrderImportRowDTO();
+        quoted.setRowNumber(1);
+        quoted.setClientCode("ACME");
+        quoted.setRecipientName("Smith, Jr. \"the\"");
+        quoted.setCity("Normal");
+        com.multiship.backend.dto.ImportBatchRowsPageDTO page =
+                com.multiship.backend.dto.ImportBatchRowsPageDTO.builder()
+                        .rows(List.of(quoted))
+                        .total(1L).all(1L).attention(0L).pending(0L).clientCodes(List.of("ACME"))
+                        .build();
+        when(orderImportService.historyRows(anyLong(), anyString(), any(), any(), eq(0), anyInt()))
+                .thenReturn(page);
+
+        var response = new org.springframework.mock.web.MockHttpServletResponse();
+        controller.historyRowsExport(slug, "all", null, response);
+
+        String body = response.getContentAsString();
+        assertTrue(body.contains("\"Smith, Jr. \"\"the\"\"\""),
+                "comma + embedded quote must RFC-4180-escape");
     }
 }
