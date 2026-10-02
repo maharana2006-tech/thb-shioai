@@ -123,6 +123,46 @@ public class PasswordService {
     }
 
     /**
+     * Audit (#294) — admin-triggered password reset. Looks up the user by
+     * id (vs. by email on {@link #forgot}) so an admin unlocking a
+     * known-locked account doesn't type an email that might not match.
+     * Reuses the same token shape + mail template as the self-service
+     * path; the only observable difference is that the caller gets the
+     * token's existence confirmed (so the admin knows the mail went out)
+     * instead of the unconditional 202 forgot() returns for anti-
+     * enumeration.
+     *
+     * @return true when the mail dispatched, false when the user had no
+     *         email on file.
+     */
+    @Transactional
+    public boolean sendAdminResetLink(Long userId) {
+        Optional<User> maybe = userRepository.findById(userId);
+        if (maybe.isEmpty()) {
+            return false;
+        }
+        User user = maybe.get();
+        if (user.getEmail() == null || user.getEmail().isBlank()) {
+            return false;
+        }
+        String plaintext = randomToken();
+        String hash = sha256Hex(plaintext);
+
+        PasswordResetToken row = PasswordResetToken.builder()
+                .userId(user.getId())
+                .tokenHash(hash)
+                .expiresAt(LocalDateTime.now().plusMinutes(RESET_TOKEN_TTL_MINUTES))
+                .build();
+        resetRepo.save(row);
+
+        String link = resetLinkBaseUrl + "?token=" + plaintext;
+        notifications.send("AUTH.PASSWORD_RESET", user.getEmail(), java.util.Map.of(
+                "resetLink", link,
+                "ttlMinutes", RESET_TOKEN_TTL_MINUTES));
+        return true;
+    }
+
+    /**
      * Consume the reset token. Single-use — deletes the row on success.
      * Bumps {@code token_version} so any outstanding JWT for the user is
      * invalidated.

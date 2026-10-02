@@ -147,6 +147,26 @@ export default function AdminUsersPage() {
     }
   }
 
+  /** Audit (#294) — admin sends a reset link to the user's stored
+   *  email. Confirm first so an accidental click doesn't spam a user. */
+  const sendResetLink = async (user: AdminUser) => {
+    if (!user.email) {
+      notify.error(`${user.username} has no email on file — assign one first.`)
+      return
+    }
+    const ok = window.confirm(
+      `Email a password-reset link to ${user.email}?\n\n` +
+        `The link expires in 30 minutes and can only be used once.`,
+    )
+    if (!ok) return
+    try {
+      await adminUserService.sendPasswordReset(user.id)
+      notify.success(`Reset link emailed to ${user.email}.`)
+    } catch (e) {
+      notify.apiError(e, 'Failed to send reset link.')
+    }
+  }
+
   /**
    * Fix #293 — role transition. Restricted per audit Option 1:
    * - USER ↔ TENANT free (single confirm)
@@ -352,6 +372,18 @@ export default function AdminUsersPage() {
                       <option value="ADMIN">ADMIN (promote)</option>
                     </select>
                   )}
+                  {/* Audit (#294) — admin-triggered reset link. Hidden
+                      for the admin's own row — self-reset is the normal
+                      /auth/forgot path, no reason to mail yourself. */}
+                  {u.username !== currentUsername && u.email ? (
+                    <button
+                      onClick={() => sendResetLink(u)}
+                      title="Email a password-reset link to this user"
+                      className="mr-2 rounded-md border border-slate-300 px-2 py-1 text-[12px] hover:bg-slate-50"
+                    >
+                      Reset password
+                    </button>
+                  ) : null}
                   <button
                     onClick={() => toggleActive(u)}
                     className={`rounded-md px-2 py-1 text-[12px] ${

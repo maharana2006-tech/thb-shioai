@@ -7,6 +7,8 @@ import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.ErrorCode;
 import com.multiship.backend.service.AdminUserService;
 import com.multiship.backend.service.AdminUserService.MutationOutcome;
+import com.multiship.backend.service.PasswordService;
+import org.springframework.beans.factory.annotation.Autowired;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -40,6 +42,13 @@ import java.util.List;
 public class AdminUserController {
 
     private final AdminUserService adminUserService;
+
+    /** Audit (#294) — admin-triggered password reset. Field +
+     *  {@code @Autowired(required=false)} so pure-Mockito ctor-arg tests
+     *  built against the one-arg constructor keep compiling. If null,
+     *  the reset endpoint 503s with a clear message rather than NPE. */
+    @Autowired(required = false)
+    private PasswordService passwordService;
 
     @Operation(summary = "List users",
             description = "Filterable by search (username/email/fullName), role, clientCode, active-only. "
@@ -87,6 +96,32 @@ public class AdminUserController {
                 body == null ? null : body.getReason(),
                 actor != null ? actor.getUsername() : "system");
         return respond(outcome, "User deactivated.");
+    }
+
+    @Operation(summary = "Send password-reset link to a user (admin)",
+            description = "Audit (#294) — issues a one-shot token (same TTL + mail template as "
+                    + "the self-service /auth/forgot flow) and dispatches it to the user's "
+                    + "stored email. Returns 200 on success, 404 if the id is unknown or the "
+                    + "user has no email on file.")
+    @PostMapping("/{id}/send-password-reset")
+    public ResponseEntity<ApiResponse<Void>> sendPasswordReset(@PathVariable Long id) {
+        if (passwordService == null) {
+            return ResponseEntity.status(503).body(ApiResponse.<Void>builder()
+                    .status("ERROR").code(503).errorCode(ErrorCode.VALIDATION_ERROR.name())
+                    .message("Password service is not configured.").build());
+        }
+        boolean sent = passwordService.sendAdminResetLink(id);
+        if (!sent) {
+            return ResponseEntity.status(404).body(ApiResponse.<Void>builder()
+                    .status("ERROR").code(404)
+                    .errorCode(ErrorCode.ADMIN_TARGET_USER_NOT_FOUND.name())
+                    .message("User " + id + " was not found, or has no email on file.")
+                    .timestamp(LocalDateTime.now()).build());
+        }
+        return ResponseEntity.ok(ApiResponse.<Void>builder()
+                .status("SUCCESS").code(200)
+                .message("Password-reset link emailed to the user.")
+                .timestamp(LocalDateTime.now()).build());
     }
 
     @Operation(summary = "Reactivate a user")

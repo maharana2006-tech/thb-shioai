@@ -81,6 +81,13 @@ export const adminUserService = {
       reason: reason ?? null,
     }),
 
+  /** Audit (#294) — admin sends a password-reset link to the user's
+   *  stored email. Backend mints the same one-shot token the self-
+   *  service /auth/forgot flow uses and dispatches via the usual mail
+   *  template. 404 when the id is unknown or the user has no email. */
+  sendPasswordReset: (id: number) =>
+    apiClient.post<ApiResponse<void>>(`/admin/users/${id}/send-password-reset`, {}),
+
   recentAudit: (limit = 50) =>
     apiClient.get<ApiResponse<AdminUserAudit[]>>(`/admin/users/audit${toQueryString({ limit })}`),
 
