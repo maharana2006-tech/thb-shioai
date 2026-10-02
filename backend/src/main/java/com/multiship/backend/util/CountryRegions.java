@@ -60,6 +60,15 @@ public final class CountryRegions {
         REGION_BY_CODE = Map.copyOf(codeToLabel);
     }
 
+    /** Test hook — restore the compile-time bootstrap mapping. Needed
+     *  because Spring-context ITs trigger CountryRegionPlatformService to
+     *  swap the live map on ApplicationReadyEvent, and the swapped map
+     *  leaks across to pure-util tests sharing the same JVM. Not for
+     *  prod use. */
+    public static void resetToBootstrap() {
+        REGION_BY_CODE = Map.copyOf(BOOTSTRAP);
+    }
+
     /** DB → bootstrap label-code translator — the DB stores NORTH_AMERICA,
      *  the util has always returned "North America". Keeps callers'
      *  string comparisons working across the swap. */
