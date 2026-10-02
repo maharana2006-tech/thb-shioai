@@ -243,6 +243,18 @@ public class DashboardService {
         health.put("customsGapLanes", gapLanes);
         data.put("health", health);
 
+        // Audit F1/F2 (#305) — defense-in-depth: label the response with the
+        // scope the backend used to filter it. A scoped USER sees TENANT +
+        // their tenantCode; a platform operator sees ORG + null. The FE can
+        // assert the shape matches the caller's role; a backend bug that
+        // ever leaked org-wide counts into a scoped response would land here
+        // with scope=ORG and the FE can reject it instead of silently
+        // rendering the leaked numbers.
+        Map<String, Object> scopeInfo = new LinkedHashMap<>();
+        scopeInfo.put("mode", scope.isPresent() ? "TENANT" : "ORG");
+        scopeInfo.put("tenantCode", scopeVal);
+        data.put("scope", scopeInfo);
+
         return ApiResponse.<Map<String, Object>>builder()
                 .status("SUCCESS").code(200).message("Dashboard retrieved.")
                 .timestamp(LocalDateTime.now()).data(data).build();
