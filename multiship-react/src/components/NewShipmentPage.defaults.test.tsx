@@ -489,10 +489,10 @@ describe('NewShipmentPage — unit-of-measure defaults', () => {
     expect(inButton!.className).toContain('bg-[#1f150c]')
   })
 
-  it('picking a client does NOT reset UoM (units are session-level, not client-scoped) — pins current behavior', async () => {
-    // Documented gap: units are hard-coded per page mount and never
-    // client/warehouse-scoped. Pin so a future refactor doesn't silently
-    // reset an operator-toggled unit when they pick a client.
+  it('picking a client with no defaultWeightUnit/defaultDimUnit leaves the session unit intact', async () => {
+    // #275 — client WITHOUT saved defaults ⇒ no reset. Pins the fallback
+    // path: an operator who toggled to KG mid-session doesn't lose that
+    // when they pick a client whose row leaves the unit blank.
     const Page = await loadPage()
     renderWithProviders(<Page />)
     const clientSel = await waitForClientSelect()
@@ -500,10 +500,36 @@ describe('NewShipmentPage — unit-of-measure defaults', () => {
     fireEvent.change(clientSel, { target: { value: 'ACME' } })
 
     await waitFor(() => {
-      // Client picked, but LB button still active → unchanged.
       const lbButton = screen.getAllByRole('button').find((b) => b.textContent === 'lb')
       expect(lbButton).toBeTruthy()
       expect(lbButton!.className).toContain('bg-[#1f150c]')
+    })
+  })
+
+  it('#275 — picking a client with defaultWeightUnit=KG + defaultDimUnit=CM flips the pickers', async () => {
+    // #275 — client-saved defaults win over the session fallback. A UK
+    // or Canadian client set to KG/CM at /settings/clients lands on the
+    // shipment form with KG + CM already active.
+    listClients.mockResolvedValueOnce({
+      data: {
+        content: [
+          { ...clientWithShipFrom, defaultWeightUnit: 'KG', defaultDimUnit: 'CM' },
+        ],
+      },
+    })
+    const Page = await loadPage()
+    renderWithProviders(<Page />)
+    const clientSel = await waitForClientSelect()
+
+    fireEvent.change(clientSel, { target: { value: 'ACME' } })
+
+    await waitFor(() => {
+      const kgButton = screen.getAllByRole('button').find((b) => b.textContent === 'kg')
+      const cmButton = screen.getAllByRole('button').find((b) => b.textContent === 'cm')
+      expect(kgButton).toBeTruthy()
+      expect(cmButton).toBeTruthy()
+      expect(kgButton!.className).toContain('bg-[#1f150c]')
+      expect(cmButton!.className).toContain('bg-[#1f150c]')
     })
   })
 })

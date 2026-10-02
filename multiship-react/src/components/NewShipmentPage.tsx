@@ -271,19 +271,13 @@ export default function NewShipmentPage() {
     })()
   }, [])
 
-  // sender / recipient so we never clobber their input.
-  useEffect(() => {
-    if (!resolvedShipper) return
-    const filled = defaultSenderFrom(resolvedShipper)
-    const untouched = (a: ManualShipmentAddress) =>
-      !a.name && !a.addressLine1 && !a.city && !a.postalCode
-    if (isReturn) {
-      setRecipient((cur) => (untouched(cur) ? filled : cur))
-    } else {
-      setSender((cur) => (untouched(cur) ? filled : cur))
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately reactive to resolvedShipper only; sender/recipient are checked inside the setter.
-  }, [resolvedShipper, isReturn])
+  // Note — the resolvedShipper → setSender/setRecipient useEffect used
+  // to live here, but it referenced isReturn + resolvedShipper (both
+  // declared later in the component) inside its deps array. Const TDZ
+  // meant every render threw a ReferenceError at the deps array
+  // evaluation — which silently broke every test on this page for
+  // weeks. Moved below resolvedShipper's declaration + the `isReturn`
+  // `const` so references resolve. See the effect at line ~390.
   const [recipient, setRecipient] = useState<ManualShipmentAddress>(blankAddress())
   /** V76 — internal per-order ops note (500 char, multi-line). Placed
    *  under the Ship From section for lack of a better home; the data
@@ -382,6 +376,24 @@ export default function NewShipmentPage() {
   // the hardcoded 350 5th Ave NYC block. Refetches whenever the operator
   // picks a different client, so cross-tenant users get the right defaults.
   const resolvedShipper = useShipperDefault(clientCode || undefined)
+
+  // When resolvedShipper first lands (or the operator changes mode
+  // between SHIPMENT and RETURN), apply it to the still-untouched
+  // sender / recipient so we never clobber their input. Moved here
+  // from the top of the component — see the TDZ comment at line ~274
+  // for why.
+  useEffect(() => {
+    if (!resolvedShipper) return
+    const filled = defaultSenderFrom(resolvedShipper)
+    const untouched = (a: ManualShipmentAddress) =>
+      !a.name && !a.addressLine1 && !a.city && !a.postalCode
+    if (isReturn) {
+      setRecipient((cur) => (untouched(cur) ? filled : cur))
+    } else {
+      setSender((cur) => (untouched(cur) ? filled : cur))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately reactive to resolvedShipper only; sender/recipient are checked inside the setter.
+  }, [resolvedShipper, isReturn])
   // NDS Shipment prefill (PR #735 backend / PR2 FE): operator scans
   // .X<containerId> or .Y<batchId>; response prefills client + recipient
   // + packages + notify + international items. Banner colours mirror
@@ -1401,6 +1413,17 @@ export default function NewShipmentPage() {
     // prior manual pick, same semantic as the carrier prefill above.
     if (client.defaultCurrency) {
       setCurrency(client.defaultCurrency)
+    }
+    // #275 — same semantic for weight + dim units. Client-saved default
+    // wins over the LB/IN session fallback. A Canadian / UK client set
+    // to KG/CM at /settings/clients lands on the shipment form with the
+    // right unit already picked — no per-shipment manual flip. Null /
+    // unrecognised value leaves the current session unit intact.
+    if (client.defaultWeightUnit === 'LB' || client.defaultWeightUnit === 'KG') {
+      setWeightUnit(client.defaultWeightUnit)
+    }
+    if (client.defaultDimUnit === 'IN' || client.defaultDimUnit === 'CM') {
+      setDimUnit(client.defaultDimUnit)
     }
   }
 
