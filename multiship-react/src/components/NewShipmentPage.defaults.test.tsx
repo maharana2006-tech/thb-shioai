@@ -120,6 +120,27 @@ vi.mock('../api/aiService', () => ({
   aiService: { reviewShipment: vi.fn().mockResolvedValue({ data: null }) },
 }))
 
+// C2 — tenant_settings-backed ship-from default. The applyClient-reset
+// test asserts the hardcoded legacy '350 5th Ave' falls into the sender
+// when a client without shipFrom is picked; after C2 that string lives
+// in the tenant_settings resolve, not inline. Mock returns the legacy
+// address so the pin test keeps meaning the same thing.
+vi.mock('../api/shipperResolveService', () => ({
+  shipperResolveService: {
+    resolve: vi.fn().mockResolvedValue({
+      tenantCode: null,
+      name: 'Platform Shipper',
+      phone: '2125551212',
+      addressLine1: '350 5th Ave',
+      addressLine2: null,
+      city: 'New York',
+      state: 'NY',
+      postalCode: '10118',
+      countryCode: 'US',
+    }),
+  },
+}))
+
 vi.mock('../api/customFieldService', () => ({
   customFieldService: {
     list: vi.fn().mockResolvedValue({ data: [] }),
