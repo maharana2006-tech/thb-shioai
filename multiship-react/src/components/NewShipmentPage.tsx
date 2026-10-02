@@ -732,6 +732,14 @@ export default function NewShipmentPage() {
   // label is the client (applyClient set it); overwriting printed the
   // facility alias ("Main Fulfillment Center") as the shipper on labels
   // and commercial invoices instead of the client's company.
+  //
+  // Audit #276 — the partial-fill (`a.city ? { city } : {}`) is DELIBERATE,
+  // not a bug. Picking a warehouse whose address has holes (e.g.
+  // `city = null` for a drop-ship-only location) PRESERVES the operator's
+  // typed city instead of clearing it. If this ever becomes "operator
+  // expected a full reset" (no repro reported as of filing), the fix is
+  // to overlay `{ ...blankAddress(), ...filledFields }` instead of
+  // `{ ...cur, ...filledFields }` — swap `cur` on the first spread.
   useEffect(() => {
     if (!warehouseCode) return
     const cw = clientWarehouses.find((w) => w.warehouse?.code === warehouseCode)
