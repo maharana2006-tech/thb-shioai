@@ -13,6 +13,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 
 /**
  * Sprint 52 admin UI — create / update payload for the
@@ -79,4 +80,11 @@ public class CarrierShippingLimitRequest {
     /** Free-text operator note. */
     @Size(max = 500, message = "notes must be 500 chars or fewer")
     private String notes;
+
+    /** Audit L2 (#378) — end-date for a scheduled supersession. Null
+     *  means "still current". Service writes it on both create + update.
+     *  effectiveFrom is still server-set on create (per class javadoc)
+     *  so operators move the timeline by adding a new row, not editing
+     *  the original anchor. */
+    private LocalDateTime effectiveUntil;
 }

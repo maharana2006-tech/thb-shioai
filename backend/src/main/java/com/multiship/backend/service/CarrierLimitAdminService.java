@@ -74,6 +74,8 @@ public class CarrierLimitAdminService {
                 .maxTotalWeightLb(req.getMaxTotalWeightLb())
                 .freeDeclaredValue(req.getFreeDeclaredValue())
                 .effectiveFrom(LocalDateTime.now())
+                // Audit L2 (#378) — scheduled end-date is optional.
+                .effectiveUntil(req.getEffectiveUntil())
                 .active(req.getActive() == null ? Boolean.TRUE : req.getActive())
                 .notes(blankToNull(req.getNotes()))
                 .build();
@@ -97,6 +99,10 @@ public class CarrierLimitAdminService {
             existing.setMaxTotalWeightLb(req.getMaxTotalWeightLb());
             existing.setFreeDeclaredValue(req.getFreeDeclaredValue());
             if (req.getActive() != null) existing.setActive(req.getActive());
+            // Audit L2 (#378) — allow operator to set / clear the end date.
+            // Null is a legitimate value ("remove the end date") so pass
+            // through directly rather than guarding on null.
+            existing.setEffectiveUntil(req.getEffectiveUntil());
             existing.setNotes(blankToNull(req.getNotes()));
             CarrierShippingLimit saved = repository.save(existing);
             resolverService.invalidateCache();

@@ -294,6 +294,12 @@ function CarrierShippingLimitEditorDialog({ row, onClose, onSaved }: EditorProps
   const [freeDeclaredValue, setFreeDeclaredValue] = useState<string>(row?.freeDeclaredValue != null ? String(row.freeDeclaredValue) : '')
   const [active, setActive] = useState<boolean>(row?.active ?? true)
   const [notes, setNotes] = useState(row?.notes ?? '')
+  // Audit L2 (#378) — scheduled end-date (null = still current). Datetime-
+  // local input wants "YYYY-MM-DDTHH:mm"; strip trailing seconds + Z from
+  // whatever the backend returned.
+  const [effectiveUntil, setEffectiveUntil] = useState<string>(
+    row?.effectiveUntil ? row.effectiveUntil.slice(0, 16) : '',
+  )
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -349,6 +355,9 @@ function CarrierShippingLimitEditorDialog({ row, onClose, onSaved }: EditorProps
       freeDeclaredValue: freeDeclaredValue.trim() ? Number(freeDeclaredValue) : null,
       active,
       notes: notes.trim() || null,
+      // Audit L2 (#378) — null (not undefined) when blank so an operator
+      // clearing the end-date actually clears it on update.
+      effectiveUntil: effectiveUntil ? `${effectiveUntil}:00` : null,
     }
     try {
       if (row) {
@@ -477,6 +486,21 @@ function CarrierShippingLimitEditorDialog({ row, onClose, onSaved }: EditorProps
               onChange={(e) => setActive(e.target.checked)}
             />
             <span className="text-[12.5px] font-medium text-slate-700">Active</span>
+          </label>
+
+          {/* Audit L2 (#378) — scheduled end-date. Blank = still current.
+              effectiveFrom isn't exposed (server-set + immutable per the
+              DTO javadoc). */}
+          <label className="col-span-2 block">
+            <span className="mb-1 block text-[12.5px] font-medium text-slate-700">
+              Effective until (optional) — blank = still current
+            </span>
+            <input
+              type="datetime-local"
+              value={effectiveUntil}
+              onChange={(e) => setEffectiveUntil(e.target.value)}
+              className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-[13px] outline-none focus:border-slate-500"
+            />
           </label>
 
           <label className="col-span-2 block">

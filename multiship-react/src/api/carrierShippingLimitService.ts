@@ -36,6 +36,10 @@ export interface CarrierShippingLimitPayload {
   freeDeclaredValue?: number | null
   active?: boolean
   notes?: string | null
+  /** Audit L2 (#378) — scheduled end-date for this cap. Null = still
+   *  current. ISO LocalDateTime ("2026-10-15T00:00:00"); omit to leave
+   *  unset / clear. */
+  effectiveUntil?: string | null
 }
 
 export interface CarrierShippingLimitListParams {
