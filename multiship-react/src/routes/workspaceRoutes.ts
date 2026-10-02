@@ -252,6 +252,9 @@ export const settingsNavItems: Array<{
   { key: 'carrier-dropdowns', label: 'Carrier Dropdowns', to: settingsPaths.carrierDropdowns, iconKey: 'carrier',
     description: 'Per-carrier vocabularies the /orders/new wizard uses — label formats, pickup types, clearance options. Read-only.',
     roles: ['ADMIN'] },
+  { key: 'code-maps', label: 'Code Maps', to: settingsPaths.codeMaps, iconKey: 'mapping',
+    description: 'Per-client ERP ship-via / service / country / package aliases. Maps external codes (P80, F77, L01, …) to the platform catalog.',
+    roles: ['ADMIN'] },
   // ===== Hidden from the Settings menu =====
   // Routes below still resolve so direct URLs and any hard-coded links keep
   // working — only the nav-menu entries are removed. Re-add an object to the
@@ -260,7 +263,6 @@ export const settingsNavItems: Array<{
   // { key: 'routing-rules',        label: 'Routing Rules',      to: settingsPaths.routingRules,          iconKey: 'mapping', description: '…', roles: ['ADMIN', 'USER'] },
   // { key: 'reports',              label: 'Reports',            to: settingsPaths.reports,               iconKey: 'apiDocs', description: '…', roles: ['ADMIN', 'USER'] },
   // { key: 'webhook-subscriptions',label: 'Webhooks',           to: settingsPaths.webhookSubs,           iconKey: 'apiKey',  description: '…', roles: ['ADMIN', 'USER'] },
-  // { key: 'code-maps',            label: 'Code Maps',          to: settingsPaths.codeMaps,              iconKey: 'mapping', description: '…', roles: ['ADMIN']         },
   // { key: 'api-keys',             label: 'API Keys',           to: settingsPaths.apiKeys,               iconKey: 'apiKey',  description: '…', roles: ['ADMIN']         },
   // { key: 'api-reference',        label: 'API Reference',      to: settingsPaths.apiReference,          iconKey: 'apiDocs', description: '…', roles: ['ADMIN']         },
 ]
