@@ -63,6 +63,26 @@ class CarrierServiceImplStatusResolversTest {
 
     @BeforeEach
     void setUp() throws Exception {
+        // Install a stub CarrierAliasService in CarrierAliasHolder so
+        // canonicalCarrierFor("F77") etc. resolves. In production the
+        // holder is set at @PostConstruct from DB; in these unit tests
+        // nothing initialises it, so without this the legacy-code tests
+        // (F77 / P80 / L01) throw "Unsupported carrier". Order-dependent
+        // flake pre-fix — whichever earlier test ran a real
+        // CarrierAliasService.reload masked the issue.
+        var aliasStub = mock(com.multiship.backend.service.carrier.CarrierAliasService.class);
+        when(aliasStub.canonicalize("F77")).thenReturn("FEDEX");
+        when(aliasStub.canonicalize("P80")).thenReturn("UPS");
+        when(aliasStub.canonicalize("L01")).thenReturn("USPS");
+        when(aliasStub.canonicalize("UPS")).thenReturn("UPS");
+        when(aliasStub.canonicalize("FEDEX")).thenReturn("FEDEX");
+        when(aliasStub.canonicalize("USPS")).thenReturn("USPS");
+        java.lang.reflect.Method setMethod =
+                com.multiship.backend.service.carrier.CarrierAliasHolder.class
+                        .getDeclaredMethod("set", com.multiship.backend.service.carrier.CarrierAliasService.class);
+        setMethod.setAccessible(true);
+        setMethod.invoke(null, aliasStub);
+
         upsConnector = mock(CarrierConnector.class);
         when(upsConnector.getCarrierCode()).thenReturn("UPS");
         when(upsConnector.getCarrierName()).thenReturn("UPS");
@@ -85,6 +105,12 @@ class CarrierServiceImplStatusResolversTest {
         ReflectionTestUtils.setField(impl, "userRepository", userRepository);
         ReflectionTestUtils.setField(impl, "shipViaRepository", shipViaRepository);
         ReflectionTestUtils.setField(impl, "carrierProperties", carrierProperties);
+        // V112 — getCarrierConnector calls carrierPlatformService.isEnabled;
+        // mock + stub to return true so every carrier dispatches by default.
+        var platformService = mock(
+                com.multiship.backend.service.carriers.platform.CarrierPlatformService.class);
+        when(platformService.isEnabled(anyString())).thenReturn(true);
+        ReflectionTestUtils.setField(impl, "carrierPlatformService", platformService);
     }
 
     /** All-null-args allocation — the fields we care about get set via
