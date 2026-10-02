@@ -147,8 +147,8 @@ export default function ShipperDefaultsSection() {
             >
               <option value="">— pick a client —</option>
               {clients.map((c) => (
-                <option key={c.code} value={c.code}>
-                  {c.code} — {c.name}
+                <option key={c.clientCode} value={c.clientCode}>
+                  {c.clientCode} — {c.name}
                 </option>
               ))}
             </select>
