@@ -179,6 +179,17 @@ export default function ClientEditorPage() {
    *  false-fire the prompt). isDirty = snapshot !== JSON.stringify(form). */
   const initialFormJsonRef = useRef<string>(JSON.stringify(form))
 
+  /** Audit 2.3 (#283) — persistent warehouse-attach error. Set when the
+   *  best-effort attach after a client save fails; cleared on a
+   *  successful retry or when the operator picks a different warehouse.
+   *  Carries the warehouseCode so Retry re-fires against the same row. */
+  const [attachmentError, setAttachmentError] = useState<{
+    message: string
+    warehouseCode: string
+    clientCode: string
+  } | null>(null)
+  const [attachRetrying, setAttachRetrying] = useState(false)
+
   /** Steps the operator has landed on at least once. Gates the Create button
    *  in create mode — must visit every step before the wizard can commit. */
   const [visitedSteps, setVisitedSteps] = useState<Set<StepKey>>(
@@ -364,6 +375,10 @@ export default function ClientEditorPage() {
    *  labels keep printing the same fields. The warehouse id is remembered so
    *  we can attach + default it on the client after save. */
   const pickShipFromWarehouse = (wh: Warehouse | null) => {
+    // Audit 2.3 (#283) — a stale banner for the old pick is noise once
+    // the operator picked something else. Clear + a new save-attach
+    // cycle will reset it correctly either way.
+    if (attachmentError) setAttachmentError(null)
     if (!wh) {
       setSelectedShipFromWarehouseId(null)
       return
@@ -639,6 +654,36 @@ export default function ClientEditorPage() {
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
   }, [isDirty, saving])
+
+  /** Audit 2.3 (#283) — re-fire the attach call that failed after save.
+   *  Keeps the banner visible on error (another retry possible) or
+   *  clears it on success. */
+  const retryWarehouseAttach = async () => {
+    if (!attachmentError || attachRetrying) return
+    setAttachRetrying(true)
+    try {
+      await clientWarehouseService.attach(attachmentError.clientCode, {
+        warehouseCode: attachmentError.warehouseCode,
+        makeDefault: true,
+      })
+      setAttachmentError(null)
+      notify.success('Warehouse attached.')
+    } catch (err) {
+      if (err instanceof ApiError && err.errorCode === 'WAREHOUSE_ALREADY_ATTACHED') {
+        // Already attached (another admin raced us) — treat as success +
+        // best-effort set-default so the UI matches reality.
+        try {
+          await clientWarehouseService.setDefault(attachmentError.clientCode, attachmentError.warehouseCode)
+        } catch { /* not fatal */ }
+        setAttachmentError(null)
+        notify.success('Warehouse attached.')
+      } else {
+        notify.apiError(err, 'Retry failed — attach still rejected.')
+      }
+    } finally {
+      setAttachRetrying(false)
+    }
+  }
 
   const onClose = async () => {
     // In-app nav intercept — the browser prompt only catches tab close /
@@ -1057,19 +1102,29 @@ export default function ClientEditorPage() {
               warehouseCode: wh.code,
               makeDefault: true,
             })
+            // Audit 2.3 (#283) — attach succeeded; clear any prior error.
+            setAttachmentError(null)
           } catch (attachError) {
             // Attach may 409 if it's already attached — that's fine; a fresh
             // "already attached" isn't worth toasting. Anything else is.
             if (!(attachError instanceof ApiError && attachError.errorCode === 'WAREHOUSE_ALREADY_ATTACHED')) {
-              notify.error(
-                attachError instanceof Error
-                  ? attachError.message
-                  : 'Client saved, but attaching Ship From warehouse failed.',
-              )
+              const msg = attachError instanceof Error
+                ? attachError.message
+                : 'Client saved, but attaching Ship From warehouse failed.'
+              notify.error(msg)
+              // Audit 2.3 (#283) — persist the failure in-page so a
+              // navigate-away from Identity can't hide it. ShipFromStep
+              // renders a banner with Retry; see render block below.
+              setAttachmentError({
+                message: msg,
+                warehouseCode: wh.code,
+                clientCode: response.data.clientCode,
+              })
             } else {
               // Even when already attached, make it the default (best-effort).
               try {
                 await clientWarehouseService.setDefault(response.data.clientCode, wh.code)
+                setAttachmentError(null)
               } catch { /* not fatal */ }
             }
           }
@@ -1277,6 +1332,33 @@ export default function ClientEditorPage() {
           />
         ) : null}
 
+        {activeStep === 'shipFrom' && attachmentError ? (
+          /* Audit 2.3 (#283) — persistent banner so the attach failure
+             isn't a one-shot toast the operator missed while on Identity.
+             Retry re-fires the exact same attach call; clearing happens
+             only on a successful attach. */
+          <div
+            role="alert"
+            className="mb-3 flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-[12.5px] text-rose-900"
+          >
+            <div className="flex-1">
+              <p className="font-semibold">Warehouse not attached</p>
+              <p className="mt-0.5 text-rose-800">
+                {attachmentError.message} — client &apos;{attachmentError.clientCode}&apos;,
+                warehouse &apos;{attachmentError.warehouseCode}&apos;.
+                Future orders won&apos;t find the default origin until this is fixed.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void retryWarehouseAttach()}
+              disabled={attachRetrying}
+              className="shrink-0 rounded-md border border-rose-300 bg-white px-2.5 py-1 text-[11.5px] font-semibold text-rose-800 transition hover:bg-rose-100 disabled:opacity-50"
+            >
+              {attachRetrying ? 'Retrying…' : 'Retry'}
+            </button>
+          </div>
+        ) : null}
         {activeStep === 'shipFrom' ? (
           <ShipFromStep
             warehouses={visibleShipFromWarehouses}
