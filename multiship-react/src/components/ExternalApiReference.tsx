@@ -482,6 +482,28 @@ export default function ExternalApiReference() {
       </div>
 
       {/* endpoint accordion */}
+      {/* Audit A7 (#393) — the ENDPOINTS array below is a hand-curated
+          quick-reference, not an exhaustive catalog. Partners who need
+          the full public API surface (webhooks, API keys, admin paths
+          added post-Sprint 46) follow the Swagger UI link in the
+          header. Framing + explicit "full list elsewhere" cue prevents
+          operators from assuming the 5-row list is comprehensive. */}
+      <div className="flex items-start gap-2 border-b border-dashed border-slate-200 bg-amber-50/40 px-4 py-2.5 text-[11.5px] text-amber-900">
+        <FiExternalLink className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-700" />
+        <p>
+          Quick reference — the 5 most-used endpoints. The{' '}
+          <a
+            href={SWAGGER_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="font-semibold underline hover:text-amber-700"
+          >
+            Swagger UI
+          </a>{' '}
+          carries the full public API catalog (webhooks, api-keys, admin paths,
+          and anything added since this page was hand-updated).
+        </p>
+      </div>
       <ul className="divide-y divide-dashed divide-slate-200">
         {ENDPOINTS.map((ep) => {
           const key = `${ep.method} ${ep.path}`
