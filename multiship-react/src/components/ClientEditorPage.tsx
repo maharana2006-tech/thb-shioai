@@ -172,6 +172,13 @@ export default function ClientEditorPage() {
   )
   const [saving, setSaving] = useState(false)
 
+  /** Audit (#281) — JSON snapshot of the form as it last matched persisted
+   *  state. Create mode: the empty-form shape at mount; edit mode: the
+   *  hydrated form after the client fetch resolves; after each successful
+   *  save: the form at save time (so a post-save navigation doesn't
+   *  false-fire the prompt). isDirty = snapshot !== JSON.stringify(form). */
+  const initialFormJsonRef = useRef<string>(JSON.stringify(form))
+
   /** Steps the operator has landed on at least once. Gates the Create button
    *  in create mode — must visit every step before the wizard can commit. */
   const [visitedSteps, setVisitedSteps] = useState<Set<StepKey>>(
@@ -401,7 +408,7 @@ export default function ClientEditorPage() {
         const c = resp.data
         if (!c) throw new Error('Client not found')
         setClient(c)
-        setForm({
+        const hydrated: ClientUpsertPayload = {
           clientCode: c.clientCode,
           name: c.name || '',
           email: c.email || '',
@@ -416,7 +423,11 @@ export default function ClientEditorPage() {
           defaultDimUnit: c.defaultDimUnit ?? '',
           timezone: c.timezone ?? '',
           defaultOriginCountry: c.defaultOriginCountry ?? '',
-        })
+        }
+        setForm(hydrated)
+        // Audit (#281) — reset the dirty baseline to the hydrated form so
+        // a navigate-away right after load doesn't false-fire the prompt.
+        initialFormJsonRef.current = JSON.stringify(hydrated)
         setAccounts(c.carrierAccounts ?? [])
       })
       .catch((err: unknown) => {
@@ -614,7 +625,30 @@ export default function ClientEditorPage() {
     if (i > 0) setActiveStep(STEP_DEFS[i - 1].key)
   }
 
-  const onClose = () => navigate('/settings/clients')
+  /** Audit (#281) — dirty-track against the pristine baseline. Memo'd so
+   *  the beforeunload handler + onClose confirm share one truth. */
+  const isDirty = useMemo(
+    () => JSON.stringify(form) !== initialFormJsonRef.current,
+    [form],
+  )
+
+  // Browser-close prompt while dirty. Mirrors NewShipmentPage's pattern.
+  useEffect(() => {
+    if (!isDirty || saving) return
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [isDirty, saving])
+
+  const onClose = async () => {
+    // In-app nav intercept — the browser prompt only catches tab close /
+    // reload. Explicit Cancel / list-link clicks route through here.
+    if (isDirty && !(await notify.confirm(
+      "This client has unsaved changes. Leave and lose what you've edited?",
+      { title: 'Leave client editor?', confirmLabel: 'Leave', cancelLabel: 'Stay' },
+    ))) return
+    navigate('/settings/clients')
+  }
 
   /** Every MANDATORY step visited AND every mandatory field valid = ready to
    *  create. Optional steps like Importer/Broker don't gate Create. */
@@ -814,6 +848,9 @@ export default function ClientEditorPage() {
       }
       const response = await clientService.createClient(payload)
       notify.success(`Client ${response.data.clientCode} created.`)
+      // Audit (#281) — reset dirty baseline so the post-create navigate
+      // doesn't fire the unsaved-changes prompt.
+      initialFormJsonRef.current = JSON.stringify(form)
       // Sprint 52 — nudge the operator toward the Billing markup tab
       // immediately after creation when no row was seeded. Same predicate
       // as the step-nav amber badge / MarkupTab banner so all four
@@ -1008,6 +1045,8 @@ export default function ClientEditorPage() {
       }
       const response = await clientService.updateClient(form.clientCode, payload)
       setClient(response.data)
+      // Audit (#281) — reset dirty baseline on successful update.
+      initialFormJsonRef.current = JSON.stringify(form)
       // Same Ship From warehouse follow-up as create: attach + default the
       // picked warehouse so the origin isn't just address text on the row.
       if (selectedShipFromWarehouseId != null) {
@@ -1077,7 +1116,7 @@ export default function ClientEditorPage() {
         <div className="flex min-w-0 items-center gap-2.5">
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => void onClose()}
             aria-label="Back to clients"
             title="Back to clients"
             className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-950"
@@ -1097,7 +1136,7 @@ export default function ClientEditorPage() {
           <div className="flex shrink-0 items-center gap-2">
             <button
               type="button"
-              onClick={onClose}
+              onClick={() => void onClose()}
               className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-600 transition hover:bg-slate-100"
             >
               Cancel
@@ -1406,7 +1445,7 @@ export default function ClientEditorPage() {
           ) : isLast ? (
             <button
               type="button"
-              onClick={onClose}
+              onClick={() => void onClose()}
               className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-4 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15]"
             >
               Finish
