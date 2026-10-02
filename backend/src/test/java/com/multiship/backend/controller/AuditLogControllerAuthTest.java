@@ -19,6 +19,36 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 class AuditLogControllerAuthTest {
 
     @Test
+    void exportEndpoint_isAdminOnly() throws Exception {
+        // Audit B6 (#357) — list opens to USER (tenant-scoped at the repo),
+        // but the CSV export is a much bigger blast radius: 100k rows in
+        // one hit, including the full change blob. Pin ADMIN-only so a
+        // code refactor can't quietly widen it.
+        Method export = AuditLogController.class.getDeclaredMethod("export",
+                String.class, String.class, String.class, String.class,
+                String.class, Integer.class, String.class, String.class,
+                jakarta.servlet.http.HttpServletResponse.class);
+        PreAuthorize gate = export.getAnnotation(PreAuthorize.class);
+        assertNotNull(gate, "export() must carry @PreAuthorize");
+        assertEquals("hasRole('ADMIN')", gate.value(),
+                "CSV export is ADMIN-only — list is open to USER but export isn't.");
+    }
+
+    @Test
+    void csvQuoting_handlesDelimitersQuotesAndNewlines() throws Exception {
+        // Audit B6 (#357) — RFC 4180 quoting on the CSV path. The changes
+        // blob in the audit log is JSON — commas + embedded quotes are
+        // routine and would silently corrupt the output without this.
+        Method csv = AuditLogController.class.getDeclaredMethod("csv", Object.class);
+        csv.setAccessible(true);
+        assertEquals("", csv.invoke(null, (Object) null));
+        assertEquals("plain", csv.invoke(null, "plain"));
+        assertEquals("\"with,comma\"", csv.invoke(null, "with,comma"));
+        assertEquals("\"with\"\"quote\"", csv.invoke(null, "with\"quote"));
+        assertEquals("\"two\nlines\"", csv.invoke(null, "two\nlines"));
+    }
+
+    @Test
     void listEndpoint_allowsAdminAndUser() throws Exception {
         // Signature growth history:
         //   original — 6 Strings + 2 ints
