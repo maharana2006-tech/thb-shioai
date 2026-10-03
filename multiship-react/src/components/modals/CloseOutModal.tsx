@@ -376,7 +376,7 @@ function FailedToClassifyList({ trackings }: { trackings: string[] }) {
       </p>
       <p className="mt-1 text-[11px]">
         These trackings weren't included in the carrier manifest because the
-        classifier couldn't resolve their fleet via the shipping-service-mapping
+        classifier couldn't resolve their fleet via the Code Maps SHIPVIA
         chain (missing OrderTracking row, no per-client alias, or no
         ShippingService for the resolved code). Fix the mapping and re-run.
       </p>

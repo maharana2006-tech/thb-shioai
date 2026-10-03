@@ -71,8 +71,8 @@ const packageFitsService = (p: PackagePreset, s: ShippingServiceItem): boolean =
 /**
  * Shipping Services — the carrier service catalog (toggle what the platform
  * offers) and each service's ALLOWED PACKAGES (its carrier's own packaging plus
- * custom boxes). The order-method → service mappings live on their own page —
- * see ShippingServiceMappingPage.
+ * custom boxes). The order-method → service mappings live on Code Maps
+ * (SHIPVIA tab) — merged in V126.
  */
 export default function ShippingServicesPage() {
   const [services, setServices] = useState<ShippingServiceItem[]>([])

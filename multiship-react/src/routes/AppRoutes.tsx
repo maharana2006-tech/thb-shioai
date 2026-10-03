@@ -65,7 +65,6 @@ const RoutingRulesPage = lazy(() => import('../components/RoutingRulesPage'))
 const ReportsPage = lazy(() => import('../components/ReportsPage'))
 const WebhookSubscriptionsPage = lazy(() => import('../components/WebhookSubscriptionsPage'))
 const ShippingCatalogPage = lazy(() => import('../components/ShippingCatalogPage'))
-const ShippingServiceMappingPage = lazy(() => import('../components/ShippingServiceMappingPage'))
 const AddressBookPage = lazy(() => import('../components/AddressBookPage'))
 const WarehousesPage = lazy(() => import('../components/WarehousesPage'))
 const CodeMapsPage = lazy(() => import('../components/CodeMapsPage'))
@@ -186,7 +185,8 @@ export default function AppRoutes() {
                 <Route path="shipping-catalog" element={<ShippingCatalogPage />} />
                 <Route path="shipping-services" element={<Navigate to="/settings/shipping-catalog?tab=services" replace />} />
                 <Route path="packages" element={<Navigate to="/settings/shipping-catalog?tab=packages" replace />} />
-                <Route path="shipping-service-mapping" element={<ShippingServiceMappingPage />} />
+                {/* V126 merge: SSM retired → Code Maps absorbs its semantics. */}
+                <Route path="shipping-service-mapping" element={<Navigate to="/settings/code-maps?tab=shipvia" replace />} />
                 <Route path="address-book" element={<AddressBookPage />} />
                 <Route path="importer-broker" element={<ImporterBrokerPage />} />
                 {/* Templates — shipping label / packing slip / commercial invoice.

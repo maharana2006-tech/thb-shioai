@@ -173,10 +173,6 @@ export default function RoutingRulesPage() {
           Code Maps
         </a>
         <span className="mx-1 text-slate-300">→</span>
-        <a href="/settings/shipping-service-mapping" className="rounded border border-slate-200 bg-white px-2 py-0.5 font-semibold text-slate-600 hover:bg-slate-50">
-          Shipping Service Mapping
-        </a>
-        <span className="mx-1 text-slate-300">→</span>
         <span className="rounded bg-[#1f150c] px-2 py-0.5 font-semibold text-white">Routing Rules</span>
         <span className="text-slate-400">·</span>
         <span className="text-slate-500">post-rate-shop REROUTE / BLOCK by priority</span>

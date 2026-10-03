@@ -29,7 +29,7 @@ export interface ManifestRequest {
  *     submission). Callers should read this list preferentially; the flat
  *     top-level manifestId/PDF fields are null in that case.
  *   · failedToClassify — trackings excluded from the manifest because their
- *     fleet couldn't be classified via the shipping-service-mapping chain.
+ *     fleet couldn't be classified via the Code Maps SHIPVIA chain.
  *     Operator re-runs after fixing the mapping.
  */
 export interface ManifestResponse {

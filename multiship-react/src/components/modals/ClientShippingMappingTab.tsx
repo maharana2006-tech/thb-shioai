@@ -33,7 +33,7 @@ import PortalMenu from '../workspace/PortalMenu'
 import ZoneEditorModal from '../workspace/ZoneEditorModal'
 import RulePackagesDrawer from './RulePackagesDrawer'
 
-/** Codes of a rule's destination zone. Mirrors ShippingServiceMappingPage. */
+/** Codes of a rule's destination zone. Mirrors Code Maps SHIPVIA tab. */
 const ruleCodes = (r: ShipMethodRule): string[] => {
   if (r.destType === 'COUNTRIES' && r.destValue) return r.destValue.split(/\s+/).filter(Boolean)
   if (r.destType === 'COUNTRY' && r.destValue) return [r.destValue]

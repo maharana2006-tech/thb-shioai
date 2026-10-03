@@ -48,7 +48,10 @@ export const settingsPaths = {
    *  the old `shipping-services` and `packages` routes. Deep-link the tab
    *  with `?tab=services` or `?tab=packages`. */
   shippingCatalog: '/settings/shipping-catalog',
-  shippingServiceMapping: '/settings/shipping-service-mapping',
+  /** V126 merge — SSM retired → Code Maps absorbs its semantics. Keep the
+   *  key so cross-link callers still compile; the path redirects via
+   *  AppRoutes to /settings/code-maps?tab=shipvia. */
+  shippingServiceMapping: '/settings/code-maps?tab=shipvia',
   addressBook: '/settings/address-book',
   importerBroker: '/settings/importer-broker',
   /** Tenant-branded document templates — shipping label, packing slip,
@@ -167,9 +170,6 @@ export const settingsNavItems: Array<{
     roles: ['ADMIN', 'USER'] },
   { key: 'shipping-catalog', label: 'Shipping Catalog', to: settingsPaths.shippingCatalog, iconKey: 'service',
     description: "Carrier services + packages per origin, and each item's allowed clients. Two sub-tabs share the origin filter and allowlist model.",
-    roles: ['ADMIN', 'USER'] },
-  { key: 'shipping-service-mapping', label: 'Shipping Service Mapping', to: settingsPaths.shippingServiceMapping, iconKey: 'mapping',
-    description: "How order ship-methods resolve to a carrier service — most specific mapping wins.",
     roles: ['ADMIN', 'USER'] },
   { key: 'address-book', label: 'Address book', to: settingsPaths.addressBook, iconKey: 'clients',
     description: 'The saved addresses offered in Ship to on a new shipment — add, correct or remove them, per client or shared.',
