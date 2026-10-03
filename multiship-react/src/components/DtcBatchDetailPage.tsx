@@ -5,9 +5,10 @@ import type { ColumnDef } from '@tanstack/react-table'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import {
-  batchStatusOf, dtcService, labelStatusOf, lineHasError,
+  batchStatusOf, canEditLine, dtcService, labelStatusOf, lineHasError,
   type DtcBatchDetail, type DtcOrder,
 } from '../api/dtcService'
+import DtcLineEditModal from './dtc/DtcLineEditModal'
 import { orderService } from '../api/orderService'
 import { ApiError } from '../api/apiClient'
 import { confirmBatchGenerate } from '../utils/dtcConfirm'
@@ -49,6 +50,8 @@ export default function DtcBatchDetailPage() {
   const [detailsOrderNo, setDetailsOrderNo] = useState<number | null>(null)
   /** Shipment line the detail modal shows (set by clicking anywhere on a row). */
   const [detailsLine, setDetailsLine] = useState<DtcOrder | null>(null)
+  /** The line being corrected (no label order yet) — see DtcLineEditModal. */
+  const [editingLine, setEditingLine] = useState<DtcOrder | null>(null)
 
   const load = useCallback(async () => {
     if (!batchId || !tenantId) return
@@ -195,14 +198,30 @@ export default function DtcBatchDetailPage() {
           return <span className="inline-flex items-center rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-700">VOIDED</span>
         }
         const errored = lineHasError(o)
+        const editButton = canEditLine(o) ? (
+          <button
+            type="button"
+            title={`Correct this line before its label is bought${o.generatedMessage ? ` — ${o.generatedMessage}` : ''}`}
+            onClick={() => setEditingLine(o)}
+            className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-semibold transition ${errored
+              ? 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100'
+              : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:bg-[#faf7f0]'}`}
+          >
+            <FiEdit2 className="h-3 w-3" />
+            Edit
+          </button>
+        ) : null
         if (!o.generatedStatus) {
           return (
-            <span
-              title="No label run has touched this line yet"
-              className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-500"
-            >
-              Not generated
-            </span>
+            <div className="flex items-center gap-2">
+              <span
+                title="No label run has touched this line yet"
+                className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-500"
+              >
+                Not generated
+              </span>
+              {editButton}
+            </div>
           )
         }
         return (
@@ -213,6 +232,7 @@ export default function DtcBatchDetailPage() {
             >
               {o.generatedStatus === 'IN_FLIGHT' ? 'Buying…' : o.generatedStatus}
             </span>
+            {editButton}
             {errored && o.generatedOrderNo && (
               <button
                 type="button"
@@ -331,13 +351,23 @@ export default function DtcBatchDetailPage() {
         />
       </section>
 
+      {editingLine && (
+        <DtcLineEditModal
+          line={editingLine}
+          onClose={() => setEditingLine(null)}
+          onSaved={() => { setEditingLine(null); void load() }}
+        />
+      )}
+
       {detailsLine && (
         <LineDetailsModal
           order={detailsLine}
           onClose={() => setDetailsLine(null)}
           onEdit={lineHasError(detailsLine) && detailsLine.generatedOrderNo
             ? () => fixLine(detailsLine)
-            : undefined}
+            : canEditLine(detailsLine)
+              ? () => { setEditingLine(detailsLine); setDetailsLine(null) }
+              : undefined}
           onOpenOrder={
             detailsLine.generatedOrderNo
               ? () => {

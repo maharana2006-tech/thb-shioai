@@ -39,6 +39,14 @@ export const dtcService = {
     apiClient.post<ApiResponse<{ job: DtcGenerationJob }>>(
       `/dtc/batches/${batchId}/generate?tenantId=${encodeURIComponent(tenantId)}`, {}),
 
+  /**
+   * Correct a line that has no label order yet (null = keep, "" = clear), or link it to an
+   * order labelled by hand ({ adoptOrderNo }). 409 once the line has a label or is being bought.
+   */
+  editLine: (batchId: string, lineId: number, tenantId: string, body: DtcLineEdit) =>
+    apiClient.patch<ApiResponse<DtcOrder>>(
+      `/dtc/batches/${batchId}/lines/${lineId}?tenantId=${encodeURIComponent(tenantId)}`, body),
+
   /** Generation job progress (poll after enqueue). */
   generationJob: (jobId: number) =>
     apiClient.get<ApiResponse<DtcGenerationJob>>(`/dtc/batches/generation-jobs/${jobId}`),
@@ -118,6 +126,21 @@ export interface DtcBatchQuery {
 }
 
 /** One dtc_orders row (DtcOrder entity, V102 generation columns included). */
+/** The fields Automatic label builds a shipment from — what an operator may correct on a line. */
+export type DtcLineEdit = Partial<Pick<DtcOrder,
+  'shipName' | 'shipAttn' | 'shipAddr1' | 'shipAddr2' | 'shipAddr3' | 'shipToCity' | 'shipToState'
+  | 'shipToZip' | 'shipToCountryCode' | 'phone' | 'email' | 'goodsDesc' | 'shipViaCode'>> & {
+  weight?: number | null
+  unitValue?: number | null
+  adoptOrderNo?: number
+}
+
+/** A line that can be corrected here: no label order yet, and not labelled or being bought. */
+export function canEditLine(o: Pick<DtcOrder, 'generatedOrderNo' | 'generatedStatus'>): boolean {
+  return !o.generatedOrderNo && o.generatedStatus !== 'GENERATED'
+    && o.generatedStatus !== 'QUEUED_USPS' && o.generatedStatus !== 'IN_FLIGHT'
+}
+
 export interface DtcOrder {
   id: number
   batchId: number

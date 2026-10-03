@@ -612,6 +612,93 @@ public class DtcLabelGenerationService {
         return true;
     }
 
+    /**
+     * Operator correction for one line — the write path behind the batch page's Edit on a
+     * line that has no label order yet (a line with an order is fixed on the manual
+     * shipment form instead). The ERP sync skips rows that already exist, so an edit here
+     * is what the next Automatic label run builds from.
+     *
+     * <p>{@code adoptOrderNo} instead points the line at an order labelled by hand on the
+     * manual shipment form and lifts it to GENERATED from that order's tracking.
+     *
+     * @throws java.util.NoSuchElementException the line isn't in this tenant's batch
+     * @throws IllegalStateException the line has a label, or is being bought right now
+     * @throws IllegalArgumentException a value can't be used
+     */
+    public DtcOrder editLine(String tenantId, BigDecimal batchId, Long lineId,
+                             com.multiship.backend.dto.DtcOrderEditRequest req, String editedBy) {
+        DtcOrder row = dtcOrderRepository.findById(lineId)
+                .filter(r -> r.getTenantId() != null && r.getTenantId().trim().equalsIgnoreCase(tenantId)
+                        && r.getBatchId() != null && r.getBatchId().compareTo(batchId) == 0)
+                .orElseThrow(() -> new java.util.NoSuchElementException(
+                        "Line " + lineId + " is not in batch " + batchId + " for " + tenantId));
+        String status = row.getGeneratedStatus() == null ? "" : row.getGeneratedStatus();
+        if (STATUS_GENERATED.equals(status) || STATUS_QUEUED_USPS.equals(status)) {
+            throw new IllegalStateException("This line already has a label — void it first to change it.");
+        }
+        if (STATUS_IN_FLIGHT.equals(status)) {
+            throw new IllegalStateException("This line's label is being bought right now — wait for the run to finish.");
+        }
+
+        if (req.adoptOrderNo() != null) {
+            Order order = orderRepository.findByOrderNo(req.adoptOrderNo())
+                    .orElseThrow(() -> new IllegalArgumentException("Order " + req.adoptOrderNo() + " doesn't exist."));
+            String owner = StringUtils.hasText(order.getTenantId()) ? order.getTenantId() : order.getCustNo();
+            if (owner == null || !owner.trim().equalsIgnoreCase(tenantId)) {
+                throw new IllegalArgumentException("Order " + req.adoptOrderNo() + " belongs to another client.");
+            }
+            Integer previous = row.getGeneratedOrderNo();
+            row.setGeneratedOrderNo(req.adoptOrderNo());
+            if (!syncFromLabel(row)) {
+                row.setGeneratedOrderNo(previous);
+                throw new IllegalArgumentException("Order " + req.adoptOrderNo() + " has no label yet — label it first.");
+            }
+            log.info("DTC line {} (batch {}) linked to hand-made order {} by {}", row.getId(), batchId, req.adoptOrderNo(), editedBy);
+            return row;
+        }
+
+        row.setShipName(patch(req.shipName(), row.getShipName()));
+        row.setShipAttn(patch(req.shipAttn(), row.getShipAttn()));
+        row.setShipAddr1(patch(req.shipAddr1(), row.getShipAddr1()));
+        row.setShipAddr2(patch(req.shipAddr2(), row.getShipAddr2()));
+        row.setShipAddr3(patch(req.shipAddr3(), row.getShipAddr3()));
+        row.setShipToCity(patch(req.shipToCity(), row.getShipToCity()));
+        row.setShipToState(patch(req.shipToState(), row.getShipToState()));
+        row.setShipToZip(patch(req.shipToZip(), row.getShipToZip()));
+        String country = patch(req.shipToCountryCode(), row.getShipToCountryCode());
+        if (country != null && !country.matches("(?i)[A-Z]{2}")) {
+            throw new IllegalArgumentException("Country must be a 2-letter code, e.g. US.");
+        }
+        row.setShipToCountryCode(country == null ? null : country.toUpperCase(Locale.ROOT));
+        row.setPhone(patch(req.phone(), row.getPhone()));
+        row.setEmail(patch(req.email(), row.getEmail()));
+        row.setGoodsDesc(patch(req.goodsDesc(), row.getGoodsDesc()));
+        row.setShipViaCode(patch(req.shipViaCode(), row.getShipViaCode()));
+        if (req.weight() != null) {
+            if (req.weight().signum() <= 0) throw new IllegalArgumentException("Weight must be more than 0.");
+            row.setWeight(req.weight());
+        }
+        if (req.unitValue() != null) {
+            if (req.unitValue().signum() < 0) throw new IllegalArgumentException("Value can't be negative.");
+            row.setUnitValue(req.unitValue());
+        }
+        if (STATUS_FAILED.equals(status)) {
+            // The old carrier error no longer describes the line; the next run retries it.
+            row.setGeneratedMessage(abbreviate("Edited by " + editedBy + " — retried on the next Generate."));
+        }
+        log.info("DTC line {} (batch {}) edited by {}", row.getId(), batchId, editedBy);
+        return dtcOrderRepository.save(row);
+    }
+
+    /** Patch semantics: null keeps the current value, blank clears it, text is trimmed (255 max). */
+    private static String patch(String incoming, String current) {
+        if (incoming == null) return current;
+        String t = incoming.trim();
+        if (t.isEmpty()) return null;
+        if (t.length() > 255) throw new IllegalArgumentException("A value is longer than 255 characters.");
+        return t;
+    }
+
     /** What the operator reads on a line whose purchase was cut off. */
     private static String interruptedMessage(DtcOrder row) {
         return "Interrupted while the label was being bought — the carrier may have charged for it. "

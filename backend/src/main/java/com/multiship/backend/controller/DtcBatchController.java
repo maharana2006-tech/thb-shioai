@@ -204,6 +204,39 @@ public class DtcBatchController {
                         .data(data).build());
     }
 
+    @Operation(summary = "Correct one shipment line",
+            description = "Patch the fields Automatic label builds from (null = keep, \"\" = clear), or link "
+                    + "the line to an order labelled by hand (adoptOrderNo). 404 when the line isn't in the "
+                    + "tenant's batch, 409 when it already has a label or is being bought.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @org.springframework.web.bind.annotation.PatchMapping("/{batchId}/lines/{lineId}")
+    public ResponseEntity<ApiResponse<DtcOrder>> editLine(
+            @PathVariable BigDecimal batchId,
+            @PathVariable Long lineId,
+            @RequestParam(defaultValue = "") String tenantId,
+            @org.springframework.web.bind.annotation.RequestBody com.multiship.backend.dto.DtcOrderEditRequest body) {
+        String tenant = requireTenant(tenantId);
+        HttpStatus status;
+        String message;
+        try {
+            DtcOrder line = generationService.editLine(tenant, batchId, lineId, body, currentUsername());
+            return ok(body.adoptOrderNo() != null ? "Line linked to order " + body.adoptOrderNo() : "Line updated", line);
+        } catch (java.util.NoSuchElementException e) {
+            status = HttpStatus.NOT_FOUND;
+            message = e.getMessage();
+        } catch (IllegalStateException e) {
+            status = HttpStatus.CONFLICT;
+            message = e.getMessage();
+        } catch (IllegalArgumentException e) {
+            status = HttpStatus.UNPROCESSABLE_CONTENT;
+            message = e.getMessage();
+        }
+        return ResponseEntity.status(status).body(ApiResponse.<DtcOrder>builder()
+                .status("ERROR").code(status.value())
+                .timestamp(LocalDateTime.now())
+                .message(message).build());
+    }
+
     @Operation(summary = "Generation job status", description = "Progress poll target after enqueue.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @GetMapping("/generation-jobs/{jobId}")
