@@ -41,4 +41,50 @@ public interface ClientShipviaCodeMapRepository extends JpaRepository<ClientShip
 
     /** Aliases pointing at one catalog service — what stops resolving if it is switched off. */
     long countByServiceId(Long serviceId);
+
+    /** V126 merge — pick the most-specific matching rule for an incoming
+     *  (client, ERP code, warehouse, country, region) tuple.
+     *
+     *  Specificity ladder (highest wins; nulls on a column = "any"):
+     *     1. client + warehouse + country
+     *     2. client + warehouse + any
+     *     3. client + any       + country
+     *     4. client + any       + any
+     *     5. global             + warehouse + country
+     *     6. global             + warehouse + any
+     *     7. global             + any       + country
+     *     8. global             + any       + any
+     *
+     *  Encoded by scoring with CASE: 4 points for a client match (vs
+     *  global), 2 for warehouse, 1 for country. Highest score wins.
+     *  Region match is a tiebreaker (any-region rules are catch-alls).
+     *
+     *  CAST(:x AS string|bigint) IS NULL guards are the same pattern as
+     *  findForUpsert — Hibernate otherwise picks LOWER(bytea) on null. */
+    @Query("""
+        SELECT m FROM ClientShipviaCodeMap m
+         WHERE LOWER(m.erpCode) = LOWER(:erpCode)
+           AND (m.clientCode IS NULL OR LOWER(m.clientCode) = LOWER(:clientCode))
+           AND (m.warehouseId IS NULL
+                OR (CAST(:warehouseId AS long) IS NOT NULL
+                    AND m.warehouseId = :warehouseId))
+           AND (m.destCountry IS NULL
+                OR (CAST(:destCountry AS string) IS NOT NULL
+                    AND m.destCountry = :destCountry))
+           AND (m.destRegion IS NULL
+                OR (CAST(:destRegion AS string) IS NOT NULL
+                    AND m.destRegion = :destRegion))
+         ORDER BY
+            (CASE WHEN m.clientCode  IS NOT NULL THEN 4 ELSE 0 END
+           + CASE WHEN m.warehouseId IS NOT NULL THEN 2 ELSE 0 END
+           + CASE WHEN m.destCountry IS NOT NULL THEN 1 ELSE 0 END) DESC,
+            CASE WHEN m.destRegion IS NOT NULL THEN 1 ELSE 0 END DESC,
+            m.id ASC
+    """)
+    List<ClientShipviaCodeMap> findMatches(
+            @Param("clientCode") String clientCode,
+            @Param("erpCode") String erpCode,
+            @Param("warehouseId") Long warehouseId,
+            @Param("destCountry") String destCountry,
+            @Param("destRegion") String destRegion);
 }
