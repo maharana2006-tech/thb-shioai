@@ -397,6 +397,8 @@ function CustomsSection({ customs, order }: { customs: OrderCustoms | null; orde
   const currency = clean(customs.currency) || 'USD'
   const unit = (clean(customs.weightUnit) || clean(order.weightUnit) || 'LB').toLowerCase()
   const items = customs.items ?? []
+  // HS codes are optional (D2C feeds never carry one) — the column shows only when one is recorded.
+  const hasHs = items.some((it) => clean(it.hsCode))
   const totals = items.reduce(
     (t, it) => ({
       qty: t.qty + (it.quantity ?? 0),
@@ -455,7 +457,7 @@ function CustomsSection({ customs, order }: { customs: OrderCustoms | null; orde
               <tr>
                 <th className="px-3 py-2">#</th>
                 <th className="px-3 py-2">Description</th>
-                <th className="px-3 py-2">HS code</th>
+                {hasHs ? <th className="px-3 py-2">HS code</th> : null}
                 <th className="px-3 py-2">Origin</th>
                 <th className="px-3 py-2 text-right">Qty</th>
                 <th className="px-3 py-2 text-right">Unit value</th>
@@ -471,7 +473,7 @@ function CustomsSection({ customs, order }: { customs: OrderCustoms | null; orde
                     <span className="font-medium text-[#1f150c]">{it.description || '—'}</span>
                     {it.sku ? <span className="block font-mono text-[10.5px] text-[#a1906d]">SKU {it.sku}</span> : null}
                   </td>
-                  <td className="px-3 py-2 font-mono text-[11px]">{it.hsCode || <span className="text-[#cdbf9f]">—</span>}</td>
+                  {hasHs ? <td className="px-3 py-2 font-mono text-[11px]">{it.hsCode || <span className="text-[#cdbf9f]">—</span>}</td> : null}
                   <td className="px-3 py-2">{it.countryOfOrigin || <span className="text-[#cdbf9f]">—</span>}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{it.quantity}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{money(it.unitValue, currency) ?? '—'}</td>
@@ -483,7 +485,7 @@ function CustomsSection({ customs, order }: { customs: OrderCustoms | null; orde
             {items.length > 1 ? (
               <tfoot className="border-t border-[#efe7d6] bg-[#fcfaf5] font-semibold text-[#1f150c]">
                 <tr>
-                  <td className="px-3 py-2" colSpan={4}>Total</td>
+                  <td className="px-3 py-2" colSpan={hasHs ? 4 : 3}>Total</td>
                   <td className="px-3 py-2 text-right tabular-nums">{totals.qty}</td>
                   <td />
                   <td className="px-3 py-2 text-right tabular-nums">{`${Number(totals.weight.toFixed(3))} ${unit}`}</td>
@@ -502,6 +504,7 @@ function CustomsSection({ customs, order }: { customs: OrderCustoms | null; orde
 
 function OrderLinesSection({ order }: { order: OrderWithLines }) {
   const lines = order.orderLines
+  const hasHs = lines.some((l) => clean(l.hsCode))
   const totals = {
     qty: lines.reduce((s, l) => s + (l.qtyShipped ?? 0), 0),
     value: lines.reduce((s, l) => s + (l.totalPrice ?? 0), 0),
@@ -516,7 +519,7 @@ function OrderLinesSection({ order }: { order: OrderWithLines }) {
               <th className="px-3 py-2">#</th>
               <th className="px-3 py-2">Item</th>
               <th className="px-3 py-2">Description</th>
-              <th className="px-3 py-2">HS code</th>
+              {hasHs ? <th className="px-3 py-2">HS code</th> : null}
               <th className="px-3 py-2">Origin</th>
               <th className="px-3 py-2 text-right">Qty</th>
               <th className="px-3 py-2 text-right">Unit</th>
@@ -533,7 +536,7 @@ function OrderLinesSection({ order }: { order: OrderWithLines }) {
                   <span className="font-medium text-[#1f150c]">{line.itemDescription || line.description || '—'}</span>
                   {line.hsDesc ? <span className="block text-[10.5px] text-[#a1906d]">{line.hsDesc}</span> : null}
                 </td>
-                <td className="px-3 py-2 font-mono text-[11px]">{line.hsCode || '—'}</td>
+                {hasHs ? <td className="px-3 py-2 font-mono text-[11px]">{line.hsCode || '—'}</td> : null}
                 <td className="px-3 py-2">{line.countryOfOrigin || '—'}</td>
                 <td className="px-3 py-2 text-right tabular-nums">{line.qtyShipped ?? '—'}</td>
                 <td className="px-3 py-2 text-right tabular-nums">{money(line.unitPrice) ?? '—'}</td>
@@ -545,7 +548,7 @@ function OrderLinesSection({ order }: { order: OrderWithLines }) {
           {lines.length > 1 ? (
             <tfoot className="border-t border-[#efe7d6] bg-[#fcfaf5] font-semibold text-[#1f150c]">
               <tr>
-                <td className="px-3 py-2" colSpan={5}>Total</td>
+                <td className="px-3 py-2" colSpan={hasHs ? 5 : 4}>Total</td>
                 <td className="px-3 py-2 text-right tabular-nums">{totals.qty}</td>
                 <td />
                 <td className="px-3 py-2 text-right tabular-nums">{money(totals.value)}</td>
