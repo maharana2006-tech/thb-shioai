@@ -6,6 +6,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * Uniform read shape for the four per-client ERP alias tables.
@@ -47,6 +48,13 @@ public class ClientCodeMapDTO {
      */
     private String destCountry;
     private String destRegion;
+
+    /** V126 — SHIPVIA only. Null = any origin. */
+    private Long warehouseId;
+    /** Display convenience for the SHIPVIA list view ("WH1 — Chicago"). */
+    private String warehouseLabel;
+    /** V127 — SHIPVIA only. Empty = unrestricted. */
+    private List<Long> allowedPresetIds;
 
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

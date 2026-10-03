@@ -12,6 +12,7 @@ import {
   type PackagePreset,
   type ShippingServiceItem,
 } from '../api/shippingConfigService'
+import { clientWarehouseService, type ClientWarehouse } from '../api/warehouseService'
 import { formatCarrierName } from '../utils/carrierUtils'
 import { COUNTRIES } from '../utils/countries'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
@@ -70,6 +71,10 @@ export default function CodeMapsPage() {
   // Catalog data for the target pickers.
   const [services, setServices] = useState<ShippingServiceItem[]>([])
   const [presets, setPresets] = useState<PackagePreset[]>([])
+  /** V126 — warehouses available for the SHIPVIA warehouse picker. Reloaded
+   *  when the selected client changes. Default (platform) warehouses that
+   *  are attached to the client are the natural options. */
+  const [clientWarehouses, setClientWarehouses] = useState<ClientWarehouse[]>([])
 
   // Inline add form state (shared shape; interpretation depends on the tab).
   const [erpCode, setErpCode] = useState('')
@@ -84,6 +89,10 @@ export default function CodeMapsPage() {
    *  disclosure so the common case stays simple. */
   const [destCountry, setDestCountry] = useState<string>('')
   const [destRegion, setDestRegion] = useState<string>('')
+  /** V126 — SHIPVIA tab only: optional origin-warehouse scope. '' = any. */
+  const [warehouseId, setWarehouseId] = useState<string>('')
+  /** V127 — SHIPVIA tab only: packaging allowlist. Empty = unrestricted. */
+  const [allowedPresetIds, setAllowedPresetIds] = useState<number[]>([])
   const [showDestScope, setShowDestScope] = useState<boolean>(false)
   const [saving, setSaving] = useState(false)
   /** Audit R2 #369 — show-inactive toggle for the client picker.
@@ -102,6 +111,9 @@ export default function CodeMapsPage() {
   const [editingRowId, setEditingRowId] = useState<number | null>(null)
   const [editTargetId, setEditTargetId] = useState<string>('')
   const [editIso2, setEditIso2] = useState<string>('')
+  /** V126/V127 — per-row edit working state for SHIPVIA tab only. */
+  const [editWarehouseId, setEditWarehouseId] = useState<string>('')
+  const [editAllowedPresetIds, setEditAllowedPresetIds] = useState<number[]>([])
   const [editSaving, setEditSaving] = useState(false)
 
   // Bootstrap the catalogs once.
@@ -139,6 +151,18 @@ export default function CodeMapsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- selectedClient intentionally omitted; only re-fetch on the inactive toggle (or first mount) to avoid re-loading the client list on every selection change
   }, [showInactiveClients])
 
+  // V126 — reload the per-client warehouse list whenever the client picks
+  // changes. Empty clientCode = no fetch; keeps the picker's option set
+  // scoped to warehouses the client is actually attached to.
+  useEffect(() => {
+    if (!selectedClient) { setClientWarehouses([]); return }
+    let alive = true
+    clientWarehouseService.listForClient(selectedClient)
+      .then((resp) => { if (alive) setClientWarehouses(resp.data ?? []) })
+      .catch(() => { if (alive) setClientWarehouses([]) })
+    return () => { alive = false }
+  }, [selectedClient])
+
   // Reload rows when either the tab or the client changes.
   const load = useCallback(async () => {
     if (!selectedClient) {
@@ -164,6 +188,8 @@ export default function CodeMapsPage() {
     // Audit R2 #368 — reset dest scoping fields too so a switched tab
     // doesn't carry over a stale destCountry from the previous kind.
     setDestCountry(''); setDestRegion(''); setShowDestScope(false)
+    // V126/V127 — reset SHIPVIA-only form fields.
+    setWarehouseId(''); setAllowedPresetIds([])
     // Audit R2 #373 — clear the row filter so switching client/tab
     // shows the fresh row set unfiltered.
     setRowFilter('')
@@ -191,11 +217,18 @@ export default function CodeMapsPage() {
               targetId: Number(targetId),
               destCountry: destCountry.trim() ? destCountry.trim().toUpperCase() : null,
               destRegion: destRegion.trim() || null,
+              // V126/V127 — SHIPVIA tab exposes origin + packaging allowlist.
+              // Other tabs omit (backend ignores the fields for them anyway).
+              ...(tab === 'SHIPVIA' ? {
+                warehouseId: warehouseId ? Number(warehouseId) : null,
+                allowedPresetIds,
+              } : {}),
             }
       await clientCodeMapService.upsert(selectedClient, tab, payload)
       notify.success(`${TAB_META[tab].label} alias saved.`)
       setErpCode(''); setTargetId(''); setIso2('')
       setDestCountry(''); setDestRegion('')
+      setWarehouseId(''); setAllowedPresetIds([])
       await load()
     } catch (error) {
       notify.apiError(error, 'Failed to save alias.')
@@ -210,12 +243,17 @@ export default function CodeMapsPage() {
     setEditingRowId(row.id)
     setEditTargetId(row.targetId != null ? String(row.targetId) : '')
     setEditIso2(row.iso2 ?? '')
+    // V126/V127 — load existing SHIPVIA scope so an edit doesn't nuke them.
+    setEditWarehouseId(row.warehouseId != null ? String(row.warehouseId) : '')
+    setEditAllowedPresetIds(row.allowedPresetIds ?? [])
   }
 
   const cancelEdit = () => {
     setEditingRowId(null)
     setEditTargetId('')
     setEditIso2('')
+    setEditWarehouseId('')
+    setEditAllowedPresetIds([])
   }
 
   const saveEdit = async (row: ClientCodeMap) => {
@@ -230,6 +268,10 @@ export default function CodeMapsPage() {
             targetId: Number(editTargetId),
             destCountry: row.destCountry ?? null,
             destRegion: row.destRegion ?? null,
+            ...(tab === 'SHIPVIA' ? {
+              warehouseId: editWarehouseId ? Number(editWarehouseId) : null,
+              allowedPresetIds: editAllowedPresetIds,
+            } : {}),
           }
     if (tab !== 'DEST_COUNTRY' && !Number.isFinite(payload.targetId)) {
       notify.error('Pick a target before saving.')
@@ -431,6 +473,42 @@ export default function CodeMapsPage() {
                       Leave both blank for an &quot;any destination&quot; alias (matches everywhere).
                       Country wins over region when both are set.
                     </p>
+                    {tab === 'SHIPVIA' ? (
+                      <>
+                        <div>
+                          <label className="mb-0.5 block text-[9.5px] font-bold uppercase tracking-wide text-slate-400">
+                            Origin warehouse (optional)
+                          </label>
+                          <Select
+                            value={warehouseId}
+                            onChange={(e) => setWarehouseId(e.target.value)}
+                            aria-label="Origin warehouse"
+                          >
+                            <option value="">Any origin</option>
+                            {clientWarehouses.map((cw) => cw.warehouse ? (
+                              <option key={cw.warehouse.id} value={String(cw.warehouse.id)}>
+                                {cw.warehouse.code} — {cw.warehouse.name}
+                                {cw.isDefault ? ' (default)' : ''}
+                              </option>
+                            ) : null)}
+                          </Select>
+                        </div>
+                        <div>
+                          <label className="mb-0.5 block text-[9.5px] font-bold uppercase tracking-wide text-slate-400">
+                            Allowed packages (optional)
+                          </label>
+                          <PackagingMultiSelect
+                            presets={presets}
+                            value={allowedPresetIds}
+                            onChange={setAllowedPresetIds}
+                          />
+                        </div>
+                        <p className="col-span-full text-[10.5px] text-slate-400">
+                          Warehouse: null = any origin. Allowed packages: empty = any
+                          package the client is otherwise cleared for.
+                        </p>
+                      </>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
@@ -505,6 +583,42 @@ export default function CodeMapsPage() {
                         </span>
                       )}
                     </p>
+                    {/* V126/V127 — SHIPVIA tab scope chips (warehouse +
+                        packaging allowlist). Row-edit mode shows the pickers
+                        inline instead so the operator can retarget them. */}
+                    {tab === 'SHIPVIA' && isEditing ? (
+                      <div className="mt-1.5 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+                        <Select
+                          value={editWarehouseId}
+                          onChange={(e) => setEditWarehouseId(e.target.value)}
+                          aria-label="Origin warehouse"
+                        >
+                          <option value="">Any origin warehouse</option>
+                          {clientWarehouses.map((cw) => cw.warehouse ? (
+                            <option key={cw.warehouse.id} value={String(cw.warehouse.id)}>
+                              {cw.warehouse.code} — {cw.warehouse.name}
+                              {cw.isDefault ? ' (default)' : ''}
+                            </option>
+                          ) : null)}
+                        </Select>
+                        <PackagingMultiSelect
+                          presets={presets}
+                          value={editAllowedPresetIds}
+                          onChange={setEditAllowedPresetIds}
+                        />
+                      </div>
+                    ) : tab === 'SHIPVIA' && (row.warehouseLabel || (row.allowedPresetIds?.length ?? 0) > 0) ? (
+                      <p className="mt-0.5 flex flex-wrap items-center gap-1 text-[10.5px] text-slate-500">
+                        {row.warehouseLabel ? (
+                          <span className="rounded bg-slate-100 px-1.5 py-0.5">from {row.warehouseLabel}</span>
+                        ) : null}
+                        {(row.allowedPresetIds?.length ?? 0) > 0 ? (
+                          <span className="rounded bg-slate-100 px-1.5 py-0.5">
+                            {row.allowedPresetIds!.length} allowed {row.allowedPresetIds!.length === 1 ? 'package' : 'packages'}
+                          </span>
+                        ) : null}
+                      </p>
+                    ) : null}
                   </div>
                   {isEditing ? (
                     <>
@@ -627,5 +741,52 @@ function TargetPicker({
         </option>
       ))}
     </Select>
+  )
+}
+
+/** V127 — multi-select over PackagePreset for the SHIPVIA per-lane allowlist.
+ *  Chip-list UI; click to add, click an added chip to remove. Empty = any. */
+function PackagingMultiSelect({
+  presets,
+  value,
+  onChange,
+}: {
+  presets: PackagePreset[]
+  value: number[]
+  onChange: (next: number[]) => void
+}) {
+  const options = useMemo(
+    () => presets.slice().sort((a, b) => a.name.localeCompare(b.name)),
+    [presets],
+  )
+  const selectedSet = useMemo(() => new Set(value), [value])
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-1.5">
+      {options.length === 0 ? (
+        <p className="px-1.5 py-1 text-[10.5px] text-slate-400">No package presets available.</p>
+      ) : (
+        <div className="flex flex-wrap gap-1">
+          {options.map((p) => {
+            if (p.id == null) return null
+            const id = p.id
+            const on = selectedSet.has(id)
+            return (
+              <button
+                key={id}
+                type="button"
+                onClick={() => onChange(on ? value.filter((v) => v !== id) : [...value, id])}
+                className={`rounded-full px-2 py-0.5 text-[10.5px] font-semibold transition ${
+                  on
+                    ? 'bg-[#1f150c] text-white hover:bg-[#412d15]'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                {p.name}{p.carrier ? ` · ${formatCarrierName(p.carrier)}` : ''}
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
   )
 }

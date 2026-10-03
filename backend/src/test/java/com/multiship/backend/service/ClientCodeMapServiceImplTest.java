@@ -11,9 +11,11 @@ import com.multiship.backend.repository.ClientDestCountryMapRepository;
 import com.multiship.backend.repository.ClientPackageCodeMapRepository;
 import com.multiship.backend.repository.ClientRepository;
 import com.multiship.backend.repository.ClientServiceCodeMapRepository;
+import com.multiship.backend.repository.ClientShipviaCodeMapPackageRepository;
 import com.multiship.backend.repository.ClientShipviaCodeMapRepository;
 import com.multiship.backend.repository.PackagePresetRepository;
 import com.multiship.backend.repository.ShippingServiceRepository;
+import com.multiship.backend.repository.WarehouseRepository;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.access.AccessDeniedException;
@@ -60,6 +62,8 @@ class ClientCodeMapServiceImplTest {
                 mock(ClientPackageCodeMapRepository.class),
                 mock(ShippingServiceRepository.class),
                 mock(PackagePresetRepository.class),
+                mock(WarehouseRepository.class),
+                mock(ClientShipviaCodeMapPackageRepository.class),
                 new TenantScopeEnforcer(new AccessScopePolicy(true)));
 
         assertThrows(AccessDeniedException.class,
@@ -82,6 +86,8 @@ class ClientCodeMapServiceImplTest {
                 mock(ClientPackageCodeMapRepository.class),
                 mock(ShippingServiceRepository.class),
                 mock(PackagePresetRepository.class),
+                mock(WarehouseRepository.class),
+                mock(ClientShipviaCodeMapPackageRepository.class),
                 new TenantScopeEnforcer(new AccessScopePolicy(true)));
 
         ApiResponse<Void> resp = service.remove("ACME", ClientCodeMapDTO.Kind.SHIPVIA, 99L);
@@ -107,6 +113,8 @@ class ClientCodeMapServiceImplTest {
                 mock(ClientPackageCodeMapRepository.class),
                 mock(ShippingServiceRepository.class),
                 mock(PackagePresetRepository.class),
+                mock(WarehouseRepository.class),
+                mock(ClientShipviaCodeMapPackageRepository.class),
                 new TenantScopeEnforcer(new AccessScopePolicy(true)));
 
         ApiResponse<Void> resp = service.remove("ACME", ClientCodeMapDTO.Kind.SHIPVIA, 7L);
@@ -149,6 +157,8 @@ class ClientCodeMapServiceImplTest {
                 mock(ClientPackageCodeMapRepository.class),
                 serviceRepo,
                 mock(PackagePresetRepository.class),
+                mock(WarehouseRepository.class),
+                mock(ClientShipviaCodeMapPackageRepository.class),
                 new TenantScopeEnforcer(new AccessScopePolicy(true)));
 
         UpsertClientCodeMapRequest req = new UpsertClientCodeMapRequest();
@@ -190,6 +200,8 @@ class ClientCodeMapServiceImplTest {
                 mock(ClientPackageCodeMapRepository.class),
                 serviceRepo,
                 mock(PackagePresetRepository.class),
+                mock(WarehouseRepository.class),
+                mock(ClientShipviaCodeMapPackageRepository.class),
                 new TenantScopeEnforcer(new AccessScopePolicy(true)));
 
         UpsertClientCodeMapRequest req = new UpsertClientCodeMapRequest();
@@ -219,6 +231,8 @@ class ClientCodeMapServiceImplTest {
                 mock(ClientPackageCodeMapRepository.class),
                 mock(ShippingServiceRepository.class),
                 mock(PackagePresetRepository.class),
+                mock(WarehouseRepository.class),
+                mock(ClientShipviaCodeMapPackageRepository.class),
                 new TenantScopeEnforcer(new AccessScopePolicy(true)));
 
         ApiResponse<Void> resp = service.remove("ACME", ClientCodeMapDTO.Kind.SHIPVIA, 3L);

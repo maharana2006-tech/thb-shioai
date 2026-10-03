@@ -10,13 +10,16 @@ import com.multiship.backend.model.ClientServiceCodeMap;
 import com.multiship.backend.model.ClientShipviaCodeMap;
 import com.multiship.backend.model.PackagePreset;
 import com.multiship.backend.model.ShippingService;
+import com.multiship.backend.model.ClientShipviaCodeMapPackage;
 import com.multiship.backend.repository.ClientDestCountryMapRepository;
 import com.multiship.backend.repository.ClientPackageCodeMapRepository;
 import com.multiship.backend.repository.ClientRepository;
 import com.multiship.backend.repository.ClientServiceCodeMapRepository;
+import com.multiship.backend.repository.ClientShipviaCodeMapPackageRepository;
 import com.multiship.backend.repository.ClientShipviaCodeMapRepository;
 import com.multiship.backend.repository.PackagePresetRepository;
 import com.multiship.backend.repository.ShippingServiceRepository;
+import com.multiship.backend.repository.WarehouseRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -39,6 +42,10 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
     private final ClientPackageCodeMapRepository packageRepo;
     private final ShippingServiceRepository shippingServiceRepository;
     private final PackagePresetRepository packagePresetRepository;
+    /** V126 — SHIPVIA tab exposes a per-row warehouse scope. */
+    private final WarehouseRepository warehouseRepository;
+    /** V127 — SHIPVIA tab exposes a per-row packaging allowlist via sidecar. */
+    private final ClientShipviaCodeMapPackageRepository shipviaPackageRepository;
     /**
      * Sprint 50 Tier 0.5 PR E - Pattern B on every path-param clientCode
      * so a scoped USER hitting /clients/OTHER/code-maps/... gets a 403.
@@ -90,7 +97,8 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
         String destRegion = normaliseDest(request.getDestRegion());
 
         return switch (kind) {
-            case SHIPVIA -> upsertShipvia(code, erp, request.getTargetId(), destCountry, destRegion);
+            case SHIPVIA -> upsertShipvia(code, erp, request.getTargetId(), destCountry, destRegion,
+                    request.getWarehouseId(), request.getAllowedPresetIds());
             case SERVICE -> upsertService(code, erp, request.getTargetId(), destCountry, destRegion);
             case DEST_COUNTRY -> upsertDest(code, erp, request.getIso2());
             case PACKAGE -> upsertPackage(code, erp, request.getTargetId(), destCountry, destRegion);
@@ -158,10 +166,23 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
     // ===== per-kind upsert helpers =====
 
     private ApiResponse<ClientCodeMapDTO> upsertShipvia(
-            String code, String erp, Long targetId, String destCountry, String destRegion) {
+            String code, String erp, Long targetId, String destCountry, String destRegion,
+            Long warehouseId, List<Long> allowedPresetIds) {
         if (targetId == null || shippingServiceRepository.findById(targetId).isEmpty()) {
             return failure(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR,
                     "targetId must reference an existing shipping service.");
+        }
+        if (warehouseId != null && warehouseRepository.findById(warehouseId).isEmpty()) {
+            return failure(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR,
+                    "warehouseId must reference an existing warehouse.");
+        }
+        if (allowedPresetIds != null) {
+            for (Long presetId : allowedPresetIds) {
+                if (presetId == null || packagePresetRepository.findById(presetId).isEmpty()) {
+                    return failure(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR,
+                            "allowedPresetIds must reference existing package presets.");
+                }
+            }
         }
         // Audit B2 (#371) — targeted finder replaces the prior full-list
         // fetch + stream().filter. O(1) index-eq lookup on a 500-row
@@ -172,7 +193,20 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
         row.setServiceId(targetId);
         row.setDestCountry(destCountry);
         row.setDestRegion(destRegion);
+        row.setWarehouseId(warehouseId);
         shipviaRepo.save(row);
+        // V127 sidecar: replace-in-place semantics. Null in the request
+        // means "don't touch" so partial-update callers can't accidentally
+        // wipe the allowlist; empty list means "clear it".
+        if (allowedPresetIds != null) {
+            shipviaPackageRepository.deleteByMapId(row.getId());
+            for (Long presetId : allowedPresetIds) {
+                ClientShipviaCodeMapPackage link = new ClientShipviaCodeMapPackage();
+                link.setMapId(row.getId());
+                link.setPresetId(presetId);
+                shipviaPackageRepository.save(link);
+            }
+        }
         return success("Shipvia alias saved.", toShipviaDto(row));
     }
 
@@ -228,13 +262,25 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
 
     private ClientCodeMapDTO toShipviaDto(ClientShipviaCodeMap row) {
         String label = serviceLabel(row.getServiceId());
+        List<Long> presetIds = row.getId() == null ? List.of()
+                : shipviaPackageRepository.findByMapId(row.getId()).stream()
+                        .map(ClientShipviaCodeMapPackage::getPresetId).toList();
         return ClientCodeMapDTO.builder()
                 .id(row.getId()).kind(ClientCodeMapDTO.Kind.SHIPVIA)
                 .clientCode(row.getClientCode()).erpCode(row.getErpCode())
                 .targetId(row.getServiceId()).targetLabel(label)
                 .destCountry(row.getDestCountry()).destRegion(row.getDestRegion())
+                .warehouseId(row.getWarehouseId()).warehouseLabel(warehouseLabel(row.getWarehouseId()))
+                .allowedPresetIds(presetIds)
                 .createdAt(row.getCreatedAt()).updatedAt(row.getUpdatedAt())
                 .build();
+    }
+
+    private String warehouseLabel(Long id) {
+        if (id == null) return null;
+        return warehouseRepository.findById(id)
+                .map(w -> w.getCode() + " — " + w.getName())
+                .orElse(null);
     }
 
     private ClientCodeMapDTO toServiceDto(ClientServiceCodeMap row) {

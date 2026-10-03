@@ -23,6 +23,12 @@ export interface ClientCodeMap {
    */
   destCountry: string | null
   destRegion: string | null
+  /** V126 — SHIPVIA only. null = any origin warehouse. */
+  warehouseId: number | null
+  /** Display label for the SHIPVIA warehouse pick, e.g. "WH1 — Chicago". */
+  warehouseLabel: string | null
+  /** V127 — SHIPVIA only. Empty = unrestricted; non-empty = allowlist. */
+  allowedPresetIds: number[] | null
   createdAt: string | null
   updatedAt: string | null
 }
@@ -33,6 +39,11 @@ export interface UpsertCodeMapPayload {
   iso2?: string | null
   destCountry?: string | null
   destRegion?: string | null
+  /** V126 — SHIPVIA only; omit on other kinds. */
+  warehouseId?: number | null
+  /** V127 — SHIPVIA only; omit on other kinds. Null = don't touch sidecar,
+   *  [] = clear it, non-empty = replace. */
+  allowedPresetIds?: number[] | null
 }
 
 /** enum → URL slug (SHIPVIA → shipvia, DEST_COUNTRY → dest-country). */

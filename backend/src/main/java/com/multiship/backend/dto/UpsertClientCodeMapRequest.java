@@ -7,6 +7,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
+
 /**
  * Body for POST / PUT of any of the four per-client alias tables.
  * Exactly one of {@code targetId} / {@code iso2} is expected depending on the
@@ -38,4 +40,12 @@ public class UpsertClientCodeMapRequest {
     private String destCountry;
     @Size(max = 40)
     private String destRegion;
+
+    /** V126 — SHIPVIA only. Null = any origin (default). FK to
+     *  {@code warehouse.id}. Ignored for non-SHIPVIA kinds. */
+    private Long warehouseId;
+
+    /** V127 — SHIPVIA only. Null or empty = unrestricted; a non-empty list
+     *  replaces the sidecar rows. Ignored for non-SHIPVIA kinds. */
+    private List<Long> allowedPresetIds;
 }
