@@ -207,8 +207,11 @@ export default function DtcOrdersPage() {
     },
     {
       // Right-aligned so the column's slack sits before the buttons, not after them.
-      id: 'actions', header: 'Actions', enableSorting: false, size: 160,
-      meta: { align: 'right' },
+      // The label is centred over the three buttons (eye 28 · Print/Reprint 88 · ⋮ 28, 6px
+      // gaps = 9.75rem), which sit flush right; the column's spare width stays to their left.
+      id: 'actions', enableSorting: false, size: 160,
+      header: () => <span className="inline-block w-[9.75rem] text-center">Actions</span>,
+      meta: { align: 'right', headerLabel: 'Actions' },
       cell: ({ row }) => {
         const b = row.original
         const active = activeJob?.key === rowKey(b)

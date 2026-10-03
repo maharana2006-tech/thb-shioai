@@ -73,7 +73,7 @@ export default function DtcBatchActions({ batch: b, printedAt, progress, busy, o
         title={nothingToPrint ? 'Generate labels first — nothing to print yet'
           : when ? `Printed ${when.toLocaleString()} — print the ${b.generatedCount} label${b.generatedCount === 1 ? '' : 's'} again`
             : `Download ${b.generatedCount} label PDF${b.generatedCount === 1 ? '' : 's'} as a ZIP`}
-        className={`inline-flex h-7 min-w-[4.75rem] items-center justify-center gap-1 rounded-lg px-2.5 text-[11px] font-semibold shadow-sm transition disabled:cursor-not-allowed disabled:opacity-40 ${
+        className={`inline-flex h-7 w-[5.5rem] items-center justify-center gap-1 rounded-lg px-2.5 text-[11px] font-semibold shadow-sm transition disabled:cursor-not-allowed disabled:opacity-40 ${
           when ? 'border border-[#cdbf9f] bg-[#f4eede] text-[#412d15] hover:bg-[#ece2cb]' : 'bg-[#1f150c] text-[#f4eede] hover:bg-[#412d15]'
         }`}
       >
