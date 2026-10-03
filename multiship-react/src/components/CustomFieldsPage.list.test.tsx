@@ -252,7 +252,9 @@ describe('CustomFieldsPage — tenant scope switch', () => {
       await userEvent.selectOptions(screen.getAllByRole('combobox')[0], 'ACME')
     })
 
-    // Now list is called with 'ACME'.
-    await waitFor(() => expect(listMock).toHaveBeenCalledWith('ACME'))
+    // Now list is called with 'ACME'. Default waitFor timeout (1000ms) is
+    // tight when this file runs after a warm suite; 10s matches the vitest-
+    // wide bump + still fails loud if the dep-chain actually breaks.
+    await waitFor(() => expect(listMock).toHaveBeenCalledWith('ACME'), { timeout: 10_000 })
   })
 })

@@ -12,6 +12,14 @@
  * virtualization tests can assert against realistic mount counts.
  */
 import '@testing-library/jest-dom/vitest'
+import { configure } from '@testing-library/react'
+
+// Default waitFor / findBy* timeout is 1000ms, which is tight once the
+// suite warms up — a single state update + mock-call waitFor racing a
+// mount effect under load easily blows past that. 5000ms is comfortable
+// and still fails loud if an assertion is truly stuck. Testing Library's
+// asyncWrapper also uses this for findBy* queries so the lift is global.
+configure({ asyncUtilTimeout: 5000 })
 
 if (typeof window !== 'undefined') {
   // ResizeObserver — react-virtual observes the scroll container.

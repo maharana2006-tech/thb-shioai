@@ -191,9 +191,17 @@ describe('UspsDirectDashboardPage — refresh button', () => {
     const Page = await loadPage()
     render(<Page />)
 
+    // The page guards `load()` with an inFlightRef — a click that lands
+    // before the mount fetch's await has fully resolved is swallowed.
+    // In isolation this never bites because tests run fast; under a warm
+    // suite the mount await lags past our click. Wait for the mount
+    // fetch to fully settle (refresh button no longer disabled) before
+    // simulating the click so the race goes away.
     await waitFor(() => expect(getDashboardMock).toHaveBeenCalledTimes(1))
+    const refreshBtn = screen.getByTestId('usps-direct-dashboard-refresh') as HTMLButtonElement
+    await waitFor(() => expect(refreshBtn.disabled).toBe(false))
 
-    fireEvent.click(screen.getByTestId('usps-direct-dashboard-refresh'))
+    fireEvent.click(refreshBtn)
 
     await waitFor(() => expect(getDashboardMock).toHaveBeenCalledTimes(2))
   })
