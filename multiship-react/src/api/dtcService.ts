@@ -213,6 +213,8 @@ export interface DtcBatchDetail {
   /** Filter options for this batch. */
   carriers?: string[]
   shipDates?: string[]
+  /** Lines per Label Status for the whole batch (NOT_GENERATED, GENERATED, FAILED, VOIDED, …). */
+  statusCounts?: Record<string, number>
 }
 
 export interface DtcBatchDetailQuery {

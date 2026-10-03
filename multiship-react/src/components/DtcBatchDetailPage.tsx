@@ -1,9 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { FiAlertCircle, FiArrowLeft, FiEdit2, FiFilter, FiPrinter, FiX, FiZap } from 'react-icons/fi'
+import { FiAlertCircle, FiArrowLeft, FiChevronDown, FiEdit2, FiFilter, FiPrinter, FiX, FiZap } from 'react-icons/fi'
 import type { ColumnDef } from '@tanstack/react-table'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
-import Select from './workspace/Select'
 import { useDismissable } from '../hooks/useDismissable'
 import {
   batchStatusOf, canEditLine, dtcService, labelStatusOf, lineHasError,
@@ -57,12 +56,12 @@ export default function DtcBatchDetailPage() {
   /** Search box value; `debouncedQ` is what hits the API. */
   const [q, setQ] = useState('')
   const [debouncedQ, setDebouncedQ] = useState('')
-  const [status, setStatus] = useState('')
-  const [carrier, setCarrier] = useState('')
-  const [shipDate, setShipDate] = useState('')
   const [showFilters, setShowFilters] = useState(false)
   const closeFilters = useCallback(() => setShowFilters(false), [])
   const filterRef = useDismissable(showFilters, closeFilters)
+  const [status, setStatus] = useState('')
+  const [carrier, setCarrier] = useState('')
+  const [shipDate, setShipDate] = useState('')
 
   useEffect(() => {
     const t = window.setTimeout(() => setDebouncedQ(q.trim()), 300)
@@ -303,8 +302,13 @@ export default function DtcBatchDetailPage() {
   const total = data?.totalElements ?? 0
   const totalPages = data?.totalPages ?? 0
   const filterCount = [status, carrier, shipDate].filter(Boolean).length
-  const filterLabel = 'block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400'
+  const counts = data?.statusCounts ?? {}
+  const anyFilter = filterCount > 0 || !!debouncedQ
+  const statusPills = STATUS_FILTERS.filter((f) => !f.value || counts[f.value] || status === f.value)
+  const selectCls = 'h-9 w-full cursor-pointer appearance-none rounded-lg border border-[#e3d9c4] bg-white bg-[length:12px] bg-[right_0.7rem_center] bg-no-repeat pl-3 pr-8 text-[12.5px] font-semibold text-[#3d2f1c] outline-none transition hover:border-[#cdbf9f] focus:border-[#412d15] focus:ring-4 focus:ring-[#f0e9d8]'
+  const sectionLabel = 'mb-1.5 block text-[10.5px] font-semibold uppercase tracking-[0.1em] text-[#a1906d]'
 
+  /** Filters dropdown: Label status pills (with each status's line count), carrier and ship date. */
   const filters = (
     <div className="relative" ref={filterRef}>
       <button
@@ -313,53 +317,95 @@ export default function DtcBatchDetailPage() {
         aria-haspopup="true"
         aria-expanded={showFilters}
         aria-controls="d2c-line-filter-panel"
-        className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[12.5px] font-semibold transition ${
-          filterCount ? 'border-[#1f150c] bg-[#1f150c] text-white' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-        }`}
+        className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-[12.5px] font-semibold transition ${
+          filterCount
+            ? 'border-[#1f150c] bg-[#1f150c] text-[#f4eede] hover:bg-[#412d15]'
+            : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'}`}
       >
         <FiFilter className="h-3.5 w-3.5" />
         Filters
-        {filterCount ? <span className="rounded-full bg-white/20 px-1.5 text-[10px] font-bold">{filterCount}</span> : null}
+        {filterCount ? <span className="rounded-full bg-white/20 px-1.5 text-[10.5px] font-bold tabular-nums">{filterCount}</span> : null}
+        <FiChevronDown className={`h-3.5 w-3.5 transition-transform ${showFilters ? 'rotate-180' : ''}`} />
       </button>
+
       {showFilters && (
         <div
           id="d2c-line-filter-panel"
           role="region"
           aria-label="Shipment line filters"
-          className="absolute right-0 z-30 mt-1 w-72 rounded-lg border border-slate-200 bg-white p-3 shadow-lg"
+          className="bulk-pop-in absolute right-0 z-30 mt-1.5 w-[22rem] overflow-hidden rounded-xl border border-[#e3d9c4] bg-white shadow-[0_16px_40px_rgba(31,21,12,0.16)]"
         >
-          <label className={filterLabel} htmlFor="d2c-l-status">Label status</label>
-          <Select id="d2c-l-status" className="mt-1" value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="">Any label status</option>
-            <option value="NOT_GENERATED">Not generated</option>
-            <option value="GENERATED">Generated</option>
-            <option value="QUEUED_USPS">Queued at USPS</option>
-            <option value="IN_FLIGHT">Buying…</option>
-            <option value="FAILED">Failed</option>
-            <option value="VOIDED">Voided</option>
-          </Select>
+          <div className="flex items-center justify-between border-b border-[#f2ecdf] bg-[#fcfaf5] px-4 py-2.5">
+            <p className="text-[13px] font-semibold text-[#1f150c]">Filter lines</p>
+            {filterCount ? (
+              <button
+                type="button"
+                onClick={() => { setStatus(''); setCarrier(''); setShipDate('') }}
+                className="inline-flex items-center gap-1 text-[11.5px] font-semibold text-[#8a7a5a] transition hover:text-[#1f150c]"
+              >
+                <FiX className="h-3 w-3" /> Clear all
+              </button>
+            ) : null}
+          </div>
 
-          <label className={`${filterLabel} mt-3`} htmlFor="d2c-l-carrier">Carrier</label>
-          <Select id="d2c-l-carrier" className="mt-1" value={carrier} onChange={(e) => setCarrier(e.target.value)}>
-            <option value="">All carriers</option>
-            {(data?.carriers ?? []).map((c) => <option key={c} value={c}>{c}</option>)}
-          </Select>
+          <div className="space-y-4 px-4 py-3.5">
+            <div>
+              <span className={sectionLabel}>Label status</span>
+              <div role="radiogroup" aria-label="Label status" className="flex flex-wrap gap-1.5">
+                {statusPills.map((f) => {
+                  const active = status === f.value
+                  const n = f.value ? counts[f.value] ?? 0 : batch?.totalLines ?? 0
+                  return (
+                    <button
+                      key={f.value || 'all'}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      onClick={() => setStatus(f.value)}
+                      className={`inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[11.5px] font-semibold transition ${
+                        active
+                          ? 'border-[#1f150c] bg-[#1f150c] text-[#f4eede]'
+                          : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'}`}
+                    >
+                      {f.dot ? <span className={`h-1.5 w-1.5 rounded-full ${f.dot}`} aria-hidden="true" /> : null}
+                      {f.label}
+                      <span className={`rounded-full px-1.5 text-[10px] tabular-nums ${active ? 'bg-white/15' : 'bg-[#f4eede] text-[#6b5c42]'}`}>{n}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
 
-          <label className={`${filterLabel} mt-3`} htmlFor="d2c-l-shipdate">Ship date</label>
-          <Select id="d2c-l-shipdate" className="mt-1" value={shipDate} onChange={(e) => setShipDate(e.target.value)}>
-            <option value="">All ship dates</option>
-            {(data?.shipDates ?? []).map((d) => <option key={d} value={d}>{d}</option>)}
-          </Select>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block">
+                <span className={sectionLabel}>Carrier</span>
+                <select value={carrier} onChange={(e) => setCarrier(e.target.value)} className={selectCls} style={{ backgroundImage: CHEVRON }}>
+                  <option value="">All carriers</option>
+                  {(data?.carriers ?? []).map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </label>
+              <label className="block">
+                <span className={sectionLabel}>Ship date</span>
+                <select value={shipDate} onChange={(e) => setShipDate(e.target.value)} className={selectCls} style={{ backgroundImage: CHEVRON }}>
+                  <option value="">All dates</option>
+                  {(data?.shipDates ?? []).map((d) => <option key={d} value={d}>{d}</option>)}
+                </select>
+              </label>
+            </div>
+          </div>
 
-          {filterCount ? (
+          <div className="flex items-center justify-between border-t border-[#f2ecdf] bg-[#fcfaf5] px-4 py-2.5">
+            <p className="text-[11.5px] text-[#8a7a5a]">
+              <b className="tabular-nums text-[#1f150c]">{total}</b> of {batch?.totalLines ?? total} lines
+            </p>
             <button
               type="button"
-              onClick={() => { setStatus(''); setCarrier(''); setShipDate('') }}
-              className="mt-3 inline-flex items-center gap-1 text-[11.5px] font-semibold text-slate-600 hover:text-slate-950"
+              onClick={closeFilters}
+              className="rounded-lg bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15]"
             >
-              <FiX className="h-3 w-3" /> Clear filters
+              Done
             </button>
-          ) : null}
+          </div>
         </div>
       )}
     </div>
@@ -440,13 +486,13 @@ export default function DtcBatchDetailPage() {
           onPaginationChange={({ pageIndex: i }) => setPageIndex(i)}
           getRowId={(o) => String(o.id)}
           csvFilename={`dtc-batch-${batchId}.csv`}
-          caption={filterCount > 0 || debouncedQ
+          caption={anyFilter
             ? `${total} of ${batch?.totalLines ?? total} shipment lines in batch ${batchId} match`
             : `${total} shipment line${total === 1 ? '' : 's'} in batch ${batchId}`}
           emptyState={
             <p className="px-5 py-10 text-center text-sm text-[#6b5c42]">
               {loading ? 'Loading…'
-                : filterCount > 0 || debouncedQ ? 'No shipment lines match your search or filters.'
+                : anyFilter ? 'No shipment lines match your search or filters.'
                   : `No shipment lines for batch ${batchId}.`}
             </p>
           }
@@ -489,6 +535,19 @@ export default function DtcBatchDetailPage() {
     </div>
   )
 }
+
+/** Label Status filter pills, in the order a batch moves through them. */
+const STATUS_FILTERS: { value: string; label: string; dot?: string }[] = [
+  { value: '', label: 'All' },
+  { value: 'NOT_GENERATED', label: 'Not generated', dot: 'bg-slate-400' },
+  { value: 'IN_FLIGHT', label: 'Buying', dot: 'bg-amber-500' },
+  { value: 'QUEUED_USPS', label: 'Queued at USPS', dot: 'bg-sky-500' },
+  { value: 'GENERATED', label: 'Generated', dot: 'bg-emerald-500' },
+  { value: 'FAILED', label: 'Failed', dot: 'bg-red-500' },
+  { value: 'VOIDED', label: 'Voided', dot: 'bg-rose-400' },
+]
+
+const CHEVRON = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23412d15' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E")`
 
 function statusPillClass(status: string) {
   if (status === 'GENERATED' || status === 'QUEUED_USPS') return 'border-emerald-200 bg-emerald-50 text-emerald-700'

@@ -172,6 +172,11 @@ public class DtcBatchController {
         // Filter options, scoped to this batch.
         data.put("carriers", dtcOrderRepository.batchCarriers(tenant, batchId));
         data.put("shipDates", dtcOrderRepository.batchShipDates(tenant, batchId));
+        Map<String, Long> statusCounts = new LinkedHashMap<>();
+        for (Object[] row : dtcOrderRepository.batchStatusCounts(tenant, batchId)) {
+            statusCounts.put(String.valueOf(row[0]), ((Number) row[1]).longValue());
+        }
+        data.put("statusCounts", statusCounts);
         return ok("DTC batch " + batchId, data);
     }
 

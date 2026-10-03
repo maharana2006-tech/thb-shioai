@@ -228,6 +228,22 @@ public interface DtcOrderRepository extends JpaRepository<DtcOrder, Long> {
             @Param("shipDate") String shipDate,
             org.springframework.data.domain.Pageable pageable);
 
+    /** Lines per Label Status (as {@link #searchBatchLines} filters them) — the status pills' counts. */
+    @Query(nativeQuery = true, value = """
+        SELECT CASE
+                 WHEN EXISTS (SELECT 1 FROM order_label_tracking t
+                              WHERE t.order_no = d.generated_order_no AND t.status = 'VOIDED') THEN 'VOIDED'
+                 WHEN d.generated_status IS NULL OR d.generated_status = '' THEN 'NOT_GENERATED'
+                 ELSE d.generated_status
+               END AS label_status,
+               COUNT(*)
+        FROM dtc_orders d
+        WHERE d.tenant_id = :tenantId AND d.batch_id = :batchId
+        GROUP BY 1
+    """)
+    java.util.List<Object[]> batchStatusCounts(@Param("tenantId") String tenantId,
+                                               @Param("batchId") java.math.BigDecimal batchId);
+
     /** Carrier filter options for one batch — the values the Carrier column shows. */
     @Query("""
         SELECT DISTINCT COALESCE(d.generatedCarrierCode, d.shipVia, d.shipViaCode) FROM DtcOrder d
