@@ -10,6 +10,7 @@ import {
 } from '../api/dtcService'
 import { orderService } from '../api/orderService'
 import { ApiError } from '../api/apiClient'
+import { confirmBatchGenerate } from '../utils/dtcConfirm'
 import { notify } from '../utils/notify'
 import { workspacePaths } from '../routes/workspaceRoutes'
 
@@ -92,6 +93,9 @@ export default function DtcBatchDetailPage() {
     if (starting || activeJobId) return
     setStarting(true)
     try {
+      // No counts yet → nothing to tell the operator what will be bought; wait for them.
+      if (!data?.batch) { notify.info('Still loading this batch — try again in a moment.'); return }
+      if (!(await confirmBatchGenerate(data.batch))) return
       const r = await dtcService.generate(batchId, tenantId)
       setActiveJobId(r.data.job.id)
     } catch (e) {

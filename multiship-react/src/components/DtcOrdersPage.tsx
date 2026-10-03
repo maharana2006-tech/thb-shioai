@@ -9,6 +9,7 @@ import {
   type DtcBatchPage, type DtcBatchStats,
 } from '../api/dtcService'
 import { ApiError } from '../api/apiClient'
+import { confirmBatchGenerate } from '../utils/dtcConfirm'
 import { useAppSession } from '../hooks/useAppSession'
 import { normalizeRole } from '../utils/roles'
 import { notify } from '../utils/notify'
@@ -156,6 +157,7 @@ export default function DtcOrdersPage() {
     if (startingKey === key || activeJob?.key === key) return
     setStartingKey(key)
     try {
+      if (!(await confirmBatchGenerate(b))) return
       const r = await dtcService.generate(String(b.batchId), b.tenantId)
       setActiveJob({ key, jobId: r.data.job.id })
     } catch (e) {
