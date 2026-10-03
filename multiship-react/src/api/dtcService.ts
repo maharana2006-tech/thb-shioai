@@ -103,6 +103,8 @@ export function labelStatusOf(b: Pick<DtcBatchStats, 'totalLines' | 'generatedCo
 
 export interface DtcBatchPage {
   content: DtcBatchStats[]
+  /** "TENANT|batchId" → when any of the batch's labels was last printed (ISO). */
+  lastPrinted?: Record<string, string>
   pageNumber: number
   pageSize: number
   totalElements: number

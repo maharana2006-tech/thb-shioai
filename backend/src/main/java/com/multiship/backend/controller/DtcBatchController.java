@@ -84,6 +84,7 @@ public class DtcBatchController {
     private final DtcLabelGenerationService generationService;
     private final LabelArtifactResolver labelArtifactResolver;
     private final TenantScopeEnforcer tenantScope;
+    private final com.multiship.backend.service.printing.DocumentPrintLog printLog;
 
     @Operation(summary = "Batch summary (one row per tenant+batch)",
             description = "Dtcal-style aggregates. Filters: tenantId, shipDate, q (free text over batch / tote / order no / "
@@ -122,6 +123,7 @@ public class DtcBatchController {
 
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("content", content);
+        data.put("lastPrinted", lastPrintedByBatch(content));
         data.put("pageNumber", keys.getNumber());
         data.put("pageSize", keys.getSize());
         data.put("totalElements", keys.getTotalElements());
@@ -267,6 +269,7 @@ public class DtcBatchController {
         try (ByteArrayOutputStream bos = new ByteArrayOutputStream();
              ZipOutputStream zip = new ZipOutputStream(bos)) {
             int added = 0;
+            List<Integer> printed = new java.util.ArrayList<>();
             for (DtcOrder row : rows) {
                 Optional<byte[]> pdf =
                         labelArtifactResolver.resolveAsBytes(row.getGeneratedOrderNo(), "PDF", null);
@@ -275,7 +278,11 @@ public class DtcBatchController {
                 zip.write(pdf.get());
                 zip.closeEntry();
                 added++;
+                printed.add(row.getGeneratedOrderNo());
             }
+            // The list shows Reprint once a batch has been printed.
+            printLog.record(printed, "LABEL", com.multiship.backend.service.printing.DocumentPrintLog.BROWSER,
+                    null, currentUsername());
             zip.finish();
             if (added == 0) {
                 return ResponseEntity.status(HttpStatus.NOT_FOUND)
@@ -319,6 +326,33 @@ public class DtcBatchController {
             throw new IllegalArgumentException("tenantId is required");
         }
         return tenant.trim();
+    }
+
+    /**
+     * "TENANT|batchId" → when any label of that batch was last printed (the batch ZIP or
+     * any logged print of its orders) — what turns the list's Print into Reprint.
+     * ponytail: one lines read per batch on the page (≤ 200), like summarizeBatch above.
+     */
+    private Map<String, LocalDateTime> lastPrintedByBatch(List<DtcBatchStats> batches) {
+        Map<String, List<Integer>> ordersByBatch = new LinkedHashMap<>();
+        for (DtcBatchStats b : batches) {
+            if (b.generatedCount() == null || b.generatedCount() == 0) continue;
+            ordersByBatch.put(batchKey(b.tenantId(), b.batchId()),
+                    dtcOrderRepository.findByTenantIdAndBatchIdOrderByIdAsc(b.tenantId(), b.batchId()).stream()
+                            .map(DtcOrder::getGeneratedOrderNo).filter(Objects::nonNull).toList());
+        }
+        Map<Integer, LocalDateTime> byOrder = printLog.lastPrintedByOrder(
+                ordersByBatch.values().stream().flatMap(List::stream).distinct().toList());
+        Map<String, LocalDateTime> out = new LinkedHashMap<>();
+        ordersByBatch.forEach((key, orders) -> orders.stream()
+                .map(byOrder::get).filter(Objects::nonNull).max(LocalDateTime::compareTo)
+                .ifPresent(t -> out.put(key, t)));
+        return out;
+    }
+
+    /** The list's key for one batch — the same batch number can recur across tenants. */
+    private static String batchKey(String tenantId, BigDecimal batchId) {
+        return tenantId + "|" + batchId.stripTrailingZeros().toPlainString();
     }
 
     private Map<Integer, String> voidStatusesFor(List<DtcOrder> lines) {

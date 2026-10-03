@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { FiDownloadCloud, FiEye, FiFilter, FiPrinter, FiX, FiZap } from 'react-icons/fi'
+import { FiDownloadCloud, FiFilter, FiX } from 'react-icons/fi'
 import type { ColumnDef } from '@tanstack/react-table'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
 import Select from './workspace/Select'
@@ -14,6 +14,7 @@ import { useAppSession } from '../hooks/useAppSession'
 import { normalizeRole } from '../utils/roles'
 import { notify } from '../utils/notify'
 import { dtcBatchPath } from '../routes/workspaceRoutes'
+import DtcBatchActions from './dtc/DtcBatchActions'
 
 /**
  * D2C Automatic Label — Dtcal-style batch summary. One row per (client, batch)
@@ -176,93 +177,53 @@ export default function DtcOrdersPage() {
 
   const openZip = (b: DtcBatchStats) => {
     window.open(dtcService.labelsZipUrl(String(b.batchId), b.tenantId), '_blank')
+    // The server logs the print while it builds the ZIP; re-read so the row says Reprint.
+    window.setTimeout(() => void load(), 2500)
   }
 
   const columns = useMemo<ColumnDef<DtcBatchStats, unknown>[]>(() => [
-    { id: 'tenantId', accessorKey: 'tenantId', header: 'Client', enableSorting: false },
-    { id: 'batchId', header: 'Batch No.', accessorKey: 'batchId', enableSorting: false },
+    { id: 'tenantId', accessorKey: 'tenantId', header: 'Client', enableSorting: false, size: 100 },
+    { id: 'batchId', header: 'Batch No.', accessorKey: 'batchId', enableSorting: false, size: 90 },
     {
-      id: 'batchStatus', header: 'Batch Status', enableSorting: false,
+      id: 'batchStatus', header: 'Batch Status', enableSorting: false, size: 115,
       cell: ({ row }) => <StatusBadge tone={batchStatusOf(row.original) === 'COMPLETE' ? 'green' : 'amber'}
         label={batchStatusOf(row.original)} />,
     },
-    { id: 'orderOption', header: 'Order Option', enableSorting: false, cell: () => 'New Order' },
+    { id: 'orderOption', header: 'Order Option', enableSorting: false, size: 105, cell: () => 'New Order' },
     {
-      id: 'lastSyncedAt', header: 'Created', accessorKey: 'lastSyncedAt', enableSorting: false,
+      id: 'lastSyncedAt', header: 'Created', accessorKey: 'lastSyncedAt', enableSorting: false, size: 150,
       cell: ({ row }) => formatDateTime(row.original.lastSyncedAt),
     },
-    { id: 'firstTote', header: 'Start Id', accessorKey: 'firstTote', enableSorting: false,
+    { id: 'firstTote', header: 'Start Id', accessorKey: 'firstTote', enableSorting: false, size: 85,
       cell: ({ row }) => row.original.firstTote ?? '—' },
-    { id: 'lastTote', header: 'End Id', accessorKey: 'lastTote', enableSorting: false,
+    { id: 'lastTote', header: 'End Id', accessorKey: 'lastTote', enableSorting: false, size: 85,
       cell: ({ row }) => row.original.lastTote ?? '—' },
     {
-      id: 'labelStatus', header: 'Label Status', enableSorting: false,
+      id: 'labelStatus', header: 'Label Status', enableSorting: false, size: 115,
       cell: ({ row }) => {
         const s = labelStatusOf(row.original)
         return <StatusBadge tone={s === 'GENERATED' ? 'green' : s === 'PARTIAL' ? 'sky' : 'slate'} label={s} />
       },
     },
     {
-      id: 'details', header: 'Details', enableSorting: false,
-      cell: ({ row }) => (
-        <button
-          type="button"
-          title={`Open shipment history for batch ${row.original.batchId}`}
-          onClick={() => navigate(dtcBatchPath(row.original.batchId, row.original.tenantId))}
-          className="inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
-        >
-          <FiEye className="h-3 w-3" />
-          Details
-        </button>
-      ),
-    },
-    {
-      id: 'print', header: 'Print', enableSorting: false,
-      cell: ({ row }) => {
-        const b = row.original
-        const disabled = b.generatedCount === 0
-        return (
-          <button
-            type="button"
-            disabled={disabled}
-            title={disabled ? 'Generate labels first — nothing to print yet' : `Download ${b.generatedCount} label PDF${b.generatedCount === 1 ? '' : 's'} as a ZIP`}
-            onClick={() => openZip(b)}
-            className="inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            <FiPrinter className="h-3 w-3" />
-            Print
-          </button>
-        )
-      },
-    },
-    {
-      id: 'generate', header: 'Generate', enableSorting: false,
+      id: 'actions', header: 'Actions', enableSorting: false, size: 175,
       cell: ({ row }) => {
         const b = row.original
         const active = activeJob?.key === rowKey(b)
-        if (active && jobProgress) {
-          return (
-            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#8a6a3b]" title="Automatic label run in progress">
-              <FiZap className="h-3 w-3 animate-pulse" />
-              {jobProgress.processed}/{jobProgress.total}
-            </span>
-          )
-        }
         return (
-          <button
-            type="button"
-            title={`Generate shipping labels for batch ${b.batchId} (${b.pendingCount} pending)`}
-            onClick={() => void generate(b)}
-            disabled={active || startingKey === rowKey(b)}
-            className="inline-flex items-center gap-1 rounded-lg bg-[#1f150c] px-2 py-1 text-[11px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#3a2a18] disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <FiZap className="h-3 w-3" />
-            Generate
-          </button>
+          <DtcBatchActions
+            batch={b}
+            printedAt={data?.lastPrinted?.[printedKey(b)]}
+            progress={active && jobProgress ? jobProgress : null}
+            busy={active || startingKey === rowKey(b)}
+            onDetails={() => navigate(dtcBatchPath(b.batchId, b.tenantId))}
+            onPrint={() => openZip(b)}
+            onGenerate={() => void generate(b)}
+          />
         )
       },
     },
-  ], [activeJob, jobProgress, navigate, startingKey])
+  ], [activeJob, jobProgress, navigate, startingKey, data])
 
   const filterLabel = 'block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400'
 
@@ -413,7 +374,7 @@ export default function DtcOrdersPage() {
         className={`rounded-2xl border border-slate-200 bg-white p-3 shadow-sm transition-opacity duration-200 ${loading && data ? 'opacity-60' : ''}`}
       >
         <AdvancedDataTable<DtcBatchStats>
-          tableKey="d2c-batches-v1"
+          tableKey="d2c-batches-v2"
           columns={columns}
           data={data?.content ?? []}
           filterToggle={filters}
@@ -448,6 +409,11 @@ export default function DtcOrdersPage() {
 
 function rowKey(b: DtcBatchStats): string {
   return `${b.tenantId}:${b.batchId}`
+}
+
+/** The server's key for a batch in DtcBatchPage.lastPrinted. */
+function printedKey(b: DtcBatchStats): string {
+  return `${b.tenantId}|${b.batchId}`
 }
 
 function StatusBadge({ tone, label }: { tone: 'green' | 'amber' | 'sky' | 'slate'; label: string }) {
