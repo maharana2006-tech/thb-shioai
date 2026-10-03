@@ -22,10 +22,12 @@ const TAB_DEFS: ReadonlyArray<{ key: CatalogTab; label: string; icon: typeof FiB
  * elsewhere in the app (Dashboard tiles, client-editor Packages step) land on
  * the right sub-view.
  *
- * Only one child page is mounted at a time. Each child registers its own
- * refresh handler with SettingsLayout via `useOutletContext` — so a tab
- * switch's unmount/mount naturally hands the top-bar Refresh icon to the
- * newly-active page. No extra plumbing needed on our side.
+ * Both child pages stay mounted — the inactive tab is just hidden. This
+ * preserves local draft state (issue #302 F5: opening the Allowed-packages
+ * modal on the Services tab, selecting a draft, switching to the Packages
+ * tab silently discarded it when the services tab unmounted). Each child
+ * receives an {@code active} prop and only calls {@code registerRefresh}
+ * while active, so the top-bar Refresh icon still routes to the right page.
  */
 export default function ShippingCatalogPage() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -75,11 +77,22 @@ export default function ShippingCatalogPage() {
         })}
       </div>
 
-      {/* Only mount the active tab. Each child's registerRefresh effect handles
-          its own subscription — the unmount / mount cycle on tab switch
-          automatically hands the Refresh icon off to the newly-active page. */}
-      <div id={`shipping-catalog-panel-${tab}`} role="tabpanel">
-        {tab === 'services' ? <ShippingServicesPage /> : <PackagesPage />}
+      {/* Both tabs stay mounted; inactive one is `hidden`. Children gate
+          their own registerRefresh on the active prop so the top-bar
+          Refresh icon still points at the visible page. */}
+      <div
+        id="shipping-catalog-panel-services"
+        role="tabpanel"
+        hidden={tab !== 'services'}
+      >
+        <ShippingServicesPage active={tab === 'services'} />
+      </div>
+      <div
+        id="shipping-catalog-panel-packages"
+        role="tabpanel"
+        hidden={tab !== 'packages'}
+      >
+        <PackagesPage active={tab === 'packages'} />
       </div>
     </div>
   )

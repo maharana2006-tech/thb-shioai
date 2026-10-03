@@ -115,7 +115,12 @@ function CartonMarks() {
  * feeds every label: package type + dimensions (+ tare weight on top of the
  * order's weight).
  */
-export default function PackagesPage() {
+/**
+ * {@code active} — see ShippingServicesPage for the shared contract.
+ * Both ShippingCatalogPage tabs stay mounted (preserves modal drafts);
+ * only the active one registers its refresh handler. Defaults to true.
+ */
+export default function PackagesPage({ active = true }: { active?: boolean } = {}) {
   const { role } = useAppSession()
   // Sync pulls the carrier's live packaging catalog — requires the admin-only
   // carrier credentials on the backend, so gate the button to admins.
@@ -172,9 +177,10 @@ export default function PackagesPage() {
 
   const { registerRefresh } = useOutletContext<SettingsOutletContext>()
   useEffect(() => {
+    if (!active) return
     registerRefresh(load)
     return () => registerRefresh(null)
-  }, [registerRefresh, load])
+  }, [registerRefresh, load, active])
 
   const save = async () => {
     if (!editing) return

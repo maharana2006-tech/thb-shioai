@@ -13,7 +13,8 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
  *   - `?tab=packages` on load starts on Packages.
  *   - Clicking Packages pill sets URL `?tab=packages` (replace mode).
  *   - Clicking Services pill flips URL back to `?tab=services`.
- *   - Only one child mounts at a time (unmount handles Refresh handoff).
+ *   - Both children stay mounted; inactive one is `hidden` (issue #302 F5
+ *     — tab-switch no longer dumps modal drafts on the services tab).
  *   - Role parity — ADMIN / USER / TENANT render identically (no per-shell gate).
  *
  * Child components (ShippingServicesPage, PackagesPage) are stubbed so this
@@ -114,8 +115,12 @@ describe('ShippingCatalogPage — tab pills', () => {
     const packagesTab = screen.getByRole('tab', { name: /packages/i })
     expect(servicesTab).toHaveAttribute('aria-selected', 'true')
     expect(packagesTab).toHaveAttribute('aria-selected', 'false')
+    // Both children mount (so drafts don't dump on tab switch, F5); the
+    // inactive one's wrapper carries the `hidden` attribute.
     expect(screen.getByTestId('services-tab-stub')).toBeInTheDocument()
-    expect(screen.queryByTestId('packages-tab-stub')).not.toBeInTheDocument()
+    expect(screen.getByTestId('packages-tab-stub')).toBeInTheDocument()
+    expect(document.getElementById('shipping-catalog-panel-services')).not.toHaveAttribute('hidden')
+    expect(document.getElementById('shipping-catalog-panel-packages')).toHaveAttribute('hidden')
   })
 
   it('starts on Packages tab when ?tab=packages is in the URL on load', async () => {
@@ -124,15 +129,15 @@ describe('ShippingCatalogPage — tab pills', () => {
 
     expect(screen.getByRole('tab', { name: /packages/i })).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByRole('tab', { name: /shipping services/i })).toHaveAttribute('aria-selected', 'false')
-    expect(screen.getByTestId('packages-tab-stub')).toBeInTheDocument()
-    expect(screen.queryByTestId('services-tab-stub')).not.toBeInTheDocument()
+    expect(document.getElementById('shipping-catalog-panel-packages')).not.toHaveAttribute('hidden')
+    expect(document.getElementById('shipping-catalog-panel-services')).toHaveAttribute('hidden')
   })
 })
 
 // ===================== URL sync =====================
 
 describe('ShippingCatalogPage — URL sync', () => {
-  it('clicking the Packages pill flips URL to ?tab=packages and swaps the child', async () => {
+  it('clicking the Packages pill flips URL to ?tab=packages and swaps the visible panel', async () => {
     const Page = await loadPage()
     renderWithRouter(Page)
 
@@ -141,8 +146,8 @@ describe('ShippingCatalogPage — URL sync', () => {
     })
 
     expect(screen.getByRole('tab', { name: /packages/i })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByTestId('packages-tab-stub')).toBeInTheDocument()
-    expect(screen.queryByTestId('services-tab-stub')).not.toBeInTheDocument()
+    expect(document.getElementById('shipping-catalog-panel-packages')).not.toHaveAttribute('hidden')
+    expect(document.getElementById('shipping-catalog-panel-services')).toHaveAttribute('hidden')
     expect(screen.getByTestId('loc').textContent).toContain('tab=packages')
   })
 
@@ -155,8 +160,8 @@ describe('ShippingCatalogPage — URL sync', () => {
     })
 
     expect(screen.getByRole('tab', { name: /shipping services/i })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByTestId('services-tab-stub')).toBeInTheDocument()
-    expect(screen.queryByTestId('packages-tab-stub')).not.toBeInTheDocument()
+    expect(document.getElementById('shipping-catalog-panel-services')).not.toHaveAttribute('hidden')
+    expect(document.getElementById('shipping-catalog-panel-packages')).toHaveAttribute('hidden')
     expect(screen.getByTestId('loc').textContent).toContain('tab=services')
   })
 
@@ -171,20 +176,23 @@ describe('ShippingCatalogPage — URL sync', () => {
   })
 })
 
-// ===================== Exclusive mount =====================
+// ===================== Both-mounted + hidden-swap =====================
 
-describe('ShippingCatalogPage — exclusive child mount', () => {
-  it('mounts only ONE child at a time (never both)', async () => {
+describe('ShippingCatalogPage — both children mount; visibility swaps', () => {
+  it('both children stay mounted after a tab switch (issue #302 F5)', async () => {
     const Page = await loadPage()
     renderWithRouter(Page)
 
-    expect(screen.getAllByTestId(/tab-stub$/).length).toBe(1)
+    // Both stubs render on initial load — key F5 contract: no unmount
+    // dumps modal drafts when the user flips tabs.
+    expect(screen.getAllByTestId(/tab-stub$/).length).toBe(2)
 
     await act(async () => {
       await userEvent.click(screen.getByRole('tab', { name: /packages/i }))
     })
 
-    expect(screen.getAllByTestId(/tab-stub$/).length).toBe(1)
+    // Still both present after a tab click — only the hidden attribute swaps.
+    expect(screen.getAllByTestId(/tab-stub$/).length).toBe(2)
   })
 
   it('preserves the panel container aria-linkage (tab controls its panel)', async () => {

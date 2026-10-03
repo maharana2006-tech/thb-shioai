@@ -74,7 +74,13 @@ const packageFitsService = (p: PackagePreset, s: ShippingServiceItem): boolean =
  * custom boxes). The order-method → service mappings live on Code Maps
  * (SHIPVIA tab) — merged in V126.
  */
-export default function ShippingServicesPage() {
+/**
+ * {@code active} — when wrapped by ShippingCatalogPage both tabs stay
+ * mounted (so modal drafts aren't lost on tab switch, issue #302 F5).
+ * Only the active tab registers its refresh handler. Defaults to true
+ * for standalone mounts.
+ */
+export default function ShippingServicesPage({ active = true }: { active?: boolean } = {}) {
   const [services, setServices] = useState<ShippingServiceItem[]>([])
   const [links, setLinks] = useState<ServicePackageLink[]>([])
   const [presets, setPresets] = useState<PackagePreset[]>([])
@@ -128,9 +134,10 @@ export default function ShippingServicesPage() {
 
   const { registerRefresh } = useOutletContext<SettingsOutletContext>()
   useEffect(() => {
+    if (!active) return
     registerRefresh(load)
     return () => registerRefresh(null)
-  }, [registerRefresh, load])
+  }, [registerRefresh, load, active])
 
   // Services offered FROM the selected origin (seeded rows default to US).
   const visibleServices = useMemo(
