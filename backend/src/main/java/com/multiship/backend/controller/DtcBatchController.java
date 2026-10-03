@@ -31,12 +31,17 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.io.ByteArrayOutputStream;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.format.DateTimeParseException;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -81,12 +86,19 @@ public class DtcBatchController {
     private final TenantScopeEnforcer tenantScope;
 
     @Operation(summary = "Batch summary (one row per tenant+batch)",
-            description = "Dtcal-style aggregates. Optional tenantId + shipDate filters; tenant-scoped callers are clamped to their own tenant.")
+            description = "Dtcal-style aggregates. Filters: tenantId, shipDate, q (free text over batch / tote / order no / "
+                    + "customer PO / ship-to name / city), labelStatus (GENERATED|PARTIAL|PENDING), batchStatus (COMPLETE|OPEN) "
+                    + "and a createdFrom/createdTo range (ISO date). Tenant-scoped callers are clamped to their own tenant.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @GetMapping
     public ResponseEntity<ApiResponse<Map<String, Object>>> batches(
             @RequestParam(defaultValue = "") String tenantId,
             @RequestParam(defaultValue = "") String shipDate,
+            @RequestParam(defaultValue = "") String q,
+            @RequestParam(defaultValue = "") String labelStatus,
+            @RequestParam(defaultValue = "") String batchStatus,
+            @RequestParam(defaultValue = "") String createdFrom,
+            @RequestParam(defaultValue = "") String createdTo,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size) {
 
@@ -94,7 +106,14 @@ public class DtcBatchController {
                 .orElse("");
         PageRequest pageable = PageRequest.of(Math.max(page, 0), Math.min(Math.max(size, 1), 200));
         Page<DtcBatchKey> keys = dtcOrderRepository.findBatchKeys(
-                tenantFilter, nullIfBlank(shipDate) == null ? "" : shipDate.trim(), pageable);
+                tenantFilter,
+                trimOrEmpty(shipDate),
+                trimOrEmpty(q),
+                oneOf(labelStatus, LABEL_STATUSES, "labelStatus"),
+                oneOf(batchStatus, BATCH_STATUSES, "batchStatus"),
+                startOfDay(createdFrom, UNBOUNDED_FROM),
+                endOfDay(createdTo, UNBOUNDED_TO),
+                pageable);
 
         List<DtcBatchStats> content = keys.getContent().stream()
                 .map(k -> dtcOrderRepository.summarizeBatch(k.tenantId(), k.batchId()).orElse(null))
@@ -111,7 +130,8 @@ public class DtcBatchController {
     }
 
     @Operation(summary = "Batch lines (HstDetails page)",
-            description = "Paged dtc_orders rows for one tenant+batch, plus voidStatuses (orderNo → tracking status) for the lines that have a generated order.")
+            description = "Paged dtc_orders rows for one tenant+batch, each realigned with its label order first, "
+                    + "plus voidStatuses (orderNo → tracking status) for the lines that have a generated order.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @GetMapping("/{batchId}")
     public ResponseEntity<ApiResponse<Map<String, Object>>> batchDetail(
@@ -124,6 +144,12 @@ public class DtcBatchController {
         PageRequest pageable = PageRequest.of(Math.max(page, 0), Math.min(Math.max(size, 1), 500),
                 Sort.by(Sort.Direction.ASC, "id"));
         Page<DtcOrder> lines = dtcOrderRepository.findByTenantIdAndBatchId(tenant, batchId, pageable);
+
+        // A line repaired on the shipment form is written by that path, not by the DTC
+        // worker, so re-read its label order here: the page then shows what was actually
+        // bought. Writes only the lines that drifted, and writes nothing for the rows
+        // that never had a label order.
+        lines.getContent().forEach(generationService::syncFromLabel);
 
         Map<Integer, String> voidStatuses = voidStatusesFor(lines.getContent());
 
@@ -285,6 +311,52 @@ public class DtcBatchController {
 
     private static String nullIfBlank(String value) {
         return value == null || value.isBlank() ? null : value;
+    }
+
+    /** Widest bounds the summary query uses when a date input is left open. */
+    private static final LocalDateTime UNBOUNDED_FROM = LocalDateTime.of(1970, 1, 1, 0, 0);
+    private static final LocalDateTime UNBOUNDED_TO = LocalDateTime.of(2999, 12, 31, 23, 59, 59);
+    private static final List<String> LABEL_STATUSES = List.of("GENERATED", "PARTIAL", "PENDING");
+    private static final List<String> BATCH_STATUSES = List.of("COMPLETE", "OPEN");
+
+    private static String trimOrEmpty(String value) {
+        return value == null ? "" : value.trim();
+    }
+
+    /** Whitelist an enum-like filter: a typo should be a 400, not a silently empty list. */
+    private static String oneOf(String value, List<String> allowed, String param) {
+        String trimmed = trimOrEmpty(value);
+        if (trimmed.isEmpty()) {
+            return "";
+        }
+        String upper = trimmed.toUpperCase(Locale.ROOT);
+        if (!allowed.contains(upper)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, param + " must be one of " + allowed);
+        }
+        return upper;
+    }
+
+    private static LocalDateTime startOfDay(String isoDate, LocalDateTime fallback) {
+        LocalDate parsed = parseIsoDate(isoDate);
+        return parsed == null ? fallback : parsed.atStartOfDay();
+    }
+
+    private static LocalDateTime endOfDay(String isoDate, LocalDateTime fallback) {
+        LocalDate parsed = parseIsoDate(isoDate);
+        return parsed == null ? fallback : parsed.atTime(LocalTime.MAX);
+    }
+
+    private static LocalDate parseIsoDate(String isoDate) {
+        String trimmed = trimOrEmpty(isoDate);
+        if (trimmed.isEmpty()) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(trimmed);
+        } catch (DateTimeParseException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "date filters must be YYYY-MM-DD, got: " + trimmed);
+        }
     }
 
     private static <T> ResponseEntity<ApiResponse<T>> ok(String message, T data) {

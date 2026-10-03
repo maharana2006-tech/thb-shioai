@@ -1,11 +1,11 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { FiArrowLeft, FiPrinter, FiX, FiZap } from 'react-icons/fi'
+import { FiAlertCircle, FiArrowLeft, FiEdit2, FiPrinter, FiX, FiZap } from 'react-icons/fi'
 import type { ColumnDef } from '@tanstack/react-table'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import {
-  batchStatusOf, dtcService, labelStatusOf,
+  batchStatusOf, dtcService, labelStatusOf, lineHasError,
   type DtcBatchDetail, type DtcOrder,
 } from '../api/dtcService'
 import { orderService } from '../api/orderService'
@@ -16,10 +16,17 @@ const OrderDetailsModal = lazy(() => import('./modals/OrderDetailsModal'))
 
 /**
  * DTC Shipment History — HstDetails-style line detail for one batch.
- * Columns mirror the reference: Client Code | Order No | Carrier | Batch No. |
- * Tot No. | Tracking Id | Ship Date | Label | Status. Print reuses the order
- * label PDF endpoint; Void reuses POST /orders/{orderNo}/void against the
- * generated order number.
+ * Columns mirror the reference: Client Code | Order No | Label Order |
+ * Carrier | Batch No. | Tot No. | Tracking Id | Ship Date | Label | Label Status.
+ * Order No is the ERP order the line was synced from, so every line has one,
+ * labelled or not. Label Order is the Multiship order a label run minted, and
+ * Label Status this app's result for the line; it stays "Not generated" until a run
+ * touches it. The ERP also syncs its own order status code (S/J), but nothing decodes
+ * it, so it is left off the screen. Print reuses the order label PDF endpoint; Void
+ * reuses POST /orders/{orderNo}/void against the generated order number. A line that carries an error gets an Edit button
+ * that opens the manual shipment form in fix mode for its order
+ * (/orders/new?fixOrder=…), where the operator corrects the data and
+ * regenerates the same order; the batch Generate then picks the line up.
  */
 export default function DtcBatchDetailPage() {
   const navigate = useNavigate()
@@ -103,9 +110,21 @@ export default function DtcBatchDetailPage() {
     }
   }
 
+  /**
+   * An errored line is corrected on the manual shipment form, in fix mode for
+   * the order this attempt minted: the form shows the carrier's error against
+   * the prefilled shipment and regenerating updates that same order rather
+   * than buying a second label.
+   */
+  const fixLine = (o: DtcOrder) => {
+    if (o.generatedOrderNo) navigate(`/orders/new?fixOrder=${o.generatedOrderNo}`)
+  }
+
   const columns = useMemo<ColumnDef<DtcOrder, unknown>[]>(() => [
     { id: 'tenantId', accessorKey: 'tenantId', header: 'Client Code', enableSorting: false },
-    { id: 'generatedOrderNo', header: 'Order No', accessorKey: 'generatedOrderNo', enableSorting: false,
+    { id: 'orderNo', header: 'Order No', accessorKey: 'orderNo', enableSorting: false,
+      cell: ({ row }) => row.original.orderNo ?? '—' },
+    { id: 'generatedOrderNo', header: 'Label Order', accessorKey: 'generatedOrderNo', enableSorting: false,
       cell: ({ row }) => {
         const orderNo = row.original.generatedOrderNo
         if (!orderNo) return <span className="text-[11px] text-[#9a8b70]">—</span>
@@ -147,39 +166,55 @@ export default function DtcBatchDetailPage() {
       },
     },
     {
-      id: 'status', header: 'Status', enableSorting: false,
+      id: 'status', header: 'Label Status', enableSorting: false,
       cell: ({ row }) => {
         const o = row.original
-        if (!o.generatedOrderNo) {
-          return <span className="text-[11px] text-[#9a8b70]">{o.generatedStatus === 'FAILED' ? 'FAILED' : '—'}</span>
-        }
-        const trackingStatus = data?.voidStatuses?.[String(o.generatedOrderNo)]
+        const trackingStatus = o.generatedOrderNo
+          ? data?.voidStatuses?.[String(o.generatedOrderNo)]
+          : undefined
         if (trackingStatus === 'VOIDED') {
           return <span className="inline-flex items-center rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-700">VOIDED</span>
         }
+        const errored = lineHasError(o)
+        if (!o.generatedStatus) {
+          return (
+            <span
+              title="No label run has touched this line yet"
+              className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-500"
+            >
+              Not generated
+            </span>
+          )
+        }
         return (
           <div className="flex items-center gap-2">
-            {o.generatedStatus && (
-              <span
-                title={o.generatedMessage ?? undefined}
-                className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
-                  o.generatedStatus === 'GENERATED' || o.generatedStatus === 'QUEUED_USPS'
-                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                    : o.generatedStatus === 'FAILED'
-                      ? 'border-red-200 bg-red-50 text-red-700'
-                      : 'border-slate-200 bg-slate-50 text-slate-600'}`}
-              >
-                {o.generatedStatus}
-              </span>
-            )}
-            <button
-              type="button"
-              title={`Void label for order ${o.generatedOrderNo}`}
-              onClick={() => void voidLabel(o)}
-              className="inline-flex items-center rounded-lg border border-rose-200 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 transition hover:bg-rose-50"
+            <span
+              title={o.generatedMessage ?? undefined}
+              className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${statusPillClass(o.generatedStatus)}`}
             >
-              Void
-            </button>
+              {o.generatedStatus}
+            </span>
+            {errored && o.generatedOrderNo && (
+              <button
+                type="button"
+                title={`Open the manual shipment form to fix order ${o.generatedOrderNo}${o.generatedMessage ? ` — ${o.generatedMessage}` : ''}`}
+                onClick={() => fixLine(o)}
+                className="inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-800 transition hover:bg-amber-100"
+              >
+                <FiEdit2 className="h-3 w-3" />
+                Edit
+              </button>
+            )}
+            {!errored && o.generatedOrderNo && (
+              <button
+                type="button"
+                title={`Void label for order ${o.generatedOrderNo}`}
+                onClick={() => void voidLabel(o)}
+                className="inline-flex items-center rounded-lg border border-rose-200 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 transition hover:bg-rose-50"
+              >
+                Void
+              </button>
+            )}
           </div>
         )
       },
@@ -239,7 +274,12 @@ export default function DtcBatchDetailPage() {
           <span>Client <b className="text-[#3d2f1c]">{batch.tenantId}</b></span>
           <span>{batch.totalLines} line{batch.totalLines === 1 ? '' : 's'}</span>
           <span>{batch.generatedCount} generated</span>
-          {batch.failedCount > 0 && <span className="font-semibold text-red-700">{batch.failedCount} failed</span>}
+          {batch.failedCount > 0 && (
+            <span className="inline-flex items-center gap-1 font-semibold text-red-700" title="Use Edit on a failed line to correct the ship-to, weight or ship-via, then Generate labels again.">
+              <FiAlertCircle className="h-3.5 w-3.5" />
+              {batch.failedCount} failed
+            </span>
+          )}
           {batch.pendingCount + batch.queuedCount > 0 && <span>{batch.pendingCount + batch.queuedCount} pending</span>}
           <span>Batch status <b className="text-[#3d2f1c]">{batchStatusOf(batch)}</b></span>
           <span>Labels <b className="text-[#3d2f1c]">{labelStatusOf(batch)}</b></span>
@@ -276,6 +316,9 @@ export default function DtcBatchDetailPage() {
         <LineDetailsModal
           order={detailsLine}
           onClose={() => setDetailsLine(null)}
+          onEdit={lineHasError(detailsLine) && detailsLine.generatedOrderNo
+            ? () => fixLine(detailsLine)
+            : undefined}
           onOpenOrder={
             detailsLine.generatedOrderNo
               ? () => {
@@ -299,12 +342,13 @@ export default function DtcBatchDetailPage() {
 /**
  * Detail modal for one shipment line — opens on any row click, including the
  * lines that have no Multiship order yet (the order drill-down only exists
- * once a label has been attempted, hence the conditional button).
+ * once a label has been attempted, hence the conditional buttons).
  */
-function LineDetailsModal({ order, onClose, onOpenOrder }: {
+function LineDetailsModal({ order, onClose, onOpenOrder, onEdit }: {
   order: DtcOrder
   onClose: () => void
   onOpenOrder?: () => void
+  onEdit?: () => void
 }) {
   const dialogRef = useRef<HTMLDivElement>(null)
   useFocusTrap(true, dialogRef)
@@ -347,7 +391,7 @@ function LineDetailsModal({ order, onClose, onOpenOrder }: {
           </button>
         </div>
         <div className="overflow-y-auto px-5 py-4">
-          <LineDetails order={order} onOpenOrder={onOpenOrder} />
+          <LineDetails order={order} onOpenOrder={onOpenOrder} onEdit={onEdit} />
         </div>
       </div>
     </div>
@@ -358,9 +402,10 @@ function LineDetailsModal({ order, onClose, onOpenOrder }: {
  * Ship to / shipment / label grid for one line, read straight off the
  * dtc_orders row so it works for pending lines too.
  */
-function LineDetails({ order: o, onOpenOrder }: {
+function LineDetails({ order: o, onOpenOrder, onEdit }: {
   order: DtcOrder
   onOpenOrder?: () => void
+  onEdit?: () => void
 }) {
   const address = [o.shipAddr1, o.shipAddr2, o.shipAddr3].filter(Boolean).join(', ')
   const locality = [o.shipToCity, o.shipToState, o.shipToZip].filter(Boolean).join(', ')
@@ -378,6 +423,7 @@ function LineDetails({ order: o, onOpenOrder }: {
 
       <section className="space-y-1">
         <h4 className="text-[10px] font-semibold uppercase tracking-wide text-[#8a7a5a]">Shipment</h4>
+        <Field label="Order" value={o.orderNo != null ? String(o.orderNo) : null} />
         <Field label="Goods" value={o.goodsDesc} />
         <Field label="Weight" value={o.weight != null ? `${o.weight} lb` : null} />
         <Field label="Ship via" value={shipViaLabel(o)} />
@@ -390,25 +436,41 @@ function LineDetails({ order: o, onOpenOrder }: {
 
       <section className="space-y-1">
         <h4 className="text-[10px] font-semibold uppercase tracking-wide text-[#8a7a5a]">Label</h4>
-        <Field label="Status" value={o.generatedStatus} />
+        <Field label="Label status" value={o.generatedStatus ?? 'Not generated'} />
         <Field label="Carrier" value={o.generatedCarrierCode} />
         <Field label="Tracking" value={o.generatedTrackingNumber} />
-        <Field label="Order" value={o.generatedOrderNo != null ? String(o.generatedOrderNo) : null} />
+        <Field label="Label order" value={o.generatedOrderNo != null ? String(o.generatedOrderNo) : null} />
         <Field label="Generated" value={formatGenerated(o.generatedAt)} />
         {o.generatedMessage && (
-          <p className="max-w-prose break-words text-[#8a4b2d]" title={o.generatedMessage}>
-            {o.generatedMessage}
+          <p
+            className={`flex items-start gap-1.5 break-words ${lineHasError(o) ? 'text-red-700' : 'text-[#8a4b2d]'}`}
+            title={o.generatedMessage}
+          >
+            {lineHasError(o) && <FiAlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
+            <span>{o.generatedMessage}</span>
           </p>
         )}
-        {onOpenOrder && (
-          <button
-            type="button"
-            onClick={onOpenOrder}
-            className="mt-1 inline-flex items-center rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
-          >
-            View order details
-          </button>
-        )}
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          {onEdit && (
+            <button
+              type="button"
+              onClick={onEdit}
+              className="inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-800 transition hover:bg-amber-100"
+            >
+              <FiEdit2 className="h-3 w-3" />
+              Edit shipment
+            </button>
+          )}
+          {onOpenOrder && (
+            <button
+              type="button"
+              onClick={onOpenOrder}
+              className="inline-flex items-center rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+            >
+              View order details
+            </button>
+          )}
+        </div>
       </section>
     </div>
   )
@@ -436,4 +498,10 @@ function formatGenerated(iso: string | null) {
   if (!iso) return null
   const d = new Date(iso)
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+}
+
+function statusPillClass(status: string) {
+  if (status === 'GENERATED' || status === 'QUEUED_USPS') return 'border-emerald-200 bg-emerald-50 text-emerald-700'
+  if (status === 'FAILED') return 'border-red-200 bg-red-50 text-red-700'
+  return 'border-slate-200 bg-slate-50 text-slate-600'
 }

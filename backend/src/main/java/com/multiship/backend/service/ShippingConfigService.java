@@ -129,9 +129,17 @@ public class ShippingConfigService {
             entry.put("serviceName", svc.getName());
             entry.put("enabled", svc.isEnabled());
             entry.put("destination", StringUtils.hasText(rule.getDestValue()) ? rule.getDestValue() : null);
+            // One entry per (code, destination): a code mapped platform-wide can
+            // be re-mapped for a cross-border destination, and both rows are
+            // true — the bulk screens show the destination qualifier.
+            String dest = StringUtils.hasText(rule.getDestValue())
+                    ? rule.getDestValue().trim().toUpperCase(Locale.ROOT) : "*";
+            String key = entry.get("code") + "|" + dest;
+            java.util.Map<String, Object> incumbent = byCode.get(key);
             // A client's own rule beats the global one for the same code.
-            String key = (String) entry.get("code");
-            if (owner != null || !byCode.containsKey(key)) byCode.put(key, entry);
+            boolean override = incumbent == null
+                    || (incumbent.get("clientCode") == null) == (owner == null);
+            if (override) byCode.put(key, entry);
         }
         return new java.util.ArrayList<>(byCode.values());
     }

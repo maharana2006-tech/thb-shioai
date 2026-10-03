@@ -8,7 +8,10 @@ import com.multiship.backend.model.Client;
 import com.multiship.backend.model.ClientShipviaCodeMap;
 import com.multiship.backend.model.DtcGenerationJob;
 import com.multiship.backend.model.DtcOrder;
+import com.multiship.backend.model.Order;
+import com.multiship.backend.model.OrderTracking;
 import com.multiship.backend.model.ShipViaMapping;
+import com.multiship.backend.model.ShipmentBatch;
 import com.multiship.backend.model.ShippingService;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
 import com.multiship.backend.repository.ClientRepository;
@@ -16,10 +19,14 @@ import com.multiship.backend.repository.ClientShipviaCodeMapRepository;
 import com.multiship.backend.repository.ClientWarehouseRepository;
 import com.multiship.backend.repository.DtcGenerationJobRepository;
 import com.multiship.backend.repository.DtcOrderRepository;
+import com.multiship.backend.repository.OrderRepository;
+import com.multiship.backend.repository.OrderTrackingRepository;
 import com.multiship.backend.repository.ShipViaMappingRepository;
+import com.multiship.backend.repository.ShipmentBatchRepository;
 import com.multiship.backend.repository.ShippingServiceRepository;
 import com.multiship.backend.repository.WarehouseRepository;
 import com.multiship.backend.service.CarrierService;
+import com.multiship.backend.service.ShippingConfigService;
 import com.multiship.backend.service.StdShipMethodResolver;
 import com.multiship.backend.service.carriers.usps.queue.IdempotencyKeys;
 import com.multiship.backend.service.ndsshipment.NdsAddressSanitizer;
@@ -53,7 +60,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * <ol>
  *   <li>Resolve the service — "STD" via {@link StdShipMethodResolver};
  *       otherwise client_shipvia_code_map (exact) then ship_via_mapping
- *       (client-narrowed → any-client → first), hold codes rejected.</li>
+ *       (client-narrowed → any-client → first), hold codes rejected. The pick
+ *       is then aligned to the row's border crossing.</li>
  *   <li>Build a {@link ManualShipmentRequest}: recipient from the row's
  *       ship-to columns (NDS sanitizer/normalizer), sender from the client's
  *       shipFrom, default warehouse, bill-to account cascade
@@ -68,8 +76,10 @@ import java.util.concurrent.atomic.AtomicLong;
  *       queue, or FAILED + message.</li>
  * </ol>
  *
- * <p>Rows already GENERATED are skipped (a re-run after a partial batch must
- * not re-buy labels); FAILED rows retry in place via
+ * <p>Rows already carrying a generated label are skipped (a re-run after a partial
+ * batch must not re-buy labels); {@link #syncFromLabel} first re-reads the label order
+ * so a line repaired on the shipment form is realigned and then skipped rather than
+ * re-attempted. FAILED rows retry in place via
  * {@code existingOrderNo = generatedOrderNo}, which flips the minted order
  * ERROR → GENERATED instead of inserting a duplicate.
  */
@@ -81,19 +91,26 @@ public class DtcLabelGenerationService {
     private static final String STATUS_GENERATED = "GENERATED";
     private static final String STATUS_FAILED = "FAILED";
     private static final String STATUS_QUEUED_USPS = "QUEUED_USPS";
+    /** The width of dtc_orders.generated_message — see {@link #abbreviate}. */
+    private static final int MESSAGE_MAX_LEN = 255;
     private static final BigDecimal DEFAULT_WEIGHT_LB = BigDecimal.ONE;
+    private static final String CURRENCY_USD = "USD";
 
     private static final int PROGRESS_FLUSH_EVERY_N = 5;
     private static final long PROGRESS_FLUSH_EVERY_MS = 2_000;
 
     private final DtcGenerationJobRepository jobRepository;
     private final DtcOrderRepository dtcOrderRepository;
+    private final OrderRepository orderRepository;
+    private final OrderTrackingRepository orderTrackingRepository;
+    private final ShipmentBatchRepository shipmentBatchRepository;
     private final CarrierService carrierService;
     private final ClientRepository clientRepository;
     private final ClientShipviaCodeMapRepository clientShipviaCodeMapRepository;
     private final ShipViaMappingRepository shipViaMappingRepository;
     private final ShippingServiceRepository shippingServiceRepository;
     private final StdShipMethodResolver stdShipMethodResolver;
+    private final ShippingConfigService shippingConfigService;
     private final CarrierAccountRefRepository accountRefRepository;
     private final ClientWarehouseRepository clientWarehouseRepository;
     private final WarehouseRepository warehouseRepository;
@@ -200,9 +217,7 @@ public class DtcLabelGenerationService {
             return RowOutcome.SKIPPED;
         }
         try {
-            if (STATUS_GENERATED.equalsIgnoreCase(
-                    row.getGeneratedStatus() == null ? "" : row.getGeneratedStatus())
-                    && row.getGeneratedOrderNo() != null) {
+            if (syncFromLabel(row)) {
                 return RowOutcome.SKIPPED; // already labelled — don't re-buy
             }
 
@@ -262,8 +277,11 @@ public class DtcLabelGenerationService {
     private ManualShipmentRequest buildRequest(DtcGenerationJob job, DtcOrder row) {
         String tenantId = row.getTenantId() == null ? job.getTenantId() : row.getTenantId();
         String shipVia = firstNonBlank(row.getShipViaCode(), row.getShipVia());
+        String originCountry = originOf(tenantId);
+        String destCountry = firstNonBlank(row.getShipToCountryCode(), "US")
+                .trim().toUpperCase(Locale.ROOT);
 
-        ShippingService service = resolveService(tenantId, shipVia);
+        ShippingService service = resolveService(tenantId, shipVia, originCountry, destCountry);
         CarrierAccountRef account = resolveAccount(tenantId, service.getCarrier());
 
         ManualShipmentRequest req = new ManualShipmentRequest();
@@ -287,14 +305,53 @@ public class DtcLabelGenerationService {
         if (StringUtils.hasText(row.getGoodsDesc())) {
             req.setGoodsDescription(NdsAddressSanitizer.sanitize(row.getGoodsDesc()));
         }
+        applyInvoiceLine(req, row, originCountry);
 
-        req.setRecipient(buildRecipient(row));
+        req.setRecipient(buildRecipient(row, destCountry));
         applyClientOrigin(req, tenantId);
         applyDefaultWarehouse(req, tenantId);
         return req;
     }
 
-    private ManualShipmentRequest.Address buildRecipient(DtcOrder row) {
+    /**
+     * The ERP feed has no item grid — one goods_desc and one unit_value per tote
+     * — so the commercial invoice line is built from those two columns. Without
+     * a line a cross-border label carries no monetary value and UPS answers
+     * "InvoiceLineTotal MonetaryValue must be greater than 0".
+     *
+     * <p>HS code is deliberately left unset: the feed does not carry it, and a
+     * guessed harmonized code is a false customs declaration. A cross-border row
+     * that needs one is corrected by the operator through Edit on the shipment
+     * form. A row with no positive unit value gets no line for the same reason.
+     */
+    private void applyInvoiceLine(ManualShipmentRequest req, DtcOrder row, String originCountry) {
+        String description = NdsAddressSanitizer.sanitize(row.getGoodsDesc());
+        if (!StringUtils.hasText(description)
+                || row.getUnitValue() == null || row.getUnitValue().signum() <= 0) {
+            return;
+        }
+        ManualShipmentRequest.Item item = new ManualShipmentRequest.Item();
+        item.setDescription(description);
+        item.setQuantity(1);
+        item.setUnitValue(row.getUnitValue());
+        item.setWeight(req.getWeight());
+        item.setCountryOfOrigin(originCountry);
+
+        req.setItems(List.of(item));
+        req.setCurrency(CURRENCY_USD);
+    }
+
+    /** Where this client ships from — the same cascade applyClientOrigin uses for the sender. */
+    private String originOf(String tenantId) {
+        Client client = clientRepository.findByClientCodeIgnoreCase(tenantId.trim()).orElse(null);
+        if (client == null) return "US";
+        com.multiship.backend.model.Address sf = client.getShipFrom();
+        String country = sf != null && StringUtils.hasText(sf.getCountry())
+                ? sf.getCountry() : client.getDefaultOriginCountry();
+        return StringUtils.hasText(country) ? country.trim().toUpperCase(Locale.ROOT) : "US";
+    }
+
+    private ManualShipmentRequest.Address buildRecipient(DtcOrder row, String destCountry) {
         ManualShipmentRequest.Address to = new ManualShipmentRequest.Address();
         String name = firstNonBlank(row.getShipName(), row.getShipAttn());
         to.setName(NdsAddressSanitizer.sanitize(name));
@@ -308,7 +365,7 @@ public class DtcLabelGenerationService {
         to.setCity(NdsAddressSanitizer.sanitize(row.getShipToCity()));
         to.setState(NdsAddressSanitizer.sanitize(row.getShipToState()));
         to.setPostalCode(row.getShipToZip() == null ? null : row.getShipToZip().trim());
-        to.setCountryCode(firstNonBlank(row.getShipToCountryCode(), "US"));
+        to.setCountryCode(destCountry);
         to.setResidential(true); // DTC ships to consumers
         String clientPhone = clientRepository
                 .findByClientCodeIgnoreCase(row.getTenantId() == null ? "" : row.getTenantId().trim())
@@ -328,9 +385,12 @@ public class DtcLabelGenerationService {
      * (NdsShipmentLookupService.resolveServiceId): the client's exact
      * client_shipvia_code_map row, then ship_via_mapping client-narrowed →
      * any-client → first. "STD" defers to StdShipMethodResolver. Hold codes
-     * (HLD literal or is_hold mapping) reject the row outright.
+     * (HLD literal or is_hold mapping) reject the row outright. The mapped
+     * service is finally checked against the row's own border crossing —
+     * {@link #alignToLane}.
      */
-    private ShippingService resolveService(String tenantId, String shipVia) {
+    private ShippingService resolveService(String tenantId, String shipVia,
+                                           String originCountry, String destCountry) {
         if (!StringUtils.hasText(shipVia)) {
             throw new IllegalArgumentException("row has no ship-via code");
         }
@@ -382,7 +442,48 @@ public class DtcLabelGenerationService {
             throw new IllegalArgumentException("service " + service.getName() + " ("
                     + service.getCarrier() + ") is disabled in the catalog");
         }
-        return service;
+        return alignToLane(service, tenantId, code, originCountry, destCountry);
+    }
+
+    /**
+     * An ERP ship-via code names a service, not a lane: a code mapped to UPS
+     * Ground (scope DOMESTIC) reaches a US→CA tote unchanged and UPS answers
+     * "121100 The requested service is invalid for the shipment origin" — a
+     * carrier 400 the operator cannot act on from the batch list. When the
+     * mapped service's scope contradicts the row's own crossing, the resolution
+     * is re-run destination-aware through
+     * {@link ShippingConfigService#resolveService}, so the client's
+     * cross-border ship-method rule wins and, failing that, the carrier's
+     * international catalog entry for this origin. A lane with no service at
+     * all fails with the mapping to add.
+     */
+    private ShippingService alignToLane(ShippingService service, String tenantId, String code,
+                                        String originCountry, String destCountry) {
+        boolean crossBorder = !originCountry.equalsIgnoreCase(destCountry);
+        if (fitsLane(service, crossBorder)) {
+            return service;
+        }
+        ShippingService aligned = shippingConfigService
+                .resolveService(service.getCarrier(), tenantId, code, destCountry,
+                        crossBorder, originCountry)
+                .filter(s -> fitsLane(s, crossBorder))
+                .orElseThrow(() -> new IllegalArgumentException("ship-via " + code + " maps to "
+                        + service.getName() + " (" + service.getCarrier() + ", " + service.getScope()
+                        + "), which is not offered " + originCountry + "→" + destCountry
+                        + "; map " + code + " to a service on that lane under"
+                        + " Settings → Shipping Service Mapping"));
+        log.info("DTC ship-via {} maps to {} ({}), which cannot serve {}→{}: generating on {}",
+                code, service.getName(), service.getScope(), originCountry, destCountry,
+                aligned.getName());
+        return aligned;
+    }
+
+    /** A service buys this lane when its catalog scope covers it. Unknown scope is taken at face value. */
+    private static boolean fitsLane(ShippingService service, boolean crossBorder) {
+        String scope = service.getScope() == null
+                ? "" : service.getScope().trim().toUpperCase(Locale.ROOT);
+        return scope.isEmpty() || "BOTH".equals(scope)
+                || (crossBorder ? "INTERNATIONAL" : "DOMESTIC").equals(scope);
     }
 
     /**
@@ -456,6 +557,56 @@ public class DtcLabelGenerationService {
         }
     }
 
+    /**
+     * A repair made on the manual shipment form mints its label through a path that
+     * knows nothing about {@code dtc_orders}, so the line keeps the carrier error the
+     * worker last saw: the history screen shows FAILED next to a printed label, and the
+     * next batch run re-attempts the line from the ERP row and overwrites what the
+     * operator fixed. Re-read the label order the line points at and stamp it to match.
+     *
+     * <p>One-way on purpose: a line is only ever lifted to GENERATED, never dropped
+     * from it — a voided or re-errored order still had a label bought for it, and
+     * downgrading the line would make the next batch run buy a second one.
+     *
+     * @return true when the line carries a generated label, so callers leave it alone
+     */
+    public boolean syncFromLabel(DtcOrder row) {
+        Integer orderNo = row.getGeneratedOrderNo();
+        if (orderNo == null) {
+            return false;
+        }
+        if (STATUS_GENERATED.equalsIgnoreCase(row.getGeneratedStatus() == null ? "" : row.getGeneratedStatus())) {
+            return true;
+        }
+        Order order = orderRepository.findByOrderNo(orderNo).orElse(null);
+        if (order == null || Boolean.TRUE.equals(order.getIsError())
+                || !STATUS_GENERATED.equalsIgnoreCase(order.getOrderStatus() == null ? "" : order.getOrderStatus())) {
+            return false;
+        }
+        OrderTracking tracking = orderTrackingRepository.findByOrderNo(orderNo).orElse(null);
+        if (tracking == null || !StringUtils.hasText(tracking.getTrackingNumber())) {
+            return false; // order generated but no label on it yet
+        }
+        String carrier = shipmentBatchRepository.findByOrderNoOrderByBatchSeqAsc(orderNo).stream()
+                .map(ShipmentBatch::getCarrierCode)
+                .filter(StringUtils::hasText)
+                .findFirst()
+                .orElse(row.getGeneratedCarrierCode());
+        String was = row.getGeneratedStatus();
+        stamp(row, STATUS_GENERATED, tracking.getTrackingNumber(), carrier, orderNo,
+                labelledMessage(orderNo, tracking));
+        log.info("DTC line {} (batch {}) realigned with label order {}: {} → GENERATED",
+                row.getId(), row.getBatchId(), orderNo, was);
+        return true;
+    }
+
+    /** Same wording the label path reports, so a realigned line reads like a generated one. */
+    private static String labelledMessage(Integer orderNo, OrderTracking tracking) {
+        return "Manual shipment #" + orderNo + " labelled"
+                + (StringUtils.hasText(tracking.getWarehouseCode()) ? " on " + tracking.getWarehouseCode() : "")
+                + ".";
+    }
+
     private void stamp(DtcOrder row, String status, String tracking, String carrierCode,
                        Integer orderNo, String message) {
         row.setGeneratedStatus(status);
@@ -512,10 +663,15 @@ public class DtcLabelGenerationService {
         return null;
     }
 
+    /**
+     * A carrier HTTP-400 body runs longer than the column, and an over-long stamp fails
+     * the UPDATE that is meant to record the failure — the line then shows no status at
+     * all, with no error for the operator to act on.
+     */
     private static String abbreviate(String message) {
         if (message == null) return null;
         String trimmed = message.trim();
-        return trimmed.length() <= 1000 ? trimmed : trimmed.substring(0, 1000);
+        return trimmed.length() <= MESSAGE_MAX_LEN ? trimmed : trimmed.substring(0, MESSAGE_MAX_LEN);
     }
 
     private enum RowOutcome {

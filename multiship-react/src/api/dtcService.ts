@@ -20,6 +20,8 @@ export const dtcService = {
     const qs = new URLSearchParams({
       page: String(p.page), size: String(p.size),
       tenantId: p.tenantId ?? '', shipDate: p.shipDate ?? '',
+      q: p.q ?? '', labelStatus: p.labelStatus ?? '', batchStatus: p.batchStatus ?? '',
+      createdFrom: p.createdFrom ?? '', createdTo: p.createdTo ?? '',
     })
     return apiClient.get<ApiResponse<DtcBatchPage>>(`/dtc/batches?${qs}`)
   },
@@ -104,6 +106,15 @@ export interface DtcBatchQuery {
   size: number
   tenantId?: string
   shipDate?: string
+  /** Free text over batch no, tote, order no, customer PO and ship-to name/city. */
+  q?: string
+  /** GENERATED | PARTIAL | PENDING — matches the badge in the Label Status column. */
+  labelStatus?: string
+  /** COMPLETE | OPEN — matches the badge in the Batch Status column. */
+  batchStatus?: string
+  /** ISO date (YYYY-MM-DD) bounds on when the batch was synced; empty = unbounded. */
+  createdFrom?: string
+  createdTo?: string
 }
 
 /** One dtc_orders row (DtcOrder entity, V102 generation columns included). */
@@ -150,6 +161,16 @@ export interface DtcOrder {
   generatedStatus: 'GENERATED' | 'FAILED' | 'QUEUED_USPS' | null
   generatedMessage: string | null
   generatedAt: string | null
+}
+
+/**
+ * True when a line carries an error the operator can correct. A GENERATED row
+ * also stores the carrier's success note in generatedMessage, so the message
+ * alone is not an error — only an unlabelled row reporting one is.
+ */
+export function lineHasError(o: Pick<DtcOrder, 'generatedStatus' | 'generatedMessage'>): boolean {
+  if (o.generatedStatus === 'GENERATED' || o.generatedStatus === 'QUEUED_USPS') return false
+  return o.generatedStatus === 'FAILED' || !!o.generatedMessage?.trim()
 }
 
 /** GET /dtc/batches/{batchId} body. */
