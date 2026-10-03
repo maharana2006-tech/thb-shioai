@@ -198,14 +198,13 @@ export default function DtcBatchDetailPage() {
           return <span className="inline-flex items-center rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-700">VOIDED</span>
         }
         const errored = lineHasError(o)
-        const editButton = canEditLine(o) ? (
+        // Only a line whose label run failed offers Edit — a pending line has nothing to fix yet.
+        const editButton = errored && canEditLine(o) ? (
           <button
             type="button"
-            title={`Correct this line before its label is bought${o.generatedMessage ? ` — ${o.generatedMessage}` : ''}`}
+            title={`Correct this line, then generate again${o.generatedMessage ? ` — ${o.generatedMessage}` : ''}`}
             onClick={() => setEditingLine(o)}
-            className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-semibold transition ${errored
-              ? 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100'
-              : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:bg-[#faf7f0]'}`}
+            className="inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-800 transition hover:bg-amber-100"
           >
             <FiEdit2 className="h-3 w-3" />
             Edit
@@ -365,7 +364,7 @@ export default function DtcBatchDetailPage() {
           onClose={() => setDetailsLine(null)}
           onEdit={lineHasError(detailsLine) && detailsLine.generatedOrderNo
             ? () => fixLine(detailsLine)
-            : canEditLine(detailsLine)
+            : lineHasError(detailsLine) && canEditLine(detailsLine)
               ? () => { setEditingLine(detailsLine); setDetailsLine(null) }
               : undefined}
           onOpenOrder={
