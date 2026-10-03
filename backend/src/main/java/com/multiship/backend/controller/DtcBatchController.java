@@ -139,13 +139,18 @@ public class DtcBatchController {
     public ResponseEntity<ApiResponse<Map<String, Object>>> batchDetail(
             @PathVariable BigDecimal batchId,
             @RequestParam(defaultValue = "") String tenantId,
+            @RequestParam(defaultValue = "") String q,
+            @RequestParam(defaultValue = "") String status,
+            @RequestParam(defaultValue = "") String carrier,
+            @RequestParam(defaultValue = "") String shipDate,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "50") int size) {
 
         String tenant = requireTenant(tenantId);
         PageRequest pageable = PageRequest.of(Math.max(page, 0), Math.min(Math.max(size, 1), 500),
                 Sort.by(Sort.Direction.ASC, "id"));
-        Page<DtcOrder> lines = dtcOrderRepository.findByTenantIdAndBatchId(tenant, batchId, pageable);
+        Page<DtcOrder> lines = dtcOrderRepository.searchBatchLines(tenant, batchId, q.trim(),
+                status.trim().toUpperCase(java.util.Locale.ROOT), carrier.trim(), shipDate.trim(), pageable);
 
         // A line repaired on the shipment form is written by that path, not by the DTC
         // worker, so re-read its label order here: the page then shows what was actually
@@ -164,6 +169,9 @@ public class DtcBatchController {
         data.put("totalPages", lines.getTotalPages());
         dtcOrderRepository.summarizeBatch(tenant, batchId)
                 .ifPresent(stats -> data.put("batch", stats));
+        // Filter options, scoped to this batch.
+        data.put("carriers", dtcOrderRepository.batchCarriers(tenant, batchId));
+        data.put("shipDates", dtcOrderRepository.batchShipDates(tenant, batchId));
         return ok("DTC batch " + batchId, data);
     }
 

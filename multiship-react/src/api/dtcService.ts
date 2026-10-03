@@ -30,6 +30,7 @@ export const dtcService = {
   batchDetail: (batchId: string, p: DtcBatchDetailQuery) => {
     const qs = new URLSearchParams({
       page: String(p.page), size: String(p.size), tenantId: p.tenantId ?? '',
+      q: p.q ?? '', status: p.status ?? '', carrier: p.carrier ?? '', shipDate: p.shipDate ?? '',
     })
     return apiClient.get<ApiResponse<DtcBatchDetail>>(`/dtc/batches/${batchId}?${qs}`)
   },
@@ -209,12 +210,21 @@ export interface DtcBatchDetail {
   totalElements: number
   totalPages: number
   batch?: DtcBatchStats
+  /** Filter options for this batch. */
+  carriers?: string[]
+  shipDates?: string[]
 }
 
 export interface DtcBatchDetailQuery {
   page: number
   size: number
   tenantId?: string
+  /** Order no, label order, tote, tracking, PO or ship-to name. */
+  q?: string
+  /** GENERATED | QUEUED_USPS | FAILED | IN_FLIGHT | NOT_GENERATED | VOIDED */
+  status?: string
+  carrier?: string
+  shipDate?: string
 }
 
 /** dtc_generation_job row — the FE polls this while a run is active. */

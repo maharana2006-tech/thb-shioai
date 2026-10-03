@@ -192,6 +192,62 @@ public interface DtcOrderRepository extends JpaRepository<DtcOrder, Long> {
             String tenantId, java.math.BigDecimal batchId,
             org.springframework.data.domain.Pageable pageable);
 
+    /**
+     * Lines of one batch for DTC Shipment History, with the page's filters. Empty
+     * strings mean "no filter". {@code q} matches order no, label order, tote,
+     * tracking, PO and ship-to name; {@code status} is what the Label Status
+     * column shows (VOIDED comes from the label's tracking row, so a voided line
+     * is not GENERATED); {@code carrier} is the Carrier column's value.
+     */
+    @Query("""
+        SELECT d FROM DtcOrder d
+        WHERE d.tenantId = :tenantId AND d.batchId = :batchId
+          AND (:q = ''
+               OR STR(d.orderNo) LIKE CONCAT('%', :q, '%')
+               OR STR(d.generatedOrderNo) LIKE CONCAT('%', :q, '%')
+               OR LOWER(d.toteNumber) LIKE LOWER(CONCAT('%', :q, '%'))
+               OR LOWER(d.generatedTrackingNumber) LIKE LOWER(CONCAT('%', :q, '%'))
+               OR LOWER(d.custPo) LIKE LOWER(CONCAT('%', :q, '%'))
+               OR LOWER(d.shipName) LIKE LOWER(CONCAT('%', :q, '%')))
+          AND (:carrier = '' OR COALESCE(d.generatedCarrierCode, d.shipVia, d.shipViaCode) = :carrier)
+          AND (:shipDate = '' OR d.shipDate = :shipDate)
+          AND (:status = ''
+               OR (:status = 'NOT_GENERATED' AND (d.generatedStatus IS NULL OR d.generatedStatus = ''))
+               OR (:status = 'VOIDED' AND EXISTS
+                     (SELECT 1 FROM OrderTracking t WHERE t.orderNo = d.generatedOrderNo AND t.status = 'VOIDED'))
+               OR (:status = 'GENERATED' AND d.generatedStatus = 'GENERATED' AND NOT EXISTS
+                     (SELECT 1 FROM OrderTracking t WHERE t.orderNo = d.generatedOrderNo AND t.status = 'VOIDED'))
+               OR (:status NOT IN ('NOT_GENERATED', 'VOIDED', 'GENERATED') AND d.generatedStatus = :status))
+    """)
+    org.springframework.data.domain.Page<DtcOrder> searchBatchLines(
+            @Param("tenantId") String tenantId,
+            @Param("batchId") java.math.BigDecimal batchId,
+            @Param("q") String q,
+            @Param("status") String status,
+            @Param("carrier") String carrier,
+            @Param("shipDate") String shipDate,
+            org.springframework.data.domain.Pageable pageable);
+
+    /** Carrier filter options for one batch — the values the Carrier column shows. */
+    @Query("""
+        SELECT DISTINCT COALESCE(d.generatedCarrierCode, d.shipVia, d.shipViaCode) FROM DtcOrder d
+        WHERE d.tenantId = :tenantId AND d.batchId = :batchId
+          AND COALESCE(d.generatedCarrierCode, d.shipVia, d.shipViaCode) IS NOT NULL
+        ORDER BY 1
+    """)
+    java.util.List<String> batchCarriers(@Param("tenantId") String tenantId,
+                                         @Param("batchId") java.math.BigDecimal batchId);
+
+    /** Ship-date filter options for one batch. */
+    @Query("""
+        SELECT DISTINCT d.shipDate FROM DtcOrder d
+        WHERE d.tenantId = :tenantId AND d.batchId = :batchId
+          AND d.shipDate IS NOT NULL AND d.shipDate <> ''
+        ORDER BY d.shipDate DESC
+    """)
+    java.util.List<String> batchShipDates(@Param("tenantId") String tenantId,
+                                          @Param("batchId") java.math.BigDecimal batchId);
+
     /** All rows of one batch in stable order — the generation worker's input. */
     java.util.List<DtcOrder> findByTenantIdAndBatchIdOrderByIdAsc(
             String tenantId, java.math.BigDecimal batchId);

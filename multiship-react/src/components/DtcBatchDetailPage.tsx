@@ -1,8 +1,10 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { FiAlertCircle, FiArrowLeft, FiEdit2, FiPrinter, FiZap } from 'react-icons/fi'
+import { FiAlertCircle, FiArrowLeft, FiEdit2, FiFilter, FiPrinter, FiX, FiZap } from 'react-icons/fi'
 import type { ColumnDef } from '@tanstack/react-table'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
+import Select from './workspace/Select'
+import { useDismissable } from '../hooks/useDismissable'
 import {
   batchStatusOf, canEditLine, dtcService, labelStatusOf, lineHasError,
   type DtcBatchDetail, type DtcOrder,
@@ -52,19 +54,40 @@ export default function DtcBatchDetailPage() {
   const [detailsLine, setDetailsLine] = useState<DtcOrder | null>(null)
   /** The line being corrected (no label order yet) — see DtcLineEditModal. */
   const [editingLine, setEditingLine] = useState<DtcOrder | null>(null)
+  /** Search box value; `debouncedQ` is what hits the API. */
+  const [q, setQ] = useState('')
+  const [debouncedQ, setDebouncedQ] = useState('')
+  const [status, setStatus] = useState('')
+  const [carrier, setCarrier] = useState('')
+  const [shipDate, setShipDate] = useState('')
+  const [showFilters, setShowFilters] = useState(false)
+  const closeFilters = useCallback(() => setShowFilters(false), [])
+  const filterRef = useDismissable(showFilters, closeFilters)
+
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedQ(q.trim()), 300)
+    return () => window.clearTimeout(t)
+  }, [q])
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- a changed filter invalidates the page you are on
+    setPageIndex(0)
+  }, [debouncedQ, status, carrier, shipDate])
 
   const load = useCallback(async () => {
     if (!batchId || !tenantId) return
     setLoading(true)
     try {
-      const res = await dtcService.batchDetail(batchId, { page: pageIndex, size: pageSize, tenantId })
+      const res = await dtcService.batchDetail(batchId, {
+        page: pageIndex, size: pageSize, tenantId, q: debouncedQ, status, carrier, shipDate,
+      })
       setData(res.data)
     } catch (e) {
       notify.apiError(e, `Could not load batch ${batchId}.`)
     } finally {
       setLoading(false)
     }
-  }, [batchId, tenantId, pageIndex])
+  }, [batchId, tenantId, pageIndex, debouncedQ, status, carrier, shipDate])
 
   useEffect(() => { void load() }, [load])
 
@@ -279,6 +302,68 @@ export default function DtcBatchDetailPage() {
   const batch = data?.batch
   const total = data?.totalElements ?? 0
   const totalPages = data?.totalPages ?? 0
+  const filterCount = [status, carrier, shipDate].filter(Boolean).length
+  const filterLabel = 'block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400'
+
+  const filters = (
+    <div className="relative" ref={filterRef}>
+      <button
+        type="button"
+        onClick={() => setShowFilters((v) => !v)}
+        aria-haspopup="true"
+        aria-expanded={showFilters}
+        aria-controls="d2c-line-filter-panel"
+        className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[12.5px] font-semibold transition ${
+          filterCount ? 'border-[#1f150c] bg-[#1f150c] text-white' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+        }`}
+      >
+        <FiFilter className="h-3.5 w-3.5" />
+        Filters
+        {filterCount ? <span className="rounded-full bg-white/20 px-1.5 text-[10px] font-bold">{filterCount}</span> : null}
+      </button>
+      {showFilters && (
+        <div
+          id="d2c-line-filter-panel"
+          role="region"
+          aria-label="Shipment line filters"
+          className="absolute right-0 z-30 mt-1 w-72 rounded-lg border border-slate-200 bg-white p-3 shadow-lg"
+        >
+          <label className={filterLabel} htmlFor="d2c-l-status">Label status</label>
+          <Select id="d2c-l-status" className="mt-1" value={status} onChange={(e) => setStatus(e.target.value)}>
+            <option value="">Any label status</option>
+            <option value="NOT_GENERATED">Not generated</option>
+            <option value="GENERATED">Generated</option>
+            <option value="QUEUED_USPS">Queued at USPS</option>
+            <option value="IN_FLIGHT">Buying…</option>
+            <option value="FAILED">Failed</option>
+            <option value="VOIDED">Voided</option>
+          </Select>
+
+          <label className={`${filterLabel} mt-3`} htmlFor="d2c-l-carrier">Carrier</label>
+          <Select id="d2c-l-carrier" className="mt-1" value={carrier} onChange={(e) => setCarrier(e.target.value)}>
+            <option value="">All carriers</option>
+            {(data?.carriers ?? []).map((c) => <option key={c} value={c}>{c}</option>)}
+          </Select>
+
+          <label className={`${filterLabel} mt-3`} htmlFor="d2c-l-shipdate">Ship date</label>
+          <Select id="d2c-l-shipdate" className="mt-1" value={shipDate} onChange={(e) => setShipDate(e.target.value)}>
+            <option value="">All ship dates</option>
+            {(data?.shipDates ?? []).map((d) => <option key={d} value={d}>{d}</option>)}
+          </Select>
+
+          {filterCount ? (
+            <button
+              type="button"
+              onClick={() => { setStatus(''); setCarrier(''); setShipDate('') }}
+              className="mt-3 inline-flex items-center gap-1 text-[11.5px] font-semibold text-slate-600 hover:text-slate-950"
+            >
+              <FiX className="h-3 w-3" /> Clear filters
+            </button>
+          ) : null}
+        </div>
+      )}
+    </div>
+  )
 
   return (
     <div className="space-y-3 pb-8">
@@ -341,6 +426,12 @@ export default function DtcBatchDetailPage() {
           tableKey={`d2c-batch-${batchId}-${tenantId}-v1`}
           columns={columns}
           data={data?.content ?? []}
+          filterToggle={filters}
+          search={{
+            value: q,
+            onChange: setQ,
+            placeholder: 'Search order no, label order, tote, tracking, PO or ship-to name',
+          }}
           manualPagination
           pageIndex={pageIndex}
           pageSize={pageSize}
@@ -349,10 +440,14 @@ export default function DtcBatchDetailPage() {
           onPaginationChange={({ pageIndex: i }) => setPageIndex(i)}
           getRowId={(o) => String(o.id)}
           csvFilename={`dtc-batch-${batchId}.csv`}
-          caption={`${total} shipment line${total === 1 ? '' : 's'} in batch ${batchId}`}
+          caption={filterCount > 0 || debouncedQ
+            ? `${total} of ${batch?.totalLines ?? total} shipment lines in batch ${batchId} match`
+            : `${total} shipment line${total === 1 ? '' : 's'} in batch ${batchId}`}
           emptyState={
             <p className="px-5 py-10 text-center text-sm text-[#6b5c42]">
-              {loading ? 'Loading…' : `No shipment lines for batch ${batchId}.`}
+              {loading ? 'Loading…'
+                : filterCount > 0 || debouncedQ ? 'No shipment lines match your search or filters.'
+                  : `No shipment lines for batch ${batchId}.`}
             </p>
           }
         />
