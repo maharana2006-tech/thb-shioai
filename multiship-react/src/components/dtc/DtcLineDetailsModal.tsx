@@ -1,7 +1,8 @@
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useRef } from 'react'
 import { FiAlertCircle, FiEdit2, FiExternalLink, FiMapPin, FiPackage, FiTag, FiX } from 'react-icons/fi'
 import { lineHasError, type DtcOrder } from '../../api/dtcService'
 import { useFocusTrap } from '../../hooks/useFocusTrap'
+import { Card, Rows } from '../modals/DetailCards'
 
 /**
  * One D2C shipment line, read straight off the dtc_orders row (so it works for
@@ -138,32 +139,6 @@ export default function DtcLineDetailsModal({ line: o, onClose, onEdit, onOpenOr
         </div>
       </div>
     </div>
-  )
-}
-
-function Card({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
-  return (
-    <section className="rounded-xl border border-[#efe7d6] bg-white p-4">
-      <h4 className="mb-2.5 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-[#8a7a5a]">
-        <span className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-[#f4eede] text-[#412d15]" aria-hidden="true">{icon}</span>
-        {title}
-      </h4>
-      {children}
-    </section>
-  )
-}
-
-/** Label / value rows; empty values show a quiet dash so the grid stays aligned. */
-function Rows({ rows }: { rows: [string, string | null | undefined, boolean?][] }) {
-  return (
-    <dl className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-[12.5px]">
-      {rows.map(([label, value, mono]) => (
-        <div key={label} className="contents">
-          <dt className="text-[#a1906d]">{label}</dt>
-          <dd className={`min-w-0 break-words ${value ? `font-medium text-[#1f150c] ${mono ? 'font-mono text-[12px]' : ''}` : 'text-[#cdbf9f]'}`}>{value || '—'}</dd>
-        </div>
-      ))}
-    </dl>
   )
 }
 

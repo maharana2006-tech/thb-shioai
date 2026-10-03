@@ -20,6 +20,12 @@ public class OrderWithLinesDTO {
     private String displayOrderNo;
     private String orderStatus;
     private String custNo;
+    /** Free-text reference on the order (DTC: "batch / tote"). */
+    private String customerRef;
+    /** Intake channel code (e.g. D2C). */
+    private String orderChannel;
+    /** Ship-via code NDS resolved the order to, when it differs from shipviaCd. */
+    private String ndsResolvedShipviaCd;
     private String shipName;
     private String shipAttn;
     private String shipAddr1;

@@ -31,6 +31,9 @@ public class OrderCustomsDTO {
     private String notes;
     private String dutiesPaidBy;
     private String dutiesAccount;
+    private String ftrExemption;
+    private String aesCitation;
+    private String exportDeclarationReference;
 
     private List<OrderCustomsItemDTO> items;
 

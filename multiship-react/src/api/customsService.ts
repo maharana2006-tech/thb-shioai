@@ -30,6 +30,9 @@ export interface OrderCustoms {
   currency?: string | null
   weightUnit?: string | null
   notes?: string | null
+  /** SENDER | RECIPIENT | THIRD_PARTY — who pays duties and taxes. */
+  dutiesPaidBy?: string | null
+  dutiesAccount?: string | null
   /** US FTR §30.37 exemption wire code — see utils/customsOptions.ts FTR_EXEMPTIONS. */
   ftrExemption?: string | null
   /** AES ITN filed with US Census (e.g. "X20260101123456"). */
