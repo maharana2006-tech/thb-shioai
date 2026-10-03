@@ -164,7 +164,7 @@ export default function DtcBatchDetailPage() {
             type="button"
             title={`Open the details for order ${orderNo}`}
             onClick={() => setDetailsOrderNo(orderNo)}
-            className="inline-flex items-center rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+            className="font-mono text-[12px] font-semibold text-[#412d15] underline decoration-[#cdbf9f] underline-offset-2 transition hover:decoration-[#412d15]"
           >
             {orderNo}
           </button>
