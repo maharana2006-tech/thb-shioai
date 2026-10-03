@@ -42,6 +42,18 @@ public interface ClientShipviaCodeMapRepository extends JpaRepository<ClientShip
     /** Aliases pointing at one catalog service — what stops resolving if it is switched off. */
     long countByServiceId(Long serviceId);
 
+    /** V126 merge — all rules in ERP-code order. Replaces the pre-merge
+     *  {@code ShipViaMappingRepository.findAllByOrderByShipviaCdAsc()}. */
+    List<ClientShipviaCodeMap> findAllByOrderByErpCodeAsc();
+
+    /** V126 merge — origin-warehouse cascade (rename / delete). Replaces
+     *  pre-merge {@code ShipViaMappingRepository.findByWarehouseId()}. */
+    List<ClientShipviaCodeMap> findByWarehouseId(Long warehouseId);
+
+    /** V126 merge — service cascade (toggle-off, delete). Replaces
+     *  pre-merge {@code ShipViaMappingRepository.findByServiceId()}. */
+    List<ClientShipviaCodeMap> findByServiceId(Long serviceId);
+
     /** V126 merge — pick the most-specific matching rule for an incoming
      *  (client, ERP code, warehouse, country, region) tuple.
      *
