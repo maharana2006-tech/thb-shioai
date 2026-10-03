@@ -287,7 +287,8 @@ function SortableHeader<T>({
     >
       <div className="flex items-center gap-1">
         {/* Drag grip — the whole label acts as the drag handle. */}
-        <span {...attributes} {...listeners} className="flex-1 cursor-grab active:cursor-grabbing">
+        <span {...attributes} {...listeners} className={`flex-1 cursor-grab active:cursor-grabbing ${
+          (header.column.columnDef.meta as { align?: 'right' } | undefined)?.align === 'right' ? 'text-right' : ''}`}>
           {children}
         </span>
       </div>

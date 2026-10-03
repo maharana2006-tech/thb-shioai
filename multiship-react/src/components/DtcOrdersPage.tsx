@@ -206,7 +206,9 @@ export default function DtcOrdersPage() {
       },
     },
     {
-      id: 'actions', header: 'Actions', enableSorting: false, size: 175,
+      // Right-aligned so the column's slack sits before the buttons, not after them.
+      id: 'actions', header: 'Actions', enableSorting: false, size: 160,
+      meta: { align: 'right' },
       cell: ({ row }) => {
         const b = row.original
         const active = activeJob?.key === rowKey(b)

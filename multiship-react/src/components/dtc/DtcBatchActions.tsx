@@ -55,7 +55,7 @@ export default function DtcBatchActions({ batch: b, printedAt, progress, busy, o
   const when = printedAt ? new Date(printedAt) : null
 
   return (
-    <div className="flex items-center gap-1.5">
+    <div className="flex w-full items-center justify-end gap-1.5">
       <button
         type="button"
         onClick={onDetails}
