@@ -1043,91 +1043,31 @@ public class ShippingConfigService {
 
     /**
      * The winning ship-method rule for (client, order ship-method, destination,
-     * origin warehouse): rules that don't match are excluded; among matches,
-     * specificity wins.
-     *
-     * <p>Scoring (bit-weighted so higher specificity always beats lower):
-     * client=8, warehouse=4, dest country=2, dest region=1.
-     *   client+wh+ctry (14) > client+wh+any (12) > client+any+ctry (10)
-     *     > client+any+any (8) > global+wh+ctry (6) > global+wh+any (4)
-     *     > global+any+ctry (2) > global+any+any (0).
-     *
-     * <p>Warehouse restriction is read from {@link ShipMethodRuleWarehouse}
-     * (the join table — source of truth); falls back to the deprecated single
-     * {@link ShipViaMapping#getWarehouseId()} column when the join is empty so
-     * pre-migration rules still resolve correctly.
+     * origin warehouse). V126 merge: delegates to
+     * {@link com.multiship.backend.repository.ClientShipviaCodeMapRepository#findMatches}
+     * whose ORDER BY encodes the specificity ladder
+     * (client &gt; warehouse &gt; country, region as tiebreaker). First result
+     * wins. Non-enabled services are skipped.
      */
     @Transactional(readOnly = true)
     public Optional<ShippingService> resolveRule(String clientCode, String orderService, String destCountry,
                                                  Long orderWarehouseId) {
         if (!StringUtils.hasText(orderService)) return Optional.empty();
-        String client = StringUtils.hasText(clientCode) ? clientCode.trim().toUpperCase(Locale.ROOT) : null;
         String region = CountryRegions.regionOf(destCountry);
+        String dest = StringUtils.hasText(destCountry)
+                ? destCountry.trim().toUpperCase(Locale.ROOT)
+                : null;
 
-        String dest = destCountry != null ? destCountry.trim().toUpperCase(Locale.ROOT) : "";
-
-        List<ShipViaMapping> candidates = ruleRepository.findByShipviaCdIgnoreCase(orderService.trim());
-        if (candidates.isEmpty()) return Optional.empty();
-
-        // Bulk-fetch warehouse restrictions for all candidate rules in one hit
-        // (rather than N per-rule queries inside the filter/score pipeline).
-        List<Long> ruleIds = candidates.stream()
-                .map(ShipViaMapping::getId)
-                .filter(Objects::nonNull)
-                .toList();
-        java.util.Map<Long, java.util.Set<Long>> warehousesByRule = new java.util.HashMap<>();
-        if (!ruleIds.isEmpty()) {
-            for (var link : ruleWarehouseRepository.findByRuleIdIn(ruleIds)) {
-                warehousesByRule
-                        .computeIfAbsent(link.getRuleId(), k -> new java.util.HashSet<>())
-                        .add(link.getWarehouseId());
-            }
-        }
-
-        return candidates.stream()
-                .filter(r -> r.getClientCode() == null || r.getClientCode().equalsIgnoreCase(client == null ? "" : client))
-                .filter(r -> switch (normType(r)) {
-                    // zone membership: the ship-to country is one of the rule's set
-                    case "COUNTRIES" -> !dest.isEmpty() && r.getDestValue() != null
-                            && (" " + r.getDestValue() + " ").contains(" " + dest + " ");
-                    case "COUNTRY" -> !dest.isEmpty() && dest.equalsIgnoreCase(r.getDestValue());
-                    case "REGION" -> region.equalsIgnoreCase(r.getDestValue());
-                    default -> true;
-                })
-                .filter(r -> warehouseMatches(r, warehousesByRule.get(r.getId()), orderWarehouseId))
-                .max(Comparator
-                        .comparingInt((ShipViaMapping r) -> (r.getClientCode() != null ? 8 : 0)
-                                + (warehouseRestricted(r, warehousesByRule.get(r.getId())) ? 4 : 0)
-                                + (switch (normType(r)) {
-                                    case "COUNTRIES", "COUNTRY" -> 2;
-                                    case "REGION" -> 1;
-                                    default -> 0;
-                                }))
-                        .thenComparing(Comparator.comparing(ShipViaMapping::getId).reversed()))
-                .flatMap(r -> serviceRepository.findById(r.getServiceId()))
-                .filter(ShippingService::isEnabled);
-    }
-
-    /** Does {@code orderWarehouseId} satisfy this rule's warehouse restriction?
-     *  Empty restriction = matches any warehouse. Restricted with no known
-     *  origin = no match (safer than applying a restricted rule blindly). */
-    private static boolean warehouseMatches(ShipViaMapping rule,
-                                            java.util.Set<Long> joinWarehouses,
-                                            Long orderWarehouseId) {
-        // Prefer the join table when present.
-        if (joinWarehouses != null && !joinWarehouses.isEmpty()) {
-            return orderWarehouseId != null && joinWarehouses.contains(orderWarehouseId);
-        }
-        // Legacy single-column fallback for pre-migration rules.
-        if (rule.getWarehouseId() != null) {
-            return orderWarehouseId != null && rule.getWarehouseId().equals(orderWarehouseId);
-        }
-        return true; // unrestricted
-    }
-
-    private static boolean warehouseRestricted(ShipViaMapping rule,
-                                               java.util.Set<Long> joinWarehouses) {
-        return (joinWarehouses != null && !joinWarehouses.isEmpty()) || rule.getWarehouseId() != null;
+        return clientShipviaAliasRepository.findMatches(
+                        StringUtils.hasText(clientCode) ? clientCode.trim() : null,
+                        orderService.trim(),
+                        orderWarehouseId,
+                        dest,
+                        region)
+                .stream()
+                .flatMap(r -> serviceRepository.findById(r.getServiceId()).stream())
+                .filter(ShippingService::isEnabled)
+                .findFirst();
     }
 
     /**
