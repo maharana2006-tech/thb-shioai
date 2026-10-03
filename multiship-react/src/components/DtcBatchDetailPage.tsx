@@ -1,14 +1,18 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { FiArrowLeft, FiPrinter, FiX, FiZap } from 'react-icons/fi'
+import { FiAlertCircle, FiArrowLeft, FiChevronDown, FiEdit2, FiFilter, FiPrinter, FiX, FiZap } from 'react-icons/fi'
 import type { ColumnDef } from '@tanstack/react-table'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
-import { useFocusTrap } from '../hooks/useFocusTrap'
+import { useDismissable } from '../hooks/useDismissable'
 import {
-  batchStatusOf, dtcService, labelStatusOf,
+  batchStatusOf, canEditLine, dtcService, labelStatusOf, lineHasError, printableCount,
   type DtcBatchDetail, type DtcOrder,
 } from '../api/dtcService'
+import DtcLineDetailsModal from './dtc/DtcLineDetailsModal'
 import { orderService } from '../api/orderService'
+import { ApiError } from '../api/apiClient'
+import { confirmBatchGenerate } from '../utils/dtcConfirm'
+import { summarizeCarrierError } from '../utils/carrierErrorMap'
 import { notify } from '../utils/notify'
 import { workspacePaths } from '../routes/workspaceRoutes'
 
@@ -16,10 +20,17 @@ const OrderDetailsModal = lazy(() => import('./modals/OrderDetailsModal'))
 
 /**
  * DTC Shipment History — HstDetails-style line detail for one batch.
- * Columns mirror the reference: Client Code | Order No | Carrier | Batch No. |
- * Tot No. | Tracking Id | Ship Date | Label | Status. Print reuses the order
- * label PDF endpoint; Void reuses POST /orders/{orderNo}/void against the
- * generated order number.
+ * Columns mirror the reference: Client Code | Order No | Label Order |
+ * Carrier | Batch No. | Tote No. | Tracking Id | Ship Date | Label | Label Status.
+ * Order No is the ERP order the line was synced from, so every line has one,
+ * labelled or not. Label Order is the Multiship order a label run minted, and
+ * Label Status this app's result for the line; it stays "Not generated" until a run
+ * touches it. The ERP also syncs its own order status code (S/J), but nothing decodes
+ * it, so it is left off the screen. Print reuses the order label PDF endpoint; Void
+ * reuses POST /orders/{orderNo}/void against the generated order number. A line that carries an error gets an Edit button
+ * that opens the manual shipment form in fix mode for its order
+ * (/orders/new?fixOrder=…), where the operator corrects the data and
+ * regenerates the same order; the batch Generate then picks the line up.
  */
 export default function DtcBatchDetailPage() {
   const navigate = useNavigate()
@@ -32,24 +43,48 @@ export default function DtcBatchDetailPage() {
   const [data, setData] = useState<DtcBatchDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [activeJobId, setActiveJobId] = useState<number | null>(null)
+  // Locks Generate from the click until the server has answered — a second click
+  // in that gap would queue a second run and buy every label twice.
+  const [starting, setStarting] = useState(false)
   const [jobProgress, setJobProgress] = useState<{ processed: number; total: number; status: string } | null>(null)
   /** Order whose details the drill-down modal shows (set by the Order No cell). */
   const [detailsOrderNo, setDetailsOrderNo] = useState<number | null>(null)
   /** Shipment line the detail modal shows (set by clicking anywhere on a row). */
   const [detailsLine, setDetailsLine] = useState<DtcOrder | null>(null)
+  /** Search box value; `debouncedQ` is what hits the API. */
+  const [q, setQ] = useState('')
+  const [debouncedQ, setDebouncedQ] = useState('')
+  const [showFilters, setShowFilters] = useState(false)
+  const closeFilters = useCallback(() => setShowFilters(false), [])
+  const filterRef = useDismissable(showFilters, closeFilters)
+  const [status, setStatus] = useState('')
+  const [carrier, setCarrier] = useState('')
+  const [shipDate, setShipDate] = useState('')
+
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedQ(q.trim()), 300)
+    return () => window.clearTimeout(t)
+  }, [q])
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- a changed filter invalidates the page you are on
+    setPageIndex(0)
+  }, [debouncedQ, status, carrier, shipDate])
 
   const load = useCallback(async () => {
     if (!batchId || !tenantId) return
     setLoading(true)
     try {
-      const res = await dtcService.batchDetail(batchId, { page: pageIndex, size: pageSize, tenantId })
+      const res = await dtcService.batchDetail(batchId, {
+        page: pageIndex, size: pageSize, tenantId, q: debouncedQ, status, carrier, shipDate,
+      })
       setData(res.data)
     } catch (e) {
       notify.apiError(e, `Could not load batch ${batchId}.`)
     } finally {
       setLoading(false)
     }
-  }, [batchId, tenantId, pageIndex])
+  }, [batchId, tenantId, pageIndex, debouncedQ, status, carrier, shipDate])
 
   useEffect(() => { void load() }, [load])
 
@@ -78,11 +113,25 @@ export default function DtcBatchDetailPage() {
   }, [activeJobId, load])
 
   const generate = async () => {
+    if (starting || activeJobId) return
+    setStarting(true)
     try {
+      // No counts yet → nothing to tell the operator what will be bought; wait for them.
+      if (!data?.batch) { notify.info('Still loading this batch — try again in a moment.'); return }
+      if (!(await confirmBatchGenerate(data.batch))) return
       const r = await dtcService.generate(batchId, tenantId)
       setActiveJobId(r.data.job.id)
     } catch (e) {
-      notify.apiError(e, 'Could not start label generation.')
+      // 409 — a run is already active for this batch; follow it instead.
+      const job = e instanceof ApiError ? (e.payload?.data as { job?: { id: number } } | undefined)?.job : undefined
+      if (e instanceof ApiError && e.status === 409 && job?.id) {
+        setActiveJobId(job.id)
+        notify.info('A generation run is already in progress for this batch — showing its progress.')
+      } else {
+        notify.apiError(e, 'Could not start label generation.')
+      }
+    } finally {
+      setStarting(false)
     }
   }
 
@@ -95,17 +144,48 @@ export default function DtcBatchDetailPage() {
     })
     if (!ok) return
     try {
-      await orderService.voidLabel(o.generatedOrderNo)
-      notify.success(`Order ${o.generatedOrderNo} voided.`)
+      // A carrier refusal comes back as 200 with voided=false — the label is still live.
+      const res = await orderService.voidLabel(o.generatedOrderNo)
+      const r = res.data
+      if (r?.voided || r?.status === 'ALREADY_VOIDED') {
+        notify.success(`Order ${o.generatedOrderNo} voided.`)
+      } else {
+        notify.error(`${r?.carrierCode ?? 'The carrier'} refused to void order ${o.generatedOrderNo} — the label is still live.${r?.message ? ` ${r.message}` : ''}`)
+      }
       await load()
     } catch (e) {
       notify.apiError(e, `Could not void order ${o.generatedOrderNo}.`)
     }
   }
 
+  /**
+   * An errored line is corrected on the manual shipment form. When the run
+   * minted an order, the form opens in fix mode for it (regenerating keeps the
+   * order number); when it failed before any order existed, the form is
+   * pre-filled from the line itself and links the label it buys back to it.
+   */
+  const fixLine = (o: DtcOrder) => {
+    navigate(o.generatedOrderNo
+      ? `/orders/new?fixOrder=${o.generatedOrderNo}`
+      : `/orders/new?dtcLine=${o.id}&batch=${Number(o.batchId)}&tenant=${encodeURIComponent(o.tenantId)}`)
+  }
+  /** Only a line whose label run failed can be fixed — a pending line has nothing to fix yet. */
+  const fixable = (o: DtcOrder) => lineHasError(o) && (!!o.generatedOrderNo || canEditLine(o))
+
   const columns = useMemo<ColumnDef<DtcOrder, unknown>[]>(() => [
     { id: 'tenantId', accessorKey: 'tenantId', header: 'Client Code', enableSorting: false },
-    { id: 'generatedOrderNo', header: 'Order No', accessorKey: 'generatedOrderNo', enableSorting: false,
+    { id: 'orderNo', header: 'Order No', accessorKey: 'orderNo', enableSorting: false,
+      cell: ({ row }) => (
+        <button
+          type="button"
+          onClick={() => setDetailsLine(row.original)}
+          title="Open this shipment line"
+          className="font-mono text-[12px] font-semibold text-[#412d15] underline decoration-[#cdbf9f] underline-offset-2 transition hover:decoration-[#412d15]"
+        >
+          {row.original.orderNo ?? '—'}
+        </button>
+      ) },
+    { id: 'generatedOrderNo', header: 'Label Order', accessorKey: 'generatedOrderNo', enableSorting: false,
       cell: ({ row }) => {
         const orderNo = row.original.generatedOrderNo
         if (!orderNo) return <span className="text-[11px] text-[#9a8b70]">—</span>
@@ -114,7 +194,7 @@ export default function DtcBatchDetailPage() {
             type="button"
             title={`Open the details for order ${orderNo}`}
             onClick={() => setDetailsOrderNo(orderNo)}
-            className="inline-flex items-center rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+            className="font-mono text-[12px] font-semibold text-[#412d15] underline decoration-[#cdbf9f] underline-offset-2 transition hover:decoration-[#412d15]"
           >
             {orderNo}
           </button>
@@ -123,16 +203,24 @@ export default function DtcBatchDetailPage() {
     { id: 'carrier', header: 'Carrier', enableSorting: false,
       cell: ({ row }) => row.original.generatedCarrierCode ?? row.original.shipVia ?? row.original.shipViaCode ?? '—' },
     { id: 'batchId', header: 'Batch No.', accessorKey: 'batchId', enableSorting: false },
-    { id: 'toteNumber', accessorKey: 'toteNumber', header: 'Tot No.', enableSorting: false },
-    { id: 'tracking', header: 'Tracking Id', enableSorting: false,
-      cell: ({ row }) => row.original.generatedTrackingNumber ?? '—' },
+    { id: 'toteNumber', accessorKey: 'toteNumber', header: 'Tote No.', enableSorting: false },
+    { id: 'tracking', header: 'Tracking Id', enableSorting: false, size: 200,
+      cell: ({ row }) => {
+        const t = row.original.generatedTrackingNumber
+        return t ? <span className="block truncate font-mono text-[11.5px]" title={t}>{t}</span> : '—'
+      } },
     { id: 'shipDate', accessorKey: 'shipDate', header: 'Ship Date', enableSorting: false,
       cell: ({ row }) => row.original.shipDate ?? '—' },
     {
       id: 'label', header: 'Label', enableSorting: false,
       cell: ({ row }) => {
         const orderNo = row.original.generatedOrderNo
-        if (!orderNo) return <span className="text-[11px] text-[#9a8b70]">—</span>
+        // Only a live label prints: not one whose run failed, and not a voided
+        // one (cancelled at the carrier — it must not go onto a parcel).
+        if (!orderNo || row.original.generatedStatus !== 'GENERATED'
+            || data?.voidStatuses?.[String(orderNo)] === 'VOIDED') {
+          return <span className="text-[11px] text-[#9a8b70]">—</span>
+        }
         return (
           <button
             type="button"
@@ -147,39 +235,66 @@ export default function DtcBatchDetailPage() {
       },
     },
     {
-      id: 'status', header: 'Status', enableSorting: false,
+      id: 'status', header: 'Label Status', enableSorting: false,
       cell: ({ row }) => {
         const o = row.original
-        if (!o.generatedOrderNo) {
-          return <span className="text-[11px] text-[#9a8b70]">{o.generatedStatus === 'FAILED' ? 'FAILED' : '—'}</span>
-        }
-        const trackingStatus = data?.voidStatuses?.[String(o.generatedOrderNo)]
+        const trackingStatus = o.generatedOrderNo
+          ? data?.voidStatuses?.[String(o.generatedOrderNo)]
+          : undefined
         if (trackingStatus === 'VOIDED') {
           return <span className="inline-flex items-center rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-700">VOIDED</span>
         }
+        const errored = lineHasError(o)
+        const editButton = fixable(o) ? (
+          <button
+            type="button"
+            title={o.generatedOrderNo
+              ? `Open the manual shipment form to fix order ${o.generatedOrderNo}`
+              : 'Open the manual shipment form pre-filled from this line'}
+            onClick={() => fixLine(o)}
+            className="inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-800 transition hover:bg-amber-100"
+          >
+            <FiEdit2 className="h-3 w-3" />
+            Edit
+          </button>
+        ) : null
+        const pill = !o.generatedStatus ? (
+          <span
+            title="No label run has touched this line yet"
+            className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-500"
+          >
+            Not generated
+          </span>
+        ) : (
+          <span
+            title={o.generatedStatus === 'IN_FLIGHT' ? 'The label is being bought right now' : undefined}
+            className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${statusPillClass(o.generatedStatus)}`}
+          >
+            {o.generatedStatus === 'IN_FLIGHT' ? 'Buying…' : o.generatedStatus}
+          </span>
+        )
         return (
-          <div className="flex items-center gap-2">
-            {o.generatedStatus && (
-              <span
-                title={o.generatedMessage ?? undefined}
-                className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
-                  o.generatedStatus === 'GENERATED' || o.generatedStatus === 'QUEUED_USPS'
-                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                    : o.generatedStatus === 'FAILED'
-                      ? 'border-red-200 bg-red-50 text-red-700'
-                      : 'border-slate-200 bg-slate-50 text-slate-600'}`}
-              >
-                {o.generatedStatus}
-              </span>
-            )}
-            <button
-              type="button"
-              title={`Void label for order ${o.generatedOrderNo}`}
-              onClick={() => void voidLabel(o)}
-              className="inline-flex items-center rounded-lg border border-rose-200 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 transition hover:bg-rose-50"
-            >
-              Void
-            </button>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              {pill}
+              {editButton}
+              {!errored && o.generatedOrderNo && o.generatedStatus === 'GENERATED' && (
+                <button
+                  type="button"
+                  title={`Void label for order ${o.generatedOrderNo}`}
+                  onClick={() => void voidLabel(o)}
+                  className="inline-flex items-center rounded-lg border border-rose-200 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 transition hover:bg-rose-50"
+                >
+                  Void
+                </button>
+              )}
+            </div>
+            {/* Why it failed, readable at a glance — the full carrier text stays on hover. */}
+            {errored && o.generatedMessage ? (
+              <p className="mt-1 max-w-[20rem] truncate text-[11px] text-red-700" title={o.generatedMessage}>
+                {summarizeCarrierError(o.generatedMessage)}
+              </p>
+            ) : null}
           </div>
         )
       },
@@ -197,6 +312,115 @@ export default function DtcBatchDetailPage() {
   const batch = data?.batch
   const total = data?.totalElements ?? 0
   const totalPages = data?.totalPages ?? 0
+  const filterCount = [status, carrier, shipDate].filter(Boolean).length
+  const counts = data?.statusCounts ?? {}
+  const anyFilter = filterCount > 0 || !!debouncedQ
+  const statusPills = STATUS_FILTERS.filter((f) => !f.value || counts[f.value] || status === f.value)
+  const selectCls = 'h-9 w-full cursor-pointer appearance-none rounded-lg border border-[#e3d9c4] bg-white bg-[length:12px] bg-[right_0.7rem_center] bg-no-repeat pl-3 pr-8 text-[12.5px] font-semibold text-[#3d2f1c] outline-none transition hover:border-[#cdbf9f] focus:border-[#412d15] focus:ring-4 focus:ring-[#f0e9d8]'
+  const sectionLabel = 'mb-1.5 block text-[10.5px] font-semibold uppercase tracking-[0.1em] text-[#a1906d]'
+
+  /** Filters dropdown: Label status pills (with each status's line count), carrier and ship date. */
+  const filters = (
+    <div className="relative" ref={filterRef}>
+      <button
+        type="button"
+        onClick={() => setShowFilters((v) => !v)}
+        aria-haspopup="true"
+        aria-expanded={showFilters}
+        aria-controls="d2c-line-filter-panel"
+        className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-[12.5px] font-semibold transition ${
+          filterCount
+            ? 'border-[#1f150c] bg-[#1f150c] text-[#f4eede] hover:bg-[#412d15]'
+            : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'}`}
+      >
+        <FiFilter className="h-3.5 w-3.5" />
+        Filters
+        {filterCount ? <span className="rounded-full bg-white/20 px-1.5 text-[10.5px] font-bold tabular-nums">{filterCount}</span> : null}
+        <FiChevronDown className={`h-3.5 w-3.5 transition-transform ${showFilters ? 'rotate-180' : ''}`} />
+      </button>
+
+      {showFilters && (
+        <div
+          id="d2c-line-filter-panel"
+          role="region"
+          aria-label="Shipment line filters"
+          className="bulk-pop-in absolute right-0 z-30 mt-1.5 w-[22rem] overflow-hidden rounded-xl border border-[#e3d9c4] bg-white shadow-[0_16px_40px_rgba(31,21,12,0.16)]"
+        >
+          <div className="flex items-center justify-between border-b border-[#f2ecdf] bg-[#fcfaf5] px-4 py-2.5">
+            <p className="text-[13px] font-semibold text-[#1f150c]">Filter lines</p>
+            {filterCount ? (
+              <button
+                type="button"
+                onClick={() => { setStatus(''); setCarrier(''); setShipDate('') }}
+                className="inline-flex items-center gap-1 text-[11.5px] font-semibold text-[#8a7a5a] transition hover:text-[#1f150c]"
+              >
+                <FiX className="h-3 w-3" /> Clear all
+              </button>
+            ) : null}
+          </div>
+
+          <div className="space-y-4 px-4 py-3.5">
+            <div>
+              <span className={sectionLabel}>Label status</span>
+              <div role="radiogroup" aria-label="Label status" className="flex flex-wrap gap-1.5">
+                {statusPills.map((f) => {
+                  const active = status === f.value
+                  const n = f.value ? counts[f.value] ?? 0 : batch?.totalLines ?? 0
+                  return (
+                    <button
+                      key={f.value || 'all'}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      onClick={() => setStatus(f.value)}
+                      className={`inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[11.5px] font-semibold transition ${
+                        active
+                          ? 'border-[#1f150c] bg-[#1f150c] text-[#f4eede]'
+                          : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'}`}
+                    >
+                      {f.dot ? <span className={`h-1.5 w-1.5 rounded-full ${f.dot}`} aria-hidden="true" /> : null}
+                      {f.label}
+                      <span className={`rounded-full px-1.5 text-[10px] tabular-nums ${active ? 'bg-white/15' : 'bg-[#f4eede] text-[#6b5c42]'}`}>{n}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block">
+                <span className={sectionLabel}>Carrier</span>
+                <select value={carrier} onChange={(e) => setCarrier(e.target.value)} className={selectCls} style={{ backgroundImage: CHEVRON }}>
+                  <option value="">All carriers</option>
+                  {(data?.carriers ?? []).map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </label>
+              <label className="block">
+                <span className={sectionLabel}>Ship date</span>
+                <select value={shipDate} onChange={(e) => setShipDate(e.target.value)} className={selectCls} style={{ backgroundImage: CHEVRON }}>
+                  <option value="">All dates</option>
+                  {(data?.shipDates ?? []).map((d) => <option key={d} value={d}>{d}</option>)}
+                </select>
+              </label>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between border-t border-[#f2ecdf] bg-[#fcfaf5] px-4 py-2.5">
+            <p className="text-[11.5px] text-[#8a7a5a]">
+              <b className="tabular-nums text-[#1f150c]">{total}</b> of {batch?.totalLines ?? total} lines
+            </p>
+            <button
+              type="button"
+              onClick={closeFilters}
+              className="rounded-lg bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15]"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
 
   return (
     <div className="space-y-3 pb-8">
@@ -215,7 +439,7 @@ export default function DtcBatchDetailPage() {
         <button
           type="button"
           onClick={generate}
-          disabled={!!activeJobId}
+          disabled={!!activeJobId || starting}
           title="Generate shipping labels for every pending line in this batch"
           className="inline-flex items-center gap-1.5 rounded-lg bg-[#1f150c] px-2.5 py-1.5 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#3a2a18] disabled:opacity-60"
         >
@@ -225,8 +449,10 @@ export default function DtcBatchDetailPage() {
         <button
           type="button"
           onClick={() => window.open(dtcService.labelsZipUrl(batchId, tenantId), '_blank')}
-          disabled={!batch || batch.generatedCount === 0}
-          title={!batch || batch.generatedCount === 0 ? 'Generate labels first — nothing to print yet' : 'Download all generated label PDFs as a ZIP'}
+          disabled={!batch || printableCount(batch) === 0}
+          title={!batch || printableCount(batch) === 0
+            ? (batch?.voidedCount ? 'Every label of this batch was voided — nothing to print' : 'Generate labels first — nothing to print yet')
+            : 'Download all live label PDFs as a ZIP (voided labels are left out)'}
           className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40"
         >
           <FiPrinter className="h-3.5 w-3.5" />
@@ -239,7 +465,13 @@ export default function DtcBatchDetailPage() {
           <span>Client <b className="text-[#3d2f1c]">{batch.tenantId}</b></span>
           <span>{batch.totalLines} line{batch.totalLines === 1 ? '' : 's'}</span>
           <span>{batch.generatedCount} generated</span>
-          {batch.failedCount > 0 && <span className="font-semibold text-red-700">{batch.failedCount} failed</span>}
+          {batch.voidedCount ? <span className="font-semibold text-rose-700">{batch.voidedCount} voided</span> : null}
+          {batch.failedCount > 0 && (
+            <span className="inline-flex items-center gap-1 font-semibold text-red-700" title="Use Edit on a failed line to correct the ship-to, weight or ship-via, then Generate labels again.">
+              <FiAlertCircle className="h-3.5 w-3.5" />
+              {batch.failedCount} failed
+            </span>
+          )}
           {batch.pendingCount + batch.queuedCount > 0 && <span>{batch.pendingCount + batch.queuedCount} pending</span>}
           <span>Batch status <b className="text-[#3d2f1c]">{batchStatusOf(batch)}</b></span>
           <span>Labels <b className="text-[#3d2f1c]">{labelStatusOf(batch)}</b></span>
@@ -251,10 +483,15 @@ export default function DtcBatchDetailPage() {
         className={`rounded-2xl border border-slate-200 bg-white p-3 shadow-sm transition-opacity duration-200 ${loading && data ? 'opacity-60' : ''}`}
       >
         <AdvancedDataTable<DtcOrder>
-          tableKey={`d2c-batch-${batchId}-${tenantId}-v1`}
+          tableKey={`d2c-batch-${batchId}-${tenantId}-v2`}
           columns={columns}
           data={data?.content ?? []}
-          onRowClick={(o) => setDetailsLine(o)}
+          filterToggle={filters}
+          search={{
+            value: q,
+            onChange: setQ,
+            placeholder: 'Search order no, label order, tote, tracking, PO or ship-to name',
+          }}
           manualPagination
           pageIndex={pageIndex}
           pageSize={pageSize}
@@ -263,19 +500,24 @@ export default function DtcBatchDetailPage() {
           onPaginationChange={({ pageIndex: i }) => setPageIndex(i)}
           getRowId={(o) => String(o.id)}
           csvFilename={`dtc-batch-${batchId}.csv`}
-          caption={`${total} shipment line${total === 1 ? '' : 's'} in batch ${batchId}`}
+          caption={anyFilter
+            ? `${total} of ${batch?.totalLines ?? total} shipment lines in batch ${batchId} match`
+            : `${total} shipment line${total === 1 ? '' : 's'} in batch ${batchId}`}
           emptyState={
             <p className="px-5 py-10 text-center text-sm text-[#6b5c42]">
-              {loading ? 'Loading…' : `No shipment lines for batch ${batchId}.`}
+              {loading ? 'Loading…'
+                : anyFilter ? 'No shipment lines match your search or filters.'
+                  : `No shipment lines for batch ${batchId}.`}
             </p>
           }
         />
       </section>
 
       {detailsLine && (
-        <LineDetailsModal
-          order={detailsLine}
+        <DtcLineDetailsModal
+          line={detailsLine}
           onClose={() => setDetailsLine(null)}
+          onEdit={fixable(detailsLine) ? () => fixLine(detailsLine) : undefined}
           onOpenOrder={
             detailsLine.generatedOrderNo
               ? () => {
@@ -296,144 +538,22 @@ export default function DtcBatchDetailPage() {
   )
 }
 
-/**
- * Detail modal for one shipment line — opens on any row click, including the
- * lines that have no Multiship order yet (the order drill-down only exists
- * once a label has been attempted, hence the conditional button).
- */
-function LineDetailsModal({ order, onClose, onOpenOrder }: {
-  order: DtcOrder
-  onClose: () => void
-  onOpenOrder?: () => void
-}) {
-  const dialogRef = useRef<HTMLDivElement>(null)
-  useFocusTrap(true, dialogRef)
+/** Label Status filter pills, in the order a batch moves through them. */
+const STATUS_FILTERS: { value: string; label: string; dot?: string }[] = [
+  { value: '', label: 'All' },
+  { value: 'NOT_GENERATED', label: 'Not generated', dot: 'bg-slate-400' },
+  { value: 'IN_FLIGHT', label: 'Buying', dot: 'bg-amber-500' },
+  { value: 'QUEUED_USPS', label: 'Queued at USPS', dot: 'bg-sky-500' },
+  { value: 'GENERATED', label: 'Generated', dot: 'bg-emerald-500' },
+  { value: 'FAILED', label: 'Failed', dot: 'bg-red-500' },
+  { value: 'VOIDED', label: 'Voided', dot: 'bg-rose-400' },
+]
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+const CHEVRON = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23412d15' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E")`
 
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm"
-      role="dialog"
-      aria-modal="true"
-      aria-label={`Shipment line ${order.toteNumber ?? ''} details`}
-      onClick={onClose}
-    >
-      <div
-        ref={dialogRef}
-        className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
-          <div>
-            <h3 className="text-[15px] font-semibold tracking-tight text-[#1f150c]">
-              Shipment line — Tote {order.toteNumber ?? '—'}
-            </h3>
-            <p className="mt-0.5 text-[12px] text-[#6b5c42]">
-              Client {order.tenantId} · batch {order.batchId}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="rounded-lg border border-[#e3d9c4] bg-white p-1.5 text-[#5a4526] transition hover:bg-[#faf7f0]"
-          >
-            <FiX className="h-4 w-4" />
-          </button>
-        </div>
-        <div className="overflow-y-auto px-5 py-4">
-          <LineDetails order={order} onOpenOrder={onOpenOrder} />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-/**
- * Ship to / shipment / label grid for one line, read straight off the
- * dtc_orders row so it works for pending lines too.
- */
-function LineDetails({ order: o, onOpenOrder }: {
-  order: DtcOrder
-  onOpenOrder?: () => void
-}) {
-  const address = [o.shipAddr1, o.shipAddr2, o.shipAddr3].filter(Boolean).join(', ')
-  const locality = [o.shipToCity, o.shipToState, o.shipToZip].filter(Boolean).join(', ')
-  return (
-    <div className="grid gap-x-8 gap-y-4 text-[12px] text-[#3d2f1c] sm:grid-cols-2 lg:grid-cols-3">
-      <section className="space-y-1">
-        <h4 className="text-[10px] font-semibold uppercase tracking-wide text-[#8a7a5a]">Ship to</h4>
-        <p className="font-semibold">{o.shipName ?? '—'}</p>
-        {o.shipAttn && <p>Attn: {o.shipAttn}</p>}
-        {address && <p>{address}</p>}
-        <p>{[locality, o.shipToCountryCode ?? o.countryName].filter(Boolean).join(', ') || '—'}</p>
-        {o.phone && <p>Phone {o.phone}</p>}
-        {o.email && <p>{o.email}</p>}
-      </section>
-
-      <section className="space-y-1">
-        <h4 className="text-[10px] font-semibold uppercase tracking-wide text-[#8a7a5a]">Shipment</h4>
-        <Field label="Goods" value={o.goodsDesc} />
-        <Field label="Weight" value={o.weight != null ? `${o.weight} lb` : null} />
-        <Field label="Ship via" value={shipViaLabel(o)} />
-        <Field label="Customer" value={o.custNo} />
-        <Field label="PO" value={o.custPo} />
-        <Field label="Terms" value={o.termsCode} />
-        <Field label="Location" value={o.location} />
-        <Field label="Intl" value={o.intlYn} />
-      </section>
-
-      <section className="space-y-1">
-        <h4 className="text-[10px] font-semibold uppercase tracking-wide text-[#8a7a5a]">Label</h4>
-        <Field label="Status" value={o.generatedStatus} />
-        <Field label="Carrier" value={o.generatedCarrierCode} />
-        <Field label="Tracking" value={o.generatedTrackingNumber} />
-        <Field label="Order" value={o.generatedOrderNo != null ? String(o.generatedOrderNo) : null} />
-        <Field label="Generated" value={formatGenerated(o.generatedAt)} />
-        {o.generatedMessage && (
-          <p className="max-w-prose break-words text-[#8a4b2d]" title={o.generatedMessage}>
-            {o.generatedMessage}
-          </p>
-        )}
-        {onOpenOrder && (
-          <button
-            type="button"
-            onClick={onOpenOrder}
-            className="mt-1 inline-flex items-center rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
-          >
-            View order details
-          </button>
-        )}
-      </section>
-    </div>
-  )
-}
-
-function Field({ label, value }: { label: string; value: string | null | undefined }) {
-  return (
-    <p>
-      <span className="text-[#8a7a5a]">{label}:</span>{' '}
-      <span className={value ? 'font-medium' : 'text-[#9a8b70]'}>{value || '—'}</span>
-    </p>
-  )
-}
-
-/** ERP ship-via arrives twice (code + description); show it once when they match. */
-function shipViaLabel(o: DtcOrder) {
-  const code = o.shipViaCode?.trim()
-  const text = o.shipVia?.trim()
-  if (code && text && code.toLowerCase() !== text.toLowerCase()) return `${code} · ${text}`
-  return code || text || null
-}
-
-/** The ERP/ISO timestamp is opaque to operators; show a locale date+time. */
-function formatGenerated(iso: string | null) {
-  if (!iso) return null
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+function statusPillClass(status: string) {
+  if (status === 'GENERATED' || status === 'QUEUED_USPS') return 'border-emerald-200 bg-emerald-50 text-emerald-700'
+  if (status === 'FAILED') return 'border-red-200 bg-red-50 text-red-700'
+  if (status === 'IN_FLIGHT') return 'border-amber-200 bg-amber-50 text-amber-700'
+  return 'border-slate-200 bg-slate-50 text-slate-600'
 }

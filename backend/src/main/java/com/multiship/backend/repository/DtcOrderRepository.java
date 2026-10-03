@@ -95,27 +95,75 @@ public interface DtcOrderRepository extends JpaRepository<DtcOrder, Long> {
     // ═════════════ DTC History (V102) — batch summary + lines ═════════════
 
     /**
-     * Distinct (tenant, batch) keys for the Dtcal-style summary page, with
-     * optional tenant and ship-date filters. Empty strings mean "no filter".
+     * Row-level predicates shared by the summary page's two queries. The
+     * created-range bounds are always supplied (the controller widens a blank
+     * input to epoch-ish defaults) so no parameter has to be null-typed.
      */
-    @Query(value = """
-        SELECT DISTINCT new com.multiship.backend.dto.DtcBatchKey(d.tenantId, d.batchId)
-        FROM DtcOrder d
+    String BATCH_WHERE = """
         WHERE (:tenantId = '' OR d.tenantId = :tenantId)
           AND (:shipDate = '' OR d.shipDate = :shipDate)
+          AND d.createdAt >= :createdFrom
+          AND d.createdAt <= :createdTo
+        """;
+
+    /**
+     * Batch-level filters, evaluated in HAVING so they judge the WHOLE batch:
+     * a search term matches if any line carries it, and the status filters see
+     * every line rather than just the matched subset. Empty = no filter.
+     * Status semantics mirror the frontend's labelStatusOf / batchStatusOf.
+     */
+    String BATCH_HAVING = """
+        HAVING (:q = ''
+                OR SUM(CASE WHEN STR(d.batchId) LIKE CONCAT('%', :q, '%')
+                              OR STR(d.orderNo) LIKE CONCAT('%', :q, '%')
+                              OR LOWER(d.toteNumber) LIKE LOWER(CONCAT('%', :q, '%'))
+                              OR LOWER(d.custPo)     LIKE LOWER(CONCAT('%', :q, '%'))
+                              OR LOWER(d.shipName)   LIKE LOWER(CONCAT('%', :q, '%'))
+                              OR LOWER(d.shipToCity) LIKE LOWER(CONCAT('%', :q, '%'))
+                            THEN 1 ELSE 0 END) > 0)
+           AND (:labelStatus = ''
+                OR (:labelStatus = 'GENERATED'
+                    AND SUM(CASE WHEN d.generatedStatus IN ('GENERATED', 'QUEUED_USPS') THEN 1 ELSE 0 END) >= COUNT(d))
+                OR (:labelStatus = 'PENDING'
+                    AND SUM(CASE WHEN d.generatedStatus IN ('GENERATED', 'QUEUED_USPS', 'FAILED') THEN 1 ELSE 0 END) = 0)
+                OR (:labelStatus = 'PARTIAL'
+                    AND SUM(CASE WHEN d.generatedStatus IN ('GENERATED', 'QUEUED_USPS') THEN 1 ELSE 0 END) < COUNT(d)
+                    AND SUM(CASE WHEN d.generatedStatus IN ('GENERATED', 'QUEUED_USPS', 'FAILED') THEN 1 ELSE 0 END) > 0))
+           AND (:batchStatus = ''
+                OR (:batchStatus = 'COMPLETE'
+                    AND SUM(CASE WHEN d.generatedStatus IS NULL OR d.generatedStatus IN ('QUEUED_USPS', 'IN_FLIGHT') THEN 1 ELSE 0 END) = 0)
+                OR (:batchStatus = 'OPEN'
+                    AND SUM(CASE WHEN d.generatedStatus IS NULL OR d.generatedStatus IN ('QUEUED_USPS', 'IN_FLIGHT') THEN 1 ELSE 0 END) > 0))
+        """;
+
+    /**
+     * Distinct (tenant, batch) keys for the Dtcal-style summary page — client,
+     * ship date, created range, free-text search and batch/label status.
+     */
+    @Query(value = """
+        SELECT new com.multiship.backend.dto.DtcBatchKey(d.tenantId, d.batchId)
+        FROM DtcOrder d
+        """ + BATCH_WHERE + """
+        GROUP BY d.tenantId, d.batchId
+        """ + BATCH_HAVING + """
         ORDER BY d.batchId DESC
         """,
         countQuery = """
         SELECT COUNT(g.batchId) FROM (
             SELECT d.batchId AS batchId FROM DtcOrder d
-            WHERE (:tenantId = '' OR d.tenantId = :tenantId)
-              AND (:shipDate = '' OR d.shipDate = :shipDate)
+            """ + BATCH_WHERE + """
             GROUP BY d.tenantId, d.batchId
+            """ + BATCH_HAVING + """
         ) g
         """)
     org.springframework.data.domain.Page<com.multiship.backend.dto.DtcBatchKey> findBatchKeys(
             @Param("tenantId") String tenantId,
             @Param("shipDate") String shipDate,
+            @Param("q") String q,
+            @Param("labelStatus") String labelStatus,
+            @Param("batchStatus") String batchStatus,
+            @Param("createdFrom") java.time.LocalDateTime createdFrom,
+            @Param("createdTo") java.time.LocalDateTime createdTo,
             org.springframework.data.domain.Pageable pageable);
 
     /** Aggregate over one batch — one row, always present when the key is. */
@@ -129,7 +177,9 @@ public interface DtcOrderRepository extends JpaRepository<DtcOrder, Long> {
             SUM(CASE WHEN d.generatedStatus = 'GENERATED' THEN 1 ELSE 0 END),
             SUM(CASE WHEN d.generatedStatus = 'FAILED' THEN 1 ELSE 0 END),
             SUM(CASE WHEN d.generatedStatus = 'QUEUED_USPS' THEN 1 ELSE 0 END),
-            SUM(CASE WHEN d.generatedStatus IS NULL THEN 1 ELSE 0 END),
+            SUM(CASE WHEN d.generatedStatus IS NULL OR d.generatedStatus = 'IN_FLIGHT' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN d.generatedOrderNo IN
+                    (SELECT t.orderNo FROM OrderTracking t WHERE t.status = 'VOIDED') THEN 1 ELSE 0 END),
             MAX(d.createdAt))
         FROM DtcOrder d
         WHERE d.tenantId = :tenantId AND d.batchId = :batchId
@@ -143,6 +193,78 @@ public interface DtcOrderRepository extends JpaRepository<DtcOrder, Long> {
     org.springframework.data.domain.Page<DtcOrder> findByTenantIdAndBatchId(
             String tenantId, java.math.BigDecimal batchId,
             org.springframework.data.domain.Pageable pageable);
+
+    /**
+     * Lines of one batch for DTC Shipment History, with the page's filters. Empty
+     * strings mean "no filter". {@code q} matches order no, label order, tote,
+     * tracking, PO and ship-to name; {@code status} is what the Label Status
+     * column shows (VOIDED comes from the label's tracking row, so a voided line
+     * is not GENERATED); {@code carrier} is the Carrier column's value.
+     */
+    @Query("""
+        SELECT d FROM DtcOrder d
+        WHERE d.tenantId = :tenantId AND d.batchId = :batchId
+          AND (:q = ''
+               OR STR(d.orderNo) LIKE CONCAT('%', :q, '%')
+               OR STR(d.generatedOrderNo) LIKE CONCAT('%', :q, '%')
+               OR LOWER(d.toteNumber) LIKE LOWER(CONCAT('%', :q, '%'))
+               OR LOWER(d.generatedTrackingNumber) LIKE LOWER(CONCAT('%', :q, '%'))
+               OR LOWER(d.custPo) LIKE LOWER(CONCAT('%', :q, '%'))
+               OR LOWER(d.shipName) LIKE LOWER(CONCAT('%', :q, '%')))
+          AND (:carrier = '' OR COALESCE(d.generatedCarrierCode, d.shipVia, d.shipViaCode) = :carrier)
+          AND (:shipDate = '' OR d.shipDate = :shipDate)
+          AND (:status = ''
+               OR (:status = 'NOT_GENERATED' AND (d.generatedStatus IS NULL OR d.generatedStatus = ''))
+               OR (:status = 'VOIDED' AND EXISTS
+                     (SELECT 1 FROM OrderTracking t WHERE t.orderNo = d.generatedOrderNo AND t.status = 'VOIDED'))
+               OR (:status = 'GENERATED' AND d.generatedStatus = 'GENERATED' AND NOT EXISTS
+                     (SELECT 1 FROM OrderTracking t WHERE t.orderNo = d.generatedOrderNo AND t.status = 'VOIDED'))
+               OR (:status NOT IN ('NOT_GENERATED', 'VOIDED', 'GENERATED') AND d.generatedStatus = :status))
+    """)
+    org.springframework.data.domain.Page<DtcOrder> searchBatchLines(
+            @Param("tenantId") String tenantId,
+            @Param("batchId") java.math.BigDecimal batchId,
+            @Param("q") String q,
+            @Param("status") String status,
+            @Param("carrier") String carrier,
+            @Param("shipDate") String shipDate,
+            org.springframework.data.domain.Pageable pageable);
+
+    /** Lines per Label Status (as {@link #searchBatchLines} filters them) — the status pills' counts. */
+    @Query(nativeQuery = true, value = """
+        SELECT CASE
+                 WHEN EXISTS (SELECT 1 FROM order_label_tracking t
+                              WHERE t.order_no = d.generated_order_no AND t.status = 'VOIDED') THEN 'VOIDED'
+                 WHEN d.generated_status IS NULL OR d.generated_status = '' THEN 'NOT_GENERATED'
+                 ELSE d.generated_status
+               END AS label_status,
+               COUNT(*)
+        FROM dtc_orders d
+        WHERE d.tenant_id = :tenantId AND d.batch_id = :batchId
+        GROUP BY 1
+    """)
+    java.util.List<Object[]> batchStatusCounts(@Param("tenantId") String tenantId,
+                                               @Param("batchId") java.math.BigDecimal batchId);
+
+    /** Carrier filter options for one batch — the values the Carrier column shows. */
+    @Query("""
+        SELECT DISTINCT COALESCE(d.generatedCarrierCode, d.shipVia, d.shipViaCode) FROM DtcOrder d
+        WHERE d.tenantId = :tenantId AND d.batchId = :batchId
+          AND COALESCE(d.generatedCarrierCode, d.shipVia, d.shipViaCode) IS NOT NULL
+        ORDER BY 1
+    """)
+    java.util.List<String> batchCarriers(@Param("tenantId") String tenantId,
+                                         @Param("batchId") java.math.BigDecimal batchId);
+
+    /** Ship-date filter options for one batch. */
+    @Query("""
+        SELECT DISTINCT d.shipDate FROM DtcOrder d
+        WHERE d.tenantId = :tenantId AND d.batchId = :batchId
+          AND d.shipDate IS NOT NULL AND d.shipDate <> ''
+        ORDER BY d.shipDate DESC
+    """)
+    java.util.List<String> batchShipDates(@Param("tenantId") String tenantId,
+                                          @Param("batchId") java.math.BigDecimal batchId);
 
     /** All rows of one batch in stable order — the generation worker's input. */
     java.util.List<DtcOrder> findByTenantIdAndBatchIdOrderByIdAsc(

@@ -92,4 +92,3 @@ multiship_db_*.sql
 # Office lock/temp files
 ~$*
 graphify-out/
-*.docx

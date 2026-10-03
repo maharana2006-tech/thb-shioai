@@ -34,7 +34,9 @@ export function summarizeCarrierError(raw?: string | null): string {
   return fixSentenceSpacing(raw
     .replace(/^The carrier rejected[^:]*:\s*/i, '')
     .replace(/\b[A-Z]+ createShipment HTTP \d+:?\s*/i, '')
-    .replace(/\{.*\}$/s, '')
+    // From the first brace on is carrier JSON — also when the stored message
+    // was cut off mid-blob and never closes.
+    .replace(/\{.*$/s, '')
     .trim()
     .slice(0, 160)) || 'Label failed'
 }

@@ -20,6 +20,8 @@ export const dtcService = {
     const qs = new URLSearchParams({
       page: String(p.page), size: String(p.size),
       tenantId: p.tenantId ?? '', shipDate: p.shipDate ?? '',
+      q: p.q ?? '', labelStatus: p.labelStatus ?? '', batchStatus: p.batchStatus ?? '',
+      createdFrom: p.createdFrom ?? '', createdTo: p.createdTo ?? '',
     })
     return apiClient.get<ApiResponse<DtcBatchPage>>(`/dtc/batches?${qs}`)
   },
@@ -28,6 +30,7 @@ export const dtcService = {
   batchDetail: (batchId: string, p: DtcBatchDetailQuery) => {
     const qs = new URLSearchParams({
       page: String(p.page), size: String(p.size), tenantId: p.tenantId ?? '',
+      q: p.q ?? '', status: p.status ?? '', carrier: p.carrier ?? '', shipDate: p.shipDate ?? '',
     })
     return apiClient.get<ApiResponse<DtcBatchDetail>>(`/dtc/batches/${batchId}?${qs}`)
   },
@@ -36,6 +39,19 @@ export const dtcService = {
   generate: (batchId: string, tenantId: string) =>
     apiClient.post<ApiResponse<{ job: DtcGenerationJob }>>(
       `/dtc/batches/${batchId}/generate?tenantId=${encodeURIComponent(tenantId)}`, {}),
+
+  /**
+   * Correct a line that has no label order yet (null = keep, "" = clear), or link it to an
+   * order labelled by hand ({ adoptOrderNo }). 409 once the line has a label or is being bought.
+   */
+  /** One line — the manual shipment form's prefill when a failed line is fixed there. */
+  line: (batchId: string, lineId: number, tenantId: string) =>
+    apiClient.get<ApiResponse<DtcOrder>>(
+      `/dtc/batches/${batchId}/lines/${lineId}?tenantId=${encodeURIComponent(tenantId)}`),
+
+  editLine: (batchId: string, lineId: number, tenantId: string, body: DtcLineEdit) =>
+    apiClient.patch<ApiResponse<DtcOrder>>(
+      `/dtc/batches/${batchId}/lines/${lineId}?tenantId=${encodeURIComponent(tenantId)}`, body),
 
   /** Generation job progress (poll after enqueue). */
   generationJob: (jobId: number) =>
@@ -77,7 +93,14 @@ export interface DtcBatchStats {
   failedCount: number
   queuedCount: number
   pendingCount: number
+  /** Generated lines whose label was since voided at the carrier (also in generatedCount). */
+  voidedCount?: number
   lastSyncedAt: string | null
+}
+
+/** Labels the batch can still print — generated and not voided. */
+export function printableCount(b: Pick<DtcBatchStats, 'generatedCount' | 'voidedCount'>): number {
+  return b.generatedCount - (b.voidedCount ?? 0)
 }
 
 export function batchStatusOf(b: Pick<DtcBatchStats, 'pendingCount' | 'queuedCount'>): 'COMPLETE' | 'OPEN' {
@@ -93,6 +116,8 @@ export function labelStatusOf(b: Pick<DtcBatchStats, 'totalLines' | 'generatedCo
 
 export interface DtcBatchPage {
   content: DtcBatchStats[]
+  /** "TENANT|batchId" → when any of the batch's labels was last printed (ISO). */
+  lastPrinted?: Record<string, string>
   pageNumber: number
   pageSize: number
   totalElements: number
@@ -104,9 +129,33 @@ export interface DtcBatchQuery {
   size: number
   tenantId?: string
   shipDate?: string
+  /** Free text over batch no, tote, order no, customer PO and ship-to name/city. */
+  q?: string
+  /** GENERATED | PARTIAL | PENDING — matches the badge in the Label Status column. */
+  labelStatus?: string
+  /** COMPLETE | OPEN — matches the badge in the Batch Status column. */
+  batchStatus?: string
+  /** ISO date (YYYY-MM-DD) bounds on when the batch was synced; empty = unbounded. */
+  createdFrom?: string
+  createdTo?: string
 }
 
 /** One dtc_orders row (DtcOrder entity, V102 generation columns included). */
+/** The fields Automatic label builds a shipment from — what an operator may correct on a line. */
+export type DtcLineEdit = Partial<Pick<DtcOrder,
+  'shipName' | 'shipAttn' | 'shipAddr1' | 'shipAddr2' | 'shipAddr3' | 'shipToCity' | 'shipToState'
+  | 'shipToZip' | 'shipToCountryCode' | 'phone' | 'email' | 'goodsDesc' | 'shipViaCode'>> & {
+  weight?: number | null
+  unitValue?: number | null
+  adoptOrderNo?: number
+}
+
+/** A line that can be corrected here: no label order yet, and not labelled or being bought. */
+export function canEditLine(o: Pick<DtcOrder, 'generatedOrderNo' | 'generatedStatus'>): boolean {
+  return !o.generatedOrderNo && o.generatedStatus !== 'GENERATED'
+    && o.generatedStatus !== 'QUEUED_USPS' && o.generatedStatus !== 'IN_FLIGHT'
+}
+
 export interface DtcOrder {
   id: number
   batchId: number
@@ -147,9 +196,20 @@ export interface DtcOrder {
   generatedOrderNo: number | null
   generatedTrackingNumber: string | null
   generatedCarrierCode: string | null
-  generatedStatus: 'GENERATED' | 'FAILED' | 'QUEUED_USPS' | null
+  /** IN_FLIGHT — the label is being bought right now (stamped just before the carrier call). */
+  generatedStatus: 'GENERATED' | 'FAILED' | 'QUEUED_USPS' | 'IN_FLIGHT' | null
   generatedMessage: string | null
   generatedAt: string | null
+}
+
+/**
+ * True when a line carries an error the operator can correct. A GENERATED row
+ * also stores the carrier's success note in generatedMessage, so the message
+ * alone is not an error — only an unlabelled row reporting one is.
+ */
+export function lineHasError(o: Pick<DtcOrder, 'generatedStatus' | 'generatedMessage'>): boolean {
+  if (o.generatedStatus === 'GENERATED' || o.generatedStatus === 'QUEUED_USPS') return false
+  return o.generatedStatus === 'FAILED' || !!o.generatedMessage?.trim()
 }
 
 /** GET /dtc/batches/{batchId} body. */
@@ -162,12 +222,23 @@ export interface DtcBatchDetail {
   totalElements: number
   totalPages: number
   batch?: DtcBatchStats
+  /** Filter options for this batch. */
+  carriers?: string[]
+  shipDates?: string[]
+  /** Lines per Label Status for the whole batch (NOT_GENERATED, GENERATED, FAILED, VOIDED, …). */
+  statusCounts?: Record<string, number>
 }
 
 export interface DtcBatchDetailQuery {
   page: number
   size: number
   tenantId?: string
+  /** Order no, label order, tote, tracking, PO or ship-to name. */
+  q?: string
+  /** GENERATED | QUEUED_USPS | FAILED | IN_FLIGHT | NOT_GENERATED | VOIDED */
+  status?: string
+  carrier?: string
+  shipDate?: string
 }
 
 /** dtc_generation_job row — the FE polls this while a run is active. */

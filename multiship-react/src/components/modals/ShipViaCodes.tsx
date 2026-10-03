@@ -72,7 +72,7 @@ export function ShipViaCodesPanel({
               </thead>
               <tbody>
                 {codes.map((c) => (
-                  <tr key={c.code} className={c.enabled ? '' : 'opacity-60'}>
+                  <tr key={`${c.code}-${c.clientCode ?? '*'}-${c.destination ?? ''}`} className={c.enabled ? '' : 'opacity-60'}>
                     <td className="py-0.5 pr-3 font-mono font-semibold text-[#3b2d18]">{c.code}</td>
                     <td className="py-0.5 pr-3 text-[#5a4526]">
                       {c.serviceName} <span className="text-[#8a7a5c]">({c.carrier} {c.serviceCode})</span>

@@ -1,44 +1,25 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useFocusTrap } from '../../hooks/useFocusTrap'
-import { FiExternalLink, FiFileText, FiGlobe, FiMapPin, FiPackage, FiPhone, FiTag, FiTruck, FiX } from 'react-icons/fi'
+import { FiAlertTriangle, FiExternalLink, FiFileText, FiGlobe, FiList, FiMapPin, FiPackage, FiTag, FiTruck, FiX } from 'react-icons/fi'
 import { notify } from '../../utils/notify'
 import {
   orderService,
   type LabelDetails,
-  type OrderLine,
+  type OrderWithLines,
   type OrderWithLinesPayload,
 } from '../../api/orderService'
 import { customsService, type OrderCustoms } from '../../api/customsService'
 import { formatCarrierName } from '../../utils/carrierUtils'
+import { countryName } from '../../utils/countries'
+import { ftrExemptionLabel, SHIPPING_PURPOSES } from '../../utils/customsOptions'
 import CarrierLogo from '../workspace/CarrierLogo'
 import OrderStatusBadge from '../workspace/OrderStatusBadge'
-import CustomsEditorModal from './CustomsEditorModal'
+import { Card, Rows } from './DetailCards'
 
 interface OrderDetailsModalProps {
   orderNo: number
   onClose: () => void
-}
-
-const formatMoney = (value: number | null | undefined) =>
-  typeof value === 'number' ? `$${value.toFixed(2)}` : '—'
-
-const formatDate = (value?: string | null) => {
-  if (!value) return '—'
-  const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime())
-    ? value
-    : parsed.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })
-}
-
-const COUNTRY_NAMES: Record<string, string> = {
-  US: 'United States',
-  IN: 'India',
-  GB: 'United Kingdom',
-  CA: 'Canada',
-  FR: 'France',
-  DE: 'Germany',
-  AU: 'Australia',
 }
 
 const SCENARIO_LABEL: Record<string, string> = {
@@ -47,22 +28,47 @@ const SCENARIO_LABEL: Record<string, string> = {
   DEFAULT: 'Company default',
 }
 
+const DUTIES_LABEL: Record<string, string> = {
+  SENDER: 'Sender',
+  RECIPIENT: 'Recipient',
+  RECEIVER: 'Recipient',
+  THIRD_PARTY: 'Third party',
+}
+
+const money = (value: number | null | undefined, currency = 'USD') => {
+  if (value == null || Number.isNaN(Number(value))) return null
+  try {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(Number(value))
+  } catch {
+    return `${Number(value).toFixed(2)} ${currency}`
+  }
+}
+
+const formatDate = (value?: string | null) => {
+  if (!value) return null
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime())
+    ? value
+    : parsed.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+const clean = (v?: string | null) => v?.trim() || null
+
 /**
- * Full order drill-down: recipient, shipping account (three-scenario cascade),
- * label/tracking status, and customs line items with totals. Backed by
- * GET /orders/{orderNo}/with-lines plus /orders/{orderNo} for label status.
+ * Full label-order drill-down: where it ships from and to, how (carrier
+ * account), the label/tracking state, the customs declaration inline
+ * (international) and the goods. Backed by GET /orders/{n}/with-lines,
+ * /orders/{n} (label status) and /orders/{n}/customs.
  */
 export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModalProps) {
-  // Sprint 51 T6b — focus trap.
   const dialogRef = useRef<HTMLDivElement>(null)
   useFocusTrap(true, dialogRef)
   const navigate = useNavigate()
   const [payload, setPayload] = useState<OrderWithLinesPayload | null>(null)
   const [label, setLabel] = useState<LabelDetails | null>(null)
+  const [customs, setCustoms] = useState<OrderCustoms | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
-  const [customsOpen, setCustomsOpen] = useState(false)
-  const [customs, setCustoms] = useState<OrderCustoms | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -76,8 +82,7 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
         notify.apiError(e, 'Order loaded, but the label details fetch failed. Label / tracking info may be missing below.')
         return null
       }),
-      // Manual/international orders carry their goods as customs commodities,
-      // not ERP order_lines. Best-effort: a 422 (no customs) just leaves it null.
+      // Best-effort: a 422 (no customs recorded) just leaves it null.
       customsService.getCustoms(orderNo).catch(() => null),
     ])
       .then(([withLines, byId, customsData]) => {
@@ -107,64 +112,18 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
   }, [onClose])
 
   const order = payload?.order
-  const account = payload?.carrierAccount
-  // Line items: ERP order_lines when present; otherwise the customs commodities
-  // (manual/international orders record goods there, not as order_lines) mapped
-  // into the same shape so the table renders them instead of "0 items".
-  const lines = useMemo<OrderLine[]>(() => {
-    if (order?.orderLines?.length) return order.orderLines
-    const items = customs?.items ?? []
-    return items.map((it, i) => {
-      const qty = it.quantity ?? 1
-      const unit = it.unitValue ?? 0
-      return {
-        id: it.id ?? i,
-        lineNo: i + 1,
-        itemNo: it.sku ?? null,
-        itemDescription: it.description ?? null,
-        description: it.description ?? null,
-        hsDesc: null,
-        hsCode: it.hsCode ?? null,
-        countryOfOrigin: it.countryOfOrigin ?? null,
-        qtyShipped: qty,
-        unitPrice: unit,
-        totalPrice: qty * unit,
-        customsDeclValue: qty * unit,
-      }
-    })
-  }, [order?.orderLines, customs?.items])
-
-  const totals = useMemo(
-    () => ({
-      qty: lines.reduce((s, l) => s + (l.qtyShipped ?? 0), 0),
-      value: lines.reduce((s, l) => s + (l.totalPrice ?? 0), 0),
-      customs: lines.reduce((s, l) => s + (l.customsDeclValue ?? 0), 0),
-    }),
-    [lines]
-  )
-
-  // Recipient name: some feeds put a bare sequence digit in ship_name.
-  const shipName = order?.shipName?.trim()
-  const recipient =
-    (shipName && shipName.length > 2 ? shipName : order?.shipAttn) || order?.customerReferenceId || 'Consignee'
-  const attnDiffers = order?.shipAttn && order.shipAttn !== recipient
-  const country = order?.shiptoCountryCd
-    ? COUNTRY_NAMES[order.shiptoCountryCd.toUpperCase()] || order.shiptoCountryCd.toUpperCase()
-    : null
-  // International = destination differs from our home country. Customs only
-  // applies to cross-border shipments, so the button appears only then.
-  const isInternational = Boolean(
-    order?.shiptoCountryCd && order.shiptoCountryCd.trim().toUpperCase() !== 'US'
-  )
+  const voided = (label?.status || '').toUpperCase() === 'VOIDED'
+  const destination = clean(order?.shiptoCountryCd)?.toUpperCase()
+  const origin = clean(order?.shipFromCountryCd)?.toUpperCase() || 'US'
+  const isInternational = order?.intlYn === 'Y' || Boolean(destination && destination !== origin)
 
   const openLabel = () => {
     onClose()
     navigate(`/label/${orderNo}`)
   }
 
-  // Sprint 51 fix #3 — open the platform's own commercial-invoice PDF in a
-  // new tab. Fetched as a blob (same-origin, auth cookie) rather than a raw
-  // link so a 422 (no customs data) surfaces as a toast, not a broken tab.
+  // Open the platform's own commercial-invoice PDF in a new tab. Fetched as a
+  // blob (same-origin, auth cookie) so a 422 surfaces as a toast, not a broken tab.
   const [invoiceBusy, setInvoiceBusy] = useState(false)
   const openCommercialInvoice = async () => {
     if (invoiceBusy) return
@@ -173,7 +132,6 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
       const blob = await orderService.getCommercialInvoicePdf(orderNo)
       const url = URL.createObjectURL(blob)
       window.open(url, '_blank', 'noopener')
-      // Revoke after a beat so the new tab has time to load it.
       setTimeout(() => URL.revokeObjectURL(url), 60_000)
     } catch (err) {
       notify.error(err instanceof Error ? err.message : 'Could not open the commercial invoice.')
@@ -181,6 +139,8 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
       setInvoiceBusy(false)
     }
   }
+
+  const btn = 'inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0] disabled:opacity-50'
 
   return (
     <div
@@ -192,41 +152,35 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
     >
       <div
         ref={dialogRef}
-        className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]"
+        className="bulk-pop-in flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-[0_30px_80px_rgba(31,21,12,0.30)]"
         onClick={(event) => event.stopPropagation()}
       >
-        {/* header */}
-        <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">Order details</p>
-            <div className="mt-1 flex flex-wrap items-center gap-2">
-              <h3 className="text-base font-semibold text-slate-950">Order #{orderNo}</h3>
+        {/* Header: which order, whose, and its label state */}
+        <div className="flex items-start justify-between gap-4 border-b border-[#f2ecdf] bg-[#fcfaf5] px-6 py-4">
+          <div className="min-w-0">
+            <p className="text-[10.5px] font-semibold uppercase tracking-[0.12em] text-[#a1906d]">Label order</p>
+            <h3 className="mt-0.5 flex flex-wrap items-center gap-2 text-[17px] font-semibold tracking-tight text-[#1f150c]">
+              Order {order?.displayOrderNo || orderNo}
               {label?.status ? <OrderStatusBadge status={label.status} /> : null}
-              {order?.tenantId ? (
-                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500">
-                  Tenant {order.tenantId}
-                </span>
-              ) : null}
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            {isInternational ? (
-              <button
-                type="button"
-                onClick={() => setCustomsOpen(true)}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                <FiGlobe className="h-3.5 w-3.5" />
-                Customs
-              </button>
+              {order?.orderChannel ? <Chip>{order.orderChannel}</Chip> : null}
+              {isInternational ? <Chip><FiGlobe className="h-3 w-3" /> International</Chip> : null}
+              {order?.isReturn === 'Y' ? <Chip>Return</Chip> : null}
+            </h3>
+            {order ? (
+              <p className="mt-1 text-[12px] text-[#6b5c42]">
+                {[
+                  order.tenantId ? `Client ${order.tenantId}` : null,
+                  formatDate(order.createdDate) ? `Created ${formatDate(order.createdDate)}` : null,
+                  clean(order.customerRef),
+                ].filter(Boolean).map((part, i) => (
+                  <span key={i}>{i ? <span className="mx-1.5 text-[#cdbf9f]">·</span> : null}{part}</span>
+                ))}
+              </p>
             ) : null}
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
             {isInternational ? (
-              <button
-                type="button"
-                onClick={openCommercialInvoice}
-                disabled={invoiceBusy}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
-              >
+              <button type="button" onClick={openCommercialInvoice} disabled={invoiceBusy} className={btn}>
                 <FiFileText className="h-3.5 w-3.5" />
                 {invoiceBusy ? 'Opening…' : 'Commercial invoice'}
               </button>
@@ -234,264 +188,412 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
             <button
               type="button"
               onClick={openLabel}
-              title={(label?.status || '').toUpperCase() === 'VOIDED'
-                ? 'This label was voided — the document opens for record-keeping only and must not be used on a parcel.'
-                : undefined}
-              className={(label?.status || '').toUpperCase() === 'VOIDED'
-                ? 'inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-500 transition hover:bg-slate-50'
-                : 'inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15]'}
+              title={voided ? 'This label was voided — the document opens for record-keeping only and must not be used on a parcel.' : undefined}
+              className={voided ? btn : 'inline-flex items-center gap-1.5 rounded-lg bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15]'}
             >
               <FiTag className="h-3.5 w-3.5" />
-              {(label?.status || '').toUpperCase() === 'VOIDED' ? 'Voided label (record)' : 'View label'}
+              {voided ? 'Voided label (record)' : 'View label'}
             </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-xl border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50"
-              aria-label="Close"
-            >
+            <button type="button" onClick={onClose} aria-label="Close" className="rounded-lg border border-[#e3d9c4] bg-white p-1.5 text-[#5a4526] transition hover:bg-[#faf7f0]">
               <FiX className="h-4 w-4" />
             </button>
           </div>
         </div>
 
-        {/* body */}
-        <div className="flex-1 overflow-y-auto px-5 py-4">
+        <div className="flex-1 overflow-y-auto px-6 py-5">
           {loading ? (
-            <div className="px-2 py-12 text-center text-sm text-slate-500">Loading order details…</div>
+            <div className="py-12 text-center text-[13px] text-[#8a7a5a]">Loading order details…</div>
           ) : error ? (
-            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-6 text-center text-xs font-semibold text-rose-700">
-              {error}
-            </div>
+            <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-6 text-center text-[12.5px] font-semibold text-red-700">{error}</div>
           ) : order ? (
             <div className="space-y-4">
-              {/* tracking strip (only when generated) */}
-              {label?.trackingNumber ? (
-                (() => { const voided = (label.status || '').toUpperCase() === 'VOIDED'; return (
-                <div className={`flex flex-wrap items-center justify-between gap-2 rounded-2xl border px-4 py-2.5 ${
-                  voided ? 'border-slate-300 bg-slate-100' : 'border-emerald-200 bg-emerald-50/70'
-                }`}>
-                  <div className="flex items-center gap-2 text-[12.5px]">
-                    <FiTruck className={`h-4 w-4 ${voided ? 'text-slate-500' : 'text-emerald-700'}`} />
-                    <span className="font-semibold text-slate-700">Tracking</span>
-                    <span className={`font-mono font-semibold ${voided ? 'text-slate-500 line-through' : 'text-slate-950'}`}>{label.trackingNumber}</span>
-                    {voided ? (
-                      <span className="rounded-full bg-slate-300 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-700">Voided — cancelled at the carrier</span>
-                    ) : label.generatedAt ? (
-                      <span className="text-slate-500">· generated {formatDate(label.generatedAt)}</span>
-                    ) : null}
-                  </div>
-                  {label.trackingUrl ? (
-                    <a
-                      href={label.trackingUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-emerald-700 transition hover:bg-emerald-50"
-                    >
-                      <FiExternalLink className="h-3 w-3" />
-                      Track
-                    </a>
-                  ) : null}
-                </div>
-                ) })()
+              {label?.trackingNumber ? <TrackingStrip label={label} voided={voided} /> : null}
+
+              <div className={`grid gap-4 sm:grid-cols-2 ${clean(order.shipFromCountryCd) ? 'lg:grid-cols-3' : ''}`}>
+                {clean(order.shipFromCountryCd) ? <ShipFrom order={order} /> : null}
+                <ShipTo order={order} />
+                <Shipment order={order} account={payload?.carrierAccount} />
+              </div>
+
+              {customs || isInternational ? (
+                <CustomsSection customs={customs} order={order} />
               ) : null}
 
-              {/* ship-from + ship-to + account + order-meta */}
-              <div className="grid gap-2.5 md:grid-cols-2">
-                {order.shipFromCountryCd?.trim() ? (
-                  <Card label="Ship from" icon={<FiMapPin className="h-3.5 w-3.5" />}>
-                    <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-950">
-                      {order.shipFromName || order.shipFromCompany || '—'}
-                      {order.shipFromResolved ? (
-                        <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-slate-500">
-                          Warehouse
-                        </span>
-                      ) : null}
-                    </p>
-                    {order.shipFromCompany && order.shipFromCompany !== order.shipFromName ? (
-                      <p className="text-xs text-slate-500">{order.shipFromCompany}</p>
-                    ) : null}
-                    {order.shipFromAddr1?.trim() ? (
-                      <p className="mt-1 text-[13px] text-slate-700">{order.shipFromAddr1.trim()}</p>
-                    ) : null}
-                    <p className="text-[13px] font-medium text-slate-800">
-                      {[order.shipFromCity, order.shipFromState, order.shipFromZip].filter(Boolean).join(', ')}
-                    </p>
-                    {order.shipFromCountryCd ? (
-                      <p className="text-[13px] text-slate-700">{order.shipFromCountryCd}</p>
-                    ) : null}
-                    {order.shipFromPhone?.trim() ? (
-                      <p className="mt-1.5 inline-flex items-center gap-1.5 text-xs text-slate-500">
-                        <FiPhone className="h-3 w-3" />
-                        {order.shipFromPhone.trim()}
-                      </p>
-                    ) : null}
-                  </Card>
-                ) : null}
-                <Card label="Ship to" icon={<FiMapPin className="h-3.5 w-3.5" />}>
-                  <p className="text-sm font-semibold text-slate-950">{recipient}</p>
-                  {attnDiffers ? <p className="text-xs text-slate-500">ATTN: {order.shipAttn}</p> : null}
-                  {order.shipAddr1?.trim() ? (
-                    <p className="mt-1 text-[13px] text-slate-700">{order.shipAddr1.trim()}</p>
-                  ) : null}
-                  <p className="text-[13px] font-medium text-slate-800">
-                    {order.shiptoCity}, {order.shiptoState} {order.shiptoZip}
-                  </p>
-                  {country ? <p className="text-[13px] text-slate-700">{country}</p> : null}
-                  {order.phone?.trim() ? (
-                    <p className="mt-1.5 inline-flex items-center gap-1.5 text-xs text-slate-500">
-                      <FiPhone className="h-3 w-3" />
-                      {order.phone.trim()}
-                    </p>
-                  ) : null}
-                </Card>
+              {order.orderLines?.length ? <OrderLinesSection order={order} /> : null}
 
-                <div className="space-y-2.5">
-                  <Card label="Ships with" icon={<FiTruck className="h-3.5 w-3.5" />}>
-                    {account ? (
-                      <div className="flex items-start gap-2.5">
-                        <span className="shrink-0 rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm">
-                          <CarrierLogo carrierId={account.carrierCode} size={16} className="rounded-sm" />
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-1.5">
-                            <p className="truncate text-sm font-semibold text-slate-950">
-                              {account.carrierName || formatCarrierName(account.carrierCode)}
-                            </p>
-                            {account.accountCode && SCENARIO_LABEL[account.accountCode] ? (
-                              <span className="shrink-0 rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-semibold text-sky-700">
-                                {SCENARIO_LABEL[account.accountCode]}
-                              </span>
-                            ) : null}
-                          </div>
-                          <p className="mt-0.5 truncate text-xs text-slate-500" title={account.accountNumber || undefined}>
-                            {account.accountNumber || '—'} · {account.environment || 'SANDBOX'}
-                          </p>
-                        </div>
-                      </div>
-                    ) : (
-                      <p className="text-xs font-semibold text-amber-700">
-                        No account resolved yet — set a company default or add carrier details.
-                      </p>
-                    )}
-                  </Card>
+              {!order.orderLines?.length && !customs?.items?.length ? (
+                <p className="rounded-xl border border-dashed border-[#e3d9c4] px-4 py-5 text-center text-[12px] text-[#8a7a5a]">
+                  No line items are recorded for this order.
+                </p>
+              ) : null}
 
-                  <Card label="Order">
-                    <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-[12.5px]">
-                      <Meta k="Customer" v={order.customerReferenceId} />
-                      <Meta k="Ship via" v={order.shipviaCd} />
-                      <Meta k="Weight" v={order.weight != null ? `${order.weight} ${(order.weightUnit || 'LB').toLowerCase()}` : '—'} />
-                      <Meta k="Declared value" v={order.declaredValue != null ? `$${Number(order.declaredValue).toFixed(2)}` : '—'} />
-                      <Meta k="Created" v={formatDate(order.createdDate)} />
-                    </dl>
-                    {order.goodsDesc ? (
-                      <p className="mt-1.5 border-t border-slate-200 pt-1.5 text-xs text-slate-600">
-                        <span className="font-semibold text-slate-500">Goods: </span>
-                        {order.goodsDesc}
-                      </p>
-                    ) : null}
-                  </Card>
-                </div>
-              </div>
-
-              {/* line items */}
-              <div>
-                <div className="flex items-center gap-2">
-                  <FiPackage className="h-3.5 w-3.5 text-slate-400" />
-                  <h4 className="text-sm font-semibold text-slate-950">Line items ({lines.length})</h4>
-                </div>
-
-                <div className="mt-2 overflow-x-auto rounded-2xl border border-slate-200">
-                  <table className="w-full min-w-[620px] text-[12px] text-slate-700">
-                    <thead className="border-b border-slate-200 bg-slate-50 text-left text-[10px] uppercase tracking-[0.12em] text-slate-500">
-                      <tr>
-                        <th className="px-3 py-2.5">#</th>
-                        <th className="px-3 py-2.5">Item</th>
-                        <th className="px-3 py-2.5">Description</th>
-                        <th className="px-3 py-2.5 text-right">Qty</th>
-                        <th className="px-3 py-2.5 text-right">Unit</th>
-                        <th className="px-3 py-2.5 text-right">Total</th>
-                        <th className="px-3 py-2.5 text-right">Customs</th>
-                        <th className="px-3 py-2.5">HS Code</th>
-                        <th className="px-3 py-2.5">Origin</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {lines.map((line) => (
-                        <tr key={line.id} className="align-top">
-                          <td className="px-3 py-2.5 font-semibold text-slate-950">{line.lineNo}</td>
-                          <td className="px-3 py-2.5 font-medium">{line.itemNo || '—'}</td>
-                          <td className="px-3 py-2.5">
-                            <span className="font-medium text-slate-800">
-                              {line.itemDescription || line.description || '—'}
-                            </span>
-                            {line.hsDesc ? (
-                              <span className="block text-[10.5px] text-slate-400">{line.hsDesc}</span>
-                            ) : null}
-                          </td>
-                          <td className="px-3 py-2.5 text-right tabular-nums">{line.qtyShipped ?? '—'}</td>
-                          <td className="px-3 py-2.5 text-right tabular-nums">{formatMoney(line.unitPrice)}</td>
-                          <td className="px-3 py-2.5 text-right font-semibold tabular-nums">{formatMoney(line.totalPrice)}</td>
-                          <td className="px-3 py-2.5 text-right tabular-nums text-slate-500">{formatMoney(line.customsDeclValue)}</td>
-                          <td className="px-3 py-2.5 font-mono text-[11px]">{line.hsCode || '—'}</td>
-                          <td className="px-3 py-2.5">{line.countryOfOrigin || '—'}</td>
-                        </tr>
-                      ))}
-
-                      {!lines.length ? (
-                        <tr>
-                          <td colSpan={9} className="px-3 py-8 text-center text-xs text-slate-500">
-                            No line items are recorded for this order.
-                          </td>
-                        </tr>
-                      ) : null}
-                    </tbody>
-                    {lines.length ? (
-                      <tfoot className="border-t-2 border-slate-200 bg-slate-50 text-[12px] font-semibold text-slate-900">
-                        <tr>
-                          <td className="px-3 py-2.5" colSpan={3}>
-                            Totals · {lines.length} line{lines.length === 1 ? '' : 's'}
-                          </td>
-                          <td className="px-3 py-2.5 text-right tabular-nums">{totals.qty}</td>
-                          <td className="px-3 py-2.5" />
-                          <td className="px-3 py-2.5 text-right tabular-nums">{formatMoney(totals.value)}</td>
-                          <td className="px-3 py-2.5 text-right tabular-nums text-slate-500">{formatMoney(totals.customs)}</td>
-                          <td className="px-3 py-2.5" colSpan={2} />
-                        </tr>
-                      </tfoot>
-                    ) : null}
-                  </table>
-                </div>
-              </div>
+              {(order.packages?.length ?? 0) > 1 ? <PackagesSection order={order} /> : null}
             </div>
           ) : null}
         </div>
       </div>
+    </div>
+  )
+}
 
-      {customsOpen ? (
-        <CustomsEditorModal orderNo={orderNo} onClose={() => setCustomsOpen(false)} />
+function Chip({ children }: { children: ReactNode }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border border-[#e3d9c4] bg-white px-2 py-0.5 text-[10.5px] font-semibold text-[#5a4526]">
+      {children}
+    </span>
+  )
+}
+
+function TrackingStrip({ label, voided }: { label: LabelDetails; voided: boolean }) {
+  return (
+    <div className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border px-4 py-2.5 ${
+      voided ? 'border-slate-300 bg-slate-100' : 'border-emerald-200 bg-emerald-50/70'}`}>
+      <div className="flex flex-wrap items-center gap-2 text-[12.5px]">
+        <FiTruck className={`h-4 w-4 ${voided ? 'text-slate-500' : 'text-emerald-700'}`} />
+        <span className="font-semibold text-[#3d2f1c]">Tracking</span>
+        <span className={`font-mono font-semibold ${voided ? 'text-slate-500 line-through' : 'text-[#1f150c]'}`}>{label.trackingNumber}</span>
+        {voided ? (
+          <span className="rounded-full bg-slate-300 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-700">Voided — cancelled at the carrier</span>
+        ) : label.generatedAt ? (
+          <span className="text-[#6b5c42]">· generated {formatDate(label.generatedAt)}</span>
+        ) : null}
+      </div>
+      {label.trackingUrl ? (
+        <a
+          href={label.trackingUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-emerald-700 transition hover:bg-emerald-50"
+        >
+          <FiExternalLink className="h-3 w-3" /> Track
+        </a>
       ) : null}
     </div>
   )
 }
 
-function Card({ label, icon, children }: { label: string; icon?: ReactNode; children: ReactNode }) {
+/** Name, street lines, locality and country — blanks and repeats dropped. */
+function Address({ name, sub, lines, city, state, zip, country, phone }: {
+  name: string | null
+  sub?: string | null
+  lines: (string | null | undefined)[]
+  city?: string | null
+  state?: string | null
+  zip?: string | null
+  country?: string | null
+  phone?: string | null
+}) {
+  const street = [...new Set(lines.map(clean).filter((l): l is string => !!l))]
+  const locality = [clean(city), [clean(state), clean(zip)].filter(Boolean).join(' ')].filter(Boolean).join(', ')
   return (
-    <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3.5">
-      <p className="mb-1.5 inline-flex items-center gap-1.5 text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-400">
-        {icon}
-        {label}
-      </p>
-      {children}
-    </div>
+    <>
+      <p className="text-[13.5px] font-semibold text-[#1f150c]">{name || '—'}</p>
+      {sub ? <p className="text-[12.5px] text-[#5a4526]">{sub}</p> : null}
+      <div className="mt-1.5 space-y-0.5 text-[12.5px] leading-relaxed text-[#3d2f1c]">
+        {street.length ? street.map((l) => <p key={l}>{l}</p>) : <p className="text-[#a1906d]">No street address</p>}
+        {locality ? <p>{locality}</p> : null}
+        {clean(country) ? <p className="font-semibold">{countryName(country)}</p> : null}
+      </div>
+      {clean(phone) ? (
+        <p className="mt-2.5 border-t border-[#f2ecdf] pt-2 text-[12px] text-[#5a4526]">{clean(phone)}</p>
+      ) : null}
+    </>
   )
 }
 
-function Meta({ k, v }: { k: string; v: ReactNode }) {
+function ShipFrom({ order }: { order: OrderWithLines }) {
+  const name = clean(order.shipFromName) || clean(order.shipFromCompany)
+  const company = clean(order.shipFromCompany)
   return (
-    <div className="flex flex-col">
-      <dt className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">{k}</dt>
-      <dd className="font-medium text-slate-800">{v || '—'}</dd>
-    </div>
+    <Card
+      icon={<FiMapPin className="h-3.5 w-3.5" />}
+      title="Ship from"
+      aside={order.shipFromResolved ? <span className="rounded-full bg-[#f4eede] px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide text-[#6b5c42]">Warehouse</span> : null}
+    >
+      <Address
+        name={name}
+        sub={company && company !== name ? company : null}
+        lines={[order.shipFromAddr1, order.shipFromAddr2]}
+        city={order.shipFromCity}
+        state={order.shipFromState}
+        zip={order.shipFromZip}
+        country={order.shipFromCountryCd}
+        phone={order.shipFromPhone}
+      />
+    </Card>
+  )
+}
+
+function ShipTo({ order }: { order: OrderWithLines }) {
+  // Some feeds (D2C totes) put a bare sequence number in ship_name — the
+  // attention line is the real recipient then.
+  const shipName = clean(order.shipName)
+  const attn = clean(order.shipAttn)
+  const name = (shipName && !/^\d+$/.test(shipName) ? shipName : attn) || 'Consignee'
+  return (
+    <Card icon={<FiMapPin className="h-3.5 w-3.5" />} title="Ship to">
+      <Address
+        name={name}
+        sub={attn && attn !== name ? `Attn: ${attn}` : null}
+        lines={[order.shipAddr1, order.shipAddr2]}
+        city={order.shiptoCity}
+        state={order.shiptoState}
+        zip={order.shiptoZip}
+        country={order.shiptoCountryCd}
+        phone={order.phone}
+      />
+    </Card>
+  )
+}
+
+function Shipment({ order, account }: { order: OrderWithLines; account: OrderWithLinesPayload['carrierAccount'] }) {
+  const via = clean(order.shipviaCd)
+  const resolved = clean(order.ndsResolvedShipviaCd)
+  const unit = (order.weightUnit || 'LB').toLowerCase()
+  return (
+    <Card icon={<FiTruck className="h-3.5 w-3.5" />} title="Shipment">
+      {account ? (
+        <div className="mb-3 flex items-start gap-2.5 border-b border-[#f2ecdf] pb-3">
+          <span className="shrink-0 rounded-lg border border-[#efe7d6] bg-white p-1.5">
+            <CarrierLogo carrierId={account.carrierCode} size={16} className="rounded-sm" />
+          </span>
+          <div className="min-w-0">
+            <p className="truncate text-[13px] font-semibold text-[#1f150c]">{account.carrierName || formatCarrierName(account.carrierCode)}</p>
+            <p className="truncate text-[11.5px] text-[#6b5c42]" title={account.accountNumber || undefined}>
+              {[account.accountNumber, account.environment].filter(Boolean).join(' · ') || 'No account number'}
+            </p>
+            {account.accountCode && SCENARIO_LABEL[account.accountCode] ? (
+              <span className="mt-1 inline-block rounded-full bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700">{SCENARIO_LABEL[account.accountCode]}</span>
+            ) : null}
+          </div>
+        </div>
+      ) : (
+        <p className="mb-3 border-b border-[#f2ecdf] pb-3 text-[12px] font-semibold text-amber-700">
+          No carrier account resolved yet — set a company default or add carrier details.
+        </p>
+      )}
+      <Rows rows={[
+        ['Ship via', via && resolved && resolved !== via ? `${via} → ${resolved}` : via || resolved],
+        ['Weight', order.weight != null ? `${order.weight} ${unit}` : null],
+        ['Packages', order.packageCount && order.packageCount > 1 ? String(order.packageCount) : order.packageCount ? '1' : null],
+        ['Declared value', money(order.declaredValue)],
+        ['Goods', clean(order.goodsDesc)],
+      ]} />
+    </Card>
+  )
+}
+
+function CustomsSection({ customs, order }: { customs: OrderCustoms | null; order: OrderWithLines }) {
+  if (!customs) {
+    return (
+      <Card icon={<FiGlobe className="h-3.5 w-3.5" />} title="Customs">
+        <p className="flex items-center gap-2 text-[12.5px] text-amber-800">
+          <FiAlertTriangle className="h-4 w-4 shrink-0" />
+          No customs declaration is recorded for this international order.
+        </p>
+      </Card>
+    )
+  }
+  const currency = clean(customs.currency) || 'USD'
+  const unit = (clean(customs.weightUnit) || clean(order.weightUnit) || 'LB').toLowerCase()
+  const items = customs.items ?? []
+  // HS codes are optional (D2C feeds never carry one) — the column shows only when one is recorded.
+  const hasHs = items.some((it) => clean(it.hsCode))
+  const totals = items.reduce(
+    (t, it) => ({
+      qty: t.qty + (it.quantity ?? 0),
+      value: t.value + (it.quantity ?? 0) * (it.unitValue ?? 0),
+      weight: t.weight + (it.weight ?? 0),
+    }),
+    { qty: 0, value: 0, weight: 0 },
+  )
+  const importer = customs.importer
+  const importerLines = importer
+    ? [importer.name, customs.importerCompany, importer.line1, importer.line2,
+        [importer.city, [importer.state, importer.zip].filter(Boolean).join(' ')].filter(Boolean).join(', '),
+        importer.country ? countryName(importer.country) : null, importer.phone].map(clean).filter(Boolean)
+    : [clean(customs.importerCompany)].filter(Boolean)
+  const ids = [
+    customs.importerTaxId ? `Tax ID ${customs.importerTaxId}` : null,
+    customs.importerVat ? `VAT ${customs.importerVat}` : null,
+    customs.importerEori ? `EORI ${customs.importerEori}` : null,
+  ].filter(Boolean)
+  const reason = SHIPPING_PURPOSES.find((p) => p.value === customs.reasonForExport)?.label ?? clean(customs.reasonForExport)
+  const duties = customs.dutiesPaidBy ? (DUTIES_LABEL[customs.dutiesPaidBy] ?? customs.dutiesPaidBy) : null
+
+  return (
+    <Card
+      icon={<FiGlobe className="h-3.5 w-3.5" />}
+      title="Customs"
+      aside={<span className="text-[11px] text-[#a1906d]">{items.length} item{items.length === 1 ? '' : 's'} · {currency}</span>}
+    >
+      <div className={`grid gap-x-6 gap-y-3 ${importerLines.length || ids.length ? 'md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_14rem]' : 'md:grid-cols-2'}`}>
+        <Rows rows={[
+          ['Incoterms', clean(customs.incoterms)],
+          ['Reason', reason],
+          ['Duties paid by', duties && customs.dutiesAccount ? `${duties} · ${customs.dutiesAccount}` : duties],
+        ]} />
+        <Rows rows={[
+          ['FTR exemption', ftrExemptionLabel(customs.ftrExemption) || null],
+          ['AES ITN', clean(customs.aesCitation), true],
+          ['Export decl.', clean(customs.exportDeclarationReference), true],
+        ]} />
+        {importerLines.length || ids.length ? (
+          <div className="min-w-0 rounded-lg bg-[#fcfaf5] px-3 py-2 text-[12px] leading-relaxed text-[#3d2f1c]">
+            <p className="mb-0.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-[#a1906d]">Importer of record</p>
+            {importerLines.map((l, i) => <p key={i} className={i === 0 ? 'font-semibold text-[#1f150c]' : ''}>{l}</p>)}
+            {ids.map((l) => <p key={l} className="font-mono text-[11px] text-[#6b5c42]">{l}</p>)}
+          </div>
+        ) : null}
+      </div>
+      {clean(customs.notes) ? (
+        <p className="mt-3 rounded-lg bg-[#fcfaf5] px-3 py-2 text-[12px] text-[#5a4526]"><span className="font-semibold">Notes: </span>{customs.notes}</p>
+      ) : null}
+
+      {items.length ? (
+        <div className="mt-3.5 overflow-x-auto rounded-lg border border-[#efe7d6]">
+          <table className="w-full min-w-[640px] text-[12px] text-[#3d2f1c]">
+            <thead className="bg-[#fcfaf5] text-left text-[10px] font-semibold uppercase tracking-[0.08em] text-[#8a7a5a]">
+              <tr>
+                <th className="px-3 py-2">#</th>
+                <th className="px-3 py-2">Description</th>
+                {hasHs ? <th className="px-3 py-2">HS code</th> : null}
+                <th className="px-3 py-2">Origin</th>
+                <th className="px-3 py-2 text-right">Qty</th>
+                <th className="px-3 py-2 text-right">Unit value</th>
+                <th className="px-3 py-2 text-right">Weight</th>
+                <th className="px-3 py-2 text-right">Total</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#f2ecdf]">
+              {items.map((it, i) => (
+                <tr key={it.id ?? i} className="align-top">
+                  <td className="px-3 py-2 text-[#a1906d]">{i + 1}</td>
+                  <td className="px-3 py-2">
+                    <span className="font-medium text-[#1f150c]">{it.description || '—'}</span>
+                    {it.sku ? <span className="block font-mono text-[10.5px] text-[#a1906d]">SKU {it.sku}</span> : null}
+                  </td>
+                  {hasHs ? <td className="px-3 py-2 font-mono text-[11px]">{it.hsCode || <span className="text-[#cdbf9f]">—</span>}</td> : null}
+                  <td className="px-3 py-2">{it.countryOfOrigin || <span className="text-[#cdbf9f]">—</span>}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{it.quantity}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{money(it.unitValue, currency) ?? '—'}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{it.weight != null ? `${it.weight} ${unit}` : '—'}</td>
+                  <td className="px-3 py-2 text-right font-semibold tabular-nums text-[#1f150c]">{money((it.quantity ?? 0) * (it.unitValue ?? 0), currency)}</td>
+                </tr>
+              ))}
+            </tbody>
+            {items.length > 1 ? (
+              <tfoot className="border-t border-[#efe7d6] bg-[#fcfaf5] font-semibold text-[#1f150c]">
+                <tr>
+                  <td className="px-3 py-2" colSpan={hasHs ? 4 : 3}>Total</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{totals.qty}</td>
+                  <td />
+                  <td className="px-3 py-2 text-right tabular-nums">{`${Number(totals.weight.toFixed(3))} ${unit}`}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{money(totals.value, currency)}</td>
+                </tr>
+              </tfoot>
+            ) : null}
+          </table>
+        </div>
+      ) : (
+        <p className="mt-3 text-[12px] text-amber-800">The declaration has no commodity lines.</p>
+      )}
+    </Card>
+  )
+}
+
+function OrderLinesSection({ order }: { order: OrderWithLines }) {
+  const lines = order.orderLines
+  const hasHs = lines.some((l) => clean(l.hsCode))
+  const totals = {
+    qty: lines.reduce((s, l) => s + (l.qtyShipped ?? 0), 0),
+    value: lines.reduce((s, l) => s + (l.totalPrice ?? 0), 0),
+    customs: lines.reduce((s, l) => s + (l.customsDeclValue ?? 0), 0),
+  }
+  return (
+    <Card icon={<FiList className="h-3.5 w-3.5" />} title="Order lines" aside={<span className="text-[11px] text-[#a1906d]">{lines.length} line{lines.length === 1 ? '' : 's'}</span>}>
+      <div className="overflow-x-auto rounded-lg border border-[#efe7d6]">
+        <table className="w-full min-w-[640px] text-[12px] text-[#3d2f1c]">
+          <thead className="bg-[#fcfaf5] text-left text-[10px] font-semibold uppercase tracking-[0.08em] text-[#8a7a5a]">
+            <tr>
+              <th className="px-3 py-2">#</th>
+              <th className="px-3 py-2">Item</th>
+              <th className="px-3 py-2">Description</th>
+              {hasHs ? <th className="px-3 py-2">HS code</th> : null}
+              <th className="px-3 py-2">Origin</th>
+              <th className="px-3 py-2 text-right">Qty</th>
+              <th className="px-3 py-2 text-right">Unit</th>
+              <th className="px-3 py-2 text-right">Total</th>
+              <th className="px-3 py-2 text-right">Customs</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-[#f2ecdf]">
+            {lines.map((line) => (
+              <tr key={line.id} className="align-top">
+                <td className="px-3 py-2 text-[#a1906d]">{line.lineNo}</td>
+                <td className="px-3 py-2 font-mono text-[11px]">{line.itemNo || '—'}</td>
+                <td className="px-3 py-2">
+                  <span className="font-medium text-[#1f150c]">{line.itemDescription || line.description || '—'}</span>
+                  {line.hsDesc ? <span className="block text-[10.5px] text-[#a1906d]">{line.hsDesc}</span> : null}
+                </td>
+                {hasHs ? <td className="px-3 py-2 font-mono text-[11px]">{line.hsCode || '—'}</td> : null}
+                <td className="px-3 py-2">{line.countryOfOrigin || '—'}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{line.qtyShipped ?? '—'}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{money(line.unitPrice) ?? '—'}</td>
+                <td className="px-3 py-2 text-right font-semibold tabular-nums text-[#1f150c]">{money(line.totalPrice) ?? '—'}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-[#6b5c42]">{money(line.customsDeclValue) ?? '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+          {lines.length > 1 ? (
+            <tfoot className="border-t border-[#efe7d6] bg-[#fcfaf5] font-semibold text-[#1f150c]">
+              <tr>
+                <td className="px-3 py-2" colSpan={hasHs ? 5 : 4}>Total</td>
+                <td className="px-3 py-2 text-right tabular-nums">{totals.qty}</td>
+                <td />
+                <td className="px-3 py-2 text-right tabular-nums">{money(totals.value)}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-[#6b5c42]">{money(totals.customs)}</td>
+              </tr>
+            </tfoot>
+          ) : null}
+        </table>
+      </div>
+    </Card>
+  )
+}
+
+function PackagesSection({ order }: { order: OrderWithLines }) {
+  const packages = order.packages ?? []
+  return (
+    <Card icon={<FiPackage className="h-3.5 w-3.5" />} title="Packages" aside={<span className="text-[11px] text-[#a1906d]">{packages.length} pieces</span>}>
+      <div className="overflow-x-auto rounded-lg border border-[#efe7d6]">
+        <table className="w-full text-[12px] text-[#3d2f1c]">
+          <thead className="bg-[#fcfaf5] text-left text-[10px] font-semibold uppercase tracking-[0.08em] text-[#8a7a5a]">
+            <tr>
+              <th className="px-3 py-2">#</th>
+              <th className="px-3 py-2">Tracking</th>
+              <th className="px-3 py-2 text-right">Weight</th>
+              <th className="px-3 py-2 text-right">Dimensions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-[#f2ecdf]">
+            {packages.map((p, i) => (
+              <tr key={p.sequenceNumber ?? i}>
+                <td className="px-3 py-2 text-[#a1906d]">{p.sequenceNumber ?? i + 1}</td>
+                <td className="px-3 py-2 font-mono text-[11px]">
+                  {p.trackingUrl && p.trackingNumber
+                    ? <a href={p.trackingUrl} target="_blank" rel="noreferrer" className="underline decoration-[#cdbf9f] underline-offset-2 hover:text-[#1f150c]">{p.trackingNumber}</a>
+                    : p.trackingNumber || '—'}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums">{p.weight != null ? `${p.weight} ${(p.weightUnit || 'LB').toLowerCase()}` : '—'}</td>
+                <td className="px-3 py-2 text-right tabular-nums">
+                  {p.length && p.width && p.height ? `${p.length} × ${p.width} × ${p.height} ${(p.dimUnit || 'IN').toLowerCase()}` : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
   )
 }

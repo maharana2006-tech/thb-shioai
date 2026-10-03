@@ -164,7 +164,17 @@ export interface OrderWithLines {
   orderNo: number
   orderSuffix: number | null
   orderStatus: string | null
+  /** Display form of the order number (e.g. MAN-prefixed for manual orders). */
+  displayOrderNo?: string | null
+  custNo?: string | null
   customerReferenceId: string | null
+  /** Free-text reference on the order (DTC: "batch / tote"). */
+  customerRef?: string | null
+  /** Intake channel code, e.g. 'D2C'. */
+  orderChannel?: string | null
+  /** Ship-via NDS resolved the order to, when the order's own code was remapped. */
+  ndsResolvedShipviaCd?: string | null
+  isReturn?: string | null
   shipName: string | null
   shipAttn: string | null
   shipAddr1: string | null
@@ -554,6 +564,8 @@ export interface ManualShipmentItem {
 export interface ManualShipmentPayload {
   sender: ManualShipmentAddress
   recipient: ManualShipmentAddress
+  /** D2C | B2B — omitted lets the server classify from the recipient. */
+  channel?: 'D2C' | 'B2B'
   /** True = reverse/return label (customer ships back); false/omitted = normal outbound shipment. */
   isReturn?: boolean
   /** Return delivery type — PRINT | EMAIL. */

@@ -19,6 +19,7 @@ import { clientService, type Client } from '../api/clientService'
 import { customsProfileService, type CustomsProfile } from '../api/customsProfileService'
 import { shippingConfigService, type ShippingServiceItem, type PackagePreset, type ServicePackageLink } from '../api/shippingConfigService'
 import { customsService } from '../api/customsService'
+import { dtcService, type DtcOrder } from '../api/dtcService'
 import { mapCarrierErrorToFields, summarizeCarrierError } from '../utils/carrierErrorMap'
 import { type AddressValidationResponse } from '../api/addressValidationService'
 import { isDuplicateSave, recipientBookService, type SavedRecipient } from '../api/recipientBookService'
@@ -197,6 +198,20 @@ export default function NewShipmentPage() {
   /** True when the order being reopened is a VOIDED (reissue) rather than a failed one. */
   const [fixVoided, setFixVoided] = useState(false)
   const [fixLoading, setFixLoading] = useState<boolean>(!!fixOrderNo)
+  /** The fixed order's own channel, re-sent on regenerate so it isn't reclassified from the recipient. */
+  const [fixChannel, setFixChannel] = useState<'D2C' | 'B2B' | null>(null)
+  // D2C-line mode: /orders/new?dtcLine=11&batch=141&tenant=ARHDEV opens a D2C
+  // line whose label run failed before any order existed. The form is
+  // pre-filled from the line, and the label it buys is linked back to the line
+  // so the batch shows it as generated (and never buys it again).
+  const dtcLineId = (() => {
+    const n = Number(searchParams.get('dtcLine'))
+    return Number.isInteger(n) && n > 0 && !fixOrderNo ? n : null
+  })()
+  const dtcBatch = searchParams.get('batch') ?? ''
+  const dtcTenant = searchParams.get('tenant') ?? ''
+  const [dtcLine, setDtcLine] = useState<DtcOrder | null>(null)
+  const dtcAppliedRef = useRef(false)
 
   const [accounts, setAccounts] = useState<CarrierAccountRef[]>([])
   const [services, setServices] = useState<ShippingServiceItem[]>([])
@@ -1121,8 +1136,11 @@ export default function NewShipmentPage() {
         // phoneCountryCode from the loaded country instead of trusting a
         // stored value that may not match.
         const recipCountry = o.shiptoCountryCd ?? 'US'
+        // D2C feeds put a bare tote sequence ("9") in ship_name — the
+        // attention line is the real recipient then.
+        const bareNo = !!o.shipName && /^\d+$/.test(o.shipName.trim()) && !!o.shipAttn?.trim()
         setRecipient({
-          name: o.shipName ?? '', company: o.shipAttn ?? '', phone: o.phone ?? '', email: '',
+          name: (bareNo ? o.shipAttn : o.shipName) ?? '', company: bareNo ? '' : o.shipAttn ?? '', phone: o.phone ?? '', email: '',
           addressLine1: o.shipAddr1 ?? '', addressLine2: '', city: o.shiptoCity ?? '',
           state: o.shiptoState ?? '', postalCode: o.shiptoZip ?? '', countryCode: recipCountry,
           phoneCountryCode: dialCodeFor(recipCountry) || '',
@@ -1196,7 +1214,12 @@ export default function NewShipmentPage() {
         }
         setFixError(byId?.data?.errorDetails?.errorMessage ?? null)
         setFixVoided((byId?.data?.labelDetails?.status ?? '').toUpperCase() === 'VOIDED')
-        if (byId?.data?.orderDetails?.refOrderNumber) setReference(byId.data.orderDetails.refOrderNumber)
+        const ch = (o.orderChannel ?? '').toUpperCase()
+        setFixChannel(ch === 'D2C' || ch === 'B2B' ? ch : null)
+        // Older D2C orders stored "DTC batch 98.00 / tote 2".
+        if (byId?.data?.orderDetails?.refOrderNumber) {
+          setReference(byId.data.orderDetails.refOrderNumber.replace(/^(DTC batch \d+)\.0+(?=\s|$)/, '$1'))
+        }
       } catch (err) {
         if (!cancelled) notify.apiError(err, `Could not load order ${fixOrderNo} to fix.`)
       } finally {
@@ -1424,6 +1447,52 @@ export default function NewShipmentPage() {
     }
     if (client.defaultDimUnit === 'IN' || client.defaultDimUnit === 'CM') {
       setDimUnit(client.defaultDimUnit)
+    }
+  }
+
+  useEffect(() => {
+    if (!dtcLineId || !dtcBatch || !dtcTenant) return
+    let cancelled = false
+    dtcService.line(dtcBatch, dtcLineId, dtcTenant)
+      .then((res) => { if (!cancelled) setDtcLine(res.data) })
+      .catch((err) => { if (!cancelled) notify.apiError(err, `Could not load D2C line ${dtcLineId}.`) })
+    return () => { cancelled = true }
+  }, [dtcLineId, dtcBatch, dtcTenant])
+
+  // Apply the line once the client list is in, so the client's own ship-from
+  // and default carrier come through applyClient like a normal pick.
+  useEffect(() => {
+    if (!dtcLine || !clients.length || dtcAppliedRef.current) return
+    dtcAppliedRef.current = true
+    const o = dtcLine
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot prefill once the D2C line and the client list have both arrived
+    if (clients.some((c) => c.clientCode === o.tenantId)) applyClient(o.tenantId)
+    else setClientCode(o.tenantId)
+    const country = (o.shipToCountryCode || 'US').toUpperCase()
+    setRecipient({
+      name: o.shipName ?? '', company: o.shipAttn ?? '', phone: o.phone ?? '', email: o.email ?? '',
+      addressLine1: o.shipAddr1 ?? '',
+      addressLine2: [o.shipAddr2, o.shipAddr3].filter((l) => l && l.trim()).join(', '),
+      city: o.shipToCity ?? '', state: o.shipToState ?? '', postalCode: o.shipToZip ?? '', countryCode: country,
+      phoneCountryCode: dialCodeFor(country) || '',
+    })
+    if (o.weight != null && o.weight > 0) setWeight(String(o.weight))
+    setWeightUnit('LB')
+    setReference(`DTC batch ${Number(o.batchId)}${o.toteNumber ? ` / tote ${o.toteNumber}` : ''}`)
+    if (o.goodsDesc) {
+      setItems([{ ...blankItem(), description: o.goodsDesc, unitValue: o.unitValue != null ? String(o.unitValue) : '' }])
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot prefill; applyClient is recreated every render
+  }, [dtcLine, clients])
+
+  /** Link the label just bought to its D2C line. Best-effort: the label is bought either way. */
+  const linkDtcLine = async (orderNo: number) => {
+    if (!dtcLine) return
+    try {
+      await dtcService.editLine(String(dtcLine.batchId), dtcLine.id, dtcLine.tenantId, { adoptOrderNo: orderNo })
+      notify.success(`D2C line (tote ${dtcLine.toteNumber ?? dtcLine.id}) now carries order ${orderNo}.`)
+    } catch (err) {
+      notify.apiError(err, `Label ${orderNo} was bought, but linking it to the D2C line failed — link it from the batch page.`)
     }
   }
 
@@ -2558,6 +2627,9 @@ export default function NewShipmentPage() {
           }
         : {}),
       reference: reference.trim() || undefined,
+      // A D2C line ships to a consumer; its attention line lands in Company,
+      // which would otherwise classify the order as B2B.
+      ...(dtcLineId ? { channel: 'D2C' as const } : fixOrderNo && fixChannel ? { channel: fixChannel } : {}),
       // V76 — internal per-order ops note; omit when blank so the
       // wire only carries populated fields.
       ...(note.trim() ? { note: note.trim() } : {}),
@@ -2811,6 +2883,7 @@ export default function NewShipmentPage() {
         return
       }
       notify.success(res.message || 'Shipment label generated.')
+      if (orderNo && dtcLine) await linkDtcLine(orderNo)
       // (a) Auto-advance to the next queued NDS shipment. When the operator
       // scanned multiple orders, drop the just-saved chip from the queue and
       // load the next one in-place instead of navigating away. Empty queue
@@ -3210,6 +3283,21 @@ export default function NewShipmentPage() {
                     <p className="mt-0.5 text-[12px] text-amber-800">
                       The previous label was voided. Adjust anything below and regenerate — the order keeps its number and the
                       voided label stays on its history.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ) : dtcLineId ? (
+              <div className="rounded-xl border border-rose-300 bg-rose-50 px-4 py-3">
+                <div className="flex items-start gap-2.5">
+                  <FiAlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
+                  <div className="min-w-0">
+                    <p className="text-[13px] font-semibold text-rose-800">
+                      Fixing D2C line — batch {dtcBatch}{dtcLine?.toteNumber ? `, tote ${dtcLine.toteNumber}` : ''}{dtcLine?.orderNo != null ? `, order ${Number(dtcLine.orderNo)}` : ''}{dtcLine ? '' : ' — loading…'}
+                    </p>
+                    <p className="mt-0.5 break-words text-[12px] text-rose-700" title={dtcLine?.generatedMessage ?? undefined}>
+                      {dtcLine?.generatedMessage ? `Label run failed: ${summarizeCarrierError(dtcLine.generatedMessage)}. ` : ''}
+                      Correct the details below and generate — the label is linked back to the line.
                     </p>
                   </div>
                 </div>
