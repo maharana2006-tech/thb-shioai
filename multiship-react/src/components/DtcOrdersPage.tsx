@@ -44,6 +44,9 @@ export default function DtcOrdersPage() {
   const [syncing, setSyncing] = useState(false)
   /** Batch row currently running a generation job — its button shows progress. */
   const [activeJob, setActiveJob] = useState<{ key: string; jobId: number } | null>(null)
+  // The batch whose Generate was just clicked, until the server answers — a second
+  // click in that gap would queue a second run and buy every label twice.
+  const [startingKey, setStartingKey] = useState<string | null>(null)
   const [jobProgress, setJobProgress] = useState<{ processed: number; total: number; status: string } | null>(null)
 
   const load = useCallback(async () => {
@@ -150,6 +153,8 @@ export default function DtcOrdersPage() {
 
   const generate = async (b: DtcBatchStats) => {
     const key = rowKey(b)
+    if (startingKey === key || activeJob?.key === key) return
+    setStartingKey(key)
     try {
       const r = await dtcService.generate(String(b.batchId), b.tenantId)
       setActiveJob({ key, jobId: r.data.job.id })
@@ -162,6 +167,8 @@ export default function DtcOrdersPage() {
       } else {
         notify.apiError(e, 'Could not start label generation.')
       }
+    } finally {
+      setStartingKey(null)
     }
   }
 
@@ -244,7 +251,8 @@ export default function DtcOrdersPage() {
             type="button"
             title={`Generate shipping labels for batch ${b.batchId} (${b.pendingCount} pending)`}
             onClick={() => void generate(b)}
-            className="inline-flex items-center gap-1 rounded-lg bg-[#1f150c] px-2 py-1 text-[11px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#3a2a18]"
+            disabled={active || startingKey === rowKey(b)}
+            className="inline-flex items-center gap-1 rounded-lg bg-[#1f150c] px-2 py-1 text-[11px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#3a2a18] disabled:cursor-not-allowed disabled:opacity-60"
           >
             <FiZap className="h-3 w-3" />
             Generate
@@ -252,7 +260,7 @@ export default function DtcOrdersPage() {
         )
       },
     },
-  ], [activeJob, jobProgress, navigate])
+  ], [activeJob, jobProgress, navigate, startingKey])
 
   const filterLabel = 'block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400'
 

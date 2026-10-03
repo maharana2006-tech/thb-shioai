@@ -9,6 +9,7 @@ import {
   type DtcBatchDetail, type DtcOrder,
 } from '../api/dtcService'
 import { orderService } from '../api/orderService'
+import { ApiError } from '../api/apiClient'
 import { notify } from '../utils/notify'
 import { workspacePaths } from '../routes/workspaceRoutes'
 
@@ -39,6 +40,9 @@ export default function DtcBatchDetailPage() {
   const [data, setData] = useState<DtcBatchDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [activeJobId, setActiveJobId] = useState<number | null>(null)
+  // Locks Generate from the click until the server has answered — a second click
+  // in that gap would queue a second run and buy every label twice.
+  const [starting, setStarting] = useState(false)
   const [jobProgress, setJobProgress] = useState<{ processed: number; total: number; status: string } | null>(null)
   /** Order whose details the drill-down modal shows (set by the Order No cell). */
   const [detailsOrderNo, setDetailsOrderNo] = useState<number | null>(null)
@@ -85,11 +89,22 @@ export default function DtcBatchDetailPage() {
   }, [activeJobId, load])
 
   const generate = async () => {
+    if (starting || activeJobId) return
+    setStarting(true)
     try {
       const r = await dtcService.generate(batchId, tenantId)
       setActiveJobId(r.data.job.id)
     } catch (e) {
-      notify.apiError(e, 'Could not start label generation.')
+      // 409 — a run is already active for this batch; follow it instead.
+      const job = e instanceof ApiError ? (e.payload?.data as { job?: { id: number } } | undefined)?.job : undefined
+      if (e instanceof ApiError && e.status === 409 && job?.id) {
+        setActiveJobId(job.id)
+        notify.info('A generation run is already in progress for this batch — showing its progress.')
+      } else {
+        notify.apiError(e, 'Could not start label generation.')
+      }
+    } finally {
+      setStarting(false)
     }
   }
 
@@ -250,7 +265,7 @@ export default function DtcBatchDetailPage() {
         <button
           type="button"
           onClick={generate}
-          disabled={!!activeJobId}
+          disabled={!!activeJobId || starting}
           title="Generate shipping labels for every pending line in this batch"
           className="inline-flex items-center gap-1.5 rounded-lg bg-[#1f150c] px-2.5 py-1.5 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#3a2a18] disabled:opacity-60"
         >

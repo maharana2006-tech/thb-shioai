@@ -33,7 +33,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
@@ -121,9 +120,14 @@ public class DtcLabelGenerationService {
      * Enqueue a generation run for (tenant, batch). Refuses when an active
      * job already exists so a double-click can't buy the batch twice.
      *
+     * <p>The exists-check alone is a race — two requests can both pass it. The
+     * partial unique index from V128 (one QUEUED/RUNNING job per batch) is what
+     * actually stops the second one, so this method is deliberately not
+     * {@code @Transactional}: the insert flushes in its own transaction and the
+     * violation surfaces here, where it reads as "already active".
+     *
      * @return the queued job, or empty when one is already active
      */
-    @Transactional
     public Optional<DtcGenerationJob> enqueue(String tenantId, BigDecimal batchId, String requestedBy) {
         boolean active = jobRepository.existsByTenantIdAndBatchIdAndStatusIn(
                 tenantId, batchId, List.of(DtcGenerationJob.QUEUED, DtcGenerationJob.RUNNING));
@@ -139,7 +143,11 @@ public class DtcLabelGenerationService {
                 .findByTenantIdAndBatchId(tenantId, batchId,
                         org.springframework.data.domain.PageRequest.of(0, 1))
                 .getTotalElements());
-        return Optional.of(jobRepository.save(job));
+        try {
+            return Optional.of(jobRepository.saveAndFlush(job));
+        } catch (org.springframework.dao.DataIntegrityViolationException alreadyActive) {
+            return Optional.empty();
+        }
     }
 
     /**
