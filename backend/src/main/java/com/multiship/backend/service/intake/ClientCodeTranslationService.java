@@ -47,7 +47,7 @@ public class ClientCodeTranslationService {
         if (!hasBoth(clientCode, rawCode)) return Optional.empty();
         // Empty alias table for this client → they're not using shipvia
         // aliases; caller falls through to whatever legacy resolution it has
-        // (typically ShipViaMapping rules).
+        // (typically platform-wide ClientShipviaCodeMap rows).
         if (shipviaRepo.findByClientCodeIgnoreCaseOrderByErpCodeAsc(clientCode.trim()).isEmpty()) {
             return Optional.empty();
         }

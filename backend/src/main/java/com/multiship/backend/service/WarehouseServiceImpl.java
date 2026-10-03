@@ -161,7 +161,8 @@ public class WarehouseServiceImpl implements WarehouseService {
         if (ownerCheck != null) return ownerCheck;
 
         // Code is immutable — it's the linkage key to ClientWarehouse and
-        // ShipViaMapping rows. The mutable surface is name, address, owner, active.
+        // ClientShipviaCodeMap.warehouseId rows. The mutable surface is
+        // name, address, owner, active.
         w.setName(request.getName().trim());
         w.setAddress(toAddress(request.getAddress()));
         w.setOwnerType(normalize(request.getOwnerType()));

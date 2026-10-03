@@ -38,6 +38,7 @@ import java.util.List;
  * &gt; client+any+any &gt; global+country &gt; global+any.
  */
 @Entity
+@jakarta.persistence.EntityListeners(ImportRevalidationListener.class)
 @Table(name = "client_shipvia_code_map",
         indexes = @Index(name = "idx_client_shipvia_code_client", columnList = "client_code"))
 @Data

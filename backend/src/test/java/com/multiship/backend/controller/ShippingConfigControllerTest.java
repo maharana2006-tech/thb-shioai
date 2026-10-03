@@ -4,7 +4,6 @@ import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.ErrorCode;
 import com.multiship.backend.model.PackagePreset;
 import com.multiship.backend.model.ServicePackage;
-import com.multiship.backend.model.ShipViaMapping;
 import com.multiship.backend.model.ShippingService;
 import com.multiship.backend.service.ShippingConfigService;
 import org.junit.jupiter.api.BeforeEach;
@@ -58,8 +57,6 @@ import static org.mockito.Mockito.when;
  *   <li>GET    /shipping-services                  — catalog</li>
  *   <li>POST   /shipping-services/sync             — sync (ADMIN)</li>
  *   <li>PATCH  /shipping-services/{id}             — setEnabled</li>
- *   <li>PUT    /ship-method-rules                  — upsertRule</li>
- *   <li>DELETE /ship-method-rules/{id}             — deleteRule</li>
  *   <li>PUT    /shipping-services/{id}/packages    — setServicePackages</li>
  *   <li>GET    /package-presets                    — listPresets</li>
  *   <li>POST   /package-presets/sync               — syncPackages (ADMIN)</li>
@@ -255,66 +252,6 @@ class ShippingConfigControllerTest {
                 controller.setEnabled(99L, Map.of("enabled", true));
 
         assertEquals(HttpStatus.NOT_FOUND, re.getStatusCode());
-    }
-
-    // ================ PUT /ship-method-rules — upsertRule ================
-
-    @Test
-    void upsertRule_returns200_andPassesAll8FieldsPositionally() {
-        // Pin the positional 8-arg dispatch so a future field-add on
-        // ShipViaMapping doesn't silently shift arguments.
-        ShipViaMapping in = new ShipViaMapping();
-        in.setId(7L);
-        in.setShipviaCd("GROUND");
-        in.setClientCode("C001");
-        in.setDestType("COUNTRY");
-        in.setDestValue("US");
-        in.setServiceId(42L);
-        in.setAllowedPresetIds(List.of(1L, 2L));
-        in.setWarehouseIds(List.of(10L));
-        when(service.upsertRule(7L, "GROUND", "C001", "COUNTRY", "US", 42L,
-                List.of(1L, 2L), List.of(10L))).thenReturn(ok(in));
-
-        ResponseEntity<ApiResponse<ShipViaMapping>> re = controller.upsertRule(in);
-
-        assertEquals(HttpStatus.OK, re.getStatusCode());
-        assertNotNull(re.getBody().getData());
-        verify(service, times(1)).upsertRule(
-                eq(7L), eq("GROUND"), eq("C001"), eq("COUNTRY"),
-                eq("US"), eq(42L), eq(List.of(1L, 2L)), eq(List.of(10L)));
-    }
-
-    @Test
-    void upsertRule_validation422_isEchoed() {
-        ShipViaMapping in = new ShipViaMapping();
-        in.setShipviaCd("GROUND");
-        when(service.upsertRule(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(err(422, ErrorCode.VALIDATION_ERROR, "clientCode required"));
-
-        ResponseEntity<ApiResponse<ShipViaMapping>> re = controller.upsertRule(in);
-
-        assertEquals(HttpStatus.UNPROCESSABLE_CONTENT, re.getStatusCode());
-    }
-
-    // ================ DELETE /ship-method-rules/{id} — deleteRule ================
-
-    @Test
-    void deleteRule_returns200_andDelegatesOnce() {
-        when(service.deleteRule(3L, false)).thenReturn(ok(null));
-
-        ResponseEntity<ApiResponse<Void>> re = controller.deleteRule(3L, false);
-
-        assertEquals(HttpStatus.OK, re.getStatusCode());
-        verify(service, times(1)).deleteRule(3L, false);
-    }
-
-    @Test
-    void deleteRule_serviceError500_isEchoed() {
-        when(service.deleteRule(3L, false)).thenReturn(err(500, ErrorCode.VALIDATION_ERROR, "boom"));
-
-        ResponseEntity<ApiResponse<Void>> re = controller.deleteRule(3L, false);
-
-        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, re.getStatusCode());
     }
 
     // ================ PUT /shipping-services/{id}/packages — setServicePackages ================
@@ -535,16 +472,6 @@ class ShippingConfigControllerTest {
     }
 
     @Test
-    void preAuthorize_upsertRule_requiresAdminOrUser() throws NoSuchMethodException {
-        assertEquals("hasAnyRole('ADMIN', 'USER')", preAuth("upsertRule", ShipViaMapping.class).value());
-    }
-
-    @Test
-    void preAuthorize_deleteRule_requiresAdminOrUser() throws NoSuchMethodException {
-        assertEquals("hasAnyRole('ADMIN', 'USER')", preAuth("deleteRule", Long.class, boolean.class).value());
-    }
-
-    @Test
     void preAuthorize_setServicePackages_requiresAdminOrUser() throws NoSuchMethodException {
         assertEquals("hasAnyRole('ADMIN', 'USER')",
                 preAuth("setServicePackages", Long.class, List.class).value());
@@ -601,10 +528,6 @@ class ShippingConfigControllerTest {
                 .getAnnotation(PostMapping.class).value()[0].equals("/shipping-services/sync"));
         assertTrue(ShippingConfigController.class.getMethod("setEnabled", Long.class, Map.class)
                 .getAnnotation(PatchMapping.class).value()[0].equals("/shipping-services/{id}"));
-        assertTrue(ShippingConfigController.class.getMethod("upsertRule", ShipViaMapping.class)
-                .getAnnotation(PutMapping.class).value()[0].equals("/ship-method-rules"));
-        assertTrue(ShippingConfigController.class.getMethod("deleteRule", Long.class, boolean.class)
-                .getAnnotation(DeleteMapping.class).value()[0].equals("/ship-method-rules/{id}"));
         assertTrue(ShippingConfigController.class.getMethod("setServicePackages", Long.class, List.class)
                 .getAnnotation(PutMapping.class).value()[0].equals("/shipping-services/{id}/packages"));
         assertTrue(ShippingConfigController.class.getMethod("listPresets")
@@ -636,8 +559,6 @@ class ShippingConfigControllerTest {
         verify(service, never()).syncFromCarrier(any(), any());
         verify(service, never()).syncPackagesFromCarrier(any(), any());
         verify(service, never()).setServiceEnabled(anyLong(), anyBoolean());
-        verify(service, never()).upsertRule(any(), any(), any(), any(), any(), any(), any(), any());
-        verify(service, never()).deleteRule(any());
         verify(service, never()).setServicePackages(any(), any());
         verify(service, never()).listPresets();
         verify(service, never()).savePreset(any(), any());

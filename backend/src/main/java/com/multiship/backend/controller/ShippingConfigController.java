@@ -2,7 +2,6 @@ package com.multiship.backend.controller;
 
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.model.PackagePreset;
-import com.multiship.backend.model.ShipViaMapping;
 import com.multiship.backend.model.ShippingService;
 import com.multiship.backend.service.ShippingConfigService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -100,38 +99,10 @@ public class ShippingConfigController {
                 .build());
     }
 
-    @Operation(summary = "Create/update a ship-method rule (client + destination aware)",
-            description = "Optional allowedPresetIds sets the rule's default package options; empty = unrestricted at the rule level.")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
-    @PutMapping("/ship-method-rules")
-    public ResponseEntity<ApiResponse<ShipViaMapping>> upsertRule(@RequestBody ShipViaMapping body) {
-        ApiResponse<ShipViaMapping> r = service.upsertRule(
-                body.getId(), body.getShipviaCd(), body.getClientCode(),
-                body.getDestType(), body.getDestValue(), body.getServiceId(),
-                body.getAllowedPresetIds(), body.getWarehouseIds());
-        return ResponseEntity.status(r.getCode()).body(r);
-    }
-
-    @Operation(summary = "Delete a ship-method rule",
-            description = "withAliases also removes the per-client aliases for the same ship via code "
-                    + "(Settings → Code Maps). Left behind, they map the code through another screen, so "
-                    + "the code half-works after the rule is gone. The cascade preview reports the count.")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
-    @DeleteMapping("/ship-method-rules/{id}")
-    public ResponseEntity<ApiResponse<Void>> deleteRule(
-            @PathVariable Long id,
-            @RequestParam(defaultValue = "false") boolean withAliases) {
-        ApiResponse<Void> r = service.deleteRule(id, withAliases);
-        return ResponseEntity.status(r.getCode()).body(r);
-    }
-
-    @Operation(summary = "Preview cascade impact of deleting a ship-method rule (audit #297)")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
-    @GetMapping("/ship-method-rules/{id}/cascade-preview")
-    public ResponseEntity<ApiResponse<com.multiship.backend.dto.RuleCascadePreviewDTO>> previewRuleDelete(@PathVariable Long id) {
-        ApiResponse<com.multiship.backend.dto.RuleCascadePreviewDTO> r = service.previewRuleDelete(id);
-        return ResponseEntity.status(r.getCode()).body(r);
-    }
+    // V126 merge — ship-method-rule CRUD + cascade-preview endpoints
+    // deleted. Rules now share client_shipvia_code_map with the per-
+    // client ERP aliases and are managed via /settings/code-maps
+    // (ClientCodeMapController upsert for SHIPVIA kind).
 
     @Operation(summary = "Replace a service's allowed packages (+ discount %)")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")

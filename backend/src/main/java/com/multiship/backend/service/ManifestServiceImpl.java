@@ -268,8 +268,8 @@ public class ManifestServiceImpl implements ManifestService {
      *   <li>tracking → {@link OrderTracking#getOrderNo}</li>
      *   <li>orderNo → {@link Order#getShipviaCd} + tenant code</li>
      *   <li>tenant + shipviaCd → {@link com.multiship.backend.model.ClientShipviaCodeMap#getServiceId}
-     *       (per-client alias) OR {@link ShipViaMapping#getServiceId}
-     *       (global fallback)</li>
+     *       (per-client row wins; null clientCode row = platform-wide
+     *       fallback)</li>
      *   <li>serviceId → {@link ShippingService#isExpress}</li>
      * </ol>
      * Any miss returns empty — caller adds the tracking to failedToClassify.

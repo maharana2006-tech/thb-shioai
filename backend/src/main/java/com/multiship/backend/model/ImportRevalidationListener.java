@@ -16,7 +16,7 @@ public class ImportRevalidationListener {
             case Client c -> c.getClientCode();
             case CarrierAccountRef a -> a.getCustomerNo();   // blank: a platform account, usable by every client
             case ClientWarehouse w -> w.getClientCode();
-            case ShipViaMapping m -> m.getClientCode();      // blank: a rule for every client
+            case ClientShipviaCodeMap m -> m.getClientCode(); // V126 merge: null = platform-wide rule
             default -> null;
         };
         ImportRevalidator.settingsChanged(client);

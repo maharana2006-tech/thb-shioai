@@ -1,7 +1,7 @@
 package com.multiship.backend.config;
 
-import com.multiship.backend.model.ShipViaMapping;
-import com.multiship.backend.repository.ShipViaMappingRepository;
+import com.multiship.backend.model.ClientShipviaCodeMap;
+import com.multiship.backend.repository.ClientShipviaCodeMapRepository;
 import com.multiship.backend.repository.ShippingServiceRepository;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -18,6 +18,10 @@ import org.springframework.stereotype.Component;
  *    (syncPackagesFromCarrier) plus any custom boxes the admin creates by hand.
  * This keeps the Shipping Services and Packages pages free of demo/starter data,
  * per the client. Never touches data that already exists.
+ *
+ * <p>V126 merge: seed rows now land on {@code client_shipvia_code_map}
+ * (nullable clientCode = platform-wide rule); the pre-merge
+ * shipvia_service_mapping is gone.
  */
 @Component
 @RequiredArgsConstructor
@@ -26,7 +30,7 @@ public class ShippingConfigSeeder implements CommandLineRunner {
     private static final Logger log = LoggerFactory.getLogger(ShippingConfigSeeder.class);
 
     private final ShippingServiceRepository services;
-    private final ShipViaMappingRepository mappings;
+    private final ClientShipviaCodeMapRepository mappings;
 
     @Override
     public void run(String... args) {
@@ -34,15 +38,21 @@ public class ShippingConfigSeeder implements CommandLineRunner {
     }
 
     private void seedMappings() {
-        if (mappings.count() > 0) return;
+        // Only seed if NO platform-wide (null clientCode) rows exist yet.
+        // Per-client rows still beat these; they don't count as "already seeded".
+        if (mappings.findAllByOrderByErpCodeAsc().stream().anyMatch(m -> m.getClientCode() == null)) return;
         map("P80", "UPS", "03");
         map("F77", "FEDEX", "FEDEX_GROUND");
         map("L01", "USPS", "PRIORITY");
-        log.info("Seeded ERP ship-via mappings ({}).", mappings.count());
+        log.info("Seeded ERP ship-via mappings on client_shipvia_code_map.");
     }
 
     private void map(String shipvia, String carrier, String serviceCode) {
         services.findByCarrierIgnoreCaseAndServiceCodeIgnoreCase(carrier, serviceCode).ifPresent(s ->
-                mappings.save(ShipViaMapping.builder().shipviaCd(shipvia).serviceId(s.getId()).build()));
+                mappings.save(ClientShipviaCodeMap.builder()
+                        .erpCode(shipvia)
+                        .serviceId(s.getId())
+                        .isHold(false)
+                        .build()));
     }
 }

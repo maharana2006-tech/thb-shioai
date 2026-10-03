@@ -12,7 +12,7 @@ import lombok.NoArgsConstructor;
 /**
  * Payload for POST /warehouses and PUT /warehouses/{code}. The code is
  * immutable after creation — it links {@link com.multiship.backend.model.ClientWarehouse}
- * and {@link com.multiship.backend.model.ShipViaMapping} rows.
+ * and {@link com.multiship.backend.model.ClientShipviaCodeMap} rows.
  */
 @Data
 @Builder

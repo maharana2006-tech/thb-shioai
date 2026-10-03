@@ -4,11 +4,9 @@ import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.ErrorCode;
 import com.multiship.backend.model.PackagePreset;
 import com.multiship.backend.model.ServicePackage;
-import com.multiship.backend.model.ShipViaMapping;
 import com.multiship.backend.model.ShippingService;
 import com.multiship.backend.repository.PackagePresetRepository;
 import com.multiship.backend.repository.ServicePackageRepository;
-import com.multiship.backend.repository.ShipViaMappingRepository;
 import com.multiship.backend.model.CarrierAccountRef;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
 import com.multiship.backend.repository.ShippingServiceRepository;
@@ -47,14 +45,13 @@ import java.util.Optional;
 public class ShippingConfigService {
 
     private final ShippingServiceRepository serviceRepository;
-    private final ShipViaMappingRepository ruleRepository;
     private final PackagePresetRepository presetRepository;
     private final ServicePackageRepository servicePackageRepository;
-    private final com.multiship.backend.repository.ShipMethodRulePackageRepository rulePackageRepository;
-    /** Per-client code aliases — a second surface mapping the same ERP codes. */
+    /** V126 merge — rules + per-client aliases share this table. */
     private final com.multiship.backend.repository.ClientShipviaCodeMapRepository clientShipviaAliasRepository;
+    /** V127 merge — packaging allowlist sidecar; replaces ship_method_rule_package. */
+    private final com.multiship.backend.repository.ClientShipviaCodeMapPackageRepository clientShipviaMapPackageRepository;
     private final com.multiship.backend.repository.ClientServiceCodeMapRepository clientServiceAliasRepository;
-    private final com.multiship.backend.repository.ShipMethodRuleWarehouseRepository ruleWarehouseRepository;
     /** F5-B — strict client-scoped package selection needs the client's allowlist. */
     private final com.multiship.backend.repository.ClientAllowedPackageRepository clientAllowedPackageRepository;
     private final com.multiship.backend.repository.WarehouseRepository warehouseRepository;
@@ -69,11 +66,12 @@ public class ShippingConfigService {
     public record PickedPackage(PackagePreset preset) {}
 
     /**
-     * F5-B — a resolved route bundles the ship-method rule ID with the
-     * resolved carrier service. The rule ID drives the ShipMethodRulePackage
-     * lookup during package selection; the service drives the fit algorithm.
-     * Rule ID is null when the caller reached this route via the plain
-     * service-catalog fallback (no matching shipvia rule).
+     * F5-B — a resolved route bundles the matched shipvia-map ID with the
+     * resolved carrier service. The map ID drives the
+     * client_shipvia_code_map_package lookup during package selection; the
+     * service drives the fit algorithm. Map ID is null when the caller
+     * reached this route via the plain service-catalog fallback (no matching
+     * shipvia rule).
      */
     public record ResolvedRoute(Long ruleId, ShippingService service) {}
 
@@ -115,21 +113,23 @@ public class ShippingConfigService {
     public java.util.List<java.util.Map<String, Object>> shipViaCodesFor(String clientCode) {
         String client = StringUtils.hasText(clientCode) ? clientCode.trim().toUpperCase(Locale.ROOT) : null;
         java.util.Map<String, java.util.Map<String, Object>> byCode = new java.util.TreeMap<>();
-        for (ShipViaMapping rule : ruleRepository.findAllByOrderByShipviaCdAsc()) {
+        for (com.multiship.backend.model.ClientShipviaCodeMap rule
+                : clientShipviaAliasRepository.findAllByOrderByErpCodeAsc()) {
             String owner = rule.getClientCode() == null || rule.getClientCode().isBlank()
                     ? null : rule.getClientCode().trim().toUpperCase(Locale.ROOT);
             if (client != null && owner != null && !owner.equals(client)) continue;
             ShippingService svc = serviceRepository.findById(rule.getServiceId()).orElse(null);
             if (svc == null) continue;
             java.util.Map<String, Object> entry = new java.util.LinkedHashMap<>();
-            entry.put("code", rule.getShipviaCd().trim().toUpperCase(Locale.ROOT));
+            entry.put("code", rule.getErpCode().trim().toUpperCase(Locale.ROOT));
             entry.put("clientCode", owner);
             entry.put("carrier", svc.getCarrier());
             entry.put("serviceCode", svc.getServiceCode());
             entry.put("serviceName", svc.getName());
             entry.put("enabled", svc.isEnabled());
-            entry.put("destination", StringUtils.hasText(rule.getDestValue()) ? rule.getDestValue() : null);
-            // A client's own rule beats the global one for the same code.
+            entry.put("destination", StringUtils.hasText(rule.getDestCountry()) ? rule.getDestCountry()
+                    : StringUtils.hasText(rule.getDestRegion()) ? rule.getDestRegion() : null);
+            // A client's own rule beats a platform-wide (null-client) one.
             String key = (String) entry.get("code");
             if (owner != null || !byCode.containsKey(key)) byCode.put(key, entry);
         }
@@ -148,7 +148,7 @@ public class ShippingConfigService {
     @Transactional(readOnly = true)
     public boolean shipViaCodeExists(String code) {
         if (!StringUtils.hasText(code)) return false;
-        return !ruleRepository.findByShipviaCdIgnoreCase(code.trim()).isEmpty();
+        return !clientShipviaAliasRepository.findByErpCodeIgnoreCase(code.trim()).isEmpty();
     }
 
     public java.util.Optional<com.multiship.backend.model.ShippingService> resolveServiceCode(
@@ -264,12 +264,12 @@ public class ShippingConfigService {
                 ? serviceRepository.findByOriginCountryIgnoreCaseOrderByCarrierAscSortOrderAsc(originCountry.trim())
                 : serviceRepository.findAllByOrderByCarrierAscSortOrderAsc();
         data.put("services", services);
-        data.put("rules", ruleRepository.findAllByOrderByShipviaCdAsc());
+        // V126 merge — rules now live on client_shipvia_code_map. The
+        // rulePackages / ruleWarehouses sidecars that drove the deleted
+        // ShippingServiceMappingPage dropped from the response; FE page
+        // deletion lands in commit 4.
+        data.put("rules", clientShipviaAliasRepository.findAllByOrderByErpCodeAsc());
         data.put("links", servicePackageRepository.findAll());
-        // Phase 6: allowed-packages per ship-method rule, flat list; frontend
-        // groups by rule_id for display.
-        data.put("rulePackages", rulePackageRepository.findAll());
-        data.put("ruleWarehouses", ruleWarehouseRepository.findAll());
         data.put("originCountries", serviceRepository.findDistinctOriginCountries());
         return success("Shipping catalog retrieved.", data);
     }
@@ -579,9 +579,12 @@ public class ShippingConfigService {
         // Switching a service off doesn't delete anything, but every rule and
         // alias pointing at it silently stops matching — the ship via code
         // then fails at upload with no clue why. Say how much that is.
-        long rules = ruleRepository.findByServiceId(id).size();
-        long aliases = (clientShipviaAliasRepository == null ? 0 : clientShipviaAliasRepository.countByServiceId(id))
-                + (clientServiceAliasRepository == null ? 0 : clientServiceAliasRepository.countByServiceId(id));
+        // V126 merge — rules + shipvia aliases now share client_shipvia_code_map,
+        // so the previous "rules + aliases" split collapses to one count.
+        long rules = clientShipviaAliasRepository == null ? 0
+                : clientShipviaAliasRepository.countByServiceId(id);
+        long aliases = clientServiceAliasRepository == null ? 0
+                : clientServiceAliasRepository.countByServiceId(id);
         String tail = rules + aliases == 0 ? "" :
                 " " + rules + " ship via rule" + (rules == 1 ? "" : "s")
                 + " and " + aliases + " ERP code alias" + (aliases == 1 ? "" : "es")
@@ -611,150 +614,10 @@ public class ShippingConfigService {
     }
 
     // ===== Ship-method rules =====
-
-    @Transactional
-    public ApiResponse<ShipViaMapping> upsertRule(Long id, String shipviaCd, String clientCode,
-                                                  String destType, String destValue, Long serviceId,
-                                                  List<Long> allowedPresetIds, List<Long> warehouseIds) {
-        String code = norm(shipviaCd);
-        if (code.isEmpty()) {
-            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
-                    "An order ship-method code is required.");
-        }
-        ShippingService svc = serviceId != null ? serviceRepository.findById(serviceId).orElse(null) : null;
-        if (svc == null) {
-            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR, "Pick a valid carrier service.");
-        }
-        String client = StringUtils.hasText(clientCode) ? clientCode.trim().toUpperCase(Locale.ROOT) : null;
-        String type = StringUtils.hasText(destType) ? destType.trim().toUpperCase(Locale.ROOT) : "ANY";
-        if (!List.of("ANY", "COUNTRIES", "REGION", "COUNTRY").contains(type)) {
-            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
-                    "Destination type must be ANY or COUNTRIES.");
-        }
-        String value;
-        if ("ANY".equals(type)) {
-            value = null;
-        } else if ("COUNTRIES".equals(type)) {
-            // Normalize the zone: uppercase, de-dupe, sorted, space-separated.
-            value = !StringUtils.hasText(destValue) ? null
-                    : java.util.Arrays.stream(destValue.trim().toUpperCase(Locale.ROOT).split("[\\s,]+"))
-                            .filter(StringUtils::hasText).distinct().sorted()
-                            .reduce((a, b) -> a + " " + b).orElse(null);
-        } else {
-            value = StringUtils.hasText(destValue)
-                    ? ("COUNTRY".equals(type) ? destValue.trim().toUpperCase(Locale.ROOT) : destValue.trim())
-                    : null;
-        }
-        if (!"ANY".equals(type) && value == null) {
-            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
-                    "Pick at least one destination country for this rule.");
-        }
-
-        // One rule per (code, client, destination) — duplicates would make
-        // resolution ambiguous.
-        Optional<ShipViaMapping> clash = ruleRepository.findByShipviaCdIgnoreCase(code).stream()
-                .filter(r -> Objects.equals(r.getClientCode(), client)
-                        && normType(r).equals(type)
-                        && Objects.equals(r.getDestValue(), value))
-                .findFirst();
-        if (clash.isPresent() && (id == null || !clash.get().getId().equals(id))) {
-            return failure(HttpStatus.CONFLICT, ErrorCode.VALIDATION_ERROR,
-                    "A rule for this code + client + destination already exists — edit that one instead.");
-        }
-
-        ShipViaMapping rule = id != null ? ruleRepository.findById(id).orElse(null)
-                : ShipViaMapping.builder().build();
-        if (rule == null) {
-            return failure(HttpStatus.NOT_FOUND, ErrorCode.VALIDATION_ERROR, "Rule not found.");
-        }
-        rule.setShipviaCd(code);
-        rule.setClientCode(client);
-        rule.setDestType(type);
-        rule.setDestValue(value);
-        rule.setServiceId(svc.getId());
-        ruleRepository.save(rule);
-
-        // Phase 6 — allowed packages on the rule. Diff-free replace: wipe
-        // then insert. Flush the delete first so uq_rule_package doesn't
-        // trip when a preset is re-linked in the same call.
-        List<Long> ids = allowedPresetIds == null ? List.of()
-                : allowedPresetIds.stream()
-                        .filter(java.util.Objects::nonNull)
-                        .distinct()
-                        .filter(presetRepository::existsById)
-                        .toList();
-        rulePackageRepository.deleteAllByRuleId(rule.getId());
-        rulePackageRepository.flush();
-        // Batched insert (perf audit): single saveAll instead of N loop-saves.
-        rulePackageRepository.saveAll(ids.stream()
-                .map(presetId -> com.multiship.backend.model.ShipMethodRulePackage.builder()
-                        .ruleId(rule.getId()).presetId(presetId).build())
-                .toList());
-
-        // Origin warehouses on the rule — same diff-free replace as packages.
-        // Empty warehouseIds = "any warehouse" (matches legacy rules).
-        List<Long> whIds = warehouseIds == null ? List.of()
-                : warehouseIds.stream()
-                        .filter(java.util.Objects::nonNull)
-                        .distinct()
-                        .filter(warehouseRepository::existsById)
-                        .toList();
-        ruleWarehouseRepository.deleteAllByRuleId(rule.getId());
-        ruleWarehouseRepository.flush();
-        // Batched insert (perf audit): single saveAll instead of N loop-saves.
-        ruleWarehouseRepository.saveAll(whIds.stream()
-                .map(whId -> com.multiship.backend.model.ShipMethodRuleWarehouse.builder()
-                        .ruleId(rule.getId()).warehouseId(whId).build())
-                .toList());
-
-        // Weight fit: warn (don't block) when a linked preset's max weight
-        // exceeds the service's carrier cap. Normalise kg → lb.
-        List<String> warnings = weightWarnings(svc, ids);
-        String base = "Rule saved: " + code + " → " + svc.getName() + ".";
-        String msg = warnings.isEmpty() ? base
-                : base + " " + String.join(" ", warnings);
-        return success(msg, rule);
-    }
-
-    @Transactional
-    public ApiResponse<Void> deleteRule(Long id) {
-        return deleteRule(id, false);
-    }
-
-    /**
-     * @param withAliases also remove the per-client aliases for the same ship
-     *        via code (Settings → Code Maps). They map the same code through a
-     *        different screen, so leaving them behind makes a deleted code
-     *        half-work: the importer refuses it while the API path still
-     *        translates it. Off by default — the caller decides, after
-     *        {@link #previewRuleDelete} has shown the count.
-     */
-    @Transactional
-    public ApiResponse<Void> deleteRule(Long id, boolean withAliases) {
-        int[] aliasesRemoved = {0};
-        String[] removed = {null};
-        String[] removedClient = {null};
-        ruleRepository.findById(id).ifPresent(rule -> {
-            removed[0] = rule.getShipviaCd();
-            removedClient[0] = StringUtils.hasText(rule.getClientCode()) ? rule.getClientCode().trim() : null;
-            if (withAliases && StringUtils.hasText(rule.getShipviaCd())) {
-                List<com.multiship.backend.model.ClientShipviaCodeMap> aliases =
-                        aliasesForRule(rule);
-                aliasesRemoved[0] = aliases.size();
-                clientShipviaAliasRepository.deleteAll(aliases);
-            }
-            // Cascade the rule's allowed-package rows so we don't leave
-            // orphans that break the uq index on future re-adds.
-            rulePackageRepository.deleteAllByRuleId(rule.getId());
-            ruleWarehouseRepository.deleteAllByRuleId(rule.getId());
-            ruleRepository.delete(rule);
-        });
-        return success(aliasesRemoved[0] == 0
-                ? (removed[0] == null ? "Rule removed." : "Removed the " + removed[0] + " mapping.")
-                : "Removed the " + removed[0] + " mapping and its " + aliasesRemoved[0]
-                    + " ERP code alias" + (aliasesRemoved[0] == 1 ? "" : "es")
-                    + (removedClient[0] == null ? "" : " for " + removedClient[0]) + ".", null);
-    }
+    // V126 merge — upsertRule / deleteRule / previewRuleDelete deleted.
+    // Rules now share client_shipvia_code_map with the per-client aliases,
+    // managed via ClientCodeMapServiceImpl.upsert (SHIPVIA kind) and the
+    // existing /settings/code-maps page.
 
     /**
      * The service a rule maps this code to, ignoring whether it is enabled.
@@ -766,86 +629,17 @@ public class ShippingConfigService {
     @Transactional(readOnly = true)
     public java.util.Optional<ShippingService> mappedServiceIgnoringEnabled(String clientCode, String code) {
         if (!StringUtils.hasText(code)) return java.util.Optional.empty();
-        String client = StringUtils.hasText(clientCode) ? clientCode.trim() : null;
-        return ruleRepository.findByShipviaCdIgnoreCase(code.trim()).stream()
-                .filter(r -> r.getServiceId() != null)
-                // A client's own rule first, then a rule that covers everyone.
-                .sorted(java.util.Comparator.comparingInt(r ->
-                        StringUtils.hasText(r.getClientCode()) ? 0 : 1))
-                .filter(r -> !StringUtils.hasText(r.getClientCode())
-                        || (client != null && r.getClientCode().trim().equalsIgnoreCase(client)))
+        // findMatches sorts per-client rows above platform-wide rows, so
+        // first-hit = best-hit (same semantic as the pre-merge "client's own
+        // rule first, then any-client rule"). Pass null for warehouse/dest
+        // so we don't require them for the "is this code mapped at all" check.
+        return clientShipviaAliasRepository
+                .findMatches(StringUtils.hasText(clientCode) ? clientCode.trim() : null,
+                             code.trim(), null, null, null)
+                .stream()
                 .map(r -> serviceRepository.findById(r.getServiceId()).orElse(null))
                 .filter(java.util.Objects::nonNull)
                 .findFirst();
-    }
-
-    /**
-     * The per-client aliases that map the same ship via code as this rule.
-     * A client rule matches that client's aliases; a global rule (no client)
-     * matches every client's alias for the code.
-     */
-    private List<com.multiship.backend.model.ClientShipviaCodeMap> aliasesForRule(ShipViaMapping rule) {
-        if (clientShipviaAliasRepository == null || !StringUtils.hasText(rule.getShipviaCd())) return List.of();
-        String owner = StringUtils.hasText(rule.getClientCode())
-                ? rule.getClientCode().trim() : null;
-        return clientShipviaAliasRepository.findByErpCodeIgnoreCase(rule.getShipviaCd().trim()).stream()
-                .filter(a -> owner == null || (a.getClientCode() != null && a.getClientCode().trim().equalsIgnoreCase(owner)))
-                .toList();
-    }
-
-    /**
-     * Sprint 55 audit #297 — preview the cascade impact of deleting a
-     * shipping mapping rule. Frontend uses the counts to render a
-     * confirmation dialog before committing (mirrors the /clients
-     * cascade preview pattern).
-     */
-    @Transactional(readOnly = true)
-    public ApiResponse<com.multiship.backend.dto.RuleCascadePreviewDTO> previewRuleDelete(Long id) {
-        ShipViaMapping rule = ruleRepository.findById(id).orElse(null);
-        if (rule == null) {
-            return failure(HttpStatus.NOT_FOUND, ErrorCode.INTERNAL_ERROR,
-                    "Ship-method rule " + id + " not found.");
-        }
-        long packageCount = rulePackageRepository.countByRuleId(id);
-        long warehouseCount = ruleWarehouseRepository.countByRuleId(id);
-        long aliasCount = aliasesForRule(rule).size();
-        // Rules other than this one that still cover the code. None means the
-        // code stops resolving: every file carrying it starts failing at upload.
-        long otherRules = StringUtils.hasText(rule.getShipviaCd())
-                ? ruleRepository.findByShipviaCdIgnoreCase(rule.getShipviaCd().trim()).stream()
-                        .filter(r -> !r.getId().equals(id))
-                        .count()
-                : 0L;
-        // Which rule takes over, and what it ships. Deleting a client's rule
-        // while a global one exists moves those shipments to another carrier
-        // without a word, which is a surprise worth preventing.
-        String fallsBackTo = null;
-        if (otherRules > 0 && StringUtils.hasText(rule.getShipviaCd())) {
-            fallsBackTo = ruleRepository.findByShipviaCdIgnoreCase(rule.getShipviaCd().trim()).stream()
-                    .filter(r -> !r.getId().equals(id) && r.getServiceId() != null)
-                    .sorted(java.util.Comparator.comparingInt(r -> StringUtils.hasText(r.getClientCode()) ? 0 : 1))
-                    .map(r -> {
-                        ShippingService svc = serviceRepository.findById(r.getServiceId()).orElse(null);
-                        if (svc == null) return null;
-                        String owner = StringUtils.hasText(r.getClientCode())
-                                ? "the " + r.getClientCode().trim() + " rule" : "the Any client rule";
-                        return owner + " — " + svc.getName() + " (" + svc.getCarrier() + " " + svc.getServiceCode() + ")";
-                    })
-                    .filter(java.util.Objects::nonNull)
-                    .findFirst()
-                    .orElse(null);
-        }
-        com.multiship.backend.dto.RuleCascadePreviewDTO body =
-                com.multiship.backend.dto.RuleCascadePreviewDTO.builder()
-                        .ruleId(id)
-                        .shipviaCd(rule.getShipviaCd())
-                        .allowedPackageCount(packageCount)
-                        .allowedWarehouseCount(warehouseCount)
-                        .clientAliasCount(aliasCount)
-                        .otherRulesForCode(otherRules)
-                        .fallsBackTo(fallsBackTo)
-                        .build();
-        return success("Cascade preview computed.", body);
     }
 
     /**
@@ -1122,12 +916,12 @@ public class ShippingConfigService {
 
     /**
      * F5-B — same resolution as {@link #resolveService} but returns the
-     * matched ship-method rule ID alongside the service. Callers that need
-     * to enforce per-rule package restrictions (ShipMethodRulePackage)
-     * during {@link #pickPackage} use this variant so the rule ID threads
-     * through in a single traversal.
+     * matched shipvia-map ID alongside the service. Callers that need
+     * to enforce per-rule package restrictions
+     * (client_shipvia_code_map_package) during {@link #pickPackage} use
+     * this variant so the map ID threads through in a single traversal.
      *
-     * <p>Rule ID is null when the resolution reached the service via the
+     * <p>Map ID is null when the resolution reached the service via the
      * carrier-catalog scope fallback (no matching shipvia rule fired).
      */
     @Transactional(readOnly = true)
@@ -1135,73 +929,30 @@ public class ShippingConfigService {
                                                 String orderService, String destCountry,
                                                 boolean international, String originCountry,
                                                 Long orderWarehouseId) {
-        // First try the rule-based resolution — captures the ruleId if a
-        // shipvia rule matches. Mirrors the internal composition of
-        // resolveService (rule first, then scope fallback).
-        Optional<ShipViaMapping> ruleMatch = resolveRuleRow(clientCode, orderService, destCountry, orderWarehouseId);
-        if (ruleMatch.isPresent()) {
-            ShipViaMapping rule = ruleMatch.get();
-            Optional<ShippingService> svc = serviceRepository.findById(rule.getServiceId())
-                    .filter(ShippingService::isEnabled);
-            if (svc.isPresent() && (canonicalCarrier == null
-                    || canonicalCarrier.equalsIgnoreCase(svc.get().getCarrier()))) {
-                return Optional.of(new ResolvedRoute(rule.getId(), svc.get()));
+        // V126 merge — rule-first resolution via findMatches. The repo
+        // query orders per-client > warehouse > country, so the first
+        // enabled match that lines up with the carrier wins. Falls back
+        // to scope resolution when no rule row matches (ruleId = null).
+        if (StringUtils.hasText(orderService)) {
+            String region = CountryRegions.regionOf(destCountry);
+            String dest = StringUtils.hasText(destCountry)
+                    ? destCountry.trim().toUpperCase(Locale.ROOT)
+                    : null;
+            for (com.multiship.backend.model.ClientShipviaCodeMap rule
+                    : clientShipviaAliasRepository.findMatches(
+                            StringUtils.hasText(clientCode) ? clientCode.trim() : null,
+                            orderService.trim(), orderWarehouseId, dest, region)) {
+                Optional<ShippingService> svc = serviceRepository.findById(rule.getServiceId())
+                        .filter(ShippingService::isEnabled);
+                if (svc.isPresent() && (canonicalCarrier == null
+                        || canonicalCarrier.equalsIgnoreCase(svc.get().getCarrier()))) {
+                    return Optional.of(new ResolvedRoute(rule.getId(), svc.get()));
+                }
             }
         }
-        // Fallback to scope resolution — no rule matched, so ruleId is null.
         return resolveService(canonicalCarrier, clientCode, orderService, destCountry,
                 international, originCountry, orderWarehouseId)
                 .map(s -> new ResolvedRoute(null, s));
-    }
-
-    /**
-     * F5-B — internal variant of {@link #resolveRule} that returns the
-     * winning {@link ShipViaMapping} row itself instead of the joined
-     * service. Callers that need the rule ID for downstream lookups
-     * (ShipMethodRulePackage) use this via {@link #resolveRoute}.
-     */
-    private Optional<ShipViaMapping> resolveRuleRow(String clientCode, String orderService,
-                                                     String destCountry, Long orderWarehouseId) {
-        if (!StringUtils.hasText(orderService)) return Optional.empty();
-        String client = StringUtils.hasText(clientCode) ? clientCode.trim().toUpperCase(Locale.ROOT) : null;
-        String region = CountryRegions.regionOf(destCountry);
-        String dest = destCountry != null ? destCountry.trim().toUpperCase(Locale.ROOT) : "";
-
-        List<ShipViaMapping> candidates = ruleRepository.findByShipviaCdIgnoreCase(orderService.trim());
-        if (candidates.isEmpty()) return Optional.empty();
-
-        List<Long> ruleIds = candidates.stream()
-                .map(ShipViaMapping::getId)
-                .filter(Objects::nonNull)
-                .toList();
-        java.util.Map<Long, java.util.Set<Long>> warehousesByRule = new java.util.HashMap<>();
-        if (!ruleIds.isEmpty()) {
-            for (var link : ruleWarehouseRepository.findByRuleIdIn(ruleIds)) {
-                warehousesByRule
-                        .computeIfAbsent(link.getRuleId(), k -> new java.util.HashSet<>())
-                        .add(link.getWarehouseId());
-            }
-        }
-
-        return candidates.stream()
-                .filter(r -> r.getClientCode() == null || r.getClientCode().equalsIgnoreCase(client == null ? "" : client))
-                .filter(r -> switch (normType(r)) {
-                    case "COUNTRIES" -> !dest.isEmpty() && r.getDestValue() != null
-                            && (" " + r.getDestValue() + " ").contains(" " + dest + " ");
-                    case "COUNTRY" -> !dest.isEmpty() && dest.equalsIgnoreCase(r.getDestValue());
-                    case "REGION" -> region.equalsIgnoreCase(r.getDestValue());
-                    default -> true;
-                })
-                .filter(r -> warehouseMatches(r, warehousesByRule.get(r.getId()), orderWarehouseId))
-                .max(Comparator
-                        .comparingInt((ShipViaMapping r) -> (r.getClientCode() != null ? 8 : 0)
-                                + (warehouseRestricted(r, warehousesByRule.get(r.getId())) ? 4 : 0)
-                                + (switch (normType(r)) {
-                                    case "COUNTRIES", "COUNTRY" -> 2;
-                                    case "REGION" -> 1;
-                                    default -> 0;
-                                }))
-                        .thenComparing(Comparator.comparing(ShipViaMapping::getId).reversed()));
     }
 
     /**
@@ -1272,8 +1023,8 @@ public class ShippingConfigService {
      *     )
      *   ∩ (
      *       (ruleId == null) OR
-     *       (rule has no ShipMethodRulePackage rows) OR
-     *       ShipMethodRulePackage(ruleId).contains(preset.id)
+     *       (map has no client_shipvia_code_map_package rows) OR
+     *       client_shipvia_code_map_package(mapId).contains(preset.id)
      *                                              (per-lane package restrictions
      *                                               from the resolved shipvia rule)
      *     )
@@ -1327,15 +1078,16 @@ public class ShippingConfigService {
         // populating ClientAllowedPackage. The truly-empty case fails later
         // when candidates.isEmpty() with the appropriate message.
 
-        // Step 2: rule-level restrictions (Phase 6). Only enforced when the
-        // rule actually has ShipMethodRulePackage rows. No rows = no per-rule
-        // restriction on this lane (behaves like unrestricted).
+        // Step 2: rule-level restrictions (Phase 6; V126 merge: now
+        // backed by client_shipvia_code_map_package instead of the
+        // deleted ship_method_rule_package sidecar). Only enforced when
+        // the rule actually has sidecar rows. No rows = unrestricted.
         final java.util.Set<Long> rulePresetIds;
         if (ruleId != null) {
-            java.util.Set<Long> rp = rulePackageRepository
-                    .findByRuleIdOrderByPresetIdAsc(ruleId)
+            java.util.Set<Long> rp = clientShipviaMapPackageRepository
+                    .findByMapId(ruleId)
                     .stream()
-                    .map(com.multiship.backend.model.ShipMethodRulePackage::getPresetId)
+                    .map(com.multiship.backend.model.ClientShipviaCodeMapPackage::getPresetId)
                     .filter(Objects::nonNull)
                     .collect(java.util.stream.Collectors.toSet());
             rulePresetIds = rp.isEmpty() ? null : rp;   // null = unrestricted
@@ -1473,10 +1225,6 @@ public class ShippingConfigService {
     }
 
     // ===== helpers =====
-
-    private String normType(ShipViaMapping r) {
-        return r.getDestType() == null || r.getDestType().isBlank() ? "ANY" : r.getDestType().toUpperCase(Locale.ROOT);
-    }
 
     private String norm(String v) { return v != null ? v.trim().toUpperCase(Locale.ROOT) : ""; }
 

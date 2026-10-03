@@ -1,18 +1,18 @@
 package com.multiship.backend.service;
 
 import com.multiship.backend.model.ClientAllowedPackage;
+import com.multiship.backend.model.ClientShipviaCodeMapPackage;
 import com.multiship.backend.model.PackagePreset;
 import com.multiship.backend.model.ServicePackage;
-import com.multiship.backend.model.ShipMethodRulePackage;
 import com.multiship.backend.model.ShippingService;
+import com.multiship.backend.repository.CarrierAccountRefRepository;
 import com.multiship.backend.repository.ClientAllowedPackageRepository;
+import com.multiship.backend.repository.ClientServiceCodeMapRepository;
+import com.multiship.backend.repository.ClientShipviaCodeMapPackageRepository;
+import com.multiship.backend.repository.ClientShipviaCodeMapRepository;
 import com.multiship.backend.repository.PackagePresetRepository;
 import com.multiship.backend.repository.ServicePackageRepository;
-import com.multiship.backend.repository.ShipMethodRulePackageRepository;
-import com.multiship.backend.repository.ShipMethodRuleWarehouseRepository;
-import com.multiship.backend.repository.ShipViaMappingRepository;
 import com.multiship.backend.repository.ShippingServiceRepository;
-import com.multiship.backend.repository.CarrierAccountRefRepository;
 import com.multiship.backend.repository.WarehouseRepository;
 import com.multiship.backend.service.carriers.CarrierConnector;
 import org.junit.jupiter.api.BeforeEach;
@@ -26,19 +26,23 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * F5-B regression tests for the new strict client-scoped package selector
+ * F5-B regression tests for the client-scoped package selector
  * {@link ShippingConfigService#pickPackageForClient(Long, Long, String, java.math.BigDecimal)}.
+ *
+ * <p>V126 merge note — per-lane package restrictions moved from
+ * ShipMethodRulePackage onto the sidecar {@link ClientShipviaCodeMapPackage}
+ * table ({@code map_id, preset_id}). The {@code ruleId} parameter is now a
+ * {@code ClientShipviaCodeMap} id.
  *
  * <p>Contract locked with the user:
  * <ol>
  *   <li>Candidate pool = ServicePackage ∩ (ClientAllowedPackage OR client-owned) ∩
- *       (rule package restrictions if any) ∩ enabled ∩ fits-by-weight</li>
+ *       (per-lane package restrictions if any) ∩ enabled ∩ fits-by-weight</li>
  *   <li>Empty candidates → {@link ShippingConfigService.PackageResolutionException}
  *       with a diagnostic message naming the failed constraint</li>
  *   <li>No silent fallback to a global default preset (pre-fix behavior)</li>
@@ -48,11 +52,11 @@ import static org.mockito.Mockito.when;
 class ShippingConfigServicePickPackageForClientTest {
 
     private ShippingServiceRepository serviceRepository;
-    private ShipViaMappingRepository ruleRepository;
     private PackagePresetRepository presetRepository;
     private ServicePackageRepository servicePackageRepository;
-    private ShipMethodRulePackageRepository rulePackageRepository;
-    private ShipMethodRuleWarehouseRepository ruleWarehouseRepository;
+    private ClientShipviaCodeMapRepository clientShipviaAliasRepository;
+    private ClientShipviaCodeMapPackageRepository clientShipviaMapPackageRepository;
+    private ClientServiceCodeMapRepository clientServiceAliasRepository;
     private ClientAllowedPackageRepository clientAllowedPackageRepository;
     private WarehouseRepository warehouseRepository;
     private CarrierAccountRefRepository carrierAccountRefRepository;
@@ -63,22 +67,20 @@ class ShippingConfigServicePickPackageForClientTest {
     @BeforeEach
     void setUp() {
         serviceRepository = mock(ShippingServiceRepository.class);
-        ruleRepository = mock(ShipViaMappingRepository.class);
         presetRepository = mock(PackagePresetRepository.class);
         servicePackageRepository = mock(ServicePackageRepository.class);
-        rulePackageRepository = mock(ShipMethodRulePackageRepository.class);
-        ruleWarehouseRepository = mock(ShipMethodRuleWarehouseRepository.class);
+        clientShipviaAliasRepository = mock(ClientShipviaCodeMapRepository.class);
+        clientShipviaMapPackageRepository = mock(ClientShipviaCodeMapPackageRepository.class);
+        clientServiceAliasRepository = mock(ClientServiceCodeMapRepository.class);
         clientAllowedPackageRepository = mock(ClientAllowedPackageRepository.class);
         warehouseRepository = mock(WarehouseRepository.class);
         carrierAccountRefRepository = mock(CarrierAccountRefRepository.class);
         eventPublisher = mock(ApplicationEventPublisher.class);
 
         service = new ShippingConfigService(
-                serviceRepository, ruleRepository, presetRepository,
-                servicePackageRepository, rulePackageRepository,
-                org.mockito.Mockito.mock(com.multiship.backend.repository.ClientShipviaCodeMapRepository.class),
-                org.mockito.Mockito.mock(com.multiship.backend.repository.ClientServiceCodeMapRepository.class),
-                ruleWarehouseRepository, clientAllowedPackageRepository,
+                serviceRepository, presetRepository, servicePackageRepository,
+                clientShipviaAliasRepository, clientShipviaMapPackageRepository,
+                clientServiceAliasRepository, clientAllowedPackageRepository,
                 warehouseRepository, List.<CarrierConnector>of(),
                 carrierAccountRefRepository, eventPublisher);
     }
@@ -115,16 +117,17 @@ class ShippingConfigServicePickPackageForClientTest {
                 .clientCode(clientCode).presetId(presetId).build();
     }
 
-    private static ShipMethodRulePackage ruleAllow(Long ruleId, Long presetId) {
-        return ShipMethodRulePackage.builder()
-                .ruleId(ruleId).presetId(presetId).build();
+    private static ClientShipviaCodeMapPackage mapAllow(Long mapId, Long presetId) {
+        ClientShipviaCodeMapPackage r = new ClientShipviaCodeMapPackage();
+        r.setMapId(mapId);
+        r.setPresetId(presetId);
+        return r;
     }
 
     // ===== happy path =====
 
     @Test
     void picksAllowedPreset_whenServiceLinkAndClientAllowlistBothInclude() {
-        // Setup: service 1 links preset 10; client ACME allows preset 10.
         PackagePreset p = preset(10L, "Standard Box", new BigDecimal("5"),
                 PackagePreset.OWNER_PLATFORM, null);
         when(serviceRepository.findById(1L)).thenReturn(Optional.of(service(1L)));
@@ -144,8 +147,6 @@ class ShippingConfigServicePickPackageForClientTest {
 
     @Test
     void clientOwnedPresetIsAutoAllowed_evenWithoutClientAllowedPackageRow() {
-        // ACME has NO ClientAllowedPackage rows, but they OWN preset 20.
-        // Auto-allow should let it be a candidate.
         PackagePreset owned = preset(20L, "ACME Custom Box", new BigDecimal("5"),
                 PackagePreset.OWNER_CLIENT, "ACME");
         when(serviceRepository.findById(1L)).thenReturn(Optional.of(service(1L)));
@@ -153,7 +154,7 @@ class ShippingConfigServicePickPackageForClientTest {
         when(presetRepository.findById(20L)).thenReturn(Optional.of(owned));
         when(clientAllowedPackageRepository
                 .findByClientCodeIgnoreCaseOrderByIsDefaultDescCreatedAtAsc("ACME"))
-                .thenReturn(List.of());   // empty allowlist
+                .thenReturn(List.of());
 
         ShippingConfigService.PickedPackage picked = service.pickPackageForClient(
                 1L, null, "ACME", new BigDecimal("2"));
@@ -163,7 +164,6 @@ class ShippingConfigServicePickPackageForClientTest {
 
     @Test
     void clientOwnedPreset_isNotAutoAllowedForOtherClients() {
-        // ACME owns preset 20; MEGA has no allowlist. MEGA must NOT get ACME's box.
         PackagePreset ownedByAcme = preset(20L, "ACME Custom", new BigDecimal("5"),
                 PackagePreset.OWNER_CLIENT, "ACME");
         when(serviceRepository.findById(1L)).thenReturn(Optional.of(service(1L)));
@@ -181,12 +181,10 @@ class ShippingConfigServicePickPackageForClientTest {
                         + ex.getMessage());
     }
 
-    // ===== rule-level restrictions (Gap 3) =====
+    // ===== per-lane restrictions (ClientShipviaCodeMapPackage) =====
 
     @Test
     void ruleRestriction_narrowsCandidatePool() {
-        // Both preset 10 and 11 are linked to the service and allowed for ACME.
-        // But rule 100 restricts to preset 11 ONLY. Selector picks 11.
         PackagePreset p10 = preset(10L, "Small", new BigDecimal("5"),
                 PackagePreset.OWNER_PLATFORM, null);
         PackagePreset p11 = preset(11L, "Medium", new BigDecimal("10"),
@@ -199,22 +197,19 @@ class ShippingConfigServicePickPackageForClientTest {
         when(clientAllowedPackageRepository
                 .findByClientCodeIgnoreCaseOrderByIsDefaultDescCreatedAtAsc("ACME"))
                 .thenReturn(List.of(allow("ACME", 10L), allow("ACME", 11L)));
-        // Rule 100 restricts to preset 11 only.
-        when(rulePackageRepository.findByRuleIdOrderByPresetIdAsc(100L))
-                .thenReturn(List.of(ruleAllow(100L, 11L)));
+        when(clientShipviaMapPackageRepository.findByMapId(100L))
+                .thenReturn(List.of(mapAllow(100L, 11L)));
 
         ShippingConfigService.PickedPackage picked = service.pickPackageForClient(
                 1L, 100L, "ACME", new BigDecimal("2"));
 
         assertEquals(11L, picked.preset().getId(),
-                "rule 100 restricts to preset 11; even though 10 would billable-fit "
-                        + "cheaper, it's excluded by the rule");
+                "map 100 restricts to preset 11; even though 10 would billable-fit "
+                        + "cheaper, it's excluded by the restriction");
     }
 
     @Test
     void emptyRuleRestriction_isTreatedAsUnrestricted() {
-        // Rule 100 has NO ShipMethodRulePackage rows — no per-lane restriction.
-        // Selector picks based on the other filters (client allowlist wins).
         PackagePreset p = preset(10L, "Standard", new BigDecimal("5"),
                 PackagePreset.OWNER_PLATFORM, null);
         when(serviceRepository.findById(1L)).thenReturn(Optional.of(service(1L)));
@@ -223,7 +218,7 @@ class ShippingConfigServicePickPackageForClientTest {
         when(clientAllowedPackageRepository
                 .findByClientCodeIgnoreCaseOrderByIsDefaultDescCreatedAtAsc("ACME"))
                 .thenReturn(List.of(allow("ACME", 10L)));
-        when(rulePackageRepository.findByRuleIdOrderByPresetIdAsc(100L)).thenReturn(List.of());
+        when(clientShipviaMapPackageRepository.findByMapId(100L)).thenReturn(List.of());
 
         ShippingConfigService.PickedPackage picked = service.pickPackageForClient(
                 1L, 100L, "ACME", new BigDecimal("2"));
@@ -231,12 +226,10 @@ class ShippingConfigServicePickPackageForClientTest {
         assertEquals(10L, picked.preset().getId());
     }
 
-    // ===== throw-on-empty (Gap 2) =====
+    // ===== throw-on-empty =====
 
     @Test
     void noAllowedPackages_throwsWithClientHint() {
-        // Service is linked to preset 10 but client's allowlist is empty AND
-        // preset isn't client-owned. No candidates → throw.
         PackagePreset p = preset(10L, "Standard", new BigDecimal("5"),
                 PackagePreset.OWNER_PLATFORM, null);
         when(serviceRepository.findById(1L)).thenReturn(Optional.of(service(1L)));
@@ -257,8 +250,6 @@ class ShippingConfigServicePickPackageForClientTest {
 
     @Test
     void noServicePackageLinks_throwsWithServiceHint() {
-        // Service has zero linked presets. Different hint than the empty-allowlist
-        // case so ops fixes the right thing.
         when(serviceRepository.findById(1L)).thenReturn(Optional.of(service(1L)));
         when(servicePackageRepository.findByServiceId(1L)).thenReturn(List.of());
         when(clientAllowedPackageRepository
@@ -276,8 +267,6 @@ class ShippingConfigServicePickPackageForClientTest {
 
     @Test
     void weightExceedsAllAllowed_throwsWithWeightHint() {
-        // Service has one linked+allowed preset but its maxWeight is too small.
-        // 5 lb preset can't hold a 10 lb order → no candidates.
         PackagePreset small = preset(10L, "Tiny", new BigDecimal("5"),
                 PackagePreset.OWNER_PLATFORM, null);
         when(serviceRepository.findById(1L)).thenReturn(Optional.of(service(1L)));

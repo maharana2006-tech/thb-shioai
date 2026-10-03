@@ -2,7 +2,6 @@ package com.multiship.backend.service.ndsshipment;
 
 import com.multiship.backend.model.ClientShipviaCodeMap;
 import com.multiship.backend.repository.ClientShipviaCodeMapRepository;
-import com.multiship.backend.repository.ShipViaMappingRepository;
 import com.multiship.backend.service.TenantScopeEnforcer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,7 +31,6 @@ class NdsShipmentLookupServiceTest {
 
     @Mock NdsShipmentLookupRepository repository;
     @Mock ClientShipviaCodeMapRepository clientShipviaRepo;
-    @Mock ShipViaMappingRepository shipviaMappingRepo;
     @Mock TenantScopeEnforcer tenantScopeEnforcer;
 
     @InjectMocks NdsShipmentLookupService service;
@@ -55,6 +53,11 @@ class NdsShipmentLookupServiceTest {
                         "P80", "UPS Ground")));
         when(clientShipviaRepo.findByClientCodeIgnoreCaseAndErpCodeIgnoreCase(anyString(), anyString()))
                 .thenReturn(Optional.of(newClientMap(42L)));
+        // V126 merge — resolveServiceId now reads via findMatches so the
+        // specificity ladder sits in SQL. Default stub yields service 42
+        // (same as the isHold path above) so pre-V126 happy-path tests pass.
+        when(clientShipviaRepo.findMatches(any(), any(), any(), any(), any()))
+                .thenReturn(List.of(newClientMap(42L)));
     }
 
     @Test
@@ -97,7 +100,8 @@ class NdsShipmentLookupServiceTest {
     void warningWhenShipviaUnmapped() {
         when(clientShipviaRepo.findByClientCodeIgnoreCaseAndErpCodeIgnoreCase(anyString(), anyString()))
                 .thenReturn(Optional.empty());
-        when(shipviaMappingRepo.findByShipviaCdIgnoreCase(anyString())).thenReturn(List.of());
+        when(clientShipviaRepo.findMatches(any(), any(), any(), any(), any()))
+                .thenReturn(List.of());
         stubDirectHappy("XYZ", "N", "N", "US");
         NdsShipmentPrefill p = service.lookup(".X" + CONTAINER_ID).orElseThrow();
         assertEquals(NdsShipmentPrefill.Status.WARNING, p.status());

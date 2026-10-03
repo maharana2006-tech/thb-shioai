@@ -3797,7 +3797,7 @@ public class CarrierServiceImpl implements CarrierService {
         CarrierProperties.ShipperDefaults shipper = shipperDefaults.resolveFor(orderClient);
         // Origin warehouse: use the client's default attachment when we can
         // find one, otherwise null (unrestricted rules still match). This is
-        // what feeds ShipMethodRuleWarehouse-based rule filtering — AND the
+        // what feeds client_shipvia_code_map.warehouse_id filtering — AND the
         // shipper block below. The manual path already ships from the
         // resolved warehouse; this path used to ignore it and stamp the
         // platform shipper defaults, which flipped a domestic US→US re-ship
@@ -3819,9 +3819,9 @@ public class CarrierServiceImpl implements CarrierService {
         String shipperCountry = firstNonBlank(whAddr != null ? whAddr.getCountry() : null, shipper.getCountryCode());
         boolean international = order.getShiptoCountryCd() != null && shipperCountry != null
                 && !order.getShiptoCountryCd().trim().equalsIgnoreCase(shipperCountry.trim());
-        // F5-B — resolveRoute returns both the ship-method rule ID AND the
+        // F5-B — resolveRoute returns both the matched shipvia-map ID AND the
         // resolved service so pickPackageForClient can enforce per-lane
-        // package restrictions (ShipMethodRulePackage) alongside the
+        // package restrictions (client_shipvia_code_map_package) alongside the
         // client's allowlist. Falls back to null ruleId when no shipvia
         // rule matched (reached service via the carrier-catalog scope path).
         ShippingConfigService.ResolvedRoute route = shippingConfigService

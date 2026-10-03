@@ -8,13 +8,11 @@ import com.multiship.backend.model.CarrierAccountRef;
 import com.multiship.backend.model.ClientShipviaCodeMap;
 import com.multiship.backend.model.Order;
 import com.multiship.backend.model.OrderTracking;
-import com.multiship.backend.model.ShipViaMapping;
 import com.multiship.backend.model.ShippingService;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
 import com.multiship.backend.repository.ClientShipviaCodeMapRepository;
 import com.multiship.backend.repository.OrderRepository;
 import com.multiship.backend.repository.OrderTrackingRepository;
-import com.multiship.backend.repository.ShipViaMappingRepository;
 import com.multiship.backend.repository.ShippingServiceRepository;
 import com.multiship.backend.service.carriers.CarrierConnector;
 import com.multiship.backend.service.carriers.CarrierConnector.CloseOutRequest;
@@ -32,6 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -40,11 +39,14 @@ import static org.mockito.Mockito.when;
 /**
  * FDX-G2 — coverage for the fleet-split classification + call fan-out in
  * {@link ManifestServiceImpl#closeOut}. Uses pure Mockito against the
- * connector + all 5 classification-chain repos so tests are hermetic.
+ * connector + the 4 classification-chain repos (SSM merged into
+ * ClientShipviaCodeMap in V126, so a single repo now carries both
+ * per-client and platform-wide rows).
  *
  * <p>The classifier walks: tracking → OrderTracking.orderNo →
- * Order.shipviaCd + tenant → ClientShipviaCodeMap (per-client) OR
- * ShipViaMapping (global) → ShippingService.express.
+ * Order.shipviaCd + tenant → ClientShipviaCodeMap.findMatches
+ * (specificity-ordered: per-client row beats platform-wide null-clientCode
+ * row in the ORDER BY) → ShippingService.express.
  */
 class ManifestServiceImplFleetSplitTest {
 
@@ -54,7 +56,6 @@ class ManifestServiceImplFleetSplitTest {
     private OrderTrackingRepository trackingRepo;
     private OrderRepository orderRepo;
     private ClientShipviaCodeMapRepository clientShipviaRepo;
-    private ShipViaMappingRepository globalShipviaRepo;
     private ShippingServiceRepository serviceRepo;
     private ManifestServiceImpl service;
 
@@ -66,7 +67,6 @@ class ManifestServiceImplFleetSplitTest {
         trackingRepo = mock(OrderTrackingRepository.class);
         orderRepo = mock(OrderRepository.class);
         clientShipviaRepo = mock(ClientShipviaCodeMapRepository.class);
-        globalShipviaRepo = mock(ShipViaMappingRepository.class);
         serviceRepo = mock(ShippingServiceRepository.class);
 
         // Every connector call resolves the account + returns a real-ish token.
@@ -88,7 +88,7 @@ class ManifestServiceImplFleetSplitTest {
         service = new ManifestServiceImpl(
                 carrierService, accountRepo,
                 new TenantScopeEnforcer(new AccessScopePolicy(false)),
-                trackingRepo, orderRepo, clientShipviaRepo, globalShipviaRepo, serviceRepo);
+                trackingRepo, orderRepo, clientShipviaRepo, serviceRepo);
     }
 
     // ===== single-fleet case (back-compat) =====
@@ -121,8 +121,6 @@ class ManifestServiceImplFleetSplitTest {
 
     @Test
     void all_ground_call_sends_express_false() {
-        // Confirms the CloseOutRequest body carries express=false for the
-        // Ground group so FedExConnector picks carrierCode=FDXG.
         stubTracking("1Z-A", 100, "P80", "ACME");
         stubClientShipvia("ACME", "P80", 10L);
         stubShippingService(10L, false);
@@ -139,8 +137,6 @@ class ManifestServiceImplFleetSplitTest {
 
     @Test
     void all_express_call_sends_express_true() {
-        // Symmetric — Express-only batch sends express=true so FedEx body
-        // picks FDXE (fixes the pre-fix silent-Ground-manifest bug).
         stubTracking("1Z-A", 100, "F77", "ACME");
         stubClientShipvia("ACME", "F77", 11L);
         stubShippingService(11L, true);
@@ -159,8 +155,6 @@ class ManifestServiceImplFleetSplitTest {
 
     @Test
     void mixed_ground_and_express_produces_two_manifests_in_order() {
-        // 2 Ground + 1 Express trackings → 2 closeOutDay calls, 2 manifests
-        // in response. Order preserved: GROUND first, EXPRESS second.
         stubTracking("1Z-G1", 100, "P80", "ACME");
         stubTracking("1Z-G2", 101, "P80", "ACME");
         stubTracking("1Z-E1", 200, "F77", "ACME");
@@ -169,8 +163,6 @@ class ManifestServiceImplFleetSplitTest {
         stubShippingService(10L, false);   // Ground
         stubShippingService(11L, true);     // Express
 
-        // First call = ground group, second call = express group. Return
-        // distinct manifest IDs so we can verify the response wiring.
         when(connector.closeOutDay(any(CloseOutRequest.class), anyString(), anyString()))
                 .thenAnswer(inv -> {
                     CloseOutRequest req = inv.getArgument(0);
@@ -186,8 +178,6 @@ class ManifestServiceImplFleetSplitTest {
 
         assertEquals(200, resp.getCode());
         ManifestResponseDTO body = resp.getData();
-        // Top-level flat fields aggregate; manifestId null so callers must
-        // read manifests[].
         assertNull(body.getManifestId(),
                 "multi-fleet response must null out flat manifestId to force callers to read manifests[]");
         assertEquals("MANIFESTED", body.getStatus());
@@ -201,13 +191,11 @@ class ManifestServiceImplFleetSplitTest {
         assertEquals("EXPRESS", body.getManifests().get(1).getFleet());
         assertEquals("GROUP-E", body.getManifests().get(1).getManifestId());
         assertEquals(List.of("1Z-E1"), body.getManifests().get(1).getTrackingNumbers());
-        // 2 connector calls — one per group.
         verify(connector, times(2)).closeOutDay(any(), anyString(), anyString());
     }
 
     @Test
     void mixed_partial_failure_returns_partial_status() {
-        // 1 Ground succeeds, 1 Express fails → status=PARTIAL.
         stubTracking("1Z-G1", 100, "P80", "ACME");
         stubTracking("1Z-E1", 200, "F77", "ACME");
         stubClientShipvia("ACME", "P80", 10L);
@@ -236,9 +224,6 @@ class ManifestServiceImplFleetSplitTest {
 
     @Test
     void unresolvable_trackings_land_in_failedToClassify_and_are_excluded() {
-        // 1 classifiable Ground + 2 unresolvable (missing OrderTracking rows).
-        // The 2 must NOT be sent to the carrier — they land in the
-        // failedToClassify list per the locked design decision.
         stubTracking("1Z-G1", 100, "P80", "ACME");
         stubClientShipvia("ACME", "P80", 10L);
         stubShippingService(10L, false);
@@ -253,7 +238,6 @@ class ManifestServiceImplFleetSplitTest {
 
         assertNotNull(body.getFailedToClassify());
         assertEquals(List.of("MYSTERY-1", "MYSTERY-2"), body.getFailedToClassify());
-        // The 1 classified tracking went in; the 2 unresolved did NOT.
         ArgumentCaptor<CloseOutRequest> captor = ArgumentCaptor.forClass(CloseOutRequest.class);
         verify(connector).closeOutDay(captor.capture(), anyString(), anyString());
         assertEquals(List.of("1Z-G1"), captor.getValue().trackingNumbers(),
@@ -262,8 +246,6 @@ class ManifestServiceImplFleetSplitTest {
 
     @Test
     void all_trackings_unresolvable_returns_error_with_failedToClassify() {
-        // Nothing classifies → skip the carrier call entirely + surface
-        // an ERROR-shaped response listing every tracking.
         when(trackingRepo.findByTrackingNumberIgnoreCase(anyString())).thenReturn(Optional.empty());
 
         ManifestResponseDTO body = service.closeOut(request("FEDEX", "ACME",
@@ -274,22 +256,22 @@ class ManifestServiceImplFleetSplitTest {
         assertEquals(List.of("X", "Y", "Z"), body.getFailedToClassify());
         assertTrue(body.getMessage().contains("failedToClassify"),
                 "message should point the operator at the failed list; got: " + body.getMessage());
-        // NO connector call — we short-circuited because everything failed.
         verify(connector, times(0)).closeOutDay(any(), anyString(), anyString());
     }
 
-    // ===== global fallback (per-client alias miss) =====
+    // ===== platform-wide fallback (per-client row absent, null-clientCode row present) =====
 
     @Test
-    void global_shipviaMapping_used_when_per_client_alias_absent() {
-        // Client has no ClientShipviaCodeMap row for "F77" — fall back to
-        // the global ShipViaMapping seeded by ShippingConfigSeeder (F77 →
-        // FEDEX_GROUND per the standard seed).
+    void platform_wide_row_used_when_per_client_alias_absent() {
+        // V126 merge — "global fallback" is now a null-clientCode row sitting
+        // in the same table. findMatches's ORDER BY (client-match = +4) still
+        // picks a per-client row first, but when only a null-clientCode row
+        // exists it returns that one.
         stubTracking("1Z-G1", 100, "F77", "ACME");
-        when(clientShipviaRepo.findByClientCodeIgnoreCaseAndErpCodeIgnoreCase("ACME", "F77"))
-                .thenReturn(Optional.empty());
-        ShipViaMapping global = ShipViaMapping.builder().shipviaCd("F77").serviceId(999L).build();
-        when(globalShipviaRepo.findByShipviaCdIgnoreCase("F77")).thenReturn(List.of(global));
+        ClientShipviaCodeMap platformWide = ClientShipviaCodeMap.builder()
+                .clientCode(null).erpCode("F77").serviceId(999L).build();
+        when(clientShipviaRepo.findMatches(eq("ACME"), eq("F77"), any(), any(), any()))
+                .thenReturn(List.of(platformWide));
         stubShippingService(999L, false);   // Ground per the seeded FedEx service
 
         when(connector.closeOutDay(any(CloseOutRequest.class), anyString(), anyString()))
@@ -300,7 +282,7 @@ class ManifestServiceImplFleetSplitTest {
 
         assertEquals("MANIFESTED", body.getStatus());
         assertNull(body.getFailedToClassify(),
-                "global fallback should classify — not fall through to failedToClassify");
+                "platform-wide row should classify — not fall through to failedToClassify");
     }
 
     // ===== fixtures =====
@@ -328,8 +310,8 @@ class ManifestServiceImplFleetSplitTest {
     private void stubClientShipvia(String tenant, String shipviaCd, long serviceId) {
         ClientShipviaCodeMap map = ClientShipviaCodeMap.builder()
                 .clientCode(tenant).erpCode(shipviaCd).serviceId(serviceId).build();
-        when(clientShipviaRepo.findByClientCodeIgnoreCaseAndErpCodeIgnoreCase(tenant, shipviaCd))
-                .thenReturn(Optional.of(map));
+        when(clientShipviaRepo.findMatches(eq(tenant), eq(shipviaCd), any(), any(), any()))
+                .thenReturn(List.of(map));
     }
 
     private void stubShippingService(long id, boolean express) {
