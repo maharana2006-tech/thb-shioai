@@ -5,7 +5,7 @@ import type { ColumnDef } from '@tanstack/react-table'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
 import { useDismissable } from '../hooks/useDismissable'
 import {
-  batchStatusOf, canEditLine, dtcService, labelStatusOf, lineHasError,
+  batchStatusOf, canEditLine, dtcService, labelStatusOf, lineHasError, printableCount,
   type DtcBatchDetail, type DtcOrder,
 } from '../api/dtcService'
 import DtcLineEditModal from './dtc/DtcLineEditModal'
@@ -146,8 +146,14 @@ export default function DtcBatchDetailPage() {
     })
     if (!ok) return
     try {
-      await orderService.voidLabel(o.generatedOrderNo)
-      notify.success(`Order ${o.generatedOrderNo} voided.`)
+      // A carrier refusal comes back as 200 with voided=false — the label is still live.
+      const res = await orderService.voidLabel(o.generatedOrderNo)
+      const r = res.data
+      if (r?.voided || r?.status === 'ALREADY_VOIDED') {
+        notify.success(`Order ${o.generatedOrderNo} voided.`)
+      } else {
+        notify.error(`${r?.carrierCode ?? 'The carrier'} refused to void order ${o.generatedOrderNo} — the label is still live.${r?.message ? ` ${r.message}` : ''}`)
+      }
       await load()
     } catch (e) {
       notify.apiError(e, `Could not void order ${o.generatedOrderNo}.`)
@@ -204,7 +210,10 @@ export default function DtcBatchDetailPage() {
       id: 'label', header: 'Label', enableSorting: false,
       cell: ({ row }) => {
         const orderNo = row.original.generatedOrderNo
-        if (!orderNo) return <span className="text-[11px] text-[#9a8b70]">—</span>
+        // A voided label is cancelled at the carrier — it must not be printed onto a parcel.
+        if (!orderNo || data?.voidStatuses?.[String(orderNo)] === 'VOIDED') {
+          return <span className="text-[11px] text-[#9a8b70]">—</span>
+        }
         return (
           <button
             type="button"
@@ -438,8 +447,10 @@ export default function DtcBatchDetailPage() {
         <button
           type="button"
           onClick={() => window.open(dtcService.labelsZipUrl(batchId, tenantId), '_blank')}
-          disabled={!batch || batch.generatedCount === 0}
-          title={!batch || batch.generatedCount === 0 ? 'Generate labels first — nothing to print yet' : 'Download all generated label PDFs as a ZIP'}
+          disabled={!batch || printableCount(batch) === 0}
+          title={!batch || printableCount(batch) === 0
+            ? (batch?.voidedCount ? 'Every label of this batch was voided — nothing to print' : 'Generate labels first — nothing to print yet')
+            : 'Download all live label PDFs as a ZIP (voided labels are left out)'}
           className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40"
         >
           <FiPrinter className="h-3.5 w-3.5" />
@@ -452,6 +463,7 @@ export default function DtcBatchDetailPage() {
           <span>Client <b className="text-[#3d2f1c]">{batch.tenantId}</b></span>
           <span>{batch.totalLines} line{batch.totalLines === 1 ? '' : 's'}</span>
           <span>{batch.generatedCount} generated</span>
+          {batch.voidedCount ? <span className="font-semibold text-rose-700">{batch.voidedCount} voided</span> : null}
           {batch.failedCount > 0 && (
             <span className="inline-flex items-center gap-1 font-semibold text-red-700" title="Use Edit on a failed line to correct the ship-to, weight or ship-via, then Generate labels again.">
               <FiAlertCircle className="h-3.5 w-3.5" />

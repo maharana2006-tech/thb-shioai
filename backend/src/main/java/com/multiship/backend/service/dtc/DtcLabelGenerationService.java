@@ -634,7 +634,8 @@ public class DtcLabelGenerationService {
                         "Line " + lineId + " is not in batch " + batchId + " for " + tenantId));
         String status = row.getGeneratedStatus() == null ? "" : row.getGeneratedStatus();
         if (STATUS_GENERATED.equals(status) || STATUS_QUEUED_USPS.equals(status)) {
-            throw new IllegalStateException("This line already has a label — void it first to change it.");
+            throw new IllegalStateException("This line already has a label bought for it, so it can't be edited "
+                    + "(voiding the label doesn't release the line).");
         }
         if (STATUS_IN_FLIGHT.equals(status)) {
             throw new IllegalStateException("This line's label is being bought right now — wait for the run to finish.");

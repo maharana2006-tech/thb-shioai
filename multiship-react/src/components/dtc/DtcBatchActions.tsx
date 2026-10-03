@@ -1,6 +1,6 @@
 import { useEffect, useState, type CSSProperties } from 'react'
 import { FiEye, FiMoreVertical, FiPrinter, FiRotateCcw, FiZap } from 'react-icons/fi'
-import type { DtcBatchStats } from '../../api/dtcService'
+import { printableCount, type DtcBatchStats } from '../../api/dtcService'
 import { useDismissable } from '../../hooks/useDismissable'
 
 /**
@@ -44,7 +44,8 @@ export default function DtcBatchActions({ batch: b, printedAt, progress, busy, o
       : { position: 'fixed', right, top: r.bottom + 6 })
     setOpen((v) => !v)
   }
-  const nothingToPrint = b.generatedCount === 0
+  const printable = printableCount(b)
+  const nothingToPrint = printable === 0
   const running = !!progress
   const items = [
     { key: 'generate', label: 'Generate', hint: b.pendingCount ? `${b.pendingCount} line${b.pendingCount === 1 ? '' : 's'} not labelled yet` : 'Every line has been tried',
@@ -70,9 +71,10 @@ export default function DtcBatchActions({ batch: b, printedAt, progress, busy, o
         type="button"
         onClick={onPrint}
         disabled={nothingToPrint}
-        title={nothingToPrint ? 'Generate labels first — nothing to print yet'
-          : when ? `Printed ${when.toLocaleString()} — print the ${b.generatedCount} label${b.generatedCount === 1 ? '' : 's'} again`
-            : `Download ${b.generatedCount} label PDF${b.generatedCount === 1 ? '' : 's'} as a ZIP`}
+        title={nothingToPrint
+          ? (b.voidedCount ? 'Every label of this batch was voided — nothing to print' : 'Generate labels first — nothing to print yet')
+          : when ? `Printed ${when.toLocaleString()} — print the ${printable} label${printable === 1 ? '' : 's'} again`
+            : `Download ${printable} label PDF${printable === 1 ? '' : 's'} as a ZIP`}
         className={`inline-flex h-7 w-[5.5rem] items-center justify-center gap-1 rounded-lg px-2.5 text-[11px] font-semibold shadow-sm transition disabled:cursor-not-allowed disabled:opacity-40 ${
           when ? 'border border-[#cdbf9f] bg-[#f4eede] text-[#412d15] hover:bg-[#ece2cb]' : 'bg-[#1f150c] text-[#f4eede] hover:bg-[#412d15]'
         }`}

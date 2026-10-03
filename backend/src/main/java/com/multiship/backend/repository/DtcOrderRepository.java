@@ -178,6 +178,8 @@ public interface DtcOrderRepository extends JpaRepository<DtcOrder, Long> {
             SUM(CASE WHEN d.generatedStatus = 'FAILED' THEN 1 ELSE 0 END),
             SUM(CASE WHEN d.generatedStatus = 'QUEUED_USPS' THEN 1 ELSE 0 END),
             SUM(CASE WHEN d.generatedStatus IS NULL OR d.generatedStatus = 'IN_FLIGHT' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN d.generatedOrderNo IN
+                    (SELECT t.orderNo FROM OrderTracking t WHERE t.status = 'VOIDED') THEN 1 ELSE 0 END),
             MAX(d.createdAt))
         FROM DtcOrder d
         WHERE d.tenantId = :tenantId AND d.batchId = :batchId

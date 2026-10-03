@@ -88,7 +88,14 @@ export interface DtcBatchStats {
   failedCount: number
   queuedCount: number
   pendingCount: number
+  /** Generated lines whose label was since voided at the carrier (also in generatedCount). */
+  voidedCount?: number
   lastSyncedAt: string | null
+}
+
+/** Labels the batch can still print — generated and not voided. */
+export function printableCount(b: Pick<DtcBatchStats, 'generatedCount' | 'voidedCount'>): number {
+  return b.generatedCount - (b.voidedCount ?? 0)
 }
 
 export function batchStatusOf(b: Pick<DtcBatchStats, 'pendingCount' | 'queuedCount'>): 'COMPLETE' | 'OPEN' {

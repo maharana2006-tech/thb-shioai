@@ -20,6 +20,8 @@ public record DtcBatchStats(
         Long failedCount,
         Long queuedCount,
         Long pendingCount,
+        /** Generated lines whose label was since voided at the carrier (also in generatedCount). */
+        Long voidedCount,
         LocalDateTime lastSyncedAt) {
 
     /** Screenshot's Batch Status: COMPLETE when nothing is left to generate. */

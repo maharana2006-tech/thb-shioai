@@ -362,6 +362,19 @@ class NdsShipmentOracleWriterTest {
         verify(prodJdbc, never()).update(anyString(), any(SqlParameterSource.class));
     }
 
+    @Test
+    void clearShipment_DtcWithoutNdsOrderNos_TouchesNothing() {
+        // 900037 is Multiship's label order, not an NDS ORDER_NO — clearing by it
+        // would wipe whichever NDS order happens to share that number.
+        WritebackClearRequest req = WritebackClearRequest.ofDtc(
+                "nds-default", "1Z999", 900037, "ACME", List.of());
+
+        writer.clearShipment(req, true, true, true, true, true, true);
+
+        verify(clientJdbc, never()).update(anyString(), any(SqlParameterSource.class));
+        verify(prodJdbc, never()).update(anyString(), any(SqlParameterSource.class));
+    }
+
     // ── G2 · USPS with no CLIPPER row → PROC_OE fallback ────────────
 
     @Test

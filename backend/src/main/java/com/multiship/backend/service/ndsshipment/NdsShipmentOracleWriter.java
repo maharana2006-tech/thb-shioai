@@ -442,11 +442,13 @@ public class NdsShipmentOracleWriter {
     // ── G4 — DTC-specific clear (void) path ─────────────────────────
 
     private WritebackAck dtcClearShipment(NamedParameterJdbcTemplate jdbc, WritebackClearRequest req) {
-        java.util.List<Integer> orderNos = req.orderNos() != null && !req.orderNos().isEmpty()
-                ? req.orderNos()
-                : (req.orderNo() != null ? java.util.List.of(req.orderNo()) : java.util.List.of());
+        // Only the NDS order numbers the caller names. req.orderNo() is Multiship's
+        // label order, not an NDS key — falling back to it deleted OE_TRACKING /
+        // nulled OE_SHIP_CONTAINER on whatever NDS order shares that number, while
+        // dtcWriteShipment never wrote anything for a request without NDS packages.
+        java.util.List<Integer> orderNos = req.orderNos() != null ? req.orderNos() : java.util.List.of();
         if (orderNos.isEmpty()) {
-            return WritebackAck.skipped("nds(DTC): no orderNos to clear");
+            return WritebackAck.skipped("nds(DTC): no NDS orderNos to clear");
         }
         List<String> touched = new ArrayList<>();
         List<String> errors = new ArrayList<>();

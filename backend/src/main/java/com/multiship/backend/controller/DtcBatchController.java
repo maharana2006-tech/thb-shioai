@@ -277,6 +277,9 @@ public class DtcBatchController {
                         r.getGeneratedStatus() == null ? "" : r.getGeneratedStatus()))
                 .filter(r -> r.getGeneratedOrderNo() != null)
                 .toList();
+        // A voided label is cancelled at the carrier — never hand it out for printing.
+        java.util.Set<Integer> voided = voidedOrderNos(rows);
+        rows = rows.stream().filter(r -> !voided.contains(r.getGeneratedOrderNo())).toList();
 
         ByteArrayOutputStream zipBytes;
         try (ByteArrayOutputStream bos = new ByteArrayOutputStream();
@@ -366,6 +369,13 @@ public class DtcBatchController {
     /** The list's key for one batch — the same batch number can recur across tenants. */
     private static String batchKey(String tenantId, BigDecimal batchId) {
         return tenantId + "|" + batchId.stripTrailingZeros().toPlainString();
+    }
+
+    private java.util.Set<Integer> voidedOrderNos(List<DtcOrder> lines) {
+        return voidStatusesFor(lines).entrySet().stream()
+                .filter(e -> "VOIDED".equalsIgnoreCase(e.getValue()))
+                .map(Map.Entry::getKey)
+                .collect(Collectors.toSet());
     }
 
     private Map<Integer, String> voidStatusesFor(List<DtcOrder> lines) {
