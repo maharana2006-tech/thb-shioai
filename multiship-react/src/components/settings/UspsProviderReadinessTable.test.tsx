@@ -197,8 +197,14 @@ describe('UspsProviderReadinessTable — refresh + callbacks', () => {
     const user = userEvent.setup()
     render(<Comp />)
 
+    // Same race pattern as UspsDirectDashboardPage.refresh: refresh button
+    // is disabled while load() is in-flight, and under a warm suite the
+    // mount await resolves after the test's click. Wait for disabled to
+    // flip off before clicking.
     await waitFor(() => expect(getReadinessMock).toHaveBeenCalledTimes(1))
-    await user.click(screen.getByRole('button', { name: /refresh usps provider readiness/i }))
+    const refreshBtn = screen.getByRole('button', { name: /refresh usps provider readiness/i }) as HTMLButtonElement
+    await waitFor(() => expect(refreshBtn.disabled).toBe(false))
+    await user.click(refreshBtn)
     await waitFor(() => expect(getReadinessMock).toHaveBeenCalledTimes(2))
   })
 

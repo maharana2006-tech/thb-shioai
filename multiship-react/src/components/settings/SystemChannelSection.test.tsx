@@ -132,9 +132,11 @@ describe('SystemChannelSection', () => {
       expect(both).toHaveAttribute('aria-checked', 'true')
     })
 
-    // Save is disabled — picker equals stored.
+    // Save is disabled — picker equals stored. Wait for "No changes to save"
+    // via findByText: `stored` is set after the mount fetch resolves, and
+    // this assertion needs it to be truthy for the message to render.
+    expect(await screen.findByText(/No changes to save/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /save/i })).toBeDisabled()
-    expect(screen.getByText(/No changes to save/)).toBeInTheDocument()
 
     // Switch to B2B only → Save enables → PUT sends the new value.
     await user.click(screen.getByRole('radio', { name: /B2B only/ }))

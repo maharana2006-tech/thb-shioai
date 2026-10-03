@@ -307,7 +307,11 @@ describe('SystemSettingsPage — role parity (no FE gate)', () => {
 
       await waitFor(() => expect(listMock).toHaveBeenCalledTimes(1))
       // Page renders identically — role doesn't gate anything on the FE.
-      expect(screen.getByText('openai.api-key')).toBeInTheDocument()
+      // Use findByText (not getByText after a listMock-called waitFor):
+      // the mock being invoked only means setLoading(true) fired, not
+      // that the response has been rendered yet. Under a warm suite the
+      // response-render tick lags past the assertion.
+      expect(await screen.findByText('openai.api-key')).toBeInTheDocument()
     },
   )
 })
