@@ -250,7 +250,12 @@ class BulkLabelServiceImplUspsQueueTest {
     @Test
     void enqueueFailureFallsBackToSyncPath() {
         stubProvider("USPS_DIRECT");
-        stubOrder(88, "L01", "ACME");
+        // Pure-Mockito context: CarrierAliasHolder isn't initialised, so
+        // ERP legacy codes like "L01" don't canonicalise to USPS and the
+        // queue path never fires. Use the canonical "USPS" code — the
+        // enqueue-fallback semantics being tested are independent of the
+        // ERP-alias translation layer, which is covered elsewhere.
+        stubOrder(88, "USPS", "ACME");
         when(queue.enqueue(any(UspsLabelQueueService.EnqueueRequest.class)))
                 .thenThrow(new RuntimeException("queue overflowed"));
         stubGenerate(88L, okLabel(88L));

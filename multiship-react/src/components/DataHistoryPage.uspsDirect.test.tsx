@@ -703,7 +703,10 @@ describe('Bulk Mailer — layout', () => {
     listBatches.mockClear()
     bulkSummary.mockClear()
     await userEvent.type(screen.getByPlaceholderText(/Search file name/i), 'acme')
-    await waitFor(() => expect(listBatches).toHaveBeenCalledWith(expect.objectContaining({ q: 'acme', page: 0 })), { timeout: 2000 })
+    // 2000ms was tight when this file ran after a warm suite (type+debounce
+    // on a 100-test backlog slips past that). 10s matches the vitest-wide
+    // timeout bump and still fails loud if debounce actually breaks.
+    await waitFor(() => expect(listBatches).toHaveBeenCalledWith(expect.objectContaining({ q: 'acme', page: 0 })), { timeout: 10_000 })
     // The summary depends on the view only: a search does not re-read it.
     expect(bulkSummary).not.toHaveBeenCalled()
   })

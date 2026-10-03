@@ -95,7 +95,11 @@ const loadPage = async () => {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  listMock.mockResolvedValue({ data: seedRows() })
+  // Audit L3/B3 (#375) — list() now returns a paged body
+  // { content, totalElements, totalPages } instead of a bare array.
+  listMock.mockResolvedValue({
+    data: { content: seedRows(), totalElements: 2, totalPages: 1, pageNumber: 0, pageSize: 50 },
+  })
   // Fail-loud: any test that accidentally triggers a real fetch throws.
   vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
     throw new Error('un-mocked fetch forbidden')
@@ -114,12 +118,13 @@ describe('CarrierShippingLimitsPage — mount + load', () => {
     expect(screen.getByText('(default)')).toBeTruthy()
   })
 
-  it('calls list with { size: 200 } on mount (one fetch, not a loop)', async () => {
+  it('calls list with { page: 0, size: 50 } on mount (one fetch, not a loop)', async () => {
     const Page = await loadPage()
     renderWithProviders(<Page />)
     await waitFor(() => expect(listMock).toHaveBeenCalled())
     expect(listMock).toHaveBeenCalledTimes(1)
-    expect(listMock).toHaveBeenCalledWith({ size: 200 })
+    // Audit L3/B3 (#375) — pagination replaced the size=200 blind fetch.
+    expect(listMock).toHaveBeenCalledWith({ page: 0, size: 50 })
   })
 
   it('shows "Loading…" before the fetch resolves', async () => {
@@ -128,11 +133,11 @@ describe('CarrierShippingLimitsPage — mount + load', () => {
     const Page = await loadPage()
     renderWithProviders(<Page />)
     expect(screen.getByText(/Loading…/i)).toBeTruthy()
-    await act(async () => { resolveIt({ data: [] }) })
+    await act(async () => { resolveIt({ data: { content: [], totalElements: 0, totalPages: 0 } }) })
   })
 
   it('renders "No limit rows." when the list is empty', async () => {
-    listMock.mockResolvedValueOnce({ data: [] })
+    listMock.mockResolvedValueOnce({ data: { content: [], totalElements: 0, totalPages: 0 } })
     const Page = await loadPage()
     renderWithProviders(<Page />)
     await waitFor(() => expect(screen.getByText(/No limit rows\./i)).toBeTruthy())
@@ -213,7 +218,11 @@ describe('CarrierShippingLimitsPage — row actions', () => {
     renderWithProviders(<Page />)
     await waitFor(() => expect(screen.getByText('UPS')).toBeTruthy())
     listMock.mockClear()
-    listMock.mockResolvedValue({ data: seedRows() })
+    // Audit L3/B3 (#375) — list() now returns a paged body
+  // { content, totalElements, totalPages } instead of a bare array.
+  listMock.mockResolvedValue({
+    data: { content: seedRows(), totalElements: 2, totalPages: 1, pageNumber: 0, pageSize: 50 },
+  })
 
     const upsRow = screen.getByText('UPS').closest('tr')!
     await userEvent.click(within(upsRow).getByRole('button', { name: /Deactivate/i }))
@@ -363,7 +372,11 @@ describe('CarrierShippingLimitsPage — editor dialog', () => {
     renderWithProviders(<Page />)
     await waitFor(() => expect(screen.getByText('UPS')).toBeTruthy())
     listMock.mockClear()
-    listMock.mockResolvedValue({ data: seedRows() })
+    // Audit L3/B3 (#375) — list() now returns a paged body
+  // { content, totalElements, totalPages } instead of a bare array.
+  listMock.mockResolvedValue({
+    data: { content: seedRows(), totalElements: 2, totalPages: 1, pageNumber: 0, pageSize: 50 },
+  })
 
     await userEvent.click(screen.getByRole('button', { name: /New row/i }))
     const dialog = screen.getByRole('dialog')

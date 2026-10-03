@@ -72,18 +72,22 @@ class ExternalSystemConfigServiceTest {
 
     @Test
     void getDefaultNdsConnectionLooksUpByWellKnownName() {
+        // V91 — findByName now resolves PROD/DEV via findAllByName. Seed a
+        // PROD row (default) so the use_dev-off path returns it.
         ExternalSystemConnection seed = new ExternalSystemConnection();
         seed.setId(42L);
         seed.setName("nds-default");
         seed.setSystemType("NDS_ORACLE");
+        seed.setEnvironment(ExternalSystemConnection.ENV_PROD);
         seed.setActive(false);
-        when(connectionRepo.findByName("nds-default")).thenReturn(Optional.of(seed));
+        when(connectionRepo.findAllByName("nds-default"))
+                .thenReturn(java.util.List.of(seed));
 
         Optional<ExternalSystemConnection> got = svc.getDefaultNdsConnection();
         assertTrue(got.isPresent());
         assertEquals("nds-default", got.get().getName());
         assertEquals("NDS_ORACLE", got.get().getSystemType());
-        verify(connectionRepo).findByName("nds-default");
+        verify(connectionRepo).findAllByName("nds-default");
     }
 
     @Test

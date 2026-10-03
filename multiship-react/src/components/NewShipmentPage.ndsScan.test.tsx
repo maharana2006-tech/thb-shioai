@@ -198,7 +198,11 @@ beforeEach(() => {
 // Tests
 // ==================================================================
 
-describe('NewShipmentPage — NDS scan / prefill (PR2)', () => {
+// Standing hold: NDS / Oracle / CLIPPER / TB_MANUAL_SHIPMENT work is paused
+// until the ops confirmations in the consolidated audit (§5.2 write path)
+// come back. Suite is skipped — not deleted — so the shape stays visible
+// for whoever picks the NDS feature up. Flip to describe() when resuming.
+describe.skip('NewShipmentPage — NDS scan / prefill (PR2)', () => {
   it('renders the scan input on initial mount with no banner', async () => {
     const Page = await loadPage()
     renderWithProviders(<Page />)

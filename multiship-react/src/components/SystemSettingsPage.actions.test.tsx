@@ -78,6 +78,27 @@ vi.mock('../api/tenantSettingsService', () => ({
     }),
     setEnabledChannels: vi.fn(),
   },
+  // ShipperDefaultsSection pulls these two re-exports at render time.
+  SHIPPER_KEYS: [
+    'shipper.name',
+    'shipper.phone',
+    'shipper.addressLine1',
+    'shipper.addressLine2',
+    'shipper.city',
+    'shipper.state',
+    'shipper.postalCode',
+    'shipper.countryCode',
+  ],
+  SHIPPER_KEY_LABEL: {
+    'shipper.name': 'Name',
+    'shipper.phone': 'Phone',
+    'shipper.addressLine1': 'Address line 1',
+    'shipper.addressLine2': 'Address line 2',
+    'shipper.city': 'City',
+    'shipper.state': 'State / Province',
+    'shipper.postalCode': 'Postal code',
+    'shipper.countryCode': 'Country (ISO-2)',
+  },
 }))
 
 // ---------- Fixtures ----------

@@ -10,9 +10,12 @@ import com.multiship.backend.exception.CarrierConnectionException;
 import com.multiship.backend.model.CarrierConfig;
 import com.multiship.backend.model.ShipVia;
 import com.multiship.backend.model.User;
+import com.multiship.backend.model.CarrierAliasEntity;
+import com.multiship.backend.repository.CarrierAliasRepository;
 import com.multiship.backend.repository.CarrierConfigRepository;
 import com.multiship.backend.repository.ShipViaRepository;
 import com.multiship.backend.repository.UserRepository;
+import com.multiship.backend.service.carrier.CarrierAliasService;
 import com.multiship.backend.service.carriers.CarrierConnector;
 import com.multiship.backend.service.carriers.FedExConnector;
 import com.multiship.backend.service.carriers.UpsConnector;
@@ -113,6 +116,10 @@ class CarrierControllerNegativeIntegrationTest extends AbstractIntegrationTest {
     @Autowired
     private CarrierConfigRepository carrierConfigRepository;
     @Autowired
+    private CarrierAliasRepository carrierAliasRepository;
+    @Autowired
+    private CarrierAliasService carrierAliasService;
+    @Autowired
     private PlatformTransactionManager txManager;
 
     @Autowired
@@ -153,6 +160,20 @@ class CarrierControllerNegativeIntegrationTest extends AbstractIntegrationTest {
         seedShipViaIfMissing(9201, "P80", "UPS");
         seedShipViaIfMissing(9202, "F77", "FedEx");
         seedShipViaIfMissing(9203, "L01", "USPS");
+
+        // AbstractIntegrationTest disables Flyway, so V106's carrier_alias
+        // seed never ran. Without it, resolveCanonicalCarrierCode("P80")
+        // can't translate the legacy ERP code to "UPS" and the connect-
+        // flow throws "Unsupported carrier: P80." Seed the rows this test
+        // exercises then reload the in-memory snapshot held by
+        // CarrierAliasHolder so canonicalCarrierFor picks them up.
+        seedCarrierAliasIfMissing("UPS", "UPS", "UPS");
+        seedCarrierAliasIfMissing("FEDEX", "FEDEX", "FedEx");
+        seedCarrierAliasIfMissing("USPS", "USPS", "USPS");
+        seedCarrierAliasIfMissing("P80", "UPS", "UPS");
+        seedCarrierAliasIfMissing("F77", "FEDEX", "FedEx");
+        seedCarrierAliasIfMissing("L01", "USPS", "USPS");
+        carrierAliasService.reload();
 
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken(USERNAME, "",
@@ -398,5 +419,18 @@ class CarrierControllerNegativeIntegrationTest extends AbstractIntegrationTest {
         sv.setShipviaDesc(desc);
         sv.setActive(true);
         shipViaRepository.save(sv);
+    }
+
+    /** Same idempotency contract as seedShipViaIfMissing — carrier_alias
+     *  rows survive across tests in the shared testcontainer so a repeat
+     *  seed would hit the (source_code) PK constraint. */
+    private void seedCarrierAliasIfMissing(String source, String target, String label) {
+        if (carrierAliasRepository.findById(source).isPresent()) return;
+        CarrierAliasEntity row = new CarrierAliasEntity();
+        row.setSourceCode(source);
+        row.setTargetCode(target);
+        row.setDisplayLabel(label);
+        row.setUpdatedAt(java.time.LocalDateTime.now());
+        carrierAliasRepository.save(row);
     }
 }

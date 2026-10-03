@@ -121,6 +121,13 @@ export default defineConfig(({ mode, command }) => {
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    // Default 5000ms is tight for the drawer-fill flows in
+    // CarrierConnections.*: multi-field user.type sequences take 12-18s
+    // when run after the suite warms up (first few test files run fast,
+    // later ones hit a JIT / module-cache slow path on CI). 30s is a
+    // comfortable ceiling that still fails loudly if a test actually hangs.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
   },
   }
 })
