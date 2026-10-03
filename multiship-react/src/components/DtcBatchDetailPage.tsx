@@ -1,14 +1,14 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { FiAlertCircle, FiArrowLeft, FiEdit2, FiPrinter, FiX, FiZap } from 'react-icons/fi'
+import { FiAlertCircle, FiArrowLeft, FiEdit2, FiPrinter, FiZap } from 'react-icons/fi'
 import type { ColumnDef } from '@tanstack/react-table'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
-import { useFocusTrap } from '../hooks/useFocusTrap'
 import {
   batchStatusOf, canEditLine, dtcService, labelStatusOf, lineHasError,
   type DtcBatchDetail, type DtcOrder,
 } from '../api/dtcService'
 import DtcLineEditModal from './dtc/DtcLineEditModal'
+import DtcLineDetailsModal from './dtc/DtcLineDetailsModal'
 import { orderService } from '../api/orderService'
 import { ApiError } from '../api/apiClient'
 import { confirmBatchGenerate } from '../utils/dtcConfirm'
@@ -145,7 +145,16 @@ export default function DtcBatchDetailPage() {
   const columns = useMemo<ColumnDef<DtcOrder, unknown>[]>(() => [
     { id: 'tenantId', accessorKey: 'tenantId', header: 'Client Code', enableSorting: false },
     { id: 'orderNo', header: 'Order No', accessorKey: 'orderNo', enableSorting: false,
-      cell: ({ row }) => row.original.orderNo ?? '—' },
+      cell: ({ row }) => (
+        <button
+          type="button"
+          onClick={() => setDetailsLine(row.original)}
+          title="Open this shipment line"
+          className="font-mono text-[12px] font-semibold text-[#412d15] underline decoration-[#cdbf9f] underline-offset-2 transition hover:decoration-[#412d15]"
+        >
+          {row.original.orderNo ?? '—'}
+        </button>
+      ) },
     { id: 'generatedOrderNo', header: 'Label Order', accessorKey: 'generatedOrderNo', enableSorting: false,
       cell: ({ row }) => {
         const orderNo = row.original.generatedOrderNo
@@ -332,7 +341,6 @@ export default function DtcBatchDetailPage() {
           tableKey={`d2c-batch-${batchId}-${tenantId}-v1`}
           columns={columns}
           data={data?.content ?? []}
-          onRowClick={(o) => setDetailsLine(o)}
           manualPagination
           pageIndex={pageIndex}
           pageSize={pageSize}
@@ -359,8 +367,8 @@ export default function DtcBatchDetailPage() {
       )}
 
       {detailsLine && (
-        <LineDetailsModal
-          order={detailsLine}
+        <DtcLineDetailsModal
+          line={detailsLine}
           onClose={() => setDetailsLine(null)}
           onEdit={lineHasError(detailsLine) && detailsLine.generatedOrderNo
             ? () => fixLine(detailsLine)
@@ -385,167 +393,6 @@ export default function DtcBatchDetailPage() {
       )}
     </div>
   )
-}
-
-/**
- * Detail modal for one shipment line — opens on any row click, including the
- * lines that have no Multiship order yet (the order drill-down only exists
- * once a label has been attempted, hence the conditional buttons).
- */
-function LineDetailsModal({ order, onClose, onOpenOrder, onEdit }: {
-  order: DtcOrder
-  onClose: () => void
-  onOpenOrder?: () => void
-  onEdit?: () => void
-}) {
-  const dialogRef = useRef<HTMLDivElement>(null)
-  useFocusTrap(true, dialogRef)
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm"
-      role="dialog"
-      aria-modal="true"
-      aria-label={`Shipment line ${order.toteNumber ?? ''} details`}
-      onClick={onClose}
-    >
-      <div
-        ref={dialogRef}
-        className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
-          <div>
-            <h3 className="text-[15px] font-semibold tracking-tight text-[#1f150c]">
-              Shipment line — Tote {order.toteNumber ?? '—'}
-            </h3>
-            <p className="mt-0.5 text-[12px] text-[#6b5c42]">
-              Client {order.tenantId} · batch {order.batchId}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="rounded-lg border border-[#e3d9c4] bg-white p-1.5 text-[#5a4526] transition hover:bg-[#faf7f0]"
-          >
-            <FiX className="h-4 w-4" />
-          </button>
-        </div>
-        <div className="overflow-y-auto px-5 py-4">
-          <LineDetails order={order} onOpenOrder={onOpenOrder} onEdit={onEdit} />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-/**
- * Ship to / shipment / label grid for one line, read straight off the
- * dtc_orders row so it works for pending lines too.
- */
-function LineDetails({ order: o, onOpenOrder, onEdit }: {
-  order: DtcOrder
-  onOpenOrder?: () => void
-  onEdit?: () => void
-}) {
-  const address = [o.shipAddr1, o.shipAddr2, o.shipAddr3].filter(Boolean).join(', ')
-  const locality = [o.shipToCity, o.shipToState, o.shipToZip].filter(Boolean).join(', ')
-  return (
-    <div className="grid gap-x-8 gap-y-4 text-[12px] text-[#3d2f1c] sm:grid-cols-2 lg:grid-cols-3">
-      <section className="space-y-1">
-        <h4 className="text-[10px] font-semibold uppercase tracking-wide text-[#8a7a5a]">Ship to</h4>
-        <p className="font-semibold">{o.shipName ?? '—'}</p>
-        {o.shipAttn && <p>Attn: {o.shipAttn}</p>}
-        {address && <p>{address}</p>}
-        <p>{[locality, o.shipToCountryCode ?? o.countryName].filter(Boolean).join(', ') || '—'}</p>
-        {o.phone && <p>Phone {o.phone}</p>}
-        {o.email && <p>{o.email}</p>}
-      </section>
-
-      <section className="space-y-1">
-        <h4 className="text-[10px] font-semibold uppercase tracking-wide text-[#8a7a5a]">Shipment</h4>
-        <Field label="Order" value={o.orderNo != null ? String(o.orderNo) : null} />
-        <Field label="Goods" value={o.goodsDesc} />
-        <Field label="Weight" value={o.weight != null ? `${o.weight} lb` : null} />
-        <Field label="Ship via" value={shipViaLabel(o)} />
-        <Field label="Customer" value={o.custNo} />
-        <Field label="PO" value={o.custPo} />
-        <Field label="Terms" value={o.termsCode} />
-        <Field label="Location" value={o.location} />
-        <Field label="Intl" value={o.intlYn} />
-      </section>
-
-      <section className="space-y-1">
-        <h4 className="text-[10px] font-semibold uppercase tracking-wide text-[#8a7a5a]">Label</h4>
-        <Field label="Label status" value={o.generatedStatus === 'IN_FLIGHT' ? 'Buying…' : o.generatedStatus ?? 'Not generated'} />
-        <Field label="Carrier" value={o.generatedCarrierCode} />
-        <Field label="Tracking" value={o.generatedTrackingNumber} />
-        <Field label="Label order" value={o.generatedOrderNo != null ? String(o.generatedOrderNo) : null} />
-        <Field label="Generated" value={formatGenerated(o.generatedAt)} />
-        {o.generatedMessage && (
-          <p
-            className={`flex items-start gap-1.5 break-words ${lineHasError(o) ? 'text-red-700' : 'text-[#8a4b2d]'}`}
-            title={o.generatedMessage}
-          >
-            {lineHasError(o) && <FiAlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
-            <span>{o.generatedMessage}</span>
-          </p>
-        )}
-        <div className="mt-1 flex flex-wrap items-center gap-2">
-          {onEdit && (
-            <button
-              type="button"
-              onClick={onEdit}
-              className="inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-800 transition hover:bg-amber-100"
-            >
-              <FiEdit2 className="h-3 w-3" />
-              Edit shipment
-            </button>
-          )}
-          {onOpenOrder && (
-            <button
-              type="button"
-              onClick={onOpenOrder}
-              className="inline-flex items-center rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
-            >
-              View order details
-            </button>
-          )}
-        </div>
-      </section>
-    </div>
-  )
-}
-
-function Field({ label, value }: { label: string; value: string | null | undefined }) {
-  return (
-    <p>
-      <span className="text-[#8a7a5a]">{label}:</span>{' '}
-      <span className={value ? 'font-medium' : 'text-[#9a8b70]'}>{value || '—'}</span>
-    </p>
-  )
-}
-
-/** ERP ship-via arrives twice (code + description); show it once when they match. */
-function shipViaLabel(o: DtcOrder) {
-  const code = o.shipViaCode?.trim()
-  const text = o.shipVia?.trim()
-  if (code && text && code.toLowerCase() !== text.toLowerCase()) return `${code} · ${text}`
-  return code || text || null
-}
-
-/** The ERP/ISO timestamp is opaque to operators; show a locale date+time. */
-function formatGenerated(iso: string | null) {
-  if (!iso) return null
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 }
 
 function statusPillClass(status: string) {
