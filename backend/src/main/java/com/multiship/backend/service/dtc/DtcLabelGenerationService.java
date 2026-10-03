@@ -88,6 +88,14 @@ public class DtcLabelGenerationService {
     private static final String STATUS_GENERATED = "GENERATED";
     private static final String STATUS_FAILED = "FAILED";
     private static final String STATUS_QUEUED_USPS = "QUEUED_USPS";
+    /**
+     * Stamped (and committed) just before the carrier call. The label purchase runs in
+     * one transaction, so a backend that dies while the carrier is answering leaves no
+     * order and no tracking row — only this. A line still IN_FLIGHT when a run reaches
+     * it was interrupted mid-purchase: the carrier may have charged, so it is handed to
+     * the operator instead of being bought again.
+     */
+    static final String STATUS_IN_FLIGHT = "IN_FLIGHT";
     /** The width of dtc_orders.generated_message — see {@link #abbreviate}. */
     private static final int MESSAGE_MAX_LEN = 255;
     private static final BigDecimal DEFAULT_WEIGHT_LB = BigDecimal.ONE;
@@ -225,6 +233,12 @@ public class DtcLabelGenerationService {
             if (syncFromLabel(row)) {
                 return RowOutcome.SKIPPED; // already labelled — don't re-buy
             }
+            if (STATUS_IN_FLIGHT.equals(row.getGeneratedStatus())) {
+                // A previous run died while this line was at the carrier — see STATUS_IN_FLIGHT.
+                stamp(row, STATUS_FAILED, null, null, row.getGeneratedOrderNo(), interruptedMessage(row));
+                log.warn("DTC line {} (batch {}) was interrupted mid-purchase; not buying again", row.getId(), row.getBatchId());
+                return RowOutcome.FAILED;
+            }
 
             ManualShipmentRequest req = buildRequest(job, row);
             Integer existingOrderNo = row.getGeneratedOrderNo();
@@ -233,6 +247,8 @@ public class DtcLabelGenerationService {
             }
             req.setInternalAuditActor("system:dtc-worker/" + job.getId());
 
+            // Committed on its own before the carrier is asked — see STATUS_IN_FLIGHT.
+            stamp(row, STATUS_IN_FLIGHT, null, null, existingOrderNo, null);
             ApiResponse<LabelGenerationResponse> resp =
                     carrierService.generateManualLabel(req, null, existingOrderNo);
             LabelGenerationResponse data = resp == null ? null : resp.getData();
@@ -594,6 +610,14 @@ public class DtcLabelGenerationService {
         log.info("DTC line {} (batch {}) realigned with label order {}: {} → GENERATED",
                 row.getId(), row.getBatchId(), orderNo, was);
         return true;
+    }
+
+    /** What the operator reads on a line whose purchase was cut off. */
+    private static String interruptedMessage(DtcOrder row) {
+        return "Interrupted while the label was being bought — the carrier may have charged for it. "
+                + "Check the carrier's shipping history for batch " + row.getBatchId()
+                + (StringUtils.hasText(row.getToteNumber()) ? " / tote " + row.getToteNumber() : "")
+                + " before generating again.";
     }
 
     /** Same wording the label path reports, so a realigned line reads like a generated one. */

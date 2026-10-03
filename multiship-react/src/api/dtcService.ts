@@ -158,7 +158,8 @@ export interface DtcOrder {
   generatedOrderNo: number | null
   generatedTrackingNumber: string | null
   generatedCarrierCode: string | null
-  generatedStatus: 'GENERATED' | 'FAILED' | 'QUEUED_USPS' | null
+  /** IN_FLIGHT — the label is being bought right now (stamped just before the carrier call). */
+  generatedStatus: 'GENERATED' | 'FAILED' | 'QUEUED_USPS' | 'IN_FLIGHT' | null
   generatedMessage: string | null
   generatedAt: string | null
 }

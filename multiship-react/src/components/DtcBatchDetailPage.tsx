@@ -208,10 +208,10 @@ export default function DtcBatchDetailPage() {
         return (
           <div className="flex items-center gap-2">
             <span
-              title={o.generatedMessage ?? undefined}
+              title={o.generatedStatus === 'IN_FLIGHT' ? 'The label is being bought right now' : o.generatedMessage ?? undefined}
               className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${statusPillClass(o.generatedStatus)}`}
             >
-              {o.generatedStatus}
+              {o.generatedStatus === 'IN_FLIGHT' ? 'Buying…' : o.generatedStatus}
             </span>
             {errored && o.generatedOrderNo && (
               <button
@@ -455,7 +455,7 @@ function LineDetails({ order: o, onOpenOrder, onEdit }: {
 
       <section className="space-y-1">
         <h4 className="text-[10px] font-semibold uppercase tracking-wide text-[#8a7a5a]">Label</h4>
-        <Field label="Label status" value={o.generatedStatus ?? 'Not generated'} />
+        <Field label="Label status" value={o.generatedStatus === 'IN_FLIGHT' ? 'Buying…' : o.generatedStatus ?? 'Not generated'} />
         <Field label="Carrier" value={o.generatedCarrierCode} />
         <Field label="Tracking" value={o.generatedTrackingNumber} />
         <Field label="Label order" value={o.generatedOrderNo != null ? String(o.generatedOrderNo) : null} />
@@ -522,5 +522,6 @@ function formatGenerated(iso: string | null) {
 function statusPillClass(status: string) {
   if (status === 'GENERATED' || status === 'QUEUED_USPS') return 'border-emerald-200 bg-emerald-50 text-emerald-700'
   if (status === 'FAILED') return 'border-red-200 bg-red-50 text-red-700'
+  if (status === 'IN_FLIGHT') return 'border-amber-200 bg-amber-50 text-amber-700'
   return 'border-slate-200 bg-slate-50 text-slate-600'
 }

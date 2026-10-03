@@ -131,9 +131,9 @@ public interface DtcOrderRepository extends JpaRepository<DtcOrder, Long> {
                     AND SUM(CASE WHEN d.generatedStatus IN ('GENERATED', 'QUEUED_USPS', 'FAILED') THEN 1 ELSE 0 END) > 0))
            AND (:batchStatus = ''
                 OR (:batchStatus = 'COMPLETE'
-                    AND SUM(CASE WHEN d.generatedStatus IS NULL OR d.generatedStatus = 'QUEUED_USPS' THEN 1 ELSE 0 END) = 0)
+                    AND SUM(CASE WHEN d.generatedStatus IS NULL OR d.generatedStatus IN ('QUEUED_USPS', 'IN_FLIGHT') THEN 1 ELSE 0 END) = 0)
                 OR (:batchStatus = 'OPEN'
-                    AND SUM(CASE WHEN d.generatedStatus IS NULL OR d.generatedStatus = 'QUEUED_USPS' THEN 1 ELSE 0 END) > 0))
+                    AND SUM(CASE WHEN d.generatedStatus IS NULL OR d.generatedStatus IN ('QUEUED_USPS', 'IN_FLIGHT') THEN 1 ELSE 0 END) > 0))
         """;
 
     /**
@@ -177,7 +177,7 @@ public interface DtcOrderRepository extends JpaRepository<DtcOrder, Long> {
             SUM(CASE WHEN d.generatedStatus = 'GENERATED' THEN 1 ELSE 0 END),
             SUM(CASE WHEN d.generatedStatus = 'FAILED' THEN 1 ELSE 0 END),
             SUM(CASE WHEN d.generatedStatus = 'QUEUED_USPS' THEN 1 ELSE 0 END),
-            SUM(CASE WHEN d.generatedStatus IS NULL THEN 1 ELSE 0 END),
+            SUM(CASE WHEN d.generatedStatus IS NULL OR d.generatedStatus = 'IN_FLIGHT' THEN 1 ELSE 0 END),
             MAX(d.createdAt))
         FROM DtcOrder d
         WHERE d.tenantId = :tenantId AND d.batchId = :batchId
