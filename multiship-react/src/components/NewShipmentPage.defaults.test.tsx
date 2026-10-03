@@ -153,6 +153,15 @@ vi.mock('../api/customFieldService', () => ({
   },
 }))
 
+const dtcLine = vi.fn()
+const dtcEditLine = vi.fn()
+vi.mock('../api/dtcService', () => ({
+  dtcService: {
+    line: (...a: unknown[]) => dtcLine(...a),
+    editLine: (...a: unknown[]) => dtcEditLine(...a),
+  },
+}))
+
 // ==================================================================
 // Fixtures
 // ==================================================================
@@ -618,5 +627,42 @@ describe('NewShipmentPage — state/region input', () => {
       expect(optionTexts).toContain('BC — British Columbia')
       expect(optionTexts).not.toContain('DE — Delaware')
     })
+  })
+})
+
+// ==================================================================
+// D2C-line mode: Edit on a failed D2C line with no label order yet
+// ==================================================================
+
+describe('NewShipmentPage — D2C line fix mode', () => {
+  it('pre-fills the form from the line and shows why its label run failed', async () => {
+    dtcLine.mockResolvedValue({
+      data: {
+        id: 11, tenantId: 'ACME', batchId: 141, toteNumber: '507', orderNo: 11520,
+        shipName: 'Jane Doe', shipAttn: null, shipAddr1: '1 Main St', shipAddr2: null, shipAddr3: null,
+        shipToCity: 'Zeeland', shipToState: 'MI', shipToZip: '49464', shipToCountryCode: 'US',
+        phone: '6165550100', email: null, weight: 2.5, goodsDesc: 'Fabric', unitValue: 10,
+        generatedStatus: 'FAILED', generatedOrderNo: null,
+        generatedMessage: 'no shipping service mapped for ship-via P80 — add a Code Map for ACME',
+      },
+    })
+    window.history.pushState({}, '', '/orders/new?dtcLine=11&batch=141&tenant=ACME')
+    try {
+      const Page = await loadPage()
+      renderWithProviders(<Page />)
+
+      expect(await screen.findByText(/Fixing D2C line — batch 141, tote 507, order 11520/)).toBeTruthy()
+      expect(screen.getByText(/no shipping service mapped for ship-via P80/)).toBeTruthy()
+      expect(dtcLine).toHaveBeenCalledWith('141', 11, 'ACME')
+      await waitFor(() => {
+        expect(screen.getByDisplayValue('Jane Doe')).toBeTruthy()
+        expect(screen.getByDisplayValue('1 Main St')).toBeTruthy()
+        expect(screen.getByDisplayValue('Zeeland')).toBeTruthy()
+        expect((screen.getByLabelText(/^Client\s*\*?$/i) as HTMLSelectElement).value).toBe('ACME')
+      })
+      expect(dtcEditLine).not.toHaveBeenCalled()
+    } finally {
+      window.history.pushState({}, '', '/')
+    }
   })
 })

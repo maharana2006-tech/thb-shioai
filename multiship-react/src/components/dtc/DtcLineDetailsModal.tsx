@@ -3,6 +3,8 @@ import { FiAlertCircle, FiEdit2, FiExternalLink, FiMapPin, FiPackage, FiTag, FiX
 import { lineHasError, type DtcOrder } from '../../api/dtcService'
 import { useFocusTrap } from '../../hooks/useFocusTrap'
 import { Card, Rows } from '../modals/DetailCards'
+import { countryName } from '../../utils/countries'
+import { summarizeCarrierError } from '../../utils/carrierErrorMap'
 
 /**
  * One D2C shipment line, read straight off the dtc_orders row (so it works for
@@ -28,9 +30,14 @@ export default function DtcLineDetailsModal({ line: o, onClose, onEdit, onOpenOr
 
   const errored = lineHasError(o)
   const status = statusOf(o)
-  const street = [o.shipAddr1, o.shipAddr2, o.shipAddr3].filter(Boolean)
+  const code = o.shipToCountryCode?.trim().toUpperCase() || null
+  const country = code ? countryName(code) : o.countryName
+  // The ERP feed sometimes repeats the country as the last street line ("Canada").
+  const isCountry = (l: string) => [country, code, o.countryName].some((c) => c && c.toLowerCase() === l.trim().toLowerCase())
+  const street = [o.shipAddr1, o.shipAddr2, o.shipAddr3].filter((l): l is string => !!l?.trim() && !isCountry(l))
   const locality = [o.shipToCity, [o.shipToState, o.shipToZip].filter(Boolean).join(' ')].filter(Boolean).join(', ')
-  const country = o.shipToCountryCode ?? o.countryName
+  // Some feeds put a bare tote sequence in ship_name — the attention line is the recipient then.
+  const name = o.shipName?.trim() && !/^\d+$/.test(o.shipName.trim()) ? o.shipName.trim() : o.shipAttn?.trim() || o.shipName
 
   return (
     <div
@@ -71,14 +78,16 @@ export default function DtcLineDetailsModal({ line: o, onClose, onEdit, onOpenOr
             <div className={`flex items-start gap-2.5 rounded-xl border px-3.5 py-2.5 text-[12.5px] ${
               errored ? 'border-red-200 bg-red-50 text-red-800' : 'border-[#e3d9c4] bg-[#fcfaf5] text-[#5a4526]'}`}>
               {errored ? <FiAlertCircle className="mt-0.5 h-4 w-4 shrink-0" /> : null}
-              <p className="min-w-0 break-words">{o.generatedMessage}</p>
+              <p className="min-w-0 break-words" title={o.generatedMessage}>
+                {errored ? summarizeCarrierError(o.generatedMessage) : o.generatedMessage}
+              </p>
             </div>
           ) : null}
 
           <div className="grid gap-4 sm:grid-cols-2">
             <Card icon={<FiMapPin className="h-3.5 w-3.5" />} title="Ship to">
-              <p className="text-[13.5px] font-semibold text-[#1f150c]">{o.shipName ?? '—'}</p>
-              {o.shipAttn ? <p className="text-[12.5px] text-[#5a4526]">{o.shipAttn}</p> : null}
+              <p className="text-[13.5px] font-semibold text-[#1f150c]">{name || '—'}</p>
+              {o.shipAttn && o.shipAttn.trim() !== name ? <p className="text-[12.5px] text-[#5a4526]">{o.shipAttn}</p> : null}
               <div className="mt-1.5 space-y-0.5 text-[12.5px] leading-relaxed text-[#3d2f1c]">
                 {street.length ? street.map((l) => <p key={l}>{l}</p>) : <p className="text-[#a1906d]">No street address</p>}
                 {locality ? <p>{locality}</p> : null}

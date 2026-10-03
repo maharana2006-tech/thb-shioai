@@ -85,6 +85,7 @@ public class DtcBatchController {
     private final LabelArtifactResolver labelArtifactResolver;
     private final TenantScopeEnforcer tenantScope;
     private final com.multiship.backend.service.printing.DocumentPrintLog printLog;
+    private final com.multiship.backend.service.LabelImagePdfService labelImagePdfService;
 
     @Operation(summary = "Batch summary (one row per tenant+batch)",
             description = "Dtcal-style aggregates. Filters: tenantId, shipDate, q (free text over batch / tote / order no / "
@@ -252,6 +253,25 @@ public class DtcBatchController {
                 .message(message).build());
     }
 
+    @Operation(summary = "One shipment line",
+            description = "Prefill for the manual shipment form when a failed line is fixed there. "
+                    + "404 when the line isn't in the tenant's batch.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping("/{batchId}/lines/{lineId}")
+    public ResponseEntity<ApiResponse<DtcOrder>> line(
+            @PathVariable BigDecimal batchId,
+            @PathVariable Long lineId,
+            @RequestParam(defaultValue = "") String tenantId) {
+        String tenant = requireTenant(tenantId);
+        return dtcOrderRepository.findById(lineId)
+                .filter(r -> r.getTenantId() != null && r.getTenantId().trim().equalsIgnoreCase(tenant)
+                        && r.getBatchId() != null && r.getBatchId().compareTo(batchId) == 0)
+                .map(r -> ok("Line " + lineId, r))
+                .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.<DtcOrder>builder()
+                        .status("ERROR").code(404).timestamp(LocalDateTime.now())
+                        .message("Line " + lineId + " is not in batch " + batchId + " for " + tenant).build()));
+    }
+
     @Operation(summary = "Generation job status", description = "Progress poll target after enqueue.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @GetMapping("/generation-jobs/{jobId}")
@@ -287,8 +307,12 @@ public class DtcBatchController {
             int added = 0;
             List<Integer> printed = new java.util.ArrayList<>();
             for (DtcOrder row : rows) {
-                Optional<byte[]> pdf =
-                        labelArtifactResolver.resolveAsBytes(row.getGeneratedOrderNo(), "PDF", null);
+                // UPS stores its label as a GIF — wrap it into a 4x6 PDF like
+                // GET /orders/{n}/label/pdf does, or the ZIP silently drops it.
+                Integer no = row.getGeneratedOrderNo();
+                Optional<byte[]> pdf = labelArtifactResolver.resolveAsBytes(no, "PDF", null)
+                        .or(() -> labelArtifactResolver.resolveImage(no, null)
+                                .map(img -> labelImagePdfService.imagesToPdf(List.of(img.bytes()))));
                 if (pdf.isEmpty()) continue;
                 zip.putNextEntry(new ZipEntry("label-" + row.getGeneratedOrderNo() + ".pdf"));
                 zip.write(pdf.get());

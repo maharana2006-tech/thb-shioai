@@ -321,7 +321,7 @@ public class DtcLabelGenerationService {
         req.setWeight(row.getWeight() != null && row.getWeight().signum() > 0
                 ? row.getWeight() : DEFAULT_WEIGHT_LB);
         req.setWeightUnit("LB");
-        req.setReference("DTC batch " + row.getBatchId()
+        req.setReference("DTC batch " + (row.getBatchId() == null ? "" : row.getBatchId().stripTrailingZeros().toPlainString())
                 + (StringUtils.hasText(row.getToteNumber()) ? " / tote " + row.getToteNumber() : ""));
         if (StringUtils.hasText(row.getGoodsDesc())) {
             req.setGoodsDescription(NdsAddressSanitizer.sanitize(row.getGoodsDesc()));

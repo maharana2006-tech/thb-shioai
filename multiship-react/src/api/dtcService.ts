@@ -44,6 +44,11 @@ export const dtcService = {
    * Correct a line that has no label order yet (null = keep, "" = clear), or link it to an
    * order labelled by hand ({ adoptOrderNo }). 409 once the line has a label or is being bought.
    */
+  /** One line — the manual shipment form's prefill when a failed line is fixed there. */
+  line: (batchId: string, lineId: number, tenantId: string) =>
+    apiClient.get<ApiResponse<DtcOrder>>(
+      `/dtc/batches/${batchId}/lines/${lineId}?tenantId=${encodeURIComponent(tenantId)}`),
+
   editLine: (batchId: string, lineId: number, tenantId: string, body: DtcLineEdit) =>
     apiClient.patch<ApiResponse<DtcOrder>>(
       `/dtc/batches/${batchId}/lines/${lineId}?tenantId=${encodeURIComponent(tenantId)}`, body),
