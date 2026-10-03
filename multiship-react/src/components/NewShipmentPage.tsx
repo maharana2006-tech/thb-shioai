@@ -198,6 +198,8 @@ export default function NewShipmentPage() {
   /** True when the order being reopened is a VOIDED (reissue) rather than a failed one. */
   const [fixVoided, setFixVoided] = useState(false)
   const [fixLoading, setFixLoading] = useState<boolean>(!!fixOrderNo)
+  /** The fixed order's own channel, re-sent on regenerate so it isn't reclassified from the recipient. */
+  const [fixChannel, setFixChannel] = useState<'D2C' | 'B2B' | null>(null)
   // D2C-line mode: /orders/new?dtcLine=11&batch=141&tenant=ARHDEV opens a D2C
   // line whose label run failed before any order existed. The form is
   // pre-filled from the line, and the label it buys is linked back to the line
@@ -1134,8 +1136,11 @@ export default function NewShipmentPage() {
         // phoneCountryCode from the loaded country instead of trusting a
         // stored value that may not match.
         const recipCountry = o.shiptoCountryCd ?? 'US'
+        // D2C feeds put a bare tote sequence ("9") in ship_name — the
+        // attention line is the real recipient then.
+        const bareNo = !!o.shipName && /^\d+$/.test(o.shipName.trim()) && !!o.shipAttn?.trim()
         setRecipient({
-          name: o.shipName ?? '', company: o.shipAttn ?? '', phone: o.phone ?? '', email: '',
+          name: (bareNo ? o.shipAttn : o.shipName) ?? '', company: bareNo ? '' : o.shipAttn ?? '', phone: o.phone ?? '', email: '',
           addressLine1: o.shipAddr1 ?? '', addressLine2: '', city: o.shiptoCity ?? '',
           state: o.shiptoState ?? '', postalCode: o.shiptoZip ?? '', countryCode: recipCountry,
           phoneCountryCode: dialCodeFor(recipCountry) || '',
@@ -1209,7 +1214,12 @@ export default function NewShipmentPage() {
         }
         setFixError(byId?.data?.errorDetails?.errorMessage ?? null)
         setFixVoided((byId?.data?.labelDetails?.status ?? '').toUpperCase() === 'VOIDED')
-        if (byId?.data?.orderDetails?.refOrderNumber) setReference(byId.data.orderDetails.refOrderNumber)
+        const ch = (o.orderChannel ?? '').toUpperCase()
+        setFixChannel(ch === 'D2C' || ch === 'B2B' ? ch : null)
+        // Older D2C orders stored "DTC batch 98.00 / tote 2".
+        if (byId?.data?.orderDetails?.refOrderNumber) {
+          setReference(byId.data.orderDetails.refOrderNumber.replace(/^(DTC batch \d+)\.0+(?=\s|$)/, '$1'))
+        }
       } catch (err) {
         if (!cancelled) notify.apiError(err, `Could not load order ${fixOrderNo} to fix.`)
       } finally {
@@ -2617,6 +2627,9 @@ export default function NewShipmentPage() {
           }
         : {}),
       reference: reference.trim() || undefined,
+      // A D2C line ships to a consumer; its attention line lands in Company,
+      // which would otherwise classify the order as B2B.
+      ...(dtcLineId ? { channel: 'D2C' as const } : fixOrderNo && fixChannel ? { channel: fixChannel } : {}),
       // V76 — internal per-order ops note; omit when blank so the
       // wire only carries populated fields.
       ...(note.trim() ? { note: note.trim() } : {}),

@@ -564,6 +564,8 @@ export interface ManualShipmentItem {
 export interface ManualShipmentPayload {
   sender: ManualShipmentAddress
   recipient: ManualShipmentAddress
+  /** D2C | B2B — omitted lets the server classify from the recipient. */
+  channel?: 'D2C' | 'B2B'
   /** True = reverse/return label (customer ships back); false/omitted = normal outbound shipment. */
   isReturn?: boolean
   /** Return delivery type — PRINT | EMAIL. */
