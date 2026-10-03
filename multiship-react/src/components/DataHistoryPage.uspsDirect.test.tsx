@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor, cleanup, act } from '@testing-library/react'
+import { render, screen, waitFor, cleanup, act, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BrowserRouter, MemoryRouter, Route, Routes } from 'react-router-dom'
 import { Provider } from 'react-redux'
@@ -702,11 +702,13 @@ describe('Bulk Mailer — layout', () => {
     await waitFor(() => expect(listBatches).toHaveBeenCalledWith(expect.objectContaining({ view: 'FILE', page: 0, size: 25, sort: 'created', dir: 'DESC' })))
     listBatches.mockClear()
     bulkSummary.mockClear()
-    await userEvent.type(screen.getByPlaceholderText(/Search file name/i), 'acme')
-    // 2000ms was tight when this file ran after a warm suite (type+debounce
-    // on a 100-test backlog slips past that). 10s matches the vitest-wide
-    // timeout bump and still fails loud if debounce actually breaks.
-    await waitFor(() => expect(listBatches).toHaveBeenCalledWith(expect.objectContaining({ q: 'acme', page: 0 })), { timeout: 10_000 })
+    // Was `userEvent.type(..., 'acme')` — v14 per-char delays stack with the
+    // 300ms debounce and under a warm suite the test blew past the waitFor
+    // ceiling. fireEvent.change fires one synchronous input event so the
+    // debounce timer starts immediately on 'acme'.
+    const searchInput = screen.getByPlaceholderText(/Search file name/i)
+    fireEvent.change(searchInput, { target: { value: 'acme' } })
+    await waitFor(() => expect(listBatches).toHaveBeenCalledWith(expect.objectContaining({ q: 'acme', page: 0 })))
     // The summary depends on the view only: a search does not re-read it.
     expect(bulkSummary).not.toHaveBeenCalled()
   })
