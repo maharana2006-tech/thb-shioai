@@ -1,9 +1,7 @@
 package com.multiship.backend.service.ndsshipment;
 
 import com.multiship.backend.model.ClientShipviaCodeMap;
-import com.multiship.backend.model.ShipViaMapping;
 import com.multiship.backend.repository.ClientShipviaCodeMapRepository;
-import com.multiship.backend.repository.ShipViaMappingRepository;
 import com.multiship.backend.service.StdShipMethodResolver;
 import com.multiship.backend.service.externalsystems.ExternalSystemException;
 import com.multiship.backend.service.TenantScopeEnforcer;
@@ -22,8 +20,8 @@ import java.util.stream.Stream;
 /**
  * Business orchestrator for the NDS Shipment prefill feature.
  * Composes {@link NdsScanValueParser} + {@link NdsShipmentLookupRepository}
- * + {@link ClientShipviaCodeMapRepository} / {@link ShipViaMappingRepository}
- * into a single {@link NdsShipmentPrefill} response.
+ * + {@link ClientShipviaCodeMapRepository} into a single
+ * {@link NdsShipmentPrefill} response.
  *
  * <p>Rules implemented here (mirroring the ShipX legacy behavior):
  * <ul>
@@ -66,7 +64,6 @@ public class NdsShipmentLookupService {
 
     private final NdsShipmentLookupRepository repository;
     private final ClientShipviaCodeMapRepository clientShipviaRepo;
-    private final ShipViaMappingRepository shipviaMappingRepo;
     /** G6 — STD ship method resolver. Nullable in reduced-args test wiring. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.service.StdShipMethodResolver stdResolver;
@@ -518,21 +515,12 @@ public class NdsShipmentLookupService {
         }
     }
 
-    /** Client-scoped code map first (exact match), fall back to global rule. */
+    /** V126 merge — single specificity-ordered lookup. The finder puts
+     *  per-client rows ahead of platform-wide (null client) rows. */
     private Long resolveServiceId(String clientCode, String shipviaCd) {
-        Optional<ClientShipviaCodeMap> perClient =
-                clientShipviaRepo.findByClientCodeIgnoreCaseAndErpCodeIgnoreCase(clientCode, shipviaCd);
-        if (perClient.isPresent()) return perClient.get().getServiceId();
-        List<ShipViaMapping> global = shipviaMappingRepo.findByShipviaCdIgnoreCase(shipviaCd);
-        if (global.isEmpty()) return null;
-        // Prefer a client-narrowed rule when present, else the first any-client rule.
-        return global.stream()
-                .filter(r -> clientCode.equalsIgnoreCase(r.getClientCode()))
-                .findFirst()
-                .or(() -> global.stream().filter(r -> r.getClientCode() == null).findFirst())
-                .or(() -> global.stream().findFirst())
-                .map(ShipViaMapping::getServiceId)
-                .orElse(null);
+        List<ClientShipviaCodeMap> matches =
+                clientShipviaRepo.findMatches(clientCode, shipviaCd, null, null, null);
+        return matches.isEmpty() ? null : matches.get(0).getServiceId();
     }
 
     private static boolean isInternational(String countryCd) {

@@ -8,11 +8,11 @@ import com.multiship.backend.dto.WarehouseDTO;
 import com.multiship.backend.dto.WarehouseListFilters;
 import com.multiship.backend.dto.WarehouseUpsertRequest;
 import com.multiship.backend.model.Address;
-import com.multiship.backend.model.ShipViaMapping;
+import com.multiship.backend.model.ClientShipviaCodeMap;
 import com.multiship.backend.model.Warehouse;
 import com.multiship.backend.repository.ClientRepository;
+import com.multiship.backend.repository.ClientShipviaCodeMapRepository;
 import com.multiship.backend.repository.ClientWarehouseRepository;
-import com.multiship.backend.repository.ShipViaMappingRepository;
 import com.multiship.backend.repository.WarehouseRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -34,9 +34,9 @@ public class WarehouseServiceImpl implements WarehouseService {
     private final WarehouseRepository warehouseRepository;
     private final ClientWarehouseRepository clientWarehouseRepository;
     private final ClientRepository clientRepository;
-    /** Sprint 55 audit #287 — used by deleteWarehouse to null out
-     *  scalar warehouse_id on legacy pre-phase-6 mapping rules. */
-    private final ShipViaMappingRepository shipViaMappingRepository;
+    /** V126 merge — deleteWarehouse nulls out scalar warehouse_id on
+     *  code-map rows that pinned this warehouse. */
+    private final ClientShipviaCodeMapRepository clientShipviaCodeMapRepository;
     private final AuditService auditService;
 
     /** Sprint 50 Tier 0.5 PR H — clamp tenant on CLIENT-owned warehouse
@@ -222,15 +222,14 @@ public class WarehouseServiceImpl implements WarehouseService {
         // Sprint 55 audit #287 — legacy pre-phase-6 rules used a scalar
         // warehouse_id column; null it out on delete so the schema is
         // cleanly consistent. The resolver ALREADY treats null as "any
-        // warehouse" (documented in ShipViaMapping.java:29), so behavior
-        // is unchanged — this just prevents dangling FK references in
-        // audit-time queries. Phase-6 rules use ShipMethodRuleWarehouse
-        // (a join table) and are unaffected.
-        List<ShipViaMapping> legacyRules = shipViaMappingRepository.findByWarehouseId(w.getId());
+        // warehouse" semantic (same as the pre-merge SSM scalar). This
+        // just prevents dangling FK references in audit-time queries.
+        List<ClientShipviaCodeMap> legacyRules =
+                clientShipviaCodeMapRepository.findByWarehouseId(w.getId());
         long detachedLegacyRules = legacyRules.size();
         if (!legacyRules.isEmpty()) {
             legacyRules.forEach(r -> r.setWarehouseId(null));
-            shipViaMappingRepository.saveAll(legacyRules);
+            clientShipviaCodeMapRepository.saveAll(legacyRules);
         }
         Long deletedId = w.getId();
         warehouseRepository.delete(w);

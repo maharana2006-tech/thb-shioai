@@ -88,10 +88,11 @@ public class OrderImportServiceImpl implements OrderImportService {
     private final CarrierAccountRefRepository accountRefRepository;
     /** Sprint 48 — service catalog for the template's serviceType dropdown. */
     private final ShippingServiceRepository shippingServiceRepository;
-    /** Ship-method rules — each client's own ship via codes for the template's
-     *  serviceType dropdown and its legend. Optional (null in tests). */
+    /** V126 merge — ship-via rules now live on client_shipvia_code_map;
+     *  used by the Excel template's serviceType dropdown. Optional (null
+     *  in tests that construct the service via its RequiredArgsConstructor). */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private com.multiship.backend.repository.ShipViaMappingRepository shipViaMappingRepository;
+    private com.multiship.backend.repository.ClientShipviaCodeMapRepository clientShipviaCodeMapRepository;
     /** Sprint 48 — package presets for the template's packageType dropdown. */
     private final PackagePresetRepository packagePresetRepository;
     /** Sprint 48 — client list for the universal-template clientCode dropdown. */
@@ -1051,14 +1052,16 @@ public class OrderImportServiceImpl implements OrderImportService {
     private Map<String, Map<String, String>> shipViaCodesByClient(
             List<Client> clients, List<com.multiship.backend.model.ShippingService> services) {
         Map<String, Map<String, String>> out = new LinkedHashMap<>();
-        if (shipViaMappingRepository == null) return out;
+        if (clientShipviaCodeMapRepository == null) return out;
         java.util.Map<Long, com.multiship.backend.model.ShippingService> serviceById = new java.util.HashMap<>();
         for (com.multiship.backend.model.ShippingService s : services) {
             if (s.getId() != null) serviceById.put(s.getId(), s);
         }
-        List<com.multiship.backend.model.ShipViaMapping> rules;
+        // V126 merge — rules come from client_shipvia_code_map; null
+        // clientCode row = platform-wide (applies to everyone).
+        List<com.multiship.backend.model.ClientShipviaCodeMap> rules;
         try {
-            rules = shipViaMappingRepository.findAllByOrderByShipviaCdAsc();
+            rules = clientShipviaCodeMapRepository.findAllByOrderByErpCodeAsc();
         } catch (RuntimeException e) {
             log.warn("xlsxTemplate: ship via rules unavailable: {}", e.getMessage());
             return out;
@@ -1067,13 +1070,13 @@ public class OrderImportServiceImpl implements OrderImportService {
             String code = c.getClientCode() == null ? null : c.getClientCode().trim().toUpperCase(Locale.ROOT);
             if (code == null || code.isBlank()) continue;
             Map<String, String> mine = new java.util.TreeMap<>();
-            for (com.multiship.backend.model.ShipViaMapping rule : rules) {
+            for (com.multiship.backend.model.ClientShipviaCodeMap rule : rules) {
                 String owner = rule.getClientCode();
-                // Global rules (no client) apply to everyone.
+                // Platform-wide rules (null clientCode) apply to everyone.
                 if (owner != null && !owner.isBlank() && !owner.trim().equalsIgnoreCase(code)) continue;
                 com.multiship.backend.model.ShippingService svc = serviceById.get(rule.getServiceId());
                 if (svc == null || !svc.isEnabled()) continue;
-                mine.put(rule.getShipviaCd().trim().toUpperCase(Locale.ROOT),
+                mine.put(rule.getErpCode().trim().toUpperCase(Locale.ROOT),
                         svc.getName() + " (" + svc.getCarrier() + " " + svc.getServiceCode() + ")");
             }
             if (!mine.isEmpty()) out.put(code, mine);

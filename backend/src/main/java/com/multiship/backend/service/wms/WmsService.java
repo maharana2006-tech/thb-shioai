@@ -52,9 +52,6 @@ public class WmsService {
     private com.multiship.backend.repository.ClientShipviaCodeMapRepository clientShipviaCodeMapRepository;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.repository.ShippingServiceRepository shippingServiceRepository;
-    /** Settings → Shipping Service Mapping (ship-via code → service, per client). */
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private com.multiship.backend.repository.ShipViaMappingRepository shipViaMappingRepository;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.repository.CarrierAccountRefRepository carrierAccountRefRepository;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
