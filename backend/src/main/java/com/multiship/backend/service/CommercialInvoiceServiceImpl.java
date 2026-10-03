@@ -20,6 +20,7 @@ import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
+import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.springframework.stereotype.Service;
 
 import java.awt.Color;
@@ -95,6 +96,11 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
     private final OrderTrackingRepository orderTrackingRepository;
     private final CarrierAccountRefRepository accountRefRepository;
     private final com.multiship.backend.repository.LabelPackageRepository labelPackageRepository;
+    // H17-2 — per-tenant branding for the commercial invoice (logo, header,
+    // primary color). Field-injected via @Autowired(required=false) so the
+    // existing 7-arg constructor-based test setup stays compatible with null.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private LabelTemplateService labelTemplateService;
 
     public CommercialInvoiceServiceImpl(OrderRepository orderRepository,
                                         OrderCustomsRepository orderCustomsRepository,
@@ -180,7 +186,15 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
         ClientCustomsProfile profile = resolveProfile(clientCode, order.getShiptoCountryCd());
         OrderTracking tracking = orderTrackingRepository.findByOrderNo(orderNo).orElse(null);
 
-        return renderPdf(buildModel(order, customs, client, profile, tracking));
+        // H17-2 — resolve the per-tenant CI template. Null when unset (either
+        // the service bean isn't wired in a bare-ctor test OR no tenant /
+        // platform-default row exists); drawers fall back to the hardcoded
+        // palette + "COMMERCIAL INVOICE" title in that case.
+        String tenantId = order.getTenantId() != null ? order.getTenantId() : order.getCustNo();
+        com.multiship.backend.model.LabelTemplate template = labelTemplateService == null
+                ? null
+                : labelTemplateService.resolve(tenantId, "COMMERCIAL_INVOICE").orElse(null);
+        return renderPdf(buildModel(order, customs, client, profile, tracking), template);
     }
 
     private Model buildModel(Order order, OrderCustoms customs, Client client,
@@ -685,6 +699,11 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
     private record Row(String section, boolean header, boolean keepWithNext, float height, RowDrawer drawer, Line line) {}
 
     private byte[] renderPdf(Model m) {
+        return renderPdf(m, null);
+    }
+
+    /** H17-2 — template may be null; drawers fall back to hardcoded defaults. */
+    private byte[] renderPdf(Model m, com.multiship.backend.model.LabelTemplate template) {
         try (PDDocument doc = new PDDocument();
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {
 
@@ -728,10 +747,31 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
                 }
             }
 
+            // H17-2 — template-driven overrides (null = hardcoded fallback).
+            final String titleText = template != null && template.getHeaderText() != null
+                    && !template.getHeaderText().isBlank()
+                    ? template.getHeaderText().trim() : "COMMERCIAL INVOICE";
+            final Color accent = parseTemplateColor(template, ESPRESSO);
+            final String footerExtra = template != null && template.getFooterText() != null
+                    && !template.getFooterText().isBlank() ? template.getFooterText().trim() : null;
+            // H17-2 — logo. Decoded once; PDImageXObject attached to the doc
+            // and reused across pages. Null when no template logo set OR the
+            // base64 is malformed (debug-logged, invoice still renders).
+            byte[] logoBytes = decodeTemplateLogo(template);
+            PDImageXObject logoImg = null;
+            if (logoBytes != null) {
+                try {
+                    logoImg = PDImageXObject.createFromByteArray(doc, logoBytes, "ci-logo");
+                } catch (Exception ex) {
+                    log.debug("CI logo PDImageXObject decode failed for templateId={}: {}",
+                            template.getId(), ex.toString());
+                }
+            }
+
             // Pass 1 — measure the fixed blocks with a dry pen, then place rows
             // page by page so the closing block always fits on the last page.
             Pen dry = new Pen(null);
-            float firstHeaderH = drawFirstHeader(dry, m, pageW, pageH);
+            float firstHeaderH = drawFirstHeader(dry, m, pageW, pageH, titleText, accent, logoImg);
             float contHeaderH = drawContinuationHeader(dry, m, pageW, pageH);
             float closingH = drawClosing(dry, m, pageW, MARGIN, contentW, 0f);
             float carryH = 20f;
@@ -805,7 +845,7 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
                 try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
                     Pen pen = new Pen(cs);
                     float top = pageH - MARGIN;
-                    y = top - (first ? drawFirstHeader(pen, m, pageW, pageH) : drawContinuationHeader(pen, m, pageW, pageH));
+                    y = top - (first ? drawFirstHeader(pen, m, pageW, pageH, titleText, accent, logoImg) : drawContinuationHeader(pen, m, pageW, pageH));
                     if (range[0] < rows.size() && !rows.get(range[0]).header()) {
                         // Continuation of a section: repeat its header.
                         y = "items".equals(rows.get(range[0]).section()) ? table.drawHeader(pen, y) : pkgTable.drawHeader(pen, y);
@@ -833,7 +873,7 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
                     }
                     if (m.lines().isEmpty() && first) pen.rule(MARGIN, MARGIN + contentW, y, RULE, 0.5f);
                     if (last) drawClosing(pen, m, pageW, MARGIN, contentW, y);
-                    drawFooter(pen, m, pageW, p + 1, totalPages);
+                    drawFooter(pen, m, pageW, p + 1, totalPages, footerExtra);
                 }
             }
             doc.save(out);
@@ -867,15 +907,37 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
     // ---- page 1 header: title, meta panel, party grid --------------------
 
     /** Draws (or measures) the page-1 header; returns its height. */
-    private float drawFirstHeader(Pen pen, Model m, float pageW, float pageH) throws IOException {
+    private float drawFirstHeader(Pen pen, Model m, float pageW, float pageH,
+                                  String titleText, Color accent,
+                                  PDImageXObject logoImg) throws IOException {
         float contentW = pageW - 2 * MARGIN;
         float top = pageH - MARGIN;
         float y = top;
 
-        // Title row
-        pen.text(HELVETICA_BOLD, 21f, INK, "COMMERCIAL INVOICE", MARGIN, y - 18f, 0.3f);
+        // Title row — H17-2: titleText comes from LabelTemplate.headerText when
+        // a per-tenant / platform CI template is seeded; accent likewise
+        // overrides the ESPRESSO default. Everything else keeps the hardcoded
+        // palette so the invoice still looks like itself.
+        pen.text(HELVETICA_BOLD, 21f, INK, titleText, MARGIN, y - 18f, 0.3f);
         pen.text(HELVETICA, 7.5f, TAUPE, "CUSTOMS DECLARATION FOR INTERNATIONAL SHIPMENT  -  ORIGINAL", MARGIN, y - 30f, 0.6f);
-        pen.rightText(HELVETICA_BOLD, 11f, ESPRESSO, m.exporterName(), MARGIN + contentW, y - 16f);
+        // H17-2 — logo replaces the exporter-name text block top-right when
+        // the template carries a decodable image. Max height 32pt keeps it
+        // flush with the title row so pagination doesn't shift (dry pen
+        // skips the image but reserves no extra space either — the slot
+        // this fills is identical to what the text block occupied).
+        if (logoImg != null) {
+            float logoMaxH = 32f;
+            float logoMaxW = 160f;
+            float logoH = logoMaxH;
+            float logoW = logoImg.getWidth() * (logoH / logoImg.getHeight());
+            if (logoW > logoMaxW) {
+                logoW = logoMaxW;
+                logoH = logoImg.getHeight() * (logoW / logoImg.getWidth());
+            }
+            pen.image(logoImg, MARGIN + contentW - logoW, y - 4f - logoH, logoW, logoH);
+        } else {
+            pen.rightText(HELVETICA_BOLD, 11f, accent, m.exporterName(), MARGIN + contentW, y - 16f);
+        }
         pen.rightText(HELVETICA, 7.5f, TAUPE, "Invoice no. " + m.order().getOrderNo()
                 + "   -   " + m.currency() + "   -   " + m.meta().get(1).value(), MARGIN + contentW, y - 29f);
         y -= 40f;
@@ -1188,13 +1250,56 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
         return top - y;
     }
 
-    private void drawFooter(Pen pen, Model m, float pageW, int pageNo, int totalPages) throws IOException {
+    private void drawFooter(Pen pen, Model m, float pageW, int pageNo, int totalPages,
+                            String extraNote) throws IOException {
         float contentW = pageW - 2 * MARGIN;
         float y = MARGIN + 6f;
         pen.rule(MARGIN, MARGIN + contentW, y + 10f, RULE, 0.5f);
+        // H17-2 — extraNote comes from LabelTemplate.footerText when a per-
+        // tenant row is seeded (e.g. "Pay to: Acme Finance, 12345 Main St").
+        // Placed above the standard provenance line so the page/N indicator
+        // and auto-generated line stay flush right of the margin as before.
+        if (extraNote != null) {
+            pen.text(HELVETICA, 6.8f, TAUPE, fit(HELVETICA, 6.8f, extraNote, contentW - 80f),
+                    MARGIN, y + 11f, 0f);
+        }
         pen.text(HELVETICA, 7f, TAUPE, "Commercial invoice no. " + m.order().getOrderNo()
                 + "  -  " + m.exporterName() + "  -  generated " + m.stamp() + " by Multiship", MARGIN, y, 0f);
         pen.rightText(HELVETICA_BOLD, 7.5f, INK, "Page " + pageNo + " of " + totalPages, MARGIN + contentW, y);
+    }
+
+    /** H17-2 — decode the template's logo base64 to raw bytes. Returns
+     *  null for missing / malformed values; the renderer falls back to
+     *  the exporter-name text block in drawFirstHeader. */
+    private static byte[] decodeTemplateLogo(com.multiship.backend.model.LabelTemplate t) {
+        if (t == null || t.getLogoBase64() == null || t.getLogoBase64().isBlank()) return null;
+        String data = t.getLogoBase64();
+        int comma = data.indexOf(',');
+        if (data.startsWith("data:") && comma > 0) data = data.substring(comma + 1);
+        try {
+            return java.util.Base64.getDecoder().decode(data);
+        } catch (IllegalArgumentException e) {
+            log.debug("CI logo Base64 decode failed for templateId={}: {}",
+                    t.getId(), e.toString());
+            return null;
+        }
+    }
+
+    /** H17-2 — accept {@code #rrggbb} or {@code rrggbb} per the LabelTemplate
+     *  schema; anything else falls back to the hardcoded ESPRESSO default. */
+    private static Color parseTemplateColor(com.multiship.backend.model.LabelTemplate t, Color fallback) {
+        if (t == null || t.getPrimaryColor() == null) return fallback;
+        String hex = t.getPrimaryColor().trim();
+        if (hex.startsWith("#")) hex = hex.substring(1);
+        if (hex.length() != 6) return fallback;
+        try {
+            int r = Integer.parseInt(hex.substring(0, 2), 16);
+            int g = Integer.parseInt(hex.substring(2, 4), 16);
+            int b = Integer.parseInt(hex.substring(4, 6), 16);
+            return new Color(r, g, b);
+        } catch (NumberFormatException ex) {
+            return fallback;
+        }
     }
 
     // =====================================================================
@@ -1239,6 +1344,13 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
             cs.addRect(x, y, w, h);
             cs.fill();
             cs.setNonStrokingColor(Color.BLACK);
+        }
+
+        /** H17-2 — raster image draw. Dry pen (cs=null) silently skips. */
+        void image(org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject img,
+                   float x, float y, float w, float h) throws IOException {
+            if (cs == null || img == null) return;
+            cs.drawImage(img, x, y, w, h);
         }
     }
 

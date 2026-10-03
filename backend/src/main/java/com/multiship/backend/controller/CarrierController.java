@@ -9,6 +9,7 @@ import com.multiship.backend.dto.CarrierStatusResponse;
 import com.multiship.backend.dto.LabelGenerationResponse;
 import com.multiship.backend.dto.OrderAccountResolutionDTO;
 import com.multiship.backend.service.CarrierService;
+import com.multiship.backend.service.carrier.CarrierAliasService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
@@ -36,12 +37,27 @@ import java.util.List;
 public class CarrierController {
 
     private final CarrierService carrierService;
+    private final CarrierAliasService carrierAliases;
 
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @GetMapping
     public ResponseEntity<ApiResponse<List<CarrierListResponse>>> getAvailableCarriers() {
         ApiResponse<List<CarrierListResponse>> response = carrierService.getAvailableCarriers();
         return ResponseEntity.status(response.getCode()).body(response);
+    }
+
+    @Operation(summary = "Known carrier codes + display labels — DB-driven registry",
+            description = "Returns every canonical carrier in the carrier_alias table. FE dropdowns build off this so adding a new carrier is a data-only change (INSERT + reload).")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping("/known")
+    public ResponseEntity<ApiResponse<List<CarrierAliasService.KnownCarrier>>> listKnownCarriers() {
+        List<CarrierAliasService.KnownCarrier> body = carrierAliases.knownCarriers();
+        return ResponseEntity.ok(ApiResponse.<List<CarrierAliasService.KnownCarrier>>builder()
+                .status("SUCCESS").code(200)
+                .message("Known carriers retrieved")
+                .data(body)
+                .timestamp(java.time.LocalDateTime.now())
+                .build());
     }
 
     @Operation(summary = "Connect a carrier account (ADMIN)",

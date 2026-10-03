@@ -39,4 +39,14 @@ class HttpClientsTest {
         HttpClients.reconfigure(10, 60);
         HttpClients.reconfigure(5, 30);
     }
+
+    @Test
+    void perCallerReadTimeoutBuilderClampsNonPositive() {
+        // S2 — RestExternalConnector reads cfg.readTimeoutSeconds which
+        // could be 0 for a brand-new row before defaults land. The
+        // overload must clamp instead of blowing up.
+        assertNotNull(HttpClients.newBuilder(0).baseUrl("http://localhost").build());
+        assertNotNull(HttpClients.newBuilder(-5).baseUrl("http://localhost").build());
+        assertNotNull(HttpClients.newBuilder(1).baseUrl("http://localhost").build());
+    }
 }

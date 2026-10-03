@@ -319,8 +319,23 @@ function Schedules({ clients }: { clients: Client[] }) {
                 <td className="px-4 py-2"><span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-bold">{s.dataset}</span></td>
                 <td className="px-4 py-2">{s.frequency}</td>
                 <td className="px-4 py-2">
-                  {s.deliveryType}
-                  {s.deliveryType === 'EMAIL' && s.deliveryEmail ? <span className="ml-1 text-[10.5px] text-slate-500">→ {s.deliveryEmail}</span> : null}
+                  {/* Audit P8 (#364) — EMAIL delivery was a logging-stub,
+                      never a real SMTP send. Legacy rows still carry
+                      deliveryType=EMAIL; the editor already blocks picking
+                      EMAIL on new rows, but the list is where auditors
+                      live and need to see that these entries NEVER sent.
+                      Red pill + "never sent" so a schedule showing
+                      DELIVERED can't fool a compliance review. */}
+                  {s.deliveryType === 'EMAIL' ? (
+                    <span className="inline-flex items-center gap-1">
+                      <span className="rounded bg-rose-100 px-1.5 py-0.5 text-[10.5px] font-semibold text-rose-800">
+                        EMAIL — never sent
+                      </span>
+                      {s.deliveryEmail ? (
+                        <span className="text-[10.5px] text-slate-500">(was → {s.deliveryEmail})</span>
+                      ) : null}
+                    </span>
+                  ) : s.deliveryType}
                 </td>
                 <td className="px-4 py-2 text-[11.5px] text-slate-500">{s.nextRunAt ? new Date(s.nextRunAt).toLocaleString() : '—'}</td>
                 <td className="px-4 py-2 text-right">

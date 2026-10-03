@@ -57,6 +57,9 @@ public class ExternalSystemsAdminController {
                     Map<String, Object> row = new HashMap<>();
                     row.put("systemType", c.systemType());
                     row.put("configType", c.configType().getSimpleName());
+                    // M3 — exposed so the FE Secrets form renders the right
+                    // key list dynamically instead of hardcoding "productionPassword".
+                    row.put("secretKeys", c.secretKeys());
                     return row;
                 })
                 .toList();
@@ -111,6 +114,15 @@ public class ExternalSystemsAdminController {
         config.findById(id).ifPresent(c -> registry.reload(c.getName()));
         config.deleteConnection(id);
         return ok(null);
+    }
+
+    @Operation(summary = "X1 — flip the DB-flagged default writeback target to this row. "
+            + "Any prior default row is cleared atomically; the partial unique index enforces single-row.")
+    @PutMapping("/{id}/default-writeback-target")
+    public ResponseEntity<ApiResponse<ConnectionDetail>> setDefaultWritebackTarget(
+            @PathVariable Long id, Authentication auth) {
+        config.setDefaultWritebackTarget(id, actor(auth));
+        return ok(detail(config.findById(id).orElseThrow()));
     }
 
     // ─── secrets ────────────────────────────────────────────────────
@@ -325,7 +337,10 @@ public class ExternalSystemsAdminController {
             LocalDateTime updatedAt, String updatedBy,
             // V91 env split — surface so the list can render an env chip and
             // an at-a-glance "using DEV" indicator on the PROD row.
-            String environment, boolean useDev) {}
+            String environment, boolean useDev,
+            // X1 — list surfaces a "DEFAULT" chip on the one row holding this
+            // flag; admin flips it via PUT /{id}/default-writeback-target.
+            boolean isDefaultWritebackTarget) {}
 
     public record ConnectionDetail(
             Long id, String name, String systemType, boolean active,
@@ -351,7 +366,10 @@ public class ExternalSystemsAdminController {
             // V91 env split — this row is PROD or DEV. useDev is canonical
             // on the PROD row (TRUE = resolver hands the DEV row back).
             String environment,
-            boolean useDev) {}
+            boolean useDev,
+            // X1 / V110 — at most one row has this flag; it's the fallback
+            // when no per-tenant writebackConnection override is set.
+            boolean isDefaultWritebackTarget) {}
 
     public static class ConnectionUpsertRequest {
         public String name;
@@ -453,7 +471,8 @@ public class ExternalSystemsAdminController {
         return new ConnectionSummary(c.getId(), c.getName(), c.getSystemType(),
                 c.isActive(), c.getUpdatedAt(), c.getUpdatedBy(),
                 c.getEnvironment() == null ? ExternalSystemConnection.ENV_PROD : c.getEnvironment(),
-                Boolean.TRUE.equals(c.getUseDev()));
+                Boolean.TRUE.equals(c.getUseDev()),
+                Boolean.TRUE.equals(c.getIsDefaultWritebackTarget()));
     }
 
     private ConnectionDetail detail(ExternalSystemConnection c) {
@@ -474,7 +493,8 @@ public class ExternalSystemsAdminController {
                 Boolean.TRUE.equals(c.getWritebackChannelD2c()),
                 Boolean.TRUE.equals(c.getWritebackChannelB2b()),
                 c.getEnvironment() == null ? ExternalSystemConnection.ENV_PROD : c.getEnvironment(),
-                Boolean.TRUE.equals(c.getUseDev()));
+                Boolean.TRUE.equals(c.getUseDev()),
+                Boolean.TRUE.equals(c.getIsDefaultWritebackTarget()));
     }
 
     private String actor(Authentication auth) {

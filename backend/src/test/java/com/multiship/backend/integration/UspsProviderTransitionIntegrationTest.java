@@ -118,12 +118,15 @@ class UspsProviderTransitionIntegrationTest extends AbstractIntegrationTest {
         // Seed a USPS account with all three identifiers populated.
         // created_at / updated_at come from Hibernate @CreationTimestamp
         // when the entity path inserts, but a native INSERT bypasses that
-        // so we set them explicitly.
+        // so we set them explicitly. V95 added return_scope NOT NULL;
+        // Hibernate's entity-side @Default doesn't translate to a DB
+        // DEFAULT, so a native INSERT that omits it hits the NOT-NULL.
         jdbc.update("INSERT INTO carrier_account_ref "
                 + "  (account_number, carrier_code, account_name, customer_no, active, "
-                + "   created_at, updated_at, "
+                + "   return_scope, created_at, updated_at, "
                 + "   usps_direct_account_number, usps_direct_crid, usps_direct_mid) "
-                + "VALUES (?, 'USPS', 'IT USPS ready', 'IT-USPS-READY', TRUE, now(), now(), ?, ?, ?)",
+                + "VALUES (?, 'USPS', 'IT USPS ready', 'IT-USPS-READY', TRUE, "
+                + "        'DOMESTIC_ONLY', now(), now(), ?, ?, ?)",
                 "IT-A-READY-" + System.nanoTime(), "EPS-1", "CRID-1", "MID-1");
 
         UspsProviderReadinessDTO ready = readinessService.check();
@@ -136,12 +139,14 @@ class UspsProviderTransitionIntegrationTest extends AbstractIntegrationTest {
                 .count();
         assertEquals(0, ourPending, "our seeded row has all three identifiers → not pending");
 
-        // Now insert a pending row (CRID = NULL).
+        // Now insert a pending row (CRID = NULL). Same return_scope hint
+        // as the ready-row INSERT above (V95 NOT NULL).
         jdbc.update("INSERT INTO carrier_account_ref "
                 + "  (account_number, carrier_code, account_name, customer_no, active, "
-                + "   created_at, updated_at, "
+                + "   return_scope, created_at, updated_at, "
                 + "   usps_direct_account_number, usps_direct_crid, usps_direct_mid) "
-                + "VALUES (?, 'USPS', 'IT USPS pending', 'IT-USPS-PENDING', TRUE, now(), now(), ?, NULL, ?)",
+                + "VALUES (?, 'USPS', 'IT USPS pending', 'IT-USPS-PENDING', TRUE, "
+                + "        'DOMESTIC_ONLY', now(), now(), ?, NULL, ?)",
                 "IT-A-PEND-" + System.nanoTime(), "EPS-2", "MID-2");
 
         UspsProviderReadinessDTO pending = readinessService.check();

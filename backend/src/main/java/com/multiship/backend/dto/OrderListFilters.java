@@ -67,4 +67,11 @@ public class OrderListFilters {
      * carrier of the account the order's label uses, else its service code's carrier.
      */
     private String carrier;
+
+    /**
+     * Returns F3 — is-return tri-state: {@code "Y"} returns-only,
+     * {@code "N"} shipments-only, null / blank = all. Matched against
+     * {@code label_batch.is_return} (legacy 'Y'/'N' column).
+     */
+    private String isReturn;
 }

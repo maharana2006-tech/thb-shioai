@@ -38,6 +38,28 @@ public class TenantSettingsService {
     /** Setting key for the B2B/D2C tenant channel-gate feature. */
     public static final String KEY_ENABLED_CHANNELS = "enabledChannels";
 
+    /** Manual F-11 — per-tenant default Incoterms for international labels.
+     *  CarrierServiceImpl's prefill falls back to the global "DAP" literal
+     *  only when neither this setting nor the destination's customs profile
+     *  carries a value. */
+    public static final String KEY_CUSTOMS_DEFAULT_INCOTERMS = "customs.default_incoterms";
+
+    /** Manual F-11 — per-tenant default reason-for-export (SHIPPING_PURPOSE).
+     *  Precedence mirrors incoterms: req → customs profile → this setting
+     *  → "SALE" literal. */
+    public static final String KEY_CUSTOMS_DEFAULT_REASON = "customs.default_reason";
+
+    /** Manual F-08 completion — per-tenant currency allowlist. Value is a
+     *  comma-separated list of ISO-4217 codes (e.g. {@code "USD,EUR,GBP"}).
+     *  Unset / blank value = all seeded currencies allowed. */
+    public static final String KEY_CURRENCY_ALLOWLIST = "currency.allowlist";
+
+    /** Backorder P2/P4 feature flag — enables the bulk-ship-from-{@code .Y}
+     *  path on {@code /orders/new}. Default false; audit's open question #9
+     *  (bulk-ship target scale) gates full rollout, but the flag is here
+     *  so first beta tenants can opt in with a single SQL row. */
+    public static final String KEY_ORDERS_NEW_BULK_SHIP_ENABLED = "orders_new.bulk_ship_enabled";
+
     /** Shipping channel enum. Must match values used on the Order /
      *  ManualShipmentRequest / ExternalShipmentRequest {@code channel}
      *  field (documented in-place as "D2C | B2B"). */
@@ -166,6 +188,46 @@ public class TenantSettingsService {
                 .map(Enum::name)
                 .collect(Collectors.joining(","));
         return putSetting(tenantCode, KEY_ENABLED_CHANNELS, value, actor);
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // Typed helpers — currency allowlist + bulk-ship flag
+    // ────────────────────────────────────────────────────────────────
+
+    /**
+     * Manual F-08 — per-tenant currency allowlist. Empty set when the
+     * setting is unset / blank (caller treats as "all seeded currencies
+     * allowed"); non-empty set is the authoritative restriction.
+     * Comma-separated raw value is normalised to uppercase 3-char codes;
+     * unknown-shape tokens are silently dropped.
+     */
+    public Set<String> getCurrencyAllowlist(String tenantCode) {
+        return getSetting(tenantCode, KEY_CURRENCY_ALLOWLIST)
+                .map(TenantSettingsService::parseCurrencyCodes)
+                .orElseGet(Set::of);
+    }
+
+    /**
+     * Backorder P2/P4 feature flag — true when the tenant has opted in.
+     * Default false (setting absent OR explicit "false"/"0"/blank).
+     */
+    public boolean isBulkShipEnabled(String tenantCode) {
+        return getSetting(tenantCode, KEY_ORDERS_NEW_BULK_SHIP_ENABLED)
+                .map(String::trim)
+                .map(v -> v.equalsIgnoreCase("true") || v.equals("1") || v.equalsIgnoreCase("yes"))
+                .orElse(false);
+    }
+
+    private static Set<String> parseCurrencyCodes(String raw) {
+        if (raw == null || raw.isBlank()) return Set.of();
+        Set<String> out = new LinkedHashSet<>();
+        for (String token : raw.split(",")) {
+            String t = token.trim().toUpperCase();
+            if (t.length() == 3 && t.chars().allMatch(Character::isLetter)) {
+                out.add(t);
+            }
+        }
+        return Set.copyOf(out);
     }
 
     // ────────────────────────────────────────────────────────────────

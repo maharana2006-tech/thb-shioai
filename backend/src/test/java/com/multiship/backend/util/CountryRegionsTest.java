@@ -1,5 +1,6 @@
 package com.multiship.backend.util;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -12,6 +13,17 @@ import static org.junit.jupiter.api.Assertions.*;
  * which would let region-scoped rules stop firing again.
  */
 class CountryRegionsTest {
+
+    @BeforeEach
+    void resetBootstrap() {
+        // V117 — CountryRegionPlatformService swaps the live map on
+        // ApplicationReadyEvent (DB-driven taxonomy). When this test runs
+        // in the full-suite JVM AFTER a Spring IT loaded the service, the
+        // swapped map leaks here and known codes (US → North America)
+        // suddenly resolve to Other. Resetting to the compile-time
+        // bootstrap keeps the pure-util test stable regardless of order.
+        CountryRegions.resetToBootstrap();
+    }
 
     @Test
     void regionOf_knownCountries() {

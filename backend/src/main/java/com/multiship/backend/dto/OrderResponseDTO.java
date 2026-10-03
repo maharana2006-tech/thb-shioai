@@ -59,6 +59,14 @@ public class OrderResponseDTO {
          *  or empty when the operator didn't add one. Rendered as a
          *  note-icon on the orders list with click-to-expand popover. */
         private String note;
+        /** Returns F9 — true when this is a return label. Routes the
+         *  row-level Edit / Reissue action to /orders/new/return?fixOrder=N
+         *  so the shipment form opens in RETURN mode. */
+        private Boolean isReturn;
+        /** Returns F12 — outbound order this return came from (null if
+         *  unlinked). Powers the "return of #N" chip + reprint-of-
+         *  original-CI link. */
+        private Integer originalOrderNo;
     }
 
     @Data

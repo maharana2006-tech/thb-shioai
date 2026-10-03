@@ -36,11 +36,27 @@ export interface CarrierShippingLimitPayload {
   freeDeclaredValue?: number | null
   active?: boolean
   notes?: string | null
+  /** Audit L2 (#378) — scheduled end-date for this cap. Null = still
+   *  current. ISO LocalDateTime ("2026-10-15T00:00:00"); omit to leave
+   *  unset / clear. */
+  effectiveUntil?: string | null
 }
 
 export interface CarrierShippingLimitListParams {
   page?: number
   size?: number
+}
+
+/** Audit L3/B3 (#375) — backend now returns a PageResponseDTO instead of
+ *  a bare array so the FE can page past the first N rows. Only the
+ *  fields the UI currently reads are typed here; see PageResponseDTO
+ *  server-side for the full shape (first/last/empty/sort). */
+export interface CarrierShippingLimitPage {
+  content: CarrierShippingLimit[]
+  pageNumber: number
+  pageSize: number
+  totalElements: number
+  totalPages: number
 }
 
 function toQueryString(params: object): string {
@@ -57,7 +73,7 @@ const BASE = '/admin/carrier-shipping-limits'
 
 export const carrierShippingLimitService = {
   list: (params: CarrierShippingLimitListParams = {}) =>
-    apiClient.get<ApiResponse<CarrierShippingLimit[]>>(`${BASE}${toQueryString(params)}`),
+    apiClient.get<ApiResponse<CarrierShippingLimitPage>>(`${BASE}${toQueryString(params)}`),
 
   get: (id: number) =>
     apiClient.get<ApiResponse<CarrierShippingLimit>>(`${BASE}/${id}`),

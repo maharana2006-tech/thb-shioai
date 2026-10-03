@@ -45,7 +45,14 @@ class AdminUserServiceTest {
         // don't assert on tv (see TokenRevocationServiceTest for that).
         service = new AdminUserService(userRepo, auditRepo, clientRepo,
                 new TenantScopeEnforcer(new AccessScopePolicy(false)),
-                mock(com.multiship.backend.service.TokenRevocationService.class));
+                mock(com.multiship.backend.service.TokenRevocationService.class),
+                stubRolePlatform());
+    }
+
+    /** V115 — bootstrap defaults match pre-V115 behaviour. */
+    private static com.multiship.backend.service.role.RolePlatformService stubRolePlatform() {
+        return new com.multiship.backend.service.role.RolePlatformService(
+                mock(com.multiship.backend.repository.RoleRepository.class));
     }
 
     private User legacyUser() {
@@ -80,7 +87,8 @@ class AdminUserServiceTest {
         try {
             AdminUserService scopedService = new AdminUserService(userRepo, auditRepo, clientRepo,
                     new TenantScopeEnforcer(new AccessScopePolicy(true)),
-                    mock(com.multiship.backend.service.TokenRevocationService.class));
+                    mock(com.multiship.backend.service.TokenRevocationService.class),
+                    stubRolePlatform());
             // Prime findById so we reach the clamp (else USER_NOT_FOUND short-
             // circuits before tenantScope is consulted).
             when(userRepo.findById(42L)).thenReturn(Optional.of(legacyUser()));

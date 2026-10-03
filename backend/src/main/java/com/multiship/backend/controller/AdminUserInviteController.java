@@ -7,6 +7,7 @@ import com.multiship.backend.dto.UserInviteResponse;
 import com.multiship.backend.model.UserInvite;
 import com.multiship.backend.repository.ClientRepository;
 import com.multiship.backend.service.UserInviteService;
+import com.multiship.backend.service.role.RolePlatformService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
@@ -21,7 +22,6 @@ import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Set;
 
 /**
  * Sprint 50 Tier 0.5 PR D — admin mints + lists user invites.
@@ -37,12 +37,12 @@ import java.util.Set;
 @PreAuthorize("hasRole('ADMIN')")
 public class AdminUserInviteController {
 
-    /** ROLEs that admins can invite. ADMIN is deliberately excluded — that role
-     *  is created out-of-band (e.g. seed / dedicated admin flow), never by invite. */
-    private static final Set<String> INVITABLE_ROLES = Set.of("USER", "TENANT");
-
     private final UserInviteService inviteService;
     private final ClientRepository clientRepository;
+    /** V115 — DB-driven invitable-roles list (Auth Gap-5-A). The pre-V115
+     *  Set.of("USER","TENANT") lives inside the service as the bootstrap
+     *  default, so first boot + DB outage still accept the same two codes. */
+    private final RolePlatformService rolePlatformService;
 
     /**
      * Base URL the invite-accept link points at. Defaults to the
@@ -60,9 +60,10 @@ public class AdminUserInviteController {
             HttpServletRequest request) {
 
         String role = req.getRole().trim().toUpperCase();
-        if (!INVITABLE_ROLES.contains(role)) {
+        if (!rolePlatformService.isInvitableRole(role)) {
             return ResponseEntity.status(400).body(error(400, ErrorCode.VALIDATION_ERROR,
-                    "Invitable roles are USER or TENANT. Got: " + role));
+                    "Role '" + role + "' is not invitable. Invitable roles: "
+                            + rolePlatformService.invitableRoles()));
         }
         String clientCode = req.getClientCode().trim();
         if (!clientRepository.existsByClientCodeIgnoreCase(clientCode)) {

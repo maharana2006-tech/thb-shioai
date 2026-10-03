@@ -7,7 +7,7 @@ import com.multiship.backend.model.PasswordResetToken;
 import com.multiship.backend.model.User;
 import com.multiship.backend.repository.PasswordResetTokenRepository;
 import com.multiship.backend.repository.UserRepository;
-import com.multiship.backend.service.mail.MailSender;
+import com.multiship.backend.service.mail.NotificationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -42,7 +42,7 @@ class PasswordServiceTest {
     private PasswordResetTokenRepository resetRepo;
     private PasswordEncoder encoder;
     private TokenRevocationService tokenRevocation;
-    private MailSender mailer;
+    private NotificationService notifications;
     private PasswordService service;
 
     @BeforeEach
@@ -51,8 +51,8 @@ class PasswordServiceTest {
         resetRepo = mock(PasswordResetTokenRepository.class);
         encoder = mock(PasswordEncoder.class);
         tokenRevocation = mock(TokenRevocationService.class);
-        mailer = mock(MailSender.class);
-        service = new PasswordService(userRepo, resetRepo, encoder, tokenRevocation, mailer);
+        notifications = mock(NotificationService.class);
+        service = new PasswordService(userRepo, resetRepo, encoder, tokenRevocation, notifications);
         ReflectionTestUtils.setField(service, "resetLinkBaseUrl", "https://example.test/reset");
         when(encoder.encode(anyString())).thenReturn("bcrypt-new");
     }
@@ -126,12 +126,15 @@ class PasswordServiceTest {
         assertEquals(64, row.getTokenHash().length());
         assertTrue(row.getExpiresAt().isAfter(LocalDateTime.now()));
 
-        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
-        verify(mailer).send(eq("alice@example.com"), anyString(), body.capture());
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<java.util.Map<String, Object>> vars =
+                ArgumentCaptor.forClass(java.util.Map.class);
+        verify(notifications).send(eq("AUTH.PASSWORD_RESET"), eq("alice@example.com"), vars.capture());
+        String link = String.valueOf(vars.getValue().get("resetLink"));
         // The reset link must carry the plaintext token, not the hash.
-        assertTrue(body.getValue().contains("https://example.test/reset?token="),
+        assertTrue(link.startsWith("https://example.test/reset?token="),
                 "reset mail must include the reset link");
-        assertNotEquals(true, body.getValue().contains(row.getTokenHash()),
+        assertNotEquals(true, link.contains(row.getTokenHash()),
                 "the DB hash must NEVER be emailed — only the plaintext");
     }
 
@@ -144,7 +147,7 @@ class PasswordServiceTest {
         service.forgot(req);
 
         verify(resetRepo, never()).save(any());
-        verify(mailer, never()).send(anyString(), anyString(), anyString());
+        verify(notifications, never()).send(anyString(), anyString(), any());
     }
 
     /* ==================== reset ==================== */

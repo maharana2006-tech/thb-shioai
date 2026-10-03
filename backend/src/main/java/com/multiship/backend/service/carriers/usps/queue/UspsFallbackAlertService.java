@@ -2,7 +2,9 @@ package com.multiship.backend.service.carriers.usps.queue;
 
 import com.multiship.backend.dto.UspsFallbackAlertDTO;
 import com.multiship.backend.model.UspsLabelQueueItem;
+import com.multiship.backend.service.observability.AlertHistoryService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -43,6 +45,12 @@ public class UspsFallbackAlertService {
     private final int maxAlerts;
     private final Deque<UspsFallbackAlertDTO> alerts;
 
+    /** V113 — field-injected so existing ctor-based test instantiation
+     *  stays compatible. Null in tests → in-memory ring only; populated in
+     *  Spring → each record() also writes a durable alert_history row. */
+    @Autowired(required = false)
+    private AlertHistoryService alertHistory;
+
     public UspsFallbackAlertService(
             @Value("${usps.direct.queue.fallback-alerts.max:50}") int maxAlerts) {
         // Belt-and-braces - never let a mis-config leak a non-positive
@@ -81,13 +89,14 @@ public class UspsFallbackAlertService {
             // path they're guarding.
             return;
         }
+        String sourceLabel = source == null ? "UNKNOWN" : source.name();
         UspsFallbackAlertDTO alert = UspsFallbackAlertDTO.builder()
                 .occurredAt(Instant.now())
                 .orderNo(orderNo)
                 .tenantCode(tenantCode)
                 .importBatchId(importBatchId)
                 .reason(reason)
-                .source(source == null ? "UNKNOWN" : source.name())
+                .source(sourceLabel)
                 .build();
         synchronized (alerts) {
             // Evict the oldest first so a burst of alerts doesn't grow
@@ -98,6 +107,7 @@ public class UspsFallbackAlertService {
             }
             alerts.offerFirst(alert);
         }
+        persistDurable(sourceLabel, orderNo, tenantCode, importBatchId, reason);
     }
 
     /**
@@ -115,19 +125,34 @@ public class UspsFallbackAlertService {
                        String sourceLabel,
                        String reason) {
         if (reason == null || reason.isBlank()) return;
+        String src = sourceLabel == null || sourceLabel.isBlank() ? "UNKNOWN" : sourceLabel;
         UspsFallbackAlertDTO alert = UspsFallbackAlertDTO.builder()
                 .occurredAt(Instant.now())
                 .orderNo(orderNo)
                 .tenantCode(tenantCode)
                 .importBatchId(importBatchId)
                 .reason(reason)
-                .source(sourceLabel == null || sourceLabel.isBlank() ? "UNKNOWN" : sourceLabel)
+                .source(src)
                 .build();
         synchronized (alerts) {
             while (alerts.size() >= maxAlerts) {
                 alerts.pollLast();
             }
             alerts.offerFirst(alert);
+        }
+        persistDurable(src, orderNo, tenantCode, importBatchId, reason);
+    }
+
+    /** V113 — fire-and-forget persist into alert_history. In-memory ring
+     *  stays the source of truth for the dashboard; the row is the audit
+     *  trail. Null service (tests, bare instantiation) → no-op. */
+    private void persistDurable(String source, Long orderNo, String tenantCode,
+                                Long importBatchId, String reason) {
+        if (alertHistory == null) return;
+        try {
+            alertHistory.record(source, orderNo, tenantCode, importBatchId, reason);
+        } catch (Exception ex) {
+            log.warn("usps-fallback-alert: alert_history persist failed: {}", ex.getMessage());
         }
     }
 

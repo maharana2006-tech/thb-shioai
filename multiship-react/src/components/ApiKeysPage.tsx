@@ -13,6 +13,7 @@ import {
   FiX,
 } from 'react-icons/fi'
 import { apiKeyService, type ApiKey } from '../api/apiKeyService'
+import { clientService } from '../api/clientService'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 
 /** Audit A3 — expiry badge tone matches the backend spec: green >30d,
@@ -73,6 +74,13 @@ export default function ApiKeysPage() {
    *  golden path stays "issue = full key"; operators wanting least-privilege
    *  uncheck specific tokens. */
   const [scopes, setScopes] = useState<Set<string>>(() => new Set(DEFAULT_SCOPE_SET))
+  /** Audit A6 (#339) — per-client vs platform-wide scope. Default stays
+   *  "all clients" (prior behaviour); "one client" reveals a picker.
+   *  Load the client list once on mount (best-effort; callers that can't
+   *  listClients just lose the picker and fall back to all-clients). */
+  const [scopeMode, setScopeMode] = useState<'ALL' | 'ONE'>('ALL')
+  const [pickedClientCode, setPickedClientCode] = useState('')
+  const [clientOptions, setClientOptions] = useState<string[]>([])
 
   /** The freshly issued key — its `token` is shown once in the reveal modal. */
   const [issued, setIssued] = useState<ApiKey | null>(null)
@@ -109,6 +117,19 @@ export default function ApiKeysPage() {
     return () => registerRefresh(null)
   }, [registerRefresh, load])
 
+  // Audit A6 (#339) — load the client list once for the per-client picker.
+  // Best-effort: list-clients 403 for scoped operators who shouldn't see
+  // other tenants; we simply hide the "one client" option in that case.
+  useEffect(() => {
+    void clientService
+      .listClients({ page: 0, size: 500 })
+      .then((res) => {
+        const codes = (res.data?.content ?? []).map((c) => c.clientCode).sort()
+        setClientOptions(codes)
+      })
+      .catch(() => setClientOptions([]))
+  }, [])
+
   const activeCount = useMemo(() => keys.filter((k) => k.active).length, [keys])
 
   const openIssue = () => {
@@ -116,6 +137,10 @@ export default function ApiKeysPage() {
     // Audit R2 #338 — reset scope-set to all-on when the modal reopens
     // so a prior narrow selection doesn't carry over silently.
     setScopes(new Set(DEFAULT_SCOPE_SET))
+    // Audit A6 (#339) — reset client-scope choice on reopen for the
+    // same reason as the scope reset above.
+    setScopeMode('ALL')
+    setPickedClientCode('')
     setIssueOpen(true)
   }
 
@@ -131,11 +156,18 @@ export default function ApiKeysPage() {
       notify.error('Pick at least one scope — a key with no scopes can’t call anything.')
       return
     }
+    // Audit A6 (#339) — require a client when scopeMode='ONE'; blank
+    // picker is operator error, not "fall back to all clients" (that
+    // would silently mint a platform-wide key).
+    if (scopeMode === 'ONE' && !pickedClientCode.trim()) {
+      notify.error('Pick a client for a single-client key, or switch to "All clients".')
+      return
+    }
     setIssuing(true)
     try {
       const res = await apiKeyService.issue({
         name: form.name.trim(),
-        clientCode: ALL_CLIENTS,
+        clientCode: scopeMode === 'ONE' ? pickedClientCode.trim() : ALL_CLIENTS,
         environment: form.environment,
         // Audit R2 #338 — space-separated token list, matches the backend's
         // ApiKeyService.issue signature (splits on whitespace at persist time).
@@ -448,10 +480,58 @@ export default function ApiKeysPage() {
                 />
               </label>
 
-              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11.5px] text-slate-500">
-                This key works for <span className="font-semibold text-slate-700">all clients</span>. Each external call
-                names the client it ships for via <span className="font-mono font-semibold text-slate-700">clientCode</span>{' '}
-                in the request body.
+              {/* Audit A6 (#339) — key scope. "All clients" (prior behaviour,
+                  stays default) mints a platform-wide key; "One client" ties
+                  the key to the picked clientCode for a smaller blast radius
+                  on compromise + per-client ledger grouping. */}
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Key scope</span>
+                <div className="mt-1 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setScopeMode('ALL')}
+                    className={`flex-1 rounded-xl border px-3 py-2 text-[12.5px] font-semibold transition ${
+                      scopeMode === 'ALL'
+                        ? 'border-[#1f150c] bg-[#1f150c] text-white'
+                        : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'
+                    }`}
+                  >
+                    All clients
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setScopeMode('ONE')}
+                    disabled={clientOptions.length === 0}
+                    title={clientOptions.length === 0
+                      ? 'No client list available — key will mint as all-clients.'
+                      : undefined}
+                    className={`flex-1 rounded-xl border px-3 py-2 text-[12.5px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                      scopeMode === 'ONE'
+                        ? 'border-[#1f150c] bg-[#1f150c] text-white'
+                        : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'
+                    }`}
+                  >
+                    One client
+                  </button>
+                </div>
+                {scopeMode === 'ONE' ? (
+                  <select
+                    value={pickedClientCode}
+                    onChange={(e) => setPickedClientCode(e.target.value)}
+                    className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-[13px] text-slate-900 outline-none focus:border-slate-400"
+                  >
+                    <option value="">— pick a client —</option>
+                    {clientOptions.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <p className="mt-2 text-[11.5px] text-slate-500">
+                    This key works for <span className="font-semibold text-slate-700">all clients</span>. Each external
+                    call names the client it ships for via{' '}
+                    <span className="font-mono font-semibold text-slate-700">clientCode</span> in the request body.
+                  </p>
+                )}
               </div>
 
               <div>

@@ -46,6 +46,14 @@ export interface DashboardData {
     rulesToDisabledServices: number
     customsGapLanes: Array<{ client: string; country: string; origin: string }>
   }
+  /** Audit F1/F2 (#305) — defense-in-depth label on the response: TENANT
+   *  for scoped USERs (clamped at the SQL layer), ORG for platform
+   *  operators (unclamped). Null/legacy responses pre-fix are treated
+   *  as ORG so an upgrade-in-flight never shows a loading error. */
+  scope: {
+    mode: 'TENANT' | 'ORG'
+    tenantCode: string | null
+  }
 }
 
 // ─── coercion helpers ────────────────────────────────────────────────────
@@ -161,6 +169,19 @@ function parseHealth(v: unknown): DashboardData['health'] {
   }
 }
 
+/** Audit F1/F2 (#305) — read the response scope label. Legacy / missing
+ *  payloads treat as ORG so a mid-rollout response doesn't trip the
+ *  caller's assertion in Dashboard.tsx. The *authority* for whether a
+ *  caller sees org-wide numbers is still the backend's SQL predicate;
+ *  this label just lets the FE catch a backend regression if that ever
+ *  slipped. */
+function parseScope(v: unknown): DashboardData['scope'] {
+  const s = isRec(v) ? v : {}
+  const mode = s.mode === 'TENANT' ? 'TENANT' : 'ORG'
+  const tenantCode = typeof s.tenantCode === 'string' ? s.tenantCode : null
+  return { mode, tenantCode }
+}
+
 /**
  * Parse the raw /dashboard response. Throws on top-level shape violations
  * so Dashboard.tsx's try-catch can surface the loadError badge; wrong
@@ -178,6 +199,7 @@ function parseDashboardData(raw: unknown): DashboardData {
     carrierSplit: asNumberMap(raw.carrierSplit),
     recentLabels: asArray(raw.recentLabels, parseRecentLabel),
     health: parseHealth(raw.health),
+    scope: parseScope(raw.scope),
   }
 }
 

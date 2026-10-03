@@ -5,6 +5,7 @@ import com.multiship.backend.dto.CarrierShippingLimitActiveRequest;
 import com.multiship.backend.dto.CarrierShippingLimitRequest;
 import com.multiship.backend.dto.CarrierShippingLimitResponse;
 import com.multiship.backend.dto.ErrorCode;
+import com.multiship.backend.dto.PageResponseDTO;
 import com.multiship.backend.service.CarrierLimitAdminService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -69,25 +70,44 @@ class CarrierLimitAdminControllerTest {
 
     @Test
     void list_returns200WithRows() {
-        when(service.list(0, 50)).thenReturn(List.of(row(1L), row(2L)));
+        // Audit L3/B3 (#375) — response is now PageResponseDTO so the FE
+        // can see totalElements and page past the first N rows.
+        when(service.list(0, 50)).thenReturn(
+                PageResponseDTO.of(List.of(row(1L), row(2L)), 0, 50, 2L));
 
-        ResponseEntity<ApiResponse<List<CarrierShippingLimitResponse>>> resp =
+        ResponseEntity<ApiResponse<PageResponseDTO<CarrierShippingLimitResponse>>> resp =
                 controller.list(0, 50);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         assertNotNull(resp.getBody());
-        assertEquals(2, resp.getBody().getData().size());
+        assertEquals(2, resp.getBody().getData().getContent().size());
+        assertEquals(2L, resp.getBody().getData().getTotalElements());
     }
 
     @Test
     void list_emptyReturns200EmptyArray() {
-        when(service.list(0, 50)).thenReturn(List.of());
+        when(service.list(0, 50)).thenReturn(PageResponseDTO.of(List.of(), 0, 50, 0L));
 
-        ResponseEntity<ApiResponse<List<CarrierShippingLimitResponse>>> resp =
+        ResponseEntity<ApiResponse<PageResponseDTO<CarrierShippingLimitResponse>>> resp =
                 controller.list(0, 50);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
-        assertEquals(0, resp.getBody().getData().size());
+        assertEquals(0, resp.getBody().getData().getContent().size());
+        assertEquals(0L, resp.getBody().getData().getTotalElements());
+    }
+
+    @Test
+    void list_surfacesLargeTotalBeyondPageSize() {
+        // Audit L3/B3 (#375) — the whole point: catalog of 523 rows, page
+        // of 50; FE sees totalElements=523 and renders page controls.
+        when(service.list(0, 50)).thenReturn(
+                PageResponseDTO.of(List.of(row(1L)), 0, 50, 523L));
+
+        ResponseEntity<ApiResponse<PageResponseDTO<CarrierShippingLimitResponse>>> resp =
+                controller.list(0, 50);
+
+        assertEquals(523L, resp.getBody().getData().getTotalElements());
+        assertEquals(11, resp.getBody().getData().getTotalPages()); // ceil(523/50)
     }
 
     // ===== get =====

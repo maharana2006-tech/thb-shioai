@@ -92,4 +92,49 @@ class WebhookSubscriptionAdminControllerTest {
         assertEquals(HttpStatus.CREATED, resp.getStatusCode());
         verify(dispatcher).invalidateSubscriptionCache();
     }
+
+    @Test
+    void save_duplicateTriple_returns409WithDuplicateErrorCode() {
+        // Audit W5 (#334) — V125's uq_ext_webhook_key_event_url blows up
+        // at the DB when an operator saves a second row at the same
+        // (api_key_id, event, url). Controller must translate to 409
+        // CONFLICT with the WEBHOOK_SUBSCRIPTION_DUPLICATE code so the
+        // FE can show a sane "already subscribed" message instead of
+        // a generic 500.
+        ExternalWebhookSubscriptionDTO body = ExternalWebhookSubscriptionDTO.builder()
+                .apiKeyId(42L).event(EventType.LABEL_GENERATED)
+                .url("https://partner.example/hook").secret("s3cr3t").active(true).build();
+        when(repo.save(any(ExternalWebhookSubscription.class)))
+                .thenThrow(new org.springframework.dao.DataIntegrityViolationException(
+                        "could not execute statement",
+                        new RuntimeException(
+                                "ERROR: duplicate key value violates unique constraint "
+                                        + "\"uq_ext_webhook_key_event_url\"")));
+
+        ResponseEntity<ApiResponse<ExternalWebhookSubscriptionDTO>> resp = controller.save(body);
+
+        assertEquals(HttpStatus.CONFLICT, resp.getStatusCode());
+        assertEquals(ErrorCode.WEBHOOK_SUBSCRIPTION_DUPLICATE.name(),
+                resp.getBody().getErrorCode());
+        verify(dispatcher, never()).invalidateSubscriptionCache();
+    }
+
+    @Test
+    void save_unrelatedConstraintViolation_bubblesAsException() {
+        // Audit W5 (#334) — narrowed catch MUST let unrelated integrity
+        // failures (FK violations, etc.) bubble as exceptions. Catching
+        // them all would mask real bugs behind a bogus 409.
+        ExternalWebhookSubscriptionDTO body = ExternalWebhookSubscriptionDTO.builder()
+                .apiKeyId(42L).event(EventType.LABEL_GENERATED)
+                .url("https://partner.example/hook").secret("s3cr3t").active(true).build();
+        when(repo.save(any(ExternalWebhookSubscription.class)))
+                .thenThrow(new org.springframework.dao.DataIntegrityViolationException(
+                        "could not execute statement",
+                        new RuntimeException(
+                                "ERROR: foreign key violation on fk_subscription_api_key")));
+
+        org.junit.jupiter.api.Assertions.assertThrows(
+                org.springframework.dao.DataIntegrityViolationException.class,
+                () -> controller.save(body));
+    }
 }

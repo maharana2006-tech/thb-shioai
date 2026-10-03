@@ -55,6 +55,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -62,12 +63,24 @@ import java.util.Optional;
 public class CarrierServiceImpl implements CarrierService {
 
     private final List<CarrierConnector> carrierConnectors;
+    // V112 — platform-wide enabled / mode / family cache. getCarrierConnector
+    // consults isEnabled before resolving the bean so admin can disable a
+    // carrier org-wide without a redeploy (Auth Gap-6-A).
+    private final com.multiship.backend.service.carriers.platform.CarrierPlatformService carrierPlatformService;
+    // Manual F-11 — tenant_settings-driven incoterms / reason-for-export
+    // defaults. Prefill falls through: req → customs profile → tenant_setting
+    // → "DAP"/"SALE" literal.
+    private final com.multiship.backend.service.TenantSettingsService tenantSettingsService;
     private final UserRepository userRepository;
     private final CarrierConfigRepository carrierConfigRepository;
     private final ShipViaRepository shipViaRepository;
     private final OrderRepository orderRepository;
     private final OrderTrackingRepository orderTrackingRepository;
     private final CarrierProperties carrierProperties;
+    // C1 — resolves tenant_settings.shipper.* overrides on top of the
+    // platform carrier.shipper.* defaults. Every call site that used to
+    // call carrierProperties.getShipper() directly now goes through this.
+    private final com.multiship.backend.service.carrier.ShipperDefaultsService shipperDefaults;
     private final OrderCarrierDetailsRepository orderCarrierDetailsRepository;
     private final CarrierAccountRefRepository carrierAccountRefRepository;
     private final ClientRepository clientRepository;
@@ -1442,7 +1455,11 @@ public class CarrierServiceImpl implements CarrierService {
         BigDecimal width = req.getWidth() != null ? req.getWidth() : (preset != null ? preset.getWidth() : null);
         BigDecimal height = req.getHeight() != null ? req.getHeight() : (preset != null ? preset.getHeight() : null);
 
-        CarrierProperties.ShipperDefaults dflt = carrierProperties.getShipper();
+        // C1 — per-tenant shipper overrides via tenant_settings.shipper.*
+        // on top of the platform carrier.shipper.* defaults. When neither the
+        // request sender nor the tenant have set countryCode, we still fall
+        // back to the platform default (dev bootability).
+        CarrierProperties.ShipperDefaults dflt = shipperDefaults.resolveFor(req.getClientCode());
         String fromCountry = firstNonBlank(from != null ? from.getCountryCode() : null, dflt.getCountryCode());
 
         // PR #534 — DTO build extracted to buildManualShipmentRequestDto
@@ -1556,10 +1573,24 @@ public class CarrierServiceImpl implements CarrierService {
                             .orElse(null);
                 }
                 if (!StringUtils.hasText(req.getIncoterms())) {
-                    req.setIncoterms(firstNonBlank(defaultsProfile == null ? null : defaultsProfile.getIncoterms(), "DAP"));
+                    // Manual F-11 — tenant_settings override (customs.default_incoterms)
+                    // sits between the client-destination profile and the "DAP" literal.
+                    String tenantDefault = StringUtils.hasText(resolvedClient)
+                            ? tenantSettingsService.getSetting(resolvedClient,
+                                    com.multiship.backend.service.TenantSettingsService.KEY_CUSTOMS_DEFAULT_INCOTERMS).orElse(null)
+                            : null;
+                    req.setIncoterms(firstNonBlank(
+                            defaultsProfile == null ? null : defaultsProfile.getIncoterms(),
+                            tenantDefault, "DAP"));
                 }
                 if (!StringUtils.hasText(req.getReasonForExport())) {
-                    req.setReasonForExport(firstNonBlank(defaultsProfile == null ? null : defaultsProfile.getReasonForExport(), "SALE"));
+                    String tenantDefault = StringUtils.hasText(resolvedClient)
+                            ? tenantSettingsService.getSetting(resolvedClient,
+                                    com.multiship.backend.service.TenantSettingsService.KEY_CUSTOMS_DEFAULT_REASON).orElse(null)
+                            : null;
+                    req.setReasonForExport(firstNonBlank(
+                            defaultsProfile == null ? null : defaultsProfile.getReasonForExport(),
+                            tenantDefault, "SALE"));
                 }
             }
             // Third-party duties need a payer: the form's account, else the
@@ -1790,6 +1821,9 @@ public class CarrierServiceImpl implements CarrierService {
                     errOrder.setCustomerRef(truncate(firstNonBlank(req.getReference(), errOrder.getCustomerRef()), 80));
                     errOrder.setCustNo(firstNonBlank(req.getClientCode(), "MANUAL"));
                     errOrder.setTenantId(StringUtils.hasText(req.getClientCode()) ? req.getClientCode().trim() : null);
+                    // V116 — Manual F-18: set the dedicated ad-hoc flag alongside the
+                    // legacy custNo="MANUAL" sentinel so new readers can prefer the boolean.
+                    errOrder.setAdHoc(!StringUtils.hasText(req.getClientCode()));
                     errOrder.setShipviaCd( finalService != null ? finalService.getServiceCode() : serviceType);
                     errOrder.setShipName(to.getName());
                     errOrder.setShipAttn(to.getCompany());
@@ -1954,6 +1988,20 @@ public class CarrierServiceImpl implements CarrierService {
         order.setIsError(false);
         order.setIsManual("Y");
         order.setIsReturn(isReturn ? "Y" : "N");
+        // Returns F10 — persist RMA only on returns; outbound regens must
+        // not inherit a stale RMA from a prior manual save.
+        order.setRmaNumber(isReturn ? truncate(req.getRmaNumber(), 60) : null);
+        // Returns F11 — persist reason only on returns. Enum validation at
+        // the boundary: unknown codes drop to null rather than 400 so a
+        // picklist mismatch doesn't block the label; analytics shows them
+        // under "Unknown".
+        order.setReturnReason(isReturn ? canonReturnReason(req.getReturnReason()) : null);
+        // Returns F12 — link to the outbound order this return came from.
+        // Existence check drops stale typed values to null — same boundary
+        // contract as rma / reason. Guards against self-linkage.
+        order.setOriginalOrderNo(isReturn
+                ? canonOriginalOrderNo(req.getOriginalOrderNo(), orderNo)
+                : null);
         // On regenerate (existingOrderNo) preserve the order's own source /
         // client so fixing a failed BULK/API order doesn't reclassify it as
         // MANUAL (which would move it to another partition and wipe its client).
@@ -1972,6 +2020,10 @@ public class CarrierServiceImpl implements CarrierService {
         order.setCustomerRef(truncate(firstNonBlank(req.getReference(), order.getCustomerRef()), 80));
         order.setCustNo(firstNonBlank(req.getClientCode(), order.getCustNo(), "MANUAL"));
         order.setTenantId(StringUtils.hasText(req.getClientCode()) ? req.getClientCode().trim() : order.getTenantId());
+        // V116 — Manual F-18: ad-hoc flag parity with the legacy custNo="MANUAL" sentinel.
+        if (!StringUtils.hasText(req.getClientCode()) && !StringUtils.hasText(order.getCustNo())) {
+            order.setAdHoc(true);
+        }
         order.setShipviaCd(service != null ? service.getServiceCode() : serviceType);
 
         // G7 — cutoff shift was computed above (before ShipmentRequestDTO
@@ -1992,6 +2044,10 @@ public class CarrierServiceImpl implements CarrierService {
                     .reverseErpCode(req.getClientCode().trim().toUpperCase(), service.getId());
         }
         order.setNdsResolvedShipviaCd(resolvedErpForOrder);
+        // B7 — persist the NDS batch id so a later cancel or admin view can
+        // find every sibling order in the batch. Only populated when the
+        // request came from a `.Y` scan (B6 threading).
+        order.setBillableBatchId(req.getNdsBatchId());
         order.setShipName(to.getName());
         order.setShipAttn(to.getCompany());
         order.setShipAddr1(to.getAddressLine1());
@@ -2357,6 +2413,12 @@ public class CarrierServiceImpl implements CarrierService {
             if (writebackDispatcher != null) {
                 com.multiship.backend.service.externalsystems.writeback.WritebackPayload.ShipTo shipTo =
                         buildWritebackShipTo(req);
+                // B6 — thread the NDS batch id + per-container package rows
+                // when the shipment came from a .Y or multi-package .X scan.
+                // Null on non-NDS shipments; the writer skips the batch loop
+                // in that case. Consumed by NdsShipmentOracleWriter fan-out.
+                java.util.List<com.multiship.backend.service.externalsystems.writeback.WritebackPackagePayload> ndsPkgs =
+                        buildNdsWritebackPackages(req);
                 writebackDispatcher.dispatchOnGenerate(
                         com.multiship.backend.service.externalsystems.writeback.WritebackPayload.builder()
                                 .clientCode(req.getClientCode())
@@ -2376,6 +2438,8 @@ public class CarrierServiceImpl implements CarrierService {
                                 .serviceDescription(service != null ? service.getName() : null)
                                 .thirdPartyAccount(req.getDutiesAccount())
                                 .shipTo(shipTo)
+                                .batchId(req.getNdsBatchId())
+                                .packages(ndsPkgs)
                                 // V96 — persisted canonical ERP wins over the request field
                                 // so regenerate / async paths pick it up too.
                                 .stdReplacementErpCode(firstNonBlank(
@@ -2404,6 +2468,35 @@ public class CarrierServiceImpl implements CarrierService {
             case "DHL" -> "DHL";
             default -> code.trim();
         };
+    }
+
+    /**
+     * B6 — map the NDS prefill's per-container package rows to the writer's
+     * WritebackPackagePayload shape. Null / empty when the request wasn't
+     * populated from an NDS scan; the writer skips its per-container loop
+     * in that case and the single-package label path stays unchanged.
+     */
+    private static java.util.List<com.multiship.backend.service.externalsystems.writeback.WritebackPackagePayload>
+            buildNdsWritebackPackages(com.multiship.backend.dto.ManualShipmentRequest req) {
+        if (req == null || req.getNdsPackages() == null || req.getNdsPackages().isEmpty()) {
+            return null;
+        }
+        java.util.List<com.multiship.backend.service.externalsystems.writeback.WritebackPackagePayload> out =
+                new java.util.ArrayList<>(req.getNdsPackages().size());
+        int seq = 1;
+        for (com.multiship.backend.dto.ManualShipmentRequest.NdsPackage p : req.getNdsPackages()) {
+            out.add(new com.multiship.backend.service.externalsystems.writeback.WritebackPackagePayload(
+                    p.getSequence() != null ? p.getSequence() : seq,
+                    p.getContainerNo(),
+                    p.getContainerIds(),
+                    p.getOrderNos(),
+                    p.getOrderSuffix(),
+                    p.getWeight(),
+                    p.getWeightUnit(),
+                    null));
+            seq++;
+        }
+        return out;
     }
 
     /** Flatten the manual request's recipient block into the WritebackPayload sub-record. */
@@ -3112,6 +3205,15 @@ public class CarrierServiceImpl implements CarrierService {
 
         String canonicalCarrierCode = resolveCanonicalCarrierCode(carrierCode);
 
+        // V112 — Auth Gap-6-A: refuse dispatch when admin has disabled this
+        // carrier org-wide. Unknown codes (not in the carriers table) default
+        // to enabled=true so pre-seed installs don't fail closed.
+        if (!carrierPlatformService.isEnabled(canonicalCarrierCode)) {
+            throw new CarrierConnectionException(
+                    "Carrier '" + canonicalCarrierCode + "' is disabled org-wide. "
+                            + "Re-enable at /settings/carriers (platform) to dispatch again.");
+        }
+
         // USPS Direct - two connectors share carrierCode="USPS" (the legacy
         // StampsConnector and the new UspsDirectConnector). Branch on the
         // platform-wide provider setting so both connectors can coexist in
@@ -3265,7 +3367,29 @@ public class CarrierServiceImpl implements CarrierService {
 
     private ShipVia resolveShipVia(String carrierCode) {
         return shipViaRepository.findByShipviaCdIgnoreCase(carrierCode)
-                .orElseThrow(() -> new CarrierConnectionException("ShipVia row not found for carrier " + carrierCode));
+                .orElseThrow(() -> new CarrierConnectionException(buildShipViaNotFoundMessage(carrierCode)));
+    }
+
+    /** G-7.1 (carrier-choice-vs-shipx) — enrich the "ShipVia not found"
+     *  error with up to 5 similar codes from ship_vias so the operator
+     *  gets a fix hint instead of a dead-end message. Prefix match on
+     *  the first two chars; falls back to substring. Empty tables and
+     *  blank input both fall through to the plain message. */
+    private String buildShipViaNotFoundMessage(String carrierCode) {
+        String base = "ShipVia row not found for carrier " + carrierCode;
+        if (carrierCode == null || carrierCode.isBlank()) return base + ".";
+        String trimmed = carrierCode.trim();
+        var page = org.springframework.data.domain.PageRequest.of(0, 5);
+        List<ShipVia> hits = List.of();
+        if (trimmed.length() >= 2) {
+            hits = shipViaRepository.findByCodePrefixIgnoreCase(trimmed.substring(0, 2), page);
+        }
+        if (hits.isEmpty()) {
+            hits = shipViaRepository.findByCodeSubstringIgnoreCase(trimmed, page);
+        }
+        if (hits.isEmpty()) return base + ".";
+        String suggestions = hits.stream().map(ShipVia::getShipviaCd).collect(Collectors.joining(", "));
+        return base + ". Did you mean: " + suggestions + "?";
     }
 
     private String resolveCarrierCode(User user) {
@@ -3419,6 +3543,27 @@ public class CarrierServiceImpl implements CarrierService {
         return value.substring(0, maxLength);
     }
 
+    /** Returns F11 — canonical return-reason codes. Keep in sync with the
+     *  FE picklist in NewShipmentPage; the enum lives here (not in the
+     *  entity) so changing values ships without a Flyway migration. */
+    private static final java.util.Set<String> RETURN_REASON_CODES = java.util.Set.of(
+            "WRONG_ITEM", "DEFECTIVE", "NO_LONGER_NEEDED", "SIZE", "OTHER");
+
+    private static String canonReturnReason(String raw) {
+        if (!StringUtils.hasText(raw)) return null;
+        String v = raw.trim().toUpperCase(java.util.Locale.ROOT);
+        return RETURN_REASON_CODES.contains(v) ? v : null;
+    }
+
+    /** Returns F12 — drop invalid outbound-order references to null:
+     *  blank, self-linkage, or no matching row. Analytics / UI treats
+     *  null as "untracked"; a stale typed value never 400s. */
+    private Integer canonOriginalOrderNo(Integer raw, Integer selfOrderNo) {
+        if (raw == null || raw <= 0) return null;
+        if (selfOrderNo != null && raw.equals(selfOrderNo)) return null;
+        return orderRepository.findByOrderNo(raw).isPresent() ? raw : null;
+    }
+
     /** Shared for packages_json round-trip. Reuse instead of allocating per call. */
     private static final com.fasterxml.jackson.databind.ObjectMapper PACKAGES_JSON_MAPPER =
             new com.fasterxml.jackson.databind.ObjectMapper();
@@ -3537,7 +3682,8 @@ public class CarrierServiceImpl implements CarrierService {
             String fromCountry,
             CarrierAccountRef account,
             Integer orderNoForPo) {
-        CarrierProperties.ShipperDefaults dflt = carrierProperties.getShipper();
+        // C1 — tenant-scoped shipper defaults (see the shipperDefaults dep).
+        CarrierProperties.ShipperDefaults dflt = shipperDefaults.resolveFor(req.getClientCode());
         // PR #543 — PO / DEPT for label printing. Manual shipments always
         // resolve here via `generateManualLabel` with req.source in
         // {null, MANUAL} → prefix MAN{orderNo}. Non-manual sources
@@ -3595,6 +3741,10 @@ public class CarrierServiceImpl implements CarrierService {
                 .declaredValue(req.getDeclaredValue())
                 .isReturn(req.getIsReturn())
                 .returnType(req.getReturnType())
+                // Returns F8 — passes through to DhlConnector; null stays null.
+                .returnPickupRequested(req.getReturnPickupRequested())
+                // Returns F10 — operator-issued RMA; persisted on label_batch.
+                .rmaNumber(req.getRmaNumber())
                 .dangerousGoods(req.getDangerousGoods())
                 .signatureOption(req.getSignatureOption())
                 .insuredValue(req.getInsuredValue())
@@ -3637,13 +3787,14 @@ public class CarrierServiceImpl implements CarrierService {
     }
 
     private ShipmentRequestDTO buildShipmentRequest(Order order, String accountNumber, CarrierConnector connector) {
-        CarrierProperties.ShipperDefaults shipper = carrierProperties.getShipper();
-
         // Service: the ship-method RULE engine (client + destination aware,
         // most-specific wins) → enabled catalog service; the old connector
         // default is only the last-resort fallback. International here =
         // COUNTRY difference (service level, not customs).
         String orderClient = firstNonBlank(order.getTenantId(), order.getCustNo());
+        // C1 — tenant-scoped shipper defaults keyed on the same identifier
+        // resolveWarehouse uses below.
+        CarrierProperties.ShipperDefaults shipper = shipperDefaults.resolveFor(orderClient);
         // Origin warehouse: use the client's default attachment when we can
         // find one, otherwise null (unrestricted rules still match). This is
         // what feeds ShipMethodRuleWarehouse-based rule filtering — AND the
@@ -3948,6 +4099,9 @@ public class CarrierServiceImpl implements CarrierService {
                 // with Y (case-insensitive) counts as a return.
                 .isReturn("Y".equalsIgnoreCase(
                         order.getIsReturn() == null ? "" : order.getIsReturn().trim()))
+                // Returns F10 — carry the stored RMA so a reissue hits the
+                // connector with the same value the operator typed first time.
+                .rmaNumber(order.getRmaNumber())
                 .build();
 
         // F6-D — if the resolved client currency differs from the carrier

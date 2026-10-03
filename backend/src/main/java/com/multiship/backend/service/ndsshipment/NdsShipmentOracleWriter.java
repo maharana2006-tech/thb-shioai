@@ -86,11 +86,14 @@ public class NdsShipmentOracleWriter {
                 int count = 0;
                 for (WritebackPackagePayload pkg : p.packages()) {
                     if (pkg.orderNos() == null || pkg.orderNos().isEmpty()) continue;
-                    // CONTAINER_NO is a NUMBER on NDS side; use the package sequence
-                    // as a stable per-order counter (matches OE_SHIP_CONTAINER seed).
-                    // ponytail: package.sequence used as CONTAINER_NO; if NDS
-                    // keys off the raw container_no from prefill, promote that field
-                    // onto WritebackPackagePayload.
+                    // C-audit F06 / E2 — use the real containerNo from the NDS
+                    // prefill so multi-container fan-out keys on the right
+                    // CLIPPER row. Fallback to the 1-based sequence keeps the
+                    // legacy behavior for callers that haven't populated
+                    // containerNo yet (backward-compat during B6 rollout).
+                    String containerNo = (pkg.containerNo() != null && !pkg.containerNo().isBlank())
+                            ? pkg.containerNo()
+                            : String.valueOf(pkg.sequence());
                     for (Integer orderNo : pkg.orderNos()) {
                         try {
                             int rows = clientJdbc.update(
@@ -104,7 +107,7 @@ public class NdsShipmentOracleWriter {
                                             .addValue("freight", p.freightAmount())
                                             .addValue("tenant", p.clientCode())
                                             .addValue("orderNo", orderNo)
-                                            .addValue("containerNo", pkg.sequence())
+                                            .addValue("containerNo", containerNo)
                                             .addValue("orderSuffix", pkg.orderSuffix() == null ? 0 : pkg.orderSuffix()));
                             count += rows;
                         } catch (Exception e) {
@@ -185,8 +188,15 @@ public class NdsShipmentOracleWriter {
                     errors.add("TB_MANUAL_SHIPMENT[" + errorMode + "]: " + e.getMessage());
                 }
             }
-            // ERROR_MODE=Q — additional audit row when the operator entered a note.
-            if (p.note() != null && !p.note().isBlank()) {
+            // B8 — ERROR_MODE=Q is ShipX's Quick-Ship / BackOrder audit trail
+            // (12c-nds-manual-list.md step 1 table). shioai's Manual / Bulk /
+            // API / WMS / DTC flows shouldn't write it: the M / R row already
+            // covers the audit and doubling up made NDS reports count twice.
+            // When Quick-Ship / BackOrder lands, this gate flips on.
+            boolean isQuickShipFamily = "QUICK_SHIP".equalsIgnoreCase(p.source())
+                    || "BACKORDER".equalsIgnoreCase(p.source())
+                    || "BACK_ORDER".equalsIgnoreCase(p.source());
+            if (isQuickShipFamily && p.note() != null && !p.note().isBlank()) {
                 try {
                     int rows = insertTbManualShipment(prodJdbc, p, "Q", orderNoText, p.note());
                     if (rows > 0) touched.add("TB_MANUAL_SHIPMENT[Q]×" + rows);

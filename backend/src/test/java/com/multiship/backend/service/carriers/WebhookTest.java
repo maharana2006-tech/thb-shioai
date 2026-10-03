@@ -12,6 +12,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -54,6 +55,38 @@ class WebhookTest {
     void hmacSha256HexReturnsNullForBlankSecret() {
         assertNull(WebhookHmacUtil.hmacSha256Hex("hello", ""));
         assertNull(WebhookHmacUtil.hmacSha256Hex("hello", null));
+    }
+
+    @Test
+    void hmacSha256HexTimestampedBindsTimestampToSignature() {
+        // Audit W4 (#333) — a receiver that enforces a timestamp window
+        // depends on the signature changing when the timestamp changes.
+        // Captured deliveries then can't be replayed with a bumped
+        // timestamp header — the mismatched signature fails verification.
+        String body = "{\"orderNo\":123}";
+        String sigAt1000 = WebhookHmacUtil.hmacSha256HexTimestamped(body, "secret", 1000L);
+        String sigAt1001 = WebhookHmacUtil.hmacSha256HexTimestamped(body, "secret", 1001L);
+        assertNotEquals(sigAt1000, sigAt1001);
+    }
+
+    @Test
+    void hmacSha256HexTimestampedDiffersFromBodyOnlyHex() {
+        // Audit W4 (#333) — the timestamped variant must NOT produce the
+        // same output as the body-only legacy signature. If a partner
+        // forgot to update their verifier to the new scheme they'd
+        // accidentally accept replays — this pin catches a regression
+        // where the two accidentally compute the same hex.
+        String body = "{\"orderNo\":123}";
+        String legacy = WebhookHmacUtil.hmacSha256Hex(body, "secret");
+        String timestamped = WebhookHmacUtil.hmacSha256HexTimestamped(body, "secret", 1000L);
+        assertNotEquals(legacy, timestamped);
+    }
+
+    @Test
+    void hmacSha256HexTimestampedReturnsNullOnBlankSecret() {
+        assertNull(WebhookHmacUtil.hmacSha256HexTimestamped("hello", null, 1L));
+        assertNull(WebhookHmacUtil.hmacSha256HexTimestamped("hello", "", 1L));
+        assertNull(WebhookHmacUtil.hmacSha256HexTimestamped(null, "secret", 1L));
     }
 
     @Test

@@ -13,6 +13,9 @@ import type { ApiResponse } from './orderService'
 export interface ConnectorSummary {
   systemType: string
   configType: string
+  /** M3 — secret keys this connector reads. FE Secrets form renders one
+   *  password input per entry. Empty = connector needs no secrets. */
+  secretKeys?: string[]
 }
 
 export interface ConnectionSummary {
@@ -25,6 +28,8 @@ export interface ConnectionSummary {
   // V91 env split. Shows PROD or DEV chip + a "using DEV" marker on PROD rows.
   environment: 'PROD' | 'DEV' | string
   useDev: boolean
+  // X1 — list shows a "DEFAULT" chip on the row holding this flag.
+  isDefaultWritebackTarget: boolean
 }
 
 export interface ConnectionDetail {
@@ -57,6 +62,9 @@ export interface ConnectionDetail {
   // canonical on the PROD row: TRUE = resolver picks the DEV row.
   environment: 'PROD' | 'DEV' | string
   useDev: boolean
+  // X1 / V110 — at most one row across the table has this flag; it's
+  // the fallback writeback target when no per-tenant override is set.
+  isDefaultWritebackTarget: boolean
 }
 
 export interface ConnectionUpsertRequest {
@@ -139,6 +147,12 @@ export const externalSystemsService = {
   delete: (id: number) =>
     apiClient.delete<ApiResponse<void>>(`${BASE}/${id}`),
 
+  /** X1 — flip the DB-flagged default writeback target to this row. */
+  setDefaultWritebackTarget: (id: number) =>
+    apiClient
+      .put<ApiResponse<ConnectionDetail>>(`${BASE}/${id}/default-writeback-target`, {})
+      .then((res) => res.data as ConnectionDetail),
+
   /** Passing null / empty plaintext deletes the secret row. */
   putSecret: (id: number, key: string, plaintext: string | null) =>
     apiClient
@@ -195,4 +209,36 @@ export const externalSystemsService = {
     apiClient
       .post<ApiResponse<Record<string, unknown>>>(`${BASE}/${id}/test-connection`, req)
       .then((res) => res),
+
+  /**
+   * D4 — Fire a synthetic writeback dispatch to prove the V90 gate matrix
+   * without actually shipping a label. Response describes what was sent;
+   * routing decision + skipped-vs-fired lines land in backend.log.
+   */
+  writebackProbe: (id: number, req: WritebackProbeRequest) =>
+    apiClient
+      .post<ApiResponse<WritebackProbeResponse>>(`${BASE}/${id}/writeback-probe`, req)
+      .then((res) => res.data as WritebackProbeResponse),
+}
+
+/** Payload for /writeback-probe. All fields optional; sensible defaults on the server. */
+export interface WritebackProbeRequest {
+  clientCode?: string
+  source?: string       // MANUAL | BULK | API | WMS | DTC | QUICK_SHIP | BACKORDER
+  channel?: string      // D2C | B2B
+  orderNo?: number
+  mode?: 'GENERATE' | 'CLEAR'
+}
+
+export interface WritebackProbeResponse {
+  connectionName: string
+  systemType: string
+  mode: string
+  sent: {
+    clientCode: string
+    orderNo: number
+    source: string
+    channel: string
+  }
+  note: string
 }

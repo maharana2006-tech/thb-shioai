@@ -43,6 +43,16 @@ public class Order {
     @Column(name = "nds_resolved_shipvia_cd", length = 20)
     private String ndsResolvedShipviaCd;
 
+    /**
+     * B7 — NDS billable batch id when the shipment came from a `.Y` scan.
+     * Populated by CarrierServiceImpl.generateManualLabel from
+     * {@code ManualShipmentRequest.ndsBatchId}. Null on non-batch
+     * shipments. Enables sibling-order lookup on cancel and future
+     * "batch is in flight" admin views.
+     */
+    @Column(name = "billable_batch_id", length = 50)
+    private String billableBatchId;
+
     @Column(name = "ship_addr1")
     private String shipAddr1;
 
@@ -119,6 +129,13 @@ public class Order {
     @Column(name = "tenant_id")
     private String tenantId;
 
+    /** V116 — ad-hoc shipment flag. Replaces the "MANUAL" literal custNo
+     *  sentinel for ad-hoc shipments (Manual F-18). Co-exists during
+     *  migration; CarrierServiceImpl sets both so legacy readers that
+     *  check {@code "MANUAL".equals(custNo)} keep working. */
+    @Column(name = "ad_hoc", nullable = false, columnDefinition = "boolean default false")
+    private Boolean adHoc = false;
+
     @Column(name = "location")
     private String location;
 
@@ -178,6 +195,26 @@ public class Order {
     /** 'Y' when this is a reverse/return label (customer ships back). */
     @Column(name = "is_return")
     private String isReturn;
+
+    /** Returns F10 — RMA number the operator issued for this return. Null
+     *  for outbound labels and for returns created before RMA capture.
+     *  Carrier wire (which reference slot it goes in) is a follow-up. */
+    @Column(name = "rma_number", length = 60)
+    private String rmaNumber;
+
+    /** Returns F11 — operator-picked reason this return was created.
+     *  One of WRONG_ITEM / DEFECTIVE / NO_LONGER_NEEDED / SIZE / OTHER;
+     *  null on outbound labels and on returns created before capture.
+     *  Enum lives in the app layer (no CHECK on the column) so new
+     *  reasons ship without a migration. */
+    @Column(name = "return_reason", length = 32)
+    private String returnReason;
+
+    /** Returns F12 — the outbound order number this is a return of.
+     *  Nullable: outbound labels and legacy returns stay NULL. No DB
+     *  FK; the manual-shipment boundary drops invalid refs to null. */
+    @Column(name = "original_order_no")
+    private Integer originalOrderNo;
 
     /** V76 — internal per-order ops note (driver instructions / pickup
      *  hints / handling flags). 500-char cap. Deliberately INTERNAL:

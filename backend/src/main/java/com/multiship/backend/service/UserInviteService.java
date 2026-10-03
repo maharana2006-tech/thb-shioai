@@ -2,7 +2,7 @@ package com.multiship.backend.service;
 
 import com.multiship.backend.model.UserInvite;
 import com.multiship.backend.repository.UserInviteRepository;
-import com.multiship.backend.service.mail.MailSender;
+import com.multiship.backend.service.mail.NotificationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -36,7 +36,7 @@ public class UserInviteService {
     private static final SecureRandom RANDOM = new SecureRandom();
 
     private final UserInviteRepository repository;
-    private final MailSender mailSender;
+    private final NotificationService notifications;
     /**
      * Sprint 50 Tier 0.5 PR E - clamp clientCode on invite mint so a
      * scoped USER (in the unlikely case they're allowed to invite) cannot
@@ -75,13 +75,12 @@ public class UserInviteService {
         repository.save(invite);
 
         String acceptLink = acceptLinkBaseUrl + "/invite/" + invite.getToken();
-        mailSender.send(invite.getEmail(),
-                "You've been invited to Multiship",
-                "You've been invited to join Multiship as " + invite.getRole()
-                        + " for client " + invite.getClientCode() + ".\n\n"
-                        + "Accept the invite (expires in " + tokenTtlDays + " days):\n"
-                        + acceptLink + "\n\n"
-                        + "Invited by: " + invitedBy);
+        notifications.send("AUTH.USER_INVITE", invite.getEmail(), java.util.Map.of(
+                "acceptLink", acceptLink,
+                "role", invite.getRole(),
+                "clientCode", invite.getClientCode(),
+                "ttlDays", tokenTtlDays,
+                "invitedBy", invitedBy == null ? "" : invitedBy));
         return invite;
     }
 

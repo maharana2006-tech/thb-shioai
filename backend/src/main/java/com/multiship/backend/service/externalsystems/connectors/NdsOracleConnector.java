@@ -103,6 +103,12 @@ public class NdsOracleConnector implements ExternalSystemConnector<NdsOracleConf
     @Override
     public Class<NdsOracleConfig> configType() { return NdsOracleConfig.class; }
 
+    /** M3 — the single secret key the admin Secrets form must offer. */
+    @Override
+    public java.util.List<String> secretKeys() {
+        return java.util.List.of(SECRET_PRODUCTION_PASSWORD);
+    }
+
     @Override
     public DataSource connect(String connectionName, NdsOracleConfig cfg,
                               LoginContext ctx, ConnectorSecretAccess secrets) {
@@ -165,6 +171,11 @@ public class NdsOracleConnector implements ExternalSystemConnector<NdsOracleConf
                                       ConnectorSecretAccess secrets, WritebackPayload payload) {
         NdsShipmentOracleWriter writer = writerProvider == null ? null : writerProvider.getIfAvailable();
         if (writer == null) {
+            // D3 — escalate to WARN so silent skips show up in log filters.
+            // Boot-time alert lives in NdsWriterHealthIndicator; this fires
+            // per-attempt so late-arriving traffic doesn't sit unnoticed.
+            log.warn("nds-writer bean unavailable — skipping writeback for connection '{}'",
+                    connectionName);
             return WritebackAck.skipped("nds-writer bean unavailable — writeback disabled in this context");
         }
         return writer.writeShipment(payload);
@@ -175,6 +186,11 @@ public class NdsOracleConnector implements ExternalSystemConnector<NdsOracleConf
                                       ConnectorSecretAccess secrets, WritebackClearRequest req) {
         NdsShipmentOracleWriter writer = writerProvider == null ? null : writerProvider.getIfAvailable();
         if (writer == null) {
+            // D3 — escalate to WARN so silent skips show up in log filters.
+            // Boot-time alert lives in NdsWriterHealthIndicator; this fires
+            // per-attempt so late-arriving traffic doesn't sit unnoticed.
+            log.warn("nds-writer bean unavailable — skipping writeback for connection '{}'",
+                    connectionName);
             return WritebackAck.skipped("nds-writer bean unavailable — writeback disabled in this context");
         }
         // Dispatcher threaded the six per-connection flags through the

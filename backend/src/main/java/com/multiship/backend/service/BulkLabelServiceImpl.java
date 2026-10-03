@@ -375,8 +375,14 @@ public class BulkLabelServiceImpl implements BulkLabelService {
      * caller sends it via HTTP; the service-level check gives non-HTTP
      * callers (background jobs, tests) the same guarantee and surfaces
      * the actionable {@link ErrorCode#BULK_LIMIT_EXCEEDED} code.
+     *
+     * <p>V116 — admin-tunable via {@code bulk.max-rows} / {@code BULK_MAX_ROWS}
+     * env var. Default 500 matches the pre-V116 constant + the DTO's
+     * {@code @Size(500)} annotation; crank both together if ops wants
+     * larger batches.
      */
-    static final int MAX_BULK_ORDERS = 500;
+    @Value("${bulk.max-rows:500}")
+    private int maxBulkOrders = 500;
 
     @Override
     public ApiResponse<BulkLabelJobDTO> submit(BulkLabelRequestDTO request, String requestedBy) {
@@ -431,9 +437,9 @@ public class BulkLabelServiceImpl implements BulkLabelService {
                     preDedupeSize - resolvedOrderNos.size(), resolvedOrderNos.size());
         }
 
-        if (resolvedOrderNos.size() > MAX_BULK_ORDERS) {
+        if (resolvedOrderNos.size() > maxBulkOrders) {
             return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.BULK_LIMIT_EXCEEDED,
-                    "Bulk batch limited to " + MAX_BULK_ORDERS + " orders — this request has "
+                    "Bulk batch limited to " + maxBulkOrders + " orders — this request has "
                             + resolvedOrderNos.size()
                             + ". Split larger batches into multiple submissions.");
         }

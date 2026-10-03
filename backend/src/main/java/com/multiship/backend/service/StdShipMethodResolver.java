@@ -1,8 +1,8 @@
 package com.multiship.backend.service;
 
-import com.multiship.backend.model.ShipViaMapping;
+import com.multiship.backend.model.ClientShipviaCodeMap;
 import com.multiship.backend.model.ShippingService;
-import com.multiship.backend.repository.ShipViaMappingRepository;
+import com.multiship.backend.repository.ClientShipviaCodeMapRepository;
 import com.multiship.backend.repository.ShippingServiceRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -19,7 +19,7 @@ import java.util.Optional;
  *
  * <p>How the client configures this:
  * <ol>
- *   <li>Settings → Shipping Service Mapping → add a row with
+ *   <li>Settings → Code Maps → SHIPVIA tab → add a row with
  *       {@code erp_code = "STD"} and {@code client_code = <client>}.
  *   <li>Pick the target service (e.g. FEDEX_GROUND).
  * </ol>
@@ -30,12 +30,11 @@ import java.util.Optional;
  * <p><b>Reverse ERP code for writeback:</b> NDS wants the operator's ERP
  * code on OEHEAD.SHIPVIA_CD (e.g. "P80" or "F03"), not our internal
  * service code. After resolving STD → serviceId, we scan the same
- * client's other ShipViaMapping rows for one where {@code service_id =
- * <resolved>} AND {@code shipvia_cd != 'STD'}. First deterministic hit
- * wins (ordered by id) so the same order → same ERP code across runs.
- * If no other mapping row exists, {@link Result#erpCodeForNds} is empty —
- * writer skips the OEHEAD update in that case (doc doesn't spec a
- * fallback and we don't want to guess wrong).
+ * client's other rows for one where {@code service_id = <resolved>} AND
+ * {@code erp_code != 'STD'}. First deterministic hit wins (ordered by
+ * id) so the same order → same ERP code across runs. If no other
+ * mapping row exists, {@link Result#erpCodeForNds} is empty — writer
+ * skips the OEHEAD update in that case.
  */
 @Slf4j
 @Service
@@ -44,7 +43,7 @@ public class StdShipMethodResolver {
 
     public static final String STD = "STD";
 
-    private final ShipViaMappingRepository mappingRepo;
+    private final ClientShipviaCodeMapRepository mappingRepo;
     private final ShippingServiceRepository serviceRepo;
 
     public record Result(ShippingService service, String erpCodeForNds) {}
@@ -53,10 +52,10 @@ public class StdShipMethodResolver {
     public Optional<Result> resolveStdForClient(String clientCode) {
         if (clientCode == null || clientCode.isBlank()) return Optional.empty();
         String normalizedClient = clientCode.trim().toUpperCase();
-        Optional<ShipViaMapping> stdRow = mappingRepo.findByShipviaCdIgnoreCase(STD).stream()
+        Optional<ClientShipviaCodeMap> stdRow = mappingRepo.findByErpCodeIgnoreCase(STD).stream()
                 .filter(m -> normalizedClient.equalsIgnoreCase(
                         m.getClientCode() == null ? "" : m.getClientCode().trim()))
-                .min(Comparator.comparing(ShipViaMapping::getId));
+                .min(Comparator.comparing(ClientShipviaCodeMap::getId));
         if (stdRow.isEmpty()) {
             log.debug("STD resolver: no mapping for client {}", normalizedClient);
             return Optional.empty();
@@ -77,13 +76,13 @@ public class StdShipMethodResolver {
      * non-STD row exists for this (client, service) pair.
      */
     public String reverseErpCode(String clientCode, Long serviceId) {
-        List<ShipViaMapping> candidates = mappingRepo.findByServiceId(serviceId);
+        List<ClientShipviaCodeMap> candidates = mappingRepo.findByServiceId(serviceId);
         return candidates.stream()
                 .filter(m -> clientCode.equalsIgnoreCase(
                         m.getClientCode() == null ? "" : m.getClientCode().trim()))
-                .filter(m -> !STD.equalsIgnoreCase(m.getShipviaCd()))
-                .min(Comparator.comparing(ShipViaMapping::getId))
-                .map(ShipViaMapping::getShipviaCd)
+                .filter(m -> !STD.equalsIgnoreCase(m.getErpCode()))
+                .min(Comparator.comparing(ClientShipviaCodeMap::getId))
+                .map(ClientShipviaCodeMap::getErpCode)
                 .orElse(null);
     }
 }

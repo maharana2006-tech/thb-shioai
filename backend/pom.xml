@@ -47,6 +47,45 @@
 			<artifactId>spring-boot-starter-web</artifactId>
 		</dependency>
 
+		<!-- A4.1 — JavaMailSenderImpl + jakarta.mail for SmtpMailProvider.
+		     Autoconfig only kicks in when spring.mail.host is set (we don't
+		     set it; the SmtpMailProvider builds a sender per-send from DB
+		     config). Inert until an admin activates an SMTP row. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-mail</artifactId>
+		</dependency>
+
+		<!-- A4.2 — Handlebars for DB-stored email templates. Chosen over
+		     StringSubstitutor because ops asked for conditionals + loops
+		     (invite email needs {{#if invitedBy}}…{{/if}}). Handlebars.java
+		     caches compiled templates internally so re-render is cheap. -->
+		<dependency>
+			<groupId>com.github.jknack</groupId>
+			<artifactId>handlebars</artifactId>
+			<version>4.4.0</version>
+		</dependency>
+
+		<!-- A4.3 — SendGrid + AWS SES + Postmark SDK deps for the alternative
+		     mail providers. Each is inert unless an admin activates the
+		     matching mail_provider row at /settings/mail. SDKs are pinned
+		     (no BOM) to keep the transitive footprint small. -->
+		<dependency>
+			<groupId>com.sendgrid</groupId>
+			<artifactId>sendgrid-java</artifactId>
+			<version>4.10.3</version>
+		</dependency>
+		<dependency>
+			<groupId>software.amazon.awssdk</groupId>
+			<artifactId>ses</artifactId>
+			<version>2.28.11</version>
+		</dependency>
+		<dependency>
+			<groupId>com.postmarkapp</groupId>
+			<artifactId>postmark</artifactId>
+			<version>1.11.1</version>
+		</dependency>
+
 		<dependency>
 			<groupId>org.postgresql</groupId>
 			<artifactId>postgresql</artifactId>

@@ -88,6 +88,36 @@ const PrintersPage = lazy(() => import('../components/PrintersPage'))
 // S3 — DB-driven external-system connection manager (Oracle WMS today,
 // REST/gRPC/SFTP later). ADMIN-only.
 const ExternalSystemsPage = lazy(() => import('../components/ExternalSystemsPage'))
+// A4.1 — DB-driven mail provider config + test-send.
+const MailSettingsPage = lazy(() => import('../components/MailSettingsPage'))
+// A4.2 — Handlebars templates for outbound-email events.
+const NotificationTemplatesPage = lazy(() => import('../components/NotificationTemplatesPage'))
+// A4.4 — dispatch journal with filter + retry.
+const NotificationDeliveryLogPage = lazy(() => import('../components/NotificationDeliveryLogPage'))
+// D1 — framework-wide external-system writeback dispatch journal.
+const WritebackJournalPage = lazy(() => import('../components/WritebackJournalPage'))
+// Returns F11 payoff — reason-by-week rollup.
+const ReturnsAnalyticsPage = lazy(() => import('../components/ReturnsAnalyticsPage'))
+// V112 — carriers platform registry (enabled + mode + family).
+const CarriersPlatformPage = lazy(() => import('../components/CarriersPlatformPage'))
+// V113 — durable alert history.
+const AlertHistoryPage = lazy(() => import('../components/AlertHistoryPage'))
+// V114 — per-request carrier API log.
+const CarrierApiLogPage = lazy(() => import('../components/CarrierApiLogPage'))
+// V115 — read-only role registry.
+const RolesPage = lazy(() => import('../components/RolesPage'))
+// V111 — read-only country / is_us_territory table.
+const CountriesPage = lazy(() => import('../components/CountriesPage'))
+// V117 — read-only reason-for-export registry.
+const ReasonsForExportPage = lazy(() => import('../components/ReasonsForExportPage'))
+// V117 — read-only ISO 4217 currency catalog.
+const CurrenciesPage = lazy(() => import('../components/CurrenciesPage'))
+// V118 — read-only carrier-error-message rules.
+const CarrierErrorMessagesPage = lazy(() => import('../components/CarrierErrorMessagesPage'))
+// V120 — read-only per-carrier dropdown vocabularies.
+const CarrierDropdownsPage = lazy(() => import('../components/CarrierDropdownsPage'))
+// A4.5 — self-serve per-user email opt-out toggles.
+const MyNotificationSubscriptionsPage = lazy(() => import('../components/MyNotificationSubscriptionsPage'))
 const CutoffsPage = lazy(() => import('../components/CutoffsPage'))
 // PR-F4 Agent-2 — USPS Direct admin dashboard (queue + quota + retries + reconciliation).
 const UspsDirectDashboardPage = lazy(() => import('../pages/UspsDirectDashboardPage'))
@@ -179,6 +209,10 @@ export default function AppRoutes() {
                     sidebar shows the entry. */}
                 <Route path="carriers" element={<CarrierPage />} />
                 <Route path="audit-log" element={<AuditLogPage />} />
+                {/* A4.5 — self-serve email opt-outs. USER + ADMIN so any
+                    authenticated user can silence alert-style templates
+                    without touching admin surfaces. */}
+                <Route path="notifications" element={<MyNotificationSubscriptionsPage />} />
                 <Route element={<RequireRole roles={['ADMIN']} />}>
                   <Route path="api-keys" element={<ApiKeysPage />} />
                   <Route path="api-reference" element={<ApiReferencePage />} />
@@ -188,6 +222,20 @@ export default function AppRoutes() {
                   <Route path="output-destinations" element={<OutputDestinationsPage />} />
                   <Route path="printers" element={<PrintersPage />} />
                   <Route path="external-systems" element={<ExternalSystemsPage />} />
+                  <Route path="mail" element={<MailSettingsPage />} />
+                  <Route path="notification-templates" element={<NotificationTemplatesPage />} />
+                  <Route path="notification-delivery-log" element={<NotificationDeliveryLogPage />} />
+                  <Route path="writeback-journal" element={<WritebackJournalPage />} />
+                  <Route path="returns-analytics" element={<ReturnsAnalyticsPage />} />
+                  <Route path="carriers-platform" element={<CarriersPlatformPage />} />
+                  <Route path="alerts-history" element={<AlertHistoryPage />} />
+                  <Route path="carrier-api-log" element={<CarrierApiLogPage />} />
+                  <Route path="roles" element={<RolesPage />} />
+                  <Route path="countries" element={<CountriesPage />} />
+                  <Route path="reasons-for-export" element={<ReasonsForExportPage />} />
+                  <Route path="currencies" element={<CurrenciesPage />} />
+                  <Route path="carrier-error-messages" element={<CarrierErrorMessagesPage />} />
+                  <Route path="carrier-dropdowns" element={<CarrierDropdownsPage />} />
                   <Route path="cutoffs" element={<CutoffsPage />} />
                   {/* PR-F4 Agent-2 — USPS Direct admin dashboard: composite
                       view of queue depth, quota headroom, retry buckets and
@@ -200,6 +248,8 @@ export default function AppRoutes() {
 
             <Route path={workspacePaths.orders} element={<OrdersPage />} />
             <Route path="/orders/new" element={<NewShipmentPage />} />
+            {/* Returns F4 — same component; pathname check inside pre-selects mode=RETURN. */}
+            <Route path="/orders/new/return" element={<NewShipmentPage />} />
             {/* Bulk Mailer — opens on Import history; the tab is in the URL. */}
             <Route path={workspacePaths.bulk} element={<Navigate to={bulkPaths.imports} replace />} />
             <Route path={bulkPaths.importFile} element={<BulkImportPage />} />

@@ -11,6 +11,7 @@ import type { SettingsOutletContext } from './layout/SettingsLayout'
 import UspsProviderReadinessTable from './settings/UspsProviderReadinessTable'
 import SystemChannelSection from './settings/SystemChannelSection'
 import NdsFallbacksSection from './settings/NdsFallbacksSection'
+import ShipperDefaultsSection from './settings/ShipperDefaultsSection'
 
 /**
  * Sprint 49 Tier 0 — admin surface for encrypted system secrets.
@@ -207,6 +208,11 @@ export default function SystemSettingsPage() {
           notify email, default weight, missing-weight policy). Same
           tenant_settings-backed pattern as the channel gate. */}
       <NdsFallbacksSection />
+
+      {/* C1 — per-tenant ship-from defaults. Applied on the label path
+          when the request has no sender and no warehouse matches, before
+          the ultimate platform default in application.properties. */}
+      <ShipperDefaultsSection />
 
       {loading ? (
         <div className="rounded-xl border border-slate-200 bg-white p-6 text-[13px] text-slate-500">

@@ -50,7 +50,14 @@ public class PrinterService {
      *  PCL: office lasers that don't — the app rasterises the page for them. */
     public static final Set<String> FORMATS = Set.of("ZPL", "PDF", "PCL");
     public static final Set<String> PAPERS = Set.of("LABEL_4X6", "A4", "LETTER");
-    public static final Set<String> DOC_TYPES = Set.of("LABEL", "COMMERCIAL_INVOICE");
+    // Print H17-1 — PACKING_SLIP added to the routable set so the
+    // branded packing slip (PackingSlipServiceImpl) can be sent to a
+    // printer alongside labels + invoices.
+    public static final Set<String> DOC_TYPES = Set.of("LABEL", "COMMERCIAL_INVOICE", "PACKING_SLIP");
+
+    /** Doc types that render as PDF — ZPL label printers would truncate /
+     *  mangle them, so the ZPL-mismatch guard refuses the assignment. */
+    private static final Set<String> PDF_ONLY_DOC_TYPES = Set.of("COMMERCIAL_INVOICE", "PACKING_SLIP");
     private static final Pattern HOST = Pattern.compile("^[A-Za-z0-9](?:[A-Za-z0-9.\\-:]{0,251}[A-Za-z0-9])?$");
     private static final Pattern QUEUE_PATH = Pattern.compile("^[A-Za-z0-9._~\\-/]{1,160}$");
 
@@ -109,8 +116,10 @@ public class PrinterService {
         apply(p, input);
         if ("ZPL".equals(p.getFormat()) && !"ZPL".equals(oldFormat)
                 && assignments.findAllByOrderByClientCodeAscDocTypeAsc().stream()
-                        .anyMatch(a -> a.getPrinterId().equals(id) && "COMMERCIAL_INVOICE".equals(a.getDocType()))) {
-            throw new PrinterValidationException("This printer receives commercial invoices, which need PDF. "
+                        .anyMatch(a -> a.getPrinterId().equals(id)
+                                && PDF_ONLY_DOC_TYPES.contains(a.getDocType()))) {
+            throw new PrinterValidationException("This printer receives PDF documents "
+                    + PDF_ONLY_DOC_TYPES + " that a ZPL printer can't render. "
                     + "Move those assignments to a PDF printer before switching it to ZPL.");
         }
         p.setUpdatedAt(LocalDateTime.now());
@@ -189,13 +198,13 @@ public class PrinterService {
         if (in == null) throw new PrinterValidationException("Assignment details are required.");
         String docType = upper(in.docType());
         if (!DOC_TYPES.contains(docType)) {
-            throw new PrinterValidationException("Document type must be LABEL or COMMERCIAL_INVOICE.");
+            throw new PrinterValidationException("Document type must be one of " + DOC_TYPES + ".");
         }
         if (in.printerId() == null) throw new PrinterValidationException("Choose a printer.");
         Printer printer = printers.findById(in.printerId())
                 .orElseThrow(() -> new PrinterValidationException("That printer no longer exists."));
-        if ("COMMERCIAL_INVOICE".equals(docType) && "ZPL".equals(printer.getFormat())) {
-            throw new PrinterValidationException("Commercial invoices are PDF pages; " + printer.getName()
+        if (PDF_ONLY_DOC_TYPES.contains(docType) && "ZPL".equals(printer.getFormat())) {
+            throw new PrinterValidationException(docType + " is a PDF page; " + printer.getName()
                     + " is a ZPL label printer. Choose a PDF printer.");
         }
         String client = upper(in.clientCode());

@@ -3,10 +3,12 @@ import { useOutletContext } from 'react-router-dom'
 import {
   FiChevronDown,
   FiChevronRight,
+  FiDownload,
   FiFilter,
   FiUser,
   FiX,
 } from 'react-icons/fi'
+import { useAppSession } from '../hooks/useAppSession'
 import type { ColumnDef, SortingState } from '@tanstack/react-table'
 import {
   auditLogService,
@@ -25,6 +27,10 @@ import { notify } from '../utils/notify'
  */
 export default function AuditLogPage() {
   const { registerRefresh } = useOutletContext<SettingsOutletContext>()
+  // Audit B6 (#357) — Export CSV button only renders for ADMIN; endpoint
+  // 403s otherwise + hiding the button prevents a confusing failure.
+  const session = useAppSession()
+  const isAdmin = session.role?.toUpperCase() === 'ADMIN'
 
   const [rows, setRows] = useState<AuditLogEntry[]>([])
   const [loading, setLoading] = useState(true)
@@ -334,7 +340,24 @@ export default function AuditLogPage() {
               /* Audit R2 #359 — outer wrapper is the ref target so a click
                   on either the toggle button or the dropdown counts as
                   "inside" and doesn't close the panel. */
-              <div className="relative" ref={filterPanelRef}>
+              <div className="relative flex items-center gap-2" ref={filterPanelRef}>
+                {isAdmin ? (
+                  /* Audit B6 (#357) — CSV export with the live filter set.
+                     <a href> lets the browser handle the download dialog
+                     + Content-Disposition filename without a Blob roundtrip. */
+                  <a
+                    href={auditLogService.exportUrl({
+                      actor, entityType, action, entityKey: debouncedEntityKey, category,
+                      orderNo: orderNoFilter ? Number(orderNoFilter) : undefined,
+                      since, until,
+                    })}
+                    title={`Export the current filter set as CSV (ADMIN only; capped at 100k rows)`}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 transition hover:bg-slate-50"
+                  >
+                    <FiDownload className="h-3.5 w-3.5" />
+                    Export CSV
+                  </a>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => setShowFilters((v) => !v)}

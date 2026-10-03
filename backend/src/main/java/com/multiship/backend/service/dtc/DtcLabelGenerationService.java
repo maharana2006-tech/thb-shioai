@@ -10,7 +10,6 @@ import com.multiship.backend.model.DtcGenerationJob;
 import com.multiship.backend.model.DtcOrder;
 import com.multiship.backend.model.Order;
 import com.multiship.backend.model.OrderTracking;
-import com.multiship.backend.model.ShipViaMapping;
 import com.multiship.backend.model.ShipmentBatch;
 import com.multiship.backend.model.ShippingService;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
@@ -21,7 +20,6 @@ import com.multiship.backend.repository.DtcGenerationJobRepository;
 import com.multiship.backend.repository.DtcOrderRepository;
 import com.multiship.backend.repository.OrderRepository;
 import com.multiship.backend.repository.OrderTrackingRepository;
-import com.multiship.backend.repository.ShipViaMappingRepository;
 import com.multiship.backend.repository.ShipmentBatchRepository;
 import com.multiship.backend.repository.ShippingServiceRepository;
 import com.multiship.backend.repository.WarehouseRepository;
@@ -107,7 +105,6 @@ public class DtcLabelGenerationService {
     private final CarrierService carrierService;
     private final ClientRepository clientRepository;
     private final ClientShipviaCodeMapRepository clientShipviaCodeMapRepository;
-    private final ShipViaMappingRepository shipViaMappingRepository;
     private final ShippingServiceRepository shippingServiceRepository;
     private final StdShipMethodResolver stdShipMethodResolver;
     private final ShippingConfigService shippingConfigService;
@@ -413,25 +410,16 @@ public class DtcLabelGenerationService {
                         + tenantId + " (Settings → Shipping Service Mapping)");
             }
         } else {
-            Long serviceId = clientShipviaCodeMapRepository
-                    .findByClientCodeIgnoreCaseAndErpCodeIgnoreCase(tenantId, code)
-                    .map(ClientShipviaCodeMap::getServiceId)
-                    .orElse(null);
-            if (serviceId == null) {
-                List<ShipViaMapping> global = shipViaMappingRepository.findByShipviaCdIgnoreCase(code);
-                serviceId = global.stream()
-                        .filter(r -> tenantId != null && tenantId.equalsIgnoreCase(r.getClientCode()))
-                        .findFirst()
-                        .or(() -> global.stream().filter(r -> r.getClientCode() == null).findFirst())
-                        .or(() -> global.stream().findFirst())
-                        .map(ShipViaMapping::getServiceId)
-                        .orElse(null);
-            }
-            if (serviceId == null) {
+            // V126 merge — single specificity-ordered lookup. The finder's
+            // ORDER BY puts per-client rows ahead of platform-wide (null
+            // client) rows, so the pre-merge fallback chain is one call.
+            List<ClientShipviaCodeMap> matches = clientShipviaCodeMapRepository
+                    .findMatches(tenantId, code, null, null, null);
+            if (matches.isEmpty()) {
                 throw new IllegalArgumentException("no shipping service mapped for ship-via " + code
-                        + " — add a Ship-Via mapping for " + tenantId);
+                        + " — add a Code Map for " + tenantId);
             }
-            service = shippingServiceRepository.findById(serviceId).orElse(null);
+            service = shippingServiceRepository.findById(matches.get(0).getServiceId()).orElse(null);
         }
 
         if (service == null) {

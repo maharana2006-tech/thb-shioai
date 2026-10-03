@@ -8,13 +8,11 @@ import com.multiship.backend.dto.ManifestResponseDTO.ManifestEntryDTO;
 import com.multiship.backend.model.CarrierAccountRef;
 import com.multiship.backend.model.Order;
 import com.multiship.backend.model.OrderTracking;
-import com.multiship.backend.model.ShipViaMapping;
 import com.multiship.backend.model.ShippingService;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
 import com.multiship.backend.repository.ClientShipviaCodeMapRepository;
 import com.multiship.backend.repository.OrderRepository;
 import com.multiship.backend.repository.OrderTrackingRepository;
-import com.multiship.backend.repository.ShipViaMappingRepository;
 import com.multiship.backend.repository.ShippingServiceRepository;
 import com.multiship.backend.service.carriers.CarrierConnector;
 import com.multiship.backend.service.carriers.CarrierConnector.AddressToValidate;
@@ -58,12 +56,11 @@ public class ManifestServiceImpl implements ManifestService {
      */
     private final TenantScopeEnforcer tenantScope;
     // FDX-G2 — classification chain dependencies. Each tracking is looked up
-    // through OrderTracking → Order → shipviaCd → ClientShipviaCodeMap (or
-    // global ShipViaMapping) → ShippingService.is_express.
+    // through OrderTracking → Order → shipviaCd → ClientShipviaCodeMap
+    // (specificity-ordered: per-client > platform-wide) → ShippingService.is_express.
     private final OrderTrackingRepository orderTrackingRepository;
     private final OrderRepository orderRepository;
     private final ClientShipviaCodeMapRepository clientShipviaCodeMapRepository;
-    private final ShipViaMappingRepository shipViaMappingRepository;
     private final ShippingServiceRepository shippingServiceRepository;
 
     @Override
@@ -289,24 +286,17 @@ public class ManifestServiceImpl implements ManifestService {
         String tenantCode = StringUtils.hasText(order.get().getTenantId())
                 ? order.get().getTenantId() : order.get().getCustNo();
 
-        // 1) Per-client alias first (client uses their own ERP shipvia codes).
-        Long serviceId = null;
-        if (StringUtils.hasText(tenantCode)) {
-            serviceId = clientShipviaCodeMapRepository
-                    .findByClientCodeIgnoreCaseAndErpCodeIgnoreCase(tenantCode.trim(), shipviaCd.trim())
-                    .map(com.multiship.backend.model.ClientShipviaCodeMap::getServiceId)
-                    .orElse(null);
-        }
-        // 2) Global fallback (any-client ShipViaMapping — the seeded
-        //    P80/F77/L01 mappings ShippingConfigSeeder writes).
-        if (serviceId == null) {
-            List<ShipViaMapping> global = shipViaMappingRepository
-                    .findByShipviaCdIgnoreCase(shipviaCd.trim());
-            if (!global.isEmpty()) serviceId = global.get(0).getServiceId();
-        }
-        if (serviceId == null) return Optional.empty();
+        // V126 merge — single specificity-ordered lookup. Per-client rows
+        // beat platform-wide (null clientCode) in the finder's ORDER BY.
+        List<com.multiship.backend.model.ClientShipviaCodeMap> matches =
+                clientShipviaCodeMapRepository.findMatches(
+                        tenantCode == null ? null : tenantCode.trim(),
+                        shipviaCd.trim(),
+                        null, null, null);
+        if (matches.isEmpty()) return Optional.empty();
+        Long serviceId = matches.get(0).getServiceId();
 
-        // 3) Resolve service → is_express flag.
+        // Resolve service → is_express flag.
         return shippingServiceRepository.findById(serviceId).map(ShippingService::isExpress);
     }
 

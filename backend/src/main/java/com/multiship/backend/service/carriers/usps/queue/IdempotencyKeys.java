@@ -95,4 +95,26 @@ public final class IdempotencyKeys {
     public static String forStampsOrder(long orderNo) {
         return forUspsOrder(orderNo);
     }
+
+    /**
+     * D5 — idempotency key for Stamps SERA {@code POST /balance/add-funds}
+     * top-ups. Bucket by (accountId, day, hour) so a scheduled poller that
+     * fires twice in the same window doesn't double-buy postage. Different
+     * hours produce different keys so a legitimate second top-up later in
+     * the day still goes through.
+     *
+     * @param carrierAccountRefId primary key of the Stamps account.
+     * @param dayHourBucket       {@code yyyy-MM-dd-HH} in UTC.
+     */
+    public static String forStampsTopup(long carrierAccountRefId, String dayHourBucket) {
+        if (carrierAccountRefId <= 0L) {
+            throw new IllegalArgumentException(
+                    "IdempotencyKeys.forStampsTopup requires a positive carrierAccountRefId");
+        }
+        if (dayHourBucket == null || dayHourBucket.isBlank()) {
+            throw new IllegalArgumentException(
+                    "IdempotencyKeys.forStampsTopup requires a non-blank dayHourBucket");
+        }
+        return "stamps-topup-" + carrierAccountRefId + "-" + dayHourBucket;
+    }
 }

@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import MpsProgressCard from './orders/MpsProgressCard'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { notify } from '../utils/notify'
 import { FiZap, FiArrowRight, FiArrowLeft, FiTruck, FiPackage, FiMapPin, FiHome, FiUsers, FiFileText, FiPlus, FiTrash2, FiRotateCcw, FiGlobe, FiEdit3, FiCheckCircle, FiAlertTriangle, FiSearch, FiX, FiCopy, FiClipboard, FiAlertCircle, FiBookmark } from 'react-icons/fi'
 import { ApiError } from '../api/apiClient'
@@ -59,7 +59,12 @@ import {
   type NdsPrefillStatus,
   type NdsMessage,
 } from '../api/ndsShipmentService'
-import { SHIPPING_PURPOSES, clearanceOptionsForCarrier, FTR_EXEMPTIONS, EEI_THRESHOLD_USD } from '../utils/customsOptions'
+import {
+  SHIPPING_PURPOSES, clearanceOptionsForCarrier, FTR_EXEMPTIONS, EEI_THRESHOLD_USD,
+  setDbClearanceByCarrier, setDbPickupByCarrier, setDbLabelFormatByCarrier,
+  pickupTypesForCarrier, labelFormatsForCarrier,
+} from '../utils/customsOptions'
+import { carrierDropdownsService } from '../api/carrierDropdownsService'
 import { isServiceAllowedForUsTerritory, usTerritoryBannerHint, isUpsDdpDisallowedForTerritory } from '../utils/usTerritoryServices'
 import {
   Field,
@@ -71,14 +76,21 @@ import { AddressBlock } from './NewShipmentComponents/AddressBlock'
 import { CarrierAddressBanner } from './NewShipmentComponents/CarrierAddressBanner'
 import ValidationChecklist from './ValidationChecklist'
 import { fieldLabelFor } from '../utils/fieldLabels'
+import { useKnownCarriers, toCarrierLabelMap } from '../hooks/useKnownCarriers'
+import { useShipperDefault } from '../hooks/useShipperDefault'
+import type { ResolvedShipper } from '../api/shipperResolveService'
 
-/** Canonicalise a carrier code (ERP aliases → UPS/FEDEX/USPS). */
+/** Canonicalise a carrier code (ERP aliases → UPS/FEDEX/USPS).
+ *  C4: closed-set 4-carrier line removed — the DB-driven carrier_alias
+ *  registry is the source of truth for canonical codes. This function
+ *  keeps the ERP shortcuts (P80/F77/L01/STAMPS) and the service-code
+ *  prefix heuristics because they're smart-defaults for user input,
+ *  not authoritative canonicalisation. */
 const canon = (c?: string | null) => {
   const v = (c || '').trim().toUpperCase()
   if (v === 'P80') return 'UPS'
   if (v === 'F77') return 'FEDEX'
   if (v === 'L01') return 'USPS'
-  if (['UPS', 'FEDEX', 'USPS', 'DHL'].includes(v)) return v
   if (v === 'STAMPS') return 'USPS'
   // Carrier-prefixed SERVICE codes (e.g. INTERNATIONAL_ECONOMY, FEDEX_2_DAY)
   // map back to their carrier — the fix/edit form derives the carrier from the
@@ -93,8 +105,6 @@ const canon = (c?: string | null) => {
   if (/^\d{2}$/.test(v)) return 'UPS'
   return v
 }
-
-const KNOWN_CARRIERS = ['UPS', 'FEDEX', 'USPS', 'DHL']
 
 // F5-C — COUNTRIES / COUNTRY_NAME / REGION_NAMES / countryNameFor +
 // CountrySelect component moved to ./NewShipmentComponents/CountrySelect.tsx.
@@ -125,20 +135,35 @@ const writeSticky = (key: string, value: string) => {
   }
 }
 
-const CARRIER_LABEL: Record<string, string> = { UPS: 'UPS', FEDEX: 'FedEx', USPS: 'USPS' }
-
 const blankAddress = (): ManualShipmentAddress => ({
   name: '', company: '', phone: '', email: '',
   addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '', countryCode: 'US',
   phoneCountryCode: dialCodeFor('US') || '',
 })
 
-/** A sensible default ship-from so operators don't retype the warehouse each time. */
-const defaultSender = (): ManualShipmentAddress => ({
-  name: 'MultiShip Fulfillment', company: 'MultiShip', phone: '2125550100', email: '',
-  addressLine1: '350 5th Ave', addressLine2: '', city: 'New York', state: 'NY', postalCode: '10118', countryCode: 'US',
-  phoneCountryCode: dialCodeFor('US') || '',
-})
+/**
+ * C2 — build a ship-from address from the DB-driven resolved shipper.
+ * When the resolve hasn't returned yet (or fails), returns a blank
+ * address so the form starts empty rather than showing a stale
+ * hardcoded NYC address that never applies to any real tenant.
+ */
+const defaultSenderFrom = (resolved: ResolvedShipper | null): ManualShipmentAddress => {
+  if (!resolved) return blankAddress()
+  const country = (resolved.countryCode ?? '').trim() || 'US'
+  return {
+    name:            resolved.name ?? '',
+    company:         '',
+    phone:           resolved.phone ?? '',
+    email:           '',
+    addressLine1:    resolved.addressLine1 ?? '',
+    addressLine2:    resolved.addressLine2 ?? '',
+    city:            resolved.city ?? '',
+    state:           resolved.state ?? '',
+    postalCode:      resolved.postalCode ?? '',
+    countryCode:     country,
+    phoneCountryCode: dialCodeFor(country) || '',
+  }
+}
 
 
 const CUSTOM_PKG = 'CUSTOM'
@@ -156,6 +181,11 @@ const US_TERRITORY_CODES = new Set(['PR', 'VI', 'GU', 'AS', 'MP', 'UM'])
 export default function NewShipmentPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
+  // Returns F4 — /orders/new/return opens the form with mode preselected
+  // to RETURN so operators have a direct link instead of filling in and
+  // then flipping the toggle.
+  const location = useLocation()
+  const isReturnPath = location.pathname.endsWith('/return')
   // Fix-a-failed-order mode: /orders/new?fixOrder=900046 pre-fills this form
   // with the failed order's data + carrier error, and submitting regenerates
   // that same order in place instead of creating a new one.
@@ -204,7 +234,50 @@ export default function NewShipmentPage() {
     mpsPieceCount: number | null
   } | null>(null)
 
-  const [sender, setSender] = useState<ManualShipmentAddress>(defaultSender())
+  // C2 — seed blank; the effect below fills in from resolvedShipper as
+  // soon as the /me/shipper-default resolve returns (if the operator
+  // hasn't started typing already).
+  const [sender, setSender] = useState<ManualShipmentAddress>(blankAddress())
+
+  // C2 — apply the DB-driven shipper default once the /me/shipper-default
+  // resolve returns. Skip when the operator has already typed anything into
+  // V120 + V121 swap seam — prefetch all three per-carrier dropdown
+  // vocabularies once per mount. Admin-only route (401 for non-admin
+  // swallowed; each picker falls through to bootstrap defaults in
+  // customsOptions.ts). Three calls fire in parallel.
+  useEffect(() => {
+    void (async () => {
+      const groupByCarrier = <T extends { carrier: string; code: string; label: string }>(rows: T[]) => {
+        const out: Record<string, Array<{ value: string; label: string }>> = {}
+        for (const r of rows) {
+          const key = r.carrier.toUpperCase()
+          if (!out[key]) out[key] = []
+          out[key].push({ value: r.code, label: r.label })
+        }
+        return out
+      }
+      try {
+        const [clearance, pickups, labelFormats] = await Promise.all([
+          carrierDropdownsService.clearanceOptions(),
+          carrierDropdownsService.pickupTypes(),
+          carrierDropdownsService.labelFormats(),
+        ])
+        setDbClearanceByCarrier(groupByCarrier(clearance))
+        setDbPickupByCarrier(groupByCarrier(pickups))
+        setDbLabelFormatByCarrier(groupByCarrier(labelFormats))
+      } catch {
+        // Non-admin users 401 here — bootstrap stays authoritative.
+      }
+    })()
+  }, [])
+
+  // Note — the resolvedShipper → setSender/setRecipient useEffect used
+  // to live here, but it referenced isReturn + resolvedShipper (both
+  // declared later in the component) inside its deps array. Const TDZ
+  // meant every render threw a ReferenceError at the deps array
+  // evaluation — which silently broke every test on this page for
+  // weeks. Moved below resolvedShipper's declaration + the `isReturn`
+  // `const` so references resolve. See the effect at line ~390.
   const [recipient, setRecipient] = useState<ManualShipmentAddress>(blankAddress())
   /** V76 — internal per-order ops note (500 char, multi-line). Placed
    *  under the Ship From section for lack of a better home; the data
@@ -222,7 +295,9 @@ export default function NewShipmentPage() {
    */
   const [residentialOrigin, setResidentialOrigin] = useState<'auto' | 'manual' | undefined>(undefined)
   // SHIPMENT = outbound (you → customer); RETURN = reverse (customer → you).
-  const [mode, setMode] = useState<'SHIPMENT' | 'RETURN'>('SHIPMENT')
+  // Returns F4 — initial mode comes from the URL path when the user lands
+  // via /orders/new/return; the mode toggle still works after that.
+  const [mode, setMode] = useState<'SHIPMENT' | 'RETURN'>(isReturnPath ? 'RETURN' : 'SHIPMENT')
   const isReturn = mode === 'RETURN'
   /**
    * How the carrier should deliver the return label — only meaningful when
@@ -234,6 +309,20 @@ export default function NewShipmentPage() {
    * on FedEx (Code 9 = ELECTRONIC_SHIPPING_INFORMATION emails the label).
    */
   const [returnType, setReturnType] = useState<'PRINT' | 'EMAIL'>('PRINT')
+  // Returns F8 — DHL Global Return pickup toggle. Default true = carrier
+  // schedules collection (prior behaviour); false = customer drops at a
+  // DHL ServicePoint. UI only shows when isReturn && carrier=DHL.
+  const [returnPickupRequested, setReturnPickupRequested] = useState<boolean>(true)
+  // Returns F10 — RMA number operator issued for this return. Persisted on
+  // label_batch.rma_number so warehouse can reconcile. UI only on return mode.
+  const [rmaNumber, setRmaNumber] = useState<string>('')
+  // Returns F11 — canonical reason code. Empty = unselected (will persist
+  // as NULL and roll up under "Unknown"). Enum must stay in sync with
+  // CarrierServiceImpl.RETURN_REASON_CODES.
+  const [returnReason, setReturnReason] = useState<string>('')
+  // Returns F12 — outbound order no this return came from. Server drops
+  // invalid refs to null so a typo doesn't block the label.
+  const [originalOrderNo, setOriginalOrderNo] = useState<string>('')
   /**
    * UPS rejects return labels with 9120145 "Missing label delivery
    * information" when the LabelDelivery.EMail block is absent — and we
@@ -243,6 +332,13 @@ export default function NewShipmentPage() {
    * also throws on this to catch programmatic callers.
    */
   const returnEmailMissing = isReturn && !sender.email?.trim()
+
+  // C4 — DB-driven carrier registry (carrier_alias). Retires the hardcoded
+  // KNOWN_CARRIERS + CARRIER_LABEL constants. First render uses a fallback
+  // (4 canonicals); the DB list overrides on the next tick.
+  const knownCarriers = useKnownCarriers()
+  const knownCarrierCodes = useMemo(() => knownCarriers.map((c) => c.code), [knownCarriers])
+  const carrierLabelMap = useMemo(() => toCarrierLabelMap(knownCarriers), [knownCarriers])
 
   const [carrier, setCarrier] = useState('')
   const [accountNumber, setAccountNumber] = useState('') // bill-to account, manually editable
@@ -275,6 +371,29 @@ export default function NewShipmentPage() {
    *  and what the importer's duplicate guard matches on. */
   const [reference, setReference] = useState('')
   const [clientCode, setClientCode] = useState('')
+
+  // C2 — DB-driven ship-from default (tenant_settings.shipper.*). Retires
+  // the hardcoded 350 5th Ave NYC block. Refetches whenever the operator
+  // picks a different client, so cross-tenant users get the right defaults.
+  const resolvedShipper = useShipperDefault(clientCode || undefined)
+
+  // When resolvedShipper first lands (or the operator changes mode
+  // between SHIPMENT and RETURN), apply it to the still-untouched
+  // sender / recipient so we never clobber their input. Moved here
+  // from the top of the component — see the TDZ comment at line ~274
+  // for why.
+  useEffect(() => {
+    if (!resolvedShipper) return
+    const filled = defaultSenderFrom(resolvedShipper)
+    const untouched = (a: ManualShipmentAddress) =>
+      !a.name && !a.addressLine1 && !a.city && !a.postalCode
+    if (isReturn) {
+      setRecipient((cur) => (untouched(cur) ? filled : cur))
+    } else {
+      setSender((cur) => (untouched(cur) ? filled : cur))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately reactive to resolvedShipper only; sender/recipient are checked inside the setter.
+  }, [resolvedShipper, isReturn])
   // NDS Shipment prefill (PR #735 backend / PR2 FE): operator scans
   // .X<containerId> or .Y<batchId>; response prefills client + recipient
   // + packages + notify + international items. Banner colours mirror
@@ -625,6 +744,14 @@ export default function NewShipmentPage() {
   // label is the client (applyClient set it); overwriting printed the
   // facility alias ("Main Fulfillment Center") as the shipper on labels
   // and commercial invoices instead of the client's company.
+  //
+  // Audit #276 — the partial-fill (`a.city ? { city } : {}`) is DELIBERATE,
+  // not a bug. Picking a warehouse whose address has holes (e.g.
+  // `city = null` for a drop-ship-only location) PRESERVES the operator's
+  // typed city instead of clearing it. If this ever becomes "operator
+  // expected a full reset" (no repro reported as of filing), the fix is
+  // to overlay `{ ...blankAddress(), ...filledFields }` instead of
+  // `{ ...cur, ...filledFields }` — swap `cur` on the first spread.
   useEffect(() => {
     if (!warehouseCode) return
     const cw = clientWarehouses.find((w) => w.warehouse?.code === warehouseCode)
@@ -1039,9 +1166,9 @@ export default function NewShipmentPage() {
         // "Carrier default" and the order could not be repaired.
         const fromShipVia = canon(String(o.shipviaCd ?? ''))
         const fromAccount = canon(details.data.carrierAccount?.carrierCode ?? '')
-        const carrierCanon = KNOWN_CARRIERS.includes(fromShipVia)
+        const carrierCanon = knownCarrierCodes.includes(fromShipVia)
           ? fromShipVia
-          : KNOWN_CARRIERS.includes(fromAccount) ? fromAccount : fromShipVia
+          : knownCarrierCodes.includes(fromAccount) ? fromAccount : fromShipVia
         if (carrierCanon) setCarrier(carrierCanon)
         if (customs) {
           if (customs.currency) setCurrency(customs.currency)
@@ -1227,17 +1354,18 @@ export default function NewShipmentPage() {
       // client's company and warehouse as the shipper. Back to the default
       // ship-from (fix-order mode keeps the order's own sender, as below).
       if (!fixOrderNo) {
-        if (isReturn) setRecipient(defaultSender())
-        else setSender(defaultSender())
+        if (isReturn) setRecipient(defaultSenderFrom(resolvedShipper))
+        else setSender(defaultSenderFrom(resolvedShipper))
       }
       return
     }
     const yourAddr = isReturn ? client.returnAddress ?? client.shipFrom : client.shipFrom
-    // Always reset to defaultSender() before overlay — otherwise switching
-    // from Client A (with shipFrom) to Client B (without) would leave A's
-    // address in place. The subsequent warehouse-change effect re-overlays
-    // if the newly-picked client has warehouses attached.
-    const base = defaultSender()
+    // Always reset to defaultSenderFrom(resolvedShipper) before overlay —
+    // otherwise switching from Client A (with shipFrom) to Client B (without)
+    // would leave A's address in place. C2 — base comes from tenant_settings
+    // instead of hardcoded NYC. The subsequent warehouse-change effect
+    // re-overlays if the newly-picked client has warehouses attached.
+    const base = defaultSenderFrom(resolvedShipper)
     const mergedCountry = yourAddr ? (yourAddr.country || base.countryCode) : base.countryCode
     const merged: ManualShipmentAddress = yourAddr
       ? {
@@ -1285,6 +1413,17 @@ export default function NewShipmentPage() {
     // prior manual pick, same semantic as the carrier prefill above.
     if (client.defaultCurrency) {
       setCurrency(client.defaultCurrency)
+    }
+    // #275 — same semantic for weight + dim units. Client-saved default
+    // wins over the LB/IN session fallback. A Canadian / UK client set
+    // to KG/CM at /settings/clients lands on the shipment form with the
+    // right unit already picked — no per-shipment manual flip. Null /
+    // unrecognised value leaves the current session unit intact.
+    if (client.defaultWeightUnit === 'LB' || client.defaultWeightUnit === 'KG') {
+      setWeightUnit(client.defaultWeightUnit)
+    }
+    if (client.defaultDimUnit === 'IN' || client.defaultDimUnit === 'CM') {
+      setDimUnit(client.defaultDimUnit)
     }
   }
 
@@ -2401,7 +2540,23 @@ export default function NewShipmentPage() {
       // Carrier connectors key off this: UPS ReturnService.Code 8/9
       // (with LabelDelivery.EMail block), FedEx returnedShipmentDetail
       // .returnType (PRINT_RETURN_LABEL / EMAIL_LABEL), etc.
-      ...(isReturn ? { returnType } : {}),
+      ...(isReturn
+        ? {
+            returnType,
+            returnPickupRequested,
+            // Returns F10 — only wire rmaNumber when operator typed one;
+            // blank/trim-empty stays off the payload so the server-side
+            // null-vs-"" distinction holds.
+            ...(rmaNumber.trim() ? { rmaNumber: rmaNumber.trim() } : {}),
+            // Returns F11 — same contract for the reason picklist.
+            ...(returnReason ? { returnReason } : {}),
+            // Returns F12 — only wire when numeric; server validates
+            // existence and drops bad refs to null.
+            ...(originalOrderNo.trim() && Number.isFinite(Number(originalOrderNo))
+                ? { originalOrderNo: Number(originalOrderNo) }
+                : {}),
+          }
+        : {}),
       reference: reference.trim() || undefined,
       // V76 — internal per-order ops note; omit when blank so the
       // wire only carries populated fields.
@@ -2496,6 +2651,26 @@ export default function NewShipmentPage() {
         ...(exportDeclarationReference ? { exportDeclarationReference } : {}),
       } : {}),
       ...(isInternational && override ? { importer: override.importer, broker: override.broker } : {}),
+      // B6 — thread the NDS batch id + per-container package rows through
+      // to the writeback so NdsShipmentOracleWriter can fan CLIPPER updates
+      // across every sibling order in the batch. Only when the shipment
+      // came from an NDS scan; manual entry leaves both null.
+      ...(ndsQueue[ndsActiveIdx]?.batchId
+          ? { ndsBatchId: ndsQueue[ndsActiveIdx]!.batchId }
+          : {}),
+      ...(ndsQueue[ndsActiveIdx]?.packages?.length
+          ? {
+              ndsPackages: ndsQueue[ndsActiveIdx]!.packages.map((pk, idx) => ({
+                sequence: idx + 1,
+                containerNo: pk.containerNo ?? null,
+                containerIds: pk.containerIds ?? [],
+                orderNos: pk.orderNos ?? [],
+                orderSuffix: pk.orderSuffix ?? null,
+                weight: pk.weight != null ? Number(pk.weight) : null,
+                weightUnit: 'LB',
+              })),
+            }
+          : {}),
     }
     return payload
   }
@@ -2503,7 +2678,7 @@ export default function NewShipmentPage() {
   // Every value the label request is built from — when it differs from the
   // one taken at the last check, the form changed since.
   const formSnapshot = JSON.stringify([
-    sender, recipient, isReturn, returnType, reference, carrier, accountNumber, serviceId,
+    sender, recipient, isReturn, returnType, rmaNumber, returnReason, originalOrderNo, reference, carrier, accountNumber, serviceId,
     packageChoice, length, width, height, dimUnit, weight, weightUnit, clientCode, warehouseCode,
     declaredValue, currency, dgBlock, signatureOption, insuredValue, labelImageType, labelStockType,
     labelImageFormat, pickupType, extraPackages, items, reasonForExport, incoterms, clearanceOption,
@@ -2930,6 +3105,63 @@ export default function NewShipmentPage() {
                         </button>
                       ))}
                     </div>
+                    {/* Returns F8 — DHL-only pickup toggle. DHL Express
+                        historically forced pickup.isRequested=true on every
+                        return; some returns are drop-off at a ServicePoint. */}
+                    {canon(carrier) === 'DHL' ? (
+                      <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[#5a4526] shadow-sm">
+                        <input
+                          type="checkbox"
+                          checked={returnPickupRequested}
+                          onChange={(e) => setReturnPickupRequested(e.target.checked)}
+                          className="h-3.5 w-3.5"
+                        />
+                        Request DHL pickup
+                      </label>
+                    ) : null}
+                    {/* Returns F10 — operator-issued RMA. Free-form,
+                        capped at the DB column width. Blank is fine. */}
+                    <label className="inline-flex cursor-text items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11.5px] font-semibold text-[#5a4526] shadow-sm">
+                      <span className="whitespace-nowrap">RMA #</span>
+                      <input
+                        type="text"
+                        value={rmaNumber}
+                        onChange={(e) => setRmaNumber(e.target.value.slice(0, 60))}
+                        placeholder="optional"
+                        maxLength={60}
+                        className="w-28 border-0 bg-transparent p-0 text-[11.5px] font-semibold text-[#1f150c] placeholder:font-normal placeholder:text-[#a08f6c] focus:outline-none focus:ring-0"
+                      />
+                    </label>
+                    {/* Returns F12 — original order no this is a return of.
+                        Server validates existence; a typo lands as NULL. */}
+                    <label className="inline-flex cursor-text items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11.5px] font-semibold text-[#5a4526] shadow-sm">
+                      <span className="whitespace-nowrap">Return of #</span>
+                      <input
+                        type="number"
+                        value={originalOrderNo}
+                        onChange={(e) => setOriginalOrderNo(e.target.value)}
+                        placeholder="optional"
+                        min={1}
+                        className="w-24 border-0 bg-transparent p-0 text-[11.5px] font-semibold text-[#1f150c] placeholder:font-normal placeholder:text-[#a08f6c] focus:outline-none focus:ring-0"
+                      />
+                    </label>
+                    {/* Returns F11 — canonical reason picklist. Codes must
+                        match CarrierServiceImpl.RETURN_REASON_CODES. */}
+                    <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11.5px] font-semibold text-[#5a4526] shadow-sm">
+                      <span className="whitespace-nowrap">Reason</span>
+                      <select
+                        value={returnReason}
+                        onChange={(e) => setReturnReason(e.target.value)}
+                        className="border-0 bg-transparent p-0 pr-5 text-[11.5px] font-semibold text-[#1f150c] focus:outline-none focus:ring-0"
+                      >
+                        <option value="">—</option>
+                        <option value="WRONG_ITEM">Wrong item</option>
+                        <option value="DEFECTIVE">Defective</option>
+                        <option value="NO_LONGER_NEEDED">No longer needed</option>
+                        <option value="SIZE">Size</option>
+                        <option value="OTHER">Other</option>
+                      </select>
+                    </label>
                   </div>
                 ) : null}
               </div>
@@ -3149,14 +3381,14 @@ export default function NewShipmentPage() {
                     {clientCarriers.length > 0 ? (
                       <optgroup label={`${clientCode || 'Client'} accounts`}>
                         {clientCarriers.map((c) => (
-                          <option key={c} value={c}>{CARRIER_LABEL[c] || c}</option>
+                          <option key={c} value={c}>{carrierLabelMap[c] || c}</option>
                         ))}
                       </optgroup>
                     ) : null}
                     {platformCarriers.length > 0 ? (
                       <optgroup label="Platform (verified)">
                         {platformCarriers.map((c) => (
-                          <option key={c} value={c}>{CARRIER_LABEL[c] || c}</option>
+                          <option key={c} value={c}>{carrierLabelMap[c] || c}</option>
                         ))}
                       </optgroup>
                     ) : null}
@@ -3304,12 +3536,12 @@ export default function NewShipmentPage() {
                         <select className={inputCls}
                                 value={pickupType}
                                 onChange={(e) => setPickupType(e.target.value)}>
-                          <option value="USE_SCHEDULED_PICKUP">Use scheduled pickup</option>
-                          <option value="REGULAR_PICKUP">Regular pickup</option>
-                          <option value="REQUEST_COURIER">Request courier</option>
-                          <option value="DROP_BOX">Drop box</option>
-                          <option value="BUSINESS_SERVICE_CENTER">Business service center</option>
-                          <option value="STATION">Station</option>
+                          {/* V120 — options come from carrier_pickup_type
+                              (via pickupTypesForCarrier). Bootstrap mirrors
+                              the pre-V120 hardcoded set when DB is empty. */}
+                          {pickupTypesForCarrier('FEDEX').map((opt) => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                          ))}
                         </select>
                       </Field>
                     ) : null}
@@ -3322,29 +3554,12 @@ export default function NewShipmentPage() {
                             value={labelImageFormat}
                             onChange={(e) => setLabelImageFormat(e.target.value)}>
                       <option value="">-- Select --</option>
-                      {canon(carrier) === 'UPS' ? (
-                        <>
-                          <option value="GIF">GIF (raster)</option>
-                          <option value="PDF">PDF (vector, sharp)</option>
-                          <option value="PNG">PNG (raster)</option>
-                          <option value="ZPL">ZPL (Zebra)</option>
-                          <option value="EPL">EPL (Eltron/legacy Zebra)</option>
-                        </>
-                      ) : null}
-                      {canon(carrier) === 'DHL' ? (
-                        <>
-                          <option value="PDF">PDF (label + A4 doc)</option>
-                          <option value="ZPL">ZPL (thermal label only)</option>
-                        </>
-                      ) : null}
-                      {canon(carrier) === 'USPS' ? (
-                        <>
-                          <option value="PNG">PNG (raster)</option>
-                          <option value="PDF">PDF (vector, sharp)</option>
-                          <option value="GIF">GIF (raster)</option>
-                          <option value="JPG">JPG (raster)</option>
-                        </>
-                      ) : null}
+                      {/* V120 — options come from carrier_label_format (via
+                          labelFormatsForCarrier). Bootstrap in customsOptions.ts
+                          mirrors the pre-V120 per-carrier hardcoded sets. */}
+                      {labelFormatsForCarrier(canon(carrier)).map((opt) => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
                     </select>
                   </Field>
                 ) : null}
@@ -3890,7 +4105,7 @@ export default function NewShipmentPage() {
                            : undefined}>
                     <select className={inputCls} value={packageChoice} onChange={(e) => { setPackageChoice(e.target.value); clearFixKey('package') }}>
                       {packagesForCarrier.length ? (
-                        <optgroup label={`${CARRIER_LABEL[carrier] || carrier} packaging`}>
+                        <optgroup label={`${carrierLabelMap[carrier] || carrier} packaging`}>
                           {packagesForCarrier.map((p) => (
                             <option key={p.id} value={String(p.id)}>{p.name}</option>
                           ))}

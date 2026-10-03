@@ -44,7 +44,9 @@ class AdminUserInviteControllerTest {
     void setUp() {
         inviteService = mock(UserInviteService.class);
         clientRepository = mock(ClientRepository.class);
-        controller = new AdminUserInviteController(inviteService, clientRepository);
+        controller = new AdminUserInviteController(inviteService, clientRepository,
+                new com.multiship.backend.service.role.RolePlatformService(
+                        mock(com.multiship.backend.repository.RoleRepository.class)));
         admin = User.withUsername("admin").password("x").roles("ADMIN").build();
         request = mock(HttpServletRequest.class);
         when(request.getScheme()).thenReturn("http");

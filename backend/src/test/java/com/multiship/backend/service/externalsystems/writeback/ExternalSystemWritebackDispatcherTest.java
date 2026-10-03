@@ -28,6 +28,8 @@ class ExternalSystemWritebackDispatcherTest {
     private ExternalSystemRegistry registry;
     private ExternalSystemConfigService config;
     private TenantSettingsService tenantSettings;
+    private WritebackJournalService journal;
+    private com.fasterxml.jackson.databind.ObjectMapper objectMapper;
     private ExternalSystemWritebackDispatcher dispatcher;
 
     @BeforeEach
@@ -35,7 +37,25 @@ class ExternalSystemWritebackDispatcherTest {
         registry = mock(ExternalSystemRegistry.class);
         config = mock(ExternalSystemConfigService.class);
         tenantSettings = mock(TenantSettingsService.class);
-        dispatcher = new ExternalSystemWritebackDispatcher(registry, config, tenantSettings);
+        journal = mock(WritebackJournalService.class);
+        objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        // D1 + D1b — journal.recordPending must return a non-null entity
+        // so the dispatcher can pull its id for the subsequent recordAck
+        // call. The 5/4-arg overloads with retryOfId are what the
+        // dispatcher actually calls after D1b.
+        com.multiship.backend.model.WritebackJournalEntity row =
+                com.multiship.backend.model.WritebackJournalEntity.builder().id(1L).build();
+        when(journal.recordPending(any(String.class), any(), any(String.class),
+                any(WritebackPayload.class), any())).thenReturn(row);
+        when(journal.recordPending(any(String.class), any(),
+                any(WritebackClearRequest.class), any())).thenReturn(row);
+        // X1 — default writeback target is "nds-default" for every
+        // existing test (the resolver reads .getName() from this row);
+        // tests that assert "no default wired" override to empty.
+        ExternalSystemConnection defaultRow = new ExternalSystemConnection();
+        defaultRow.setName("nds-default");
+        when(config.findDefaultWritebackTarget()).thenReturn(Optional.of(defaultRow));
+        dispatcher = new ExternalSystemWritebackDispatcher(registry, config, tenantSettings, journal, objectMapper);
     }
 
     private static ExternalSystemConnection conn(String name, boolean tr, boolean sd,
@@ -111,22 +131,21 @@ class ExternalSystemWritebackDispatcherTest {
                 .thenReturn(Optional.of("acme-sap"));
         String name = dispatcher.resolveConnectionName("ACME");
         assertEquals("acme-sap", name);
-        // Default lookup NOT consulted — save a DB hit on the hot path.
-        verify(config, never()).findByName(anyString());
+        // X1 — Default lookup NOT consulted when the tenant setting hits
+        // (save a DB round-trip on the hot path).
+        verify(config, never()).findDefaultWritebackTarget();
     }
 
     @Test
     void resolveConnectionNameFallsBackToDefaultWhenNoTenantSetting() {
         when(tenantSettings.getSetting(anyString(), anyString())).thenReturn(Optional.empty());
-        ExternalSystemConnection def = conn("nds-default", true, true, true, true, true, true);
-        when(config.findByName("nds-default")).thenReturn(Optional.of(def));
         assertEquals("nds-default", dispatcher.resolveConnectionName("ACME"));
     }
 
     @Test
     void resolveConnectionNameReturnsNullWhenNothingWired() {
         when(tenantSettings.getSetting(anyString(), anyString())).thenReturn(Optional.empty());
-        when(config.findByName(anyString())).thenReturn(Optional.empty());
+        when(config.findDefaultWritebackTarget()).thenReturn(Optional.empty());
         assertNull(dispatcher.resolveConnectionName("ACME"));
         assertNull(dispatcher.resolveConnectionName(""));
         assertNull(dispatcher.resolveConnectionName(null));

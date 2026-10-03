@@ -1,7 +1,12 @@
 package com.multiship.backend.config;
 
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
+import org.springframework.core.env.StandardEnvironment;
 import org.springframework.stereotype.Service;
 
 import javax.crypto.Cipher;
@@ -20,9 +25,11 @@ import java.util.Base64;
  * for carrier client_secret encryption.
  *
  * <p>Key material comes from the {@code SECRETS_ENCRYPTION_KEY} env
- * var. The service does NOT fail-fast at construction — if the env var
- * is unset, encryption/decryption throws at first use so a fresh dev
- * environment can still boot with the feature simply disabled.
+ * var. In dev/test the service constructs with an empty key and warns;
+ * encryption/decryption throws at first use. In the {@code prod}
+ * profile the {@link #assertAvailableInProd() PostConstruct} guard
+ * refuses to boot without a key so plaintext writes cannot happen
+ * silently in production.
  *
  * <p>Wire format: {@code base64( nonce || ciphertext-with-tag )},
  * where nonce is 12 bytes and the GCM auth tag is 128 bits.
@@ -37,10 +44,41 @@ public class CryptoService {
     private static final int MIN_KEY_BYTES = 32;  // AES-256
 
     private final byte[] keyBytes;
+    private final Environment env;
     private final SecureRandom rng = new SecureRandom();
 
-    public CryptoService(@Value("${secrets.encryption-key:}") String base64Key) {
+    // @Autowired required because a second (test-only) constructor exists —
+    // Spring can't otherwise disambiguate which ctor to use for injection.
+    // Precedent: G3b hotfix acb49066 (feedback_component_ctor_overload_needs_autowired).
+    @Autowired
+    public CryptoService(@Value("${secrets.encryption-key:}") String base64Key,
+                         Environment env) {
         this.keyBytes = decodeKeyIfPresent(base64Key);
+        this.env = env;
+    }
+
+    /** Test-only convenience: no active profiles → prod-guard is a no-op. */
+    CryptoService(String base64Key) {
+        this(base64Key, new StandardEnvironment());
+    }
+
+    /**
+     * A prod install without {@code SECRETS_ENCRYPTION_KEY} would silently
+     * store Oracle passwords / API keys / tenant credentials as plaintext
+     * (see {@link com.multiship.backend.service.externalsystems.ExternalSystemConfigService#putSecret}).
+     * That's a compliance landmine hidden behind a single INFO log, so we
+     * refuse to boot the prod profile without a key rather than let it happen.
+     * Dev / test can still boot with the feature disabled.
+     */
+    @PostConstruct
+    void assertAvailableInProd() {
+        if (env.acceptsProfiles(Profiles.of("prod")) && !isAvailable()) {
+            throw new IllegalStateException(
+                    "SECRETS_ENCRYPTION_KEY is required in the 'prod' profile. "
+                            + "Without it, external-system secrets (Oracle passwords, API keys, "
+                            + "client-override passwords) would be written as plaintext. "
+                            + "Set the env var to a base64-encoded 32-byte random value.");
+        }
     }
 
     private static byte[] decodeKeyIfPresent(String base64Key) {

@@ -105,8 +105,9 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
     setLoggingOut(true)
     try {
       await authService.logout()
-    } catch (error) {
-      console.debug('Logout request failed', error)
+    } catch {
+      // Logout UI flow continues regardless of the backend's response —
+      // the Redux reset + cookie clear + redirect below is authoritative.
     }
 
     // Sprint 49 Tier 4 Fix 2 — reset ALL Redux user-data slices BEFORE

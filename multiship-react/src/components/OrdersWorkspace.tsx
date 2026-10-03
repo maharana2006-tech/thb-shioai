@@ -35,6 +35,7 @@ import {
   FiSend,
   FiChevronDown,
   FiSettings,
+  FiRotateCcw,
 } from 'react-icons/fi'
 import { ApiError, isAbortError } from '../api/apiClient'
 import { normalizeCarrierCode } from '../utils/carrierUtils'
@@ -129,6 +130,8 @@ export default function OrdersWorkspace() {
   const [sourceFilter, setSourceFilter] = useState('')
   const [channelFilter, setChannelFilter] = useState('')
   const [carrierFilter, setCarrierFilter] = useState('')
+  // Returns F3 — is-return tri-state: '' = all, 'Y' = returns only, 'N' = shipments only.
+  const [isReturnFilter, setIsReturnFilter] = useState<'' | 'Y' | 'N'>('')
   const [clientCodes, setClientCodes] = useState<string[]>([])
   // Sprint 51 migration — sort is owned by the shared AdvancedDataTable now.
   // sortBy / sortDirection remain the fetch-effect inputs (derived below).
@@ -280,6 +283,7 @@ export default function OrdersWorkspace() {
           source: sourceFilter || undefined,
           channel: channelFilter || undefined,
           carrier: carrierFilter || undefined,
+          isReturn: isReturnFilter || undefined,
         })
         if (!cancelled) setBatchesForPicker(res.data ?? [])
       } catch {
@@ -300,8 +304,8 @@ export default function OrdersWorkspace() {
    */
   const filterSignature = useMemo(() => JSON.stringify({
     view, q: debouncedQuery, client: clientFilter, from: dateFrom, to: dateTo,
-    filters: debouncedFilters, source: sourceFilter, channel: channelFilter, carrier: carrierFilter,
-  }), [view, debouncedQuery, clientFilter, dateFrom, dateTo, debouncedFilters, sourceFilter, channelFilter, carrierFilter])
+    filters: debouncedFilters, source: sourceFilter, channel: channelFilter, carrier: carrierFilter, isReturn: isReturnFilter,
+  }), [view, debouncedQuery, clientFilter, dateFrom, dateTo, debouncedFilters, sourceFilter, channelFilter, carrierFilter, isReturnFilter])
 
   // Filter change → invalidate the all-filtered cache, but KEEP rows the
   // operator ticked by hand: they pick orders across several searches and
@@ -422,6 +426,7 @@ export default function OrdersWorkspace() {
       source: sourceFilter || undefined,
       channel: channelFilter || undefined,
       carrier: carrierFilter || undefined,
+      isReturn: isReturnFilter || undefined,
       page: page - 1,
       size: pageSize,
       sortBy,
@@ -683,6 +688,7 @@ export default function OrdersWorkspace() {
       source: sourceFilter || undefined,
       channel: channelFilter || undefined,
       carrier: carrierFilter || undefined,
+      isReturn: isReturnFilter || undefined,
     }
   }, [view, clientFilter, debouncedQuery, debouncedFilters, dateFrom, dateTo, sourceFilter, channelFilter, carrierFilter])
 
@@ -1200,14 +1206,21 @@ export default function OrdersWorkspace() {
       // carrier error, so the operator corrects it and regenerates IN PLACE.
       // (The old "Retry" re-ran from stored data and could bounce to a Settings
       // page when the cause was a missing client / customs profile.)
+      // Returns F9 — if the row is a return, route to the return path so
+      // the shipment form opens in RETURN mode (same component, same fix
+      // behaviour, with the mode toggle pre-set).
+      const isReturn = order.orderDetails?.isReturn === true
+      const target = isReturn
+        ? `/orders/new/return?fixOrder=${orderNo}`
+        : `/orders/new?fixOrder=${orderNo}`
       return (
         <button
           type="button"
-          onClick={() => navigate(`/orders/new?fixOrder=${orderNo}`)}
+          onClick={() => navigate(target)}
           className={`${ACTION_BASE} ${ACTION_RETRY}`}
         >
           <FiEdit3 className="h-3 w-3" />
-          Edit
+          {isReturn ? 'Retry return' : 'Edit'}
         </button>
       )
     }
@@ -1261,15 +1274,20 @@ export default function OrdersWorkspace() {
       // The label was cancelled: the way back is the reissue form (adjust,
       // then regenerate under the same number, with the void on its history)
       // — not a bare re-generate through the account chooser.
+      // Returns F9 — same return-aware routing as the ERROR branch above.
+      const isReturn = order.orderDetails?.isReturn === true
+      const target = isReturn
+        ? `/orders/new/return?fixOrder=${orderNo}`
+        : `/orders/new?fixOrder=${orderNo}`
       return (
         <button
           type="button"
-          onClick={() => navigate(`/orders/new?fixOrder=${orderNo}`)}
+          onClick={() => navigate(target)}
           className={`${ACTION_BASE} ${ACTION_RETRY}`}
           title="Reopen this order pre-filled and regenerate a new label"
         >
           <FiEdit3 className="h-3 w-3" />
-          Reissue label
+          {isReturn ? 'Reissue return' : 'Reissue label'}
         </button>
       )
     }
@@ -1493,11 +1511,24 @@ export default function OrdersWorkspace() {
       cell: ({ row }) => {
         const o = row.original.orderDetails
         const ref = o.refOrderNumber
+        // Returns F12 — clickable "return of #N" chip. Jumping to the
+        // outbound row is the cheapest way to reach its Reprint CI icon.
+        const originalNo = o.originalOrderNo
         return (
           <span className="flex min-w-0 flex-col gap-0.5">
             <span className="flex items-center gap-1.5">
               <span className="font-mono text-[13.5px] font-bold tabular-nums text-[#1f150c]">#{o.orderNo}</span>
               {sourceChips(row.original)}
+              {originalNo ? (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); navigate(`/orders?orderNo=${originalNo}`) }}
+                  title={`Return of outbound order #${originalNo} — click to open it`}
+                  className="inline-flex items-center rounded border border-[#e3d9c4] bg-[#faf7f0] px-1.5 py-[1px] font-mono text-[10.5px] font-semibold text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#f3eddc]"
+                >
+                  ↩ #{originalNo}
+                </button>
+              ) : null}
             </span>
             <span
               className="truncate font-mono text-[11.5px] text-[#6b5c42]"
@@ -2030,6 +2061,13 @@ export default function OrdersWorkspace() {
               <FiPlus className="h-3 w-3" />
               New shipment
             </button>
+            <button type="button"
+                    onClick={() => navigate('/orders/new/return')}
+                    className={BTN_GHOST_SM}
+                    title="Returns F4 — opens /orders/new with mode preselected to RETURN">
+              <FiRotateCcw className="h-3 w-3" />
+              New return
+            </button>
       </div>
 
       {/* ===== workspace card ===== */}
@@ -2455,6 +2493,21 @@ export default function OrdersWorkspace() {
                           <option value="FEDEX">FedEx</option>
                           <option value="USPS">USPS</option>
                           <option value="DHL">DHL</option>
+                        </select>,
+                      )}
+                      {/* Returns F3 — surface the hidden return rows that today only
+                          live inside a batch. Tri-state so operators can pivot either way. */}
+                      {advField(
+                        <FiRotateCcw className="h-3 w-3" />,
+                        'Shipment vs return',
+                        <select
+                          value={isReturnFilter}
+                          onChange={(e) => setIsReturnFilter(e.target.value as '' | 'Y' | 'N')}
+                          className={advInputCls}
+                        >
+                          <option value="">Any</option>
+                          <option value="N">Shipments only</option>
+                          <option value="Y">Returns only</option>
                         </select>,
                       )}
                     </div>

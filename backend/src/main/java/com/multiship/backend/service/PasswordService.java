@@ -7,7 +7,7 @@ import com.multiship.backend.model.PasswordResetToken;
 import com.multiship.backend.model.User;
 import com.multiship.backend.repository.PasswordResetTokenRepository;
 import com.multiship.backend.repository.UserRepository;
-import com.multiship.backend.service.mail.MailSender;
+import com.multiship.backend.service.mail.NotificationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -34,8 +34,9 @@ import java.util.Optional;
  *   <li><b>forgot</b> — unauthenticated. Mints a 32-byte one-shot token,
  *       stores its SHA-256 hash + 30-min expiry in
  *       {@code password_reset_tokens}, dispatches the plaintext via
- *       {@link MailSender}. Returns unconditionally so an attacker cannot
- *       enumerate registered emails.</li>
+ *       {@link NotificationService} using template {@code AUTH.PASSWORD_RESET}.
+ *       Returns unconditionally so an attacker cannot enumerate registered
+ *       emails.</li>
  *   <li><b>reset</b> — unauthenticated. Consumes the token (single-use:
  *       row deleted on success), updates the password, bumps
  *       {@code token_version}. Rejects expired + already-used tokens.</li>
@@ -58,7 +59,7 @@ public class PasswordService {
     private final PasswordResetTokenRepository resetRepo;
     private final PasswordEncoder passwordEncoder;
     private final TokenRevocationService tokenRevocation;
-    private final MailSender mailSender;
+    private final NotificationService notifications;
 
     @Value("${app.password-reset.link-base-url:http://localhost:5173/reset-password}")
     private String resetLinkBaseUrl;
@@ -113,19 +114,52 @@ public class PasswordService {
                 .build();
         resetRepo.save(row);
 
-        // TODO wire to SMTP before enabling in prod — the default MailSender
-        // impl is LoggingMailSender which INFO-logs the token. That's fine
-        // for dev but must be swapped for a real SmtpMailSender in prod
-        // (see MailSender javadoc). The invite flow lives with the same
-        // caveat; this endpoint inherits it.
+        // Template AUTH.PASSWORD_RESET; if no mail provider is active at
+        // /settings/mail the send is INFO-logged rather than dropped.
         String link = resetLinkBaseUrl + "?token=" + plaintext;
-        mailSender.send(user.getEmail(),
-                "Password reset request",
-                "A password reset was requested for your Multiship account.\n\n"
-                        + "Reset your password (link expires in "
-                        + RESET_TOKEN_TTL_MINUTES + " minutes):\n"
-                        + link + "\n\n"
-                        + "If you didn't request this, ignore this email — your password will not change.");
+        notifications.send("AUTH.PASSWORD_RESET", user.getEmail(), java.util.Map.of(
+                "resetLink", link,
+                "ttlMinutes", RESET_TOKEN_TTL_MINUTES));
+    }
+
+    /**
+     * Audit (#294) — admin-triggered password reset. Looks up the user by
+     * id (vs. by email on {@link #forgot}) so an admin unlocking a
+     * known-locked account doesn't type an email that might not match.
+     * Reuses the same token shape + mail template as the self-service
+     * path; the only observable difference is that the caller gets the
+     * token's existence confirmed (so the admin knows the mail went out)
+     * instead of the unconditional 202 forgot() returns for anti-
+     * enumeration.
+     *
+     * @return true when the mail dispatched, false when the user had no
+     *         email on file.
+     */
+    @Transactional
+    public boolean sendAdminResetLink(Long userId) {
+        Optional<User> maybe = userRepository.findById(userId);
+        if (maybe.isEmpty()) {
+            return false;
+        }
+        User user = maybe.get();
+        if (user.getEmail() == null || user.getEmail().isBlank()) {
+            return false;
+        }
+        String plaintext = randomToken();
+        String hash = sha256Hex(plaintext);
+
+        PasswordResetToken row = PasswordResetToken.builder()
+                .userId(user.getId())
+                .tokenHash(hash)
+                .expiresAt(LocalDateTime.now().plusMinutes(RESET_TOKEN_TTL_MINUTES))
+                .build();
+        resetRepo.save(row);
+
+        String link = resetLinkBaseUrl + "?token=" + plaintext;
+        notifications.send("AUTH.PASSWORD_RESET", user.getEmail(), java.util.Map.of(
+                "resetLink", link,
+                "ttlMinutes", RESET_TOKEN_TTL_MINUTES));
+        return true;
     }
 
     /**

@@ -80,7 +80,11 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
         if (!StringUtils.hasText(request.getErpCode())) {
             return failure(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR, "erpCode is required.");
         }
-        String erp = request.getErpCode().trim();
+        // Audit B3 (#372) — normalise erp casing so sequential saves of
+        // "p80" + "P80" don't drift (the equalsIgnoreCase match said the
+        // row existed, but the stored casing came from whichever write
+        // landed first). Case-sensitive audit queries now stay consistent.
+        String erp = normalize(request.getErpCode());
 
         String destCountry = normaliseDest(request.getDestCountry());
         String destRegion = normaliseDest(request.getDestRegion());
@@ -159,12 +163,11 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
             return failure(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR,
                     "targetId must reference an existing shipping service.");
         }
+        // Audit B2 (#371) — targeted finder replaces the prior full-list
+        // fetch + stream().filter. O(1) index-eq lookup on a 500-row
+        // catalog instead of pulling + materialising every alias.
         ClientShipviaCodeMap row = shipviaRepo
-                .findByClientCodeIgnoreCaseOrderByErpCodeAsc(code).stream()
-                .filter(r -> r.getErpCode().equalsIgnoreCase(erp)
-                        && java.util.Objects.equals(r.getDestCountry(), destCountry)
-                        && java.util.Objects.equals(r.getDestRegion(), destRegion))
-                .findFirst()
+                .findForUpsert(code, erp, destCountry, destRegion)
                 .orElseGet(() -> ClientShipviaCodeMap.builder().clientCode(code).erpCode(erp).build());
         row.setServiceId(targetId);
         row.setDestCountry(destCountry);
@@ -179,12 +182,9 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
             return failure(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR,
                     "targetId must reference an existing shipping service.");
         }
+        // Audit B2 (#371) — targeted finder; see upsertShipvia above.
         ClientServiceCodeMap row = serviceRepo
-                .findByClientCodeIgnoreCaseOrderByErpCodeAsc(code).stream()
-                .filter(r -> r.getErpCode().equalsIgnoreCase(erp)
-                        && java.util.Objects.equals(r.getDestCountry(), destCountry)
-                        && java.util.Objects.equals(r.getDestRegion(), destRegion))
-                .findFirst()
+                .findForUpsert(code, erp, destCountry, destRegion)
                 .orElseGet(() -> ClientServiceCodeMap.builder().clientCode(code).erpCode(erp).build());
         row.setServiceId(targetId);
         row.setDestCountry(destCountry);
@@ -213,12 +213,9 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
             return failure(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR,
                     "targetId must reference an existing package preset.");
         }
+        // Audit B2 (#371) — targeted finder; see upsertShipvia above.
         ClientPackageCodeMap row = packageRepo
-                .findByClientCodeIgnoreCaseOrderByErpCodeAsc(code).stream()
-                .filter(r -> r.getErpCode().equalsIgnoreCase(erp)
-                        && java.util.Objects.equals(r.getDestCountry(), destCountry)
-                        && java.util.Objects.equals(r.getDestRegion(), destRegion))
-                .findFirst()
+                .findForUpsert(code, erp, destCountry, destRegion)
                 .orElseGet(() -> ClientPackageCodeMap.builder().clientCode(code).erpCode(erp).build());
         row.setPresetId(targetId);
         row.setDestCountry(destCountry);

@@ -1,6 +1,8 @@
 package com.multiship.backend.service.externalsystems.writeback;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.multiship.backend.model.ExternalSystemConnection;
+import com.multiship.backend.model.WritebackJournalEntity;
 import com.multiship.backend.service.TenantSettingsService;
 import com.multiship.backend.service.externalsystems.ExternalSystemConfigService;
 import com.multiship.backend.service.externalsystems.ExternalSystemRegistry;
@@ -34,9 +36,11 @@ import java.util.Optional;
  * <ol>
  *   <li>tenant setting {@code writebackConnection} for the order's
  *       clientCode (via {@link TenantSettingsService})</li>
- *   <li>{@code nds-default} — the S4 well-known seed connection</li>
+ *   <li>whichever row has {@code is_default_writeback_target = TRUE}
+ *       (X1 / V110 — admin-flipped from /settings/external-systems;
+ *       prior to V110 this was a compile-time literal "nds-default")</li>
  * </ol>
- * A blank clientCode + missing default = silent skip (no external
+ * A blank clientCode + no default-marked row = silent skip (no external
  * system wired). No side effects — this is the common case for the
  * many tenants that don't use writeback at all.
  *
@@ -54,12 +58,13 @@ public class ExternalSystemWritebackDispatcher {
     /** Tenant-setting key naming the writeback connection for this client. */
     public static final String SETTING_WRITEBACK_CONNECTION = "writebackConnection";
 
-    /** Fallback connection name when no per-tenant override is set. */
-    public static final String DEFAULT_CONNECTION_NAME = "nds-default";
-
     private final ExternalSystemRegistry registry;
     private final ExternalSystemConfigService config;
     private final TenantSettingsService tenantSettings;
+    // D1 — every dispatch attempt persists to external_system_writeback_journal.
+    private final WritebackJournalService journal;
+    // D1b — redispatch() deserializes stored payloads for sweeper + admin retry.
+    private final ObjectMapper objectMapper;
 
     /**
      * Async post-generate hook. The caller (CarrierServiceImpl) invokes
@@ -71,6 +76,12 @@ public class ExternalSystemWritebackDispatcher {
      */
     @Async
     public void dispatchOnGenerate(WritebackPayload payload) {
+        dispatchOnGenerate(payload, null);
+    }
+
+    /** D1b — chaining overload used by the retry sweeper + admin retry. */
+    @Async
+    public void dispatchOnGenerate(WritebackPayload payload, Long retryOfId) {
         if (payload == null) return;
         try {
             String name = resolveConnectionName(payload.clientCode());
@@ -103,8 +114,23 @@ public class ExternalSystemWritebackDispatcher {
                 log.debug("writeback: skipping generate on '{}' — no flags enabled", name);
                 return;
             }
-            WritebackAck ack = registry.writeShipment(name, redacted);
-            logAck("generate", name, payload.orderNo(), ack);
+            // D1 — journal the attempt around the connector call. Failure
+            // inside the connector still updates the journal to FAILED
+            // (WritebackAck.Status.FAILED path); an exception thrown out
+            // is caught below and journalled via recordFailure.
+            Long journalId = null;
+            long start = System.currentTimeMillis();
+            try {
+                journalId = journal.recordPending(name, row.get().getSystemType(),
+                        WritebackJournalService.MODE_GENERATE, redacted, retryOfId).getId();
+                WritebackAck ack = registry.writeShipment(name, redacted);
+                journal.recordAck(journalId, ack, (int)(System.currentTimeMillis() - start));
+                logAck("generate", name, payload.orderNo(), ack);
+            } catch (RuntimeException connErr) {
+                journal.recordFailure(journalId, connErr.getMessage(),
+                        (int)(System.currentTimeMillis() - start));
+                throw connErr;  // fall through to the outer catch for logging
+            }
         } catch (Exception e) {
             // Ponytail rule: writeback failure MUST NOT bubble. Log at
             // WARN so ops sees it, then swallow.
@@ -119,6 +145,12 @@ public class ExternalSystemWritebackDispatcher {
      */
     @Async
     public void dispatchOnClear(WritebackClearRequest req) {
+        dispatchOnClear(req, null);
+    }
+
+    /** D1b — chaining overload used by the retry sweeper + admin retry. */
+    @Async
+    public void dispatchOnClear(WritebackClearRequest req, Long retryOfId) {
         if (req == null) return;
         try {
             String name = resolveConnectionName(req.clientCode());
@@ -160,11 +192,46 @@ public class ExternalSystemWritebackDispatcher {
                     Boolean.TRUE.equals(r.getWritebackFreight()),
                     req.source(),
                     req.channel());
-            WritebackAck ack = registry.clearShipment(name, named);
-            logAck("clear", name, req.orderNo(), ack);
+            // D1 — same journal-around-call pattern as generate.
+            Long journalId = null;
+            long start = System.currentTimeMillis();
+            try {
+                journalId = journal.recordPending(name, r.getSystemType(), named, retryOfId).getId();
+                WritebackAck ack = registry.clearShipment(name, named);
+                journal.recordAck(journalId, ack, (int)(System.currentTimeMillis() - start));
+                logAck("clear", name, req.orderNo(), ack);
+            } catch (RuntimeException connErr) {
+                journal.recordFailure(journalId, connErr.getMessage(),
+                        (int)(System.currentTimeMillis() - start));
+                throw connErr;
+            }
         } catch (Exception e) {
             log.warn("writeback: clear dispatch failed for order={}: {}",
                     req.orderNo(), e.getMessage());
+        }
+    }
+
+    /**
+     * D1b — deserialize a stored journal row's payload and re-fire it
+     * through the correct dispatch entry point, with the chain linkage
+     * ({@code retryOfId = row.id}, {@code attemptNumber = row.attemptNumber+1})
+     * applied by {@link WritebackJournalService#recordPending}.
+     *
+     * <p>Shared by the admin controller's manual retry and the
+     * {@link WritebackJournalSweeper} scheduled bean. Any deserialization
+     * failure throws — callers decide how to surface (controller returns
+     * 422; sweeper logs and skips).
+     */
+    public void redispatch(WritebackJournalEntity row) throws com.fasterxml.jackson.core.JsonProcessingException {
+        if (row == null || row.getPayloadJson() == null || row.getPayloadJson().isBlank()) {
+            throw new IllegalArgumentException("Journal row has no persisted payload");
+        }
+        if (WritebackJournalService.MODE_GENERATE.equals(row.getMode())) {
+            WritebackPayload payload = objectMapper.readValue(row.getPayloadJson(), WritebackPayload.class);
+            dispatchOnGenerate(payload, row.getId());
+        } else {
+            WritebackClearRequest req = objectMapper.readValue(row.getPayloadJson(), WritebackClearRequest.class);
+            dispatchOnClear(req, row.getId());
         }
     }
 
@@ -182,10 +249,9 @@ public class ExternalSystemWritebackDispatcher {
                 return perTenant.get().trim();
             }
         }
-        // Default only fires when it actually exists — an install that
-        // never seeded nds-default gets null (silent skip), not a
-        // per-label WARN.
-        return config.findByName(DEFAULT_CONNECTION_NAME).map(ExternalSystemConnection::getName).orElse(null);
+        // X1 — DB-flagged default. Null when no row is marked (silent
+        // skip is correct for installs that never set one).
+        return config.findDefaultWritebackTarget().map(ExternalSystemConnection::getName).orElse(null);
     }
 
     WritebackPayload redactByFlags(WritebackPayload src, ExternalSystemConnection row) {

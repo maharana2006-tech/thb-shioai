@@ -557,16 +557,39 @@ class FedExConnectorPayloadTest {
 
     @SuppressWarnings("unchecked")
     @Test
-    void exportDetailOmittedWhenNoFtrOrAes() throws Exception {
-        // Absent FTR/AES on the intl block, we leave exportDetail off the
-        // wire and let FedEx apply its server-side default (§30.37(a),
-        // safe only under $2,500 USD). Value-threshold gating happens at
-        // IntlShipmentValidator upstream.
+    void exportDetailDefaultsToNoEei_30_37a_WhenUsOriginHasNoFtrOrAes() throws Exception {
+        // F3 fix (intl-export-declaration track, PRs #564-#567): pre-fix
+        // we emitted no exportDetail and let FedEx apply its server-side
+        // default; FedEx was then rejecting US→CN + other export-
+        // controlled lanes with "invalid FTR/AES for EEI". We now default
+        // the §30.37(a) low-value Census exemption CLIENT-side for US-
+        // origin shipments without FTR/AES. High-value gating stays
+        // upstream at IntlShipmentValidator so this default never fires
+        // when a real ITN would be required.
         ShipmentRequestDTO r = baseRequest();
         r.setIntl(baseIntl());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> ccd = (Map<String, Object>) requestedShipment(r).get("customsClearanceDetail");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> exportDetail = (Map<String, Object>) ccd.get("exportDetail");
+        assertNotNull(exportDetail, "US-origin + no FTR/AES must still emit exportDetail");
+        assertEquals("NO EEI 30.37(a)", exportDetail.get("exportComplianceStatement"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void exportDetailOmittedWhenNonUsOriginHasNoFtrOrAes() throws Exception {
+        // Non-US origin + no FTR/AES / exportDeclarationReference: the
+        // US §30.37(a) default is US-origin-specific (FedEx servers
+        // handle non-US origin on their side via the per-country export
+        // declaration policy). The exportDetail block stays off.
+        ShipmentRequestDTO r = baseRequest();
+        r.setShipperCountryCode("DE");
+        r.setIntl(baseIntl());
+        @SuppressWarnings("unchecked")
         Map<String, Object> ccd = (Map<String, Object>) requestedShipment(r).get("customsClearanceDetail");
         assertNull(ccd.get("exportDetail"),
-                "no FTR/AES on the DTO → no exportDetail block on the wire");
+                "non-US origin + no declaration → no exportDetail on the wire");
     }
 
     @SuppressWarnings("unchecked")

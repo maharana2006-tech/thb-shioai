@@ -92,6 +92,25 @@ class CarrierServiceUspsDispatchTest {
 
     @BeforeEach
     void setUp() {
+        // Install a stub CarrierAliasService so legacyL01Code → USPS
+        // canonicalises in getCarrierConnector. Pre-fix the holder was
+        // uninitialised and the L01 test threw "Unsupported carrier"
+        // (order-dependent on whichever earlier test loaded a real
+        // CarrierAliasService in the shared JVM).
+        try {
+            var aliasStub = mock(com.multiship.backend.service.carrier.CarrierAliasService.class);
+            when(aliasStub.canonicalize("L01")).thenReturn("USPS");
+            when(aliasStub.canonicalize("USPS")).thenReturn("USPS");
+            when(aliasStub.canonicalize("FEDEX")).thenReturn("FEDEX");
+            java.lang.reflect.Method setMethod =
+                    com.multiship.backend.service.carrier.CarrierAliasHolder.class
+                            .getDeclaredMethod("set", com.multiship.backend.service.carrier.CarrierAliasService.class);
+            setMethod.setAccessible(true);
+            setMethod.invoke(null, aliasStub);
+        } catch (Exception e) {
+            throw new AssertionError("Unable to install CarrierAliasHolder stub", e);
+        }
+
         systemSettingService = mock(SystemSettingService.class);
         stampsConnector = new StampsConnector();
         uspsDirectConnector = new UspsDirectConnector();
@@ -105,6 +124,14 @@ class CarrierServiceUspsDispatchTest {
                 List.of(stampsConnector, uspsDirectConnector, fedexConnector);
         ReflectionTestUtils.setField(service, "carrierConnectors", connectors);
         ReflectionTestUtils.setField(service, "systemSettingService", systemSettingService);
+        // V112 — getCarrierConnector calls carrierPlatformService.isEnabled
+        // before reaching the dispatch branch. Mock + default-true so every
+        // dispatch test exercises the branch under test, not the disabled gate.
+        var platformService = mock(
+                com.multiship.backend.service.carriers.platform.CarrierPlatformService.class);
+        when(platformService.isEnabled(org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(true);
+        ReflectionTestUtils.setField(service, "carrierPlatformService", platformService);
     }
 
     private static CarrierServiceImpl allocate() {

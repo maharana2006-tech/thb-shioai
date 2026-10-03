@@ -178,6 +178,8 @@ public class OrderServiceImpl implements OrderService {
         // Shipping channel: D2C | B2B. '' = all channels.
         String channelFilter = trimmed(filters.getChannel()).toUpperCase(java.util.Locale.ROOT);
         String carrierFilter = trimmed(filters.getCarrier()).toUpperCase(java.util.Locale.ROOT);
+        // Returns F3 — 'Y' / 'N' / '' = all. Matches label_batch.is_return.
+        String isReturnFilter = trimmed(filters.getIsReturn()).toUpperCase(java.util.Locale.ROOT);
 
         if (!isValidDateFilter(createdFrom) || !isValidDateFilter(createdTo)) {
             return ApiResponse.<PageResponseDTO<OrderResponseDTO>>builder()
@@ -218,13 +220,13 @@ public class OrderServiceImpl implements OrderService {
                 statusFilter, tenantFilter, keywordFilter, resolutionFilter,
                 customerFilter, cityFilter, orderNoFilter, trackingFilter,
                 batchIdFilter,
-                createdFrom, createdTo, sourceFilter, channelFilter, carrierFilter,
+                createdFrom, createdTo, sourceFilter, channelFilter, carrierFilter, isReturnFilter,
                 page * size, size, sortBy, sortDirection);
         long totalRecords = orderRepository.countOrdersUnified(
                 statusFilter, tenantFilter, keywordFilter, resolutionFilter,
                 customerFilter, cityFilter, orderNoFilter, trackingFilter,
                 batchIdFilter,
-                createdFrom, createdTo, sourceFilter, channelFilter, carrierFilter);
+                createdFrom, createdTo, sourceFilter, channelFilter, carrierFilter, isReturnFilter);
 
         List<OrderResponseDTO> orders = results.stream()
                 .map(this::mapToOrderResponseDTO)
@@ -284,6 +286,8 @@ public class OrderServiceImpl implements OrderService {
         String sourceFilter = trimmed(filters.getSource()).toUpperCase(java.util.Locale.ROOT);
         String channelFilter = trimmed(filters.getChannel()).toUpperCase(java.util.Locale.ROOT);
         String carrierFilter = trimmed(filters.getCarrier()).toUpperCase(java.util.Locale.ROOT);
+        // Returns F3 — 'Y' / 'N' / '' = all. Matches label_batch.is_return.
+        String isReturnFilter = trimmed(filters.getIsReturn()).toUpperCase(java.util.Locale.ROOT);
 
         if (!isValidDateFilter(createdFrom) || !isValidDateFilter(createdTo)) {
             return ApiResponse.<java.util.List<Integer>>builder()
@@ -314,7 +318,7 @@ public class OrderServiceImpl implements OrderService {
                 statusFilter, tenantFilter, keywordFilter, resolutionFilter,
                 customerFilter, cityFilter, orderNoFilter, trackingFilter,
                 batchIdFilter,
-                createdFrom, createdTo, sourceFilter, channelFilter, carrierFilter);
+                createdFrom, createdTo, sourceFilter, channelFilter, carrierFilter, isReturnFilter);
 
         return ApiResponse.<java.util.List<Integer>>builder()
                 .status("SUCCESS").code(200)
@@ -359,6 +363,8 @@ public class OrderServiceImpl implements OrderService {
         String sourceFilter = trimmed(filters.getSource()).toUpperCase(java.util.Locale.ROOT);
         String channelFilter = trimmed(filters.getChannel()).toUpperCase(java.util.Locale.ROOT);
         String carrierFilter = trimmed(filters.getCarrier()).toUpperCase(java.util.Locale.ROOT);
+        // Returns F3 — 'Y' / 'N' / '' = all. Matches label_batch.is_return.
+        String isReturnFilter = trimmed(filters.getIsReturn()).toUpperCase(java.util.Locale.ROOT);
 
         if (!isValidDateFilter(createdFrom) || !isValidDateFilter(createdTo)) {
             return ApiResponse.<java.util.List<java.util.Map<String, Object>>>builder()
@@ -373,7 +379,7 @@ public class OrderServiceImpl implements OrderService {
                 statusFilter, tenantFilter, keywordFilter, resolutionFilter,
                 customerFilter, cityFilter, orderNoFilter, trackingFilter,
                 batchIdFilter,
-                createdFrom, createdTo, sourceFilter, channelFilter, carrierFilter);
+                createdFrom, createdTo, sourceFilter, channelFilter, carrierFilter, isReturnFilter);
 
         java.util.List<java.util.Map<String, Object>> out = rows.stream()
                 .map(r -> {
@@ -873,6 +879,18 @@ public class OrderServiceImpl implements OrderService {
                         // OrderRepository that share this mapper). Null / blank
                         // hides the FE row-icon popover.
                         .note(row.length > 25 ? (String) row[25] : null)
+                        // Returns F9 — is_return legacy 'Y'/'N' column, index 26.
+                        // Routes the row-level Edit button to the return path
+                        // when 'Y'. Null tolerated → treated as not-return.
+                        .isReturn(row.length > 26
+                                && row[26] != null
+                                && "Y".equalsIgnoreCase(String.valueOf(row[26]).trim()))
+                        // Returns F12 — the outbound order this return
+                        // came from. Null when unlinked (outbound rows,
+                        // legacy returns).
+                        .originalOrderNo(row.length > 27 && row[27] != null
+                                ? ((Number) row[27]).intValue()
+                                : null)
                         .build())
                 .shippingDetails(OrderResponseDTO.ShippingDetails.builder()
                         .city((String) row[4])

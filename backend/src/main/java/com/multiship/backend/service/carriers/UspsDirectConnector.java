@@ -649,6 +649,17 @@ public class UspsDirectConnector implements CarrierConnector {
     public ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken, String environment) {
         assertRealToken(accessToken, request);
         assertRecipientCountry(request, "shipment");
+        // B9 — USPS Direct has no PARCEL_SELECT_RETURN_SERVICE branch wired
+        // yet, so silently shipping an outbound label for a return request
+        // would produce a wrong-direction label. Reject with a clear error
+        // until the mailClass + endpoint pair is implemented (audit Returns F1).
+        if (Boolean.TRUE.equals(request.getIsReturn())) {
+            throw new UnsupportedOperationException(
+                    "USPS Direct return-label support is not implemented yet. "
+                            + "Pick another provider (Stamps SWSIM / SERA) for return labels, "
+                            + "or set return_mail_class on the carrier_account_ref once the "
+                            + "USPS Ship API return branch lands.");
+        }
         TenantIdentifiers tenant = requireTenantIdentifiers(request, "shipment");
 
         // Mint the payment-authorization token — required as a second

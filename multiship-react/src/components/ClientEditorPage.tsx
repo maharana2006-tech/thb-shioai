@@ -172,6 +172,24 @@ export default function ClientEditorPage() {
   )
   const [saving, setSaving] = useState(false)
 
+  /** Audit (#281) — JSON snapshot of the form as it last matched persisted
+   *  state. Create mode: the empty-form shape at mount; edit mode: the
+   *  hydrated form after the client fetch resolves; after each successful
+   *  save: the form at save time (so a post-save navigation doesn't
+   *  false-fire the prompt). isDirty = snapshot !== JSON.stringify(form). */
+  const initialFormJsonRef = useRef<string>(JSON.stringify(form))
+
+  /** Audit 2.3 (#283) — persistent warehouse-attach error. Set when the
+   *  best-effort attach after a client save fails; cleared on a
+   *  successful retry or when the operator picks a different warehouse.
+   *  Carries the warehouseCode so Retry re-fires against the same row. */
+  const [attachmentError, setAttachmentError] = useState<{
+    message: string
+    warehouseCode: string
+    clientCode: string
+  } | null>(null)
+  const [attachRetrying, setAttachRetrying] = useState(false)
+
   /** Steps the operator has landed on at least once. Gates the Create button
    *  in create mode — must visit every step before the wizard can commit. */
   const [visitedSteps, setVisitedSteps] = useState<Set<StepKey>>(
@@ -357,6 +375,10 @@ export default function ClientEditorPage() {
    *  labels keep printing the same fields. The warehouse id is remembered so
    *  we can attach + default it on the client after save. */
   const pickShipFromWarehouse = (wh: Warehouse | null) => {
+    // Audit 2.3 (#283) — a stale banner for the old pick is noise once
+    // the operator picked something else. Clear + a new save-attach
+    // cycle will reset it correctly either way.
+    if (attachmentError) setAttachmentError(null)
     if (!wh) {
       setSelectedShipFromWarehouseId(null)
       return
@@ -401,7 +423,7 @@ export default function ClientEditorPage() {
         const c = resp.data
         if (!c) throw new Error('Client not found')
         setClient(c)
-        setForm({
+        const hydrated: ClientUpsertPayload = {
           clientCode: c.clientCode,
           name: c.name || '',
           email: c.email || '',
@@ -416,7 +438,11 @@ export default function ClientEditorPage() {
           defaultDimUnit: c.defaultDimUnit ?? '',
           timezone: c.timezone ?? '',
           defaultOriginCountry: c.defaultOriginCountry ?? '',
-        })
+        }
+        setForm(hydrated)
+        // Audit (#281) — reset the dirty baseline to the hydrated form so
+        // a navigate-away right after load doesn't false-fire the prompt.
+        initialFormJsonRef.current = JSON.stringify(hydrated)
         setAccounts(c.carrierAccounts ?? [])
       })
       .catch((err: unknown) => {
@@ -449,6 +475,28 @@ export default function ClientEditorPage() {
       .catch(() => { /* picker just stays empty — non-fatal */ })
     return () => { cancelled = true }
   }, [editingCode])
+
+  /** Audit 4.1 (#284) — refresh accounts when the operator lands on a
+   *  step whose render depends on addressCaps / enabledCarrierCodes.
+   *  Catches the stale-caps race: operator adds a carrier in the
+   *  embedded CarrierConnections drawer, drawer saves, operator steps
+   *  back to Ship From — pre-fix the caps intersection still used the
+   *  pre-save accounts list because the drawer never notified the
+   *  parent. Audit recommends Option 3 ("poll on tab switch") as the
+   *  simplest fix with no API change to CarrierConnections. */
+  useEffect(() => {
+    if (!isEdit || !editingCode) return
+    if (activeStep !== 'shipFrom' && activeStep !== 'return') return
+    let cancelled = false
+    clientService
+      .getClient(editingCode)
+      .then((resp) => {
+        if (cancelled || !resp.data) return
+        setAccounts(resp.data.carrierAccounts ?? [])
+      })
+      .catch(() => { /* re-fetch is best-effort; stale caps better than crash */ })
+    return () => { cancelled = true }
+  }, [activeStep, isEdit, editingCode])
 
   // ===== Per-user draft persistence =====
   // Only in create mode — edit already carries a persisted server row. Writes
@@ -614,7 +662,60 @@ export default function ClientEditorPage() {
     if (i > 0) setActiveStep(STEP_DEFS[i - 1].key)
   }
 
-  const onClose = () => navigate('/settings/clients')
+  /** Audit (#281) — dirty-track against the pristine baseline. Memo'd so
+   *  the beforeunload handler + onClose confirm share one truth. */
+  const isDirty = useMemo(
+    () => JSON.stringify(form) !== initialFormJsonRef.current,
+    [form],
+  )
+
+  // Browser-close prompt while dirty. Mirrors NewShipmentPage's pattern.
+  useEffect(() => {
+    if (!isDirty || saving) return
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [isDirty, saving])
+
+  /** Audit 2.3 (#283) — re-fire the attach call that failed after save.
+   *  Keeps the banner visible on error (another retry possible) or
+   *  clears it on success. */
+  const retryWarehouseAttach = async () => {
+    if (!attachmentError || attachRetrying) return
+    setAttachRetrying(true)
+    try {
+      await clientWarehouseService.attach(attachmentError.clientCode, {
+        warehouseCode: attachmentError.warehouseCode,
+        makeDefault: true,
+      })
+      setAttachmentError(null)
+      notify.success('Warehouse attached.')
+    } catch (err) {
+      if (err instanceof ApiError && err.errorCode === 'WAREHOUSE_ALREADY_ATTACHED') {
+        // Already attached (another admin raced us) — treat as success +
+        // best-effort set-default so the UI matches reality.
+        try {
+          await clientWarehouseService.setDefault(attachmentError.clientCode, attachmentError.warehouseCode)
+        } catch { /* not fatal */ }
+        setAttachmentError(null)
+        notify.success('Warehouse attached.')
+      } else {
+        notify.apiError(err, 'Retry failed — attach still rejected.')
+      }
+    } finally {
+      setAttachRetrying(false)
+    }
+  }
+
+  const onClose = async () => {
+    // In-app nav intercept — the browser prompt only catches tab close /
+    // reload. Explicit Cancel / list-link clicks route through here.
+    if (isDirty && !(await notify.confirm(
+      "This client has unsaved changes. Leave and lose what you've edited?",
+      { title: 'Leave client editor?', confirmLabel: 'Leave', cancelLabel: 'Stay' },
+    ))) return
+    navigate('/settings/clients')
+  }
 
   /** Every MANDATORY step visited AND every mandatory field valid = ready to
    *  create. Optional steps like Importer/Broker don't gate Create. */
@@ -814,6 +915,9 @@ export default function ClientEditorPage() {
       }
       const response = await clientService.createClient(payload)
       notify.success(`Client ${response.data.clientCode} created.`)
+      // Audit (#281) — reset dirty baseline so the post-create navigate
+      // doesn't fire the unsaved-changes prompt.
+      initialFormJsonRef.current = JSON.stringify(form)
       // Sprint 52 — nudge the operator toward the Billing markup tab
       // immediately after creation when no row was seeded. Same predicate
       // as the step-nav amber badge / MarkupTab banner so all four
@@ -1008,6 +1112,8 @@ export default function ClientEditorPage() {
       }
       const response = await clientService.updateClient(form.clientCode, payload)
       setClient(response.data)
+      // Audit (#281) — reset dirty baseline on successful update.
+      initialFormJsonRef.current = JSON.stringify(form)
       // Same Ship From warehouse follow-up as create: attach + default the
       // picked warehouse so the origin isn't just address text on the row.
       if (selectedShipFromWarehouseId != null) {
@@ -1018,25 +1124,37 @@ export default function ClientEditorPage() {
               warehouseCode: wh.code,
               makeDefault: true,
             })
+            // Audit 2.3 (#283) — attach succeeded; clear any prior error.
+            setAttachmentError(null)
           } catch (attachError) {
             // Attach may 409 if it's already attached — that's fine; a fresh
             // "already attached" isn't worth toasting. Anything else is.
             if (!(attachError instanceof ApiError && attachError.errorCode === 'WAREHOUSE_ALREADY_ATTACHED')) {
-              notify.error(
-                attachError instanceof Error
-                  ? attachError.message
-                  : 'Client saved, but attaching Ship From warehouse failed.',
-              )
+              const msg = attachError instanceof Error
+                ? attachError.message
+                : 'Client saved, but attaching Ship From warehouse failed.'
+              notify.error(msg)
+              // Audit 2.3 (#283) — persist the failure in-page so a
+              // navigate-away from Identity can't hide it. ShipFromStep
+              // renders a banner with Retry; see render block below.
+              setAttachmentError({
+                message: msg,
+                warehouseCode: wh.code,
+                clientCode: response.data.clientCode,
+              })
             } else {
               // Even when already attached, make it the default (best-effort).
               try {
                 await clientWarehouseService.setDefault(response.data.clientCode, wh.code)
+                setAttachmentError(null)
               } catch { /* not fatal */ }
             }
           }
         }
       }
-      notify.success(`Client ${response.data.clientCode} updated.`)
+      // Audit 2.2 (#282) — be precise about what landed. Carrier /
+      // mapping / importer edits are on their own save paths.
+      notify.success(`Client ${response.data.clientCode} identity + addresses saved.`)
     } catch (error) {
       notify.apiError(error, 'Failed to save the client.')
     } finally {
@@ -1077,7 +1195,7 @@ export default function ClientEditorPage() {
         <div className="flex min-w-0 items-center gap-2.5">
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => void onClose()}
             aria-label="Back to clients"
             title="Back to clients"
             className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-950"
@@ -1095,9 +1213,23 @@ export default function ClientEditorPage() {
         </div>
         {isEdit && (activeStep === 'identity' || activeStep === 'shipFrom' || activeStep === 'return') ? (
           <div className="flex shrink-0 items-center gap-2">
+            {/* Audit 2.2 (#282) — "Save changes" only commits identity +
+                ship-from + return-address + per-tenant defaults; carrier /
+                mapping / importer-broker steps use embedded child
+                components with their own save paths. Hint keeps the
+                operator from assuming one green toast means everything on
+                the page landed. Full coordinator-pattern refactor is
+                tracked separately — this is the interim mitigation the
+                audit recommends. */}
+            <span
+              title="Save on this button covers identity + addresses + defaults. Carrier accounts, mapping rules, and importer/broker edits save from their own forms."
+              className="hidden items-center text-[11px] text-slate-500 md:inline-flex"
+            >
+              Identity + addresses only
+            </span>
             <button
               type="button"
-              onClick={onClose}
+              onClick={() => void onClose()}
               className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-600 transition hover:bg-slate-100"
             >
               Cancel
@@ -1222,6 +1354,33 @@ export default function ClientEditorPage() {
           />
         ) : null}
 
+        {activeStep === 'shipFrom' && attachmentError ? (
+          /* Audit 2.3 (#283) — persistent banner so the attach failure
+             isn't a one-shot toast the operator missed while on Identity.
+             Retry re-fires the exact same attach call; clearing happens
+             only on a successful attach. */
+          <div
+            role="alert"
+            className="mb-3 flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-[12.5px] text-rose-900"
+          >
+            <div className="flex-1">
+              <p className="font-semibold">Warehouse not attached</p>
+              <p className="mt-0.5 text-rose-800">
+                {attachmentError.message} — client &apos;{attachmentError.clientCode}&apos;,
+                warehouse &apos;{attachmentError.warehouseCode}&apos;.
+                Future orders won&apos;t find the default origin until this is fixed.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void retryWarehouseAttach()}
+              disabled={attachRetrying}
+              className="shrink-0 rounded-md border border-rose-300 bg-white px-2.5 py-1 text-[11.5px] font-semibold text-rose-800 transition hover:bg-rose-100 disabled:opacity-50"
+            >
+              {attachRetrying ? 'Retrying…' : 'Retry'}
+            </button>
+          </div>
+        ) : null}
         {activeStep === 'shipFrom' ? (
           <ShipFromStep
             warehouses={visibleShipFromWarehouses}
@@ -1406,7 +1565,7 @@ export default function ClientEditorPage() {
           ) : isLast ? (
             <button
               type="button"
-              onClick={onClose}
+              onClick={() => void onClose()}
               className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-4 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15]"
             >
               Finish

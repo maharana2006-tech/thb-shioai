@@ -85,6 +85,13 @@ export const navIcons: Record<string, ReactNode> = {
       <path d="M10 4.75v11.5" strokeLinecap="round" />
     </svg>
   ),
+  // Envelope — outbound email settings (A4.1 /settings/mail).
+  mail: (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-[18px] w-[18px]" aria-hidden="true">
+      <rect x="2.75" y="4.75" width="14.5" height="10.5" rx="1.25" strokeLinejoin="round" />
+      <path d="m3 6 7 4.75L17 6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
   // Chain-link — mapping ties an order's ship method to a carrier service.
   mapping: (
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-[18px] w-[18px]" aria-hidden="true">

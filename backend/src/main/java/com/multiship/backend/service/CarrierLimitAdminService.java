@@ -2,6 +2,7 @@ package com.multiship.backend.service;
 
 import com.multiship.backend.dto.CarrierShippingLimitRequest;
 import com.multiship.backend.dto.CarrierShippingLimitResponse;
+import com.multiship.backend.dto.PageResponseDTO;
 import com.multiship.backend.model.CarrierShippingLimit;
 import com.multiship.backend.repository.CarrierShippingLimitRepository;
 import lombok.RequiredArgsConstructor;
@@ -39,7 +40,7 @@ public class CarrierLimitAdminService {
     private final CarrierLimitService resolverService;
 
     @Transactional(readOnly = true)
-    public List<CarrierShippingLimitResponse> list(int page, int size) {
+    public PageResponseDTO<CarrierShippingLimitResponse> list(int page, int size) {
         int clampedSize = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
         int clampedPage = Math.max(page, 0);
         Pageable pageable = PageRequest.of(clampedPage, clampedSize,
@@ -47,9 +48,13 @@ public class CarrierLimitAdminService {
                         .and(Sort.by(Sort.Direction.ASC, "serviceCode"))
                         .and(Sort.by(Sort.Direction.ASC, "scope")));
         Page<CarrierShippingLimit> rows = repository.findAll(pageable);
-        return rows.getContent().stream()
+        // Audit L3/B3 (#375) — surface totalElements so the FE knows when
+        // the catalog has outgrown a page. Pre-fix, the service returned
+        // a bare List and the FE assumed size=200 was the whole table.
+        List<CarrierShippingLimitResponse> content = rows.getContent().stream()
                 .map(CarrierShippingLimitResponse::from)
                 .toList();
+        return PageResponseDTO.of(content, clampedPage, clampedSize, rows.getTotalElements());
     }
 
     @Transactional(readOnly = true)
@@ -69,6 +74,8 @@ public class CarrierLimitAdminService {
                 .maxTotalWeightLb(req.getMaxTotalWeightLb())
                 .freeDeclaredValue(req.getFreeDeclaredValue())
                 .effectiveFrom(LocalDateTime.now())
+                // Audit L2 (#378) — scheduled end-date is optional.
+                .effectiveUntil(req.getEffectiveUntil())
                 .active(req.getActive() == null ? Boolean.TRUE : req.getActive())
                 .notes(blankToNull(req.getNotes()))
                 .build();
@@ -92,6 +99,10 @@ public class CarrierLimitAdminService {
             existing.setMaxTotalWeightLb(req.getMaxTotalWeightLb());
             existing.setFreeDeclaredValue(req.getFreeDeclaredValue());
             if (req.getActive() != null) existing.setActive(req.getActive());
+            // Audit L2 (#378) — allow operator to set / clear the end date.
+            // Null is a legitimate value ("remove the end date") so pass
+            // through directly rather than guarding on null.
+            existing.setEffectiveUntil(req.getEffectiveUntil());
             existing.setNotes(blankToNull(req.getNotes()));
             CarrierShippingLimit saved = repository.save(existing);
             resolverService.invalidateCache();

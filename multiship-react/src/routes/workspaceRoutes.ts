@@ -83,10 +83,50 @@ export const settingsPaths = {
    *  external_system_connection table + secrets + client-login
    *  overrides + Test-connection dial. ADMIN role only. */
   externalSystems: '/settings/external-systems',
+  /** A4.1 — DB-driven mail provider registry (SMTP today; SendGrid/SES/
+   *  Postmark in A4.3). Ops picks the active provider + sends a test
+   *  email without a redeploy. Backing tables mail_provider + mail_config. */
+  mail: '/settings/mail',
+  /** A4.2 — Handlebars templates for every outbound email event
+   *  (AUTH.VERIFY_EMAIL, AUTH.PASSWORD_RESET, AUTH.USER_INVITE today;
+   *  OPS.* / BILLING.* come as new send-sites are wired). Backing table
+   *  notification_template. Live preview against a JSON var map. */
+  notificationTemplates: '/settings/notification-templates',
+  /** A4.4 — outbound-email delivery journal (SENT + FAILED). Filter by
+   *  template / status / recipient; retry any row. Backing table
+   *  notification_delivery_log. */
+  notificationDeliveryLog: '/settings/notification-delivery-log',
+  /** A4.5 — self-serve per-user opt-out for alert-style email templates.
+   *  Any authenticated role; transactional templates are never listed. */
+  mySubscriptions: '/settings/notifications',
   /** G7 — (source × carrier × warehouse) cutoff-shift rule matrix +
    *  global holiday list. Shipments past cutoff or on a holiday get
    *  their SHIP_DATE pushed to next working day. ADMIN role only. */
   cutoffs: '/settings/cutoffs',
+  /** D1 — framework-wide external-system writeback dispatch journal
+   *  (PENDING / OK / SKIPPED / FAILED) with filter + per-row Retry.
+   *  Backing table external_system_writeback_journal. ADMIN only. */
+  writebackJournal: '/settings/writeback-journal',
+  /** Returns F11 payoff — reason-by-week rollup. ADMIN only. */
+  returnsAnalytics: '/settings/returns-analytics',
+  /** V112 — platform-wide carrier registry (Auth Gap-6-A). */
+  carriersPlatform: '/settings/carriers-platform',
+  /** V113 — durable record of fired alerts. */
+  alertsHistory: '/settings/alerts-history',
+  /** V114 — per-request carrier API log. */
+  carrierApiLog: '/settings/carrier-api-log',
+  /** V115 — role registry (read-only). */
+  roles: '/settings/roles',
+  /** V111 — country table + is_us_territory flag (read-only). */
+  countries: '/settings/countries',
+  /** V117 — reason-for-export registry (read-only). */
+  reasonsForExport: '/settings/reasons-for-export',
+  /** V117 — ISO 4217 currency catalog (read-only). */
+  currencies: '/settings/currencies',
+  /** V118 — carrier-error-message pattern → humanized rules (read-only). */
+  carrierErrorMessages: '/settings/carrier-error-messages',
+  /** V120 — per-carrier dropdown vocabularies (label format / pickup / clearance). */
+  carrierDropdowns: '/settings/carrier-dropdowns',
 } as const
 
 export const workspaceNavItems: Array<{
@@ -164,8 +204,56 @@ export const settingsNavItems: Array<{
   { key: 'external-systems', label: 'External Systems', to: settingsPaths.externalSystems, iconKey: 'apiKey',
     description: 'DB-driven connection manager for external systems (Oracle WMS today, REST/gRPC/SFTP later). Set host/port/creds/pool params + per-tenant login overrides + test the connection live.',
     roles: ['ADMIN'] },
+  { key: 'mail', label: 'Mail', to: settingsPaths.mail, iconKey: 'mail',
+    description: 'Outbound email provider — pick SMTP today (SendGrid/SES/Postmark coming), edit host/port/creds, and send a live test message. Config lives in mail_provider + mail_config.',
+    roles: ['ADMIN'] },
+  { key: 'notification-templates', label: 'Email Templates', to: settingsPaths.notificationTemplates, iconKey: 'apiDocs',
+    description: 'Handlebars templates for every outbound email event (invite, verify, password reset, and future alerts). Live preview against a JSON var map before saving.',
+    roles: ['ADMIN'] },
+  { key: 'notification-delivery-log', label: 'Email Delivery Log', to: settingsPaths.notificationDeliveryLog, iconKey: 'dashboard',
+    description: 'Every outbound-email dispatch — SENT and FAILED — with template, provider, latency, and error. Retry any row to re-send the same message.',
+    roles: ['ADMIN'] },
+  { key: 'my-subscriptions', label: 'Notifications', to: settingsPaths.mySubscriptions, iconKey: 'mail',
+    description: 'Turn off alert-style emails you don\'t want to receive. Transactional emails (invite, verify, password reset) always send.',
+    roles: ['ADMIN', 'USER'] },
   { key: 'cutoffs', label: 'Cutoffs & Holidays', to: settingsPaths.cutoffs, iconKey: 'dashboard',
     description: 'Per (source × carrier × warehouse) cutoff rules + global holiday list. Shipments past cutoff or on a holiday get their SHIP_DATE pushed to the next working day.',
+    roles: ['ADMIN'] },
+  { key: 'writeback-journal', label: 'Writeback Journal', to: settingsPaths.writebackJournal, iconKey: 'dashboard',
+    description: 'Every external-system writeback dispatch — PENDING, OK, SKIPPED and FAILED — with connection, order and latency. Retry any failed row to re-fire through the dispatcher.',
+    roles: ['ADMIN'] },
+  { key: 'returns-analytics', label: 'Returns Analytics', to: settingsPaths.returnsAnalytics, iconKey: 'dashboard',
+    description: 'Weekly rollup of return reasons (Wrong item, Defective, No longer needed, Size, Other, Unknown) over a chosen lookback window.',
+    roles: ['ADMIN'] },
+  { key: 'carriers-platform', label: 'Carriers (platform)', to: settingsPaths.carriersPlatform, iconKey: 'carrier',
+    description: 'Platform-wide carrier registry — toggle enabled org-wide and flip LIVE/TEST mode without a code deploy.',
+    roles: ['ADMIN'] },
+  { key: 'alerts-history', label: 'Alerts History', to: settingsPaths.alertsHistory, iconKey: 'dashboard',
+    description: 'Durable record of fired alerts (USPS fallback, Stamps SERA, future). Filter by source, tenant and order.',
+    roles: ['ADMIN'] },
+  { key: 'carrier-api-log', label: 'Carrier API Log', to: settingsPaths.carrierApiLog, iconKey: 'dashboard',
+    description: 'Per-request carrier API round-trips with request / response bodies. Infrastructure present; connector wiring lands as follow-ups.',
+    roles: ['ADMIN'] },
+  { key: 'roles', label: 'Roles', to: settingsPaths.roles, iconKey: 'clients',
+    description: 'Platform-wide role registry. Read-only; add roles via SQL today.',
+    roles: ['ADMIN'] },
+  { key: 'countries', label: 'Countries', to: settingsPaths.countries, iconKey: 'mapping',
+    description: 'ISO country list + is_us_territory flag. Read-only; edit via SQL today.',
+    roles: ['ADMIN'] },
+  { key: 'reasons-for-export', label: 'Reasons for Export', to: settingsPaths.reasonsForExport, iconKey: 'customs',
+    description: 'Reason-for-export codes used on commercial invoices (Sale / Gift / Sample / …). Read-only; edit via SQL today.',
+    roles: ['ADMIN'] },
+  { key: 'currencies', label: 'Currencies', to: settingsPaths.currencies, iconKey: 'apiDocs',
+    description: 'ISO 4217 currency catalog. Read-only; per-tenant allowlist layered via tenant_settings.currency.allowlist.',
+    roles: ['ADMIN'] },
+  { key: 'carrier-error-messages', label: 'Carrier Error Messages', to: settingsPaths.carrierErrorMessages, iconKey: 'dashboard',
+    description: 'Pattern → humanized sentence rules CarrierErrorMessages applies to raw carrier payloads. Read-only; edit via SQL today.',
+    roles: ['ADMIN'] },
+  { key: 'carrier-dropdowns', label: 'Carrier Dropdowns', to: settingsPaths.carrierDropdowns, iconKey: 'carrier',
+    description: 'Per-carrier vocabularies the /orders/new wizard uses — label formats, pickup types, clearance options. Read-only.',
+    roles: ['ADMIN'] },
+  { key: 'code-maps', label: 'Code Maps', to: settingsPaths.codeMaps, iconKey: 'mapping',
+    description: 'Per-client ERP ship-via / service / country / package aliases. Maps external codes (P80, F77, L01, …) to the platform catalog.',
     roles: ['ADMIN'] },
   // ===== Hidden from the Settings menu =====
   // Routes below still resolve so direct URLs and any hard-coded links keep
@@ -175,7 +263,6 @@ export const settingsNavItems: Array<{
   // { key: 'routing-rules',        label: 'Routing Rules',      to: settingsPaths.routingRules,          iconKey: 'mapping', description: '…', roles: ['ADMIN', 'USER'] },
   // { key: 'reports',              label: 'Reports',            to: settingsPaths.reports,               iconKey: 'apiDocs', description: '…', roles: ['ADMIN', 'USER'] },
   // { key: 'webhook-subscriptions',label: 'Webhooks',           to: settingsPaths.webhookSubs,           iconKey: 'apiKey',  description: '…', roles: ['ADMIN', 'USER'] },
-  // { key: 'code-maps',            label: 'Code Maps',          to: settingsPaths.codeMaps,              iconKey: 'mapping', description: '…', roles: ['ADMIN']         },
   // { key: 'api-keys',             label: 'API Keys',           to: settingsPaths.apiKeys,               iconKey: 'apiKey',  description: '…', roles: ['ADMIN']         },
   // { key: 'api-reference',        label: 'API Reference',      to: settingsPaths.apiReference,          iconKey: 'apiDocs', description: '…', roles: ['ADMIN']         },
 ]

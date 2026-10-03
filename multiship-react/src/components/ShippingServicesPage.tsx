@@ -318,6 +318,27 @@ export default function ShippingServicesPage() {
         ))}
       </section>
 
+      {/* Audit #222 — unified empty state. True-empty catalog (zero
+          services across every origin + no origin ever synced) renders
+          one clear "nothing here yet" cue instead of three per-carrier
+          empty tiles that each said "No X services from Y yet." Screen
+          readers now get one semantic region. */}
+      {!loading && !visibleServices.length && !originCountries.length ? (
+        <section
+          role="region"
+          aria-label="Shipping services empty state"
+          className="rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center shadow-sm"
+        >
+          <p className="text-[13px] font-semibold text-slate-800">
+            No services synced yet
+          </p>
+          <p className="mt-1 text-[12px] text-slate-500">
+            Connect a carrier under <span className="font-mono">/settings/carriers</span> and sync it
+            — the service catalog populates automatically from the first successful rate call.
+          </p>
+        </section>
+      ) : null}
+
       {/* service catalog, grouped by carrier */}
       <section className="grid gap-4 lg:grid-cols-3">
         {loading && !services.length ? (

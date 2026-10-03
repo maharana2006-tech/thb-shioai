@@ -29,6 +29,24 @@ public class ManualShipmentRequest {
     /** Return label delivery type — PRINT | EMAIL (informational for now; finalised against the carrier sandbox). */
     private String returnType;
 
+    /** Returns F8 — DHL Global Return pickup toggle. Null / true = carrier
+     *  schedules pickup (prior default); false = customer drops at a DHL
+     *  ServicePoint. Only consulted when {@link #isReturn} = true + DHL
+     *  carrier. UPS / FedEx / USPS ignore the field. */
+    private Boolean returnPickupRequested;
+
+    /** Returns F10 — RMA number the operator issued for this return. */
+    private String rmaNumber;
+
+    /** Returns F11 — canonical return reason code. One of WRONG_ITEM /
+     *  DEFECTIVE / NO_LONGER_NEEDED / SIZE / OTHER. Only consulted when
+     *  {@link #isReturn} = true. Validated at the service boundary. */
+    private String returnReason;
+
+    /** Returns F12 — the outbound order this is a return of. Dropped to
+     *  null when the referenced order doesn't exist. */
+    private Integer originalOrderNo;
+
     /** carrier_account_ref id to bill — optional credential hint. */
     private Long accountId;
 
@@ -276,6 +294,40 @@ public class ManualShipmentRequest {
      */
     @JsonIgnore
     private String internalAuditActor;
+
+    /**
+     * B6 — the NDS batch id when the shipment came from a {@code .Y}
+     * batch scan on /orders/new. Null on non-batch shipments. Passed
+     * through to the writeback so {@code NdsShipmentOracleWriter} can
+     * fan its CLIPPER UPDATE across every sibling order in the batch.
+     */
+    private String ndsBatchId;
+
+    /**
+     * B6 — the per-container package rows returned by the NDS prefill
+     * ({@code NdsShipmentPrefill.Package}). Null on non-NDS shipments.
+     * Carries the real {@code containerNo} + {@code orderNos} the
+     * writer needs to key each CLIPPER row on — otherwise the writer's
+     * fan-out defaults to package-sequence and misses siblings.
+     */
+    private List<NdsPackage> ndsPackages;
+
+    /**
+     * B6 — projection of {@code NdsShipmentPrefill.Package} that only
+     * carries what the writer needs. Names match
+     * {@link com.multiship.backend.service.externalsystems.writeback.WritebackPackagePayload}
+     * so mapping is one-to-one.
+     */
+    @Data
+    public static class NdsPackage {
+        private Integer sequence;
+        private String containerNo;
+        private List<Long> containerIds;
+        private List<Integer> orderNos;
+        private Integer orderSuffix;
+        private BigDecimal weight;
+        private String weightUnit;
+    }
 
     @Data
     public static class Address {

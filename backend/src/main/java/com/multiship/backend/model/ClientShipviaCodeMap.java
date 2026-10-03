@@ -7,7 +7,7 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Index;
 import jakarta.persistence.Table;
-import jakarta.persistence.UniqueConstraint;
+import jakarta.persistence.Transient;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -16,24 +16,26 @@ import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
- * Per-client shipvia alias: maps an ERP-side ship-method code to a platform
- * {@link ShippingService}, optionally scoped by destination country or
- * region. Distinct from {@link ShipViaMapping} in that this is a direct
- * alias (no rules) — used at order intake to translate the raw code.
+ * Shipvia alias: maps an ERP-side ship-method code (e.g. "P80") to a
+ * platform {@link ShippingService}, with optional scope by client,
+ * origin warehouse, and destination country/region.
  *
- * <p>Destination scope makes the alias per-lane so a single ERP shipvia
- * code (e.g. "P80") can resolve to different services in different
- * destinations. Both {@code destCountry} and {@code destRegion} are
- * nullable: null in both = "any destination" (the fallback).
+ * <p>Pre-merge (through V125) this was a strictly per-client table and
+ * global rules lived in the parallel {@code shipvia_service_mapping}
+ * table. V126 relaxed {@code client_code} to nullable so one row can
+ * represent either a per-client alias OR a platform-wide rule, and
+ * added {@code warehouse_id} to carry the origin-scoping that used to
+ * live on the deleted SSM sidecar. Packaging allowlist (another SSM
+ * sidecar's job) now hangs off the composite-key
+ * {@code client_shipvia_code_map_package} table — the field below is a
+ * Jackson round-trip for the API only (persisted by the service layer).
  *
- * <p>Uniqueness is enforced at the service layer (find-then-save on
- * {@code (clientCode, erpCode, destCountry, destRegion)}). We deliberately
- * do NOT declare a DB unique constraint that includes the nullable
- * destination columns — Postgres treats NULLs as distinct in unique keys
- * by default, which would let two duplicate "any-destination" rows coexist.
- * The service preflight does the right thing regardless.
+ * <p>Resolver specificity ladder (most specific wins):
+ * client+warehouse+country &gt; client+warehouse+any &gt; client+any+country
+ * &gt; client+any+any &gt; global+country &gt; global+any.
  */
 @Entity
 @Table(name = "client_shipvia_code_map",
@@ -48,7 +50,8 @@ public class ClientShipviaCodeMap {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "client_code", nullable = false, length = 50)
+    /** Null = platform-wide rule (applies to any client). */
+    @Column(name = "client_code", length = 50)
     private String clientCode;
 
     /** The raw ship-method code the ERP sends (e.g. "P80"). */
@@ -59,8 +62,8 @@ public class ClientShipviaCodeMap {
     @Column(name = "service_id", nullable = false)
     private Long serviceId;
 
-    /** V98 — when true, NDS prefill treats this ERP code as an "on hold"
-     *  marker and blocks the order (replaces the hardcoded "HLD" literal). */
+    /** V98 — when true, intake treats this ERP code as an "on hold"
+     *  marker and blocks the order. */
     @Column(name = "is_hold", nullable = false)
     @Builder.Default
     private Boolean isHold = Boolean.FALSE;
@@ -72,6 +75,20 @@ public class ClientShipviaCodeMap {
     /** Destination region name (e.g. "North America"; nullable = "any region"). */
     @Column(name = "dest_region", length = 40)
     private String destRegion;
+
+    /** V126 — origin warehouse scope (nullable = any origin). Add multiple
+     *  rows if the same ERP code should route from more than one warehouse
+     *  (deliberately simpler than SSM's list-sidecar — the list was never
+     *  used in practice). */
+    @Column(name = "warehouse_id")
+    private Long warehouseId;
+
+    /** V127 — packaging allowlist persisted via the
+     *  {@code client_shipvia_code_map_package} sidecar. Round-trip only on
+     *  the API; the service layer handles the sidecar writes.
+     *  Empty = unrestricted. */
+    @Transient
+    private List<Long> allowedPresetIds;
 
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)

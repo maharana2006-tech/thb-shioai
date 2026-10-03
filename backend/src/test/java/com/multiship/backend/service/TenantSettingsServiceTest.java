@@ -225,4 +225,53 @@ class TenantSettingsServiceTest {
         svc.setEnabledChannels("THB000", EnumSet.of(Channel.D2C), "admin");
         assertEquals(EnumSet.of(Channel.D2C), svc.getEnabledChannels("THB000"));
     }
+
+    // ────────────────────────────────────────────────────────────────
+    // Currency allowlist + bulk-ship flag
+    // ────────────────────────────────────────────────────────────────
+
+    private void stub(String tenant, String key, String value) {
+        TenantSetting row = new TenantSetting();
+        row.setTenantCode(tenant);
+        row.setSettingKey(key);
+        row.setSettingValue(value);
+        when(repo.findByTenantCodeAndSettingKey(tenant, key)).thenReturn(Optional.of(row));
+    }
+
+    @Test
+    void getCurrencyAllowlistReturnsEmptyWhenUnset() {
+        when(repo.findByTenantCodeAndSettingKey(any(), any())).thenReturn(Optional.empty());
+        assertTrue(svc.getCurrencyAllowlist("THB000").isEmpty());
+    }
+
+    @Test
+    void getCurrencyAllowlistParsesCommaSeparatedUppercase() {
+        stub("THB000", TenantSettingsService.KEY_CURRENCY_ALLOWLIST, " usd, eur,gbp ");
+        assertEquals(java.util.Set.of("USD", "EUR", "GBP"), svc.getCurrencyAllowlist("THB000"));
+    }
+
+    @Test
+    void getCurrencyAllowlistDropsBadTokens() {
+        stub("THB000", TenantSettingsService.KEY_CURRENCY_ALLOWLIST, "USD, FOUR, 123, EUR");
+        assertEquals(java.util.Set.of("USD", "EUR"), svc.getCurrencyAllowlist("THB000"));
+    }
+
+    @Test
+    void isBulkShipEnabledHonoursTruthyValues() {
+        stub("A", TenantSettingsService.KEY_ORDERS_NEW_BULK_SHIP_ENABLED, "true");
+        stub("B", TenantSettingsService.KEY_ORDERS_NEW_BULK_SHIP_ENABLED, "YES");
+        stub("C", TenantSettingsService.KEY_ORDERS_NEW_BULK_SHIP_ENABLED, "1");
+        assertTrue(svc.isBulkShipEnabled("A"));
+        assertTrue(svc.isBulkShipEnabled("B"));
+        assertTrue(svc.isBulkShipEnabled("C"));
+    }
+
+    @Test
+    void isBulkShipEnabledDefaultsFalse() {
+        when(repo.findByTenantCodeAndSettingKey(any(), any())).thenReturn(Optional.empty());
+        assertFalse(svc.isBulkShipEnabled("UNSEEDED"));
+
+        stub("D", TenantSettingsService.KEY_ORDERS_NEW_BULK_SHIP_ENABLED, "false");
+        assertFalse(svc.isBulkShipEnabled("D"));
+    }
 }

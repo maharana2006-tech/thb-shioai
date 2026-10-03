@@ -91,26 +91,24 @@ class RestExternalConnectorTest {
     }
 
     @Test
-    void oauthModeRequiresOauthClientSecret() {
+    void oauthModeIsRefusedAtValidation_S4() {
+        // S4 — the stub doesn't implement OAuth token exchange, so any
+        // oauthTokenUrl config is a misconfig. Prior behaviour was a
+        // WARN-log + silently-unauthenticated requests; now it's a hard
+        // INVALID_CONFIG at validate time regardless of secret presence.
         baseConfig.setOauthTokenUrl("https://api.example.com/oauth/token");
-        StubSecrets s = new StubSecrets(); // no oauthClientSecret set
-        ExternalSystemException e = assertThrows(ExternalSystemException.class,
-                () -> connector.connect("api", baseConfig, LoginContext.platform(), s));
-        assertEquals(ExternalSystemException.Kind.SECRET_UNAVAILABLE, e.kind());
-        assertTrue(e.getMessage().contains("oauthClientSecret"));
-    }
+        StubSecrets withoutSecret = new StubSecrets();
+        ExternalSystemException e1 = assertThrows(ExternalSystemException.class,
+                () -> connector.connect("api", baseConfig, LoginContext.platform(), withoutSecret));
+        assertEquals(ExternalSystemException.Kind.INVALID_CONFIG, e1.kind());
+        assertTrue(e1.getMessage().toLowerCase().contains("oauth"),
+                "message must name the OAuth-mode refusal explicitly");
 
-    @Test
-    void oauthModeBuildsStubbedClientWhenSecretPresent() {
-        // Real OAuth token-dance is deferred to S5b; this stub returns
-        // a working RestClient without an auth header + logs a warn.
-        // Behavior verified: no exception + client cached.
-        baseConfig.setOauthTokenUrl("https://api.example.com/oauth/token");
-        StubSecrets s = new StubSecrets();
-        s.oauthClientSecret = "oauth-secret";
-        assertDoesNotThrow(() ->
-                connector.connect("api", baseConfig, LoginContext.platform(), s));
-        assertEquals(1, connector.clientsForTest().size());
+        StubSecrets withSecret = new StubSecrets();
+        withSecret.oauthClientSecret = "oauth-secret";
+        ExternalSystemException e2 = assertThrows(ExternalSystemException.class,
+                () -> connector.connect("api", baseConfig, LoginContext.platform(), withSecret));
+        assertEquals(ExternalSystemException.Kind.INVALID_CONFIG, e2.kind());
     }
 
     // ─── caching semantics ─────────────────────────────────────────

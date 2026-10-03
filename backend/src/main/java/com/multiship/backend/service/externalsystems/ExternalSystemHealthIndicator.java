@@ -33,10 +33,18 @@ public class ExternalSystemHealthIndicator implements HealthIndicator {
     @Override
     public Health health() {
         List<HealthCheckResult> snapshots = registry.healthCheckAll();
+        // L1 — surface rows whose system_type has no registered connector.
+        // Prior behaviour was WARN-log at boot only; monitoring couldn't
+        // see a connector that got removed by a redeploy.
+        List<String> orphans = registry.orphanedConnectionNames();
         if (snapshots.isEmpty()) {
-            return Health.up()
-                    .withDetail("connections", "none configured")
-                    .build();
+            Health.Builder empty = Health.up()
+                    .withDetail("connections", "none configured");
+            if (!orphans.isEmpty()) {
+                empty.withDetail("orphaned", orphans.size());
+                empty.withDetail("orphanedNames", orphans);
+            }
+            return empty.build();
         }
         int up = 0, down = 0, unknown = 0;
         Map<String, Object> per = new HashMap<>();
@@ -53,12 +61,19 @@ public class ExternalSystemHealthIndicator implements HealthIndicator {
             if (!r.details().isEmpty()) row.put("details", r.details());
             per.put(r.connectionName(), row);
         }
-        Health.Builder builder = down > 0 ? Health.down() : Health.up();
-        return builder
-                .withDetail("up", up)
-                .withDetail("down", down)
-                .withDetail("unknown", unknown)
-                .withDetail("connections", per)
-                .build();
+        // L1 — orphans count as DOWN for the overall rollup; a connection
+        // that can't dispatch is operationally broken even if its DOWN
+        // path never fires (because no connector is wired to call it).
+        boolean hasFailure = down > 0 || !orphans.isEmpty();
+        Health.Builder builder = hasFailure ? Health.down() : Health.up();
+        builder.withDetail("up", up)
+               .withDetail("down", down)
+               .withDetail("unknown", unknown)
+               .withDetail("connections", per);
+        if (!orphans.isEmpty()) {
+            builder.withDetail("orphaned", orphans.size());
+            builder.withDetail("orphanedNames", orphans);
+        }
+        return builder.build();
     }
 }

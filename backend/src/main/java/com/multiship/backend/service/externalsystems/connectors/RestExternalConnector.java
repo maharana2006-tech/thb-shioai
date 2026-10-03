@@ -66,6 +66,13 @@ public class RestExternalConnector implements ExternalSystemConnector<RestExtern
 
     @Override public Class<RestExternalConfig> configType() { return RestExternalConfig.class; }
 
+    /** M3 — static-header auth needs {@code apiKey}. OAuth mode would
+     *  need {@code oauthClientSecret} but S4 refuses OAuth at validate
+     *  time, so only the one key is live today. */
+    @Override public java.util.List<String> secretKeys() {
+        return java.util.List.of(SECRET_API_KEY);
+    }
+
     @Override
     public RestClient connect(String connectionName, RestExternalConfig cfg,
                               LoginContext ctx, ConnectorSecretAccess secrets) {
@@ -81,17 +88,29 @@ public class RestExternalConnector implements ExternalSystemConnector<RestExtern
         } catch (ExternalSystemException e) {
             return HealthCheckResult.down(connectionName, SYSTEM_TYPE, e.getMessage());
         }
-        RestClient client;
+        // Build-time validation (missing API key / OAuth secret) still
+        // flips the health check to DOWN; the cached client itself isn't
+        // used for the GET below because health has its own timeout.
         try {
-            client = clients.computeIfAbsent(connectionName, name -> buildClient(name, cfg, secrets));
+            clients.computeIfAbsent(connectionName, name -> buildClient(name, cfg, secrets));
         } catch (ExternalSystemException e) {
             return HealthCheckResult.down(connectionName, SYSTEM_TYPE, e.getMessage());
         }
         Map<String, Object> details = new HashMap<>();
         details.put("baseUrl", cfg.getBaseUrl());
         details.put("healthCheckPath", cfg.getHealthCheckPath());
+        details.put("healthCheckTimeoutSeconds", cfg.getHealthCheckTimeoutSeconds());
+        // S2 — health check uses the shorter healthCheckTimeoutSeconds so
+        // the actuator doesn't block for the full request readTimeout when
+        // an endpoint goes dark. Build a one-off client (fresh RestClient
+        // is cheap; the JVM HttpClient underneath is pooled). Falls back
+        // to the cached write-request client when the config lacks a
+        // sane value.
+        RestClient healthClient = HttpClients.newBuilder(cfg.getHealthCheckTimeoutSeconds())
+                .baseUrl(normalizeBaseUrl(cfg.getBaseUrl()))
+                .build();
         try {
-            String body = client.get()
+            String body = healthClient.get()
                     .uri(cfg.getHealthCheckPath())
                     .retrieve()
                     .body(String.class);
@@ -218,11 +237,25 @@ public class RestExternalConnector implements ExternalSystemConnector<RestExtern
             throw new ExternalSystemException(Kind.INVALID_CONFIG, connectionName,
                     "healthCheckPath required for REST_JSON connection.");
         }
+        // S4 — refuse OAuth mode at config-validation. Prior behaviour was
+        // to WARN-log and return a client with no auth header; requests
+        // then silently went unauthenticated until the carrier 401'd. Fail
+        // fast at admin save-time so the misconfig is impossible to miss.
+        if (cfg.getOauthTokenUrl() != null && !cfg.getOauthTokenUrl().isBlank()) {
+            throw new ExternalSystemException(Kind.INVALID_CONFIG, connectionName,
+                    "OAuth 2.0 mode (oauthTokenUrl set) is declared but not implemented by this "
+                            + "stub connector. Clear oauthTokenUrl to use static-header auth, "
+                            + "or wire a vendor-specific OAuth interceptor (S5b).");
+        }
     }
 
     private RestClient buildClient(String connectionName, RestExternalConfig cfg,
                                    ConnectorSecretAccess secrets) {
-        RestClient.Builder builder = HttpClients.newBuilder().baseUrl(normalizeBaseUrl(cfg.getBaseUrl()));
+        // S2 — honour the admin-editable readTimeoutSeconds for every
+        // writeback request. Prior to S2 this was pinned at the global
+        // HttpClients default (30s) and the field was dead.
+        RestClient.Builder builder = HttpClients.newBuilder(cfg.getReadTimeoutSeconds())
+                .baseUrl(normalizeBaseUrl(cfg.getBaseUrl()));
         boolean oauthMode = cfg.getOauthTokenUrl() != null && !cfg.getOauthTokenUrl().isBlank();
         if (oauthMode) {
             Optional<String> clientSecret = secrets.getSecret(SECRET_OAUTH_CLIENT_SECRET);

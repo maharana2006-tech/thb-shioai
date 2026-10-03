@@ -241,6 +241,29 @@ public class ShipmentRequestDTO {
     private String returnType;
 
     /**
+     * Returns F8 — operator-controllable DHL Global Return pickup.
+     *
+     * <p>DHL Express historically forced {@code pickup.isRequested=true}
+     * for every return label (DhlConnector.java:1223 before F8), auto-
+     * scheduling collection. Some returns are drop-off at a DHL
+     * ServicePoint — the operator wants a dropped shipment, not a pickup
+     * crew. This toggle lets them turn it off.
+     *
+     * <p>Semantics: {@code true} / null = request pickup (prior default);
+     * {@code false} = drop-off. Only consulted when {@link #isReturn} =
+     * true. UPS / FedEx / USPS return paths ignore this field.
+     */
+    private Boolean returnPickupRequested;
+
+    /**
+     * Returns F10 — RMA number the operator issued (null for outbound).
+     * Persisted on {@code label_batch.rma_number} so warehouse staff can
+     * reconcile the return when the box arrives. Carrier reference-slot
+     * wire is a deliberate follow-up PR.
+     */
+    private String rmaNumber;
+
+    /**
      * Optional dangerous goods declaration. When present + ready for
      * carrier (see {@link DangerousGoodsBlockDTO#isReadyForCarrier}),
      * connectors emit the carrier-specific hazmat wire format on top of

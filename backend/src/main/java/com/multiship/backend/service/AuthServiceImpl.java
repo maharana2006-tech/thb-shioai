@@ -74,8 +74,10 @@ public class AuthServiceImpl implements AuthService {
     @Autowired
     private ClientRepository clientRepository;
 
+    // A4.2 — templates replace the inline subject+body concatenation
+    // that used to live at the send call site.
     @Autowired
-    private com.multiship.backend.service.mail.MailSender mailSender;
+    private com.multiship.backend.service.mail.NotificationService notifications;
 
     /** Sprint 51 T2 finding #6 — brute-force lockout on login. */
     @Autowired
@@ -209,10 +211,9 @@ public class AuthServiceImpl implements AuthService {
         if (!verifyBase.isEmpty() && verifyBase.endsWith("/")) {
             verifyBase = verifyBase.substring(0, verifyBase.length() - 1);
         }
-        mailSender.send(user.getEmail(),
-                "Verify your Multiship account",
-                "Click to verify (expires in " + emailVerifyTtlHours + " hours):\n"
-                        + verifyBase + "/verify-email?token=" + verifyToken);
+        notifications.send("AUTH.VERIFY_EMAIL", user.getEmail(), java.util.Map.of(
+                "verifyLink", verifyBase + "/verify-email?token=" + verifyToken,
+                "ttlHours", emailVerifyTtlHours));
 
         String successMsg = messageSource.getMessage("success.user.registered", null, LocaleContextHolder.getLocale());
         return ResponseEntity.status(HttpStatus.CREATED).body(new MessageResponse(

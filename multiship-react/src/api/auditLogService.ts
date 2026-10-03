@@ -69,4 +69,23 @@ export const auditLogService = {
     query.set('size', String(params.size ?? 25))
     return apiClient.get<ApiResponse<AuditLogPage>>(`/audit-log?${query.toString()}`)
   },
+
+  /** Audit B6 (#357) — CSV export URL that mirrors the list filters.
+   *  Returned as a string so the caller can set it on an <a href=…>
+   *  rather than fetching to a Blob (lets the browser handle the download
+   *  dialog + skips a round-trip through the apiClient wrapper). ADMIN
+   *  only — unauthenticated requests 403 at the backend. */
+  exportUrl: (params: AuditLogListParams = {}): string => {
+    const query = new URLSearchParams()
+    if (params.actor?.trim()) query.set('actor', params.actor.trim())
+    if (params.entityType?.trim()) query.set('entityType', params.entityType.trim())
+    if (params.action?.trim()) query.set('action', params.action.trim())
+    if (params.entityKey?.trim()) query.set('entityKey', params.entityKey.trim())
+    if (params.category?.trim()) query.set('category', params.category.trim())
+    if (params.orderNo != null) query.set('orderNo', String(params.orderNo))
+    if (params.since?.trim()) query.set('since', params.since.trim())
+    if (params.until?.trim()) query.set('until', params.until.trim())
+    const qs = query.toString()
+    return `/api/v1/audit-log/export${qs ? `?${qs}` : ''}`
+  },
 }

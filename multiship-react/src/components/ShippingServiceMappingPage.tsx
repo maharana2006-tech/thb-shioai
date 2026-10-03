@@ -286,7 +286,19 @@ export default function ShippingServiceMappingPage() {
    *  the mapping can actually ship on. */
   const [accounts, setAccounts] = useState<CarrierAccountRef[]>([])
   const [loading, setLoading] = useState(true)
-  const [newRule, setNewRule] = useState({ ...blankRule })
+  // #302 F12 — explicit lazy initialiser + mount-time reset so the
+  // draft can't bleed in from a prior render if this page ever becomes
+  // a root (today it unmounts between visits because it's tabbed under
+  // /settings/shipping-catalog, which clears the local state). Defensive
+  // for a future refactor that elevates it; harmless today.
+  const [newRule, setNewRule] = useState(() => ({ ...blankRule }))
+  useEffect(() => {
+    setNewRule({ ...blankRule })
+    // Empty deps — fires once on mount. Explicit reset so a hypothetical
+    // KeepAlive wrapper that preserves this component across route
+    // navigations starts each visit with a clean draft.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   /** Platform account the operator picked to seed / extend the new-rule
    *  Ship Via carrier filter. Reset whenever the client changes. */
   const [newRulePlatformAccountId, setNewRulePlatformAccountId] = useState<number | null>(null)
@@ -1125,6 +1137,21 @@ export default function ShippingServiceMappingPage() {
 
   return (
     <div className="space-y-4 pb-16">
+      {/* Resolution pipeline — three pages, each fires at a different
+          stage. Named so operators stop opening the wrong one. */}
+      <nav aria-label="Routing resolution pipeline" className="flex items-center gap-1 text-[10.5px]">
+        <a href="/settings/code-maps" className="rounded border border-slate-200 bg-white px-2 py-0.5 font-semibold text-slate-600 hover:bg-slate-50">
+          Code Maps
+        </a>
+        <span className="mx-1 text-slate-300">→</span>
+        <span className="rounded bg-[#1f150c] px-2 py-0.5 font-semibold text-white">Shipping Service Mapping</span>
+        <span className="text-slate-400">·</span>
+        <span className="text-slate-500">route (client, shipvia, warehouse, dest) → carrier service</span>
+        <span className="mx-1 text-slate-300">→</span>
+        <a href="/settings/routing-rules" className="rounded border border-slate-200 bg-white px-2 py-0.5 font-semibold text-slate-600 hover:bg-slate-50">
+          Routing Rules
+        </a>
+      </nav>
       {pendingPackagesForRules.size > 0 ? (
         <div
           role="alert"
@@ -1370,7 +1397,14 @@ export default function ShippingServiceMappingPage() {
                     value={newRule.warehouseIds.map(String)}
                     onChange={(e) => {
                       const next = Array.from(e.target.selectedOptions).map((o) => Number(o.value))
-                      setNewRule((c) => ({ ...c, warehouseIds: next, presetIds: [] }))
+                      // Audit F19 (#300) — warehouse pick narrows the carrier
+                      // lane set (service UPS Ground may have no JPN lane).
+                      // Reset serviceId so the operator picks fresh instead
+                      // of saving a mapping whose service doesn't actually
+                      // service the chosen warehouse's origin. Matches the
+                      // client-picker + platform-account-picker cascade
+                      // semantics already in place above.
+                      setNewRule((c) => ({ ...c, warehouseIds: next, presetIds: [], serviceId: '' }))
                     }}
                     aria-label="Warehouses"
                     title={

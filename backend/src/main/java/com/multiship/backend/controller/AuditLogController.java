@@ -9,11 +9,13 @@ import com.multiship.backend.repository.AuditLogRepository;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -21,7 +23,11 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 
 /**
@@ -134,6 +140,96 @@ public class AuditLogController {
      * to createdAt (rather than reaching the persistence layer with an
      * unmapped column).
      */
+    /** Audit B6 (#357) — row cap on the CSV export so a mis-filtered dump
+     *  doesn't OOM the service. 100k rows covers the typical compliance
+     *  ask ("last quarter") with room to spare; past that, the auditor
+     *  gets the first 100k and a header line hinting at the cap. */
+    static final int EXPORT_ROW_CAP = 100_000;
+
+    private static final DateTimeFormatter FILENAME_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
+
+    @Operation(summary = "Export audit rows as CSV",
+            description = "Audit B6 (#357) — compliance-oriented range export. Same filters as "
+                    + "the list endpoint; capped at " + EXPORT_ROW_CAP + " rows. ADMIN-only "
+                    + "(list allows USER, export is a bigger blast radius). Tenant scoping on the "
+                    + "repository fragment still clamps scoped operators to their own rows.")
+    @PreAuthorize("hasRole('ADMIN')")
+    @GetMapping(value = "/export", produces = "text/csv")
+    public void export(
+            @RequestParam(required = false) String actor,
+            @RequestParam(required = false) String entityType,
+            @RequestParam(required = false) String action,
+            @RequestParam(required = false) String entityKey,
+            @RequestParam(required = false) String category,
+            @RequestParam(required = false) Integer orderNo,
+            @RequestParam(required = false) String since,
+            @RequestParam(required = false) String until,
+            HttpServletResponse response) throws IOException {
+        String safeActor = actor == null ? "" : actor.trim();
+        String safeEntity = entityType == null ? "" : entityType.trim().toUpperCase();
+        String safeAction = action == null ? "" : action.trim().toUpperCase();
+        String safeKey = entityKey == null ? "" : entityKey.trim();
+        String safeCategory = category == null ? "" : category.trim().toUpperCase();
+
+        LocalDateTime sinceTs;
+        LocalDateTime untilTs;
+        try {
+            sinceTs = parseOrDefault(since, LocalDateTime.of(1970, 1, 1, 0, 0), "since");
+            untilTs = parseOrDefault(until, LocalDateTime.of(9999, 12, 31, 23, 59), "until");
+        } catch (IllegalArgumentException ex) {
+            response.setStatus(HttpStatus.BAD_REQUEST.value());
+            response.setContentType(MediaType.TEXT_PLAIN_VALUE);
+            response.getWriter().write(ex.getMessage());
+            return;
+        }
+
+        String filename = "audit-" + FILENAME_FMT.format(sinceTs.toLocalDate())
+                + "-to-" + FILENAME_FMT.format(untilTs.toLocalDate()) + ".csv";
+        response.setContentType("text/csv; charset=utf-8");
+        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+        response.setHeader("Content-Disposition", "attachment; filename=\"" + filename + "\"");
+
+        Page<AuditLog> result = repo.search(safeActor, safeEntity, safeAction, safeKey,
+                safeCategory, orderNo, sinceTs, untilTs,
+                PageRequest.of(0, EXPORT_ROW_CAP, Sort.by(Sort.Direction.DESC, "createdAt")));
+
+        PrintWriter out = response.getWriter();
+        out.println("id,createdAt,actor,action,entityType,entityId,entityKey,clientCode,category,severity,orderNo,notes,changes");
+        for (AuditLog r : result.getContent()) {
+            out.print(r.getId()); out.print(',');
+            out.print(csv(r.getCreatedAt())); out.print(',');
+            out.print(csv(r.getActor())); out.print(',');
+            out.print(csv(r.getAction())); out.print(',');
+            out.print(csv(r.getEntityType())); out.print(',');
+            out.print(csv(r.getEntityId())); out.print(',');
+            out.print(csv(r.getEntityKey())); out.print(',');
+            out.print(csv(r.getClientCode())); out.print(',');
+            out.print(csv(r.getCategory())); out.print(',');
+            out.print(csv(r.getSeverity())); out.print(',');
+            out.print(r.getOrderNo() == null ? "" : r.getOrderNo()); out.print(',');
+            out.print(csv(r.getNotes())); out.print(',');
+            out.println(csv(r.getChanges()));
+        }
+        if (result.getTotalElements() > EXPORT_ROW_CAP) {
+            out.println();
+            out.println("# NOTE: result truncated at " + EXPORT_ROW_CAP + " rows (of "
+                    + result.getTotalElements() + "). Narrow the filter and re-export.");
+        }
+        out.flush();
+    }
+
+    /** RFC 4180 quoting — wrap in double quotes when the value contains a
+     *  delimiter / newline / embedded quote; double-up embedded quotes.
+     *  Null renders as empty. */
+    static String csv(Object value) {
+        if (value == null) return "";
+        String s = value.toString();
+        if (s.indexOf(',') < 0 && s.indexOf('"') < 0 && s.indexOf('\n') < 0 && s.indexOf('\r') < 0) {
+            return s;
+        }
+        return "\"" + s.replace("\"", "\"\"") + "\"";
+    }
+
     private static Sort parseSort(String raw) {
         if (raw == null || raw.isBlank()) return Sort.by(Sort.Direction.DESC, "createdAt");
         String[] parts = raw.split(",");

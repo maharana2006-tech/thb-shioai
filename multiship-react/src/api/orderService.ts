@@ -30,6 +30,13 @@ export interface OrderDetails {
   /** V76 — internal per-order ops note (500 char). Null / empty
    *  hides the row-icon in the orders list. */
   note?: string | null
+  /** Returns F9 — true when this is a return label. Routes the row-level
+   *  Edit / Reissue button to /orders/new/return?fixOrder=N so prefill
+   *  opens in RETURN mode. */
+  isReturn?: boolean | null
+  /** Returns F12 — outbound order this return came from. Null when
+   *  unlinked. Drives the "return of #N" chip. */
+  originalOrderNo?: number | null
 }
 
 export interface ShippingDetails {
@@ -551,6 +558,20 @@ export interface ManualShipmentPayload {
   isReturn?: boolean
   /** Return delivery type — PRINT | EMAIL. */
   returnType?: string
+  /** Returns F8 — DHL Global Return pickup toggle. true/omitted = schedule
+   *  pickup (prior default); false = customer drops at ServicePoint. UPS /
+   *  FedEx / USPS ignore the field. */
+  returnPickupRequested?: boolean
+  /** Returns F10 — operator-issued RMA number for this return. 60-char cap;
+   *  omit when blank. Persisted on label_batch.rma_number. */
+  rmaNumber?: string
+  /** Returns F11 — canonical reason code. One of WRONG_ITEM / DEFECTIVE /
+   *  NO_LONGER_NEEDED / SIZE / OTHER. Server quietly drops unknown codes
+   *  to null so a picklist mismatch doesn't block the label. */
+  returnReason?: string
+  /** Returns F12 — outbound order number this is a return of. Server
+   *  drops to null when the referenced order doesn't exist. */
+  originalOrderNo?: number
   /** Optional credential-account hint; resolved from accountNumber + carrierCode when absent. */
   accountId?: number | null
   /** Carrier (UPS/FEDEX/USPS) — needed to resolve credentials for a manually-typed account. */
@@ -607,6 +628,15 @@ export interface ManualShipmentPayload {
    *  Null / omitted → backend synthesises a single-package list from the
    *  top-level weight/length/width/height fields (existing behavior). */
   packages?: PackageDetail[]
+  /** B6 — NDS batch id when the shipment originated from a `.Y` scan.
+   *  Null on non-NDS or `.X` shipments. Threaded to `NdsShipmentOracleWriter`
+   *  so CLIPPER updates fan across every sibling order in the batch. */
+  ndsBatchId?: string | null
+  /** B6 — per-container package rows from `NdsShipmentPrefill.packages`.
+   *  Null on non-NDS shipments. Each row carries `containerNo` + `orderNos`
+   *  so the writer keys its CLIPPER update on the real NDS row identifier
+   *  instead of the FE's package sequence. */
+  ndsPackages?: NdsPackagePayload[]
   /** Sprint 35 — signature at delivery. NONE | INDIRECT | DIRECT | ADULT.
    *  Null / omitted → carrier default (usually no signature on domestic
    *  ground, indirect on air). */
@@ -661,6 +691,19 @@ export interface SplitRequiredPayload {
     trackingCount: number
     note: string
   }[]
+}
+
+/** B6 — per-container NDS package row that flows through to the writeback.
+ *  Only populated when the shipment originated from a `.X` / `.Y` NDS scan;
+ *  manual entry leaves the array off entirely. */
+export interface NdsPackagePayload {
+  sequence: number
+  containerNo: string | null
+  containerIds: number[]
+  orderNos: number[]
+  orderSuffix: number | null
+  weight: number | null
+  weightUnit: string
 }
 
 /** One box in a multi-package shipment — mirrors backend PackageDetailDTO. */
@@ -792,6 +835,8 @@ export interface OrderListParams {
   channel?: string
   /** Carrier: UPS | FEDEX | USPS | DHL. Empty = all carriers. */
   carrier?: string
+  /** Returns F3 — 'Y' = returns only, 'N' = shipments only, empty = all. */
+  isReturn?: 'Y' | 'N' | ''
 }
 
 /** Tab counts for the Labels work queue. */
@@ -912,6 +957,7 @@ export const orderService = {
     if (params.source) query.set('source', params.source)
     if (params.channel) query.set('channel', params.channel)
     if (params.carrier) query.set('carrier', params.carrier)
+    if (params.isReturn) query.set('isReturn', params.isReturn)
 
     return apiClient.get<ApiResponse<PaginatedOrderData>>(`/orders?${query.toString()}`)
   },
@@ -939,6 +985,7 @@ export const orderService = {
     if (params.source) query.set('source', params.source)
     if (params.channel) query.set('channel', params.channel)
     if (params.carrier) query.set('carrier', params.carrier)
+    if (params.isReturn) query.set('isReturn', params.isReturn)
     return apiClient.get<ApiResponse<number[]>>(`/orders/ids?${query.toString()}`)
   },
 
@@ -964,6 +1011,7 @@ export const orderService = {
     if (params.source) query.set('source', params.source)
     if (params.channel) query.set('channel', params.channel)
     if (params.carrier) query.set('carrier', params.carrier)
+    if (params.isReturn) query.set('isReturn', params.isReturn)
     return apiClient.get<ApiResponse<Array<{ batchId: number; count: number }>>>(
       `/orders/batches?${query.toString()}`,
     )

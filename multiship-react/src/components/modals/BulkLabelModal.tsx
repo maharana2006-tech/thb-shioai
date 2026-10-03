@@ -144,8 +144,10 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
           notify.error('Bulk-label job failed. See error message.')
         }
       }
-    } catch (e) {
-      console.warn('Bulk-label refresh error', e)
+    } catch {
+      // Transient refresh error — the next poll tick (or operator-initiated
+      // refresh) catches up. notify is already wired on the per-status
+      // branches above so a hard failure never slips past silently.
     }
   }, [])
 
@@ -196,8 +198,11 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
             return
           }
         }
-      } catch (e) {
-        console.warn('Poll error', e)
+      } catch {
+        // Poll error — bump the backoff and let the next tick retry.
+        // No console: the exponential-backoff IS the signal; a visible
+        // warning per tick while the backend recovers would spam the
+        // console without giving the operator anything actionable.
         delayMs = Math.min(delayMs * 2, MAX_DELAY)
       }
       pollTimer.current = window.setTimeout(tick, delayMs)

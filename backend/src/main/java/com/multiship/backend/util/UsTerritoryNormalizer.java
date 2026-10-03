@@ -36,12 +36,26 @@ import java.util.Set;
  */
 public final class UsTerritoryNormalizer {
 
-    /** ISO 3166-1 alpha-2 codes for the six US territories. Both codes
-     *  double as valid ISO state codes for {@code country=US} — that
-     *  ambiguity is the root of the connector-side confusion this
-     *  helper resolves. */
-    public static final Set<String> US_TERRITORY_CODES = Set.of(
+    /** Baked-in bootstrap default — used until
+     *  {@code CountryPlatformService} loads V111's {@code country} table
+     *  on {@code ApplicationReadyEvent} and swaps the live set via
+     *  {@link #setUsTerritoryCodes}. Kept as a fallback so first boot
+     *  after the migration and any DB outage still return correct codes. */
+    private static final Set<String> BOOTSTRAP_CODES = Set.of(
             "PR", "VI", "GU", "AS", "MP", "UM");
+
+    /** ISO 3166-1 alpha-2 codes for US territories, swappable at startup.
+     *  Volatile so callers never see a half-set swap. */
+    public static volatile Set<String> US_TERRITORY_CODES = BOOTSTRAP_CODES;
+
+    /** V111 hook — {@code CountryPlatformService} calls this once at
+     *  {@code ApplicationReadyEvent} with the DB-driven set. Null / empty
+     *  input leaves the bootstrap default in place rather than nuking it
+     *  (a DB that has the table but no rows is treated as "not seeded"). */
+    public static void setUsTerritoryCodes(Set<String> codes) {
+        if (codes == null || codes.isEmpty()) return;
+        US_TERRITORY_CODES = Set.copyOf(codes);
+    }
 
     /** UPS service codes that deliver to Puerto Rico from a US-mainland
      *  origin. Includes domestic Air family (UPS bills PR at domestic

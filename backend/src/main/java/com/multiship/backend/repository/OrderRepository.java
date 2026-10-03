@@ -142,7 +142,14 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             -- note — V76 internal per-order ops note. Rendered as an
             -- icon-popover on the /orders list row. Empty/null hides
             -- the icon. Both queries feed mapToOrderResponseDTO.
-            b.note
+            b.note,
+            -- Returns F9 — surface the legacy 'Y'/'N' is_return flag so
+            -- OrdersWorkspace can route the row-level Edit button to
+            -- /orders/new/return?fixOrder=N (prefill in return mode).
+            b.is_return,
+            -- Returns F12 — outbound order this return came from; drives
+            -- the "return of #N" chip + reprint-of-original-CI link.
+            b.original_order_no
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
         LEFT JOIN ship_vias s ON b.shipvia_cd = s.shipvia_cd
@@ -219,6 +226,23 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
           AND UPPER(COALESCE(tenant_id, cust_no)) = UPPER(:tenantId)
     """, nativeQuery = true)
     List<Object[]> getAverageWeightForTenant(@Param("tenantId") String tenantId);
+
+    /** Returns F11 payoff — weekly rollup of return_reason counts since
+     *  :sinceDate. Null reason bucket surfaces as 'UNKNOWN'. Returns one
+     *  row per (week_start, reason). Sorted newest week first, then
+     *  reason alpha for a stable UI render. */
+    @Query(value = """
+        SELECT
+            date_trunc('week', created_date)::date AS week_start,
+            COALESCE(return_reason, 'UNKNOWN')     AS reason,
+            COUNT(*)                               AS cnt
+        FROM label_batch
+        WHERE UPPER(COALESCE(is_return, 'N')) = 'Y'
+          AND created_date >= :sinceDate
+        GROUP BY week_start, reason
+        ORDER BY week_start DESC, reason ASC
+    """, nativeQuery = true)
+    List<Object[]> getReturnsReasonRollup(@Param("sinceDate") java.time.LocalDate sinceDate);
 
     /**
      * Pending (unlabelled) order count for a client — powers the
@@ -350,6 +374,7 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
                   WHERE UPPER(r.account_number) = UPPER(t.account_number) LIMIT 1),
                 (SELECT s2.carrier FROM shipping_service s2
                   WHERE UPPER(s2.service_code) = UPPER(b.shipvia_cd) LIMIT 1))) = :carrier)
+          AND (:isReturn = '' OR UPPER(COALESCE(b.is_return, 'N')) = :isReturn)
           AND (:resolution = ''
                OR (:resolution = 'READY' AND """ + RESOLUTION_READY_SQL + """
                )
@@ -404,7 +429,14 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             -- note — V76 internal per-order ops note. Rendered as an
             -- icon-popover on the /orders list row. Empty/null hides
             -- the icon. Both queries feed mapToOrderResponseDTO.
-            b.note
+            b.note,
+            -- Returns F9 — surface the legacy 'Y'/'N' is_return flag so
+            -- OrdersWorkspace can route the row-level Edit button to
+            -- /orders/new/return?fixOrder=N (prefill in return mode).
+            b.is_return,
+            -- Returns F12 — outbound order this return came from; drives
+            -- the "return of #N" chip + reprint-of-original-CI link.
+            b.original_order_no
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
         LEFT JOIN ship_vias s ON b.shipvia_cd = s.shipvia_cd
@@ -443,6 +475,7 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("source") String source,
             @Param("channel") String channel,
             @Param("carrier") String carrier,
+            @Param("isReturn") String isReturn,
             @Param("offset") int offset,
             @Param("limit") int limit,
             @Param("sortBy") String sortBy,
@@ -468,7 +501,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("createdTo") String createdTo,
             @Param("source") String source,
             @Param("channel") String channel,
-            @Param("carrier") String carrier
+            @Param("carrier") String carrier,
+            @Param("isReturn") String isReturn
     );
 
     /**
@@ -499,7 +533,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("createdTo") String createdTo,
             @Param("source") String source,
             @Param("channel") String channel,
-            @Param("carrier") String carrier
+            @Param("carrier") String carrier,
+            @Param("isReturn") String isReturn
     );
 
     /**
@@ -532,7 +567,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("createdTo") String createdTo,
             @Param("source") String source,
             @Param("channel") String channel,
-            @Param("carrier") String carrier
+            @Param("carrier") String carrier,
+            @Param("isReturn") String isReturn
     );
 
     /** Tab counts for the Labels work queue, computed in one pass. */

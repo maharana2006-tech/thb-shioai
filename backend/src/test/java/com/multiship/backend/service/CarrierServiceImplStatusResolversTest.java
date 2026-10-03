@@ -63,6 +63,26 @@ class CarrierServiceImplStatusResolversTest {
 
     @BeforeEach
     void setUp() throws Exception {
+        // Install a stub CarrierAliasService in CarrierAliasHolder so
+        // canonicalCarrierFor("F77") etc. resolves. In production the
+        // holder is set at @PostConstruct from DB; in these unit tests
+        // nothing initialises it, so without this the legacy-code tests
+        // (F77 / P80 / L01) throw "Unsupported carrier". Order-dependent
+        // flake pre-fix — whichever earlier test ran a real
+        // CarrierAliasService.reload masked the issue.
+        var aliasStub = mock(com.multiship.backend.service.carrier.CarrierAliasService.class);
+        when(aliasStub.canonicalize("F77")).thenReturn("FEDEX");
+        when(aliasStub.canonicalize("P80")).thenReturn("UPS");
+        when(aliasStub.canonicalize("L01")).thenReturn("USPS");
+        when(aliasStub.canonicalize("UPS")).thenReturn("UPS");
+        when(aliasStub.canonicalize("FEDEX")).thenReturn("FEDEX");
+        when(aliasStub.canonicalize("USPS")).thenReturn("USPS");
+        java.lang.reflect.Method setMethod =
+                com.multiship.backend.service.carrier.CarrierAliasHolder.class
+                        .getDeclaredMethod("set", com.multiship.backend.service.carrier.CarrierAliasService.class);
+        setMethod.setAccessible(true);
+        setMethod.invoke(null, aliasStub);
+
         upsConnector = mock(CarrierConnector.class);
         when(upsConnector.getCarrierCode()).thenReturn("UPS");
         when(upsConnector.getCarrierName()).thenReturn("UPS");
@@ -85,6 +105,12 @@ class CarrierServiceImplStatusResolversTest {
         ReflectionTestUtils.setField(impl, "userRepository", userRepository);
         ReflectionTestUtils.setField(impl, "shipViaRepository", shipViaRepository);
         ReflectionTestUtils.setField(impl, "carrierProperties", carrierProperties);
+        // V112 — getCarrierConnector calls carrierPlatformService.isEnabled;
+        // mock + stub to return true so every carrier dispatches by default.
+        var platformService = mock(
+                com.multiship.backend.service.carriers.platform.CarrierPlatformService.class);
+        when(platformService.isEnabled(anyString())).thenReturn(true);
+        ReflectionTestUtils.setField(impl, "carrierPlatformService", platformService);
     }
 
     /** All-null-args allocation — the fields we care about get set via
@@ -250,9 +276,45 @@ class CarrierServiceImplStatusResolversTest {
     @Test
     void resolveShipVia_missing_throwsCarrierConnectionExceptionWithCode() {
         when(shipViaRepository.findByShipviaCdIgnoreCase(anyString())).thenReturn(Optional.empty());
+        // G-7.1 — empty hints table ends message with a period; no "Did you mean".
         CarrierConnectionException ex = assertThrows(CarrierConnectionException.class,
                 () -> ReflectionTestUtils.invokeMethod(impl, "resolveShipVia", "ZZZ"));
-        assertEquals("ShipVia row not found for carrier ZZZ", ex.getMessage());
+        assertEquals("ShipVia row not found for carrier ZZZ.", ex.getMessage());
+    }
+
+    @Test
+    void resolveShipVia_missing_appendsPrefixMatchSuggestions() {
+        // G-7.1 — operator typed "UPS01"; repo doesn't have it, but a prefix
+        // scan on "UP" finds UPS1DA + UPSGND. Message carries both.
+        when(shipViaRepository.findByShipviaCdIgnoreCase(anyString())).thenReturn(Optional.empty());
+        ShipVia a = new ShipVia(); a.setShipviaCd("UPS1DA");
+        ShipVia b = new ShipVia(); b.setShipviaCd("UPSGND");
+        when(shipViaRepository.findByCodePrefixIgnoreCase(org.mockito.ArgumentMatchers.eq("UP"),
+                org.mockito.ArgumentMatchers.any(org.springframework.data.domain.Pageable.class)))
+                .thenReturn(List.of(a, b));
+
+        CarrierConnectionException ex = assertThrows(CarrierConnectionException.class,
+                () -> ReflectionTestUtils.invokeMethod(impl, "resolveShipVia", "UPS01"));
+        assertEquals("ShipVia row not found for carrier UPS01. Did you mean: UPS1DA, UPSGND?",
+                ex.getMessage());
+    }
+
+    @Test
+    void resolveShipVia_missing_fallsBackToSubstringMatch() {
+        // G-7.1 — prefix pulls nothing; substring on "SGN" catches UPSGND.
+        when(shipViaRepository.findByShipviaCdIgnoreCase(anyString())).thenReturn(Optional.empty());
+        ShipVia hit = new ShipVia(); hit.setShipviaCd("UPSGND");
+        when(shipViaRepository.findByCodePrefixIgnoreCase(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any(org.springframework.data.domain.Pageable.class)))
+                .thenReturn(List.of());
+        when(shipViaRepository.findByCodeSubstringIgnoreCase(org.mockito.ArgumentMatchers.eq("SGN"),
+                org.mockito.ArgumentMatchers.any(org.springframework.data.domain.Pageable.class)))
+                .thenReturn(List.of(hit));
+
+        CarrierConnectionException ex = assertThrows(CarrierConnectionException.class,
+                () -> ReflectionTestUtils.invokeMethod(impl, "resolveShipVia", "SGN"));
+        assertEquals("ShipVia row not found for carrier SGN. Did you mean: UPSGND?",
+                ex.getMessage());
     }
 
     // ==================================================================

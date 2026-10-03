@@ -81,6 +81,7 @@ const CONN_SUMMARY: ConnectionSummary = {
   updatedBy: 'admin',
   environment: 'PROD',
   useDev: false,
+  isDefaultWritebackTarget: false,
 }
 
 const CONN_DETAIL: ConnectionDetail = {
@@ -107,6 +108,7 @@ const CONN_DETAIL: ConnectionDetail = {
   writebackChannelB2b: true,
   environment: 'PROD',
   useDev: false,
+  isDefaultWritebackTarget: false,
 }
 
 const CONNECTORS: ConnectorSummary[] = [

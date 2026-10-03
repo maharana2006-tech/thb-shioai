@@ -81,6 +81,10 @@ public class OrderController {
     @Autowired
     private CarrierProperties carrierProperties;
 
+    // C1 — resolves tenant_settings.shipper.* on top of the platform default.
+    @Autowired
+    private com.multiship.backend.service.carrier.ShipperDefaultsService shipperDefaultsService;
+
     @Autowired
     private com.multiship.backend.repository.OrderTrackingRepository orderTrackingRepository;
 
@@ -274,6 +278,8 @@ public class OrderController {
             @Parameter(description = "Order source: MANUAL | BULK | API | WMS | ERP") @RequestParam(required = false) String source,
             @Parameter(description = "Shipping channel: D2C | B2B") @RequestParam(required = false) String channel,
             @Parameter(description = "Carrier: UPS | FEDEX | USPS | DHL") @RequestParam(required = false) String carrier,
+            @Parameter(description = "Returns F3 — Y = returns only, N = shipments only, blank = all")
+            @RequestParam(required = false) String isReturn,
             @Parameter(description = "Attach the cascade's account pick (accountResolution) to each row") @RequestParam(defaultValue = "false") boolean includeResolution) {
 
         if (!isValidSortBy(sortBy)) {
@@ -307,6 +313,7 @@ public class OrderController {
                 .source(source)
                 .channel(channel)
                 .carrier(carrier)
+                .isReturn(isReturn)
                 .build();
 
         ApiResponse<PageResponseDTO<OrderResponseDTO>> response =
@@ -339,7 +346,8 @@ public class OrderController {
             @RequestParam(required = false) String createdTo,
             @RequestParam(required = false) String source,
             @RequestParam(required = false) String channel,
-            @RequestParam(required = false) String carrier) {
+            @RequestParam(required = false) String carrier,
+            @RequestParam(required = false) String isReturn) {
 
         OrderListFilters filters = OrderListFilters.builder()
                 .status(status)
@@ -356,6 +364,7 @@ public class OrderController {
                 .source(source)
                 .channel(channel)
                 .carrier(carrier)
+                .isReturn(isReturn)
                 .build();
 
         ApiResponse<java.util.List<Integer>> response = orderService.listOrderNos(filters);
@@ -385,7 +394,8 @@ public class OrderController {
             @RequestParam(required = false) String createdTo,
             @RequestParam(required = false) String source,
             @RequestParam(required = false) String channel,
-            @RequestParam(required = false) String carrier) {
+            @RequestParam(required = false) String carrier,
+            @RequestParam(required = false) String isReturn) {
 
         // NOTE: no batch param here on purpose — this endpoint POPULATES
         // the batch dropdown, so filtering by batch would collapse it to
@@ -404,6 +414,7 @@ public class OrderController {
                 .source(source)
                 .channel(channel)
                 .carrier(carrier)
+                .isReturn(isReturn)
                 .build();
 
         ApiResponse<java.util.List<java.util.Map<String, Object>>> response = orderService.listBatches(filters);
@@ -611,7 +622,9 @@ public class OrderController {
             shipper = addressMap(client.getShipFrom(), client.getName());
             returnTo = addressMap(client.effectiveReturnAddress(), client.getName());
         } else {
-            CarrierProperties.ShipperDefaults d = carrierProperties.getShipper();
+            // C1 — tenant-scoped shipper defaults keyed on the order's tenant.
+            String orderTenant = order.getTenantId() != null ? order.getTenantId() : order.getCustNo();
+            CarrierProperties.ShipperDefaults d = shipperDefaultsService.resolveFor(orderTenant);
             shipper = new LinkedHashMap<>();
             shipper.put("name", d.getName());
             shipper.put("phone", d.getPhone());

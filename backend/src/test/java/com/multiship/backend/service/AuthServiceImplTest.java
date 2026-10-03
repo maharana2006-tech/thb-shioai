@@ -6,7 +6,7 @@ import com.multiship.backend.dto.SignupRequest;
 import com.multiship.backend.model.User;
 import com.multiship.backend.repository.ClientRepository;
 import com.multiship.backend.repository.UserRepository;
-import com.multiship.backend.service.mail.MailSender;
+import com.multiship.backend.service.mail.NotificationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -45,7 +45,7 @@ class AuthServiceImplTest {
     private SignupRateLimiter rateLimiter;
     private UserInviteService inviteService;
     private ClientRepository clientRepository;
-    private MailSender mailSender;
+    private NotificationService notifications;
     private AuthServiceImpl service;
 
     @BeforeEach
@@ -57,7 +57,7 @@ class AuthServiceImplTest {
         rateLimiter = mock(SignupRateLimiter.class);
         inviteService = mock(UserInviteService.class);
         clientRepository = mock(ClientRepository.class);
-        mailSender = mock(MailSender.class);
+        notifications = mock(NotificationService.class);
         service = new AuthServiceImpl();
 
         // The service uses @Autowired field injection — set via reflection
@@ -69,7 +69,7 @@ class AuthServiceImplTest {
         injectField("rateLimiter", rateLimiter);
         injectField("inviteService", inviteService);
         injectField("clientRepository", clientRepository);
-        injectField("mailSender", mailSender);
+        injectField("notifications", notifications);
         // Sprint 50 PR D — flag on for the role-smuggling tests. Rate-limit
         // + gate-off tests set this false / flip explicitly.
         injectField("publicSignupEnabled", true);

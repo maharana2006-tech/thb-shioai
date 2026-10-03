@@ -99,10 +99,12 @@ public class NdsShipmentLookupRepository {
             String currency) {}
 
     public Optional<OrderHeader> findOrderHeader(String clientCode, String orderNo, String orderSuffix) {
-        // Ship-to columns use the real OEHEAD names confirmed by ops
-        // (SHIP_NAME / SHIP_ADDR1..3 / SHIPTO_*). Still not selected —
-        // not present on real OEHEAD or not yet confirmed: SHIP_TO_EMAIL,
-        // SHIPPED_FLAG, HOLD_FLAG, CUST_PO, DEPARTMENT, INCOTERMS, CURRENCY_CD.
+        // B4 — SHIPPED_FLAG + HOLD_FLAG now selected so the block-gate at
+        // NdsShipmentLookupService:332-337 actually fires. Same query
+        // covers CUST_PO / DEPARTMENT / INCOTERMS / CURRENCY_CD which the
+        // audit flagged as latent gaps — all four are needed downstream
+        // by CustomsService/label rendering. SHIP_TO_EMAIL stays TBD (a
+        // separate audit item, may live on a different NDS table).
         String sql = """
                 SELECT ORDER_NO,
                        ORDER_SUFFIX,
@@ -116,7 +118,13 @@ public class NdsShipmentLookupRepository {
                        SHIPTO_ZIP,
                        SHIPTO_COUNTRY_CD,
                        SHIPTO_RECIP_PHONE,
-                       SHIPVIA_CD
+                       SHIPVIA_CD,
+                       SHIPPED_FLAG,
+                       HOLD_FLAG,
+                       CUST_PO,
+                       DEPARTMENT,
+                       INCOTERMS,
+                       CURRENCY_CD
                   FROM OEHEAD
                  WHERE ORDER_NO     = :orderNo
                    AND ORDER_SUFFIX = :orderSuffix
@@ -139,14 +147,14 @@ public class NdsShipmentLookupRepository {
                             rs.getString("SHIPTO_ZIP"),
                             rs.getString("SHIPTO_COUNTRY_CD"),
                             rs.getString("SHIPTO_RECIP_PHONE"),
-                            null,   // SHIP_TO_EMAIL — TBD
+                            null,   // SHIP_TO_EMAIL — TBD (separate audit item)
                             rs.getString("SHIPVIA_CD"),
-                            null,   // SHIPPED_FLAG — TBD
-                            null,   // HOLD_FLAG — TBD
-                            null,   // CUST_PO — TBD
-                            null,   // DEPARTMENT — TBD
-                            null,   // INCOTERMS — TBD
-                            null))); // CURRENCY_CD — TBD
+                            rs.getString("SHIPPED_FLAG"),
+                            rs.getString("HOLD_FLAG"),
+                            rs.getString("CUST_PO"),
+                            rs.getString("DEPARTMENT"),
+                            rs.getString("INCOTERMS"),
+                            rs.getString("CURRENCY_CD"))));
         } catch (EmptyResultDataAccessException empty) {
             return Optional.empty();
         }
@@ -245,6 +253,13 @@ public class NdsShipmentLookupRepository {
     public List<InternationalItem> findInternationalItems(String clientCode,
                                                           String orderNo,
                                                           String orderSuffix) {
+        // B2 — was OE_INTL_ITEMS (invented, only existed in the test
+        // fixture). ShipX reads TB_CLIPPER_ITEM_DETL on the CI item path
+        // (08a-quickship.md:126-152). Column names below match the shape
+        // ShipX/DAL* use; if a prod install has different column names,
+        // TB_CLIPPER_ITEM_DETL's own DDL should confirm and a per-connection
+        // query template (audit F10) will let ops override without a code
+        // change.
         String sql = """
                 SELECT DESCRIPTION,
                        QUANTITY,
@@ -253,7 +268,7 @@ public class NdsShipmentLookupRepository {
                        HS_CODE,
                        COUNTRY_OF_ORIGIN,
                        UNIT_WEIGHT_LB
-                  FROM OE_INTL_ITEMS
+                  FROM TB_CLIPPER_ITEM_DETL
                  WHERE ORDER_NO     = :orderNo
                    AND ORDER_SUFFIX = :orderSuffix
                  ORDER BY LINE_NO
