@@ -705,8 +705,11 @@ describe('Bulk Mailer — layout', () => {
     // Was `userEvent.type(..., 'acme')` — v14 per-char delays stack with the
     // 300ms debounce and under a warm suite the test blew past the waitFor
     // ceiling. fireEvent.change fires one synchronous input event so the
-    // debounce timer starts immediately on 'acme'.
-    const searchInput = screen.getByPlaceholderText(/Search file name/i)
+    // debounce timer starts immediately on 'acme'. findByPlaceholderText
+    // (not getByPlaceholderText): the input only renders after the first
+    // listBatches response is applied, which is a separate microtask from
+    // the mock being called.
+    const searchInput = await screen.findByPlaceholderText(/Search file name/i)
     fireEvent.change(searchInput, { target: { value: 'acme' } })
     await waitFor(() => expect(listBatches).toHaveBeenCalledWith(expect.objectContaining({ q: 'acme', page: 0 })))
     // The summary depends on the view only: a search does not re-read it.
