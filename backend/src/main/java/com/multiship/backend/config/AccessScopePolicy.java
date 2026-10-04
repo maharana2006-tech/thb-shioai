@@ -1,5 +1,7 @@
 package com.multiship.backend.config;
 
+import jakarta.annotation.PostConstruct;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
@@ -31,18 +33,32 @@ import java.util.Optional;
  *       ({@code clientCode = "*"}), which behaves as an operator.</li>
  * </ul>
  *
- * <p>The flag defaults to {@code false} so nothing changes on deploy — ops
- * is expected to backfill {@code client_code} on every legacy USER via the
- * {@code /settings/users} admin page, then flip the flag.
+ * <p>The flag defaults to {@code true} post-PR-F — V130 adds a DB CHECK
+ * that every non-ADMIN user has a {@code client_code}, so the legacy
+ * branch is dead code at the schema level. The flag remains as a soft
+ * kill-switch; set {@code ACCESS_SCOPE_USER_BY_CLIENT=false} to re-enable
+ * the pre-F "USER = operator" behaviour. A WARN log fires on construction
+ * when the flag is explicitly false so an unexpected rollback shows up in
+ * startup output.
  */
+@Slf4j
 @Component("accessScope")
 public class AccessScopePolicy {
 
     private final boolean scopeUserByClient;
 
     public AccessScopePolicy(
-            @Value("${access.scope-user-by-client:false}") boolean scopeUserByClient) {
+            @Value("${access.scope-user-by-client:true}") boolean scopeUserByClient) {
         this.scopeUserByClient = scopeUserByClient;
+    }
+
+    @PostConstruct
+    void warnIfLegacyModeOn() {
+        if (!scopeUserByClient) {
+            log.warn("access.scope-user-by-client=false — USER rows will see every tenant"
+                    + " (legacy pre-PR-F behaviour). V130 should have made this impossible;"
+                    + " flip back to true unless an incident response specifically requires it.");
+        }
     }
 
     /** True when the operational flag is on (test/observability convenience). */
