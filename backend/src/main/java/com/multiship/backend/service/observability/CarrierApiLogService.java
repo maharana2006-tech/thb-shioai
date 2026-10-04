@@ -14,11 +14,14 @@ import java.time.ZoneOffset;
 /**
  * V114 — narrow writer for the carrier_api_log table.
  *
- * <p>Infrastructure-only in this commit. Connector wiring (StampsConnector,
- * UpsConnector, FedExConnector, DhlConnector, UspsDirectConnector) swaps
- * in follow-up commits as each is touched. Call {@link #record} right
- * after each carrier round-trip resolves (success or failure) — bodies
- * clamped to 60 kB to keep rows bounded.
+ * <p>Wired globally via
+ * {@link com.multiship.backend.service.observability.CarrierApiLoggingConfig}
+ * (installs {@link CarrierApiLoggingInterceptor} on
+ * {@code HttpClients.setGlobalInterceptor}). Every carrier that uses the
+ * shared HTTP factory — FedEx, UPS, USPS, DHL, Stamps, USPS_Direct, plus
+ * any future connector — logs each HTTP round-trip automatically.
+ * Direct {@link #record} calls remain available for non-HTTP writes
+ * (SOAP wrappers, synthetic traces) — bodies clamped to 60 kB.
  */
 @Slf4j
 @Service

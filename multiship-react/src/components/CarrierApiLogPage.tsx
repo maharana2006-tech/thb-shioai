@@ -100,7 +100,7 @@ export default function CarrierApiLogPageView() {
           <div className="px-4 py-6 text-center text-[13px] text-slate-500">Loading…</div>
         ) : items.length === 0 ? (
           <div className="px-4 py-6 text-center text-[13px] text-slate-500">
-            No API-log rows match those filters. (Connectors are not yet wired to persist — infrastructure only.)
+            No API-log rows match those filters.
           </div>
         ) : (
           <table className="w-full text-[13px]">
