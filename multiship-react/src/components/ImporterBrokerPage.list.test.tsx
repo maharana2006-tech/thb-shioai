@@ -238,9 +238,13 @@ describe('ImporterBrokerPage — filter popover', () => {
     listProfilesMock.mockResolvedValue(pageWith([]))
     const Page = await loadPage()
     renderPage(Page)
+    // waitFor on mock-called isn't enough — the Filters button only
+    // renders after the response is applied. Use findByRole so the
+    // click target definitely exists before act.
     await waitFor(() => expect(listProfilesMock).toHaveBeenCalledTimes(1))
+    const filtersBtn = await screen.findByRole('button', { name: /^Filters$/i })
 
-    await act(async () => { await userEvent.click(screen.getByRole('button', { name: /^Filters$/i })) })
+    await act(async () => { await userEvent.click(filtersBtn) })
     await userEvent.selectOptions(screen.getByLabelText(/Filter by client/i), 'ACME')
 
     await waitFor(() => {
@@ -273,8 +277,9 @@ describe('ImporterBrokerPage — filter counter + Clear', () => {
     const Page = await loadPage()
     renderPage(Page)
     await waitFor(() => expect(listProfilesMock).toHaveBeenCalled())
+    const filtersBtn = await screen.findByRole('button', { name: /^Filters$/i })
 
-    await act(async () => { await userEvent.click(screen.getByRole('button', { name: /^Filters$/i })) })
+    await act(async () => { await userEvent.click(filtersBtn) })
     await userEvent.selectOptions(screen.getByLabelText(/Filter by client/i), 'ACME')
     await userEvent.selectOptions(screen.getByLabelText(/Filter by carrier/i), 'UPS')
 
@@ -287,8 +292,9 @@ describe('ImporterBrokerPage — filter counter + Clear', () => {
     const Page = await loadPage()
     renderPage(Page)
     await waitFor(() => expect(listProfilesMock).toHaveBeenCalled())
+    const filtersBtn = await screen.findByRole('button', { name: /^Filters$/i })
 
-    await act(async () => { await userEvent.click(screen.getByRole('button', { name: /^Filters$/i })) })
+    await act(async () => { await userEvent.click(filtersBtn) })
     await userEvent.selectOptions(screen.getByLabelText(/Filter by client/i), 'ACME')
 
     await act(async () => {

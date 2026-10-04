@@ -13,6 +13,7 @@
  */
 import '@testing-library/jest-dom/vitest'
 import { configure } from '@testing-library/react'
+import { afterEach } from 'vitest'
 
 // Default waitFor / findBy* timeout is 1000ms, which is tight once the
 // suite warms up — a single state update + mock-call waitFor racing a
@@ -20,6 +21,26 @@ import { configure } from '@testing-library/react'
 // and still fails loud if an assertion is truly stuck. Testing Library's
 // asyncWrapper also uses this for findBy* queries so the lift is global.
 configure({ asyncUtilTimeout: 5000 })
+
+// Pollution guard: clear localStorage + sessionStorage + reset window.history
+// after every test regardless of file. Several files write to these and don't
+// uniformly reset — e.g. SystemChannelSection.test.tsx has beforeEach-clear
+// but no afterEach, leaving its last-run tenant in localStorage for whoever
+// runs next. Centralising the teardown here means per-file beforeEach-clears
+// still work but no file can leak either way.
+if (typeof window !== 'undefined') {
+  afterEach(() => {
+    try { window.localStorage.clear() } catch { /* private mode */ }
+    try { window.sessionStorage.clear() } catch { /* private mode */ }
+    // Reset the URL to '/' so BrowserRouter-based renderWithProviders
+    // doesn't pick up a prior test's pushState. Only one file currently
+    // uses pushState (NewShipmentPage.defaults) and it does reset in a
+    // finally, but belt-and-braces is cheap.
+    if (window.location.pathname !== '/') {
+      window.history.pushState({}, '', '/')
+    }
+  })
+}
 
 if (typeof window !== 'undefined') {
   // ResizeObserver — react-virtual observes the scroll container.
