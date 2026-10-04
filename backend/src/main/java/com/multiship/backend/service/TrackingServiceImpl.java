@@ -110,6 +110,17 @@ public class TrackingServiceImpl implements TrackingService {
             return failure(HttpStatus.UNPROCESSABLE_CONTENT,
                     "Order " + orderNo + " has no carrier code; can't resolve credentials.");
         }
+        // Tag every carrier HTTP round-trip this live-tracking call triggers
+        // (trackShipment stub + token refresh + authenticated trackShipment)
+        // so carrier_api_log rows link back to this order + tracking.
+        try (var ignored = com.multiship.backend.service.observability
+                .CarrierCallContext.forOrder(Long.valueOf(orderNo), trackingNumber)) {
+            return getLiveTrackingInner(orderNo, tracking, trackingNumber, canonicalCarrier);
+        }
+    }
+
+    private ApiResponse<TrackingResponseDTO> getLiveTrackingInner(Integer orderNo,
+            OrderTracking tracking, String trackingNumber, String canonicalCarrier) {
 
         // Cache probe. A LIVE result with delivered=true stays for 24h;
         // anything else re-checks after CACHE_TTL_ACTIVE.

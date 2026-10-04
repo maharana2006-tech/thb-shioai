@@ -143,6 +143,17 @@ public class UspsMpsPieceDispatcher {
                             + "The wiring-side branch that routes single-label rows to CarrierService.generateLabel "
                             + "must run before this dispatcher.");
         }
+        // Tag every HTTP round-trip this queue-thread dispatch triggers so
+        // the carrier_api_log rows link to the parent order. Queue workers
+        // run on their own threads outside the generateLabel wrap, so this
+        // path has to tag itself.
+        try (var ignored = com.multiship.backend.service.observability
+                .CarrierCallContext.forOrder(parentOrderNo)) {
+            return dispatchPieceInner(item, parentOrderNo);
+        }
+    }
+
+    private String dispatchPieceInner(UspsLabelQueueItem item, Long parentOrderNo) throws Exception {
         Integer seq = item.getSequenceNumber();
         if (seq == null || seq < 1) {
             throw new IllegalArgumentException(
