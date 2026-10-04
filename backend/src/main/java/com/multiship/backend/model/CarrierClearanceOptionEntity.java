@@ -23,7 +23,7 @@ public class CarrierClearanceOptionEntity {
     @Id @Column(length = 64, nullable = false) private String code;
 
     @Column(nullable = false, length = 120) private String label;
-    @Column(name = "sort_order", nullable = false) private Integer sortOrder = 0;
+    @Column(name = "sort_order", nullable = false) @Builder.Default private Integer sortOrder = 0;
 
     @Data @NoArgsConstructor @AllArgsConstructor
     public static class PK implements Serializable {

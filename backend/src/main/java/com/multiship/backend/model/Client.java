@@ -56,6 +56,7 @@ public class Client {
      *  override they can SQL-flip without a migration. */
     @Column(name = "is_master_account", nullable = false,
             columnDefinition = "boolean default false")
+    @Builder.Default
     private Boolean isMasterAccount = false;
 
     @Column(nullable = false, length = 255)

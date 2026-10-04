@@ -36,6 +36,7 @@ public class CarrierErrorMessageEntity {
     private String humanized;
 
     @Column(name = "sort_order", nullable = false)
+    @Builder.Default
     private Integer sortOrder = 0;
 
     @Column(name = "created_at")

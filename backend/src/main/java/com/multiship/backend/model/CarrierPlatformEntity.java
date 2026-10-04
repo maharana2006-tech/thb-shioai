@@ -31,9 +31,11 @@ public class CarrierPlatformEntity {
     private String displayName;
 
     @Column(nullable = false)
+    @Builder.Default
     private Boolean enabled = true;
 
     @Column(nullable = false, length = 8)
+    @Builder.Default
     private String mode = MODE_LIVE;
 
     /** USPS | FEDEX | UPS | DHL. Rolls up STAMPS_COM + USPS_DIRECT under USPS. */

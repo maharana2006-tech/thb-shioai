@@ -29,9 +29,11 @@ public class CarrierLabelFormatEntity {
     private String label;
 
     @Column(name = "is_stock_type", nullable = false)
+    @Builder.Default
     private Boolean isStockType = false;
 
     @Column(name = "sort_order", nullable = false)
+    @Builder.Default
     private Integer sortOrder = 0;
 
     @Data @NoArgsConstructor @AllArgsConstructor

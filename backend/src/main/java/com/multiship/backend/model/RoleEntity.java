@@ -25,6 +25,7 @@ public class RoleEntity {
     private String name;
 
     @Column(name = "is_invitable", nullable = false)
+    @Builder.Default
     private Boolean isInvitable = true;
 
     @Column(name = "created_at")

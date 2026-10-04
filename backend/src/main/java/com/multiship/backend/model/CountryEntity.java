@@ -28,6 +28,7 @@ public class CountryEntity {
     private String name;
 
     @Column(name = "is_us_territory", nullable = false)
+    @Builder.Default
     private Boolean isUsTerritory = false;
 
     @Column(name = "created_at")
