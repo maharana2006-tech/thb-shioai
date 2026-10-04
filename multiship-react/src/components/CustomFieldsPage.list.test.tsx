@@ -247,14 +247,18 @@ describe('CustomFieldsPage — tenant scope switch', () => {
     await waitFor(() => expect(listMock).toHaveBeenCalledWith(null))
     listMock.mockClear()
 
+    // Wait for the ACME option to be present in the combobox — listClients
+    // is a separate fetch from listMock, so the mock-called waitFor above
+    // doesn't guarantee ACME has rendered as an <option>.
+    await waitFor(() =>
+      expect(screen.getAllByRole('combobox')[0].querySelector('option[value="ACME"]')).toBeTruthy(),
+    )
+
     // Switch to ACME — the tenant scope select is the first combobox.
     await act(async () => {
       await userEvent.selectOptions(screen.getAllByRole('combobox')[0], 'ACME')
     })
 
-    // Now list is called with 'ACME'. Default waitFor timeout (1000ms) is
-    // tight when this file runs after a warm suite; 10s matches the vitest-
-    // wide bump + still fails loud if the dep-chain actually breaks.
-    await waitFor(() => expect(listMock).toHaveBeenCalledWith('ACME'), { timeout: 10_000 })
+    await waitFor(() => expect(listMock).toHaveBeenCalledWith('ACME'))
   })
 })

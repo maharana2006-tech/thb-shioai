@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, act, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, Outlet } from 'react-router-dom'
 import type { ComponentType } from 'react'
@@ -280,10 +280,19 @@ describe('ImporterBrokerPage — filter counter + Clear', () => {
     const filtersBtn = await screen.findByRole('button', { name: /^Filters$/i })
 
     await act(async () => { await userEvent.click(filtersBtn) })
-    await userEvent.selectOptions(screen.getByLabelText(/Filter by client/i), 'ACME')
-    await userEvent.selectOptions(screen.getByLabelText(/Filter by carrier/i), 'UPS')
+    // Apply filters one at a time with the counter settling in between.
+    // Back-to-back selectOptions on separate selects can race with the
+    // popover's outside-click handler and the second mousedown gets
+    // interpreted as "outside the ref" during the first's re-render,
+    // closing the popover before the second select is reached.
+    await act(async () => {
+      await userEvent.selectOptions(screen.getByLabelText(/Filter by client/i), 'ACME')
+    })
+    await waitFor(() => expect(filtersBtn.textContent).toContain('1'))
 
-    const filtersBtn = screen.getByRole('button', { name: /^Filters/i })
+    await act(async () => {
+      await userEvent.selectOptions(screen.getByLabelText(/Filter by carrier/i), 'UPS')
+    })
     await waitFor(() => expect(filtersBtn.textContent).toContain('2'))
   })
 
@@ -301,7 +310,6 @@ describe('ImporterBrokerPage — filter counter + Clear', () => {
       await userEvent.click(await screen.findByRole('button', { name: /Clear/i }))
     })
 
-    const filtersBtn = screen.getByRole('button', { name: /^Filters$/i })
     expect(filtersBtn.textContent).not.toMatch(/\b[1-9]\b/)
   })
 })

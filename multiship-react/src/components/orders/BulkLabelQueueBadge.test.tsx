@@ -46,6 +46,13 @@ async function loadComponent() {
 
 beforeEach(() => {
   getMetricsMock.mockReset()
+  // BulkLabelQueueBadge keeps a module-scoped `lastMetrics` Map so the
+  // badge paints last-seen data on remount (prod wants that; tests
+  // don't). Reset the module cache so each test gets a fresh Map —
+  // otherwise a test like "renders nothing when depth is 0" paints
+  // whatever the previous test's mock returned on first render and
+  // then races with its own setMetrics(0).
+  vi.resetModules()
 })
 
 afterEach(() => {

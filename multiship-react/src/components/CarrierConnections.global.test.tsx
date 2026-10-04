@@ -284,9 +284,11 @@ describe('CarrierConnections · Global · positive', () => {
     const Page = await loadPage()
     renderPage(Page)
 
-    await waitFor(() => expect(screen.getByText(/Ready to ship/i)).toBeTruthy())
-    // Ready to ship = 2 (only active + complete count). Total = 3.
-    expect(screen.getByText('2/3')).toBeTruthy()
+    // "Ready to ship" label renders even in the empty state. Wait for
+    // the computed count "2/3" so the assertion fires after accounts
+    // actually land in state, not just after the label mounts.
+    const readyCount = await screen.findByText('2/3')
+    expect(readyCount).toBeTruthy()
     // Platform accounts = 1 (null customerNo). Client accounts = 2.
     const platformCard = screen.getByText(/Platform accounts/i).closest('div')
     expect(platformCard?.textContent).toContain('1')
