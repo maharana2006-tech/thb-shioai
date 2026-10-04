@@ -449,10 +449,20 @@ describe('NewShipmentPage — carrier account defaults', () => {
     renderWithProviders(<Page />)
     const clientSel = await waitForClientSelect()
 
+    // applyClient's `carrierOptions.includes('UPS')` guard silently
+    // skips setCarrier when the accounts fetch is still pending —
+    // then useEffect 675 picks carrierOptions[0] (alphabetical FEDEX)
+    // and the test is stuck. Wait for carrierOptions to populate (any
+    // non-empty carrier value) before firing the client change so
+    // applyClient's override lands.
+    await waitFor(() => {
+      const carrierSel = screen.getByLabelText(/^Carrier\s?\*?$/i) as HTMLSelectElement
+      expect(carrierSel.value).toBeTruthy()
+    })
     fireEvent.change(clientSel, { target: { value: 'ACME' } })
 
     // ACME's clientDefault is the UPS row (id=10 ACME-UPS). The carrier
-    // select should now be UPS. Locate the "Carrier" select by label.
+    // select should now be UPS.
     await waitFor(() => {
       const carrierSel = screen.getByLabelText(/^Carrier\s?\*?$/i) as HTMLSelectElement
       expect(carrierSel.value).toBe('UPS')
