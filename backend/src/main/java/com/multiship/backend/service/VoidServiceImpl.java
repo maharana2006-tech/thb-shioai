@@ -97,6 +97,16 @@ public class VoidServiceImpl implements VoidService {
             return failure(HttpStatus.NOT_FOUND,
                     "Order " + orderNo + " has no tracking number to void.");
         }
+        // Tag every carrier HTTP round-trip this void path triggers so the
+        // carrier_api_log row ties back to this order + tracking. See
+        // CarrierCallContext javadoc for the MDC contract.
+        try (var ignored = com.multiship.backend.service.observability
+                .CarrierCallContext.forOrder(Long.valueOf(orderNo), tracking.getTrackingNumber())) {
+            return voidLabelInner(orderNo, tracking);
+        }
+    }
+
+    private ApiResponse<VoidLabelResponseDTO> voidLabelInner(Integer orderNo, OrderTracking tracking) {
 
         // Idempotent short-circuit — now safe from the concurrent-void
         // race because we hold PESSIMISTIC_WRITE on the tracking row.

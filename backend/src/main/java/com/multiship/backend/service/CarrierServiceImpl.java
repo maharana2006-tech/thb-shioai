@@ -469,6 +469,19 @@ public class CarrierServiceImpl implements CarrierService {
     public ApiResponse<LabelGenerationResponse> generateLabel(Long orderNo, UserDetails userDetails,
                                                               String idempotencyKey, Long accountId,
                                                               boolean useHouseAccount) {
+        // Tag the carrier_api_log rows for every HTTP round-trip this call
+        // triggers (createShipment, auth refresh, address validation, etc).
+        // Try-with-resources restores the prior MDC on exit so nested
+        // calls / background workers don't inherit this orderNo.
+        try (var ignored = com.multiship.backend.service.observability
+                .CarrierCallContext.forOrder(orderNo)) {
+            return generateLabelInner(orderNo, userDetails, idempotencyKey, accountId, useHouseAccount);
+        }
+    }
+
+    private ApiResponse<LabelGenerationResponse> generateLabelInner(Long orderNo, UserDetails userDetails,
+                                                                    String idempotencyKey, Long accountId,
+                                                                    boolean useHouseAccount) {
         User user = resolveUser(userDetails);
 
         // Row lock: concurrent generations for this order (double-click,

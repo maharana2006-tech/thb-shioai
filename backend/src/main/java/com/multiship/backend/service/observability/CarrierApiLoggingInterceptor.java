@@ -1,6 +1,7 @@
 package com.multiship.backend.service.observability;
 
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.http.HttpRequest;
 import org.springframework.http.client.ClientHttpRequestExecution;
 import org.springframework.http.client.ClientHttpRequestInterceptor;
@@ -57,21 +58,33 @@ public class CarrierApiLoggingInterceptor implements ClientHttpRequestIntercepto
         String url = request.getURI().toString();
         String requestBody = body == null || body.length == 0
                 ? null : new String(body, StandardCharsets.UTF_8);
+        // MDC context — requestId is set by MdcCorrelationFilter on every
+        // HTTP-triggered flow; orderNo + tracking come from CarrierCallContext
+        // when a connector call site tagged itself. All three may be null
+        // (background jobs / cron ticks without a request scope).
+        String requestId = MDC.get("requestId");
+        Long orderNo = parseLong(MDC.get(CarrierCallContext.MDC_CARRIER_ORDER_NO));
+        String tracking = MDC.get(CarrierCallContext.MDC_CARRIER_TRACKING);
         try {
             ClientHttpResponse response = execution.execute(request, body);
             int status = response.getStatusCode().value();
             String responseBody = readBodySafely(response);
             long latency = System.currentTimeMillis() - start;
             logService.record(carrier, method, url, requestBody, responseBody,
-                    status, (int) latency, null, null, null, null);
+                    status, (int) latency, null, orderNo, tracking, requestId);
             return response;
         } catch (IOException | RuntimeException ex) {
             long latency = System.currentTimeMillis() - start;
             logService.record(carrier, method, url, requestBody, null,
                     null, (int) latency, ex.getClass().getSimpleName() + ": " + ex.getMessage(),
-                    null, null, null);
+                    orderNo, tracking, requestId);
             throw ex;
         }
+    }
+
+    private static Long parseLong(String s) {
+        if (s == null || s.isBlank()) return null;
+        try { return Long.parseLong(s.trim()); } catch (NumberFormatException ex) { return null; }
     }
 
     /** Known-host → canonical carrier code map. Add rows as new
