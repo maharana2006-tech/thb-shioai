@@ -258,8 +258,9 @@ describe('ImporterBrokerPage — filter popover', () => {
     const Page = await loadPage()
     renderPage(Page)
     await waitFor(() => expect(listProfilesMock).toHaveBeenCalledTimes(1))
+    const filtersBtn = await screen.findByRole('button', { name: /^Filters$/i })
 
-    await act(async () => { await userEvent.click(screen.getByRole('button', { name: /^Filters$/i })) })
+    await act(async () => { await userEvent.click(filtersBtn) })
     await userEvent.selectOptions(screen.getByLabelText(/Filter by broker/i), 'YES')
 
     await waitFor(() => {
