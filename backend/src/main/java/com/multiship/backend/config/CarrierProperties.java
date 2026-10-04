@@ -351,5 +351,23 @@ public class CarrierProperties {
 
         @NotBlank
         private String countryCode;
+
+        /**
+         * C1 strict-mode (audit §4 follow-up). Default false preserves the
+         * historical silent-fallback-to-platform behaviour. Flip to true
+         * once every tenant has configured its own shipper at
+         * /settings/system so label generation refuses to stamp the
+         * platform default onto a non-configured tenant's label — the
+         * audit's T2 ("platform defaults leak into per-tenant flows") was
+         * blocked on this flag landing.
+         *
+         * <p>Semantic when true: any call to
+         * {@link com.multiship.backend.service.carrier.ShipperDefaultsService#resolveFor(String)}
+         * with a non-blank tenantCode throws {@code IllegalStateException}
+         * if ANY required field (name, phone, line 1, city, state, postal
+         * code, country) would fall through to platform default.
+         * addressLine2 remains optional.
+         */
+        private boolean strictMode = false;
     }
 }

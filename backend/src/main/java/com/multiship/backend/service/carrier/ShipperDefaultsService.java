@@ -49,11 +49,24 @@ public class ShipperDefaultsService {
             KEY_NAME, KEY_PHONE, KEY_ADDRESS_LINE1, KEY_ADDRESS_LINE2,
             KEY_CITY, KEY_STATE, KEY_POSTAL_CODE, KEY_COUNTRY_CODE);
 
+    /** Keys that strict-mode requires every tenant to override. addressLine2
+     *  is excluded because many addresses legitimately don't have it. */
+    public static final java.util.List<String> REQUIRED_KEYS = java.util.List.of(
+            KEY_NAME, KEY_PHONE, KEY_ADDRESS_LINE1,
+            KEY_CITY, KEY_STATE, KEY_POSTAL_CODE, KEY_COUNTRY_CODE);
+
     private final CarrierProperties carrierProperties;
     private final TenantSettingsService tenantSettings;
 
     /**
      * Resolve for a tenant. {@code null} / blank tenantCode → platform default.
+     *
+     * <p>When {@code carrier.shipper.strict-mode=true} AND a non-blank
+     * {@code tenantCode} is given, any REQUIRED field (see
+     * {@link #REQUIRED_KEYS}) that would fall through to platform default
+     * throws {@link IllegalStateException} naming the missing field(s).
+     * The pre-flip caller never sees this; existing callers under the
+     * default flag=false still get the silent-fallback behaviour.
      */
     public CarrierProperties.ShipperDefaults resolveFor(String tenantCode) {
         CarrierProperties.ShipperDefaults platform = carrierProperties.getShipper();
@@ -69,7 +82,29 @@ public class ShipperDefaultsService {
         merged.setState(mergeField(tenantCode, KEY_STATE, platform.getState()));
         merged.setPostalCode(mergeField(tenantCode, KEY_POSTAL_CODE, platform.getPostalCode()));
         merged.setCountryCode(mergeField(tenantCode, KEY_COUNTRY_CODE, platform.getCountryCode()));
+        if (platform.isStrictMode()) assertStrictFor(tenantCode);
         return merged;
+    }
+
+    /**
+     * Audit §4 strict-mode: throw when any required field for the given
+     * tenant has no override in tenant_settings. Called inline by
+     * {@link #resolveFor} only when {@code carrier.shipper.strict-mode=true}
+     * so the common-case path stays allocation-free.
+     */
+    private void assertStrictFor(String tenantCode) {
+        java.util.List<String> missing = new java.util.ArrayList<>();
+        for (String key : REQUIRED_KEYS) {
+            Optional<String> v = tenantSettings.getSetting(tenantCode, key);
+            if (v.isEmpty() || v.get().isBlank()) missing.add(key);
+        }
+        if (!missing.isEmpty()) {
+            throw new IllegalStateException(
+                    "carrier.shipper.strict-mode is on and tenant " + tenantCode
+                    + " has no override for: " + String.join(", ", missing)
+                    + ". Configure at /settings/system or set"
+                    + " carrier.shipper.strict-mode=false.");
+        }
     }
 
     /**
