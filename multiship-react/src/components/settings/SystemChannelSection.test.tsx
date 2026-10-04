@@ -77,8 +77,13 @@ describe('SystemChannelSection', () => {
     const user = userEvent.setup()
     render(<SystemChannelSection />)
 
-    // Wait for the client list to populate.
-    await waitFor(() => expect(screen.getByRole('combobox')).toBeInTheDocument())
+    // Wait for the THB000 OPTION to populate — not just the combobox,
+    // whose empty "pick a tenant" option renders synchronously. The
+    // clients fetch is a separate microtask; selectOptions throws if
+    // THB000 isn't in the <option> list yet.
+    await waitFor(() =>
+      expect(screen.getByRole('combobox').querySelector('option[value="THB000"]')).toBeTruthy(),
+    )
 
     await user.selectOptions(screen.getByRole('combobox'), 'THB000')
 
