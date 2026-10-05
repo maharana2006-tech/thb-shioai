@@ -37,6 +37,7 @@ import Login from '../components/Login'
 import Signup from '../components/Signup'
 import WorkspaceLayout from '../components/layout/WorkspaceLayout'
 import SettingsLayout from '../components/layout/SettingsLayout'
+import SettingsOverview from '../components/layout/SettingsOverview'
 import DashboardPage from '../pages/DashboardPage'
 import OrdersPage from '../pages/OrdersPage'
 import ProtectedRoute from './ProtectedRoute'
@@ -173,7 +174,7 @@ export default function AppRoutes() {
 
               {/* Settings hub — master data (clients / carriers / broker-importer) */}
               <Route path={workspacePaths.settings} element={<SettingsLayout />}>
-                <Route index element={<Navigate to={settingsPaths.clients} replace />} />
+                <Route index element={<SettingsOverview />} />
                 <Route path="clients" element={<ClientsPage />} />
                 <Route path="clients/new" element={<ClientEditorPage />} />
                 <Route path="clients/:clientCode" element={<ClientEditorPage />} />

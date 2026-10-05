@@ -267,6 +267,43 @@ export const settingsNavItems: Array<{
   // { key: 'api-reference',        label: 'API Reference',      to: settingsPaths.apiReference,          iconKey: 'apiDocs', description: '…', roles: ['ADMIN']         },
 ]
 
+/** How the Settings menu groups its pages, in menu order. A settings item not
+ *  listed here still shows, under "Other", so a new page can't go missing. */
+export const settingsGroups: Array<{ key: string; label: string; blurb: string; items: string[] }> = [
+  { key: 'org', label: 'Organization', blurb: 'Who you ship for, from where, and who can sign in.',
+    items: ['clients', 'warehouses', 'address-book', 'users', 'roles'] },
+  { key: 'carriers', label: 'Carriers & services', blurb: 'Accounts, services and the rules that pick them.',
+    items: ['carriers', 'carriers-platform', 'shipping-catalog', 'code-maps', 'carrier-limits', 'carrier-dropdowns', 'cutoffs'] },
+  { key: 'intl', label: 'International', blurb: 'What customs paperwork needs.',
+    items: ['importer-broker', 'countries', 'reasons-for-export', 'currencies'] },
+  { key: 'docs', label: 'Labels & documents', blurb: 'What gets printed, and where it goes.',
+    items: ['templates', 'custom-fields', 'printers', 'output-destinations'] },
+  { key: 'email', label: 'Email & alerts', blurb: 'Who hears about what, and how it reads.',
+    items: ['mail', 'notification-templates', 'my-subscriptions'] },
+  { key: 'integrations', label: 'Integrations', blurb: 'Systems Multiship reads from and writes back to.',
+    items: ['external-systems'] },
+  { key: 'system', label: 'System', blurb: 'Workspace-wide defaults and wording.',
+    items: ['system', 'carrier-error-messages'] },
+  { key: 'activity', label: 'Activity & logs', blurb: 'History to look things up in, not settings to change.',
+    items: ['audit-log', 'carrier-api-log', 'notification-delivery-log', 'writeback-journal', 'alerts-history', 'returns-analytics'] },
+]
+
+type SettingsNavItem = (typeof settingsNavItems)[number]
+
+/** The role's settings pages, grouped for the menu; empty groups are dropped. */
+export const getSettingsGroupsForRole = (role: UserRole) => {
+  const items = getSettingsNavForRole(role)
+  const byKey = new Map(items.map((i) => [i.key, i]))
+  const placed = new Set(settingsGroups.flatMap((g) => g.items))
+  const groups = settingsGroups.map((g) => ({
+    ...g,
+    pages: g.items.map((k) => byKey.get(k)).filter((i): i is SettingsNavItem => !!i),
+  }))
+  const other = items.filter((i) => !placed.has(i.key))
+  if (other.length) groups.push({ key: 'other', label: 'Other', blurb: '', items: [], pages: other })
+  return groups.filter((g) => g.pages.length)
+}
+
 export const getNavItemsForRole = (role: UserRole) => {
   const allowedKeys = getNavKeysForRole(role)
   return workspaceNavItems.filter((item) => allowedKeys.includes(item.key))
