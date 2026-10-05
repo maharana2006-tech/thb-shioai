@@ -1,9 +1,28 @@
 import { useCallback, useMemo, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { FiRefreshCw, FiSearch } from 'react-icons/fi'
+import type { IconType } from 'react-icons'
+import {
+  FiActivity, FiAlertCircle, FiAlertTriangle, FiBell, FiBookOpen, FiBriefcase, FiCalendar, FiCircle,
+  FiCornerUpLeft, FiCreditCard, FiDollarSign, FiEdit3, FiFileText, FiGlobe, FiGrid, FiHome, FiInbox,
+  FiLayout, FiLink, FiList, FiMail, FiMap, FiMessageSquare, FiPackage, FiPrinter, FiRefreshCw, FiRepeat,
+  FiSearch, FiSend, FiSettings, FiShield, FiShuffle, FiSliders, FiTerminal, FiTruck, FiUsers,
+} from 'react-icons/fi'
 import { getSettingsGroupsForRole, settingsNavItems, workspacePaths } from '../../routes/workspaceRoutes'
 import { useAppSession } from '../../hooks/useAppSession'
 import { normalizeRole } from '../../utils/roles'
+
+/** One icon per settings page, by settingsNavItems key. */
+const PAGE_ICONS: Record<string, IconType> = {
+  clients: FiBriefcase, warehouses: FiHome, 'address-book': FiBookOpen, users: FiUsers, roles: FiShield,
+  carriers: FiCreditCard, 'carriers-platform': FiTruck, 'shipping-catalog': FiPackage, 'code-maps': FiShuffle,
+  'carrier-limits': FiSliders, 'carrier-dropdowns': FiList, cutoffs: FiCalendar,
+  'importer-broker': FiGlobe, countries: FiMap, 'reasons-for-export': FiFileText, currencies: FiDollarSign,
+  templates: FiLayout, 'custom-fields': FiEdit3, printers: FiPrinter, 'output-destinations': FiSend,
+  mail: FiMail, 'notification-templates': FiMessageSquare, 'my-subscriptions': FiBell,
+  'external-systems': FiLink, system: FiSettings, 'carrier-error-messages': FiAlertTriangle,
+  'audit-log': FiActivity, 'carrier-api-log': FiTerminal, 'notification-delivery-log': FiInbox,
+  'writeback-journal': FiRepeat, 'alerts-history': FiAlertCircle, 'returns-analytics': FiCornerUpLeft,
+}
 
 /** Handler shape a Settings page registers so the global Refresh icon has something to call. */
 type RefreshHandler = () => void | Promise<void>
@@ -63,19 +82,26 @@ export default function SettingsLayout() {
   }
 
   const itemClass = (active: boolean) =>
-    `flex w-full items-center rounded-lg px-2.5 py-[7px] text-[13.5px] leading-snug transition ${
-      active ? 'bg-[#efe5cf] font-semibold !text-[#1f150c]' : 'font-medium !text-[#5a4526] hover:bg-[#f6f0e2] hover:!text-[#1f150c]'
+    `group/item flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[6px] text-[13px] leading-snug transition ${
+      active ? 'bg-[#1f150c] font-semibold !text-[#f4eede]' : 'font-medium !text-[#5a4526] hover:bg-[#efe7d4] hover:!text-[#1f150c]'
     }`
+  const iconClass = (active: boolean) =>
+    `h-[15px] w-[15px] shrink-0 ${active ? 'text-[#e1dcc9]' : 'text-[#a1906d] group-hover/item:text-[#412d15]'}`
 
   return (
-    <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
-      {/* Grouped menu (lg+) */}
+    // lg+: the menu is a full-height panel attached to the app sidebar — the
+    // negative margins cancel <main>'s padding so it sits flush left and top.
+    <div className="flex flex-col lg:-mx-8 lg:-my-5 lg:flex-row">
       <aside
         aria-label="Settings"
-        className="hidden w-60 shrink-0 lg:sticky lg:top-[4.5rem] lg:block lg:max-h-[calc(100vh-5.5rem)] lg:overflow-y-auto"
+        className="hidden w-[232px] shrink-0 border-r border-[#e6dcc6] bg-[#f8f3e8] lg:sticky lg:top-14 lg:block lg:h-[calc(100vh-3.5rem)] lg:self-start lg:overflow-y-auto [scrollbar-color:#d9cfbb_transparent] [scrollbar-width:thin]"
       >
-        <div className="rounded-2xl border border-[#ebe3d2] bg-[#fffdf8] p-3">
-          <label className="relative mb-2 block">
+        <div className="px-3 pb-6 pt-4">
+          <p className="mb-3 flex items-center gap-2 px-2.5 text-[15px] font-bold tracking-tight text-[#1f150c]">
+            <FiSettings className="h-4 w-4 text-[#412d15]" />
+            Settings
+          </p>
+          <label className="relative mb-3 block">
             <span className="sr-only">Search settings</span>
             <FiSearch className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#a1906d]" />
             <input
@@ -83,24 +109,27 @@ export default function SettingsLayout() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search settings"
-              className="h-9 w-full rounded-lg border border-[#e3d9c4] bg-white pl-8 pr-2 text-[13px] text-[#1f150c] outline-none transition placeholder:text-[#a1906d] focus:border-[#412d15] focus:ring-4 focus:ring-[#efe5cf]"
+              className="h-8 w-full rounded-lg border border-[#e3d9c4] bg-white pl-8 pr-2 text-[12.5px] text-[#1f150c] outline-none transition placeholder:text-[#a1906d] focus:border-[#412d15] focus:ring-4 focus:ring-[#efe5cf]"
             />
           </label>
 
           {!q ? (
             <NavLink to={workspacePaths.settings} end aria-current={onOverview ? 'page' : undefined} className={itemClass(onOverview)}>
+              <FiGrid className={iconClass(onOverview)} aria-hidden="true" />
               All settings
             </NavLink>
           ) : null}
 
           {shown.map((g) => (
-            <div key={g.key} className="mt-3">
-              <p className="mb-1 px-2.5 font-mono text-[10px] font-semibold uppercase tracking-[0.1em] text-[#a1906d]">{g.label}</p>
+            <div key={g.key} className="mt-4 space-y-px">
+              <p className="mb-1 px-2.5 font-mono text-[9.5px] font-semibold uppercase tracking-[0.14em] text-[#a1906d]">{g.label}</p>
               {g.pages.map((p) => {
                 const active = isActive(p.to)
+                const Icon = PAGE_ICONS[p.key] ?? FiCircle
                 return (
                   <NavLink key={p.key} to={p.to} aria-current={active ? 'page' : undefined} className={itemClass(active)}>
-                    {p.label}
+                    <Icon className={iconClass(active)} aria-hidden="true" />
+                    <span className="truncate">{p.label}</span>
                   </NavLink>
                 )
               })}
@@ -112,7 +141,7 @@ export default function SettingsLayout() {
         </div>
       </aside>
 
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-1 lg:px-7 lg:py-5">
         {/* Below lg the menu is a select, so the page keeps its width. */}
         <label className="mb-3 block lg:hidden">
           <span className="sr-only">Settings page</span>
@@ -131,7 +160,7 @@ export default function SettingsLayout() {
         </label>
 
         {!onOverview ? (
-          <div className="mb-4 flex items-start justify-between gap-4">
+          <div className="mb-4 flex items-start justify-between gap-4 border-b border-[#ebe3d2] pb-4">
             <div className="min-w-0">
               <h1 className="text-[22px] font-bold tracking-tight text-[#1f150c]">{activeItem?.label ?? 'Settings'}</h1>
               {activeItem?.description ? (
