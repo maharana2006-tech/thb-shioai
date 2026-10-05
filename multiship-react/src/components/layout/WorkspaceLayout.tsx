@@ -32,6 +32,14 @@ export default function WorkspaceLayout() {
 
   const togglePin = () => setPinned((cur) => !cur)
 
+  // Settings brings its own menu beside the sidebar, so there the sidebar
+  // starts as the icon rail (hover still peeks it open). Pinning it there
+  // lasts for the visit and leaves the operator's saved choice alone.
+  const onSettings = useLocation().pathname.startsWith('/settings')
+  const [settingsPinned, setSettingsPinned] = useState(false)
+  const railPinned = onSettings ? settingsPinned : pinned
+  const toggleRail = onSettings ? () => setSettingsPinned((cur) => !cur) : togglePin
+
   return (
     <div className="relative min-h-screen overflow-x-clip bg-[var(--color-background)] text-[var(--color-text)]">
       {/* whisper-subtle signature texture behind every page (hidden in print) */}
@@ -39,15 +47,15 @@ export default function WorkspaceLayout() {
         <BrandBackdrop variant="light" />
       </div>
       <Sidebar
-        pinned={pinned}
-        onTogglePin={togglePin}
+        pinned={railPinned}
+        onTogglePin={toggleRail}
         mobileOpen={mobileNavOpen}
         onMobileClose={() => setMobileNavOpen(false)}
       />
       {/* Sprint 51 FE-M5 — content column starts full-bleed on <md (drawer
           is an overlay, not a permanent rail) and re-inherits the 56/64
           margin on md+. */}
-      <div className={`relative transition-[margin] duration-200 ease-out print:ml-0 ml-0 ${pinned ? 'md:ml-56' : 'md:ml-16'}`}>
+      <div className={`relative transition-[margin] duration-200 ease-out print:ml-0 ml-0 ${railPinned ? 'md:ml-56' : 'md:ml-16'}`}>
         <WorkspaceHeader onOpenMobileNav={() => setMobileNavOpen(true)} />
         <main className="px-4 py-5 sm:px-6 lg:px-8">
           {/* Sprint 49 Tier 4 Fix 1 — route-scoped boundary so a broken

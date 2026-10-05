@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import type { IconType } from 'react-icons'
 import {
-  FiActivity, FiAlertCircle, FiAlertTriangle, FiBell, FiBookOpen, FiBriefcase, FiCalendar, FiCircle,
+  FiActivity, FiAlertCircle, FiAlertTriangle, FiBell, FiChevronsLeft, FiChevronsRight, FiBookOpen, FiBriefcase, FiCalendar, FiCircle,
   FiCornerUpLeft, FiCreditCard, FiDollarSign, FiEdit3, FiFileText, FiGlobe, FiGrid, FiHome, FiInbox,
   FiLayout, FiLink, FiList, FiMail, FiMap, FiMessageSquare, FiPackage, FiPrinter, FiRefreshCw, FiRepeat,
   FiSearch, FiSend, FiSettings, FiShield, FiShuffle, FiSliders, FiTerminal, FiTruck, FiUsers,
@@ -12,6 +12,11 @@ import { useAppSession } from '../../hooks/useAppSession'
 import { normalizeRole } from '../../utils/roles'
 
 /** One icon per settings page, by settingsNavItems key. */
+const COMPACT_KEY = 'multiship_settings_menu_compact'
+const readCompact = () => {
+  try { return localStorage.getItem(COMPACT_KEY) === '1' } catch { return false }
+}
+
 const PAGE_ICONS: Record<string, IconType> = {
   clients: FiBriefcase, warehouses: FiHome, 'address-book': FiBookOpen, users: FiUsers, roles: FiShield,
   carriers: FiCreditCard, 'carriers-platform': FiTruck, 'shipping-catalog': FiPackage, 'code-maps': FiShuffle,
@@ -44,6 +49,14 @@ export default function SettingsLayout() {
   const navigate = useNavigate()
   const groups = getSettingsGroupsForRole(normalizeRole(role))
   const [query, setQuery] = useState('')
+  // Icons-only menu (~60px) for wide tables; remembered per browser.
+  const [compact, setCompact] = useState(readCompact)
+  const toggleCompact = () => {
+    const next = !compact
+    setCompact(next)
+    if (next) setQuery('') // the icon menu has no search box to show a filter in
+    try { localStorage.setItem(COMPACT_KEY, next ? '1' : '0') } catch { /* preference only */ }
+  }
 
   const [refresh, setRefresh] = useState<RefreshHandler | null>(null)
   const [refreshing, setRefreshing] = useState(false)
@@ -82,7 +95,9 @@ export default function SettingsLayout() {
   }
 
   const itemClass = (active: boolean) =>
-    `group/item flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[6px] text-[13px] leading-snug transition ${
+    `group/item flex w-full items-center rounded-lg py-[6px] text-[13px] leading-snug transition ${
+      compact ? 'justify-center px-0 py-[7px]' : 'gap-2.5 px-2.5'
+    } ${
       active ? 'bg-[#1f150c] font-semibold !text-[#f4eede]' : 'font-medium !text-[#5a4526] hover:bg-[#efe7d4] hover:!text-[#1f150c]'
     }`
   const iconClass = (active: boolean) =>
@@ -94,13 +109,37 @@ export default function SettingsLayout() {
     <div className="flex flex-col lg:-mx-8 lg:-my-5 lg:flex-row">
       <aside
         aria-label="Settings"
-        className="hidden w-[232px] shrink-0 border-r border-[#e6dcc6] bg-[#f8f3e8] lg:sticky lg:top-14 lg:block lg:h-[calc(100vh-3.5rem)] lg:self-start lg:overflow-y-auto [scrollbar-color:#d9cfbb_transparent] [scrollbar-width:thin]"
+        className={`hidden ${compact ? 'w-[60px]' : 'w-[232px]'} shrink-0 border-r border-[#e6dcc6] bg-[#f8f3e8] lg:sticky lg:top-14 lg:block lg:h-[calc(100vh-3.5rem)] lg:self-start lg:overflow-y-auto [scrollbar-color:#d9cfbb_transparent] [scrollbar-width:thin]`}
       >
-        <div className="px-3 pb-6 pt-4">
-          <p className="mb-3 flex items-center gap-2 px-2.5 text-[15px] font-bold tracking-tight text-[#1f150c]">
-            <FiSettings className="h-4 w-4 text-[#412d15]" />
-            Settings
-          </p>
+        <div className={`${compact ? 'px-2' : 'px-3'} pb-6 pt-4`}>
+          <div className={`mb-3 flex items-center ${compact ? 'justify-center' : 'justify-between gap-2 pl-2.5'}`}>
+            {!compact ? (
+              <p className="flex items-center gap-2 text-[15px] font-bold tracking-tight text-[#1f150c]">
+                <FiSettings className="h-4 w-4 text-[#412d15]" />
+                Settings
+              </p>
+            ) : null}
+            <button
+              type="button"
+              onClick={toggleCompact}
+              aria-label={compact ? 'Expand settings menu' : 'Collapse settings menu to icons'}
+              title={compact ? 'Expand menu' : 'Collapse to icons'}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[#8a7a5a] transition hover:bg-[#efe7d4] hover:text-[#1f150c]"
+            >
+              {compact ? <FiChevronsRight className="h-4 w-4" /> : <FiChevronsLeft className="h-4 w-4" />}
+            </button>
+          </div>
+          {compact ? (
+            <button
+              type="button"
+              onClick={toggleCompact}
+              aria-label="Search settings"
+              title="Search settings"
+              className="mb-3 flex h-8 w-full items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#a1906d] transition hover:text-[#1f150c]"
+            >
+              <FiSearch className="h-3.5 w-3.5" />
+            </button>
+          ) : (
           <label className="relative mb-3 block">
             <span className="sr-only">Search settings</span>
             <FiSearch className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#a1906d]" />
@@ -112,24 +151,25 @@ export default function SettingsLayout() {
               className="h-8 w-full rounded-lg border border-[#e3d9c4] bg-white pl-8 pr-2 text-[12.5px] text-[#1f150c] outline-none transition placeholder:text-[#a1906d] focus:border-[#412d15] focus:ring-4 focus:ring-[#efe5cf]"
             />
           </label>
+          )}
 
           {!q ? (
-            <NavLink to={workspacePaths.settings} end aria-current={onOverview ? 'page' : undefined} className={itemClass(onOverview)}>
+            <NavLink to={workspacePaths.settings} end aria-current={onOverview ? 'page' : undefined} title={compact ? 'All settings' : undefined} className={itemClass(onOverview)}>
               <FiGrid className={iconClass(onOverview)} aria-hidden="true" />
-              All settings
+              <span className={compact ? 'sr-only' : ''}>All settings</span>
             </NavLink>
           ) : null}
 
           {shown.map((g) => (
-            <div key={g.key} className="mt-4 space-y-px">
-              <p className="mb-1 px-2.5 font-mono text-[9.5px] font-semibold uppercase tracking-[0.14em] text-[#a1906d]">{g.label}</p>
+            <div key={g.key} className={`${compact ? 'mt-2 border-t border-[#e6dcc6] pt-2' : 'mt-4'} space-y-px`}>
+              <p className={compact ? 'sr-only' : 'mb-1 px-2.5 font-mono text-[9.5px] font-semibold uppercase tracking-[0.14em] text-[#a1906d]'}>{g.label}</p>
               {g.pages.map((p) => {
                 const active = isActive(p.to)
                 const Icon = PAGE_ICONS[p.key] ?? FiCircle
                 return (
-                  <NavLink key={p.key} to={p.to} aria-current={active ? 'page' : undefined} className={itemClass(active)}>
+                  <NavLink key={p.key} to={p.to} aria-current={active ? 'page' : undefined} title={compact ? p.label : undefined} className={itemClass(active)}>
                     <Icon className={iconClass(active)} aria-hidden="true" />
-                    <span className="truncate">{p.label}</span>
+                    <span className={compact ? 'sr-only' : 'truncate'}>{p.label}</span>
                   </NavLink>
                 )
               })}
