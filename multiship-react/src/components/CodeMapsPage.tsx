@@ -61,7 +61,18 @@ const TAB_ORDER: TabKind[] = ['SHIPVIA', 'SERVICE', 'DEST_COUNTRY', 'PACKAGE']
  * tables. A Client filter at the top scopes everything below to one client's
  * aliases; the four tabs share the same CRUD shape.
  */
-export default function CodeMapsPage() {
+/**
+ * Settings → Code Maps, also embeddable in the client Edit page's mapping step.
+ * - initialClientFilter: lock to one client and hide the client picker.
+ * - embedded: drop the outer page header + Refresh registration so it sits
+ *   inside the client wizard tab (mirrors CarrierConnections).
+ */
+export interface CodeMapsPageProps {
+  initialClientFilter?: string
+  embedded?: boolean
+}
+
+export default function CodeMapsPage({ initialClientFilter, embedded = false }: CodeMapsPageProps = {}) {
   const [clients, setClients] = useState<Client[]>([])
   const [selectedClient, setSelectedClient] = useState<string>('')
   const [tab, setTab] = useState<TabKind>('SHIPVIA')
@@ -144,7 +155,7 @@ export default function CodeMapsPage() {
         if (!alive) return
         const list = clientPage.data?.content ?? []
         setClients(list)
-        if (list.length && !selectedClient) setSelectedClient(list[0].clientCode)
+        if (!embedded && list.length && !selectedClient) setSelectedClient(list[0].clientCode)
       })
       .catch(() => { /* covered by page-level loading */ })
     return () => { alive = false }
@@ -195,11 +206,21 @@ export default function CodeMapsPage() {
     setRowFilter('')
   }, [load])
 
-  const { registerRefresh } = useOutletContext<SettingsOutletContext>()
+  // Embedded in the client Edit page: lock to that client.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- lock to the client the wizard embeds for
+    if (embedded && initialClientFilter) setSelectedClient(initialClientFilter)
+  }, [embedded, initialClientFilter])
+
+  // The outer page owns the Refresh button; an embedded instance must not hijack it.
+  // Optional: present on the Settings route, absent if mounted elsewhere.
+  const outlet = useOutletContext<SettingsOutletContext | undefined>()
+  const registerRefresh = outlet?.registerRefresh
+  useEffect(() => {
+    if (embedded || !registerRefresh) return
     registerRefresh(load)
     return () => registerRefresh(null)
-  }, [registerRefresh, load])
+  }, [embedded, registerRefresh, load])
 
   const submitAdd = async () => {
     if (!selectedClient || !erpCode.trim()) return
@@ -325,7 +346,8 @@ export default function CodeMapsPage() {
 
   return (
     <div className="space-y-4">
-      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <section className={embedded ? '' : 'rounded-2xl border border-slate-200 bg-white p-5 shadow-sm'}>
+        {!embedded ? (
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <h2 className="text-[14.5px] font-semibold text-slate-950">Code maps</h2>
@@ -369,6 +391,7 @@ export default function CodeMapsPage() {
             </label>
           </div>
         </div>
+        ) : null}
 
         {/* Tab bar */}
         <div role="tablist" aria-label="Code map kinds" className="mt-4 flex gap-1 border-b border-slate-100">

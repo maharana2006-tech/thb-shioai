@@ -56,7 +56,7 @@ import ClientMarkupTab from './modals/ClientMarkupTab'
 // import ClientOwnedPackagesPanel from './modals/ClientOwnedPackagesPanel'
 import CarrierConnections from './CarrierConnections'
 import WarehouseEditorModal from './modals/WarehouseEditorModal'
-import ClientShippingMappingTab from './modals/ClientShippingMappingTab'
+import CodeMapsPage from './CodeMapsPage'
 import { customsProfileService, type CustomsProfile } from '../api/customsProfileService'
 import {
   intersectionAddressCaps,
@@ -1457,7 +1457,7 @@ export default function ClientEditorPage() {
             mode. Draft is intentionally minimal (shipvia + service) — full
             scoping fields land after the client is persisted. */}
         {activeStep === 'mapping' && (client ? (
-          <ClientShippingMappingTab clientCode={client.clientCode} />
+          <CodeMapsPage initialClientFilter={client.clientCode} embedded />
         ) : (
           <MappingDraftStep
             drafts={mappingDrafts}
