@@ -101,14 +101,20 @@
 
 		<!-- Sprint 49 Tier 1: Flyway for schema migrations. Baseline-on-migrate
 		     lets Flyway stamp existing (ddl-auto-created) prod schemas at V1
-		     without running the empty V1 file. V2+ contain real migrations. -->
+		     without running the empty V1 file. V2+ contain real migrations.
+		     Version overridden to 13.x — Spring Boot 4.1's BOM pins 12.4.0;
+		     Flyway 13 has no documented breaking changes vs 12.x (per upstream
+		     release notes), just new features + default flips (new report
+		     format, FLYWAY_USE_SYSTEM_PROXIES now opt-in). -->
 		<dependency>
 			<groupId>org.flywaydb</groupId>
 			<artifactId>flyway-core</artifactId>
+			<version>13.7.0</version>
 		</dependency>
 		<dependency>
 			<groupId>org.flywaydb</groupId>
 			<artifactId>flyway-database-postgresql</artifactId>
+			<version>13.7.0</version>
 		</dependency>
 		<!-- Spring Boot 4 splits auto-configuration into modules; without this
 		     one, flyway-core sits on the classpath but migrations never run. -->
