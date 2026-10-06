@@ -147,6 +147,9 @@ export default function CodeMapsPage({ initialClientFilter, embedded = false }: 
   // toggle flips. Separate effect so the initial mount + toggle share
   // exactly the same fetch path.
   useEffect(() => {
+    // Embedded in the client Edit page the picker is hidden and the client is
+    // fixed, so the full client list is never shown — skip the fetch.
+    if (embedded) return
     let alive = true
     const params: { status?: 'ACTIVE'; size: number } = { size: 200 }
     if (!showInactiveClients) params.status = 'ACTIVE'

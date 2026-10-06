@@ -1457,7 +1457,9 @@ export default function ClientEditorPage() {
             mode. Draft is intentionally minimal (shipvia + service) — full
             scoping fields land after the client is persisted. */}
         {activeStep === 'mapping' && (client ? (
-          <CodeMapsPage initialClientFilter={client.clientCode} embedded />
+          <div className="px-1 pt-2">
+            <CodeMapsPage initialClientFilter={client.clientCode} embedded />
+          </div>
         ) : (
           <MappingDraftStep
             drafts={mappingDrafts}
