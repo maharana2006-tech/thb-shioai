@@ -40,7 +40,10 @@ export interface ShippingServiceItem {
  */
 export interface ShipMethodRule {
   id?: number
-  shipviaCd: string
+  /** The ERP ship-via code. Post the SSM→Code-Maps merge the catalog returns
+   *  it as `erpCode`; `shipviaCd` is kept for the pre-merge payloads. */
+  shipviaCd?: string
+  erpCode?: string | null
   clientCode?: string | null
   /** ANY | COUNTRIES (zone: space-separated codes in destValue). REGION/COUNTRY are legacy. */
   destType?: 'ANY' | 'COUNTRIES' | 'REGION' | 'COUNTRY' | null

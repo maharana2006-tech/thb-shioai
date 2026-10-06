@@ -34,6 +34,10 @@ import ZoneEditorModal from '../workspace/ZoneEditorModal'
 import RulePackagesDrawer from './RulePackagesDrawer'
 
 /** Codes of a rule's destination zone. Mirrors Code Maps SHIPVIA tab. */
+/** The ERP ship-via code, from whichever field the backend sent it in
+ *  (`erpCode` since the SSM→Code-Maps merge; `shipviaCd` pre-merge). */
+const codeOf = (r: ShipMethodRule): string => (r.shipviaCd || r.erpCode || '').trim()
+
 const ruleCodes = (r: ShipMethodRule): string[] => {
   if (r.destType === 'COUNTRIES' && r.destValue) return r.destValue.split(/\s+/).filter(Boolean)
   if (r.destType === 'COUNTRY' && r.destValue) return [r.destValue]
@@ -442,7 +446,7 @@ export default function ClientShippingMappingTab({ clientCode }: { clientCode: s
 
   const removeRule = async (rule: ShipMethodRule) => {
     if (rule.id == null) return
-    if (!(await notify.confirm(`Remove this ${rule.shipviaCd} mapping?`, {
+    if (!(await notify.confirm(`Remove this ${codeOf(rule)} mapping?`, {
       title: 'Remove mapping',
       confirmLabel: 'Remove',
       danger: true,
@@ -742,7 +746,7 @@ export default function ClientShippingMappingTab({ clientCode }: { clientCode: s
                 <tr key={rule.id} className="align-middle">
                   <Td>
                     <span className="rounded-lg bg-[#1f150c] px-2.5 py-1 font-mono text-[11.5px] font-bold text-[#e1dcc9]">
-                      {rule.shipviaCd}
+                      {codeOf(rule) || '—'}
                     </span>
                   </Td>
                   <Td>
@@ -812,7 +816,7 @@ export default function ClientShippingMappingTab({ clientCode }: { clientCode: s
                     <button
                       type="button"
                       onClick={() => void removeRule(rule)}
-                      aria-label={`Remove mapping ${rule.shipviaCd}`}
+                      aria-label={`Remove mapping ${codeOf(rule)}`}
                       className="inline-flex rounded-lg border border-rose-200 bg-white p-1.5 text-rose-600 transition hover:bg-rose-50"
                     >
                       <FiTrash2 className="h-3.5 w-3.5" />
@@ -834,7 +838,7 @@ export default function ClientShippingMappingTab({ clientCode }: { clientCode: s
         subject={
           zoneFor && zoneFor !== 'new' ? (
             <>
-              Mapping <span className="font-mono font-bold text-slate-700">{zoneFor.shipviaCd}</span> · {clientCode}
+              Mapping <span className="font-mono font-bold text-slate-700">{codeOf(zoneFor)}</span> · {clientCode}
             </>
           ) : undefined
         }
