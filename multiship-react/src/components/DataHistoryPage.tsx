@@ -1,5 +1,6 @@
 import { createPortal } from 'react-dom'
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazyWithRetry } from '../utils/lazyWithRetry'
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   FiAlertCircle,
@@ -36,8 +37,8 @@ import AnimatedHeight from './ui/AnimatedHeight'
 import BatchLabelBar from './bulk/BatchLabelBar'
 import LabelPreviewModal from './bulk/LabelPreviewModal'
 // The Orders page's per-order modals, reused on the batch page.
-const OrderDetailsModal = lazy(() => import('./modals/OrderDetailsModal'))
-const TrackingTimelineModal = lazy(() => import('./tracking/TrackingTimelineModal'))
+const OrderDetailsModal = lazyWithRetry(() => import('./modals/OrderDetailsModal'))
+const TrackingTimelineModal = lazyWithRetry(() => import('./tracking/TrackingTimelineModal'))
 import { hasCommercialInvoice, type LabelCounts } from '../utils/batchLabels'
 import { downloadCsv } from '../utils/csv'
 import { printPdfBlob } from '../utils/printPdf'

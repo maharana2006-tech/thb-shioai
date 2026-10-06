@@ -1,4 +1,5 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import { lazyWithRetry } from '../utils/lazyWithRetry'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { FiAlertCircle, FiArrowLeft, FiChevronDown, FiEdit2, FiFilter, FiPrinter, FiX, FiZap } from 'react-icons/fi'
 import AdvancedDataTable, { type ColumnDef } from './workspace/AdvancedDataTable'
@@ -15,7 +16,7 @@ import { summarizeCarrierError } from '../utils/carrierErrorMap'
 import { notify } from '../utils/notify'
 import { workspacePaths } from '../routes/workspaceRoutes'
 
-const OrderDetailsModal = lazy(() => import('./modals/OrderDetailsModal'))
+const OrderDetailsModal = lazyWithRetry(() => import('./modals/OrderDetailsModal'))
 
 /**
  * DTC Shipment History — HstDetails-style line detail for one batch.

@@ -1,4 +1,5 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
+import { lazyWithRetry } from '../../utils/lazyWithRetry'
 import { useNavigate } from 'react-router-dom'
 import { notify } from '../../utils/notify'
 import { FiFileText, FiRefreshCw, FiTag, FiTruck } from 'react-icons/fi'
@@ -7,8 +8,8 @@ import { formatCarrierName } from '../../utils/carrierUtils'
 // Bundle audit #434 follow-up — same chunks as OrdersWorkspace, so a
 // TENANT opening a detail/track modal reuses the already-fetched
 // chunk from the parent OrdersPage (or downloads once, on demand).
-const OrderDetailsModal = lazy(() => import('../modals/OrderDetailsModal'))
-const TrackingTimelineModal = lazy(() => import('../tracking/TrackingTimelineModal'))
+const OrderDetailsModal = lazyWithRetry(() => import('../modals/OrderDetailsModal'))
+const TrackingTimelineModal = lazyWithRetry(() => import('../tracking/TrackingTimelineModal'))
 import OrdersTable from './OrdersTable'
 import PageSectionHeader from './PageSectionHeader'
 import TablePagination from './TablePagination'

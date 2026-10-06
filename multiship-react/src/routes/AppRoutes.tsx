@@ -1,4 +1,5 @@
-import { lazy, Suspense } from 'react'
+import { Suspense } from 'react'
+import { lazyWithRetry as lazy } from '../utils/lazyWithRetry'
 import { Navigate, Route, Routes, useParams } from 'react-router-dom'
 
 /** Redirect the legacy `/settings/label-templates/:id` URL to the new

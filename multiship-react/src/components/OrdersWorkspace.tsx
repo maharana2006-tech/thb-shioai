@@ -1,5 +1,6 @@
 import { relativeTime } from '../utils/relativeTime'
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { lazyWithRetry } from '../utils/lazyWithRetry'
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useLocation, useNavigate } from 'react-router-dom'
 import type { SortingState } from '@tanstack/react-table'
@@ -58,15 +59,15 @@ import { printPdfBlob as printPdfBlobUtil } from '../utils/printPdf'
 // itself is the visible transition so a spinner in its place would
 // double up. First-open cost is one small RTT for the modal's chunk;
 // cached thereafter.
-const FillCarrierDetailsModal = lazy(() => import('./modals/FillCarrierDetailsModal'))
-const AccountPickerModal = lazy(() => import('./modals/AccountPickerModal'))
-const OrderDetailsModal = lazy(() => import('./modals/OrderDetailsModal'))
-const TrackingTimelineModal = lazy(() => import('./tracking/TrackingTimelineModal'))
-const SchedulePickupModal = lazy(() => import('./modals/SchedulePickupModal'))
-const CloseOutModal = lazy(() => import('./modals/CloseOutModal'))
-const BulkLabelModal = lazy(() => import('./modals/BulkLabelModal'))
-const MultiWarehouseSplitModal = lazy(() => import('./modals/MultiWarehouseSplitModal'))
-const OrderImportModal = lazy(() => import('./modals/OrderImportModal'))
+const FillCarrierDetailsModal = lazyWithRetry(() => import('./modals/FillCarrierDetailsModal'))
+const AccountPickerModal = lazyWithRetry(() => import('./modals/AccountPickerModal'))
+const OrderDetailsModal = lazyWithRetry(() => import('./modals/OrderDetailsModal'))
+const TrackingTimelineModal = lazyWithRetry(() => import('./tracking/TrackingTimelineModal'))
+const SchedulePickupModal = lazyWithRetry(() => import('./modals/SchedulePickupModal'))
+const CloseOutModal = lazyWithRetry(() => import('./modals/CloseOutModal'))
+const BulkLabelModal = lazyWithRetry(() => import('./modals/BulkLabelModal'))
+const MultiWarehouseSplitModal = lazyWithRetry(() => import('./modals/MultiWarehouseSplitModal'))
+const OrderImportModal = lazyWithRetry(() => import('./modals/OrderImportModal'))
 
 type View = 'all' | 'ready' | 'details' | 'client' | 'choose' | 'failed' | 'generated'
 
