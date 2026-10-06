@@ -666,6 +666,7 @@ export default function ClientEditorPage() {
   /** Audit (#281) — dirty-track against the pristine baseline. Memo'd so
    *  the beforeunload handler + onClose confirm share one truth. */
   const isDirty = useMemo(
+    // eslint-disable-next-line react-hooks/refs -- initialFormJsonRef is a write-once baseline set at mount; reading it here is safe because it never changes after init.
     () => JSON.stringify(form) !== initialFormJsonRef.current,
     [form],
   )
