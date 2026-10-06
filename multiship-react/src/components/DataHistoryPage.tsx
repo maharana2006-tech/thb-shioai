@@ -23,8 +23,7 @@ import {
   FiZap,
   FiEdit3,
 } from 'react-icons/fi'
-import type { ColumnDef } from '@tanstack/react-table'
-import AdvancedDataTable from './workspace/AdvancedDataTable'
+import AdvancedDataTable, { type ColumnDef } from './workspace/AdvancedDataTable'
 import FixRowPanel from './bulk/FixRowPanel'
 import BatchPrintMenu from './bulk/BatchPrintMenu'
 import { apiBatchPath, apiBatchesPath, bulkBatchPath, bulkPaths, settingsPaths } from '../routes/workspaceRoutes'

@@ -15,7 +15,7 @@ import {
   FiX,
 } from 'react-icons/fi'
 import { createPortal } from 'react-dom'
-import type { ColumnDef, SortingState } from '@tanstack/react-table'
+import type { SortingState } from '@tanstack/react-table'
 import { ApiError } from '../api/apiClient'
 import {
   labelTemplateService,
@@ -24,7 +24,7 @@ import {
 } from '../api/labelTemplateService'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import { notify } from '../utils/notify'
-import AdvancedDataTable from './workspace/AdvancedDataTable'
+import AdvancedDataTable, { type ColumnDef } from './workspace/AdvancedDataTable'
 import Select from './workspace/Select'
 import PortalMenu from './workspace/PortalMenu'
 import { useAppSession } from '../hooks/useAppSession'

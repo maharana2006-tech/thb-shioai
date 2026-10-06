@@ -294,11 +294,11 @@ export default function CodeMapsPage({ initialClientFilter, embedded = false }: 
               allowedPresetIds: editAllowedPresetIds,
             } : {}),
           }
-    if (tab !== 'DEST_COUNTRY' && !Number.isFinite(payload.targetId)) {
+    if (tab !== 'DEST_COUNTRY' && 'targetId' in payload && !Number.isFinite(payload.targetId)) {
       notify.error('Pick a target before saving.')
       return
     }
-    if (tab === 'DEST_COUNTRY' && !payload.iso2) {
+    if (tab === 'DEST_COUNTRY' && 'iso2' in payload && !payload.iso2) {
       notify.error('Enter an ISO-2 country before saving.')
       return
     }

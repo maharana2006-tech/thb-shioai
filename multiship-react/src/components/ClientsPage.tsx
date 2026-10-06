@@ -15,14 +15,14 @@ import {
   FiUsers,
   FiX,
 } from 'react-icons/fi'
-import type { ColumnDef, SortingState } from '@tanstack/react-table'
+import type { SortingState } from '@tanstack/react-table'
 import { clientService, type Client } from '../api/clientService'
 import { formatCarrierName } from '../utils/carrierUtils'
 import { countryName } from '../utils/countries'
 import PortalMenu from './workspace/PortalMenu'
 import CustomsProfileModal from './modals/CustomsProfileModal'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
-import AdvancedDataTable from './workspace/AdvancedDataTable'
+import AdvancedDataTable, { type ColumnDef } from './workspace/AdvancedDataTable'
 import Select from './workspace/Select'
 import { useAppSession } from '../hooks/useAppSession'
 import { normalizeRole } from '../utils/roles'

@@ -3,19 +3,24 @@ import { useDismissable } from '../../hooks/useDismissable'
 import { downloadCsv } from '../../utils/csv'
 import {
   flexRender,
-  getCoreRowModel,
-  getPaginationRowModel,
-  getSortedRowModel,
-  useReactTable,
-  type Column,
-  type ColumnDef,
   type ColumnOrderState,
   type ColumnPinningState,
   type ColumnSizingState,
+  type ColumnVisibilityState as VisibilityState,
+  type RowData,
   type SortingState,
-  type Table,
-  type VisibilityState,
 } from '@tanstack/react-table'
+import {
+  getCoreRowModel,
+  getPaginationRowModel,
+  getSortedRowModel,
+  useLegacyTable as useReactTable,
+  type LegacyColumn as Column,
+  type LegacyColumnDef as ColumnDef,
+  type LegacyTable as Table,
+} from '@tanstack/react-table/legacy'
+
+export type { ColumnDef }
 import {
   DndContext,
   KeyboardSensor,
@@ -60,9 +65,12 @@ export interface EditCellProps<T> {
   cancel: () => void
 }
 
-/** Persisted layout for a given tableKey. Bump `v` on schema change. */
+/**
+ * Persisted layout for a given tableKey. Bump `v` on schema change.
+ * v: 2 — ColumnPinningState renamed `left/right` → `start/end` for tanstack v9.
+ */
 interface StoredLayout {
-  v: 1
+  v: 2
   columnOrder?: string[]
   columnVisibility?: VisibilityState
   columnSizing?: ColumnSizingState
@@ -70,7 +78,7 @@ interface StoredLayout {
   density?: Density
 }
 
-export interface AdvancedDataTableProps<T> {
+export interface AdvancedDataTableProps<T extends RowData> {
   /** Stable key — used to persist layout in localStorage. */
   tableKey: string
   columns: ColumnDef<T, unknown>[]
@@ -160,7 +168,7 @@ const densityRowClass: Record<Density, string> = {
   comfortable: 'px-2.5 py-3',
 }
 
-function exportRowValues<T>(table: Table<T>): string[][] {
+function exportRowValues<T extends RowData>(table: Table<T>): string[][] {
   const exportable = (col: { columnDef: { meta?: unknown } }) =>
     (col.columnDef.meta as { exportable?: boolean } | undefined)?.exportable !== false
   const visible = table.getVisibleLeafColumns().filter(exportable)
@@ -193,14 +201,18 @@ function exportRowValues<T>(table: Table<T>): string[][] {
   return [header, ...rows]
 }
 
+// Storage key bumped `:v1` → `:v2` to drop pre-v9 layouts carrying the old
+// `{left, right}` ColumnPinningState shape.
+const LAYOUT_STORAGE_KEY = (tableKey: string) => `advanced-data-table:${tableKey}:v2`
+
 /** Read + write the per-table layout to localStorage. Never throws. */
 function loadLayout(tableKey: string): StoredLayout | null {
   if (typeof window === 'undefined') return null
   try {
-    const raw = window.localStorage.getItem(`advanced-data-table:${tableKey}:v1`)
+    const raw = window.localStorage.getItem(LAYOUT_STORAGE_KEY(tableKey))
     if (!raw) return null
     const parsed = JSON.parse(raw) as StoredLayout
-    if (parsed?.v !== 1) return null
+    if (parsed?.v !== 2) return null
     return parsed
   } catch {
     return null
@@ -211,8 +223,8 @@ function saveLayout(tableKey: string, layout: Omit<StoredLayout, 'v'>) {
   if (typeof window === 'undefined') return
   try {
     window.localStorage.setItem(
-      `advanced-data-table:${tableKey}:v1`,
-      JSON.stringify({ v: 1, ...layout }),
+      LAYOUT_STORAGE_KEY(tableKey),
+      JSON.stringify({ v: 2, ...layout }),
     )
   } catch {
     // storage unavailable / quota — non-fatal.
@@ -222,7 +234,7 @@ function saveLayout(tableKey: string, layout: Omit<StoredLayout, 'v'>) {
 function clearLayout(tableKey: string) {
   if (typeof window === 'undefined') return
   try {
-    window.localStorage.removeItem(`advanced-data-table:${tableKey}:v1`)
+    window.localStorage.removeItem(LAYOUT_STORAGE_KEY(tableKey))
   } catch {
     // non-fatal.
   }
@@ -232,27 +244,27 @@ function clearLayout(tableKey: string) {
  * Sticky offset for a pinned column. Left-pinned columns stack from the left
  * (getStart), right-pinned from the right (getAfter). Non-pinned returns null.
  */
-function pinnedStyle<T>(column: Column<T, unknown>): React.CSSProperties | undefined {
+function pinnedStyle<T extends RowData>(column: Column<T, unknown>): React.CSSProperties | undefined {
   const side = column.getIsPinned()
   if (!side) return undefined
-  if (side === 'left') {
+  if (side === 'start') {
     return {
       position: 'sticky',
-      left: `${column.getStart('left')}px`,
+      left: `${column.getStart('start')}px`,
       zIndex: 2,
       background: 'white',
     }
   }
   return {
     position: 'sticky',
-    right: `${column.getAfter('right')}px`,
+    right: `${column.getAfter('end')}px`,
     zIndex: 2,
     background: 'white',
   }
 }
 
 /** Sortable/draggable header cell. Wraps a <th> so @dnd-kit can move it. */
-function SortableHeader<T>({
+function SortableHeader<T extends RowData>({
   header,
   density,
   children,
@@ -307,7 +319,7 @@ function SortableHeader<T>({
   )
 }
 
-export default function AdvancedDataTable<T>({
+export default function AdvancedDataTable<T extends RowData>({
   tableKey,
   columns,
   data,
@@ -373,7 +385,7 @@ export default function AdvancedDataTable<T>({
     () => persisted?.columnSizing ?? {},
   )
   const [columnPinning, setColumnPinning] = useState<ColumnPinningState>(
-    () => persisted?.columnPinning ?? { left: [], right: [] },
+    () => persisted?.columnPinning ?? { start: [], end: [] },
   )
   const [density, setDensity] = useState<Density>(persisted?.density ?? initialDensity)
   const [openMenu, setOpenMenu] = useState<null | 'columns' | 'density'>(null)
@@ -440,9 +452,9 @@ export default function AdvancedDataTable<T>({
   )
   const effectiveColumnPinning: ColumnPinningState = useMemo(() => {
     if (!hasSelectColumn) return columnPinning
-    const left = (columnPinning.left ?? []).filter((id) => id !== 'select')
-    const right = (columnPinning.right ?? []).filter((id) => id !== 'select')
-    return { left: ['select', ...left], right }
+    const start = (columnPinning.start ?? []).filter((id) => id !== 'select')
+    const end = (columnPinning.end ?? []).filter((id) => id !== 'select')
+    return { start: ['select', ...start], end }
   }, [columnPinning, hasSelectColumn])
   const effectiveColumnOrder: ColumnOrderState = useMemo(() => {
     if (!hasSelectColumn || columnOrder.length === 0) return columnOrder
@@ -456,7 +468,6 @@ export default function AdvancedDataTable<T>({
     [columnVisibility, forcedKey],
   )
 
-  // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Table's useReactTable() returns functions that cannot be memoized safely — library-level incompatibility with react-hooks analyzer, not a code issue
   const table = useReactTable<T>({
     data,
     columns,
@@ -528,7 +539,7 @@ export default function AdvancedDataTable<T>({
     setColumnOrder(defaultOrder)
     setColumnVisibility(defaultVisibility)
     setColumnSizing({})
-    setColumnPinning({ left: [], right: [] })
+    setColumnPinning({ start: [], end: [] })
     setDensity(initialDensity)
     setOpenMenu(null)
   }
@@ -628,8 +639,8 @@ export default function AdvancedDataTable<T>({
 
   const cyclePin = (col: Column<T, unknown>) => {
     const cur = col.getIsPinned()
-    // Cycle: none → left → none. (Right-pin skipped in menu; TanStack still supports it.)
-    col.pin(cur === 'left' ? false : 'left')
+    // Cycle: none → start → none. (End-pin skipped in menu; TanStack still supports it.)
+    col.pin(cur === 'start' ? false : 'start')
   }
 
   return (
@@ -683,8 +694,8 @@ export default function AdvancedDataTable<T>({
               .filter((id) => idToCol.has(id))
             // Pinned-first sort. Stable within each group (preserves
             // whatever order the draft/committed list already has).
-            const pinnedIds = workingIds.filter((id) => idToCol.get(id)?.getIsPinned() === 'left')
-            const unpinnedIds = workingIds.filter((id) => idToCol.get(id)?.getIsPinned() !== 'left')
+            const pinnedIds = workingIds.filter((id) => idToCol.get(id)?.getIsPinned() === 'start')
+            const unpinnedIds = workingIds.filter((id) => idToCol.get(id)?.getIsPinned() !== 'start')
             const orderedIds = [...pinnedIds, ...unpinnedIds]
 
             /** Return the pin-scoped neighbour indices for a given
@@ -698,8 +709,8 @@ export default function AdvancedDataTable<T>({
               if (!a || !b) return
               // Same-pin-group check — moving pinned into unpinned or
               // vice versa isn't allowed here (change pin state via 📌).
-              const aPinned = a.getIsPinned() === 'left'
-              const bPinned = b.getIsPinned() === 'left'
+              const aPinned = a.getIsPinned() === 'start'
+              const bPinned = b.getIsPinned() === 'start'
               if (aPinned !== bPinned) return
               const next = [...orderedIds]
               const tmp = next[idx]
@@ -726,9 +737,9 @@ export default function AdvancedDataTable<T>({
                   // boundary. Compute by peeking at neighbours.
                   const prev = idx > 0 ? idToCol.get(orderedIds[idx - 1]) : null
                   const next = idx < orderedIds.length - 1 ? idToCol.get(orderedIds[idx + 1]) : null
-                  const isPinned = pinned === 'left'
-                  const canUp = !!prev && ((prev.getIsPinned() === 'left') === isPinned)
-                  const canDown = !!next && ((next.getIsPinned() === 'left') === isPinned)
+                  const isPinned = pinned === 'start'
+                  const canUp = !!prev && ((prev.getIsPinned() === 'start') === isPinned)
+                  const canDown = !!next && ((next.getIsPinned() === 'start') === isPinned)
                   return (
                     <div
                       key={col.id}
@@ -767,10 +778,10 @@ export default function AdvancedDataTable<T>({
                       <button
                         type="button"
                         onClick={() => cyclePin(col)}
-                        title={pinned === 'left' ? 'Unpin' : 'Pin to left'}
-                        aria-pressed={pinned === 'left'}
+                        title={pinned === 'start' ? 'Unpin' : 'Pin to left'}
+                        aria-pressed={pinned === 'start'}
                         className={`rounded-md px-1.5 py-0.5 text-[10px] font-semibold transition ${
-                          pinned === 'left'
+                          pinned === 'start'
                             ? 'bg-[#1f150c] text-white'
                             : 'border border-slate-200 bg-white text-slate-500 hover:bg-slate-100'
                         }`}

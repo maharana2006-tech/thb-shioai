@@ -2,7 +2,7 @@ import { relativeTime } from '../utils/relativeTime'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useLocation, useNavigate } from 'react-router-dom'
-import type { ColumnDef, SortingState } from '@tanstack/react-table'
+import type { SortingState } from '@tanstack/react-table'
 import { notify } from '../utils/notify'
 // Espresso/cream button tokens — shared across the app (see components/ui/buttons).
 import { BTN_PRIMARY, BTN_GHOST_SM, BTN_PRIMARY_SM } from './ui/buttons'
@@ -46,7 +46,7 @@ import type { CarrierAccountRef, OrderAccountResolution } from '../api/accountRe
 import AccountScenarioBadge from './workspace/AccountScenarioBadge'
 // PR #555 — inline compact status dot+label supersedes OrderStatusBadge.
 // import OrderStatusBadge from './workspace/OrderStatusBadge'
-import AdvancedDataTable from './workspace/AdvancedDataTable'
+import AdvancedDataTable, { type ColumnDef } from './workspace/AdvancedDataTable'
 import SendToPrinterDialog from './workspace/SendToPrinterDialog'
 import { useAppSession } from '../hooks/useAppSession'
 import { normalizeRole } from '../utils/roles'
