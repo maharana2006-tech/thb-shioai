@@ -57,9 +57,9 @@ const PIPELINE = [
 ] as const
 
 const CARRIER_AVATAR: Record<string, { bg: string; mono: string }> = {
-  UPS: { bg: 'bg-[#351C15]', mono: 'UPS' },
-  FEDEX: { bg: 'bg-[#4D148C]', mono: 'FDX' },
-  USPS: { bg: 'bg-[#1F5AA6]', mono: 'USP' },
+  UPS: { bg: 'bg-[var(--e-351c15)]', mono: 'UPS' },
+  FEDEX: { bg: 'bg-[var(--e-4d148c)]', mono: 'FDX' },
+  USPS: { bg: 'bg-[var(--e-1f5aa6)]', mono: 'USP' },
 }
 
 const initials = (name?: string | null) =>
@@ -308,7 +308,7 @@ export default function Dashboard() {
         </span>
       ),
       icon: <FiTag className="h-4 w-4" />,
-      tone: 'border-[#412d15]/25 bg-[#412d15]/[0.06] text-[#412d15]',
+      tone: 'border-[var(--e-412d15)]/25 bg-[var(--e-412d15)]/[0.06] text-[var(--e-412d15)]',
       to: '/orders?view=generated',
     },
     {
@@ -345,7 +345,7 @@ export default function Dashboard() {
       {/* ===== greeting header ===== */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#1f150c] text-[16px] font-bold text-[#e1dcc9] shadow-sm">
+          <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--e-1f150c)] text-[16px] font-bold text-[var(--e-e1dcc9)] shadow-sm">
             {initials(username)}
           </span>
           <div>
@@ -410,7 +410,7 @@ export default function Dashboard() {
             type="button"
             onClick={() => navigate('/orders?view=ready')}
             disabled={!ready}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[12.5px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-slate-300"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--e-1f150c)] px-3.5 py-2 text-[12.5px] font-semibold text-white transition hover:bg-[var(--e-412d15)] disabled:cursor-not-allowed disabled:bg-slate-300"
           >
             <FiZap className="h-3.5 w-3.5" /> Generate ready ({ready})
           </button>
@@ -424,7 +424,7 @@ export default function Dashboard() {
             key={c.label}
             type="button"
             onClick={() => navigate(c.to)}
-            className={`${CARD} group text-left transition hover:-translate-y-0.5 hover:border-[#412d15]/30 hover:shadow-md`}
+            className={`${CARD} group text-left transition hover:-translate-y-0.5 hover:border-[var(--e-412d15)]/30 hover:shadow-md`}
           >
             <div className="flex items-start justify-between gap-2 px-4 pt-3.5">
               <p className="flex min-w-0 items-baseline gap-2">
@@ -451,7 +451,7 @@ export default function Dashboard() {
             </p>
             <div className="mt-3 flex items-center justify-between gap-2 border-t border-dashed border-slate-200 px-4 py-2.5">
               <p className="min-w-0 truncate text-[11.5px] font-medium text-slate-500">{c.sub}</p>
-              <FiArrowRight className="h-3.5 w-3.5 shrink-0 text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-[#412d15]" />
+              <FiArrowRight className="h-3.5 w-3.5 shrink-0 text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-[var(--e-412d15)]" />
             </div>
           </button>
         ))}
@@ -461,7 +461,7 @@ export default function Dashboard() {
       <section className={`${CARD} p-5`}>
         <div className="mb-3 flex items-center justify-between">
           <h3 className="inline-flex items-center gap-2 text-[13.5px] font-semibold text-slate-950">
-            <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-[#412d15]/10 text-[#412d15]">
+            <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-[var(--e-412d15)]/10 text-[var(--e-412d15)]">
               <FiTruck className="h-3.5 w-3.5" />
             </span>
             Label pipeline
@@ -469,7 +469,7 @@ export default function Dashboard() {
           <button
             type="button"
             onClick={() => navigate('/orders')}
-            className="inline-flex items-center gap-1 text-[12px] font-semibold text-[#412d15] transition hover:gap-1.5"
+            className="inline-flex items-center gap-1 text-[12px] font-semibold text-[var(--e-412d15)] transition hover:gap-1.5"
           >
             Open workspace <FiArrowRight className="h-3.5 w-3.5" />
           </button>
@@ -489,7 +489,7 @@ export default function Dashboard() {
           {/* a parcel traveling the belt */}
           <span
             aria-hidden="true"
-            className="mb-belt-parcel pointer-events-none absolute top-[18.5px] h-[7px] w-[7px] rotate-45 rounded-[1px] bg-[#412d15]/35"
+            className="mb-belt-parcel pointer-events-none absolute top-[18.5px] h-[7px] w-[7px] rotate-45 rounded-[1px] bg-[var(--e-412d15)]/35"
           />
 
           <div className="grid grid-cols-5 gap-2">
@@ -632,7 +632,7 @@ export default function Dashboard() {
         {/* carrier split */}
         <div className={`${CARD} p-5`}>
           <h3 className="inline-flex items-center gap-2 text-[13.5px] font-semibold text-slate-950">
-            <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-[#412d15]/10 text-[#412d15]">
+            <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-[var(--e-412d15)]/10 text-[var(--e-412d15)]">
               <FiTruck className="h-3.5 w-3.5" />
             </span>
             Carrier split
@@ -679,7 +679,7 @@ export default function Dashboard() {
             <button
               type="button"
               onClick={() => navigate('/orders?view=generated')}
-              className="text-[11.5px] font-semibold text-[#412d15] hover:underline"
+              className="text-[11.5px] font-semibold text-[var(--e-412d15)] hover:underline"
             >
               View all
             </button>
@@ -699,9 +699,9 @@ export default function Dashboard() {
                     type="button"
                     onClick={() => navigate(`/label/${l.orderNo}`)}
                     aria-label={label}
-                    className="flex flex-1 items-center gap-2.5 rounded-lg py-2.5 text-left transition hover:bg-slate-50/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#412d15]"
+                    className="flex flex-1 items-center gap-2.5 rounded-lg py-2.5 text-left transition hover:bg-slate-50/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--e-412d15)]"
                   >
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#412d15]/10 text-[10.5px] font-bold text-[#412d15]">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--e-412d15)]/10 text-[10.5px] font-bold text-[var(--e-412d15)]">
                       {initials(l.client)}
                     </span>
                     <span className="min-w-0 flex-1">
@@ -731,7 +731,7 @@ export default function Dashboard() {
                       }}
                       aria-label={`Copy tracking number ${l.trackingNumber}`}
                       title="Copy tracking number"
-                      className="shrink-0 rounded-md p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#412d15]"
+                      className="shrink-0 rounded-md p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--e-412d15)]"
                     >
                       <FiCopy className="h-3 w-3" />
                     </button>

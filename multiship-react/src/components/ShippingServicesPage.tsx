@@ -26,9 +26,9 @@ import type { SettingsOutletContext } from './layout/SettingsLayout'
 import CarrierSyncMenuModal from './modals/CarrierSyncMenuModal'
 
 const CARRIER_BADGE: Record<string, { bg: string; mono: string }> = {
-  UPS: { bg: 'bg-[#351C15]', mono: 'UPS' },
-  FEDEX: { bg: 'bg-[#4D148C]', mono: 'FDX' },
-  USPS: { bg: 'bg-[#1F5AA6]', mono: 'USP' },
+  UPS: { bg: 'bg-[var(--e-351c15)]', mono: 'UPS' },
+  FEDEX: { bg: 'bg-[var(--e-4d148c)]', mono: 'FDX' },
+  USPS: { bg: 'bg-[var(--e-1f5aa6)]', mono: 'USP' },
 }
 
 /** The carriers a manifest is always shown for (so an un-synced origin can still be synced). */
@@ -288,7 +288,7 @@ export default function ShippingServicesPage({ active = true }: { active?: boole
           <select
             value={origin}
             onChange={(e) => setOrigin(e.target.value)}
-            className="cursor-pointer bg-transparent py-1 pr-1 text-[12.5px] font-semibold text-[#1f150c] outline-none"
+            className="cursor-pointer bg-transparent py-1 pr-1 text-[12.5px] font-semibold text-[var(--e-1f150c)] outline-none"
           >
             {originOptions.map((code) => (
               <option key={code} value={code}>
@@ -302,7 +302,7 @@ export default function ShippingServicesPage({ active = true }: { active?: boole
       {/* health strip — tally tickets */}
       <section className="grid grid-cols-2 gap-3">
         {[
-          { label: `Services from ${origin}`, value: `${enabledCount}/${visibleServices.length}`, unit: 'services', icon: FiSend, tone: 'border-[#412d15]/25 bg-[#412d15]/[0.06] text-[#412d15]' },
+          { label: `Services from ${origin}`, value: `${enabledCount}/${visibleServices.length}`, unit: 'services', icon: FiSend, tone: 'border-[var(--e-412d15)]/25 bg-[var(--e-412d15)]/[0.06] text-[var(--e-412d15)]' },
           { label: 'Package links', value: links.length, unit: 'links', icon: FiBox, tone: 'border-emerald-200 bg-emerald-50 text-emerald-600' },
         ].map((c, idx) => (
           <div key={c.label} className="rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -374,18 +374,18 @@ export default function ShippingServicesPage({ active = true }: { active?: boole
             return (
               <div key={carrier} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
                 {/* document band: carrier plate + manifest title + origin + sync */}
-                <div className="flex items-center justify-between gap-2 bg-[#1f150c] px-4 py-2.5">
+                <div className="flex items-center justify-between gap-2 bg-[var(--e-1f150c)] px-4 py-2.5">
                   <p className="flex min-w-0 items-center gap-2.5">
                     <span className={`flex h-6 w-9 shrink-0 items-center justify-center rounded ${badge.bg} font-mono text-[9px] font-black tracking-wider text-white`}>
                       {badge.mono}
                     </span>
-                    <span className="truncate text-[10px] font-black uppercase tracking-[0.2em] text-[#e1dcc9]">
+                    <span className="truncate text-[10px] font-black uppercase tracking-[0.2em] text-[var(--e-e1dcc9)]">
                       {carrier} · from {origin}
                     </span>
                   </p>
                   <div className="flex shrink-0 items-center gap-1.5">
                     {list.length ? (
-                      <span className="rounded bg-[#e1dcc9]/15 px-2 py-0.5 font-mono text-[10px] font-bold tabular-nums text-[#e1dcc9]">
+                      <span className="rounded bg-[var(--e-e1dcc9)]/15 px-2 py-0.5 font-mono text-[10px] font-bold tabular-nums text-[var(--e-e1dcc9)]">
                         {on}/{list.length} ON
                       </span>
                     ) : null}
@@ -403,7 +403,7 @@ export default function ShippingServicesPage({ active = true }: { active?: boole
                       onClick={() => setSyncMenuFor(carrier)}
                       disabled={isSyncing}
                       title={`Pull ${carrier}'s available services from ${countryName(origin)}`}
-                      className="inline-flex items-center gap-1 rounded bg-[#e1dcc9]/15 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-[#e1dcc9] transition hover:bg-[#e1dcc9]/25 disabled:opacity-50"
+                      className="inline-flex items-center gap-1 rounded bg-[var(--e-e1dcc9)]/15 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-[var(--e-e1dcc9)] transition hover:bg-[var(--e-e1dcc9)]/25 disabled:opacity-50"
                     >
                       <FiDownloadCloud className={`h-3 w-3 ${isSyncing ? 'animate-pulse' : ''}`} />
                       {isSyncing ? 'Syncing' : 'Sync'}
@@ -411,7 +411,7 @@ export default function ShippingServicesPage({ active = true }: { active?: boole
                   </div>
                 </div>
                 {prov ? (
-                  <div className="flex items-center gap-1.5 border-b border-dashed border-slate-200 bg-[#faf9f7] px-4 py-1.5">
+                  <div className="flex items-center gap-1.5 border-b border-dashed border-slate-200 bg-[var(--e-faf9f7)] px-4 py-1.5">
                     <span
                       className={`h-1.5 w-1.5 rounded-full ${
                         prov.kind === 'live' ? 'bg-emerald-500' : prov.kind === 'built-in' ? 'bg-amber-400' : 'bg-slate-300'
@@ -436,7 +436,7 @@ export default function ShippingServicesPage({ active = true }: { active?: boole
                       type="button"
                       onClick={() => setSyncMenuFor(carrier)}
                       disabled={isSyncing}
-                      className="mt-2.5 inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[11.5px] font-semibold text-white transition hover:bg-[#412d15] disabled:opacity-50"
+                      className="mt-2.5 inline-flex items-center gap-1.5 rounded-xl bg-[var(--e-1f150c)] px-3 py-1.5 text-[11.5px] font-semibold text-white transition hover:bg-[var(--e-412d15)] disabled:opacity-50"
                     >
                       <FiDownloadCloud className="h-3.5 w-3.5" />
                       {isSyncing ? 'Syncing…' : 'Sync from carrier'}
@@ -476,7 +476,7 @@ export default function ShippingServicesPage({ active = true }: { active?: boole
                           role="switch"
                           aria-checked={s.enabled}
                           onClick={() => void toggle(s)}
-                          className={`relative h-5 w-9 shrink-0 rounded-full transition ${s.enabled ? 'bg-[#1f150c]' : 'bg-slate-200'}`}
+                          className={`relative h-5 w-9 shrink-0 rounded-full transition ${s.enabled ? 'bg-[var(--e-1f150c)]' : 'bg-slate-200'}`}
                           title={s.enabled ? 'Disable' : 'Enable'}
                         >
                           <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${s.enabled ? 'left-[18px]' : 'left-0.5'}`} />
@@ -514,7 +514,7 @@ export default function ShippingServicesPage({ active = true }: { active?: boole
                           title={`Assigned to: ${clientTooltip}`}
                           className={`inline-flex items-center gap-1 rounded-lg border px-1.5 py-1 text-[10px] font-bold transition ${
                             clientCount
-                              ? 'border-[#412d15]/20 bg-[#412d15]/[0.06] text-[#412d15]'
+                              ? 'border-[var(--e-412d15)]/20 bg-[var(--e-412d15)]/[0.06] text-[var(--e-412d15)]'
                               : 'border-slate-200 bg-white text-slate-400'
                           }`}
                         >
@@ -687,7 +687,7 @@ export default function ShippingServicesPage({ active = true }: { active?: boole
               <button
                 type="button"
                 onClick={() => void savePackages()}
-                className="rounded-xl bg-[#1f150c] px-5 py-2 text-[13px] font-semibold text-white transition hover:bg-[#412d15]"
+                className="rounded-xl bg-[var(--e-1f150c)] px-5 py-2 text-[13px] font-semibold text-white transition hover:bg-[var(--e-412d15)]"
               >
                 Save packages
               </button>

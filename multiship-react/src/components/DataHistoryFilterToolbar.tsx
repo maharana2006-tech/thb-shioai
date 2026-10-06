@@ -35,7 +35,7 @@ export const statusMeta = (status?: string | null) =>
   BATCH_STATUS[(status || '').toUpperCase()] ?? { label: status || '—', cls: 'bg-slate-100 text-slate-500 ring-slate-200' }
 
 /** The status filter's choices, in order. */
-const ANY_STATUS = { label: 'Any status', hint: 'Every import', dot: 'bg-[#1f150c]' }
+const ANY_STATUS = { label: 'Any status', hint: 'Every import', dot: 'bg-[var(--e-1f150c)]' }
 const STATUS_OPTIONS: HistoryStatusKey[] = ['ALL', 'DRAFT', 'INITIATE', 'IN_PROGRESS', 'PARTIAL_COMPLETE', 'COMPLETE', 'FAILED']
 const statusOption = (k: HistoryStatusKey) => (k === 'ALL' ? ANY_STATUS : BATCH_STATUS[k])
 
@@ -154,8 +154,8 @@ export default function DataHistoryFilterToolbar(props: DataHistoryFilterToolbar
                         <button type="button" onClick={() => setStatusFilter(key)} aria-pressed={on} className={`${OPTION} ${on ? OPTION_ON : ''}`}>
                           <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${s.dot} ${n === 0 && !on ? 'opacity-40' : ''}`} aria-hidden="true" />
                           <span className="min-w-0 flex-1">
-                            <span className={`block text-[12.5px] font-semibold leading-tight ${n === 0 && !on ? 'text-[#a1906d]' : 'text-[#1f150c]'}`}>{s.label}</span>
-                            <span className="block text-[10.5px] leading-tight text-[#a1906d]">{s.hint}</span>
+                            <span className={`block text-[12.5px] font-semibold leading-tight ${n === 0 && !on ? 'text-[var(--e-a1906d)]' : 'text-[var(--e-1f150c)]'}`}>{s.label}</span>
+                            <span className="block text-[10.5px] leading-tight text-[var(--e-a1906d)]">{s.hint}</span>
                           </span>
                           <CountBadge n={n} />
                           {on ? <Check /> : null}
@@ -173,15 +173,15 @@ export default function DataHistoryFilterToolbar(props: DataHistoryFilterToolbar
               {field === 'createdBy' ? (
                 <div className="space-y-2">
                   {creators.length > 6 ? (
-                    <label className="flex items-center gap-2 rounded-lg border border-[#e3d9c4] bg-[#fcfaf5] px-2.5 py-1.5 focus-within:border-[#412d15]">
-                      <FiSearch className="h-3.5 w-3.5 text-[#b6a684]" />
-                      <input value={creatorQuery} onChange={(e) => setCreatorQuery(e.target.value)} placeholder="Find a user…" className="w-full bg-transparent text-[12.5px] outline-none placeholder:text-[#b6a684]" />
+                    <label className="flex items-center gap-2 rounded-lg border border-[var(--e-e3d9c4)] bg-[var(--e-fcfaf5)] px-2.5 py-1.5 focus-within:border-[var(--e-412d15)]">
+                      <FiSearch className="h-3.5 w-3.5 text-[var(--e-b6a684)]" />
+                      <input value={creatorQuery} onChange={(e) => setCreatorQuery(e.target.value)} placeholder="Find a user…" className="w-full bg-transparent text-[12.5px] outline-none placeholder:text-[var(--e-b6a684)]" />
                     </label>
                   ) : null}
                   <ul className="space-y-0.5">
                     <li>
                       <button type="button" onClick={() => setCreatedBy('')} aria-pressed={!createdBy} className={`${OPTION} ${!createdBy ? OPTION_ON : ''}`}>
-                        <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#f4eede] text-[#6b5c42]" aria-hidden="true"><FiUser className="h-3 w-3" /></span>
+                        <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--e-f4eede)] text-[var(--e-6b5c42)]" aria-hidden="true"><FiUser className="h-3 w-3" /></span>
                         <span className="text-[12.5px] font-semibold">Anyone</span>
                         {!createdBy ? <Check /> : null}
                       </button>
@@ -191,14 +191,14 @@ export default function DataHistoryFilterToolbar(props: DataHistoryFilterToolbar
                       return (
                         <li key={c}>
                           <button type="button" onClick={() => setCreatedBy(c)} aria-pressed={on} className={`${OPTION} ${on ? OPTION_ON : ''}`}>
-                            <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#412d15] text-[10px] font-bold uppercase text-[#f4eede]" aria-hidden="true">{c.slice(0, 1)}</span>
+                            <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--e-412d15)] text-[10px] font-bold uppercase text-[var(--e-f4eede)]" aria-hidden="true">{c.slice(0, 1)}</span>
                             <span className="truncate text-[12.5px] font-semibold">{c}</span>
                             {on ? <Check /> : null}
                           </button>
                         </li>
                       )
                     })}
-                    {visibleCreators.length === 0 ? <li className="px-2.5 py-2 text-[12px] text-[#a1906d]">No user matches.</li> : null}
+                    {visibleCreators.length === 0 ? <li className="px-2.5 py-2 text-[12px] text-[var(--e-a1906d)]">No user matches.</li> : null}
                   </ul>
                 </div>
               ) : null}
@@ -210,10 +210,10 @@ export default function DataHistoryFilterToolbar(props: DataHistoryFilterToolbar
                     return (
                       <li key={b.key}>
                         <button type="button" onClick={() => setBatchPresence(b.key)} aria-pressed={on} className={`${OPTION} ${on ? OPTION_ON : ''}`}>
-                          <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[#f4eede] text-[#6b5c42]" aria-hidden="true"><FiHash className="h-3 w-3" /></span>
+                          <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[var(--e-f4eede)] text-[var(--e-6b5c42)]" aria-hidden="true"><FiHash className="h-3 w-3" /></span>
                           <span className="min-w-0 flex-1">
                             <span className="block text-[12.5px] font-semibold leading-tight">{b.label}</span>
-                            <span className="block text-[10.5px] leading-tight text-[#a1906d]">{b.hint}</span>
+                            <span className="block text-[10.5px] leading-tight text-[var(--e-a1906d)]">{b.hint}</span>
                           </span>
                           {on ? <Check /> : null}
                         </button>
@@ -226,10 +226,10 @@ export default function DataHistoryFilterToolbar(props: DataHistoryFilterToolbar
               {field === 'rows' ? (
                 <div className="space-y-3">
                   <label className="block">
-                    <span className="mb-1 block text-[11px] text-[#6b5c42]">Show imports with at least</span>
+                    <span className="mb-1 block text-[11px] text-[var(--e-6b5c42)]">Show imports with at least</span>
                     <span className="flex items-center gap-2">
                       <input type="number" min={0} value={minSaved} onChange={(e) => setMinSaved(e.target.value)} placeholder="0" aria-label="Min rows saved" className={`${FIELD_INPUT} max-w-[8rem] tabular-nums`} />
-                      <span className="text-[12px] text-[#6b5c42]">saved rows</span>
+                      <span className="text-[12px] text-[var(--e-6b5c42)]">saved rows</span>
                     </span>
                   </label>
                   <div className="flex flex-wrap gap-1.5">
@@ -258,7 +258,7 @@ export default function DataHistoryFilterToolbar(props: DataHistoryFilterToolbar
                   </ul>
                   <div>
                     <p className={FIELD_LABEL}>Direction</p>
-                    <div className="inline-flex rounded-lg border border-[#e3d9c4] bg-[#fcfaf5] p-0.5" role="group" aria-label="Sort direction">
+                    <div className="inline-flex rounded-lg border border-[var(--e-e3d9c4)] bg-[var(--e-fcfaf5)] p-0.5" role="group" aria-label="Sort direction">
                       {(['DESC', 'ASC'] as const).map((d) => {
                         const on = sortDir === d
                         return (
@@ -267,7 +267,7 @@ export default function DataHistoryFilterToolbar(props: DataHistoryFilterToolbar
                             type="button"
                             onClick={() => setSortDir(() => d)}
                             aria-pressed={on}
-                            className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[11.5px] font-semibold transition ${on ? 'bg-white text-[#1f150c] shadow-sm ring-1 ring-[#e3d9c4]' : 'text-[#6b5c42] hover:text-[#1f150c]'}`}
+                            className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[11.5px] font-semibold transition ${on ? 'bg-white text-[var(--e-1f150c)] shadow-sm ring-1 ring-[var(--e-e3d9c4)]' : 'text-[var(--e-6b5c42)] hover:text-[var(--e-1f150c)]'}`}
                           >
                             {d === 'DESC' ? <FiArrowDown className="h-3 w-3" /> : <FiArrowUp className="h-3 w-3" />}
                             {d === 'DESC' ? sortMeta.desc : sortMeta.asc}

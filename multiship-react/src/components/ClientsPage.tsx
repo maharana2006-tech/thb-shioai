@@ -369,7 +369,7 @@ export default function ClientsPage() {
                 <span
                   key={a.id}
                   className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10.5px] font-semibold ${
-                    a.clientDefault ? 'bg-[#412d15]/10 text-[#412d15]' : 'bg-slate-100 text-slate-600'
+                    a.clientDefault ? 'bg-[var(--e-412d15)]/10 text-[var(--e-412d15)]' : 'bg-slate-100 text-slate-600'
                   }`}
                 >
                   {formatCarrierName(a.carrierCode)}
@@ -496,7 +496,7 @@ export default function ClientsPage() {
                   title="Filters"
                   className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-[12px] font-semibold transition md:px-3 ${
                     showFilters || activeFilterCount
-                      ? 'bg-[#1f150c] text-white'
+                      ? 'bg-[var(--e-1f150c)] text-white'
                       : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
                   }`}
                 >
@@ -523,17 +523,17 @@ export default function ClientsPage() {
                           onChange={(e) => setColFilters((c) => ({ ...c, code: e.target.value }))}
                           placeholder="e.g. ARHDEV"
                           aria-label="Filter clients by code"
-                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12.5px] font-semibold text-slate-950 outline-none transition focus:border-[#412d15]"
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12.5px] font-semibold text-slate-950 outline-none transition focus:border-[var(--e-412d15)]"
                         />
                       </div>
                       <div>
-                        <span className={filterLabelClass}><FiTag className="h-3 w-3 text-[#412d15]" />Name contains</span>
+                        <span className={filterLabelClass}><FiTag className="h-3 w-3 text-[var(--e-412d15)]" />Name contains</span>
                         <input
                           value={colFilters.name}
                           onChange={(e) => setColFilters((c) => ({ ...c, name: e.target.value }))}
                           placeholder="e.g. Modern Art"
                           aria-label="Filter clients by name"
-                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12.5px] font-semibold text-slate-950 outline-none transition focus:border-[#412d15]"
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12.5px] font-semibold text-slate-950 outline-none transition focus:border-[var(--e-412d15)]"
                         />
                       </div>
                       <div>
@@ -543,7 +543,7 @@ export default function ClientsPage() {
                           onChange={(e) => setColFilters((c) => ({ ...c, city: e.target.value }))}
                           placeholder="e.g. Chicago"
                           aria-label="Filter clients by city"
-                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12.5px] font-semibold text-slate-950 outline-none transition focus:border-[#412d15]"
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12.5px] font-semibold text-slate-950 outline-none transition focus:border-[var(--e-412d15)]"
                         />
                       </div>
                       <div>
@@ -564,7 +564,7 @@ export default function ClientsPage() {
                         </Select>
                       </div>
                       <div>
-                        <span className={filterLabelClass}><FiUsers className="h-3 w-3 text-[#412d15]" />Orders</span>
+                        <span className={filterLabelClass}><FiUsers className="h-3 w-3 text-[var(--e-412d15)]" />Orders</span>
                         <Select value={ordersFilter} onChange={(e) => setOrdersFilter(e.target.value)} aria-label="Filter by orders">
                           <option value="">All clients</option>
                           <option value="YES">With orders</option>
@@ -587,7 +587,7 @@ export default function ClientsPage() {
                       <button
                         type="button"
                         onClick={() => setShowFilters(false)}
-                        className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[11.5px] font-semibold text-white transition hover:bg-[#412d15]"
+                        className="inline-flex items-center gap-1 rounded-xl bg-[var(--e-1f150c)] px-3 py-1.5 text-[11.5px] font-semibold text-white transition hover:bg-[var(--e-412d15)]"
                       >
                         Done
                       </button>
@@ -600,7 +600,7 @@ export default function ClientsPage() {
               <button
                 type="button"
                 onClick={() => navigate('/settings/clients/new')}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15]"
+                className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--e-1f150c)] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[var(--e-412d15)]"
               >
                 <FiPlus className="h-3.5 w-3.5" /> Add Client
               </button>
@@ -708,7 +708,7 @@ function RowActionsMenu({
           onClick={() => { close(); onImporter() }}
           className="flex w-full items-center gap-2 px-3 py-2 text-[12px] font-semibold text-slate-700 transition hover:bg-slate-50"
         >
-          <FiGlobe className="h-3.5 w-3.5 text-[#412d15]" />
+          <FiGlobe className="h-3.5 w-3.5 text-[var(--e-412d15)]" />
           Importer / Broker
         </button>
         <button

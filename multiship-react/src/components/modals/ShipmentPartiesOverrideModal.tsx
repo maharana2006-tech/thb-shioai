@@ -5,12 +5,12 @@ import { useModalDismiss } from '../../hooks/useModalDismiss'
 export type Party = Record<string, string>
 
 const inputCls =
-  'w-full rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13px] text-[#1f150c] outline-none transition placeholder:text-[#b6a684] focus:border-[#cdbf9f] focus:ring-4 focus:ring-[#f4eede]'
+  'w-full rounded-xl border border-[var(--e-e3d9c4)] bg-white px-3 py-2 text-[13px] text-[var(--e-1f150c)] outline-none transition placeholder:text-[var(--e-b6a684)] focus:border-[var(--e-cdbf9f)] focus:ring-4 focus:ring-[var(--e-f4eede)]'
 
 function Field({ label, children, className = '' }: { label: string; children: ReactNode; className?: string }) {
   return (
     <label className={`block space-y-1 ${className}`}>
-      <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#6b5c42]">{label}</span>
+      <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--e-6b5c42)]">{label}</span>
       {children}
     </label>
   )
@@ -54,14 +54,14 @@ export default function ShipmentPartiesOverrideModal({
         className="my-6 w-full max-w-3xl overflow-hidden rounded-2xl bg-white shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-start justify-between gap-4 bg-[#1f150c] px-6 py-4 text-[#f4eede]">
+        <div className="flex items-start justify-between gap-4 bg-[var(--e-1f150c)] px-6 py-4 text-[var(--e-f4eede)]">
           <div>
-            <p className="flex items-center gap-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-[#b6a684]">
+            <p className="flex items-center gap-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-[var(--e-b6a684)]">
               <FiGlobe className="h-3 w-3" /> This shipment only · {destCountry || '—'}
             </p>
             <h2 id="parties-override-title" className="mt-0.5 text-lg font-semibold">Importer & broker override</h2>
           </div>
-          <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-[#b6a684] transition hover:bg-white/10 hover:text-white" aria-label="Close">
+          <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-[var(--e-b6a684)] transition hover:bg-white/10 hover:text-white" aria-label="Close">
             <FiX className="h-5 w-5" />
           </button>
         </div>
@@ -74,7 +74,7 @@ export default function ShipmentPartiesOverrideModal({
 
           {/* Importer */}
           <section className="space-y-3">
-            <h3 className="border-b border-dashed border-[#e3d9c4] pb-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-[#6b5c42]">
+            <h3 className="border-b border-dashed border-[var(--e-e3d9c4)] pb-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--e-6b5c42)]">
               Importer of record
             </h3>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -128,8 +128,8 @@ export default function ShipmentPartiesOverrideModal({
 
           {/* Broker */}
           <section className="space-y-3">
-            <h3 className="border-b border-dashed border-[#e3d9c4] pb-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-[#6b5c42]">
-              Customs broker <span className="font-sans normal-case tracking-normal text-[#b6a684]">— leave name blank for carrier-default brokerage</span>
+            <h3 className="border-b border-dashed border-[var(--e-e3d9c4)] pb-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--e-6b5c42)]">
+              Customs broker <span className="font-sans normal-case tracking-normal text-[var(--e-b6a684)]">— leave name blank for carrier-default brokerage</span>
             </h3>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <Field label="Name" className="col-span-2">
@@ -160,18 +160,18 @@ export default function ShipmentPartiesOverrideModal({
           </section>
         </div>
 
-        <div className="flex items-center justify-end gap-2 border-t border-[#e3d9c4] bg-[#faf7f0] px-6 py-3.5">
+        <div className="flex items-center justify-end gap-2 border-t border-[var(--e-e3d9c4)] bg-[var(--e-faf7f0)] px-6 py-3.5">
           <button
             type="button"
             onClick={onClose}
-            className="rounded-xl border border-[#e3d9c4] bg-white px-3.5 py-2 text-[12.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-white"
+            className="rounded-xl border border-[var(--e-e3d9c4)] bg-white px-3.5 py-2 text-[12.5px] font-semibold text-[var(--e-5a4526)] transition hover:border-[var(--e-cdbf9f)] hover:bg-white"
           >
             Cancel
           </button>
           <button
             type="button"
             onClick={() => onSave(imp, brk)}
-            className="rounded-xl bg-[#1f150c] px-4 py-2 text-[12.5px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15]"
+            className="rounded-xl bg-[var(--e-1f150c)] px-4 py-2 text-[12.5px] font-semibold text-[var(--e-f4eede)] shadow-sm transition hover:bg-[var(--e-412d15)]"
           >
             Use for this shipment
           </button>

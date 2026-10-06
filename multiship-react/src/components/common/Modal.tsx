@@ -1,6 +1,6 @@
 /**
  * Reusable themed modal shell. Matches the notify.confirm dialog theme
- * (bg-[#1f150c]/50 backdrop, cream card, brown text) so every modal in
+ * (bg-[var(--e-1f150c)]/50 backdrop, cream card, brown text) so every modal in
  * the app looks like it belongs to the same design system.
  *
  * Behavior: ESC closes; backdrop click closes; body scroll locked while
@@ -62,7 +62,7 @@ export default function Modal({
 
   return (
     <div
-      className="fixed inset-0 z-[70] flex items-center justify-center bg-[#1f150c]/50 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-[var(--e-1f150c)]/50 p-4 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       aria-labelledby="modal-title"
@@ -73,22 +73,22 @@ export default function Modal({
     >
       <div
         ref={cardRef}
-        className={`w-full ${SIZE_CLASS[size]} overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-[0_30px_80px_rgba(31,21,12,0.35)]`}
+        className={`w-full ${SIZE_CLASS[size]} overflow-hidden rounded-2xl border border-[var(--e-e3d9c4)] bg-white shadow-[0_30px_80px_rgba(31,21,12,0.35)]`}
       >
-        <header className="flex items-start justify-between gap-3 border-b border-[#eee6d6] px-5 py-4">
+        <header className="flex items-start justify-between gap-3 border-b border-[var(--e-eee6d6)] px-5 py-4">
           <div className="min-w-0">
-            <h2 id="modal-title" className="text-[15px] font-semibold text-[#1f150c]">
+            <h2 id="modal-title" className="text-[15px] font-semibold text-[var(--e-1f150c)]">
               {title}
             </h2>
             {subtitle && (
-              <p className="mt-0.5 text-[12px] leading-snug text-[#5a4526]">{subtitle}</p>
+              <p className="mt-0.5 text-[12px] leading-snug text-[var(--e-5a4526)]">{subtitle}</p>
             )}
           </div>
           <button
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="-mr-1 rounded-md p-1.5 text-[#b6a684] transition hover:bg-[#faf7f0] hover:text-[#412d15]"
+            className="-mr-1 rounded-md p-1.5 text-[var(--e-b6a684)] transition hover:bg-[var(--e-faf7f0)] hover:text-[var(--e-412d15)]"
           >
             <FiX className="h-4 w-4" />
           </button>
@@ -97,7 +97,7 @@ export default function Modal({
         <div className="max-h-[70vh] overflow-y-auto px-5 py-4">{children}</div>
 
         {footer && (
-          <footer className="flex items-center justify-end gap-2 rounded-b-2xl border-t border-[#eee6d6] bg-[#faf7f0]/60 px-5 py-3">
+          <footer className="flex items-center justify-end gap-2 rounded-b-2xl border-t border-[var(--e-eee6d6)] bg-[var(--e-faf7f0)]/60 px-5 py-3">
             {footer}
           </footer>
         )}
@@ -129,7 +129,7 @@ export function ModalActions({
       <button
         type="button"
         onClick={onCancel}
-        className="rounded-xl border border-[#e3d9c4] bg-white px-4 py-2 text-[13px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
+        className="rounded-xl border border-[var(--e-e3d9c4)] bg-white px-4 py-2 text-[13px] font-semibold text-[var(--e-5a4526)] transition hover:bg-[var(--e-faf7f0)]"
       >
         {cancelLabel}
       </button>
@@ -138,7 +138,7 @@ export function ModalActions({
         onClick={onConfirm}
         disabled={confirmDisabled || confirmLoading}
         className={`rounded-xl px-5 py-2 text-[13px] font-semibold text-white transition disabled:opacity-60 ${
-          danger ? 'bg-rose-600 hover:bg-rose-700' : 'bg-[#1f150c] hover:bg-[#412d15]'
+          danger ? 'bg-rose-600 hover:bg-rose-700' : 'bg-[var(--e-1f150c)] hover:bg-[var(--e-412d15)]'
         }`}
       >
         {confirmLoading ? 'Working…' : confirmLabel}

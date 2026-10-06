@@ -329,3 +329,141 @@ textarea {
   .bulk-tab-in-right, .bulk-tab-in-left, .bulk-fade-in, .bulk-pop-in { animation: none; }
   .animated-height { transition: none !important; }
 }
+
+/* ===== Light / Dark theme tokens (generated) =====
+   Espresso palette tokenised so the whole UI flips. LabelDocumentPage
+   is excluded (printed labels stay true white). ===== */
+:root {
+  --e-160e07: #160e07;
+  --e-1f150c: #1f150c;
+  --e-33221a: #33221a;
+  --e-351c15: #351c15;
+  --e-3a2a18: #3a2a18;
+  --e-3b2d18: #3b2d18;
+  --e-3d2f1c: #3d2f1c;
+  --e-3f3527: #3f3527;
+  --e-412d15: #412d15;
+  --e-5a4526: #5a4526;
+  --e-6b5c42: #6b5c42;
+  --e-8a7a5a: #8a7a5a;
+  --e-8a7a5c: #8a7a5c;
+  --e-9a8a6c: #9a8a6c;
+  --e-9a8b70: #9a8b70;
+  --e-a08f6c: #a08f6c;
+  --e-a1906d: #a1906d;
+  --e-b3a583: #b3a583;
+  --e-b6a684: #b6a684;
+  --e-cdbf9f: #cdbf9f;
+  --e-c2b494: #c2b494;
+  --e-d8cbb0: #d8cbb0;
+  --e-dccfb4: #dccfb4;
+  --e-dcd4c4: #dcd4c4;
+  --e-e3d9c4: #e3d9c4;
+  --e-e6dcc6: #e6dcc6;
+  --e-e6dcc7: #e6dcc7;
+  --e-eae2d1: #eae2d1;
+  --e-ebe3d2: #ebe3d2;
+  --e-ece2cb: #ece2cb;
+  --e-e1dcc9: #e1dcc9;
+  --e-f8f3e8: #f8f3e8;
+  --e-f9f6f0: #f9f6f0;
+  --e-faf6ec: #faf6ec;
+  --e-faf7f0: #faf7f0;
+  --e-faf9f7: #faf9f7;
+  --e-fcfaf5: #fcfaf5;
+  --e-fdfbf6: #fdfbf6;
+  --e-fdfcfb: #fdfcfb;
+  --e-fffdf8: #fffdf8;
+  --e-efe5cf: #efe5cf;
+  --e-efe7d4: #efe7d4;
+  --e-efe7d6: #efe7d6;
+  --e-eee6d6: #eee6d6;
+  --e-f0e9d8: #f0e9d8;
+  --e-f2ebda: #f2ebda;
+  --e-f2ecdf: #f2ecdf;
+  --e-f3ecdd: #f3ecdd;
+  --e-f3eddc: #f3eddc;
+  --e-f4eede: #f4eede;
+  --e-f5f0e6: #f5f0e6;
+  --e-f6f0e2: #f6f0e2;
+  --e-f6f1e6: #f6f1e6;
+  --e-f2c94c: #f2c94c;
+  --e-4d148c: #4d148c;
+  --e-7a3b2e: #7a3b2e;
+  --e-1f5aa6: #1f5aa6;
+}
+:root[data-theme="dark"] {
+  --e-160e07: #f4ecda;
+  --e-1f150c: #ece3d1;
+  --e-33221a: #e0d3b8;
+  --e-351c15: #ddd0b4;
+  --e-3a2a18: #d8cbb0;
+  --e-3b2d18: #d6c9ae;
+  --e-3d2f1c: #d2c4a8;
+  --e-3f3527: #cdbf9f;
+  --e-412d15: #daccb0;
+  --e-5a4526: #c9ba9a;
+  --e-6b5c42: #b6a684;
+  --e-8a7a5a: #a89977;
+  --e-8a7a5c: #a89977;
+  --e-9a8a6c: #a89977;
+  --e-9a8b70: #a89977;
+  --e-a08f6c: #9c8c69;
+  --e-a1906d: #9c8c69;
+  --e-b3a583: #857650;
+  --e-b6a684: #857650;
+  --e-cdbf9f: #453722;
+  --e-c2b494: #4a3c27;
+  --e-d8cbb0: #3f321e;
+  --e-dccfb4: #3f321e;
+  --e-dcd4c4: #3a2e1d;
+  --e-e3d9c4: #362a1a;
+  --e-e6dcc6: #322717;
+  --e-e6dcc7: #322717;
+  --e-eae2d1: #2e2415;
+  --e-ebe3d2: #2e2415;
+  --e-ece2cb: #2e2415;
+  --e-e1dcc9: #e6dcc0;
+  --e-f8f3e8: #211911;
+  --e-f9f6f0: #211911;
+  --e-faf6ec: #1e1710;
+  --e-faf7f0: #1e1710;
+  --e-faf9f7: #1e1710;
+  --e-fcfaf5: #241c12;
+  --e-fdfbf6: #221a11;
+  --e-fdfcfb: #221a11;
+  --e-fffdf8: #241c12;
+  --e-efe5cf: #2a2115;
+  --e-efe7d4: #2a2115;
+  --e-efe7d6: #2a2115;
+  --e-eee6d6: #272015;
+  --e-f0e9d8: #2a2216;
+  --e-f2ebda: #2c2317;
+  --e-f2ecdf: #2c2317;
+  --e-f3ecdd: #2c2317;
+  --e-f3eddc: #2c2317;
+  --e-f4eede: #2e2418;
+  --e-f5f0e6: #2a2216;
+  --e-f6f0e2: #2a2216;
+  --e-f6f1e6: #2a2216;
+  --e-f2c94c: #f2c94c;
+  --e-4d148c: #b084e6;
+  --e-7a3b2e: #c9735c;
+  --e-1f5aa6: #6fa8e0;
+  /* base element vars */
+  --color-background: #15110b; --color-text: #ece3d1; --color-border: #362a1a;
+  --color-primary: #ece3d1; --color-secondary: #daccb0; --color-text-secondary: #b6a684;
+  /* Tailwind primitives: flip bg-white / slate-* / sky-* app-wide */
+  --color-white: #1f1810;
+  --color-slate-50:#15110b; --color-slate-100:#1c1710; --color-slate-200:#302516;
+  --color-slate-300:#413420; --color-slate-400:#7a6c4f; --color-slate-500:#9c8c69;
+  --color-slate-600:#b6a684; --color-slate-700:#ccbd9f; --color-slate-800:#ddd0b4;
+  --color-slate-900:#ece3d1; --color-slate-950:#f4efe3;
+  --color-sky-50:#2a2115; --color-sky-100:#332815; --color-sky-200:#4a3c27;
+  --color-sky-300:#6f5527; --color-sky-400:#96793f; --color-sky-500:#b7a077;
+  --color-sky-600:#daccb0; --color-sky-700:#e6dcc0; --color-sky-800:#efe7d4; --color-sky-900:#f4eede; --color-sky-950:#ffffff;
+  --rose-50:#2a1416;
+}
+:root[data-theme="dark"] body {
+  background: #15110b;
+}

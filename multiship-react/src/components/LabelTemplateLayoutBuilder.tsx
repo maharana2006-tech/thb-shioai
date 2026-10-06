@@ -290,14 +290,14 @@ export default function LabelTemplateLayoutBuilder({
           Single Preview button — opens a modal containing the HTML iframe
           plus Open-as-PDF and Download-ZPL actions. The always-visible
           inline iframe was removed so the builder gets more vertical room. */}
-      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[#e3d9c4] bg-[#1f150c] px-3 py-2 shadow-sm">
-        <FiGrid className="h-3.5 w-3.5 text-[#b6a684]" />
-        <span className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-[#e3d9c4]">Layout studio</span>
-        <span className="hidden text-[10.5px] text-[#6b5c42] sm:inline">Free-form blocks · renders to PDF &amp; ZPL</span>
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--e-e3d9c4)] bg-[var(--e-1f150c)] px-3 py-2 shadow-sm">
+        <FiGrid className="h-3.5 w-3.5 text-[var(--e-b6a684)]" />
+        <span className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-[var(--e-e3d9c4)]">Layout studio</span>
+        <span className="hidden text-[10.5px] text-[var(--e-6b5c42)] sm:inline">Free-form blocks · renders to PDF &amp; ZPL</span>
         <button
           type="button"
           onClick={() => setPreviewOpen(true)}
-          className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-[#f4eede] px-3 py-1.5 text-[12px] font-semibold text-[#1f150c] transition hover:bg-white"
+          className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-[var(--e-f4eede)] px-3 py-1.5 text-[12px] font-semibold text-[var(--e-1f150c)] transition hover:bg-white"
         >
           <FiEye className="h-3.5 w-3.5" />
           Preview &amp; export
@@ -319,10 +319,10 @@ export default function LabelTemplateLayoutBuilder({
 
       <div className="grid grid-cols-12 gap-3">
       {/* ===== Left: block palette (toolbox) ===== */}
-      <aside className="col-span-3 overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-sm">
-        <div className="flex items-center gap-1.5 border-b border-[#eee6d6] bg-[#faf7f0]/70 px-3 py-2">
-          <FiGrid className="h-3 w-3 text-[#b6a684]" />
-          <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#412d15]">Toolbox</span>
+      <aside className="col-span-3 overflow-hidden rounded-2xl border border-[var(--e-e3d9c4)] bg-white shadow-sm">
+        <div className="flex items-center gap-1.5 border-b border-[var(--e-eee6d6)] bg-[var(--e-faf7f0)]/70 px-3 py-2">
+          <FiGrid className="h-3 w-3 text-[var(--e-b6a684)]" />
+          <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--e-412d15)]">Toolbox</span>
         </div>
         <div className="space-y-1 p-2">
           {PALETTE.map((p) => {
@@ -332,18 +332,18 @@ export default function LabelTemplateLayoutBuilder({
                 key={p.kind}
                 type="button"
                 onClick={() => addBlock(p.kind)}
-                className="group flex w-full items-center gap-2 rounded-lg border border-[#e3d9c4] bg-[#faf7f0]/40 px-2 py-1.5 text-left text-[11.5px] font-semibold text-[#412d15] transition hover:border-[#cdbf9f] hover:bg-white"
+                className="group flex w-full items-center gap-2 rounded-lg border border-[var(--e-e3d9c4)] bg-[var(--e-faf7f0)]/40 px-2 py-1.5 text-left text-[11.5px] font-semibold text-[var(--e-412d15)] transition hover:border-[var(--e-cdbf9f)] hover:bg-white"
                 title={`Add a ${p.label} block`}
               >
-                <span className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-white text-[#6b5c42] ring-1 ring-[#e3d9c4] transition group-hover:bg-[#1f150c] group-hover:text-[#f4eede] group-hover:ring-[#1f150c]">
+                <span className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-white text-[var(--e-6b5c42)] ring-1 ring-[var(--e-e3d9c4)] transition group-hover:bg-[var(--e-1f150c)] group-hover:text-[var(--e-f4eede)] group-hover:ring-[var(--e-1f150c)]">
                   <Icon className="h-3.5 w-3.5" />
                 </span>
                 {p.label}
-                <FiPlus className="ml-auto h-3 w-3 text-[#b6a684] transition group-hover:text-[#412d15]" />
+                <FiPlus className="ml-auto h-3 w-3 text-[var(--e-b6a684)] transition group-hover:text-[var(--e-412d15)]" />
               </button>
             )
           })}
-          <p className="px-1 pt-1 text-[10px] leading-4 text-[#b6a684]">
+          <p className="px-1 pt-1 text-[10px] leading-4 text-[var(--e-b6a684)]">
             Click to drop a block, then drag to move · corner handle to resize · snap {SNAP_MM} mm.
           </p>
         </div>
@@ -355,19 +355,19 @@ export default function LabelTemplateLayoutBuilder({
           pointer events; positions snap to a 2mm grid. Click to select,
           click again brings the block to the front of the z-order so
           overlapped blocks are always reachable. */}
-      <div className="col-span-6 overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-sm">
-        <div className="flex items-center justify-between gap-2 border-b border-[#eee6d6] bg-[#faf7f0]/70 px-3 py-2">
-          <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.16em] text-[#412d15]">
-            <FiFileText className="h-3 w-3 text-[#b6a684]" /> Artboard
+      <div className="col-span-6 overflow-hidden rounded-2xl border border-[var(--e-e3d9c4)] bg-white shadow-sm">
+        <div className="flex items-center justify-between gap-2 border-b border-[var(--e-eee6d6)] bg-[var(--e-faf7f0)]/70 px-3 py-2">
+          <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--e-412d15)]">
+            <FiFileText className="h-3 w-3 text-[var(--e-b6a684)]" /> Artboard
           </span>
-          <span className="font-mono text-[9.5px] font-semibold tabular-nums text-[#6b5c42]">
+          <span className="font-mono text-[9.5px] font-semibold tabular-nums text-[var(--e-6b5c42)]">
             {layout.blocks.length} block{layout.blocks.length === 1 ? '' : 's'} · {pageWidthMm}×{pageHeightMm}mm · snap {SNAP_MM}mm
           </span>
         </div>
 
         {/* Scrollable viewport so operators on smaller screens can still
             reach every corner of an A4 page. The page itself is centered. */}
-        <div className="max-h-[720px] overflow-auto bg-[#eee6d6] p-4">
+        <div className="max-h-[720px] overflow-auto bg-[var(--e-eee6d6)] p-4">
           <div
             className="relative mx-auto bg-white shadow-[0_10px_30px_rgba(15,23,42,.12)]"
             style={{ width: toPx(pageWidthMm), height: toPx(pageHeightMm) }}
@@ -375,7 +375,7 @@ export default function LabelTemplateLayoutBuilder({
           >
             {/* Margin frame — visible dashed rectangle marking the printable area. */}
             <div
-              className="pointer-events-none absolute rounded-sm border border-dashed border-[#e3d9c4]"
+              className="pointer-events-none absolute rounded-sm border border-dashed border-[var(--e-e3d9c4)]"
               style={{
                 left: toPx(marginMm), top: toPx(marginMm),
                 width: toPx(innerWMm), height: toPx(innerHMm),
@@ -392,7 +392,7 @@ export default function LabelTemplateLayoutBuilder({
               }}
             >
               {layout.blocks.length === 0 ? (
-                <div className="absolute inset-0 flex items-center justify-center rounded-md border border-dashed border-[#cdbf9f] text-[12px] text-[#6b5c42]">
+                <div className="absolute inset-0 flex items-center justify-center rounded-md border border-dashed border-[var(--e-cdbf9f)] text-[12px] text-[var(--e-6b5c42)]">
                   Empty page. Click a block on the left to drop it here.
                 </div>
               ) : null}
@@ -410,8 +410,8 @@ export default function LabelTemplateLayoutBuilder({
                     }}
                     className={`absolute select-none rounded-md border bg-white shadow-sm transition ${
                       selected
-                        ? 'border-[#1f150c] ring-2 ring-[#412d15]/25'
-                        : 'border-[#e3d9c4] hover:border-[#b6a684]'
+                        ? 'border-[var(--e-1f150c)] ring-2 ring-[var(--e-412d15)]/25'
+                        : 'border-[var(--e-e3d9c4)] hover:border-[var(--e-b6a684)]'
                     }`}
                     style={{
                       left: toPx(pos.xMm), top: toPx(pos.yMm),
@@ -423,7 +423,7 @@ export default function LabelTemplateLayoutBuilder({
                     {/* Top chrome — kind label + delete button (visible when selected) */}
                     {selected ? (
                       <div className="pointer-events-none absolute -top-5 left-0 flex items-center gap-1">
-                        <span className="rounded-md bg-[#1f150c] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white">
+                        <span className="rounded-md bg-[var(--e-1f150c)] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white">
                           {b.kind} · {pos.wMm}×{pos.hMm}mm
                         </span>
                       </div>
@@ -433,7 +433,7 @@ export default function LabelTemplateLayoutBuilder({
                         type="button"
                         onPointerDown={(e) => e.stopPropagation()}
                         onClick={(e) => { e.stopPropagation(); removeBlock(b.id) }}
-                        className="absolute -top-2 -right-2 z-10 inline-flex h-5 w-5 items-center justify-center rounded-full border border-[#e3d9c4] bg-white text-[#6b5c42] shadow hover:border-rose-200 hover:text-rose-600"
+                        className="absolute -top-2 -right-2 z-10 inline-flex h-5 w-5 items-center justify-center rounded-full border border-[var(--e-e3d9c4)] bg-white text-[var(--e-6b5c42)] shadow hover:border-rose-200 hover:text-rose-600"
                         aria-label={`Remove ${b.kind} block`}
                       >
                         <FiTrash2 className="h-2.5 w-2.5" />
@@ -442,7 +442,7 @@ export default function LabelTemplateLayoutBuilder({
 
                     {/* Block preview fills the block's bounding rect. Overflow
                         hidden so oversized content doesn't spill into the page. */}
-                    <div className="pointer-events-none h-full w-full overflow-hidden rounded-md bg-[#faf7f0] p-1">
+                    <div className="pointer-events-none h-full w-full overflow-hidden rounded-md bg-[var(--e-faf7f0)] p-1">
                       <BlockPreview block={b} />
                     </div>
 
@@ -453,17 +453,17 @@ export default function LabelTemplateLayoutBuilder({
                       <>
                         <div
                           onPointerDown={(e) => beginPointerGesture(b.id, 'resize-e', e)}
-                          className="absolute right-0 top-1/2 -translate-y-1/2 h-6 w-1.5 cursor-ew-resize rounded-sm bg-[#412d15]/60 hover:bg-[#412d15]"
+                          className="absolute right-0 top-1/2 -translate-y-1/2 h-6 w-1.5 cursor-ew-resize rounded-sm bg-[var(--e-412d15)]/60 hover:bg-[var(--e-412d15)]"
                           title="Drag to resize width"
                         />
                         <div
                           onPointerDown={(e) => beginPointerGesture(b.id, 'resize-s', e)}
-                          className="absolute bottom-0 left-1/2 -translate-x-1/2 h-1.5 w-6 cursor-ns-resize rounded-sm bg-[#412d15]/60 hover:bg-[#412d15]"
+                          className="absolute bottom-0 left-1/2 -translate-x-1/2 h-1.5 w-6 cursor-ns-resize rounded-sm bg-[var(--e-412d15)]/60 hover:bg-[var(--e-412d15)]"
                           title="Drag to resize height"
                         />
                         <div
                           onPointerDown={(e) => beginPointerGesture(b.id, 'resize-se', e)}
-                          className="absolute bottom-0 right-0 h-3 w-3 cursor-nwse-resize rounded-sm bg-[#412d15]"
+                          className="absolute bottom-0 right-0 h-3 w-3 cursor-nwse-resize rounded-sm bg-[var(--e-412d15)]"
                           title="Drag to resize"
                         />
                       </>
@@ -477,13 +477,13 @@ export default function LabelTemplateLayoutBuilder({
       </div>
 
       {/* ===== Right: selected-block config + binding tree (inspector) ===== */}
-      <aside className="col-span-3 overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-sm">
-        <div className="flex items-center justify-between gap-1.5 border-b border-[#eee6d6] bg-[#faf7f0]/70 px-3 py-2">
-          <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.16em] text-[#412d15]">
-            <FiType className="h-3 w-3 text-[#b6a684]" /> Inspector
+      <aside className="col-span-3 overflow-hidden rounded-2xl border border-[var(--e-e3d9c4)] bg-white shadow-sm">
+        <div className="flex items-center justify-between gap-1.5 border-b border-[var(--e-eee6d6)] bg-[var(--e-faf7f0)]/70 px-3 py-2">
+          <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--e-412d15)]">
+            <FiType className="h-3 w-3 text-[var(--e-b6a684)]" /> Inspector
           </span>
           {selectedBlock ? (
-            <span className="rounded-full bg-[#1f150c] px-1.5 py-0.5 font-mono text-[8.5px] font-bold uppercase tracking-wide text-[#f4eede]">{selectedBlock.kind}</span>
+            <span className="rounded-full bg-[var(--e-1f150c)] px-1.5 py-0.5 font-mono text-[8.5px] font-bold uppercase tracking-wide text-[var(--e-f4eede)]">{selectedBlock.kind}</span>
           ) : null}
         </div>
         <div className="space-y-3 p-2">
@@ -495,7 +495,7 @@ export default function LabelTemplateLayoutBuilder({
               textAreaRef={(el) => { textAreaRefs.current[selectedBlock.id] = el }}
             />
           ) : (
-            <p className="rounded-lg border border-dashed border-[#e3d9c4] bg-[#faf7f0]/60 px-2 py-3 text-center text-[11px] text-[#6b5c42]">
+            <p className="rounded-lg border border-dashed border-[var(--e-e3d9c4)] bg-[var(--e-faf7f0)]/60 px-2 py-3 text-center text-[11px] text-[var(--e-6b5c42)]">
               Select a block on the artboard to edit it.
             </p>
           )}
@@ -550,12 +550,12 @@ function PreviewModal({
   }, [onClose])
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#1f150c]/50 p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--e-1f150c)]/50 p-4">
       <div className="flex h-full max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
-        <header className="flex items-start justify-between gap-3 border-b border-[#e3d9c4] px-5 py-3">
+        <header className="flex items-start justify-between gap-3 border-b border-[var(--e-e3d9c4)] px-5 py-3">
           <div>
-            <h2 className="text-base font-semibold text-[#1f150c]">Template preview</h2>
-            <p className="text-[12px] text-[#6b5c42]">
+            <h2 className="text-base font-semibold text-[var(--e-1f150c)]">Template preview</h2>
+            <p className="text-[12px] text-[var(--e-6b5c42)]">
               Rendered against the built-in sample shipment context. Edits re-render automatically.
             </p>
           </div>
@@ -563,18 +563,18 @@ function PreviewModal({
             type="button"
             onClick={onClose}
             aria-label="Close preview"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[#6b5c42] transition hover:bg-[#eee6d6] hover:text-[#1f150c]"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--e-6b5c42)] transition hover:bg-[var(--e-eee6d6)] hover:text-[var(--e-1f150c)]"
           >
             <FiX className="h-4 w-4" />
           </button>
         </header>
-        <div className="flex flex-wrap gap-2 border-b border-[#eee6d6] bg-[#faf7f0]/60 px-5 py-3">
+        <div className="flex flex-wrap gap-2 border-b border-[var(--e-eee6d6)] bg-[var(--e-faf7f0)]/60 px-5 py-3">
           <button
             type="button"
             onClick={onRefresh}
             disabled={previewLoading}
             title="Force-refresh HTML preview"
-            className="inline-flex items-center gap-1.5 rounded-md border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12.5px] font-semibold text-[#412d15] transition hover:bg-[#faf7f0] disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-md border border-[var(--e-e3d9c4)] bg-white px-3 py-1.5 text-[12.5px] font-semibold text-[var(--e-412d15)] transition hover:bg-[var(--e-faf7f0)] disabled:opacity-50"
           >
             {previewLoading ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiRefreshCw className="h-3.5 w-3.5" />}
             Refresh HTML
@@ -584,7 +584,7 @@ function PreviewModal({
             onClick={onOpenPdf}
             disabled={pdfLoading}
             title="Open the same layout rendered as PDF in a new tab"
-            className="inline-flex items-center gap-1.5 rounded-md border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12.5px] font-semibold text-[#412d15] transition hover:bg-[#faf7f0] disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-md border border-[var(--e-e3d9c4)] bg-white px-3 py-1.5 text-[12.5px] font-semibold text-[var(--e-412d15)] transition hover:bg-[var(--e-faf7f0)] disabled:opacity-50"
           >
             {pdfLoading ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiDownload className="h-3.5 w-3.5" />}
             Open as PDF
@@ -594,24 +594,24 @@ function PreviewModal({
             onClick={onDownloadZpl}
             disabled={zplLoading}
             title="Download the layout as ZPL for a 203-dpi Zebra thermal printer (paste into labelary.com/viewer.html to visualise)"
-            className="inline-flex items-center gap-1.5 rounded-md border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12.5px] font-semibold text-[#412d15] transition hover:bg-[#faf7f0] disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-md border border-[var(--e-e3d9c4)] bg-white px-3 py-1.5 text-[12.5px] font-semibold text-[var(--e-412d15)] transition hover:bg-[var(--e-faf7f0)] disabled:opacity-50"
           >
             {zplLoading ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiCode className="h-3.5 w-3.5" />}
             Download ZPL
           </button>
         </div>
-        <div className="flex-1 overflow-hidden bg-[#eee6d6] p-3">
+        <div className="flex-1 overflow-hidden bg-[var(--e-eee6d6)] p-3">
           {previewHtml ? (
             <iframe
               // srcDoc keeps everything self-contained — the endpoint returns
               // a full HTML document; no external assets to sandbox.
               srcDoc={previewHtml}
               title="Template preview"
-              className="h-full w-full rounded-lg border border-[#e3d9c4] bg-white"
+              className="h-full w-full rounded-lg border border-[var(--e-e3d9c4)] bg-white"
               sandbox=""
             />
           ) : (
-            <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-[#e3d9c4] bg-white text-[12.5px] text-[#6b5c42]">
+            <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-[var(--e-e3d9c4)] bg-white text-[12.5px] text-[var(--e-6b5c42)]">
               {previewLoading ? 'Loading preview…' : 'Preview will render once the backend responds.'}
             </div>
           )}
@@ -629,44 +629,44 @@ function BlockPreview({ block }: { block: TemplateBlock }) {
       return (
         <p className={`whitespace-pre-wrap ${block.kind === 'text' && (block as { bold?: boolean }).bold ? 'font-bold' : ''}`}
            style={{ textAlign: (block as { align?: 'left'|'center'|'right' }).align, fontSize: (block as { sizePx?: number }).sizePx ?? 11 }}>
-          {(block as { content: string }).content || <span className="italic text-[#b6a684]">empty</span>}
+          {(block as { content: string }).content || <span className="italic text-[var(--e-b6a684)]">empty</span>}
         </p>
       )
     case 'logo':
       return block.src
         ? <img src={block.src} alt="logo" style={{ width: block.widthPx ?? 120 }} className="max-h-24 object-contain" />
-        : <span className="italic text-[#b6a684]">Logo placeholder — set image src in Block settings</span>
+        : <span className="italic text-[var(--e-b6a684)]">Logo placeholder — set image src in Block settings</span>
     case 'address':
-      return <span className="italic text-[#6b5c42]">↳ {block.which} address (rendered from shipment)</span>
+      return <span className="italic text-[var(--e-6b5c42)]">↳ {block.which} address (rendered from shipment)</span>
     case 'items':
       return (
         <table className="w-full border-collapse text-[10.5px]">
           <thead>
             <tr>
-              {block.columns.map((c) => <th key={c} className="border-b border-[#e3d9c4] px-1 py-0.5 text-left font-semibold text-[#6b5c42]">{c}</th>)}
+              {block.columns.map((c) => <th key={c} className="border-b border-[var(--e-e3d9c4)] px-1 py-0.5 text-left font-semibold text-[var(--e-6b5c42)]">{c}</th>)}
             </tr>
           </thead>
           <tbody>
             <tr>
-              {block.columns.map((c) => <td key={c} className="px-1 py-0.5 text-[#b6a684] italic">…{c}…</td>)}
+              {block.columns.map((c) => <td key={c} className="px-1 py-0.5 text-[var(--e-b6a684)] italic">…{c}…</td>)}
             </tr>
           </tbody>
         </table>
       )
     case 'barcode':
-      return <span className="font-mono italic text-[#6b5c42]">▉▊▉ {block.binding}</span>
+      return <span className="font-mono italic text-[var(--e-6b5c42)]">▉▊▉ {block.binding}</span>
     case 'qr':
       return (
-        <div className="inline-block rounded border border-[#e3d9c4] bg-white p-1 text-center text-[9px] text-[#b6a684]" style={{ width: block.sizePx ?? 90, height: block.sizePx ?? 90 }}>
+        <div className="inline-block rounded border border-[var(--e-e3d9c4)] bg-white p-1 text-center text-[9px] text-[var(--e-b6a684)]" style={{ width: block.sizePx ?? 90, height: block.sizePx ?? 90 }}>
           QR<br />{block.binding}
         </div>
       )
     case 'divider':
       return <hr style={{ borderTopWidth: block.thicknessPx ?? 1, borderColor: block.color ?? '#94a3b8' }} />
     case 'spacer':
-      return <div style={{ height: block.heightPx ?? 12 }} className="rounded bg-[#eee6d6] text-center text-[9px] leading-none text-[#b6a684]">↕ spacer</div>
+      return <div style={{ height: block.heightPx ?? 12 }} className="rounded bg-[var(--e-eee6d6)] text-center text-[9px] leading-none text-[var(--e-b6a684)]">↕ spacer</div>
     case 'totals':
-      return <span className="italic text-[#6b5c42]">Totals: {block.include.join(' · ')}</span>
+      return <span className="italic text-[var(--e-6b5c42)]">Totals: {block.include.join(' · ')}</span>
   }
 }
 
@@ -679,8 +679,8 @@ function BlockEditor({
   onChange: (patch: Partial<TemplateBlock>) => void
   textAreaRef: (el: HTMLTextAreaElement | null) => void
 }) {
-  const labelCls = 'mb-0.5 block text-[9.5px] font-bold uppercase tracking-[0.14em] text-[#6b5c42]'
-  const inputCls = 'w-full rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[11.5px] text-[#412d15] outline-none focus:border-[#412d15]'
+  const labelCls = 'mb-0.5 block text-[9.5px] font-bold uppercase tracking-[0.14em] text-[var(--e-6b5c42)]'
+  const inputCls = 'w-full rounded-lg border border-[var(--e-e3d9c4)] bg-white px-2 py-1 text-[11.5px] text-[var(--e-412d15)] outline-none focus:border-[var(--e-412d15)]'
 
   // Position card — precise coordinates for operators who don't want to
   // eyeball drag-and-drop. Rendered above the kind-specific settings so it's
@@ -689,23 +689,23 @@ function BlockEditor({
   const setPos = (patch: Partial<typeof pos>) =>
     onChange({ position: { ...pos, ...patch } } as Partial<TemplateBlock>)
   const positionCard = (
-    <div className="rounded-lg border border-[#eee6d6] bg-[#faf7f0]/60 p-2">
+    <div className="rounded-lg border border-[var(--e-eee6d6)] bg-[var(--e-faf7f0)]/60 p-2">
       <p className={labelCls}>Position (mm)</p>
       <div className="grid grid-cols-2 gap-1.5">
         <label className="block">
-          <span className="text-[9.5px] font-semibold text-[#6b5c42]">X</span>
+          <span className="text-[9.5px] font-semibold text-[var(--e-6b5c42)]">X</span>
           <input type="number" value={pos.xMm} onChange={(e) => setPos({ xMm: Number(e.target.value) || 0 })} className={inputCls} />
         </label>
         <label className="block">
-          <span className="text-[9.5px] font-semibold text-[#6b5c42]">Y</span>
+          <span className="text-[9.5px] font-semibold text-[var(--e-6b5c42)]">Y</span>
           <input type="number" value={pos.yMm} onChange={(e) => setPos({ yMm: Number(e.target.value) || 0 })} className={inputCls} />
         </label>
         <label className="block">
-          <span className="text-[9.5px] font-semibold text-[#6b5c42]">Width</span>
+          <span className="text-[9.5px] font-semibold text-[var(--e-6b5c42)]">Width</span>
           <input type="number" value={pos.wMm} onChange={(e) => setPos({ wMm: Number(e.target.value) || 1 })} className={inputCls} />
         </label>
         <label className="block">
-          <span className="text-[9.5px] font-semibold text-[#6b5c42]">Height</span>
+          <span className="text-[9.5px] font-semibold text-[var(--e-6b5c42)]">Height</span>
           <input type="number" value={pos.hMm} onChange={(e) => setPos({ hMm: Number(e.target.value) || 1 })} className={inputCls} />
         </label>
       </div>
@@ -740,7 +740,7 @@ function BlockEditor({
                 <span className={labelCls}>Size (px)</span>
                 <input type="number" min={6} max={72} value={block.sizePx ?? 11} onChange={(e) => onChange({ sizePx: Number(e.target.value) } as Partial<TemplateBlock>)} className={inputCls} />
               </label>
-              <label className="flex items-center gap-1.5 text-[11px] font-semibold text-[#412d15]">
+              <label className="flex items-center gap-1.5 text-[11px] font-semibold text-[var(--e-412d15)]">
                 <input type="checkbox" checked={!!block.bold} onChange={(e) => onChange({ bold: e.target.checked } as Partial<TemplateBlock>)} className="h-3.5 w-3.5" />
                 Bold
               </label>
@@ -784,7 +784,7 @@ function BlockEditor({
             className={inputCls}
             placeholder="sku,description,qty,unitPrice,lineTotal"
           />
-          <p className="mt-1 text-[10.5px] text-[#b6a684]">
+          <p className="mt-1 text-[10.5px] text-[var(--e-b6a684)]">
             Allowed: sku · description · qty · unitPrice · lineTotal · weight · hsCode · originCountry
           </p>
         </label>
@@ -795,7 +795,7 @@ function BlockEditor({
           <label className="block">
             <span className={labelCls}>Binding (data source)</span>
             <input value={block.binding} onChange={(e) => onChange({ binding: e.target.value } as Partial<TemplateBlock>)} className={inputCls} placeholder="shipment.trackingNumber" />
-            <p className="mt-1 text-[10.5px] text-[#b6a684]">Or click a field on the right to set it.</p>
+            <p className="mt-1 text-[10.5px] text-[var(--e-b6a684)]">Or click a field on the right to set it.</p>
           </label>
           <label className="block">
             <span className={labelCls}>Format</span>
@@ -832,7 +832,7 @@ function BlockEditor({
           </label>
           <label className="block">
             <span className={labelCls}>Color</span>
-            <input type="color" value={block.color ?? '#94a3b8'} onChange={(e) => onChange({ color: e.target.value } as Partial<TemplateBlock>)} className="h-8 w-full rounded-lg border border-[#e3d9c4]" />
+            <input type="color" value={block.color ?? '#94a3b8'} onChange={(e) => onChange({ color: e.target.value } as Partial<TemplateBlock>)} className="h-8 w-full rounded-lg border border-[var(--e-e3d9c4)]" />
           </label>
         </div>
       )
@@ -853,7 +853,7 @@ function BlockEditor({
               onChange={(e) => onChange({ include: e.target.value.split(/[,\s]+/).filter(Boolean) as typeof block.include } as Partial<TemplateBlock>)}
               className={inputCls}
             />
-            <p className="mt-1 text-[10.5px] text-[#b6a684]">Allowed: subtotal · freight · duties · insurance · grandTotal</p>
+            <p className="mt-1 text-[10.5px] text-[var(--e-b6a684)]">Allowed: subtotal · freight · duties · insurance · grandTotal</p>
           </label>
           <label className="block">
             <span className={labelCls}>Currency</span>
@@ -890,13 +890,13 @@ function BindingsPanel({
   }
   return (
     <div>
-      <p className="mb-1.5 px-1 text-[10px] font-bold uppercase tracking-[0.16em] text-[#6b5c42]">
+      <p className="mb-1.5 px-1 text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--e-6b5c42)]">
         Available fields
       </p>
-      <p className="mb-1.5 px-1 text-[10.5px] leading-4 text-[#b6a684]">
+      <p className="mb-1.5 px-1 text-[10.5px] leading-4 text-[var(--e-b6a684)]">
         Click a field to insert <span className="font-mono">{`{{path}}`}</span> at the cursor of the selected block.
       </p>
-      <div className={`max-h-96 overflow-y-auto rounded-lg border border-[#e3d9c4] bg-white p-1 ${disabled ? 'opacity-40' : ''}`}>
+      <div className={`max-h-96 overflow-y-auto rounded-lg border border-[var(--e-e3d9c4)] bg-white p-1 ${disabled ? 'opacity-40' : ''}`}>
         {BINDING_GROUPS.map((g) => {
           const open = openGroups.has(g.key)
           return (
@@ -904,13 +904,13 @@ function BindingsPanel({
               <button
                 type="button"
                 onClick={() => toggle(g.key)}
-                className="flex w-full items-center gap-1 rounded px-1 py-0.5 text-left text-[11px] font-semibold text-[#412d15] hover:bg-[#faf7f0]"
+                className="flex w-full items-center gap-1 rounded px-1 py-0.5 text-left text-[11px] font-semibold text-[var(--e-412d15)] hover:bg-[var(--e-faf7f0)]"
               >
                 {open ? <FiChevronDown className="h-3 w-3" /> : <FiChevronRight className="h-3 w-3" />}
                 {g.label}
               </button>
               {open ? (
-                <ul className="ml-2 border-l border-[#eee6d6]">
+                <ul className="ml-2 border-l border-[var(--e-eee6d6)]">
                   {g.fields.map((f: BindingField) => (
                     <li key={f.path}>
                       <button
@@ -918,10 +918,10 @@ function BindingsPanel({
                         onClick={() => !disabled && onInsert(f.path)}
                         disabled={disabled}
                         title={f.sample ? `Sample: ${f.sample}` : undefined}
-                        className="flex w-full items-center gap-1 rounded px-1.5 py-0.5 text-left text-[10.5px] text-[#5a4526] hover:bg-[#412d15]/[0.06] hover:text-[#1f150c] disabled:cursor-not-allowed"
+                        className="flex w-full items-center gap-1 rounded px-1.5 py-0.5 text-left text-[10.5px] text-[var(--e-5a4526)] hover:bg-[var(--e-412d15)]/[0.06] hover:text-[var(--e-1f150c)] disabled:cursor-not-allowed"
                       >
                         <span className="truncate">{f.label}</span>
-                        <span className="ml-auto shrink-0 font-mono text-[9.5px] text-[#b6a684]">{f.path.split('.').slice(1).join('.')}</span>
+                        <span className="ml-auto shrink-0 font-mono text-[9.5px] text-[var(--e-b6a684)]">{f.path.split('.').slice(1).join('.')}</span>
                       </button>
                     </li>
                   ))}

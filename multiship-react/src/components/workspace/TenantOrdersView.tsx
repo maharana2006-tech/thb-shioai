@@ -115,7 +115,7 @@ export default function TenantOrdersView({ tenantId }: TenantOrdersViewProps) {
                 }}
                 className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-[11px] font-semibold transition sm:px-3 sm:text-xs ${
                   statusFilter === status
-                    ? 'bg-[#1f150c] text-white'
+                    ? 'bg-[var(--e-1f150c)] text-white'
                     : 'bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-950'
                 }`}
               >
@@ -169,7 +169,7 @@ export default function TenantOrdersView({ tenantId }: TenantOrdersViewProps) {
                 <button
                   type="button"
                   onClick={() => navigate(`/label/${order.orderDetails.orderNo}`)}
-                  className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[11px] font-semibold text-white transition hover:bg-[#412d15]"
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--e-1f150c)] px-3 py-1.5 text-[11px] font-semibold text-white transition hover:bg-[var(--e-412d15)]"
                 >
                   <FiTag className="h-3 w-3" />
                   Label

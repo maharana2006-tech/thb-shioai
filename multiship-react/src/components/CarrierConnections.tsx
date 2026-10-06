@@ -223,7 +223,7 @@ const emptyDrawer: DrawerState = {
 }
 
 const inputClassName =
-  'w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15] focus:ring-4 focus:ring-[#412d15]/10'
+  'w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[var(--e-412d15)] focus:ring-4 focus:ring-[var(--e-412d15)]/10'
 
 const filterLabelClass = 'mb-1 flex items-center gap-1 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400'
 
@@ -913,7 +913,7 @@ export default function CarrierConnections({
                 <span className="h-4 w-4 shrink-0" />
               ) : account.clientDefault && account.active ? (
                 <span title={`Default account for ${account.customerNo}`}>
-                  <FiStar className="h-4 w-4 shrink-0 fill-[#f2c94c] text-[#f2c94c]" />
+                  <FiStar className="h-4 w-4 shrink-0 fill-[var(--e-f2c94c)] text-[var(--e-f2c94c)]" />
                 </span>
               ) : account.clientDefault && !account.active ? (
                 <span title={`Was ${account.customerNo}'s default — inactive, not used`}>
@@ -926,7 +926,7 @@ export default function CarrierConnections({
                   disabled={busyId !== null}
                   aria-label={`Make this ${account.customerNo}'s default account`}
                   title={`Make this ${account.customerNo}'s default account`}
-                  className="shrink-0 text-slate-300 transition hover:text-[#f2c94c] disabled:opacity-50"
+                  className="shrink-0 text-slate-300 transition hover:text-[var(--e-f2c94c)] disabled:opacity-50"
                 >
                   <FiStar className="h-4 w-4" />
                 </button>
@@ -985,8 +985,8 @@ export default function CarrierConnections({
               Platform
             </span>
           ) : (
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-[#412d15]/10 py-1 pl-1 pr-2.5 text-[11px] font-semibold text-[#412d15]">
-              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#412d15] text-[9px] font-bold uppercase text-white">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--e-412d15)]/10 py-1 pl-1 pr-2.5 text-[11px] font-semibold text-[var(--e-412d15)]">
+              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--e-412d15)] text-[9px] font-bold uppercase text-white">
                 {(account.customerNo || '?').slice(0, 1)}
               </span>
               {account.customerNo}
@@ -1140,7 +1140,7 @@ export default function CarrierConnections({
       { label: 'Ready to ship', value: `${readyCount}/${accounts.length}`, tone: 'text-emerald-600', icon: FiCheckCircle, chip: 'bg-emerald-50 text-emerald-600' },
       { label: 'Unverified', value: unverifiedCount, tone: unverifiedCount ? 'text-amber-600' : 'text-slate-950', icon: FiAlertTriangle, chip: unverifiedCount ? 'bg-amber-50 text-amber-600' : 'bg-slate-100 text-slate-400' },
       { label: 'Platform accounts', value: platformCount, tone: 'text-slate-950', icon: FiBox, chip: 'bg-slate-100 text-slate-500' },
-      { label: 'Client accounts', value: clientCount, tone: 'text-slate-950', icon: FiUsers, chip: 'bg-[#412d15]/10 text-[#412d15]' },
+      { label: 'Client accounts', value: clientCount, tone: 'text-slate-950', icon: FiUsers, chip: 'bg-[var(--e-412d15)]/10 text-[var(--e-412d15)]' },
     ],
     [readyCount, accounts.length, unverifiedCount, platformCount, clientCount],
   )
@@ -1170,7 +1170,7 @@ export default function CarrierConnections({
              action. The button reuses the same drawer the toolbar opens. */}
       {embedded && !loading && accounts.length === 0 ? (
         <section className="rounded-2xl border border-dashed border-slate-300 bg-slate-50/60 px-5 py-8 text-center">
-          <div className="mx-auto inline-flex h-11 w-11 items-center justify-center rounded-xl bg-[#412d15]/10 text-[#412d15]">
+          <div className="mx-auto inline-flex h-11 w-11 items-center justify-center rounded-xl bg-[var(--e-412d15)]/10 text-[var(--e-412d15)]">
             <FiBox className="h-5 w-5" />
           </div>
           <p className="mt-2 text-[13.5px] font-semibold text-slate-950">No carrier accounts yet</p>
@@ -1182,7 +1182,7 @@ export default function CarrierConnections({
           <button
             type="button"
             onClick={() => openDrawer()}
-            className="mt-3 inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-4 py-2 text-[12px] font-semibold text-white transition hover:bg-[#412d15]"
+            className="mt-3 inline-flex items-center gap-1.5 rounded-xl bg-[var(--e-1f150c)] px-4 py-2 text-[12px] font-semibold text-white transition hover:bg-[var(--e-412d15)]"
           >
             <FiPlus className="h-3.5 w-3.5" /> Add carrier account
           </button>
@@ -1214,7 +1214,7 @@ export default function CarrierConnections({
                   title="Filters"
                   className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-[12px] font-semibold transition md:px-3 ${
                     showFilters || filterOnlyCount
-                      ? 'bg-[#1f150c] text-white'
+                      ? 'bg-[var(--e-1f150c)] text-white'
                       : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
                   }`}
                 >
@@ -1232,7 +1232,7 @@ export default function CarrierConnections({
                   >
                     <div className="space-y-2.5">
                       <div>
-                        <span className={filterLabelClass}><FiUsers className="h-3 w-3 text-[#412d15]" />Account type</span>
+                        <span className={filterLabelClass}><FiUsers className="h-3 w-3 text-[var(--e-412d15)]" />Account type</span>
                         <Select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} aria-label="Filter by account type">
                           <option value="">All accounts</option>
                           <option value="PLATFORM">Platform ({platformCount})</option>
@@ -1250,7 +1250,7 @@ export default function CarrierConnections({
                         </Select>
                       </div>
                       <div>
-                        <span className={filterLabelClass}><FiUser className="h-3 w-3 text-[#412d15]" />Client</span>
+                        <span className={filterLabelClass}><FiUser className="h-3 w-3 text-[var(--e-412d15)]" />Client</span>
                         <Select value={clientFilter} onChange={(e) => setClientFilter(e.target.value)} aria-label="Filter by client">
                           <option value="">All clients</option>
                           {clients.map((c) => (
@@ -1308,7 +1308,7 @@ export default function CarrierConnections({
                       <button
                         type="button"
                         onClick={() => setShowFilters(false)}
-                        className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[11.5px] font-semibold text-white transition hover:bg-[#412d15]"
+                        className="inline-flex items-center gap-1 rounded-xl bg-[var(--e-1f150c)] px-3 py-1.5 text-[11.5px] font-semibold text-white transition hover:bg-[var(--e-412d15)]"
                       >
                         Done
                       </button>
@@ -1332,7 +1332,7 @@ export default function CarrierConnections({
               <button
                 type="button"
                 onClick={() => openDrawer()}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15]"
+                className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--e-1f150c)] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[var(--e-412d15)]"
               >
                 <FiPlus className="h-3.5 w-3.5" /> Add Account
               </button>
@@ -1398,7 +1398,7 @@ export default function CarrierConnections({
                           selected
                             ? locked
                               ? 'cursor-not-allowed border-slate-300 bg-slate-100 text-slate-700'
-                              : 'border-[#1f150c] bg-white text-[#1f150c]'
+                              : 'border-[var(--e-1f150c)] bg-white text-[var(--e-1f150c)]'
                             : locked
                               ? 'cursor-not-allowed border-slate-100 bg-slate-50 text-slate-300 opacity-60'
                               : 'border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100'
@@ -2212,7 +2212,7 @@ export default function CarrierConnections({
                 type="button"
                 onClick={() => void handleSave()}
                 disabled={saving}
-                className="flex-1 rounded-xl bg-[#1f150c] px-3 py-2.5 text-[13px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-slate-300"
+                className="flex-1 rounded-xl bg-[var(--e-1f150c)] px-3 py-2.5 text-[13px] font-semibold text-white transition hover:bg-[var(--e-412d15)] disabled:cursor-not-allowed disabled:bg-slate-300"
               >
                 {saving ? 'Saving…' : 'Save to Account Book'}
               </button>
@@ -2361,7 +2361,7 @@ function RowActionsMenu({
           onClick={() => { setOpen(false); onEdit() }}
           className="flex w-full items-center gap-2 px-3 py-2 text-[12px] font-semibold text-slate-700 transition hover:bg-slate-50"
         >
-          <FiEdit2 className="h-3.5 w-3.5 text-[#412d15]" />
+          <FiEdit2 className="h-3.5 w-3.5 text-[var(--e-412d15)]" />
           Edit
         </button>
         {admin ? (

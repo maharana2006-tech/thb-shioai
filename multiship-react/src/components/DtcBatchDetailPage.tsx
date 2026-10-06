@@ -180,7 +180,7 @@ export default function DtcBatchDetailPage() {
           type="button"
           onClick={() => setDetailsLine(row.original)}
           title="Open this shipment line"
-          className="font-mono text-[12px] font-semibold text-[#412d15] underline decoration-[#cdbf9f] underline-offset-2 transition hover:decoration-[#412d15]"
+          className="font-mono text-[12px] font-semibold text-[var(--e-412d15)] underline decoration-[var(--e-cdbf9f)] underline-offset-2 transition hover:decoration-[var(--e-412d15)]"
         >
           {row.original.orderNo ?? '—'}
         </button>
@@ -188,13 +188,13 @@ export default function DtcBatchDetailPage() {
     { id: 'generatedOrderNo', header: 'Label Order', accessorKey: 'generatedOrderNo', enableSorting: false,
       cell: ({ row }) => {
         const orderNo = row.original.generatedOrderNo
-        if (!orderNo) return <span className="text-[11px] text-[#9a8b70]">—</span>
+        if (!orderNo) return <span className="text-[11px] text-[var(--e-9a8b70)]">—</span>
         return (
           <button
             type="button"
             title={`Open the details for order ${orderNo}`}
             onClick={() => setDetailsOrderNo(orderNo)}
-            className="font-mono text-[12px] font-semibold text-[#412d15] underline decoration-[#cdbf9f] underline-offset-2 transition hover:decoration-[#412d15]"
+            className="font-mono text-[12px] font-semibold text-[var(--e-412d15)] underline decoration-[var(--e-cdbf9f)] underline-offset-2 transition hover:decoration-[var(--e-412d15)]"
           >
             {orderNo}
           </button>
@@ -219,14 +219,14 @@ export default function DtcBatchDetailPage() {
         // one (cancelled at the carrier — it must not go onto a parcel).
         if (!orderNo || row.original.generatedStatus !== 'GENERATED'
             || data?.voidStatuses?.[String(orderNo)] === 'VOIDED') {
-          return <span className="text-[11px] text-[#9a8b70]">—</span>
+          return <span className="text-[11px] text-[var(--e-9a8b70)]">—</span>
         }
         return (
           <button
             type="button"
             title={`Open the label PDF for order ${orderNo}`}
             onClick={() => window.open(dtcService.labelPdfUrl(orderNo), '_blank')}
-            className="inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+            className="inline-flex items-center gap-1 rounded-lg border border-[var(--e-e3d9c4)] bg-white px-2 py-1 text-[11px] font-semibold text-[var(--e-5a4526)] transition hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-faf7f0)]"
           >
             <FiPrinter className="h-3 w-3" />
             Print
@@ -303,7 +303,7 @@ export default function DtcBatchDetailPage() {
 
   if (!tenantId) {
     return (
-      <p className="px-5 py-10 text-center text-sm text-[#6b5c42]">
+      <p className="px-5 py-10 text-center text-sm text-[var(--e-6b5c42)]">
         Missing client (tenant) for this batch — go back to Automatic Label and open the batch from there.
       </p>
     )
@@ -316,8 +316,8 @@ export default function DtcBatchDetailPage() {
   const counts = data?.statusCounts ?? {}
   const anyFilter = filterCount > 0 || !!debouncedQ
   const statusPills = STATUS_FILTERS.filter((f) => !f.value || counts[f.value] || status === f.value)
-  const selectCls = 'h-9 w-full cursor-pointer appearance-none rounded-lg border border-[#e3d9c4] bg-white bg-[length:12px] bg-[right_0.7rem_center] bg-no-repeat pl-3 pr-8 text-[12.5px] font-semibold text-[#3d2f1c] outline-none transition hover:border-[#cdbf9f] focus:border-[#412d15] focus:ring-4 focus:ring-[#f0e9d8]'
-  const sectionLabel = 'mb-1.5 block text-[10.5px] font-semibold uppercase tracking-[0.1em] text-[#a1906d]'
+  const selectCls = 'h-9 w-full cursor-pointer appearance-none rounded-lg border border-[var(--e-e3d9c4)] bg-white bg-[length:12px] bg-[right_0.7rem_center] bg-no-repeat pl-3 pr-8 text-[12.5px] font-semibold text-[var(--e-3d2f1c)] outline-none transition hover:border-[var(--e-cdbf9f)] focus:border-[var(--e-412d15)] focus:ring-4 focus:ring-[var(--e-f0e9d8)]'
+  const sectionLabel = 'mb-1.5 block text-[10.5px] font-semibold uppercase tracking-[0.1em] text-[var(--e-a1906d)]'
 
   /** Filters dropdown: Label status pills (with each status's line count), carrier and ship date. */
   const filters = (
@@ -330,8 +330,8 @@ export default function DtcBatchDetailPage() {
         aria-controls="d2c-line-filter-panel"
         className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-[12.5px] font-semibold transition ${
           filterCount
-            ? 'border-[#1f150c] bg-[#1f150c] text-[#f4eede] hover:bg-[#412d15]'
-            : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'}`}
+            ? 'border-[var(--e-1f150c)] bg-[var(--e-1f150c)] text-[var(--e-f4eede)] hover:bg-[var(--e-412d15)]'
+            : 'border-[var(--e-e3d9c4)] bg-white text-[var(--e-5a4526)] hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-faf7f0)]'}`}
       >
         <FiFilter className="h-3.5 w-3.5" />
         Filters
@@ -344,15 +344,15 @@ export default function DtcBatchDetailPage() {
           id="d2c-line-filter-panel"
           role="region"
           aria-label="Shipment line filters"
-          className="bulk-pop-in absolute right-0 z-30 mt-1.5 w-[22rem] overflow-hidden rounded-xl border border-[#e3d9c4] bg-white shadow-[0_16px_40px_rgba(31,21,12,0.16)]"
+          className="bulk-pop-in absolute right-0 z-30 mt-1.5 w-[22rem] overflow-hidden rounded-xl border border-[var(--e-e3d9c4)] bg-white shadow-[0_16px_40px_rgba(31,21,12,0.16)]"
         >
-          <div className="flex items-center justify-between border-b border-[#f2ecdf] bg-[#fcfaf5] px-4 py-2.5">
-            <p className="text-[13px] font-semibold text-[#1f150c]">Filter lines</p>
+          <div className="flex items-center justify-between border-b border-[var(--e-f2ecdf)] bg-[var(--e-fcfaf5)] px-4 py-2.5">
+            <p className="text-[13px] font-semibold text-[var(--e-1f150c)]">Filter lines</p>
             {filterCount ? (
               <button
                 type="button"
                 onClick={() => { setStatus(''); setCarrier(''); setShipDate('') }}
-                className="inline-flex items-center gap-1 text-[11.5px] font-semibold text-[#8a7a5a] transition hover:text-[#1f150c]"
+                className="inline-flex items-center gap-1 text-[11.5px] font-semibold text-[var(--e-8a7a5a)] transition hover:text-[var(--e-1f150c)]"
               >
                 <FiX className="h-3 w-3" /> Clear all
               </button>
@@ -375,12 +375,12 @@ export default function DtcBatchDetailPage() {
                       onClick={() => setStatus(f.value)}
                       className={`inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[11.5px] font-semibold transition ${
                         active
-                          ? 'border-[#1f150c] bg-[#1f150c] text-[#f4eede]'
-                          : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'}`}
+                          ? 'border-[var(--e-1f150c)] bg-[var(--e-1f150c)] text-[var(--e-f4eede)]'
+                          : 'border-[var(--e-e3d9c4)] bg-white text-[var(--e-5a4526)] hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-faf7f0)]'}`}
                     >
                       {f.dot ? <span className={`h-1.5 w-1.5 rounded-full ${f.dot}`} aria-hidden="true" /> : null}
                       {f.label}
-                      <span className={`rounded-full px-1.5 text-[10px] tabular-nums ${active ? 'bg-white/15' : 'bg-[#f4eede] text-[#6b5c42]'}`}>{n}</span>
+                      <span className={`rounded-full px-1.5 text-[10px] tabular-nums ${active ? 'bg-white/15' : 'bg-[var(--e-f4eede)] text-[var(--e-6b5c42)]'}`}>{n}</span>
                     </button>
                   )
                 })}
@@ -405,14 +405,14 @@ export default function DtcBatchDetailPage() {
             </div>
           </div>
 
-          <div className="flex items-center justify-between border-t border-[#f2ecdf] bg-[#fcfaf5] px-4 py-2.5">
-            <p className="text-[11.5px] text-[#8a7a5a]">
-              <b className="tabular-nums text-[#1f150c]">{total}</b> of {batch?.totalLines ?? total} lines
+          <div className="flex items-center justify-between border-t border-[var(--e-f2ecdf)] bg-[var(--e-fcfaf5)] px-4 py-2.5">
+            <p className="text-[11.5px] text-[var(--e-8a7a5a)]">
+              <b className="tabular-nums text-[var(--e-1f150c)]">{total}</b> of {batch?.totalLines ?? total} lines
             </p>
             <button
               type="button"
               onClick={closeFilters}
-              className="rounded-lg bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15]"
+              className="rounded-lg bg-[var(--e-1f150c)] px-3 py-1.5 text-[12px] font-semibold text-[var(--e-f4eede)] shadow-sm transition hover:bg-[var(--e-412d15)]"
             >
               Done
             </button>
@@ -425,13 +425,13 @@ export default function DtcBatchDetailPage() {
   return (
     <div className="space-y-3 pb-8">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-1 pt-1">
-        <h2 className="mr-auto flex items-center gap-2 text-[17px] font-semibold tracking-tight text-[#1f150c]">
+        <h2 className="mr-auto flex items-center gap-2 text-[17px] font-semibold tracking-tight text-[var(--e-1f150c)]">
           DTC Shipment History — Batch {batchId}
         </h2>
         <button
           type="button"
           onClick={() => navigate(workspacePaths.d2c)}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--e-e3d9c4)] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[var(--e-5a4526)] transition hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-faf7f0)]"
         >
           <FiArrowLeft className="h-3.5 w-3.5" />
           Back
@@ -441,7 +441,7 @@ export default function DtcBatchDetailPage() {
           onClick={generate}
           disabled={!!activeJobId || starting}
           title="Generate shipping labels for every pending line in this batch"
-          className="inline-flex items-center gap-1.5 rounded-lg bg-[#1f150c] px-2.5 py-1.5 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#3a2a18] disabled:opacity-60"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--e-1f150c)] px-2.5 py-1.5 text-[12px] font-semibold text-[var(--e-f4eede)] shadow-sm transition hover:bg-[var(--e-3a2a18)] disabled:opacity-60"
         >
           <FiZap className="h-3.5 w-3.5" />
           {activeJobId && jobProgress ? `Generating ${jobProgress.processed}/${jobProgress.total}…` : 'Generate labels'}
@@ -453,7 +453,7 @@ export default function DtcBatchDetailPage() {
           title={!batch || printableCount(batch) === 0
             ? (batch?.voidedCount ? 'Every label of this batch was voided — nothing to print' : 'Generate labels first — nothing to print yet')
             : 'Download all live label PDFs as a ZIP (voided labels are left out)'}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--e-e3d9c4)] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[var(--e-5a4526)] transition hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-faf7f0)] disabled:cursor-not-allowed disabled:opacity-40"
         >
           <FiPrinter className="h-3.5 w-3.5" />
           Print all
@@ -461,8 +461,8 @@ export default function DtcBatchDetailPage() {
       </div>
 
       {batch && (
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-1 text-[12px] text-[#6b5c42]">
-          <span>Client <b className="text-[#3d2f1c]">{batch.tenantId}</b></span>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-1 text-[12px] text-[var(--e-6b5c42)]">
+          <span>Client <b className="text-[var(--e-3d2f1c)]">{batch.tenantId}</b></span>
           <span>{batch.totalLines} line{batch.totalLines === 1 ? '' : 's'}</span>
           <span>{batch.generatedCount} generated</span>
           {batch.voidedCount ? <span className="font-semibold text-rose-700">{batch.voidedCount} voided</span> : null}
@@ -473,8 +473,8 @@ export default function DtcBatchDetailPage() {
             </span>
           )}
           {batch.pendingCount + batch.queuedCount > 0 && <span>{batch.pendingCount + batch.queuedCount} pending</span>}
-          <span>Batch status <b className="text-[#3d2f1c]">{batchStatusOf(batch)}</b></span>
-          <span>Labels <b className="text-[#3d2f1c]">{labelStatusOf(batch)}</b></span>
+          <span>Batch status <b className="text-[var(--e-3d2f1c)]">{batchStatusOf(batch)}</b></span>
+          <span>Labels <b className="text-[var(--e-3d2f1c)]">{labelStatusOf(batch)}</b></span>
         </div>
       )}
 
@@ -504,7 +504,7 @@ export default function DtcBatchDetailPage() {
             ? `${total} of ${batch?.totalLines ?? total} shipment lines in batch ${batchId} match`
             : `${total} shipment line${total === 1 ? '' : 's'} in batch ${batchId}`}
           emptyState={
-            <p className="px-5 py-10 text-center text-sm text-[#6b5c42]">
+            <p className="px-5 py-10 text-center text-sm text-[var(--e-6b5c42)]">
               {loading ? 'Loading…'
                 : anyFilter ? 'No shipment lines match your search or filters.'
                   : `No shipment lines for batch ${batchId}.`}

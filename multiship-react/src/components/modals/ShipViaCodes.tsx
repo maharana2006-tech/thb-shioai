@@ -41,29 +41,29 @@ export function ShipViaCodesPanel({
   }, [open, clientCode, reloadKey])
 
   return (
-    <div className="rounded-xl border border-[#e3d9c4] bg-[#fcfaf5]">
+    <div className="rounded-xl border border-[var(--e-e3d9c4)] bg-[var(--e-fcfaf5)]">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[12px] font-semibold text-[#5a4526]"
+        className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[12px] font-semibold text-[var(--e-5a4526)]"
       >
         {open ? <FiChevronDown className="h-3.5 w-3.5" /> : <FiChevronRight className="h-3.5 w-3.5" />}
         Ship via codes {clientCode ? `for ${clientCode}` : 'on this platform'}
-        <span className="font-normal text-[#8a7a5c]">— what goes in the Service column (serviceType in the file)</span>
+        <span className="font-normal text-[var(--e-8a7a5c)]">— what goes in the Service column (serviceType in the file)</span>
       </button>
       {open ? (
-        <div className="border-t border-[#efe7d6] px-3 py-2">
+        <div className="border-t border-[var(--e-efe7d6)] px-3 py-2">
           {codes === null ? (
-            <p className="text-[12px] text-[#8a7a5c]">Loading…</p>
+            <p className="text-[12px] text-[var(--e-8a7a5c)]">Loading…</p>
           ) : codes.length === 0 ? (
-            <p className="text-[12px] text-[#8a7a5c]">
+            <p className="text-[12px] text-[var(--e-8a7a5c)]">
               No ship via codes are mapped {clientCode ? `for ${clientCode}` : 'yet'}. The file can still use a
               carrier service code such as 03.
             </p>
           ) : (
             <table className="w-full text-[12px]">
-              <thead className="text-left text-[10.5px] font-semibold uppercase tracking-wide text-[#8a7a5c]">
+              <thead className="text-left text-[10.5px] font-semibold uppercase tracking-wide text-[var(--e-8a7a5c)]">
                 <tr>
                   <th className="pb-1">Code</th>
                   <th className="pb-1">Ships with</th>
@@ -73,12 +73,12 @@ export function ShipViaCodesPanel({
               <tbody>
                 {codes.map((c) => (
                   <tr key={`${c.code}-${c.clientCode ?? '*'}-${c.destination ?? ''}`} className={c.enabled ? '' : 'opacity-60'}>
-                    <td className="py-0.5 pr-3 font-mono font-semibold text-[#3b2d18]">{c.code}</td>
-                    <td className="py-0.5 pr-3 text-[#5a4526]">
-                      {c.serviceName} <span className="text-[#8a7a5c]">({c.carrier} {c.serviceCode})</span>
+                    <td className="py-0.5 pr-3 font-mono font-semibold text-[var(--e-3b2d18)]">{c.code}</td>
+                    <td className="py-0.5 pr-3 text-[var(--e-5a4526)]">
+                      {c.serviceName} <span className="text-[var(--e-8a7a5c)]">({c.carrier} {c.serviceCode})</span>
                       {c.enabled ? null : <span className="ml-1 text-amber-700">· switched off</span>}
                     </td>
-                    <td className="py-0.5 text-[#8a7a5c]">
+                    <td className="py-0.5 text-[var(--e-8a7a5c)]">
                       {c.clientCode ?? 'every client'}{c.destination ? ` · ${c.destination}` : ''}
                     </td>
                   </tr>
@@ -90,7 +90,7 @@ export function ShipViaCodesPanel({
             <button
               type="button"
               onClick={onOpenMapping}
-              className="mt-2 inline-flex items-center gap-1 text-[12px] font-semibold text-[#5a4526] underline"
+              className="mt-2 inline-flex items-center gap-1 text-[12px] font-semibold text-[var(--e-5a4526)] underline"
             >
               <FiExternalLink className="h-3 w-3" />
               Manage these in Settings → Shipping Service Mapping
@@ -160,7 +160,7 @@ export function AddShipViaMappingDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-[#1f150c]/45 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-[var(--e-1f150c)]/45 p-4" onClick={onClose}>
       <div
         role="dialog"
         aria-modal="true"
@@ -168,24 +168,24 @@ export function AddShipViaMappingDialog({
         className="w-full max-w-[460px] rounded-2xl bg-white shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="border-b border-[#efe7d6] px-5 py-3">
+        <div className="border-b border-[var(--e-efe7d6)] px-5 py-3">
           <h3 className="text-[15px] font-semibold text-slate-900">
             Map ship via <span className="font-mono">{code}</span>
           </h3>
-          <p className="mt-0.5 text-[12px] text-[#6b5c42]">
+          <p className="mt-0.5 text-[12px] text-[var(--e-6b5c42)]">
             Every order with this code ships the service you pick here, on this upload and every one after it.
           </p>
         </div>
         <div className="space-y-3 px-5 py-4">
           <label className="block">
-            <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-[#8a7a5c]">
+            <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-[var(--e-8a7a5c)]">
               Ships with
             </span>
             <select
               value={serviceId}
               onChange={(e) => setServiceId(e.target.value)}
               disabled={services === null}
-              className="w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-2 text-[13px]"
+              className="w-full rounded-lg border border-[var(--e-e3d9c4)] bg-white px-2.5 py-2 text-[13px]"
             >
               <option value="">{services === null ? 'Loading…' : 'Choose a carrier service…'}</option>
               {[...byCarrier.entries()].map(([carrier, list]) => (
@@ -199,14 +199,14 @@ export function AddShipViaMappingDialog({
           </label>
           {clientCode ? (
             <fieldset>
-              <legend className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-[#8a7a5c]">
+              <legend className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--e-8a7a5c)]">
                 Applies to
               </legend>
               {([
                 ['client', `Only ${clientCode}`],
                 ['all', 'Every client without their own rule'],
               ] as const).map(([value, label]) => (
-                <label key={value} className="flex items-center gap-2 py-0.5 text-[13px] text-[#3b2d18]">
+                <label key={value} className="flex items-center gap-2 py-0.5 text-[13px] text-[var(--e-3b2d18)]">
                   <input
                     type="radio"
                     name="ship-via-scope"
@@ -218,16 +218,16 @@ export function AddShipViaMappingDialog({
               ))}
             </fieldset>
           ) : (
-            <p className="text-[12px] text-[#6b5c42]">
+            <p className="text-[12px] text-[var(--e-6b5c42)]">
               This row has no client code, so the rule will apply to every client.
             </p>
           )}
         </div>
-        <div className="flex justify-end gap-2 border-t border-[#efe7d6] px-5 py-3">
+        <div className="flex justify-end gap-2 border-t border-[var(--e-efe7d6)] px-5 py-3">
           <button
             type="button"
             onClick={onClose}
-            className="rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]"
+            className="rounded-xl border border-[var(--e-e3d9c4)] bg-white px-3 py-2 text-[13px] font-semibold text-[var(--e-5a4526)] hover:bg-[var(--e-faf7f0)]"
           >
             Cancel
           </button>
@@ -235,7 +235,7 @@ export function AddShipViaMappingDialog({
             type="button"
             onClick={() => void save()}
             disabled={saving || !serviceId}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-[#3b2d18] px-3 py-2 text-[13px] font-semibold text-white hover:bg-[#5a4526] disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--e-3b2d18)] px-3 py-2 text-[13px] font-semibold text-white hover:bg-[var(--e-5a4526)] disabled:opacity-50"
           >
             {saving
               ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />

@@ -166,10 +166,10 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
 
   const inputCls = (k?: FieldKey) => {
     const bad = k ? err(k) != null : false
-    return `w-full rounded-lg border bg-white px-2.5 py-1.5 text-[12.5px] text-[#1f150c] outline-none focus:ring-1 ${
+    return `w-full rounded-lg border bg-white px-2.5 py-1.5 text-[12.5px] text-[var(--e-1f150c)] outline-none focus:ring-1 ${
       bad
         ? 'border-rose-400 focus:border-rose-500 focus:ring-rose-400'
-        : 'border-[#e3d9c4] focus:border-[#412d15] focus:ring-[#412d15]'
+        : 'border-[var(--e-e3d9c4)] focus:border-[var(--e-412d15)] focus:ring-[var(--e-412d15)]'
     }`
   }
 
@@ -207,23 +207,23 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
       role="dialog"
       aria-modal="true"
       aria-label="Schedule courier pickup"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[#1f150c]/45 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--e-1f150c)]/45 p-4"
       onClick={onClose}
     >
       <div
         ref={dialogRef}
-        className="flex h-[min(760px,92vh)] w-full max-w-[640px] flex-col overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-[0_30px_80px_rgba(31,21,12,0.35)]"
+        className="flex h-[min(760px,92vh)] w-full max-w-[640px] flex-col overflow-hidden rounded-2xl border border-[var(--e-e3d9c4)] bg-white shadow-[0_30px_80px_rgba(31,21,12,0.35)]"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-start justify-between gap-3 border-b border-[#eee6d6] px-5 py-4">
+        <div className="flex items-start justify-between gap-3 border-b border-[var(--e-eee6d6)] px-5 py-4">
           <div>
-            <p className="inline-flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-[0.16em] text-[#6b5c42]">
+            <p className="inline-flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-[0.16em] text-[var(--e-6b5c42)]">
               <FiTruck className="h-3 w-3" /> Pickup
             </p>
-            <h3 className="mt-1 text-[15px] font-semibold text-[#1f150c]">
+            <h3 className="mt-1 text-[15px] font-semibold text-[var(--e-1f150c)]">
               Schedule courier pickup
             </h3>
-            <p className="mt-1 text-[11.5px] text-[#6b5c42]">
+            <p className="mt-1 text-[11.5px] text-[var(--e-6b5c42)]">
               Books a driver to collect the parcels at your ship-from address.
             </p>
           </div>
@@ -231,7 +231,7 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#6b5c42] transition hover:bg-[#faf7f0]"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--e-e3d9c4)] bg-white text-[var(--e-6b5c42)] transition hover:bg-[var(--e-faf7f0)]"
           >
             <FiX className="h-3.5 w-3.5" />
           </button>
@@ -256,7 +256,7 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
                          min={today}
                          onChange={(e) => update({ pickupDate: e.target.value })}
                          onBlur={() => touch('pickupDate')} />
-                  <FiCalendar className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-[#b6a684]" />
+                  <FiCalendar className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-[var(--e-b6a684)]" />
                 </div>
               </Field>
               <Field label="Window start" required error={err('pickupWindowStart')}>
@@ -416,14 +416,14 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
           {result ? <ResultBanner result={result} /> : null}
         </div>
 
-        <div className="flex items-center justify-end gap-2 border-t border-[#eee6d6] px-5 py-3">
+        <div className="flex items-center justify-end gap-2 border-t border-[var(--e-eee6d6)] px-5 py-3">
           <button type="button" onClick={onClose}
-                  className="inline-flex items-center rounded-lg border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#412d15] hover:bg-[#faf7f0]">
+                  className="inline-flex items-center rounded-lg border border-[var(--e-e3d9c4)] bg-white px-3 py-1.5 text-[12px] font-semibold text-[var(--e-412d15)] hover:bg-[var(--e-faf7f0)]">
             Cancel
           </button>
           <button type="button" disabled={submitting}
                   onClick={() => void submit()}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-[#f4eede] transition hover:bg-[#412d15] disabled:opacity-40">
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--e-1f150c)] px-3 py-1.5 text-[12px] font-semibold text-[var(--e-f4eede)] transition hover:bg-[var(--e-412d15)] disabled:opacity-40">
             <FiTruck className="h-3 w-3" />
             {submitting ? 'Scheduling…' : 'Schedule pickup'}
           </button>
@@ -449,7 +449,7 @@ function ResultBanner({ result }: { result: PickupResponse }) {
   }
   if (result.status === 'NOT_SUPPORTED') {
     return (
-      <div className="rounded-xl border border-[#e3d9c4] bg-[#faf7f0] px-3 py-2 text-[12px] text-[#412d15]">
+      <div className="rounded-xl border border-[var(--e-e3d9c4)] bg-[var(--e-faf7f0)] px-3 py-2 text-[12px] text-[var(--e-412d15)]">
         <p className="font-semibold">Pickup not scheduled</p>
         <p className="mt-1">{result.message}</p>
       </div>
@@ -468,7 +468,7 @@ function ResultBanner({ result }: { result: PickupResponse }) {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section>
-      <h4 className="mb-1.5 text-[10.5px] font-bold uppercase tracking-[0.14em] text-[#6b5c42]">
+      <h4 className="mb-1.5 text-[10.5px] font-bold uppercase tracking-[0.14em] text-[var(--e-6b5c42)]">
         {title}
       </h4>
       {children}
@@ -492,7 +492,7 @@ function Field({
 }) {
   return (
     <label className={`block ${className}`}>
-      <span className="mb-0.5 block text-[10.5px] font-semibold text-[#5a4526]">
+      <span className="mb-0.5 block text-[10.5px] font-semibold text-[var(--e-5a4526)]">
         {label} {required ? <span className="text-rose-500">*</span> : null}
       </span>
       {children}

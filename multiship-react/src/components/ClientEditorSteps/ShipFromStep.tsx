@@ -136,7 +136,7 @@ export function ShipFromStep({
                   {picked.code} · {picked.name}
                   <span className={`ml-1 rounded-full px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide ${
                     (picked.ownerType || '').toUpperCase() === 'PLATFORM'
-                      ? 'bg-sky-100 text-sky-700' : 'bg-[#412d15]/10 text-[#412d15]'
+                      ? 'bg-sky-100 text-sky-700' : 'bg-[var(--e-412d15)]/10 text-[var(--e-412d15)]'
                   }`}>
                     {(picked.ownerType || 'PLATFORM').toUpperCase()}
                   </span>
@@ -156,7 +156,7 @@ export function ShipFromStep({
                   type="button"
                   onClick={() => onEditWarehouseClick(picked)}
                   title="Edit this warehouse (shared across clients — CLIENT-owned only)"
-                  className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 transition hover:border-[#412d15] hover:bg-[#faf7f0] hover:text-[#412d15]"
+                  className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 transition hover:border-[var(--e-412d15)] hover:bg-[var(--e-faf7f0)] hover:text-[var(--e-412d15)]"
                 >
                   <FiEdit2 className="h-3 w-3" /> Edit
                 </button>

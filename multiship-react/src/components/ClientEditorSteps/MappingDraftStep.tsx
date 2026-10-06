@@ -123,7 +123,7 @@ export function MappingDraftStep({
           <button
             type="button"
             onClick={() => setAdding(true)}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15]"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--e-1f150c)] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[var(--e-412d15)]"
           >
             <FiPlus className="h-3.5 w-3.5" /> Add mapping
           </button>
@@ -221,7 +221,7 @@ export function MappingDraftStep({
               aria-disabled={!canSave}
               title={!canSave ? 'Fix the highlighted fields to continue' : undefined}
               className={`rounded-xl px-4 py-1.5 text-[12px] font-semibold text-white transition ${
-                canSave ? 'bg-[#1f150c] hover:bg-[#412d15]' : 'bg-slate-300'
+                canSave ? 'bg-[var(--e-1f150c)] hover:bg-[var(--e-412d15)]' : 'bg-slate-300'
               }`}
             >
               Add to list
@@ -247,7 +247,7 @@ export function MappingDraftStep({
               const svc = svcById.get(d.serviceId)
               return (
                 <li key={d.id} className="flex items-center gap-3 px-3 py-2">
-                  <span className="rounded-lg bg-[#1f150c] px-2.5 py-1 font-mono text-[11.5px] font-bold text-[#e1dcc9]">
+                  <span className="rounded-lg bg-[var(--e-1f150c)] px-2.5 py-1 font-mono text-[11.5px] font-bold text-[var(--e-e1dcc9)]">
                     {d.shipviaCd}
                   </span>
                   <div className="flex-1 min-w-0">

@@ -32,13 +32,13 @@ export default function AuthLayout({ eyebrow, title, description, children, foot
   const printedOn = new Date().toISOString().slice(0, 10)
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#160e07]">
+    <div className="relative min-h-screen overflow-hidden bg-[var(--e-160e07)]">
       <BrandBackdrop variant="dark" />
 
       {/* ghost wordmark bleeding off the bottom of the night sky */}
       <p
         aria-hidden="true"
-        className="pointer-events-none absolute -bottom-[4vw] left-1/2 -translate-x-1/2 select-none whitespace-nowrap text-[17vw] font-black uppercase tracking-tighter text-[#e1dcc9]/[0.035]"
+        className="pointer-events-none absolute -bottom-[4vw] left-1/2 -translate-x-1/2 select-none whitespace-nowrap text-[17vw] font-black uppercase tracking-tighter text-[var(--e-e1dcc9)]/[0.035]"
       >
         MultiShip
       </p>
@@ -47,17 +47,17 @@ export default function AuthLayout({ eyebrow, title, description, children, foot
         {/* top chrome: logo + trust line */}
         <header className="flex items-center justify-between auth-fade-up">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[#e1dcc9] text-[#1f150c] shadow-lg">
+            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[var(--e-e1dcc9)] text-[var(--e-1f150c)] shadow-lg">
               <FiBox className="h-5 w-5" />
             </div>
             <div>
               <p className="text-[15px] font-bold leading-tight text-white">MultiShip</p>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#e1dcc9]/60">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--e-e1dcc9)]/60">
                 Shipping Operations
               </p>
             </div>
           </div>
-          <div className="hidden items-center gap-5 text-[11px] font-semibold text-[#e1dcc9]/55 md:flex">
+          <div className="hidden items-center gap-5 text-[11px] font-semibold text-[var(--e-e1dcc9)]/55 md:flex">
             <span className="inline-flex items-center gap-1.5">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Platform healthy
             </span>
@@ -105,11 +105,11 @@ export default function AuthLayout({ eyebrow, title, description, children, foot
               {/* --- document body --- */}
               <div style={{ backgroundColor: PAPER }} className="rounded-t-2xl md:rounded-tl-none">
                 {/* header band */}
-                <div className="flex items-center justify-between gap-3 rounded-t-2xl bg-[#1f150c] px-5 py-3 sm:px-7 md:rounded-tl-none">
-                  <p className="text-[10px] font-black uppercase tracking-[0.22em] text-[#e1dcc9]">
+                <div className="flex items-center justify-between gap-3 rounded-t-2xl bg-[var(--e-1f150c)] px-5 py-3 sm:px-7 md:rounded-tl-none">
+                  <p className="text-[10px] font-black uppercase tracking-[0.22em] text-[var(--e-e1dcc9)]">
                     Operator access document
                   </p>
-                  <span className="rounded bg-[#e1dcc9]/15 px-2 py-1 text-[9px] font-bold uppercase tracking-[0.18em] text-[#e1dcc9]">
+                  <span className="rounded bg-[var(--e-e1dcc9)]/15 px-2 py-1 text-[9px] font-bold uppercase tracking-[0.18em] text-[var(--e-e1dcc9)]">
                     {eyebrow}
                   </span>
                 </div>
@@ -123,7 +123,7 @@ export default function AuthLayout({ eyebrow, title, description, children, foot
                   <div className="px-4 py-2.5 sm:px-5">
                     <p className="text-[8.5px] font-bold uppercase tracking-[0.18em] text-slate-400">Route</p>
                     <p className="mt-0.5 flex items-center gap-1 font-mono text-[11px] font-semibold text-slate-800">
-                      YOU <FiArrowRight className="h-3 w-3 text-[#412d15]" /> WORKSPACE
+                      YOU <FiArrowRight className="h-3 w-3 text-[var(--e-412d15)]" /> WORKSPACE
                     </p>
                   </div>
                   <div className="px-4 py-2.5 sm:px-5">
@@ -137,10 +137,10 @@ export default function AuthLayout({ eyebrow, title, description, children, foot
                   {/* faded rubber stamp */}
                   <div
                     aria-hidden="true"
-                    className="pointer-events-none absolute right-4 top-4 rotate-[7deg] rounded-md border-[2.5px] border-[#7a3b2e]/45 px-2.5 py-1 text-center sm:right-7"
+                    className="pointer-events-none absolute right-4 top-4 rotate-[7deg] rounded-md border-[2.5px] border-[var(--e-7a3b2e)]/45 px-2.5 py-1 text-center sm:right-7"
                   >
-                    <p className="text-[10px] font-black uppercase tracking-[0.26em] text-[#7a3b2e]/55">Cleared</p>
-                    <p className="text-[6.5px] font-bold uppercase tracking-[0.18em] text-[#7a3b2e]/45">for access · MS ops</p>
+                    <p className="text-[10px] font-black uppercase tracking-[0.26em] text-[var(--e-7a3b2e)]/55">Cleared</p>
+                    <p className="text-[6.5px] font-bold uppercase tracking-[0.18em] text-[var(--e-7a3b2e)]/45">for access · MS ops</p>
                   </div>
 
                   <h1 className="max-w-[26rem] pr-24 text-[22px] font-semibold leading-snug tracking-tight text-slate-950 sm:pr-28">

@@ -239,7 +239,7 @@ export default function ClientAllowlistTab<TAllowed, TCatalog>({
               type="button"
               onClick={() => void submitPicker()}
               disabled={!pickerChoice || busy}
-              className="rounded-xl bg-[#1f150c] px-4 py-1.5 text-[11.5px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-xl bg-[var(--e-1f150c)] px-4 py-1.5 text-[11.5px] font-semibold text-white transition hover:bg-[var(--e-412d15)] disabled:cursor-not-allowed disabled:opacity-50"
             >
               Add
             </button>
@@ -271,7 +271,7 @@ export default function ClientAllowlistTab<TAllowed, TCatalog>({
                 <div className="min-w-0 flex-1">{renderAllowed(row)}</div>
                 {renderRowExtras ? renderRowExtras(row) : null}
                 {isDefault ? (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-[#412d15]/10 px-2 py-0.5 text-[10.5px] font-semibold text-[#412d15]">
+                  <span className="inline-flex items-center gap-1 rounded-full bg-[var(--e-412d15)]/10 px-2 py-0.5 text-[10.5px] font-semibold text-[var(--e-412d15)]">
                     <FiStar className="h-3 w-3" />
                     Default
                   </span>

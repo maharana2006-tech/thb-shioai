@@ -1245,7 +1245,7 @@ export default function ClientEditorPage() {
               type="button"
               onClick={() => { void handleUpdate() }}
               disabled={saving}
-              className="rounded-xl bg-[#1f150c] px-4 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-slate-300"
+              className="rounded-xl bg-[var(--e-1f150c)] px-4 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[var(--e-412d15)] disabled:cursor-not-allowed disabled:bg-slate-300"
             >
               {saving ? 'Saving…' : 'Save changes'}
             </button>
@@ -1314,7 +1314,7 @@ export default function ClientEditorPage() {
               data-testid={`step-pill-${s.key}`}
               className={`group inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11.5px] font-semibold transition ${
                 active
-                  ? 'border-[#1f150c] bg-[#1f150c] text-white'
+                  ? 'border-[var(--e-1f150c)] bg-[var(--e-1f150c)] text-white'
                   : invalid
                     ? 'border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100'
                     : warn
@@ -1327,7 +1327,7 @@ export default function ClientEditorPage() {
               <span
                 className={`inline-flex h-4 w-4 items-center justify-center rounded-full text-[9.5px] font-bold ${
                   active
-                    ? 'bg-white text-[#1f150c]'
+                    ? 'bg-white text-[var(--e-1f150c)]'
                     : invalid
                       ? 'bg-rose-600 text-white'
                       : warn
@@ -1567,7 +1567,7 @@ export default function ClientEditorPage() {
                     ? `Cannot submit yet:\n  • ${createBlockers.join('\n  • ')}`
                     : 'Cannot submit yet.'
               }
-              className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-4 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-slate-300"
+              className="inline-flex items-center gap-1 rounded-xl bg-[var(--e-1f150c)] px-4 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[var(--e-412d15)] disabled:cursor-not-allowed disabled:bg-slate-300"
             >
               {saving ? 'Submitting…' : 'Submit — create client'}
               <FiCheck className="h-3.5 w-3.5" />
@@ -1576,7 +1576,7 @@ export default function ClientEditorPage() {
             <button
               type="button"
               onClick={() => void onClose()}
-              className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-4 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15]"
+              className="inline-flex items-center gap-1 rounded-xl bg-[var(--e-1f150c)] px-4 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[var(--e-412d15)]"
             >
               Finish
               <FiCheck className="h-3.5 w-3.5" />
@@ -1599,7 +1599,7 @@ export default function ClientEditorPage() {
                       ? 'Complete this step to continue.'
                       : undefined
                 }
-                className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-4 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-slate-300"
+                className="inline-flex items-center gap-1 rounded-xl bg-[var(--e-1f150c)] px-4 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[var(--e-412d15)] disabled:cursor-not-allowed disabled:bg-slate-300"
               >
                 Next
                 <FiChevronRight className="h-3.5 w-3.5" />

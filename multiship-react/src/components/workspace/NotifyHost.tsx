@@ -60,7 +60,7 @@ function ToastStack({ toasts }: { toasts: NotifyMessage[] }) {
         <button
           type="button"
           onClick={() => newestFirst.slice(MAX_VISIBLE).forEach((t) => notifyStore.dismiss(t.id, false))}
-          className="pointer-events-auto rounded-full border border-[#e3d9c4] bg-white/95 px-3 py-1 text-[10.5px] font-semibold text-[#6b5c42] shadow-sm backdrop-blur transition hover:bg-[#faf7f0]"
+          className="pointer-events-auto rounded-full border border-[var(--e-e3d9c4)] bg-white/95 px-3 py-1 text-[10.5px] font-semibold text-[var(--e-6b5c42)] shadow-sm backdrop-blur transition hover:bg-[var(--e-faf7f0)]"
         >
           +{hidden} more · clear
         </button>
@@ -74,7 +74,7 @@ function ToastStack({ toasts }: { toasts: NotifyMessage[] }) {
         <button
           type="button"
           onClick={() => toasts.forEach((t) => notifyStore.dismiss(t.id, false))}
-          className="pointer-events-auto rounded-full border border-[#e3d9c4] bg-white/95 px-3 py-1 text-[10.5px] font-semibold text-[#6b5c42] shadow-sm backdrop-blur transition hover:bg-[#faf7f0]"
+          className="pointer-events-auto rounded-full border border-[var(--e-e3d9c4)] bg-white/95 px-3 py-1 text-[10.5px] font-semibold text-[var(--e-6b5c42)] shadow-sm backdrop-blur transition hover:bg-[var(--e-faf7f0)]"
         >
           Dismiss all
         </button>
@@ -125,11 +125,11 @@ function Toast({ message }: { message: NotifyMessage }) {
           <theme.icon className={`h-3.5 w-3.5 ${theme.iconColor}`} />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="text-[12.5px] font-semibold leading-tight text-[#1f150c]">
+          <p className="text-[12.5px] font-semibold leading-tight text-[var(--e-1f150c)]">
             {message.title || theme.defaultTitle}
           </p>
           {message.body ? (
-            <p className="mt-0.5 whitespace-pre-line break-words text-[11.5px] leading-snug text-[#5a4526]">
+            <p className="mt-0.5 whitespace-pre-line break-words text-[11.5px] leading-snug text-[var(--e-5a4526)]">
               {message.body}
             </p>
           ) : null}
@@ -138,7 +138,7 @@ function Toast({ message }: { message: NotifyMessage }) {
           type="button"
           onClick={close}
           aria-label="Dismiss"
-          className="-mr-0.5 rounded-md p-1 text-[#b6a684] transition hover:bg-[#faf7f0] hover:text-[#412d15]"
+          className="-mr-0.5 rounded-md p-1 text-[var(--e-b6a684)] transition hover:bg-[var(--e-faf7f0)] hover:text-[var(--e-412d15)]"
         >
           <FiX className="h-3.5 w-3.5" />
         </button>
@@ -161,29 +161,29 @@ function ConfirmModal({ message }: { message: NotifyMessage }) {
   const theme = THEME.confirm
   return (
     <div
-      className="fixed inset-0 z-[70] flex items-center justify-center bg-[#1f150c]/50 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-[var(--e-1f150c)]/50 p-4 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       aria-labelledby={`notify-${message.id}-title`}
     >
-      <div className="w-full max-w-md rounded-2xl border border-[#e3d9c4] bg-white shadow-[0_30px_80px_rgba(31,21,12,0.35)]">
+      <div className="w-full max-w-md rounded-2xl border border-[var(--e-e3d9c4)] bg-white shadow-[0_30px_80px_rgba(31,21,12,0.35)]">
         <div className="flex items-start gap-3 px-5 pt-5">
           <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${theme.iconBg}`}>
             <theme.icon className={`h-5 w-5 ${theme.iconColor}`} />
           </span>
           <div className="min-w-0 flex-1">
-            <h3 id={`notify-${message.id}-title`} className="text-[15px] font-semibold text-[#1f150c]">
+            <h3 id={`notify-${message.id}-title`} className="text-[15px] font-semibold text-[var(--e-1f150c)]">
               {message.title || theme.defaultTitle}
             </h3>
-            <p className="mt-1 whitespace-pre-line text-[13px] leading-5 text-[#5a4526]">{message.body}</p>
+            <p className="mt-1 whitespace-pre-line text-[13px] leading-5 text-[var(--e-5a4526)]">{message.body}</p>
           </div>
         </div>
 
-        <div className="mt-5 flex items-center justify-end gap-2 rounded-b-2xl border-t border-[#eee6d6] bg-[#faf7f0]/60 px-5 py-3">
+        <div className="mt-5 flex items-center justify-end gap-2 rounded-b-2xl border-t border-[var(--e-eee6d6)] bg-[var(--e-faf7f0)]/60 px-5 py-3">
           <button
             type="button"
             onClick={() => notifyStore.dismiss(message.id, false)}
-            className="rounded-xl border border-[#e3d9c4] bg-white px-4 py-2 text-[13px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
+            className="rounded-xl border border-[var(--e-e3d9c4)] bg-white px-4 py-2 text-[13px] font-semibold text-[var(--e-5a4526)] transition hover:bg-[var(--e-faf7f0)]"
             autoFocus
           >
             {message.cancelLabel || 'Cancel'}
@@ -192,7 +192,7 @@ function ConfirmModal({ message }: { message: NotifyMessage }) {
             type="button"
             onClick={() => notifyStore.dismiss(message.id, true)}
             className={`rounded-xl px-5 py-2 text-[13px] font-semibold text-white transition ${
-              message.danger ? 'bg-rose-600 hover:bg-rose-700' : 'bg-[#1f150c] hover:bg-[#412d15]'
+              message.danger ? 'bg-rose-600 hover:bg-rose-700' : 'bg-[var(--e-1f150c)] hover:bg-[var(--e-412d15)]'
             }`}
           >
             {message.confirmLabel || 'Confirm'}
@@ -229,10 +229,10 @@ const THEME: Record<NotifyType, {
   },
   info: {
     icon: FiInfo,
-    iconBg: 'bg-[#f4eede]',
-    iconColor: 'text-[#412d15]',
-    border: 'border-[#e3d9c4]',
-    bar: 'bg-[#b6a684]',
+    iconBg: 'bg-[var(--e-f4eede)]',
+    iconColor: 'text-[var(--e-412d15)]',
+    border: 'border-[var(--e-e3d9c4)]',
+    bar: 'bg-[var(--e-b6a684)]',
     defaultTitle: 'Heads up',
   },
   confirm: {

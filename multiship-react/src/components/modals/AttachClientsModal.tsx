@@ -29,7 +29,7 @@ export default function AttachClientsModal({
       <div ref={dialogRef} className="w-full max-w-2xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]">
         <header className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
           <div className="flex items-center gap-2.5">
-            <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[#412d15]/10 text-[#412d15]">
+            <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--e-412d15)]/10 text-[var(--e-412d15)]">
               <FiHome className="h-4 w-4" />
             </span>
             <div>

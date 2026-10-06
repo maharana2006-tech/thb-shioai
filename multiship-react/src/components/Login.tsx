@@ -141,7 +141,7 @@ export default function Login() {
         <button
           type="submit"
           disabled={loading || !formik.isValid || !formik.dirty}
-          className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[#1f150c] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-slate-300"
+          className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[var(--e-1f150c)] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[var(--e-412d15)] disabled:cursor-not-allowed disabled:bg-slate-300"
         >
           {loading ? 'Authenticating...' : 'Sign In'}
           {!loading ? <FiArrowRight className="h-4 w-4" /> : null}

@@ -113,7 +113,7 @@ export default function AttachClientsStep({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search clients by code or name…"
-            className="w-full rounded-xl border border-slate-200 bg-white pl-8 pr-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15]"
+            className="w-full rounded-xl border border-slate-200 bg-white pl-8 pr-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[var(--e-412d15)]"
           />
         </div>
 
@@ -138,7 +138,7 @@ export default function AttachClientsStep({
                       type="checkbox"
                       checked={checked}
                       onChange={() => toggle(c.clientCode)}
-                      className="h-4 w-4 rounded border-slate-300 text-[#412d15] focus:ring-[#412d15]"
+                      className="h-4 w-4 rounded border-slate-300 text-[var(--e-412d15)] focus:ring-[var(--e-412d15)]"
                     />
                     <span className="flex-1">
                       <span className="block text-[13px] font-semibold text-slate-900">
@@ -160,7 +160,7 @@ export default function AttachClientsStep({
               type="checkbox"
               checked={makeDefault}
               onChange={(e) => setMakeDefault(e.target.checked)}
-              className="h-4 w-4 rounded border-slate-300 text-[#412d15] focus:ring-[#412d15]"
+              className="h-4 w-4 rounded border-slate-300 text-[var(--e-412d15)] focus:ring-[var(--e-412d15)]"
             />
             Set as this client's default warehouse
           </label>
@@ -185,7 +185,7 @@ export default function AttachClientsStep({
             type="button"
             onClick={attachSelected}
             disabled={selected.size === 0 || attaching}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-5 py-2 text-[13px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--e-1f150c)] px-5 py-2 text-[13px] font-semibold text-white transition hover:bg-[var(--e-412d15)] disabled:cursor-not-allowed disabled:opacity-50"
           >
             <FiLink className="h-3.5 w-3.5" />
             {attaching ? 'Attaching…' : confirmLabel}

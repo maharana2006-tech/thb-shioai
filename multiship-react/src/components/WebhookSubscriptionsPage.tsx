@@ -105,7 +105,7 @@ export default function WebhookSubscriptionsPage() {
               active: true,
             })}
             disabled={keys.length === 0}
-            className="inline-flex items-center gap-1.5 rounded-md bg-[#1f150c] px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-black disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-md bg-[var(--e-1f150c)] px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-black disabled:opacity-50"
           >
             <FiPlus /> New subscription
           </button>
@@ -262,7 +262,7 @@ function SubscriptionEditor({
 
         <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-6 py-3">
           <button onClick={onClose} className="rounded-md border border-slate-200 px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:bg-slate-50">Cancel</button>
-          <button onClick={save} disabled={saving} className="rounded-md bg-[#1f150c] px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-black disabled:opacity-50">
+          <button onClick={save} disabled={saving} className="rounded-md bg-[var(--e-1f150c)] px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-black disabled:opacity-50">
             {saving ? 'Saving…' : 'Save'}
           </button>
         </div>
@@ -273,4 +273,4 @@ function SubscriptionEditor({
 
 const fieldLabel = 'mb-1 block text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-500'
 const inputCls =
-  'w-full rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[13px] text-slate-800 outline-none focus:border-[#1f150c]'
+  'w-full rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[13px] text-slate-800 outline-none focus:border-[var(--e-1f150c)]'

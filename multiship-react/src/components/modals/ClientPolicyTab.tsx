@@ -134,7 +134,7 @@ export default function ClientPolicyTab({ clientCode }: { clientCode: string }) 
                 key={s}
                 className={`inline-flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-[12px] font-semibold transition ${
                   rateStrategy === s
-                    ? 'border-[#412d15] bg-[#412d15]/5 text-[#412d15]'
+                    ? 'border-[var(--e-412d15)] bg-[var(--e-412d15)]/5 text-[var(--e-412d15)]'
                     : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
                 }`}
               >
@@ -192,7 +192,7 @@ export default function ClientPolicyTab({ clientCode }: { clientCode: string }) 
                   type="time"
                   value={cutoffTime}
                   onChange={(e) => setCutoffTime(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15]"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[var(--e-412d15)]"
                 />
               </div>
               <div>
@@ -226,7 +226,7 @@ export default function ClientPolicyTab({ clientCode }: { clientCode: string }) 
               type="button"
               onClick={() => void save()}
               disabled={saving || (!!cutoffTime && !cutoffTz)}
-              className="rounded-xl bg-[#1f150c] px-4 py-2 text-[12.5px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-xl bg-[var(--e-1f150c)] px-4 py-2 text-[12.5px] font-semibold text-white transition hover:bg-[var(--e-412d15)] disabled:cursor-not-allowed disabled:opacity-50"
             >
               {saving ? 'Saving…' : 'Save policy'}
             </button>

@@ -97,15 +97,15 @@ export default function WorkspaceHeader({ onOpenMobileNav }: WorkspaceHeaderProp
               </span>
               <span className="flex min-w-0 items-center gap-2">
                 <span className="relative flex h-2.5 w-2.5 shrink-0" aria-hidden="true">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#412d15]/40 [animation-duration:2.6s]" />
-                  <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-[#412d15]" />
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--e-412d15)]/40 [animation-duration:2.6s]" />
+                  <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-[var(--e-412d15)]" />
                 </span>
-                <span className="shrink-0 text-[#412d15]">{navIcons[crumb.iconKey] ?? null}</span>
-                <span className="truncate text-[16px] font-bold text-[#1f150c]">{crumb.label}</span>
+                <span className="shrink-0 text-[var(--e-412d15)]">{navIcons[crumb.iconKey] ?? null}</span>
+                <span className="truncate text-[16px] font-bold text-[var(--e-1f150c)]">{crumb.label}</span>
               </span>
             </>
           ) : (
-            <span className="text-[13.5px] font-bold text-[#1f150c]">Multiship</span>
+            <span className="text-[13.5px] font-bold text-[var(--e-1f150c)]">Multiship</span>
           )}
         </div>
 
@@ -148,11 +148,11 @@ export default function WorkspaceHeader({ onOpenMobileNav }: WorkspaceHeaderProp
 
         {/* user as ID badge */}
         <span className="hidden shrink-0 items-center gap-2 rounded-lg border border-slate-200 bg-white/70 py-1 pl-1 pr-2.5 sm:flex">
-          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[#1f150c] font-mono text-[10px] font-black text-[#e1dcc9]">
+          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[var(--e-1f150c)] font-mono text-[10px] font-black text-[var(--e-e1dcc9)]">
             {initials}
           </span>
           <span className="text-left leading-tight">
-            <span className="block text-[12px] font-semibold text-[#1f150c]">{username || 'Signed in'}</span>
+            <span className="block text-[12px] font-semibold text-[var(--e-1f150c)]">{username || 'Signed in'}</span>
             <span className="block font-mono text-[8.5px] uppercase tracking-[0.16em] text-slate-400">
               {normalizedRole} · on shift
             </span>

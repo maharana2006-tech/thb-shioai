@@ -257,7 +257,7 @@ export default function AcceptInvitePage() {
           <button
             type="submit"
             disabled={submitting || !formik.isValid || !formik.dirty}
-            className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[#1f150c] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-slate-300"
+            className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[var(--e-1f150c)] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[var(--e-412d15)] disabled:cursor-not-allowed disabled:bg-slate-300"
           >
             {submitting ? 'Creating Account…' : 'Accept Invite'}
             {!submitting ? <FiArrowRight className="h-4 w-4" /> : null}

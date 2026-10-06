@@ -55,7 +55,7 @@ function DestinationChips({ countries, max }: { countries: string[]; max?: numbe
         <span
           key={c}
           title={countryName(c)}
-          className="rounded-md bg-[#412d15]/[0.07] px-1.5 py-0.5 text-[10.5px] font-bold text-[#412d15]"
+          className="rounded-md bg-[var(--e-412d15)]/[0.07] px-1.5 py-0.5 text-[10.5px] font-bold text-[var(--e-412d15)]"
         >
           {c}
         </span>
@@ -402,7 +402,7 @@ export default function ImporterBrokerPage() {
   )
 
   const cards = [
-    { label: 'Profiles', value: stats.profiles, icon: FiGlobe, chip: 'bg-[#412d15]/10 text-[#412d15]' },
+    { label: 'Profiles', value: stats.profiles, icon: FiGlobe, chip: 'bg-[var(--e-412d15)]/10 text-[var(--e-412d15)]' },
     { label: 'Destinations covered', value: stats.destinationsCovered, icon: FiMapPin, chip: 'bg-sky-50 text-sky-700' },
     { label: 'Clients configured', value: stats.clientsConfigured, icon: FiUsers, chip: 'bg-emerald-50 text-emerald-600' },
   ]
@@ -460,7 +460,7 @@ export default function ImporterBrokerPage() {
                   title="Filters"
                   className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-[12px] font-semibold transition md:px-3 ${
                     showFilters || activeFilterCount
-                      ? 'bg-[#1f150c] text-white'
+                      ? 'bg-[var(--e-1f150c)] text-white'
                       : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
                   }`}
                 >
@@ -480,7 +480,7 @@ export default function ImporterBrokerPage() {
                   >
                     <div className="space-y-2.5">
                       <div>
-                        <span className={filterLabelClass}><FiUser className="h-3 w-3 text-[#412d15]" />Client</span>
+                        <span className={filterLabelClass}><FiUser className="h-3 w-3 text-[var(--e-412d15)]" />Client</span>
                         <Select value={clientFilter} onChange={(e) => setClientFilter(e.target.value)} aria-label="Filter by client">
                           <option value="">All clients</option>
                           {clients.map((c) => (
@@ -545,7 +545,7 @@ export default function ImporterBrokerPage() {
                       <button
                         type="button"
                         onClick={() => setShowFilters(false)}
-                        className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[11.5px] font-semibold text-white transition hover:bg-[#412d15]"
+                        className="inline-flex items-center gap-1 rounded-xl bg-[var(--e-1f150c)] px-3 py-1.5 text-[11.5px] font-semibold text-white transition hover:bg-[var(--e-412d15)]"
                       >
                         Done
                       </button>
@@ -558,7 +558,7 @@ export default function ImporterBrokerPage() {
               <button
                 type="button"
                 onClick={() => setModal({ mode: 'new' })}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15]"
+                className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--e-1f150c)] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[var(--e-412d15)]"
               >
                 <FiPlus className="h-3.5 w-3.5" /> Add profile
               </button>

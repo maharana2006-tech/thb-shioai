@@ -140,7 +140,7 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
     }
   }
 
-  const btn = 'inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0] disabled:opacity-50'
+  const btn = 'inline-flex items-center gap-1.5 rounded-lg border border-[var(--e-e3d9c4)] bg-white px-3 py-1.5 text-[12px] font-semibold text-[var(--e-5a4526)] transition hover:bg-[var(--e-faf7f0)] disabled:opacity-50'
 
   return (
     <div
@@ -152,14 +152,14 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
     >
       <div
         ref={dialogRef}
-        className="bulk-pop-in flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-[0_30px_80px_rgba(31,21,12,0.30)]"
+        className="bulk-pop-in flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-[var(--e-e3d9c4)] bg-white shadow-[0_30px_80px_rgba(31,21,12,0.30)]"
         onClick={(event) => event.stopPropagation()}
       >
         {/* Header: which order, whose, and its label state */}
-        <div className="flex items-start justify-between gap-4 border-b border-[#f2ecdf] bg-[#fcfaf5] px-6 py-4">
+        <div className="flex items-start justify-between gap-4 border-b border-[var(--e-f2ecdf)] bg-[var(--e-fcfaf5)] px-6 py-4">
           <div className="min-w-0">
-            <p className="text-[10.5px] font-semibold uppercase tracking-[0.12em] text-[#a1906d]">Label order</p>
-            <h3 className="mt-0.5 flex flex-wrap items-center gap-2 text-[17px] font-semibold tracking-tight text-[#1f150c]">
+            <p className="text-[10.5px] font-semibold uppercase tracking-[0.12em] text-[var(--e-a1906d)]">Label order</p>
+            <h3 className="mt-0.5 flex flex-wrap items-center gap-2 text-[17px] font-semibold tracking-tight text-[var(--e-1f150c)]">
               Order {order?.displayOrderNo || orderNo}
               {label?.status ? <OrderStatusBadge status={label.status} /> : null}
               {order?.orderChannel ? <Chip>{order.orderChannel}</Chip> : null}
@@ -167,13 +167,13 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
               {order?.isReturn === 'Y' ? <Chip>Return</Chip> : null}
             </h3>
             {order ? (
-              <p className="mt-1 text-[12px] text-[#6b5c42]">
+              <p className="mt-1 text-[12px] text-[var(--e-6b5c42)]">
                 {[
                   order.tenantId ? `Client ${order.tenantId}` : null,
                   formatDate(order.createdDate) ? `Created ${formatDate(order.createdDate)}` : null,
                   clean(order.customerRef),
                 ].filter(Boolean).map((part, i) => (
-                  <span key={i}>{i ? <span className="mx-1.5 text-[#cdbf9f]">·</span> : null}{part}</span>
+                  <span key={i}>{i ? <span className="mx-1.5 text-[var(--e-cdbf9f)]">·</span> : null}{part}</span>
                 ))}
               </p>
             ) : null}
@@ -189,12 +189,12 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
               type="button"
               onClick={openLabel}
               title={voided ? 'This label was voided — the document opens for record-keeping only and must not be used on a parcel.' : undefined}
-              className={voided ? btn : 'inline-flex items-center gap-1.5 rounded-lg bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15]'}
+              className={voided ? btn : 'inline-flex items-center gap-1.5 rounded-lg bg-[var(--e-1f150c)] px-3 py-1.5 text-[12px] font-semibold text-[var(--e-f4eede)] shadow-sm transition hover:bg-[var(--e-412d15)]'}
             >
               <FiTag className="h-3.5 w-3.5" />
               {voided ? 'Voided label (record)' : 'View label'}
             </button>
-            <button type="button" onClick={onClose} aria-label="Close" className="rounded-lg border border-[#e3d9c4] bg-white p-1.5 text-[#5a4526] transition hover:bg-[#faf7f0]">
+            <button type="button" onClick={onClose} aria-label="Close" className="rounded-lg border border-[var(--e-e3d9c4)] bg-white p-1.5 text-[var(--e-5a4526)] transition hover:bg-[var(--e-faf7f0)]">
               <FiX className="h-4 w-4" />
             </button>
           </div>
@@ -202,7 +202,7 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
 
         <div className="flex-1 overflow-y-auto px-6 py-5">
           {loading ? (
-            <div className="py-12 text-center text-[13px] text-[#8a7a5a]">Loading order details…</div>
+            <div className="py-12 text-center text-[13px] text-[var(--e-8a7a5a)]">Loading order details…</div>
           ) : error ? (
             <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-6 text-center text-[12.5px] font-semibold text-red-700">{error}</div>
           ) : order ? (
@@ -222,7 +222,7 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
               {order.orderLines?.length ? <OrderLinesSection order={order} /> : null}
 
               {!order.orderLines?.length && !customs?.items?.length ? (
-                <p className="rounded-xl border border-dashed border-[#e3d9c4] px-4 py-5 text-center text-[12px] text-[#8a7a5a]">
+                <p className="rounded-xl border border-dashed border-[var(--e-e3d9c4)] px-4 py-5 text-center text-[12px] text-[var(--e-8a7a5a)]">
                   No line items are recorded for this order.
                 </p>
               ) : null}
@@ -238,7 +238,7 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
 
 function Chip({ children }: { children: ReactNode }) {
   return (
-    <span className="inline-flex items-center gap-1 rounded-full border border-[#e3d9c4] bg-white px-2 py-0.5 text-[10.5px] font-semibold text-[#5a4526]">
+    <span className="inline-flex items-center gap-1 rounded-full border border-[var(--e-e3d9c4)] bg-white px-2 py-0.5 text-[10.5px] font-semibold text-[var(--e-5a4526)]">
       {children}
     </span>
   )
@@ -250,12 +250,12 @@ function TrackingStrip({ label, voided }: { label: LabelDetails; voided: boolean
       voided ? 'border-slate-300 bg-slate-100' : 'border-emerald-200 bg-emerald-50/70'}`}>
       <div className="flex flex-wrap items-center gap-2 text-[12.5px]">
         <FiTruck className={`h-4 w-4 ${voided ? 'text-slate-500' : 'text-emerald-700'}`} />
-        <span className="font-semibold text-[#3d2f1c]">Tracking</span>
-        <span className={`font-mono font-semibold ${voided ? 'text-slate-500 line-through' : 'text-[#1f150c]'}`}>{label.trackingNumber}</span>
+        <span className="font-semibold text-[var(--e-3d2f1c)]">Tracking</span>
+        <span className={`font-mono font-semibold ${voided ? 'text-slate-500 line-through' : 'text-[var(--e-1f150c)]'}`}>{label.trackingNumber}</span>
         {voided ? (
           <span className="rounded-full bg-slate-300 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-700">Voided — cancelled at the carrier</span>
         ) : label.generatedAt ? (
-          <span className="text-[#6b5c42]">· generated {formatDate(label.generatedAt)}</span>
+          <span className="text-[var(--e-6b5c42)]">· generated {formatDate(label.generatedAt)}</span>
         ) : null}
       </div>
       {label.trackingUrl ? (
@@ -287,15 +287,15 @@ function Address({ name, sub, lines, city, state, zip, country, phone }: {
   const locality = [clean(city), [clean(state), clean(zip)].filter(Boolean).join(' ')].filter(Boolean).join(', ')
   return (
     <>
-      <p className="text-[13.5px] font-semibold text-[#1f150c]">{name || '—'}</p>
-      {sub ? <p className="text-[12.5px] text-[#5a4526]">{sub}</p> : null}
-      <div className="mt-1.5 space-y-0.5 text-[12.5px] leading-relaxed text-[#3d2f1c]">
-        {street.length ? street.map((l) => <p key={l}>{l}</p>) : <p className="text-[#a1906d]">No street address</p>}
+      <p className="text-[13.5px] font-semibold text-[var(--e-1f150c)]">{name || '—'}</p>
+      {sub ? <p className="text-[12.5px] text-[var(--e-5a4526)]">{sub}</p> : null}
+      <div className="mt-1.5 space-y-0.5 text-[12.5px] leading-relaxed text-[var(--e-3d2f1c)]">
+        {street.length ? street.map((l) => <p key={l}>{l}</p>) : <p className="text-[var(--e-a1906d)]">No street address</p>}
         {locality ? <p>{locality}</p> : null}
         {clean(country) ? <p className="font-semibold">{countryName(country)}</p> : null}
       </div>
       {clean(phone) ? (
-        <p className="mt-2.5 border-t border-[#f2ecdf] pt-2 text-[12px] text-[#5a4526]">{clean(phone)}</p>
+        <p className="mt-2.5 border-t border-[var(--e-f2ecdf)] pt-2 text-[12px] text-[var(--e-5a4526)]">{clean(phone)}</p>
       ) : null}
     </>
   )
@@ -308,7 +308,7 @@ function ShipFrom({ order }: { order: OrderWithLines }) {
     <Card
       icon={<FiMapPin className="h-3.5 w-3.5" />}
       title="Ship from"
-      aside={order.shipFromResolved ? <span className="rounded-full bg-[#f4eede] px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide text-[#6b5c42]">Warehouse</span> : null}
+      aside={order.shipFromResolved ? <span className="rounded-full bg-[var(--e-f4eede)] px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide text-[var(--e-6b5c42)]">Warehouse</span> : null}
     >
       <Address
         name={name}
@@ -353,13 +353,13 @@ function Shipment({ order, account }: { order: OrderWithLines; account: OrderWit
   return (
     <Card icon={<FiTruck className="h-3.5 w-3.5" />} title="Shipment">
       {account ? (
-        <div className="mb-3 flex items-start gap-2.5 border-b border-[#f2ecdf] pb-3">
-          <span className="shrink-0 rounded-lg border border-[#efe7d6] bg-white p-1.5">
+        <div className="mb-3 flex items-start gap-2.5 border-b border-[var(--e-f2ecdf)] pb-3">
+          <span className="shrink-0 rounded-lg border border-[var(--e-efe7d6)] bg-white p-1.5">
             <CarrierLogo carrierId={account.carrierCode} size={16} className="rounded-sm" />
           </span>
           <div className="min-w-0">
-            <p className="truncate text-[13px] font-semibold text-[#1f150c]">{account.carrierName || formatCarrierName(account.carrierCode)}</p>
-            <p className="truncate text-[11.5px] text-[#6b5c42]" title={account.accountNumber || undefined}>
+            <p className="truncate text-[13px] font-semibold text-[var(--e-1f150c)]">{account.carrierName || formatCarrierName(account.carrierCode)}</p>
+            <p className="truncate text-[11.5px] text-[var(--e-6b5c42)]" title={account.accountNumber || undefined}>
               {[account.accountNumber, account.environment].filter(Boolean).join(' · ') || 'No account number'}
             </p>
             {account.accountCode && SCENARIO_LABEL[account.accountCode] ? (
@@ -368,7 +368,7 @@ function Shipment({ order, account }: { order: OrderWithLines; account: OrderWit
           </div>
         </div>
       ) : (
-        <p className="mb-3 border-b border-[#f2ecdf] pb-3 text-[12px] font-semibold text-amber-700">
+        <p className="mb-3 border-b border-[var(--e-f2ecdf)] pb-3 text-[12px] font-semibold text-amber-700">
           No carrier account resolved yet — set a company default or add carrier details.
         </p>
       )}
@@ -425,7 +425,7 @@ function CustomsSection({ customs, order }: { customs: OrderCustoms | null; orde
     <Card
       icon={<FiGlobe className="h-3.5 w-3.5" />}
       title="Customs"
-      aside={<span className="text-[11px] text-[#a1906d]">{items.length} item{items.length === 1 ? '' : 's'} · {currency}</span>}
+      aside={<span className="text-[11px] text-[var(--e-a1906d)]">{items.length} item{items.length === 1 ? '' : 's'} · {currency}</span>}
     >
       <div className={`grid gap-x-6 gap-y-3 ${importerLines.length || ids.length ? 'md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_14rem]' : 'md:grid-cols-2'}`}>
         <Rows rows={[
@@ -439,21 +439,21 @@ function CustomsSection({ customs, order }: { customs: OrderCustoms | null; orde
           ['Export decl.', clean(customs.exportDeclarationReference), true],
         ]} />
         {importerLines.length || ids.length ? (
-          <div className="min-w-0 rounded-lg bg-[#fcfaf5] px-3 py-2 text-[12px] leading-relaxed text-[#3d2f1c]">
-            <p className="mb-0.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-[#a1906d]">Importer of record</p>
-            {importerLines.map((l, i) => <p key={i} className={i === 0 ? 'font-semibold text-[#1f150c]' : ''}>{l}</p>)}
-            {ids.map((l) => <p key={l} className="font-mono text-[11px] text-[#6b5c42]">{l}</p>)}
+          <div className="min-w-0 rounded-lg bg-[var(--e-fcfaf5)] px-3 py-2 text-[12px] leading-relaxed text-[var(--e-3d2f1c)]">
+            <p className="mb-0.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-[var(--e-a1906d)]">Importer of record</p>
+            {importerLines.map((l, i) => <p key={i} className={i === 0 ? 'font-semibold text-[var(--e-1f150c)]' : ''}>{l}</p>)}
+            {ids.map((l) => <p key={l} className="font-mono text-[11px] text-[var(--e-6b5c42)]">{l}</p>)}
           </div>
         ) : null}
       </div>
       {clean(customs.notes) ? (
-        <p className="mt-3 rounded-lg bg-[#fcfaf5] px-3 py-2 text-[12px] text-[#5a4526]"><span className="font-semibold">Notes: </span>{customs.notes}</p>
+        <p className="mt-3 rounded-lg bg-[var(--e-fcfaf5)] px-3 py-2 text-[12px] text-[var(--e-5a4526)]"><span className="font-semibold">Notes: </span>{customs.notes}</p>
       ) : null}
 
       {items.length ? (
-        <div className="mt-3.5 overflow-x-auto rounded-lg border border-[#efe7d6]">
-          <table className="w-full min-w-[640px] text-[12px] text-[#3d2f1c]">
-            <thead className="bg-[#fcfaf5] text-left text-[10px] font-semibold uppercase tracking-[0.08em] text-[#8a7a5a]">
+        <div className="mt-3.5 overflow-x-auto rounded-lg border border-[var(--e-efe7d6)]">
+          <table className="w-full min-w-[640px] text-[12px] text-[var(--e-3d2f1c)]">
+            <thead className="bg-[var(--e-fcfaf5)] text-left text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--e-8a7a5a)]">
               <tr>
                 <th className="px-3 py-2">#</th>
                 <th className="px-3 py-2">Description</th>
@@ -465,25 +465,25 @@ function CustomsSection({ customs, order }: { customs: OrderCustoms | null; orde
                 <th className="px-3 py-2 text-right">Total</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#f2ecdf]">
+            <tbody className="divide-y divide-[var(--e-f2ecdf)]">
               {items.map((it, i) => (
                 <tr key={it.id ?? i} className="align-top">
-                  <td className="px-3 py-2 text-[#a1906d]">{i + 1}</td>
+                  <td className="px-3 py-2 text-[var(--e-a1906d)]">{i + 1}</td>
                   <td className="px-3 py-2">
-                    <span className="font-medium text-[#1f150c]">{it.description || '—'}</span>
-                    {it.sku ? <span className="block font-mono text-[10.5px] text-[#a1906d]">SKU {it.sku}</span> : null}
+                    <span className="font-medium text-[var(--e-1f150c)]">{it.description || '—'}</span>
+                    {it.sku ? <span className="block font-mono text-[10.5px] text-[var(--e-a1906d)]">SKU {it.sku}</span> : null}
                   </td>
-                  {hasHs ? <td className="px-3 py-2 font-mono text-[11px]">{it.hsCode || <span className="text-[#cdbf9f]">—</span>}</td> : null}
-                  <td className="px-3 py-2">{it.countryOfOrigin || <span className="text-[#cdbf9f]">—</span>}</td>
+                  {hasHs ? <td className="px-3 py-2 font-mono text-[11px]">{it.hsCode || <span className="text-[var(--e-cdbf9f)]">—</span>}</td> : null}
+                  <td className="px-3 py-2">{it.countryOfOrigin || <span className="text-[var(--e-cdbf9f)]">—</span>}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{it.quantity}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{money(it.unitValue, currency) ?? '—'}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{it.weight != null ? `${it.weight} ${unit}` : '—'}</td>
-                  <td className="px-3 py-2 text-right font-semibold tabular-nums text-[#1f150c]">{money((it.quantity ?? 0) * (it.unitValue ?? 0), currency)}</td>
+                  <td className="px-3 py-2 text-right font-semibold tabular-nums text-[var(--e-1f150c)]">{money((it.quantity ?? 0) * (it.unitValue ?? 0), currency)}</td>
                 </tr>
               ))}
             </tbody>
             {items.length > 1 ? (
-              <tfoot className="border-t border-[#efe7d6] bg-[#fcfaf5] font-semibold text-[#1f150c]">
+              <tfoot className="border-t border-[var(--e-efe7d6)] bg-[var(--e-fcfaf5)] font-semibold text-[var(--e-1f150c)]">
                 <tr>
                   <td className="px-3 py-2" colSpan={hasHs ? 4 : 3}>Total</td>
                   <td className="px-3 py-2 text-right tabular-nums">{totals.qty}</td>
@@ -511,10 +511,10 @@ function OrderLinesSection({ order }: { order: OrderWithLines }) {
     customs: lines.reduce((s, l) => s + (l.customsDeclValue ?? 0), 0),
   }
   return (
-    <Card icon={<FiList className="h-3.5 w-3.5" />} title="Order lines" aside={<span className="text-[11px] text-[#a1906d]">{lines.length} line{lines.length === 1 ? '' : 's'}</span>}>
-      <div className="overflow-x-auto rounded-lg border border-[#efe7d6]">
-        <table className="w-full min-w-[640px] text-[12px] text-[#3d2f1c]">
-          <thead className="bg-[#fcfaf5] text-left text-[10px] font-semibold uppercase tracking-[0.08em] text-[#8a7a5a]">
+    <Card icon={<FiList className="h-3.5 w-3.5" />} title="Order lines" aside={<span className="text-[11px] text-[var(--e-a1906d)]">{lines.length} line{lines.length === 1 ? '' : 's'}</span>}>
+      <div className="overflow-x-auto rounded-lg border border-[var(--e-efe7d6)]">
+        <table className="w-full min-w-[640px] text-[12px] text-[var(--e-3d2f1c)]">
+          <thead className="bg-[var(--e-fcfaf5)] text-left text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--e-8a7a5a)]">
             <tr>
               <th className="px-3 py-2">#</th>
               <th className="px-3 py-2">Item</th>
@@ -527,32 +527,32 @@ function OrderLinesSection({ order }: { order: OrderWithLines }) {
               <th className="px-3 py-2 text-right">Customs</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-[#f2ecdf]">
+          <tbody className="divide-y divide-[var(--e-f2ecdf)]">
             {lines.map((line) => (
               <tr key={line.id} className="align-top">
-                <td className="px-3 py-2 text-[#a1906d]">{line.lineNo}</td>
+                <td className="px-3 py-2 text-[var(--e-a1906d)]">{line.lineNo}</td>
                 <td className="px-3 py-2 font-mono text-[11px]">{line.itemNo || '—'}</td>
                 <td className="px-3 py-2">
-                  <span className="font-medium text-[#1f150c]">{line.itemDescription || line.description || '—'}</span>
-                  {line.hsDesc ? <span className="block text-[10.5px] text-[#a1906d]">{line.hsDesc}</span> : null}
+                  <span className="font-medium text-[var(--e-1f150c)]">{line.itemDescription || line.description || '—'}</span>
+                  {line.hsDesc ? <span className="block text-[10.5px] text-[var(--e-a1906d)]">{line.hsDesc}</span> : null}
                 </td>
                 {hasHs ? <td className="px-3 py-2 font-mono text-[11px]">{line.hsCode || '—'}</td> : null}
                 <td className="px-3 py-2">{line.countryOfOrigin || '—'}</td>
                 <td className="px-3 py-2 text-right tabular-nums">{line.qtyShipped ?? '—'}</td>
                 <td className="px-3 py-2 text-right tabular-nums">{money(line.unitPrice) ?? '—'}</td>
-                <td className="px-3 py-2 text-right font-semibold tabular-nums text-[#1f150c]">{money(line.totalPrice) ?? '—'}</td>
-                <td className="px-3 py-2 text-right tabular-nums text-[#6b5c42]">{money(line.customsDeclValue) ?? '—'}</td>
+                <td className="px-3 py-2 text-right font-semibold tabular-nums text-[var(--e-1f150c)]">{money(line.totalPrice) ?? '—'}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-[var(--e-6b5c42)]">{money(line.customsDeclValue) ?? '—'}</td>
               </tr>
             ))}
           </tbody>
           {lines.length > 1 ? (
-            <tfoot className="border-t border-[#efe7d6] bg-[#fcfaf5] font-semibold text-[#1f150c]">
+            <tfoot className="border-t border-[var(--e-efe7d6)] bg-[var(--e-fcfaf5)] font-semibold text-[var(--e-1f150c)]">
               <tr>
                 <td className="px-3 py-2" colSpan={hasHs ? 5 : 4}>Total</td>
                 <td className="px-3 py-2 text-right tabular-nums">{totals.qty}</td>
                 <td />
                 <td className="px-3 py-2 text-right tabular-nums">{money(totals.value)}</td>
-                <td className="px-3 py-2 text-right tabular-nums text-[#6b5c42]">{money(totals.customs)}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-[var(--e-6b5c42)]">{money(totals.customs)}</td>
               </tr>
             </tfoot>
           ) : null}
@@ -565,10 +565,10 @@ function OrderLinesSection({ order }: { order: OrderWithLines }) {
 function PackagesSection({ order }: { order: OrderWithLines }) {
   const packages = order.packages ?? []
   return (
-    <Card icon={<FiPackage className="h-3.5 w-3.5" />} title="Packages" aside={<span className="text-[11px] text-[#a1906d]">{packages.length} pieces</span>}>
-      <div className="overflow-x-auto rounded-lg border border-[#efe7d6]">
-        <table className="w-full text-[12px] text-[#3d2f1c]">
-          <thead className="bg-[#fcfaf5] text-left text-[10px] font-semibold uppercase tracking-[0.08em] text-[#8a7a5a]">
+    <Card icon={<FiPackage className="h-3.5 w-3.5" />} title="Packages" aside={<span className="text-[11px] text-[var(--e-a1906d)]">{packages.length} pieces</span>}>
+      <div className="overflow-x-auto rounded-lg border border-[var(--e-efe7d6)]">
+        <table className="w-full text-[12px] text-[var(--e-3d2f1c)]">
+          <thead className="bg-[var(--e-fcfaf5)] text-left text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--e-8a7a5a)]">
             <tr>
               <th className="px-3 py-2">#</th>
               <th className="px-3 py-2">Tracking</th>
@@ -576,13 +576,13 @@ function PackagesSection({ order }: { order: OrderWithLines }) {
               <th className="px-3 py-2 text-right">Dimensions</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-[#f2ecdf]">
+          <tbody className="divide-y divide-[var(--e-f2ecdf)]">
             {packages.map((p, i) => (
               <tr key={p.sequenceNumber ?? i}>
-                <td className="px-3 py-2 text-[#a1906d]">{p.sequenceNumber ?? i + 1}</td>
+                <td className="px-3 py-2 text-[var(--e-a1906d)]">{p.sequenceNumber ?? i + 1}</td>
                 <td className="px-3 py-2 font-mono text-[11px]">
                   {p.trackingUrl && p.trackingNumber
-                    ? <a href={p.trackingUrl} target="_blank" rel="noreferrer" className="underline decoration-[#cdbf9f] underline-offset-2 hover:text-[#1f150c]">{p.trackingNumber}</a>
+                    ? <a href={p.trackingUrl} target="_blank" rel="noreferrer" className="underline decoration-[var(--e-cdbf9f)] underline-offset-2 hover:text-[var(--e-1f150c)]">{p.trackingNumber}</a>
                     : p.trackingNumber || '—'}
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums">{p.weight != null ? `${p.weight} ${(p.weightUnit || 'LB').toLowerCase()}` : '—'}</td>

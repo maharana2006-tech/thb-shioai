@@ -83,10 +83,10 @@ interface CustomsProfileModalProps {
 }
 
 const inputClassName =
-  'w-full rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13px] text-[#1f150c] outline-none transition focus:border-[#412d15] focus:ring-4 focus:ring-[#412d15]/10 disabled:cursor-not-allowed disabled:bg-[#eee6d6] disabled:text-[#b6a684]'
+  'w-full rounded-xl border border-[var(--e-e3d9c4)] bg-white px-3 py-2 text-[13px] text-[var(--e-1f150c)] outline-none transition focus:border-[var(--e-412d15)] focus:ring-4 focus:ring-[var(--e-412d15)]/10 disabled:cursor-not-allowed disabled:bg-[var(--e-eee6d6)] disabled:text-[var(--e-b6a684)]'
 /** inputClassName with the border swapped to a rose error ring when invalid. */
 const inputErrClassName =
-  'w-full rounded-xl border border-rose-400 bg-white px-3 py-2 text-[13px] text-[#1f150c] outline-none transition focus:border-rose-500 focus:ring-4 focus:ring-rose-100'
+  'w-full rounded-xl border border-rose-400 bg-white px-3 py-2 text-[13px] text-[var(--e-1f150c)] outline-none transition focus:border-rose-500 focus:ring-4 focus:ring-rose-100'
 const fieldCls = (bad?: string | null) => (bad ? inputErrClassName : inputClassName)
 
 
@@ -95,7 +95,7 @@ const blank = (): CustomsProfile => ({ countries: [] })
 function Field({ label, required, error, children }: { label: string; required?: boolean; error?: string | null; children: ReactNode }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-[10.5px] font-semibold uppercase tracking-[0.1em] text-[#b6a684]">
+      <span className="mb-1 block text-[10.5px] font-semibold uppercase tracking-[0.1em] text-[var(--e-b6a684)]">
         {label}
         {required ? <span className="ml-0.5 text-rose-500">*</span> : null}
       </span>
@@ -128,16 +128,16 @@ function Section({
   children: ReactNode
 }) {
   return (
-    <section className="overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white">
-      <div className="flex items-center justify-between gap-3 border-b border-[#eee6d6] bg-[#faf7f0]/60 px-4 py-2.5">
+    <section className="overflow-hidden rounded-2xl border border-[var(--e-e3d9c4)] bg-white">
+      <div className="flex items-center justify-between gap-3 border-b border-[var(--e-eee6d6)] bg-[var(--e-faf7f0)]/60 px-4 py-2.5">
         <div className="flex items-center gap-2.5">
-          <span className="grid h-6 w-6 place-items-center rounded-full bg-[#1f150c] text-[10.5px] font-bold text-[#f4eede]">
+          <span className="grid h-6 w-6 place-items-center rounded-full bg-[var(--e-1f150c)] text-[10.5px] font-bold text-[var(--e-f4eede)]">
             {step}
           </span>
           <span className={`inline-flex h-6 w-6 items-center justify-center rounded-lg ${tone}`}>{icon}</span>
           <div>
-            <h4 className="text-[12.5px] font-semibold text-[#1f150c]">{title}</h4>
-            {hint ? <p className="text-[10.5px] text-[#b6a684]">{hint}</p> : null}
+            <h4 className="text-[12.5px] font-semibold text-[var(--e-1f150c)]">{title}</h4>
+            {hint ? <p className="text-[10.5px] text-[var(--e-b6a684)]">{hint}</p> : null}
           </div>
         </div>
         {aside}
@@ -497,7 +497,7 @@ export default function CustomsProfileModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[#1f150c]/45 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--e-1f150c)]/45 p-4 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       aria-label="Importer / Broker profile"
@@ -505,29 +505,29 @@ export default function CustomsProfileModal({
     >
       <div
         ref={dialogRef}
-        className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]"
+        className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-[var(--e-e3d9c4)] bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* header */}
-        <div className="flex items-start justify-between gap-3 border-b border-[#eee6d6] px-5 py-4">
+        <div className="flex items-start justify-between gap-3 border-b border-[var(--e-eee6d6)] px-5 py-4">
           <div className="flex items-center gap-3">
-            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[#1f150c] text-[14px] font-bold text-[#e1dcc9] shadow-sm">
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[var(--e-1f150c)] text-[14px] font-bold text-[var(--e-e1dcc9)] shadow-sm">
               {initials || <FiUsers className="h-4 w-4" />}
             </span>
             <div>
-              <p className="inline-flex items-center gap-1.5 text-[10.5px] font-bold uppercase tracking-[0.16em] text-[#b6a684]">
+              <p className="inline-flex items-center gap-1.5 text-[10.5px] font-bold uppercase tracking-[0.16em] text-[var(--e-b6a684)]">
                 <FiGlobe className="h-3.5 w-3.5" /> Importer / Broker profile
               </p>
-              <h3 className="mt-1 text-[15px] font-semibold text-[#1f150c]">
+              <h3 className="mt-1 text-[15px] font-semibold text-[var(--e-1f150c)]">
                 {editing ? 'Edit profile' : 'New profile'}
-                {client ? <span className="text-[#b6a684]"> · {client.name}</span> : null}
+                {client ? <span className="text-[var(--e-b6a684)]"> · {client.name}</span> : null}
               </h3>
             </div>
           </div>
           <div className="flex items-center gap-2">
             {/* live summary pill */}
             {selectedRegion ? (
-              <span className="hidden items-center gap-1.5 rounded-full bg-[#412d15]/10 px-3 py-1.5 text-[11px] font-bold text-[#412d15] sm:inline-flex">
+              <span className="hidden items-center gap-1.5 rounded-full bg-[var(--e-412d15)]/10 px-3 py-1.5 text-[11px] font-bold text-[var(--e-412d15)] sm:inline-flex">
                 <FiMapPin className="h-3 w-3" />
                 {selectedRegion.region} · {(form.countries ?? []).length} destination{(form.countries ?? []).length === 1 ? '' : 's'}
               </span>
@@ -535,7 +535,7 @@ export default function CustomsProfileModal({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-xl border border-[#e3d9c4] bg-white p-2 text-[#6b5c42] transition hover:bg-[#faf7f0]"
+              className="rounded-xl border border-[var(--e-e3d9c4)] bg-white p-2 text-[var(--e-6b5c42)] transition hover:bg-[var(--e-faf7f0)]"
               aria-label="Close"
             >
               <FiX className="h-4 w-4" />
@@ -543,12 +543,12 @@ export default function CustomsProfileModal({
           </div>
         </div>
 
-        <div className="flex-1 space-y-3.5 overflow-y-auto bg-[#faf7f0]/50 px-5 py-4">
+        <div className="flex-1 space-y-3.5 overflow-y-auto bg-[var(--e-faf7f0)]/50 px-5 py-4">
           {/* 1 — Client & destinations */}
           <Section
             step="1"
             icon={<FiUsers className="h-3.5 w-3.5" />}
-            tone="bg-[#412d15]/10 text-[#412d15]"
+            tone="bg-[var(--e-412d15)]/10 text-[var(--e-412d15)]"
             title="Client & destinations"
             hint="Who ships, and to which countries of one region this profile applies."
           >
@@ -570,27 +570,27 @@ export default function CustomsProfileModal({
                   </Select>
                 </Field>
                 {clientLocked ? (
-                  <p className="mt-1.5 text-[11px] text-[#b6a684]">
+                  <p className="mt-1.5 text-[11px] text-[var(--e-b6a684)]">
                     {editing ? 'Client is fixed while editing.' : 'Pre-selected from the client.'}
                   </p>
                 ) : null}
 
                 {/* selection summary */}
-                <div className="mt-3 rounded-xl border border-[#eee6d6] bg-[#faf7f0]/80 p-3">
-                  <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#b6a684]">Selection</p>
+                <div className="mt-3 rounded-xl border border-[var(--e-eee6d6)] bg-[var(--e-faf7f0)]/80 p-3">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--e-b6a684)]">Selection</p>
                   {selectedRegion ? (
                     <>
-                      <p className="mt-1 text-[12px] font-semibold text-[#412d15]">{selectedRegion.region}</p>
+                      <p className="mt-1 text-[12px] font-semibold text-[var(--e-412d15)]">{selectedRegion.region}</p>
                       <div className="mt-1.5 flex flex-wrap gap-1">
                         {selectedRegion.codes.map((c) => (
-                          <span key={c} title={countryName(c)} className="rounded-md bg-white px-1.5 py-0.5 text-[10.5px] font-semibold text-[#5a4526] ring-1 ring-[#e3d9c4]">
+                          <span key={c} title={countryName(c)} className="rounded-md bg-white px-1.5 py-0.5 text-[10.5px] font-semibold text-[var(--e-5a4526)] ring-1 ring-[var(--e-e3d9c4)]">
                             {c}
                           </span>
                         ))}
                       </div>
                     </>
                   ) : (
-                    <p className="mt-1 text-[11.5px] text-[#b6a684]">Nothing selected yet.</p>
+                    <p className="mt-1 text-[11.5px] text-[var(--e-b6a684)]">Nothing selected yet.</p>
                   )}
                 </div>
               </div>
@@ -615,7 +615,7 @@ export default function CustomsProfileModal({
           <Section
             step="2"
             icon={<FiUser className="h-3.5 w-3.5" />}
-            tone="bg-[#412d15]/10 text-[#412d15]"
+            tone="bg-[var(--e-412d15)]/10 text-[var(--e-412d15)]"
             title="Importer of record"
             hint="The registered entity importing the goods at the destination."
           >
@@ -641,8 +641,8 @@ export default function CustomsProfileModal({
                 its own identifiers (CNPJ, RFC, EIN, VAT+EORI, GSTIN+IEC…),
                 so the fields come from the territory's spec, never a generic
                 "Tax ID Type" dropdown. */}
-            <div className="mt-3 rounded-xl border border-[#eee6d6] bg-[#faf7f0]/80 p-3">
-              <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-[#b6a684]">
+            <div className="mt-3 rounded-xl border border-[var(--e-eee6d6)] bg-[var(--e-faf7f0)]/80 p-3">
+              <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--e-b6a684)]">
                 {activeTerritory ? taxIdentityTitle(activeTerritory) : 'Tax identity'}
               </p>
               {activeTerritory && taxSpec ? (
@@ -661,10 +661,10 @@ export default function CustomsProfileModal({
                       </Field>
                     ))}
                   </div>
-                  {taxSpec.note ? <p className="mt-2 text-[10.5px] text-[#5a4526]">{taxSpec.note}</p> : null}
+                  {taxSpec.note ? <p className="mt-2 text-[10.5px] text-[var(--e-5a4526)]">{taxSpec.note}</p> : null}
                 </>
               ) : (
-                <p className="text-[11.5px] text-[#b6a684]">
+                <p className="text-[11.5px] text-[var(--e-b6a684)]">
                   Pick the destination countries first — each customs territory requires its own identifiers.
                 </p>
               )}
@@ -675,7 +675,7 @@ export default function CustomsProfileModal({
           <Section
             step="3"
             icon={<FiBriefcase className="h-3.5 w-3.5" />}
-            tone="bg-[#faf7f0] text-[#5a4526]"
+            tone="bg-[var(--e-faf7f0)] text-[var(--e-5a4526)]"
             title="Customs broker"
             hint="A licensed broker at the destination border — never the shipper itself."
           >
@@ -685,21 +685,21 @@ export default function CustomsProfileModal({
                 type="button"
                 onClick={() => setOwnBroker(false)}
                 className={`rounded-xl border p-3 text-left transition ${
-                  !ownBroker ? 'border-[#412d15] bg-[#412d15]/[0.04] ring-1 ring-[#412d15]/20' : 'border-[#e3d9c4] hover:border-[#cdbf9f]'
+                  !ownBroker ? 'border-[var(--e-412d15)] bg-[var(--e-412d15)]/[0.04] ring-1 ring-[var(--e-412d15)]/20' : 'border-[var(--e-e3d9c4)] hover:border-[var(--e-cdbf9f)]'
                 }`}
               >
-                <p className="text-[12px] font-semibold text-[#1f150c]">Carrier clears customs <span className="ml-1 rounded bg-emerald-50 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-emerald-700">Recommended</span></p>
-                <p className="mt-0.5 text-[11px] text-[#6b5c42]">UPS/FedEx brokerage is included with international shipments — nothing to set up.</p>
+                <p className="text-[12px] font-semibold text-[var(--e-1f150c)]">Carrier clears customs <span className="ml-1 rounded bg-emerald-50 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-emerald-700">Recommended</span></p>
+                <p className="mt-0.5 text-[11px] text-[var(--e-6b5c42)]">UPS/FedEx brokerage is included with international shipments — nothing to set up.</p>
               </button>
               <button
                 type="button"
                 onClick={() => setOwnBroker(true)}
                 className={`rounded-xl border p-3 text-left transition ${
-                  ownBroker ? 'border-[#412d15] bg-[#412d15]/[0.04] ring-1 ring-[#412d15]/20' : 'border-[#e3d9c4] hover:border-[#cdbf9f]'
+                  ownBroker ? 'border-[var(--e-412d15)] bg-[var(--e-412d15)]/[0.04] ring-1 ring-[var(--e-412d15)]/20' : 'border-[var(--e-e3d9c4)] hover:border-[var(--e-cdbf9f)]'
                 }`}
               >
-                <p className="text-[12px] font-semibold text-[#1f150c]">Own broker (Broker Select)</p>
-                <p className="mt-0.5 text-[11px] text-[#6b5c42]">The carrier hands the shipment to your named broker at the border.</p>
+                <p className="text-[12px] font-semibold text-[var(--e-1f150c)]">Own broker (Broker Select)</p>
+                <p className="mt-0.5 text-[11px] text-[var(--e-6b5c42)]">The carrier hands the shipment to your named broker at the border.</p>
               </button>
             </div>
 
@@ -807,7 +807,7 @@ export default function CustomsProfileModal({
         </div>
 
         {/* footer */}
-        <div className="flex items-center justify-between gap-3 border-t border-[#eee6d6] px-5 py-4">
+        <div className="flex items-center justify-between gap-3 border-t border-[var(--e-eee6d6)] px-5 py-4">
           <div>
             {editing ? (
               <button
@@ -824,7 +824,7 @@ export default function CustomsProfileModal({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-xl border border-[#e3d9c4] bg-white px-4 py-2 text-[13px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
+              className="rounded-xl border border-[var(--e-e3d9c4)] bg-white px-4 py-2 text-[13px] font-semibold text-[var(--e-5a4526)] transition hover:bg-[var(--e-faf7f0)]"
             >
               Cancel
             </button>
@@ -832,7 +832,7 @@ export default function CustomsProfileModal({
               type="button"
               onClick={() => void handleSave()}
               disabled={saving}
-              className="rounded-xl bg-[#1f150c] px-5 py-2 text-[13px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#cdbf9f]"
+              className="rounded-xl bg-[var(--e-1f150c)] px-5 py-2 text-[13px] font-semibold text-white transition hover:bg-[var(--e-412d15)] disabled:cursor-not-allowed disabled:bg-[var(--e-cdbf9f)]"
             >
               {saving ? 'Saving…' : editing ? 'Save changes' : 'Create profile'}
             </button>

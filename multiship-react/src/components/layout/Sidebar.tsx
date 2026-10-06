@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { notify } from '../../utils/notify'
 import { FiChevronsLeft, FiChevronsRight, FiLogOut } from 'react-icons/fi'
+import ThemeToggle from './ThemeToggle'
 import { authService } from '../../api/authService'
 import { clearAuthSession, useAppSession } from '../../hooks/useAppSession'
 import { getNavItemsForRole, resolveWorkspaceRouteKey } from '../../routes/workspaceRoutes'
@@ -265,6 +266,8 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
       </div>
 
       {/* pin toggle */}
+      <ThemeToggle collapsed={!pinned && !mobileOpen} />
+
       <div className="px-2.5 pb-1">
         <button
           type="button"

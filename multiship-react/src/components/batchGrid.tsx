@@ -267,7 +267,7 @@ export function GridCell({
           // don't let ancestor key handlers see it.
           else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') { e.stopPropagation() }
         }}
-        className={`w-full rounded-[5px] border border-[#412d15] bg-white px-1.5 py-0.5 text-[10.5px] text-[#1f150c] outline-none ring-1 ring-[#412d15] ${mono ? 'font-mono' : ''}`}
+        className={`w-full rounded-[5px] border border-[var(--e-412d15)] bg-white px-1.5 py-0.5 text-[10.5px] text-[var(--e-1f150c)] outline-none ring-1 ring-[var(--e-412d15)] ${mono ? 'font-mono' : ''}`}
       />
     )
   }
@@ -279,12 +279,12 @@ export function GridCell({
       onClick={begin}
       title={tooltip}
       className={`block w-full truncate rounded-[5px] px-1.5 py-0.5 text-left text-[10.5px] transition ${mono ? 'font-mono' : ''} ${
-        readOnly ? 'cursor-default text-[#6b5c42]'
+        readOnly ? 'cursor-default text-[var(--e-6b5c42)]'
           : bad ? 'cursor-text bg-rose-50 text-rose-800 ring-1 ring-inset ring-rose-300 hover:ring-rose-400'
-          : 'cursor-text text-[#3f3527] hover:bg-[#efe7d4]'
+          : 'cursor-text text-[var(--e-3f3527)] hover:bg-[var(--e-efe7d4)]'
       }`}
     >
-      {shownValue(value) || <span className="text-[#cdbf9f]">—</span>}
+      {shownValue(value) || <span className="text-[var(--e-cdbf9f)]">—</span>}
     </button>
   )
 }

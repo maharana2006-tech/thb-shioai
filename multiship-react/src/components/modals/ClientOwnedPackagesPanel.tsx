@@ -213,7 +213,7 @@ function EditorForm({
           <input
             value={preset.name}
             onChange={(e) => set('name', e.target.value)}
-            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15]"
+            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[var(--e-412d15)]"
           />
         </FieldRow>
         <FieldRow label="Kind">
@@ -235,7 +235,7 @@ function EditorForm({
             value={preset.carrierPackageCode ?? ''}
             onChange={(e) => set('carrierPackageCode', e.target.value || null)}
             placeholder="only for CARRIER kind"
-            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15]"
+            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[var(--e-412d15)]"
           />
         </FieldRow>
         <FieldRow label="Length">
@@ -244,7 +244,7 @@ function EditorForm({
             step="0.01"
             value={preset.length ?? ''}
             onChange={(e) => set('length', e.target.value ? Number(e.target.value) : null)}
-            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15]"
+            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[var(--e-412d15)]"
           />
         </FieldRow>
         <FieldRow label="Width">
@@ -253,7 +253,7 @@ function EditorForm({
             step="0.01"
             value={preset.width ?? ''}
             onChange={(e) => set('width', e.target.value ? Number(e.target.value) : null)}
-            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15]"
+            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[var(--e-412d15)]"
           />
         </FieldRow>
         <FieldRow label="Height">
@@ -262,7 +262,7 @@ function EditorForm({
             step="0.01"
             value={preset.height ?? ''}
             onChange={(e) => set('height', e.target.value ? Number(e.target.value) : null)}
-            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15]"
+            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[var(--e-412d15)]"
           />
         </FieldRow>
         <FieldRow label="Dim unit">
@@ -277,7 +277,7 @@ function EditorForm({
             step="0.01"
             value={preset.maxWeight ?? ''}
             onChange={(e) => set('maxWeight', e.target.value ? Number(e.target.value) : null)}
-            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15]"
+            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[var(--e-412d15)]"
           />
         </FieldRow>
         <FieldRow label="Weight unit">
@@ -299,7 +299,7 @@ function EditorForm({
           type="button"
           onClick={onSave}
           disabled={saving}
-          className="rounded-xl bg-[#1f150c] px-4 py-1.5 text-[11.5px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-xl bg-[var(--e-1f150c)] px-4 py-1.5 text-[11.5px] font-semibold text-white transition hover:bg-[var(--e-412d15)] disabled:cursor-not-allowed disabled:opacity-50"
         >
           {saving ? 'Saving…' : 'Save'}
         </button>

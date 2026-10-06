@@ -93,8 +93,8 @@ export default function FixRowPanel({
     const errs = byField[key] ?? []
     const bad = errs.length > 0
     const set = (v: string) => setDraft((d) => ({ ...d, [key]: v }))
-    const box = `w-full rounded-lg border bg-white px-2.5 py-1.5 text-[12.5px] text-[#1f150c] outline-none transition focus:ring-2 ${
-      bad ? 'border-rose-300 focus:ring-rose-100' : 'border-[#e3d9c4] focus:border-[#cdbf9f] focus:ring-[#f4eede]'} ${COL[key]?.mono ? 'font-mono' : ''}`
+    const box = `w-full rounded-lg border bg-white px-2.5 py-1.5 text-[12.5px] text-[var(--e-1f150c)] outline-none transition focus:ring-2 ${
+      bad ? 'border-rose-300 focus:ring-rose-100' : 'border-[var(--e-e3d9c4)] focus:border-[var(--e-cdbf9f)] focus:ring-[var(--e-f4eede)]'} ${COL[key]?.mono ? 'font-mono' : ''}`
     const id = `fix-${row.rowNumber}-${key}`
     const states = key === 'state' ? STATE_CODE_OPTIONS[(draft.countryCode || '').trim().toUpperCase()] : undefined
     let input: React.ReactNode
@@ -126,14 +126,14 @@ export default function FixRowPanel({
     }
     return (
       <div key={key} className={key === 'addressLine1' || key === 'itemDescription' || key === 'recipientName' ? 'sm:col-span-2' : ''}>
-        <label htmlFor={id} className={`mb-0.5 block text-[10.5px] font-semibold uppercase tracking-[0.06em] ${bad ? 'text-rose-700' : 'text-[#8a7a5c]'}`}>
+        <label htmlFor={id} className={`mb-0.5 block text-[10.5px] font-semibold uppercase tracking-[0.06em] ${bad ? 'text-rose-700' : 'text-[var(--e-8a7a5c)]'}`}>
           {labelOf(key)}
         </label>
         {input}
         {errs.map((m) => <p key={m} className="mt-0.5 text-[11px] leading-snug text-rose-700">{messageUnder(key, m)}</p>)}
         {key === 'serviceType' && unmapped && canMap ? (
           <button type="button" onClick={() => onMap(unmapped)}
-            className="mt-1 rounded-md border border-[#e3d9c4] bg-white px-2 py-0.5 text-[11px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]">
+            className="mt-1 rounded-md border border-[var(--e-e3d9c4)] bg-white px-2 py-0.5 text-[11px] font-semibold text-[var(--e-5a4526)] hover:bg-[var(--e-faf7f0)]">
             Map {unmapped}…
           </button>
         ) : null}
@@ -142,22 +142,22 @@ export default function FixRowPanel({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-[#1f150c]/35" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex justify-end bg-[var(--e-1f150c)]/35" onClick={onClose}>
       <aside
         role="dialog"
         aria-modal="true"
         aria-label={`Fix row ${row.rowNumber}`}
         onClick={(e) => e.stopPropagation()}
-        className="flex h-full w-full max-w-[460px] flex-col bg-[#fcfaf5] shadow-[-18px_0_50px_rgba(31,21,12,0.25)]"
+        className="flex h-full w-full max-w-[460px] flex-col bg-[var(--e-fcfaf5)] shadow-[-18px_0_50px_rgba(31,21,12,0.25)]"
       >
-        <header className="flex items-start gap-3 border-b border-[#e3d9c4] bg-white px-4 py-3">
+        <header className="flex items-start gap-3 border-b border-[var(--e-e3d9c4)] bg-white px-4 py-3">
           <div className="min-w-0 flex-1">
-            <h2 className="text-[15px] font-semibold text-[#1f150c]">Fix row {row.rowNumber}</h2>
-            <p className="truncate text-[11.5px] text-[#6b5c42]">
+            <h2 className="text-[15px] font-semibold text-[var(--e-1f150c)]">Fix row {row.rowNumber}</h2>
+            <p className="truncate text-[11.5px] text-[var(--e-6b5c42)]">
               {[row.orderRef && `Order ${row.orderRef}`, client, row.recipientName].filter(Boolean).join(' · ')}
             </p>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close" className="rounded-lg p-1.5 text-[#5a4526] hover:bg-[#f4eede]">
+          <button type="button" onClick={onClose} aria-label="Close" className="rounded-lg p-1.5 text-[var(--e-5a4526)] hover:bg-[var(--e-f4eede)]">
             <FiX className="h-4 w-4" />
           </button>
         </header>
@@ -189,8 +189,8 @@ export default function FixRowPanel({
           {SECTIONS.map((s) => {
             const hasErr = s.keys.some((k) => byField[k]?.length)
             return (
-              <details key={s.title} open={hasErr || undefined} className="rounded-xl border border-[#e3d9c4] bg-white">
-                <summary className={`cursor-pointer select-none px-3 py-2 text-[12px] font-semibold ${hasErr ? 'text-rose-800' : 'text-[#412d15]'}`}>
+              <details key={s.title} open={hasErr || undefined} className="rounded-xl border border-[var(--e-e3d9c4)] bg-white">
+                <summary className={`cursor-pointer select-none px-3 py-2 text-[12px] font-semibold ${hasErr ? 'text-rose-800' : 'text-[var(--e-412d15)]'}`}>
                   {s.title}{hasErr ? ' · needs fixing' : ''}
                 </summary>
                 <div className="grid grid-cols-1 gap-2.5 px-3 pb-3 sm:grid-cols-2">{s.keys.map(field)}</div>
@@ -199,13 +199,13 @@ export default function FixRowPanel({
           })}
         </div>
 
-        <footer className="flex items-center justify-end gap-2 border-t border-[#e3d9c4] bg-white px-4 py-3">
-          <button type="button" onClick={onClose} className="rounded-lg border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]">
+        <footer className="flex items-center justify-end gap-2 border-t border-[var(--e-e3d9c4)] bg-white px-4 py-3">
+          <button type="button" onClick={onClose} className="rounded-lg border border-[var(--e-e3d9c4)] bg-white px-3 py-1.5 text-[12px] font-semibold text-[var(--e-5a4526)] hover:bg-[var(--e-faf7f0)]">
             Cancel
           </button>
           <button type="button" onClick={save} disabled={!dirty || saving}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[#1f150c] px-3.5 py-1.5 text-[12px] font-semibold text-[#f4eede] hover:bg-[#412d15] disabled:cursor-not-allowed disabled:opacity-40">
-            {saving ? <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" /> : null}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--e-1f150c)] px-3.5 py-1.5 text-[12px] font-semibold text-[var(--e-f4eede)] hover:bg-[var(--e-412d15)] disabled:cursor-not-allowed disabled:opacity-40">
+            {saving ? <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[var(--e-f4eede)]/40 border-t-[var(--e-f4eede)]" /> : null}
             {saving ? 'Checking…' : 'Save & re-check'}
           </button>
         </footer>

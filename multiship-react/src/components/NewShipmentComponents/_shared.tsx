@@ -11,7 +11,7 @@
 import { cloneElement, Fragment, isValidElement, type ReactNode } from 'react'
 
 export const inputCls =
-  'w-full rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13px] text-[#1f150c] outline-none transition placeholder:text-[#b6a684] focus:border-[#cdbf9f] focus:ring-4 focus:ring-[#f4eede] disabled:cursor-not-allowed disabled:bg-[#faf7f0] disabled:text-[#6b5c42]'
+  'w-full rounded-xl border border-[var(--e-e3d9c4)] bg-white px-3 py-2 text-[13px] text-[var(--e-1f150c)] outline-none transition placeholder:text-[var(--e-b6a684)] focus:border-[var(--e-cdbf9f)] focus:ring-4 focus:ring-[var(--e-f4eede)] disabled:cursor-not-allowed disabled:bg-[var(--e-faf7f0)] disabled:text-[var(--e-6b5c42)]'
 
 export interface SectionRailItem {
   id: string
@@ -31,7 +31,7 @@ export function SectionRail({ sections }: { sections: SectionRailItem[] }) {
   const jump = (id: string) =>
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   return (
-    <nav aria-label="Shipment sections" className="sticky top-2 z-30 -mx-1 mb-3 flex flex-wrap items-center gap-1.5 rounded-2xl border border-[#e3d9c4] bg-[#fdfbf6]/95 px-2 py-1.5 shadow-sm backdrop-blur">
+    <nav aria-label="Shipment sections" className="sticky top-2 z-30 -mx-1 mb-3 flex flex-wrap items-center gap-1.5 rounded-2xl border border-[var(--e-e3d9c4)] bg-[var(--e-fdfbf6)]/95 px-2 py-1.5 shadow-sm backdrop-blur">
       {visible.map((x, i) => (
         <button
           key={x.id}
@@ -39,10 +39,10 @@ export function SectionRail({ sections }: { sections: SectionRailItem[] }) {
           onClick={() => jump(x.id)}
           aria-label={`${x.label}${x.done ? ' — complete' : ' — needs attention'}`}
           className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition ${
-            x.done ? 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100' : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:bg-[#faf7f0]'
+            x.done ? 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100' : 'border-[var(--e-e3d9c4)] bg-white text-[var(--e-5a4526)] hover:bg-[var(--e-faf7f0)]'
           }`}
         >
-          <span className={`inline-flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-bold ${x.done ? 'bg-emerald-600 text-white' : 'bg-[#f4eede] text-[#6b5c42]'}`}>
+          <span className={`inline-flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-bold ${x.done ? 'bg-emerald-600 text-white' : 'bg-[var(--e-f4eede)] text-[var(--e-6b5c42)]'}`}>
             {x.done ? '✓' : i + 1}
           </span>
           {x.label}
@@ -76,7 +76,7 @@ export function Field({
       className={`block space-y-1 ${error ? '[&_input]:!border-rose-400 [&_select]:!border-rose-400 [&_textarea]:!border-rose-400' : ''} ${className}`}
       title={title}
     >
-      <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#6b5c42]">
+      <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-[var(--e-6b5c42)]">
         {label}
         {required ? <span className="text-rose-500"> *</span> : null}
       </span>
@@ -118,14 +118,14 @@ export function SectionCard({
   return (
     <section id={id} className={`scroll-mt-24 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5 ${className}`}>
       {/* Wraps when the badges don't fit (phones) instead of pushing the page wider. */}
-      <div className="flex min-h-[38px] flex-wrap items-center justify-between gap-2 border-b border-dashed border-[#e3d9c4] pb-2">
+      <div className="flex min-h-[38px] flex-wrap items-center justify-between gap-2 border-b border-dashed border-[var(--e-e3d9c4)] pb-2">
         <div className="flex items-center gap-2">
-          <span className="text-[#6b5c42]">{icon}</span>
-          <h3 className="font-mono text-[11px] font-bold uppercase tracking-[0.16em] text-[#6b5c42]">{title}</h3>
+          <span className="text-[var(--e-6b5c42)]">{icon}</span>
+          <h3 className="font-mono text-[11px] font-bold uppercase tracking-[0.16em] text-[var(--e-6b5c42)]">{title}</h3>
         </div>
         {badge}
       </div>
-      {note ? <p className="mt-2 text-[11px] text-[#6b5c42]">{note}</p> : null}
+      {note ? <p className="mt-2 text-[11px] text-[var(--e-6b5c42)]">{note}</p> : null}
       <div className="mt-3">{children}</div>
     </section>
   )

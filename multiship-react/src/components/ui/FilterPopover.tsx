@@ -20,20 +20,20 @@ import { useDismissable } from '../../hooks/useDismissable'
  */
 
 // ── Shared classes for the editors ──
-export const OPTION = 'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition hover:bg-[#faf7f0]'
-export const OPTION_ON = 'bg-[#f4eede]/70 hover:bg-[#f4eede]'
+export const OPTION = 'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition hover:bg-[var(--e-faf7f0)]'
+export const OPTION_ON = 'bg-[var(--e-f4eede)]/70 hover:bg-[var(--e-f4eede)]'
 export const CHIP_BTN = 'inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11.5px] font-semibold transition'
-export const CHIP_OFF = 'border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
-export const CHIP_ON = 'border-[#1f150c] bg-[#1f150c] text-[#f4eede]'
-export const FIELD_INPUT = 'w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12.5px] text-[#1f150c] outline-none transition focus:border-[#412d15] focus:ring-4 focus:ring-[#f0e9d8]'
-export const FIELD_LABEL = 'mb-1.5 block text-[10.5px] font-semibold uppercase tracking-[0.08em] text-[#b6a684]'
+export const CHIP_OFF = 'border-[var(--e-e3d9c4)] bg-white text-[var(--e-5a4526)] hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-faf7f0)]'
+export const CHIP_ON = 'border-[var(--e-1f150c)] bg-[var(--e-1f150c)] text-[var(--e-f4eede)]'
+export const FIELD_INPUT = 'w-full rounded-lg border border-[var(--e-e3d9c4)] bg-white px-2.5 py-1.5 text-[12.5px] text-[var(--e-1f150c)] outline-none transition focus:border-[var(--e-412d15)] focus:ring-4 focus:ring-[var(--e-f0e9d8)]'
+export const FIELD_LABEL = 'mb-1.5 block text-[10.5px] font-semibold uppercase tracking-[0.08em] text-[var(--e-b6a684)]'
 
 /** The tick on the chosen option. */
-export const Check = () => <FiCheck className="ml-auto h-3.5 w-3.5 shrink-0 text-[#1f150c]" aria-hidden="true" />
+export const Check = () => <FiCheck className="ml-auto h-3.5 w-3.5 shrink-0 text-[var(--e-1f150c)]" aria-hidden="true" />
 
 /** How many rows an option matches. */
 export const CountBadge = ({ n }: { n: number | undefined }) => (
-  <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-[#6b5c42] ring-1 ring-[#e3d9c4]">{n ?? '–'}</span>
+  <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-[var(--e-6b5c42)] ring-1 ring-[var(--e-e3d9c4)]">{n ?? '–'}</span>
 )
 
 // ── Dates ──
@@ -87,11 +87,11 @@ export function DateRangeField({ from, to, onChange, label }: {
         <p className={FIELD_LABEL}>Custom range</p>
         <div className="grid grid-cols-2 gap-2">
           <label className="block">
-            <span className="mb-1 block text-[11px] text-[#6b5c42]">From</span>
+            <span className="mb-1 block text-[11px] text-[var(--e-6b5c42)]">From</span>
             <input type="date" value={from} max={to || undefined} onChange={(e) => onChange(e.target.value, to)} aria-label={`${label} from`} className={FIELD_INPUT} />
           </label>
           <label className="block">
-            <span className="mb-1 block text-[11px] text-[#6b5c42]">To</span>
+            <span className="mb-1 block text-[11px] text-[var(--e-6b5c42)]">To</span>
             <input type="date" value={to} min={from || undefined} onChange={(e) => onChange(from, e.target.value)} aria-label={`${label} to`} className={FIELD_INPUT} />
           </label>
         </div>
@@ -160,13 +160,13 @@ export function FilterPopover<F extends string>({
         aria-expanded={open}
         aria-haspopup="dialog"
         className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[12px] font-semibold transition ${
-          lit ? 'border-[#412d15] bg-[#412d15] text-[#f4eede]' : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
+          lit ? 'border-[var(--e-412d15)] bg-[var(--e-412d15)] text-[var(--e-f4eede)]' : 'border-[var(--e-e3d9c4)] bg-white text-[var(--e-5a4526)] hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-faf7f0)]'
         }`}
       >
         <FiFilter className="h-3.5 w-3.5" />
         Filters
         {activeCount > 0 ? (
-          <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[#f4eede] px-1 text-[9.5px] font-bold text-[#412d15]">
+          <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--e-f4eede)] px-1 text-[9.5px] font-bold text-[var(--e-412d15)]">
             {activeCount}
           </span>
         ) : null}
@@ -177,11 +177,11 @@ export function FilterPopover<F extends string>({
           role="dialog"
           aria-label="Filters"
           style={{ left: shift, width: `min(${POPOVER_W}px, calc(100vw - 2rem))` }}
-          className="bulk-pop-in absolute z-30 mt-1.5 overflow-hidden rounded-xl border border-[#e3d9c4] bg-white text-[#1f150c] shadow-[0_18px_44px_rgba(31,21,12,0.16)]"
+          className="bulk-pop-in absolute z-30 mt-1.5 overflow-hidden rounded-xl border border-[var(--e-e3d9c4)] bg-white text-[var(--e-1f150c)] shadow-[0_18px_44px_rgba(31,21,12,0.16)]"
         >
           <div className="flex">
             {/* ── The rail: what you can filter by, and what each is set to ── */}
-            <nav aria-label="Filter by" className="w-[8.25rem] shrink-0 border-r border-[#f2ecdf] bg-[#fcfaf5] p-1.5 sm:w-[11.5rem]">
+            <nav aria-label="Filter by" className="w-[8.25rem] shrink-0 border-r border-[var(--e-f2ecdf)] bg-[var(--e-fcfaf5)] p-1.5 sm:w-[11.5rem]">
               {rail.map((r) => {
                 const on = field === r.key
                 return (
@@ -191,17 +191,17 @@ export function FilterPopover<F extends string>({
                     onClick={() => pickField(r.key)}
                     aria-current={on ? 'true' : undefined}
                     className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition ${
-                      on ? 'bg-white shadow-sm ring-1 ring-[#e3d9c4]' : 'hover:bg-[#f4eede]/60'
+                      on ? 'bg-white shadow-sm ring-1 ring-[var(--e-e3d9c4)]' : 'hover:bg-[var(--e-f4eede)]/60'
                     }`}
                   >
-                    <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${r.active ? 'bg-[#1f150c] text-[#f4eede]' : 'bg-[#f4eede] text-[#6b5c42]'}`} aria-hidden="true">
+                    <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${r.active ? 'bg-[var(--e-1f150c)] text-[var(--e-f4eede)]' : 'bg-[var(--e-f4eede)] text-[var(--e-6b5c42)]'}`} aria-hidden="true">
                       {r.icon}
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block text-[11.5px] font-semibold leading-tight text-[#1f150c]">{r.label}</span>
-                      <span className={`hidden truncate text-[10.5px] leading-tight sm:block ${r.active ? 'font-semibold text-[#412d15]' : 'text-[#a1906d]'}`}>{r.value}</span>
+                      <span className="block text-[11.5px] font-semibold leading-tight text-[var(--e-1f150c)]">{r.label}</span>
+                      <span className={`hidden truncate text-[10.5px] leading-tight sm:block ${r.active ? 'font-semibold text-[var(--e-412d15)]' : 'text-[var(--e-a1906d)]'}`}>{r.value}</span>
                     </span>
-                    <FiChevronRight className={`h-3 w-3 shrink-0 ${on ? 'text-[#412d15]' : 'text-[#dcd4c4]'}`} aria-hidden="true" />
+                    <FiChevronRight className={`h-3 w-3 shrink-0 ${on ? 'text-[var(--e-412d15)]' : 'text-[var(--e-dcd4c4)]'}`} aria-hidden="true" />
                   </button>
                 )
               })}
@@ -214,17 +214,17 @@ export function FilterPopover<F extends string>({
           </div>
 
           {/* ── Footer: what it comes to, clear, done ── */}
-          <div className="flex items-center justify-between gap-2 border-t border-[#f2ecdf] bg-[#fcfaf5] px-3 py-2 text-[11.5px] text-[#6b5c42]">
+          <div className="flex items-center justify-between gap-2 border-t border-[var(--e-f2ecdf)] bg-[var(--e-fcfaf5)] px-3 py-2 text-[11.5px] text-[var(--e-6b5c42)]">
             <span aria-live="polite">
-              <span className="font-semibold text-[#1f150c]">{shown}</span> of {total ?? '–'} {noun ? `${noun} ` : ''}shown
+              <span className="font-semibold text-[var(--e-1f150c)]">{shown}</span> of {total ?? '–'} {noun ? `${noun} ` : ''}shown
             </span>
             <span className="flex items-center gap-1.5">
               {activeCount > 0 ? (
-                <button type="button" onClick={clearFilters} className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11.5px] font-semibold text-[#6b5c42] transition hover:bg-rose-50 hover:text-rose-700">
+                <button type="button" onClick={clearFilters} className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11.5px] font-semibold text-[var(--e-6b5c42)] transition hover:bg-rose-50 hover:text-rose-700">
                   <FiX className="h-3.5 w-3.5" /> Clear all
                 </button>
               ) : null}
-              <button type="button" onClick={() => setOpen(false)} className="rounded-lg bg-[#1f150c] px-3 py-1 text-[11.5px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15]">
+              <button type="button" onClick={() => setOpen(false)} className="rounded-lg bg-[var(--e-1f150c)] px-3 py-1 text-[11.5px] font-semibold text-[var(--e-f4eede)] shadow-sm transition hover:bg-[var(--e-412d15)]">
                 Done
               </button>
             </span>
@@ -243,16 +243,16 @@ export function FilterChips({ chips, clearFilters, testId }: { chips: FilterChip
   return (
     <div data-testid={testId} className="bulk-fade-in mt-2 flex flex-wrap items-center gap-1.5">
       {chips.map((c) => (
-        <span key={c.key} className="inline-flex items-center gap-1 rounded-full border border-[#e3d9c4] bg-[#fcfaf5] py-0.5 pl-2.5 pr-1 text-[11.5px] text-[#5a4526]">
-          <span className="text-[#a1906d]">{c.label}</span>
-          <span className="font-semibold text-[#1f150c]">{c.value}</span>
-          <button type="button" onClick={c.clear} aria-label={`Remove ${c.label} filter`} className="ml-0.5 rounded-full p-0.5 text-[#a1906d] transition hover:bg-[#f0e9d8] hover:text-rose-700">
+        <span key={c.key} className="inline-flex items-center gap-1 rounded-full border border-[var(--e-e3d9c4)] bg-[var(--e-fcfaf5)] py-0.5 pl-2.5 pr-1 text-[11.5px] text-[var(--e-5a4526)]">
+          <span className="text-[var(--e-a1906d)]">{c.label}</span>
+          <span className="font-semibold text-[var(--e-1f150c)]">{c.value}</span>
+          <button type="button" onClick={c.clear} aria-label={`Remove ${c.label} filter`} className="ml-0.5 rounded-full p-0.5 text-[var(--e-a1906d)] transition hover:bg-[var(--e-f0e9d8)] hover:text-rose-700">
             <FiX className="h-3 w-3" />
           </button>
         </span>
       ))}
       {chips.length > 1 ? (
-        <button type="button" onClick={clearFilters} className="text-[11.5px] font-semibold text-[#6b5c42] underline-offset-2 hover:text-rose-700 hover:underline">
+        <button type="button" onClick={clearFilters} className="text-[11.5px] font-semibold text-[var(--e-6b5c42)] underline-offset-2 hover:text-rose-700 hover:underline">
           Clear all
         </button>
       ) : null}

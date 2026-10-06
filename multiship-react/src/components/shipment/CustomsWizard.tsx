@@ -233,7 +233,7 @@ export default function CustomsWizard({
               onClick={() => goto(s.id)}
               className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11.5px] font-semibold transition ${
                 idx === stepIdx
-                  ? 'bg-[#1f150c] text-white'
+                  ? 'bg-[var(--e-1f150c)] text-white'
                   : idx < stepIdx
                     ? 'text-emerald-700 hover:bg-emerald-50'
                     : 'text-slate-400 cursor-not-allowed'
@@ -313,7 +313,7 @@ export default function CustomsWizard({
               type="button"
               onClick={next}
               disabled={!canProceed}
-              className="inline-flex items-center gap-1 rounded-lg bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-slate-300"
+              className="inline-flex items-center gap-1 rounded-lg bg-[var(--e-1f150c)] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[var(--e-412d15)] disabled:cursor-not-allowed disabled:bg-slate-300"
             >
               Next
               <FiChevronRight className="h-3.5 w-3.5" />
@@ -408,7 +408,7 @@ function CommoditiesStep({
           <button
             type="button"
             onClick={onAdd}
-            className="mt-2 inline-flex items-center gap-1 rounded-lg bg-[#1f150c] px-3 py-1.5 text-[11.5px] font-semibold text-white hover:bg-[#412d15]"
+            className="mt-2 inline-flex items-center gap-1 rounded-lg bg-[var(--e-1f150c)] px-3 py-1.5 text-[11.5px] font-semibold text-white hover:bg-[var(--e-412d15)]"
           >
             <FiPlus className="h-3 w-3" />
             Add first line
@@ -638,7 +638,7 @@ function DutiesStep({
               onClick={() => onPatch({ incoterms: opt.code })}
               className={`rounded-xl border p-2.5 text-left transition ${
                 value.incoterms === opt.code
-                  ? 'border-[#1f150c] bg-white text-[#1f150c] shadow-sm'
+                  ? 'border-[var(--e-1f150c)] bg-white text-[var(--e-1f150c)] shadow-sm'
                   : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100'
               }`}
             >

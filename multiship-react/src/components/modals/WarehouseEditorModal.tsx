@@ -320,14 +320,14 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
   const err = (k: keyof typeof errors): string | null => (touched[k] ? errors[k] : null)
   /** Input class with an error ring when the (touched) field is invalid. */
   const inputCls = (k: keyof typeof errors, extra = '') =>
-    `w-full rounded-xl border bg-white px-3 py-2 text-[13px] text-[#1f150c] outline-none transition ${
-      err(k) ? 'border-rose-400 focus:border-rose-500' : 'border-[#e3d9c4] focus:border-[#412d15]'
+    `w-full rounded-xl border bg-white px-3 py-2 text-[13px] text-[var(--e-1f150c)] outline-none transition ${
+      err(k) ? 'border-rose-400 focus:border-rose-500' : 'border-[var(--e-e3d9c4)] focus:border-[var(--e-412d15)]'
     } ${extra}`
 
   return (
     <>
       <div
-        className="fixed inset-0 z-40 bg-[#1f150c]/45"
+        className="fixed inset-0 z-40 bg-[var(--e-1f150c)]/45"
         onClick={closeAction}
         aria-hidden="true"
       />
@@ -336,25 +336,25 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
         role="dialog"
         aria-modal="true"
         aria-labelledby="warehouse-editor-title"
-        className="fixed inset-y-0 right-0 z-50 flex w-full max-w-[520px] flex-col border-l border-[#e3d9c4] bg-white shadow-[-18px_0_50px_rgba(8,14,26,0.18)]"
+        className="fixed inset-y-0 right-0 z-50 flex w-full max-w-[520px] flex-col border-l border-[var(--e-e3d9c4)] bg-white shadow-[-18px_0_50px_rgba(8,14,26,0.18)]"
       >
-        <header className="flex items-start justify-between gap-3 border-b border-[#eee6d6] px-5 py-4">
+        <header className="flex items-start justify-between gap-3 border-b border-[var(--e-eee6d6)] px-5 py-4">
           <div className="flex items-start gap-2.5">
-            <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[#412d15]/10 text-[#412d15]">
+            <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--e-412d15)]/10 text-[var(--e-412d15)]">
               <FiHome className="h-4 w-4" />
             </span>
             <div>
-              <p className="text-[10.5px] font-bold uppercase tracking-[0.16em] text-[#b6a684]">
+              <p className="text-[10.5px] font-bold uppercase tracking-[0.16em] text-[var(--e-b6a684)]">
                 Warehouses
               </p>
-              <h2 id="warehouse-editor-title" className="mt-0.5 text-[15px] font-semibold text-[#1f150c]">
+              <h2 id="warehouse-editor-title" className="mt-0.5 text-[15px] font-semibold text-[var(--e-1f150c)]">
                 {created
                   ? `Attach ${created.code} to clients`
                   : isEdit
                     ? `Edit warehouse ${warehouse!.code}`
                     : 'Add warehouse'}
               </h2>
-              <p className="mt-0.5 text-[11.5px] text-[#6b5c42]">
+              <p className="mt-0.5 text-[11.5px] text-[var(--e-6b5c42)]">
                 {created
                   ? 'Optional — pick the clients that should see this warehouse.'
                   : 'Ship-from locations attach to clients; each client picks one default.'}
@@ -365,7 +365,7 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
             type="button"
             aria-label="Close"
             onClick={closeAction}
-            className="rounded-xl border border-[#e3d9c4] bg-white p-2 text-[#6b5c42] transition hover:bg-[#faf7f0]"
+            className="rounded-xl border border-[var(--e-e3d9c4)] bg-white p-2 text-[var(--e-6b5c42)] transition hover:bg-[var(--e-faf7f0)]"
           >
             <FiX className="h-4 w-4" />
           </button>
@@ -387,7 +387,7 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
                 placeholder="3PL-EAST"
                 maxLength={FIELD_LIMITS.clientCode}
                 aria-invalid={!isEdit && err('code') ? true : undefined}
-                className={inputCls('code', 'font-semibold disabled:cursor-not-allowed disabled:bg-[#faf7f0] disabled:text-[#6b5c42]')}
+                className={inputCls('code', 'font-semibold disabled:cursor-not-allowed disabled:bg-[var(--e-faf7f0)] disabled:text-[var(--e-6b5c42)]')}
               />
             </Field>
             <Field label="Name" required error={err('name')}>
@@ -405,7 +405,7 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
 
           {/* Ownership — radios drive the client picker's visibility. */}
           <section>
-            <p className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-[#b6a684]">
+            <p className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--e-b6a684)]">
               Owner
             </p>
             <div className="flex flex-wrap gap-2">
@@ -414,8 +414,8 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
                   key={v}
                   className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-[12.5px] font-semibold transition ${
                     ownerType === v
-                      ? 'border-[#412d15] bg-[#412d15]/5 text-[#412d15]'
-                      : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:bg-[#faf7f0]'
+                      ? 'border-[var(--e-412d15)] bg-[var(--e-412d15)]/5 text-[var(--e-412d15)]'
+                      : 'border-[var(--e-e3d9c4)] bg-white text-[var(--e-5a4526)] hover:bg-[var(--e-faf7f0)]'
                   } ${
                     // Ownership is IMMUTABLE post-create — disable the radios
                     // in edit mode. Prior UI let operators click them, which
@@ -462,7 +462,7 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
           {/* Address */}
           <section>
             <div className="mb-1.5 flex items-center justify-between gap-3">
-              <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#b6a684]">
+              <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--e-b6a684)]">
                 Address
               </p>
               <div className="inline-flex items-center gap-1.5">
@@ -471,13 +471,13 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
                     Pre-fix, hardcoded 'UPS' (or defaultCarrierCode) silently
                     validated against one carrier — an address that passes
                     UPS but fails FedEx would go undetected. */}
-                <label className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#b6a684]">
+                <label className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--e-b6a684)]">
                   Carrier
                   <select
                     value={verifyCarrier}
                     onChange={(e) => setVerifyCarrier(e.target.value)}
                     disabled={verifying}
-                    className="ml-1 rounded border border-[#e3d9c4] bg-white px-1.5 py-0.5 text-[10.5px] font-semibold text-[#412d15] outline-none focus:border-[#412d15] disabled:opacity-50"
+                    className="ml-1 rounded border border-[var(--e-e3d9c4)] bg-white px-1.5 py-0.5 text-[10.5px] font-semibold text-[var(--e-412d15)] outline-none focus:border-[var(--e-412d15)] disabled:opacity-50"
                   >
                     {enabledCarriers.map((c) => (
                       <option key={c} value={c}>{c}</option>
@@ -495,8 +495,8 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
                   }
                   className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[10.5px] font-semibold transition ${
                     canVerify
-                      ? 'border-[#412d15] bg-white text-[#412d15] hover:bg-[#faf7f0]'
-                      : 'cursor-not-allowed border-[#e3d9c4] bg-[#faf7f0] text-[#b6a684]'
+                      ? 'border-[var(--e-412d15)] bg-white text-[var(--e-412d15)] hover:bg-[var(--e-faf7f0)]'
+                      : 'cursor-not-allowed border-[var(--e-e3d9c4)] bg-[var(--e-faf7f0)] text-[var(--e-b6a684)]'
                   }`}
                 >
                   <FiSearch className="h-3 w-3" />
@@ -547,25 +547,25 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
           </section>
 
           {/* Active */}
-          <section className="flex items-center gap-3 rounded-xl border border-[#eee6d6] bg-[#faf7f0]/60 px-4 py-3">
+          <section className="flex items-center gap-3 rounded-xl border border-[var(--e-eee6d6)] bg-[var(--e-faf7f0)]/60 px-4 py-3">
             <input
               id="warehouse-active"
               type="checkbox"
               checked={active}
               onChange={(e) => setActive(e.target.checked)}
-              className="h-4 w-4 rounded border-[#cdbf9f] text-[#412d15] focus:ring-[#412d15]"
+              className="h-4 w-4 rounded border-[var(--e-cdbf9f)] text-[var(--e-412d15)] focus:ring-[var(--e-412d15)]"
             />
-            <label htmlFor="warehouse-active" className="text-[12.5px] font-semibold text-[#412d15]">
+            <label htmlFor="warehouse-active" className="text-[12.5px] font-semibold text-[var(--e-412d15)]">
               Active — inactive warehouses are hidden from shipment resolution.
             </label>
           </section>
         </div>
 
-        <footer className="flex items-center justify-end gap-2 border-t border-[#eee6d6] bg-[#faf7f0]/60 px-5 py-3">
+        <footer className="flex items-center justify-end gap-2 border-t border-[var(--e-eee6d6)] bg-[var(--e-faf7f0)]/60 px-5 py-3">
           <button
             type="button"
             onClick={closeWithGuard}
-            className="rounded-xl border border-[#e3d9c4] bg-white px-4 py-2 text-[13px] font-semibold text-[#5a4526] transition hover:bg-[#eee6d6]"
+            className="rounded-xl border border-[var(--e-e3d9c4)] bg-white px-4 py-2 text-[13px] font-semibold text-[var(--e-5a4526)] transition hover:bg-[var(--e-eee6d6)]"
           >
             Cancel
           </button>
@@ -576,7 +576,7 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
             aria-disabled={!canSubmit || saving}
             title={!canSubmit ? 'Fix the highlighted fields to continue' : undefined}
             className={`rounded-xl px-5 py-2 text-[13px] font-semibold text-white transition ${
-              canSubmit ? 'bg-[#1f150c] hover:bg-[#412d15]' : 'bg-[#1f150c]/50'
+              canSubmit ? 'bg-[var(--e-1f150c)] hover:bg-[var(--e-412d15)]' : 'bg-[var(--e-1f150c)]/50'
             } disabled:cursor-not-allowed disabled:opacity-50`}
           >
             {saving ? 'Saving…' : isEdit ? 'Save changes' : 'Create warehouse'}
@@ -634,7 +634,7 @@ function VerifyResultPanel({
       </div>
       {result.suggested && (level === 'CORRECTED' || level === 'AMBIGUOUS') ? (
         <div className="mt-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
-          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#b6a684]">Suggested by {result.carrierCode}</p>
+          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--e-b6a684)]">Suggested by {result.carrierCode}</p>
           <p className="mt-1 text-[11.5px] leading-4 text-slate-800">
             {result.suggested.name ? <>{result.suggested.name}<br /></> : null}
             {result.suggested.addressLine1}
@@ -654,7 +654,7 @@ function VerifyResultPanel({
             <button
               type="button"
               onClick={onUse}
-              className="inline-flex items-center gap-1 rounded-lg bg-[#412d15] px-2.5 py-1 text-[11px] font-semibold text-white transition hover:bg-[#1f150c]"
+              className="inline-flex items-center gap-1 rounded-lg bg-[var(--e-412d15)] px-2.5 py-1 text-[11px] font-semibold text-white transition hover:bg-[var(--e-1f150c)]"
             >
               <FiCheck className="h-3 w-3" /> Use suggestion
             </button>
@@ -687,7 +687,7 @@ function Field({
 }) {
   return (
     <div className={span === 2 ? 'sm:col-span-2' : ''}>
-      <label className="mb-1 flex items-center gap-1 text-[10px] font-bold uppercase tracking-[0.14em] text-[#b6a684]">
+      <label className="mb-1 flex items-center gap-1 text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--e-b6a684)]">
         {label}
         {required ? <span className="text-rose-500">*</span> : null}
       </label>
@@ -697,7 +697,7 @@ function Field({
           <span aria-hidden>⚠</span> {error}
         </p>
       ) : hint ? (
-        <p className="mt-1 text-[10.5px] text-[#b6a684]">{hint}</p>
+        <p className="mt-1 text-[10.5px] text-[var(--e-b6a684)]">{hint}</p>
       ) : null}
     </div>
   )

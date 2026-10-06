@@ -38,7 +38,7 @@ const TEMPLATE_TYPES = ['SHIPPING_LABEL', 'PACKING_SLIP', 'COMMERCIAL_INVOICE', 
 const filterLabelClass =
   'mb-1 flex items-center gap-1 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400'
 const textInput =
-  'w-full rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[13px] text-slate-800 outline-none focus:border-[#1f150c]'
+  'w-full rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[13px] text-slate-800 outline-none focus:border-[var(--e-1f150c)]'
 
 /**
  * Settings → Label Templates list page. Cross-tenant table, filters,
@@ -433,7 +433,7 @@ export default function LabelTemplatesListPage() {
                   onClick={() => setShowFilters((v) => !v)}
                   className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[12.5px] font-semibold transition ${
                     filtersActive
-                      ? 'border-[#1f150c] bg-[#1f150c] text-white'
+                      ? 'border-[var(--e-1f150c)] bg-[var(--e-1f150c)] text-white'
                       : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
                   }`}
                 >
@@ -489,7 +489,7 @@ export default function LabelTemplatesListPage() {
               <button
                 type="button"
                 onClick={() => navigate('/settings/templates/new')}
-                className="inline-flex items-center gap-1.5 rounded-md bg-[#1f150c] px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-black"
+                className="inline-flex items-center gap-1.5 rounded-md bg-[var(--e-1f150c)] px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-black"
               >
                 <FiPlus className="h-3.5 w-3.5" /> Add template
               </button>
@@ -591,7 +591,7 @@ function PreviewModal({
             type="button"
             onClick={onRun}
             disabled={previewing}
-            className="inline-flex items-center gap-1.5 rounded-md bg-[#1f150c] px-3 py-1.5 text-[12.5px] font-semibold text-white transition hover:bg-black disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-md bg-[var(--e-1f150c)] px-3 py-1.5 text-[12.5px] font-semibold text-white transition hover:bg-black disabled:opacity-50"
           >
             {previewing ? <FiLoader className="animate-spin" /> : <FiEye />}
             {previewing ? 'Loading…' : 'Preview'}

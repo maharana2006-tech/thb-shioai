@@ -68,7 +68,7 @@ export default function BatchPrintMenu({
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
   const items = docs ? [
     { key: 'LABEL', label: 'Download labels', hint: `One print dialog, ${plural(docs.labels.length, 'label')}`,
-      icon: <FiPrinter className="h-3.5 w-3.5 text-[#412d15]" />, run: () => onPrint(docs.labels, 'LABEL') },
+      icon: <FiPrinter className="h-3.5 w-3.5 text-[var(--e-412d15)]" />, run: () => onPrint(docs.labels, 'LABEL') },
     ...(docs.invoices.length > 0 ? [{ key: 'INVOICE', label: 'Download invoices',
       hint: `Commercial invoices — ${plural(docs.invoices.length, 'international order')}`,
       icon: <FiFileText className="h-3.5 w-3.5 text-sky-700" />, run: () => onPrint(docs.invoices, 'COMMERCIAL_INVOICE') }] : []),
@@ -88,33 +88,33 @@ export default function BatchPrintMenu({
         aria-label={buttonLabel ? undefined : 'Print batch'}
         title={disabledReason ?? `Download labels or invoices of ${scope}, or send them to a printer`}
         className={buttonLabel
-          ? 'inline-flex items-center gap-1 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[12.5px] font-semibold text-[#412d15] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40'
-          : 'inline-flex items-center gap-0.5 rounded-xl border border-[#e3d9c4] bg-[#faf7f0] p-2 text-[#412d15] transition hover:border-[#cdbf9f] hover:bg-[#f0e9d8] disabled:opacity-50'}
+          ? 'inline-flex items-center gap-1 rounded-xl border border-[var(--e-e3d9c4)] bg-white px-3 py-2 text-[12.5px] font-semibold text-[var(--e-412d15)] transition hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-faf7f0)] disabled:cursor-not-allowed disabled:opacity-40'
+          : 'inline-flex items-center gap-0.5 rounded-xl border border-[var(--e-e3d9c4)] bg-[var(--e-faf7f0)] p-2 text-[var(--e-412d15)] transition hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-f0e9d8)] disabled:opacity-50'}
       >
         {busy
-          ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#e3d9c4] border-t-[#5a4526]" />
+          ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[var(--e-e3d9c4)] border-t-[var(--e-5a4526)]" />
           : <FiPrinter className="h-3.5 w-3.5" />}
         {buttonLabel}
-        <FiChevronDown className={`h-3 w-3 text-[#b6a684] transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden="true" />
+        <FiChevronDown className={`h-3 w-3 text-[var(--e-b6a684)] transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden="true" />
       </button>
       {open && at ? (
         <div role="menu" aria-label={`Print ${scope}`} style={{ position: 'fixed', ...at }}
-          className="bulk-pop-in z-50 w-60 rounded-xl border border-[#e3d9c4] bg-white p-1 text-left shadow-[0_12px_32px_rgba(31,21,12,0.14)]">
+          className="bulk-pop-in z-50 w-60 rounded-xl border border-[var(--e-e3d9c4)] bg-white p-1 text-left shadow-[0_12px_32px_rgba(31,21,12,0.14)]">
           {docs === null ? (
-            <p className="px-2.5 py-2 text-[11.5px] text-[#8a7a5c]">Reading {scope}…</p>
+            <p className="px-2.5 py-2 text-[11.5px] text-[var(--e-8a7a5c)]">Reading {scope}…</p>
           ) : docs.labels.length === 0 ? (
-            <p className="px-2.5 py-2 text-[11.5px] text-[#8a7a5c]">No live labels in {scope}.</p>
+            <p className="px-2.5 py-2 text-[11.5px] text-[var(--e-8a7a5c)]">No live labels in {scope}.</p>
           ) : items.map((item) => (
             <button key={item.key} type="button" role="menuitem" onClick={() => { close(); item.run() }}
-              className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition hover:bg-[#faf7f0]">
-              <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[#f4eede]" aria-hidden="true">{item.icon}</span>
+              className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition hover:bg-[var(--e-faf7f0)]">
+              <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[var(--e-f4eede)]" aria-hidden="true">{item.icon}</span>
               <span className="min-w-0">
-                <span className="block text-[12px] font-semibold leading-tight text-[#1f150c]">{item.label}</span>
-                <span className="block text-[10.5px] leading-tight text-[#a1906d]">{item.hint}</span>
+                <span className="block text-[12px] font-semibold leading-tight text-[var(--e-1f150c)]">{item.label}</span>
+                <span className="block text-[10.5px] leading-tight text-[var(--e-a1906d)]">{item.hint}</span>
               </span>
             </button>
           ))}
-          <p className="border-t border-[#f2ecdf] px-2.5 pb-1 pt-1.5 text-[10.5px] text-[#a1906d]">For {scope.startsWith('batch #') ? `all of ${scope}` : `the ${scope} selected`}.</p>
+          <p className="border-t border-[var(--e-f2ecdf)] px-2.5 pb-1 pt-1.5 text-[10.5px] text-[var(--e-a1906d)]">For {scope.startsWith('batch #') ? `all of ${scope}` : `the ${scope} selected`}.</p>
         </div>
       ) : null}
     </div>

@@ -81,11 +81,11 @@ export default function ValidationChecklist({
     <section
       data-testid="validation-checklist"
       aria-label="Shipment check"
-      className="max-h-[34vh] overflow-y-auto rounded-2xl sm:max-h-[48vh] border border-[#e3d9c4] bg-white p-3.5 shadow-[0_18px_50px_rgba(31,21,12,0.14)]"
+      className="max-h-[34vh] overflow-y-auto rounded-2xl sm:max-h-[48vh] border border-[var(--e-e3d9c4)] bg-white p-3.5 shadow-[0_18px_50px_rgba(31,21,12,0.14)]"
     >
       <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-[#5a4526]">Shipment check</p>
+          <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-[var(--e-5a4526)]">Shipment check</p>
           <p className={`mt-0.5 flex items-center gap-1.5 text-[13px] font-semibold ${headline.tone}`}>
             {headline.icon}
             {checklistHeadline(groups)}
@@ -101,15 +101,15 @@ export default function ValidationChecklist({
         </div>
         <div className="flex items-center gap-1.5 whitespace-nowrap">
           <button type="button" onClick={onRevalidate} disabled={busy}
-            className="inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] px-2 py-1 text-[11.5px] font-semibold text-[#5a4526] hover:bg-[#faf7f0] disabled:opacity-50">
+            className="inline-flex items-center gap-1 rounded-lg border border-[var(--e-e3d9c4)] px-2 py-1 text-[11.5px] font-semibold text-[var(--e-5a4526)] hover:bg-[var(--e-faf7f0)] disabled:opacity-50">
             <FiRefreshCw className={`h-3 w-3 ${busy ? 'animate-spin' : ''}`} /> Check again
           </button>
           <button type="button" onClick={() => setCompact((c) => !c)}
-            className="rounded-lg border border-[#e3d9c4] px-2 py-1 text-[11.5px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]">
+            className="rounded-lg border border-[var(--e-e3d9c4)] px-2 py-1 text-[11.5px] font-semibold text-[var(--e-5a4526)] hover:bg-[var(--e-faf7f0)]">
             {compact ? 'Show details' : 'Minimise'}
           </button>
           <button type="button" onClick={onClose} aria-label="Close the shipment check"
-            className="rounded-lg p-1 text-[#6b5c42] hover:bg-[#faf7f0]">
+            className="rounded-lg p-1 text-[var(--e-6b5c42)] hover:bg-[var(--e-faf7f0)]">
             <FiX className="h-4 w-4" />
           </button>
         </div>
@@ -120,7 +120,7 @@ export default function ValidationChecklist({
           {fixCount ? `${fixCount} to fix` : 'Nothing to fix'}{reviewCount ? ` · ${reviewCount} to review` : ''} — the rows are hidden while you edit.
         </p>
       ) : (
-      <ul className="divide-y divide-[#efe7d6] rounded-xl border border-[#efe7d6]">
+      <ul className="divide-y divide-[var(--e-efe7d6)] rounded-xl border border-[var(--e-efe7d6)]">
         {groups.map((g) => {
           const tone = TONE[g.status]
           const isOpen = open.has(g.key)
@@ -129,9 +129,9 @@ export default function ValidationChecklist({
           return (
             <li key={g.key} data-testid={`check-${g.key}`} data-status={g.status}>
               <button type="button" onClick={() => hasDetail && toggle(g.key)} aria-expanded={hasDetail ? isOpen : undefined}
-                className={`flex w-full items-center gap-2 px-3 py-2 text-left ${hasDetail ? 'hover:bg-[#fcfaf5]' : 'cursor-default'}`}>
+                className={`flex w-full items-center gap-2 px-3 py-2 text-left ${hasDetail ? 'hover:bg-[var(--e-fcfaf5)]' : 'cursor-default'}`}>
                 {tone.icon}
-                <span className="flex-1 text-[12.5px] font-semibold text-[#1f150c]">{g.title}</span>
+                <span className="flex-1 text-[12.5px] font-semibold text-[var(--e-1f150c)]">{g.title}</span>
                 <span className={`rounded-full px-1.5 py-0.5 text-[10.5px] font-semibold ring-1 ${tone.chip}`}>{tone.label(g)}</span>
                 {hasDetail ? <FiChevronDown className={`h-3.5 w-3.5 text-slate-400 transition ${isOpen ? 'rotate-180' : ''}`} /> : <span className="w-3.5" />}
               </button>
@@ -168,7 +168,7 @@ export default function ValidationChecklist({
                   ) : null}
                   {(g.errors.length || g.warnings.length) && g.key !== 'carrier' ? (
                     <button type="button" onClick={() => { setCompact(true); goTo(g.sectionId) }}
-                      className="text-[11.5px] font-semibold text-[#5a4526] underline-offset-2 hover:underline">
+                      className="text-[11.5px] font-semibold text-[var(--e-5a4526)] underline-offset-2 hover:underline">
                       Go to {g.title.toLowerCase()}
                     </button>
                   ) : null}

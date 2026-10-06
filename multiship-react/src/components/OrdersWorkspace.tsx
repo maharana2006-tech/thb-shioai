@@ -100,9 +100,9 @@ const BULK_FETCH_SIZE = 100
 const ACTION_BASE =
   'inline-flex min-w-[96px] items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-[11px] font-semibold transition disabled:cursor-not-allowed'
 const ACTION_SOLID =
-  'bg-[#1f150c] text-[#f4eede] shadow-sm ring-1 ring-inset ring-white/10 hover:bg-[#412d15] disabled:bg-[#dcd4c4] disabled:text-white disabled:shadow-none disabled:ring-0'
+  'bg-[var(--e-1f150c)] text-[var(--e-f4eede)] shadow-sm ring-1 ring-inset ring-white/10 hover:bg-[var(--e-412d15)] disabled:bg-[var(--e-dcd4c4)] disabled:text-white disabled:shadow-none disabled:ring-0'
 const ACTION_OUTLINE =
-  'border border-[#d8cbb0] bg-white text-[#412d15] hover:border-[#412d15] hover:bg-[#faf7f0] disabled:opacity-50'
+  'border border-[var(--e-d8cbb0)] bg-white text-[var(--e-412d15)] hover:border-[var(--e-412d15)] hover:bg-[var(--e-faf7f0)] disabled:opacity-50'
 const ACTION_RETRY =
   'border border-amber-300 bg-amber-50 text-amber-800 hover:border-amber-400 hover:bg-amber-100 disabled:opacity-50'
 
@@ -1342,13 +1342,13 @@ export default function OrdersWorkspace() {
 
   // ── Advanced filter panel (shown when the Filters button is toggled) ────────
   const advInputCls =
-    'w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1 text-[12px] font-medium text-[#1f150c] outline-none transition placeholder:text-[#b6a684] focus:border-[#cdbf9f] focus:ring-2 focus:ring-[#f0e9d8]'
+    'w-full rounded-lg border border-[var(--e-e3d9c4)] bg-white px-2.5 py-1 text-[12px] font-medium text-[var(--e-1f150c)] outline-none transition placeholder:text-[var(--e-b6a684)] focus:border-[var(--e-cdbf9f)] focus:ring-2 focus:ring-[var(--e-f0e9d8)]'
   /** A labeled advanced-filter field: mono uppercase caption + icon, then control.
    *  Full width so fields stack one per row in the popover. */
   const advField = (icon: ReactNode, label: string, control: ReactNode) => (
     <label className="block w-full">
-      <span className="mb-1 flex items-center gap-1 font-mono text-[8.5px] font-bold uppercase tracking-[0.12em] text-[#a1906d]">
-        <span className="text-[#cdbf9f]">{icon}</span>
+      <span className="mb-1 flex items-center gap-1 font-mono text-[8.5px] font-bold uppercase tracking-[0.12em] text-[var(--e-a1906d)]">
+        <span className="text-[var(--e-cdbf9f)]">{icon}</span>
         {label}
       </span>
       {control}
@@ -1466,7 +1466,7 @@ export default function OrdersWorkspace() {
                   selectPage()
                 }
               }}
-              className="h-4 w-4 rounded border-[#cdbf9f] text-[#1f150c] focus:ring-[#e3d9c4]"
+              className="h-4 w-4 rounded border-[var(--e-cdbf9f)] text-[var(--e-1f150c)] focus:ring-[var(--e-e3d9c4)]"
             />
           )
         },
@@ -1494,7 +1494,7 @@ export default function OrdersWorkspace() {
               if (e.detail === 0) toggleOrder(row.original.orderDetails.orderNo, row.index, e.shiftKey)
             }}
             onChange={() => { /* handled by onClick */ }}
-            className="h-4 w-4 rounded border-[#cdbf9f] text-[#1f150c] focus:ring-[#e3d9c4]"
+            className="h-4 w-4 rounded border-[var(--e-cdbf9f)] text-[var(--e-1f150c)] focus:ring-[var(--e-e3d9c4)]"
           />
         ),
         meta: { headerLabel: 'Select', hideable: false, exportable: false },
@@ -1518,25 +1518,25 @@ export default function OrdersWorkspace() {
         return (
           <span className="flex min-w-0 flex-col gap-0.5">
             <span className="flex items-center gap-1.5">
-              <span className="font-mono text-[13.5px] font-bold tabular-nums text-[#1f150c]">#{o.orderNo}</span>
+              <span className="font-mono text-[13.5px] font-bold tabular-nums text-[var(--e-1f150c)]">#{o.orderNo}</span>
               {sourceChips(row.original)}
               {originalNo ? (
                 <button
                   type="button"
                   onClick={(e) => { e.stopPropagation(); navigate(`/orders?orderNo=${originalNo}`) }}
                   title={`Return of outbound order #${originalNo} — click to open it`}
-                  className="inline-flex items-center rounded border border-[#e3d9c4] bg-[#faf7f0] px-1.5 py-[1px] font-mono text-[10.5px] font-semibold text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#f3eddc]"
+                  className="inline-flex items-center rounded border border-[var(--e-e3d9c4)] bg-[var(--e-faf7f0)] px-1.5 py-[1px] font-mono text-[10.5px] font-semibold text-[var(--e-5a4526)] hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-f3eddc)]"
                 >
                   ↩ #{originalNo}
                 </button>
               ) : null}
             </span>
             <span
-              className="truncate font-mono text-[11.5px] text-[#6b5c42]"
+              className="truncate font-mono text-[11.5px] text-[var(--e-6b5c42)]"
               title={ref ? `${o.customerCode} · ref ${ref}` : o.customerCode}
             >
               {o.customerCode}
-              {ref ? <span className="text-[#b3a583]"> · {ref}</span> : null}
+              {ref ? <span className="text-[var(--e-b3a583)]"> · {ref}</span> : null}
             </span>
           </span>
         )
@@ -1553,7 +1553,7 @@ export default function OrdersWorkspace() {
       header: 'Client',
       size: 128,
       cell: ({ row }) => (
-        <span className="block truncate font-mono text-[12px] font-semibold text-[#5a4526]">
+        <span className="block truncate font-mono text-[12px] font-semibold text-[var(--e-5a4526)]">
           {row.original.orderDetails.customerCode}
         </span>
       ),
@@ -1601,10 +1601,10 @@ export default function OrdersWorkspace() {
       size: 120,
       cell: ({ row }) => (
         <span
-          className="block truncate font-mono text-[12px] text-[#5a4526]"
+          className="block truncate font-mono text-[12px] text-[var(--e-5a4526)]"
           title={row.original.orderDetails.refOrderNumber || undefined}
         >
-          {row.original.orderDetails.refOrderNumber || <span className="text-[#b3a583]">—</span>}
+          {row.original.orderDetails.refOrderNumber || <span className="text-[var(--e-b3a583)]">—</span>}
         </span>
       ),
       meta: {
@@ -1623,8 +1623,8 @@ export default function OrdersWorkspace() {
       // empty batchId.
       size: 96,
       cell: ({ row }) => (
-        <span className="block truncate font-mono text-[12px] text-[#5a4526]">
-          {row.original.orderDetails.batchId ?? <span className="text-[#b3a583]">—</span>}
+        <span className="block truncate font-mono text-[12px] text-[var(--e-5a4526)]">
+          {row.original.orderDetails.batchId ?? <span className="text-[var(--e-b3a583)]">—</span>}
         </span>
       ),
       meta: {
@@ -1651,8 +1651,8 @@ export default function OrdersWorkspace() {
         const tooltip = tooltipParts.length > 0 ? tooltipParts.join(' ') : 'No destination on file'
         return (
           <span className="flex min-w-0 flex-col gap-0.5" title={tooltip}>
-            <span className="truncate text-[13.5px] text-[#3f3527]">{s.city || s.state || '—'}</span>
-            {sub ? <span className="truncate text-[11.5px] tabular-nums text-[#6b5c42]">{sub}</span> : null}
+            <span className="truncate text-[13.5px] text-[var(--e-3f3527)]">{s.city || s.state || '—'}</span>
+            {sub ? <span className="truncate text-[11.5px] tabular-nums text-[var(--e-6b5c42)]">{sub}</span> : null}
           </span>
         )
       },
@@ -1703,7 +1703,7 @@ export default function OrdersWorkspace() {
               ) : null}
               </span>
               <span
-                className="truncate text-[11.5px] text-[#6b5c42]"
+                className="truncate text-[11.5px] text-[var(--e-6b5c42)]"
                 title={row.original.orderDetails.createdDate || 'unknown creation date'}
               >
                 {formatCreated(row.original.orderDetails.createdDate)}
@@ -1723,7 +1723,7 @@ export default function OrdersWorkspace() {
         size: 130,
         cell: ({ row }) => (
           <span
-            className="whitespace-nowrap text-[12px] text-[#6b5c42]"
+            className="whitespace-nowrap text-[12px] text-[var(--e-6b5c42)]"
             title={row.original.orderDetails.createdDate || 'unknown creation date'}
           >
             {formatCreated(row.original.orderDetails.createdDate)}
@@ -1750,7 +1750,7 @@ export default function OrdersWorkspace() {
         cell: ({ row }) => {
           const tn = row.original.labelDetails.trackingNumber
           const url = row.original.labelDetails.trackingUrl
-          if (!tn) return <span className="text-[#b3a583]">—</span>
+          if (!tn) return <span className="text-[var(--e-b3a583)]">—</span>
           const last4 = tn.length > 4 ? tn.slice(-4) : tn
           const chip = (
             <span
@@ -1770,7 +1770,7 @@ export default function OrdersWorkspace() {
             <span className="flex min-w-0 flex-col gap-0.5">
               {link}
               <span
-                className="truncate text-[11.5px] text-[#6b5c42]"
+                className="truncate text-[11.5px] text-[var(--e-6b5c42)]"
                 title={row.original.labelDetails.generatedAt || 'not generated yet'}
               >
                 {gen || '—'}
@@ -1790,7 +1790,7 @@ export default function OrdersWorkspace() {
         size: 112,
         cell: ({ row }) => (
           <span
-            className="whitespace-nowrap text-[12px] text-[#6b5c42]"
+            className="whitespace-nowrap text-[12px] text-[var(--e-6b5c42)]"
             title={row.original.labelDetails.generatedAt || 'not generated yet'}
           >
             {relativeTime(row.original.labelDetails.generatedAt) || '—'}
@@ -1846,7 +1846,7 @@ export default function OrdersWorkspace() {
         // persisted at label time, and domestic orders 422 on that endpoint.
         const isIntl = order.shippingDetails?.intlYn === 'Y'
         const ICON = 'flex h-7 w-7 items-center justify-center rounded-lg border transition'
-        const NEUTRAL = 'border-[#e6dcc7] bg-[#faf7f0] text-[#5a4526] hover:border-[#dccfb4] hover:bg-[#f2ebda]'
+        const NEUTRAL = 'border-[var(--e-e6dcc7)] bg-[var(--e-faf7f0)] text-[var(--e-5a4526)] hover:border-[var(--e-dccfb4)] hover:bg-[var(--e-f2ebda)]'
         const slot = (node: React.ReactNode) => (
           <span className="flex h-7 w-7 shrink-0 items-center justify-center">{node}</span>
         )
@@ -1995,13 +1995,13 @@ export default function OrdersWorkspace() {
                   <div className="fixed inset-0 z-[60]" onClick={() => setPrintMenuOpen(false)} />
                   <div role="menu"
                     style={{ top: printMenuAnchor.top, left: printMenuAnchor.left, width: printMenuAnchor.width }}
-                    className="fixed z-[61] overflow-hidden rounded-xl border border-[#e3d9c4] bg-white py-1 text-left shadow-[0_18px_50px_rgba(15,23,42,0.18)]">
+                    className="fixed z-[61] overflow-hidden rounded-xl border border-[var(--e-e3d9c4)] bg-white py-1 text-left shadow-[0_18px_50px_rgba(15,23,42,0.18)]">
                     {selectedCount === 0 || !printableView ? (
-                      <p className="border-b border-[#efe7d6] bg-[#faf7f0] px-3 py-2 text-[12px] leading-snug text-[#5a4526]">
+                      <p className="border-b border-[var(--e-efe7d6)] bg-[var(--e-faf7f0)] px-3 py-2 text-[12px] leading-snug text-[var(--e-5a4526)]">
                         Tick the orders to print first, in the <b>All orders</b> or <b>Archive</b> tab. Use <b>Filters → Carrier</b> to narrow to UPS, FedEx or USPS.
                       </p>
                     ) : (
-                      <p className="border-b border-[#efe7d6] px-3 py-2 text-[12px] text-slate-500">
+                      <p className="border-b border-[var(--e-efe7d6)] px-3 py-2 text-[12px] text-slate-500">
                         {selectedCount.toLocaleString()} order{selectedCount === 1 ? '' : 's'} selected
                       </p>
                     )}
@@ -2016,8 +2016,8 @@ export default function OrdersWorkspace() {
                       <button key={item.key} type="button" role="menuitem"
                         disabled={selectedCount === 0 || !printableView || busy || bulkPrinting !== null}
                         onClick={() => { setPrintMenuOpen(false); item.run() }}
-                        className="flex w-full items-start gap-2.5 px-3 py-2 text-left hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent">
-                        <span className="mt-0.5 text-[#5a4526]">{item.icon}</span>
+                        className="flex w-full items-start gap-2.5 px-3 py-2 text-left hover:bg-[var(--e-faf7f0)] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent">
+                        <span className="mt-0.5 text-[var(--e-5a4526)]">{item.icon}</span>
                         <span>
                           <span className="block text-[13px] font-semibold text-slate-900">{item.label}</span>
                           <span className="block text-[11.5px] text-slate-500">{item.hint}</span>
@@ -2027,8 +2027,8 @@ export default function OrdersWorkspace() {
                     {normalizeRole(sessionRole) === 'ADMIN' ? (
                       <button type="button" role="menuitem"
                         onClick={() => { setPrintMenuOpen(false); navigate(settingsPaths.printers) }}
-                        className="mt-1 flex w-full items-center gap-2.5 border-t border-[#efe7d6] px-3 py-2 text-left text-[13px] font-semibold text-slate-700 hover:bg-[#faf7f0]">
-                        <FiSettings className="h-3.5 w-3.5 text-[#5a4526]" />
+                        className="mt-1 flex w-full items-center gap-2.5 border-t border-[var(--e-efe7d6)] px-3 py-2 text-left text-[13px] font-semibold text-slate-700 hover:bg-[var(--e-faf7f0)]">
+                        <FiSettings className="h-3.5 w-3.5 text-[var(--e-5a4526)]" />
                         Manage printers &amp; client routing
                       </button>
                     ) : null}
@@ -2074,7 +2074,7 @@ export default function OrdersWorkspace() {
       {/* ===== workspace card ===== */}
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-wrap items-center gap-2.5">
-          <div className="mr-auto flex flex-wrap gap-0.5 rounded-xl border border-[#e3d9c4] bg-[#f4eede]/60 p-1" role="tablist">
+          <div className="mr-auto flex flex-wrap gap-0.5 rounded-xl border border-[var(--e-e3d9c4)] bg-[var(--e-f4eede)]/60 p-1" role="tablist">
             {tabs.map((t) => (
               <button
                 key={t.key}
@@ -2087,15 +2087,15 @@ export default function OrdersWorkspace() {
                 }}
                 className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13.5px] font-semibold transition ${
                   view === t.key
-                    ? 'bg-white text-[#1f150c] shadow-sm ring-1 ring-[#e3d9c4]'
-                    : 'text-[#6b5c42] hover:text-[#412d15]'
+                    ? 'bg-white text-[var(--e-1f150c)] shadow-sm ring-1 ring-[var(--e-e3d9c4)]'
+                    : 'text-[var(--e-6b5c42)] hover:text-[var(--e-412d15)]'
                 }`}
               >
                 {t.tone !== 'slate' ? <span className={`h-1.5 w-1.5 rounded-full ${dotTone[t.tone]}`} /> : null}
                 {t.label}
                 <span
                   className={`font-mono text-[11px] font-semibold tabular-nums ${
-                    view === t.key ? 'text-[#6b5c42]' : 'text-[#b6a684]'
+                    view === t.key ? 'text-[var(--e-6b5c42)]' : 'text-[var(--e-b6a684)]'
                   }`}
                 >
                   {t.count}
@@ -2111,7 +2111,7 @@ export default function OrdersWorkspace() {
               <button
                 type="button"
                 onClick={() => pageAllSelected ? clearSelection() : selectPage()}
-                className="rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+                className="rounded-xl border border-[var(--e-e3d9c4)] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[var(--e-5a4526)] transition hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-faf7f0)]"
               >
                 {pageAllSelected ? 'Deselect page' : `Select this page (${selectableVisible.length})`}
               </button>
@@ -2122,7 +2122,7 @@ export default function OrdersWorkspace() {
                 type="button"
                 onClick={() => void invertSelection()}
                 title="Flip the current selection within the current filter"
-                className="rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+                className="rounded-xl border border-[var(--e-e3d9c4)] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[var(--e-5a4526)] transition hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-faf7f0)]"
               >
                 Invert
               </button>
@@ -2205,7 +2205,7 @@ export default function OrdersWorkspace() {
                 <select
                   value={clientFilter}
                   onChange={(e) => setClientFilter(e.target.value)}
-                  className="rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] outline-none transition focus:border-[#cdbf9f]"
+                  className="rounded-xl border border-[var(--e-e3d9c4)] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[var(--e-5a4526)] outline-none transition focus:border-[var(--e-cdbf9f)]"
                   aria-label="Filter by client"
                 >
                   <option value="">All clients</option>
@@ -2216,25 +2216,25 @@ export default function OrdersWorkspace() {
                   ))}
                 </select>
 
-                <label className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[#6b5c42]">
+                <label className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--e-e3d9c4)] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[var(--e-6b5c42)]">
                   From
                   <input
                     type="date"
                     value={dateFrom}
                     max={dateTo || undefined}
                     onChange={(e) => setDateFrom(e.target.value)}
-                    className="bg-transparent text-[12px] font-medium text-[#1f150c] outline-none"
+                    className="bg-transparent text-[12px] font-medium text-[var(--e-1f150c)] outline-none"
                     aria-label="Created from date"
                   />
                 </label>
-                <label className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[#6b5c42]">
+                <label className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--e-e3d9c4)] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[var(--e-6b5c42)]">
                   To
                   <input
                     type="date"
                     value={dateTo}
                     min={dateFrom || undefined}
                     onChange={(e) => setDateTo(e.target.value)}
-                    className="bg-transparent text-[12px] font-medium text-[#1f150c] outline-none"
+                    className="bg-transparent text-[12px] font-medium text-[var(--e-1f150c)] outline-none"
                     aria-label="Created to date"
                   />
                 </label>
@@ -2246,8 +2246,8 @@ export default function OrdersWorkspace() {
                   aria-expanded={showFilters}
                   className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-[12px] font-semibold transition ${
                     showFilters || activeFilterCount
-                      ? 'bg-[#1f150c] text-[#f4eede] shadow-sm'
-                      : 'border border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
+                      ? 'bg-[var(--e-1f150c)] text-[var(--e-f4eede)] shadow-sm'
+                      : 'border border-[var(--e-e3d9c4)] bg-white text-[var(--e-5a4526)] hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-faf7f0)]'
                   }`}
                 >
                   <FiFilter className="h-3.5 w-3.5" />
@@ -2263,7 +2263,7 @@ export default function OrdersWorkspace() {
                   <button
                     type="button"
                     onClick={clearColumnFilters}
-                    className="rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+                    className="rounded-xl border border-[var(--e-e3d9c4)] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[var(--e-5a4526)] transition hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-faf7f0)]"
                   >
                     Clear
                   </button>
@@ -2297,17 +2297,17 @@ export default function OrdersWorkspace() {
                   <div
                     role="dialog"
                     aria-label="Advanced filters"
-                    className="absolute right-0 top-full z-30 mt-1.5 w-64 rounded-2xl border border-[#e3d9c4] bg-[#faf7f0] p-3.5 shadow-[0_20px_60px_rgba(31,21,12,0.18)]"
+                    className="absolute right-0 top-full z-30 mt-1.5 w-64 rounded-2xl border border-[var(--e-e3d9c4)] bg-[var(--e-faf7f0)] p-3.5 shadow-[0_20px_60px_rgba(31,21,12,0.18)]"
                   >
                     <div className="mb-2.5 flex items-center justify-between">
-                      <span className="inline-flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-[#b6a684]">
+                      <span className="inline-flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-[var(--e-b6a684)]">
                         <FiSliders className="h-3 w-3" /> Advanced filters
                       </span>
                       <button
                         type="button"
                         onClick={clearColumnFilters}
                         disabled={!activeFilterCount}
-                        className="inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#6b5c42] transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[#e3d9c4] disabled:hover:bg-white disabled:hover:text-[#6b5c42]"
+                        className="inline-flex items-center gap-1 rounded-lg border border-[var(--e-e3d9c4)] bg-white px-2.5 py-1 text-[11px] font-semibold text-[var(--e-6b5c42)] transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[var(--e-e3d9c4)] disabled:hover:bg-white disabled:hover:text-[var(--e-6b5c42)]"
                       >
                         <FiX className="h-3.5 w-3.5" /> Clear all
                       </button>
@@ -2513,11 +2513,11 @@ export default function OrdersWorkspace() {
                       )}
                     </div>
 
-                    <div className="mt-3 flex items-center justify-end gap-2 border-t border-dashed border-[#e3d9c4] pt-2.5">
+                    <div className="mt-3 flex items-center justify-end gap-2 border-t border-dashed border-[var(--e-e3d9c4)] pt-2.5">
                       <button
                         type="button"
                         onClick={() => setShowFilters(false)}
-                        className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[11.5px] font-semibold text-[#f4eede] transition hover:bg-[#412d15]"
+                        className="inline-flex items-center gap-1 rounded-xl bg-[var(--e-1f150c)] px-3 py-1.5 text-[11.5px] font-semibold text-[var(--e-f4eede)] transition hover:bg-[var(--e-412d15)]"
                       >
                         Done
                       </button>
@@ -2528,8 +2528,8 @@ export default function OrdersWorkspace() {
             }
             csvFilename="orders"
             caption={
-              <div className="flex items-center justify-between border-b border-dashed border-[#e3d9c4] pb-1.5">
-                <span className="font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-[#b6a684]">
+              <div className="flex items-center justify-between border-b border-dashed border-[var(--e-e3d9c4)] pb-1.5">
+                <span className="font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-[var(--e-b6a684)]">
                   Order manifest — {rows.length} {rows.length === 1 ? 'line' : 'lines'}
                 </span>
               </div>
@@ -2635,10 +2635,10 @@ export default function OrdersWorkspace() {
                       onClick={() => void printSelected('LABEL')}
                       disabled={busy || bulkPrinting !== null}
                       title="Print the labels of every selected order in one job (orders without a label are skipped)"
-                      className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:opacity-50"
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--e-e3d9c4)] bg-white px-3 py-2 text-[13.5px] font-semibold text-[var(--e-5a4526)] transition hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-faf7f0)] disabled:opacity-50"
                     >
                       {bulkPrinting === 'LABEL'
-                        ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#5a4526]" />
+                        ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[var(--e-cdbf9f)] border-t-[var(--e-5a4526)]" />
                         : <FiPrinter className="h-3.5 w-3.5" />}
                       Print labels
                     </button>
@@ -2647,10 +2647,10 @@ export default function OrdersWorkspace() {
                       onClick={() => void printSelected('COMMERCIAL_INVOICE')}
                       disabled={busy || bulkPrinting !== null}
                       title="Print the commercial invoices of every selected international order in one job"
-                      className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:opacity-50"
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--e-e3d9c4)] bg-white px-3 py-2 text-[13.5px] font-semibold text-[var(--e-5a4526)] transition hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-faf7f0)] disabled:opacity-50"
                     >
                       {bulkPrinting === 'COMMERCIAL_INVOICE'
-                        ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#5a4526]" />
+                        ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[var(--e-cdbf9f)] border-t-[var(--e-5a4526)]" />
                         : <FiFileText className="h-3.5 w-3.5" />}
                       Print invoices
                     </button>
@@ -2659,7 +2659,7 @@ export default function OrdersWorkspace() {
                       onClick={() => setSendToPrinterOpen(true)}
                       disabled={busy}
                       title="Send the selected orders' labels or invoices straight to your network printers — each client's assigned printer, or one you pick"
-                      className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:opacity-50"
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--e-e3d9c4)] bg-white px-3 py-2 text-[13.5px] font-semibold text-[var(--e-5a4526)] transition hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-faf7f0)] disabled:opacity-50"
                     >
                       <FiSend className="h-3.5 w-3.5" />
                       Send to printer
@@ -2668,7 +2668,7 @@ export default function OrdersWorkspace() {
                       type="button"
                       onClick={() => void copySelectedOrderNos()}
                       title="Copy the selected order numbers to the clipboard, one per line"
-                      className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--e-e3d9c4)] bg-white px-3 py-2 text-[13.5px] font-semibold text-[var(--e-5a4526)] transition hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-faf7f0)]"
                     >
                       <FiCopy className="h-3.5 w-3.5" />
                       Copy order #s
@@ -2679,7 +2679,7 @@ export default function OrdersWorkspace() {
                   type="button"
                   onClick={clearSelection}
                   aria-label="Clear selection"
-                  className="rounded-xl border border-[#e3d9c4] bg-white p-2 text-[#6b5c42] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+                  className="rounded-xl border border-[var(--e-e3d9c4)] bg-white p-2 text-[var(--e-6b5c42)] transition hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-faf7f0)]"
                 >
                   <FiX className="h-3.5 w-3.5" />
                 </button>
@@ -2732,7 +2732,7 @@ export default function OrdersWorkspace() {
             role="dialog"
             aria-modal="true"
             aria-label={`Void order ${confirmVoid.orderNo}`}
-            className="fixed inset-0 z-50 flex items-center justify-center bg-[#1f150c]/45 p-4 backdrop-blur-[1px]"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--e-1f150c)]/45 p-4 backdrop-blur-[1px]"
             onClick={() => setConfirmVoid(null)}
           >
             <div
@@ -2745,7 +2745,7 @@ export default function OrdersWorkspace() {
                 </span>
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-rose-500">Void label</p>
-                  <h3 className="text-[15px] font-semibold text-[#1f150c]">
+                  <h3 className="text-[15px] font-semibold text-[var(--e-1f150c)]">
                     Void order #{confirmVoid.orderNo}?
                   </h3>
                   <p className="mt-0.5 font-mono text-[11px] text-rose-700">{confirmVoid.trackingNumber}</p>
@@ -2756,7 +2756,7 @@ export default function OrdersWorkspace() {
                   ) : null}
                 </div>
               </div>
-              <div className="space-y-2 px-5 py-4 text-[13.5px] leading-relaxed text-[#5a4526]">
+              <div className="space-y-2 px-5 py-4 text-[13.5px] leading-relaxed text-[var(--e-5a4526)]">
                 <p>
                   This cancels the label at the carrier — <span className="font-semibold">it cannot be undone</span>.
                   The tracking number dies and the label must not be used on a parcel.
@@ -2766,11 +2766,11 @@ export default function OrdersWorkspace() {
                   post-scan voids succeed but no refund is issued.
                 </p>
               </div>
-              <div className="flex items-center justify-end gap-2 border-t border-[#eee6d6] bg-[#faf7f0] px-5 py-3">
+              <div className="flex items-center justify-end gap-2 border-t border-[var(--e-eee6d6)] bg-[var(--e-faf7f0)] px-5 py-3">
                 <button
                   type="button"
                   onClick={() => setConfirmVoid(null)}
-                  className="rounded-xl border border-[#e3d9c4] bg-white px-3.5 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
+                  className="rounded-xl border border-[var(--e-e3d9c4)] bg-white px-3.5 py-2 text-[13.5px] font-semibold text-[var(--e-5a4526)] transition hover:bg-[var(--e-faf7f0)]"
                 >
                   Keep the label
                 </button>

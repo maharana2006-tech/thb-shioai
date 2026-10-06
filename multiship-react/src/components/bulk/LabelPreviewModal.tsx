@@ -51,26 +51,26 @@ export default function LabelPreviewModal({ orderNo, onClose }: { orderNo: numbe
       onClick={onClose}
     >
       <div className="relative w-full max-w-4xl rounded-lg bg-white shadow-lg" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between border-b border-[#e3d9c4] px-6 py-4">
-          <h2 className="text-lg font-semibold text-[#1f150c]">Order #{orderNo} - Label Preview</h2>
-          <button type="button" onClick={onClose} className="rounded-full p-1 text-[#6b5c42] hover:bg-[#f2ecdf]" title="Close" aria-label="Close">
+        <div className="flex items-center justify-between border-b border-[var(--e-e3d9c4)] px-6 py-4">
+          <h2 className="text-lg font-semibold text-[var(--e-1f150c)]">Order #{orderNo} - Label Preview</h2>
+          <button type="button" onClick={onClose} className="rounded-full p-1 text-[var(--e-6b5c42)] hover:bg-[var(--e-f2ecdf)]" title="Close" aria-label="Close">
             <FiX className="h-5 w-5" />
           </button>
         </div>
 
-        <div className="h-[70vh] overflow-auto bg-[#f9f6f0]">
+        <div className="h-[70vh] overflow-auto bg-[var(--e-f9f6f0)]">
           {src ? (
             <iframe src={src} className="h-full w-full border-0" title={`Label for order ${orderNo}`} />
           ) : (
-            <p className="py-16 text-center text-sm text-[#6b5c42]">{error ?? 'Loading the label…'}</p>
+            <p className="py-16 text-center text-sm text-[var(--e-6b5c42)]">{error ?? 'Loading the label…'}</p>
           )}
         </div>
 
-        <div className="flex items-center justify-end gap-2 border-t border-[#e3d9c4] px-6 py-3">
+        <div className="flex items-center justify-end gap-2 border-t border-[var(--e-e3d9c4)] px-6 py-3">
           <button
             type="button"
             onClick={() => window.open(`/api/v1/orders/${orderNo}/label/pdf`, '_blank')}
-            className="inline-flex items-center gap-1 rounded-lg px-3 py-2 text-[12px] font-semibold text-[#1f150c] hover:bg-[#f2ecdf]"
+            className="inline-flex items-center gap-1 rounded-lg px-3 py-2 text-[12px] font-semibold text-[var(--e-1f150c)] hover:bg-[var(--e-f2ecdf)]"
           >
             📥 Download
           </button>
@@ -78,14 +78,14 @@ export default function LabelPreviewModal({ orderNo, onClose }: { orderNo: numbe
             type="button"
             disabled={!blob}
             onClick={() => { if (blob) printPdfBlob(blob) }}
-            className="inline-flex items-center gap-1 rounded-lg px-3 py-2 text-[12px] font-semibold text-[#1f150c] hover:bg-[#f2ecdf] disabled:opacity-40"
+            className="inline-flex items-center gap-1 rounded-lg px-3 py-2 text-[12px] font-semibold text-[var(--e-1f150c)] hover:bg-[var(--e-f2ecdf)] disabled:opacity-40"
           >
             🖨️ Print
           </button>
           <button
             type="button"
             onClick={onClose}
-            className="inline-flex items-center gap-1 rounded-lg bg-[#1f150c] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#412d15]"
+            className="inline-flex items-center gap-1 rounded-lg bg-[var(--e-1f150c)] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[var(--e-412d15)]"
           >
             Close
           </button>

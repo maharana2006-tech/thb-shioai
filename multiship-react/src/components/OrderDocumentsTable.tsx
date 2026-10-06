@@ -52,7 +52,7 @@ const money = (v: number | null | undefined, ccy?: string | null) =>
   v == null ? '—' : `${Number(v).toFixed(2)}${ccy ? ` ${ccy}` : ''}`
 
 const DOC_BTN =
-  'inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[10.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40'
+  'inline-flex items-center gap-1 rounded-lg border border-[var(--e-e3d9c4)] bg-white px-2 py-1 text-[10.5px] font-semibold text-[var(--e-5a4526)] transition hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-faf7f0)] disabled:cursor-not-allowed disabled:opacity-40'
 
 export default function OrderDocumentsTable() {
   const [rows, setRows] = useState<OrderDocumentRow[]>([])
@@ -146,11 +146,11 @@ export default function OrderDocumentsTable() {
         const r = row.original
         return (
           <span className="flex flex-wrap items-center gap-1.5">
-            <Link to={`/label/${r.orderNo}`} className="font-mono text-[12px] font-bold text-[#412d15] underline-offset-2 hover:underline">
+            <Link to={`/label/${r.orderNo}`} className="font-mono text-[12px] font-bold text-[var(--e-412d15)] underline-offset-2 hover:underline">
               #{r.orderNo}
             </Link>
             {r.packageCount && r.packageCount > 1 ? (
-              <span className="text-[10px] text-[#b6a684]">×{r.packageCount} pkg</span>
+              <span className="text-[10px] text-[var(--e-b6a684)]">×{r.packageCount} pkg</span>
             ) : null}
             {r.voided ? (
               <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-600">Voided</span>
@@ -166,9 +166,9 @@ export default function OrderDocumentsTable() {
       size: 170,
       cell: ({ row }) => (
         <span className="flex flex-col">
-          <span className="font-semibold text-[#1f150c]">{row.original.recipientName ?? '—'}</span>
+          <span className="font-semibold text-[var(--e-1f150c)]">{row.original.recipientName ?? '—'}</span>
           {row.original.customerReferenceId ? (
-            <span className="font-mono text-[10.5px] text-[#8a7a5a]">{row.original.customerReferenceId}</span>
+            <span className="font-mono text-[10.5px] text-[var(--e-8a7a5a)]">{row.original.customerReferenceId}</span>
           ) : null}
         </span>
       ),
@@ -179,7 +179,7 @@ export default function OrderDocumentsTable() {
       header: 'Destination',
       size: 130,
       cell: ({ row }) => (
-        <span className="text-[#5a4526]">{row.original.city ?? '—'}{row.original.countryCode ? ` · ${row.original.countryCode}` : ''}</span>
+        <span className="text-[var(--e-5a4526)]">{row.original.city ?? '—'}{row.original.countryCode ? ` · ${row.original.countryCode}` : ''}</span>
       ),
       meta: { exportValue: (r: OrderDocumentRow) => [r.city, r.countryCode].filter(Boolean).join(' · ') },
     },
@@ -189,10 +189,10 @@ export default function OrderDocumentsTable() {
       size: 200,
       cell: ({ row }) => (
         <span className="flex flex-col">
-          <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-[#1f150c]">
-            <FiTruck className="h-3 w-3 text-[#b6a684]" aria-hidden="true" />{row.original.carrier ?? '—'}
+          <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-[var(--e-1f150c)]">
+            <FiTruck className="h-3 w-3 text-[var(--e-b6a684)]" aria-hidden="true" />{row.original.carrier ?? '—'}
           </span>
-          <span className="font-mono text-[10.5px] text-[#5a4526]">{row.original.trackingNumber ?? '—'}</span>
+          <span className="font-mono text-[10.5px] text-[var(--e-5a4526)]">{row.original.trackingNumber ?? '—'}</span>
         </span>
       ),
       meta: { exportValue: (r: OrderDocumentRow) => `${r.carrier ?? ''} ${r.trackingNumber ?? ''}`.trim() },
@@ -205,10 +205,10 @@ export default function OrderDocumentsTable() {
         const d = row.original.generatedAt ? new Date(row.original.generatedAt) : null
         return d && !Number.isNaN(d.getTime()) ? (
           <span className="flex flex-col tabular-nums">
-            <span className="text-[#1f150c]">{d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}</span>
-            <span className="text-[10.5px] text-[#8a7a5a]">{d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}</span>
+            <span className="text-[var(--e-1f150c)]">{d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+            <span className="text-[10.5px] text-[var(--e-8a7a5a)]">{d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}</span>
           </span>
-        ) : <span className="text-[#b6a684]">—</span>
+        ) : <span className="text-[var(--e-b6a684)]">—</span>
       },
       meta: { exportValue: (r: OrderDocumentRow) => r.generatedAt ?? '' },
     },
@@ -221,7 +221,7 @@ export default function OrderDocumentsTable() {
           {row.original.voided ? (
             <span title="Label voided — charge reversed" className="text-slate-400"><s>{money(row.original.billableAmount, row.original.markupCurrency)}</s></span>
           ) : (
-            <span className="font-semibold text-[#1f150c]">{money(row.original.billableAmount, row.original.markupCurrency)}</span>
+            <span className="font-semibold text-[var(--e-1f150c)]">{money(row.original.billableAmount, row.original.markupCurrency)}</span>
           )}
         </span>
       ),
@@ -239,11 +239,11 @@ export default function OrderDocumentsTable() {
           <span className="flex items-center gap-1 whitespace-nowrap">
             <button type="button" onClick={() => void download(`label-${r.orderNo}`, () => orderService.getLabelPdf(r.orderNo), `label-${r.orderNo}.pdf`, 'Label PDF download failed.')}
               disabled={busyKey === `label-${r.orderNo}`} className={DOC_BTN} title="Download the 4x6 shipping label as PDF">
-              {busyKey === `label-${r.orderNo}` ? spin : <FiDownload className="h-3 w-3 text-[#412d15]" />} Label
+              {busyKey === `label-${r.orderNo}` ? spin : <FiDownload className="h-3 w-3 text-[var(--e-412d15)]" />} Label
             </button>
             <button type="button" onClick={() => void download(`zpl-${r.orderNo}`, async () => new Blob([await orderService.getLabelZpl(r.orderNo)], { type: 'text/plain' }), `label-${r.orderNo}.zpl`, 'ZPL download failed.')}
               disabled={busyKey === `zpl-${r.orderNo}`} className={DOC_BTN} title="Raw ZPL for thermal printers">
-              {busyKey === `zpl-${r.orderNo}` ? spin : <FiDownload className="h-3 w-3 text-[#412d15]" />} ZPL
+              {busyKey === `zpl-${r.orderNo}` ? spin : <FiDownload className="h-3 w-3 text-[var(--e-412d15)]" />} ZPL
             </button>
             {r.hasInvoice ? (
               <button type="button" onClick={() => void download(`inv-${r.orderNo}`, () => orderService.getCommercialInvoicePdf(r.orderNo), `commercial-invoice-${r.orderNo}.pdf`, 'Commercial invoice download failed.')}
@@ -251,7 +251,7 @@ export default function OrderDocumentsTable() {
                 {busyKey === `inv-${r.orderNo}` ? spin : <FiDownload className="h-3 w-3 text-sky-700" />} Invoice
               </button>
             ) : (
-              <span className="whitespace-nowrap px-1 text-[10px] text-[#cdbf9f]" title="Domestic shipment — no customs invoice">no invoice</span>
+              <span className="whitespace-nowrap px-1 text-[10px] text-[var(--e-cdbf9f)]" title="Domestic shipment — no customs invoice">no invoice</span>
             )}
             <button type="button" onClick={() => setStatementRow(r)} className={DOC_BTN} title="Billing statement — carrier cost, markup, billable amount">
               <FiFileText className="h-3 w-3 text-emerald-700" /> Statement
@@ -296,7 +296,7 @@ export default function OrderDocumentsTable() {
             onClick={() => void load(true)}
             aria-label="Refresh"
             title="Refresh the documents"
-            className="inline-flex h-[30px] w-[30px] items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+            className="inline-flex h-[30px] w-[30px] items-center justify-center rounded-lg border border-[var(--e-e3d9c4)] bg-white text-[var(--e-5a4526)] transition hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-faf7f0)]"
           >
             <FiRefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
           </button>
@@ -314,7 +314,7 @@ export default function OrderDocumentsTable() {
         caption={`${pageInfo.total} labelled order${pageInfo.total === 1 ? '' : 's'} · tracking, label, invoice & statement for each`}
         emptyState={
           <div className="px-5 py-10 text-center">
-            <p className="text-sm text-[#6b5c42]">
+            <p className="text-sm text-[var(--e-6b5c42)]">
               {!loaded ? 'Loading documents…'
                 : activeCount > 0 || debouncedSearch ? 'No documents match your filters.'
                   : 'No labels generated yet — generate one and its documents appear here.'}
@@ -323,7 +323,7 @@ export default function OrderDocumentsTable() {
               <button
                 type="button"
                 onClick={() => { clearFilters(); setSearch('') }}
-                className="mt-3 inline-flex items-center gap-1 rounded-xl border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
+                className="mt-3 inline-flex items-center gap-1 rounded-xl border border-[var(--e-e3d9c4)] bg-white px-3 py-1.5 text-[12px] font-semibold text-[var(--e-5a4526)] transition hover:bg-[var(--e-faf7f0)]"
               >
                 <FiX className="h-3.5 w-3.5" /> Clear filters
               </button>
@@ -338,23 +338,23 @@ export default function OrderDocumentsTable() {
           role="dialog"
           aria-modal="true"
           aria-label={`Billing statement for order ${statementRow.orderNo}`}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-[#1f150c]/45 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--e-1f150c)]/45 p-4"
           onClick={() => setStatementRow(null)}
         >
           <div
-            className="w-full max-w-[420px] overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-2xl"
+            className="w-full max-w-[420px] overflow-hidden rounded-2xl border border-[var(--e-e3d9c4)] bg-white shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-start justify-between border-b border-[#eee6d6] bg-[#faf7f0] px-5 py-3.5">
+            <div className="flex items-start justify-between border-b border-[var(--e-eee6d6)] bg-[var(--e-faf7f0)] px-5 py-3.5">
               <div>
-                <p className="text-[9.5px] font-bold uppercase tracking-[0.18em] text-[#b6a684]">Billing statement</p>
-                <p className="text-[14px] font-semibold text-[#1f150c]">Order #{statementRow.orderNo}</p>
+                <p className="text-[9.5px] font-bold uppercase tracking-[0.18em] text-[var(--e-b6a684)]">Billing statement</p>
+                <p className="text-[14px] font-semibold text-[var(--e-1f150c)]">Order #{statementRow.orderNo}</p>
               </div>
               <button
                 type="button"
                 onClick={() => setStatementRow(null)}
                 aria-label="Close"
-                className="rounded-lg border border-[#e3d9c4] bg-white p-1.5 text-[#6b5c42] transition hover:bg-[#faf7f0]"
+                className="rounded-lg border border-[var(--e-e3d9c4)] bg-white p-1.5 text-[var(--e-6b5c42)] transition hover:bg-[var(--e-faf7f0)]"
               >
                 <FiX className="h-3.5 w-3.5" />
               </button>
@@ -368,17 +368,17 @@ export default function OrderDocumentsTable() {
                 ['Generated', statementRow.generatedAt ? new Date(statementRow.generatedAt).toLocaleString() : '—'],
               ].map(([k, v]) => (
                 <div key={k} className="flex items-baseline justify-between gap-3">
-                  <span className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-[#b6a684]">{k}</span>
-                  <span className="text-right font-medium text-[#1f150c]">{v}</span>
+                  <span className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-[var(--e-b6a684)]">{k}</span>
+                  <span className="text-right font-medium text-[var(--e-1f150c)]">{v}</span>
                 </div>
               ))}
-              <div className="my-1 border-t border-dashed border-[#e3d9c4]" />
+              <div className="my-1 border-t border-dashed border-[var(--e-e3d9c4)]" />
               <div className="flex items-baseline justify-between gap-3">
-                <span className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-[#b6a684]">Carrier cost</span>
+                <span className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-[var(--e-b6a684)]">Carrier cost</span>
                 <span className="text-right tabular-nums">{money(statementRow.carrierAmount, statementRow.markupCurrency)}</span>
               </div>
               <div className="flex items-baseline justify-between gap-3">
-                <span className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-[#b6a684]">
+                <span className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-[var(--e-b6a684)]">
                   Markup{statementRow.markupKind ? ` (${statementRow.markupKind.toLowerCase()}${statementRow.markupValue != null ? ` ${statementRow.markupValue}` : ''})` : ''}
                 </span>
                 <span className="text-right tabular-nums">
@@ -387,9 +387,9 @@ export default function OrderDocumentsTable() {
                     : '—'}
                 </span>
               </div>
-              <div className="flex items-baseline justify-between gap-3 rounded-xl bg-[#faf7f0] px-3 py-2">
-                <span className="text-[10.5px] font-bold uppercase tracking-[0.06em] text-[#5a4526]">Billable total</span>
-                <span className="text-right text-[14px] font-bold tabular-nums text-[#1f150c]">
+              <div className="flex items-baseline justify-between gap-3 rounded-xl bg-[var(--e-faf7f0)] px-3 py-2">
+                <span className="text-[10.5px] font-bold uppercase tracking-[0.06em] text-[var(--e-5a4526)]">Billable total</span>
+                <span className="text-right text-[14px] font-bold tabular-nums text-[var(--e-1f150c)]">
                   {money(statementRow.billableAmount, statementRow.markupCurrency)}
                 </span>
               </div>
@@ -446,10 +446,10 @@ function DocumentsFilterMenu({
                     return (
                       <li key={k}>
                         <button type="button" onClick={() => setFilters((f) => ({ ...f, status: k }))} aria-pressed={on} className={`${OPTION} ${on ? OPTION_ON : ''}`}>
-                          <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${k === 'VOIDED' ? 'bg-slate-400' : k === 'LIVE' ? 'bg-emerald-500' : 'bg-[#1f150c]'}`} aria-hidden="true" />
+                          <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${k === 'VOIDED' ? 'bg-slate-400' : k === 'LIVE' ? 'bg-emerald-500' : 'bg-[var(--e-1f150c)]'}`} aria-hidden="true" />
                           <span className="min-w-0 flex-1">
                             <span className="block text-[12.5px] font-semibold leading-tight">{label}</span>
-                            <span className="block text-[10.5px] leading-tight text-[#a1906d]">{hint}</span>
+                            <span className="block text-[10.5px] leading-tight text-[var(--e-a1906d)]">{hint}</span>
                           </span>
                           <CountBadge n={n} />
                           {on ? <Check /> : null}
@@ -473,7 +473,7 @@ function DocumentsFilterMenu({
                     return (
                       <li key={c.carrier}>
                         <button type="button" onClick={() => setFilters((f) => ({ ...f, carrier: c.carrier }))} aria-pressed={on} className={`${OPTION} ${on ? OPTION_ON : ''}`}>
-                          <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[#f4eede] text-[#6b5c42]" aria-hidden="true"><FiTruck className="h-3 w-3" /></span>
+                          <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[var(--e-f4eede)] text-[var(--e-6b5c42)]" aria-hidden="true"><FiTruck className="h-3 w-3" /></span>
                           <span className="text-[12.5px] font-semibold">{c.carrier}</span>
                           <CountBadge n={c.count} />
                           {on ? <Check /> : null}
@@ -481,7 +481,7 @@ function DocumentsFilterMenu({
                       </li>
                     )
                   })}
-                  {facets && facets.carriers.length === 0 ? <li className="px-2.5 py-2 text-[12px] text-[#a1906d]">No labelled orders yet.</li> : null}
+                  {facets && facets.carriers.length === 0 ? <li className="px-2.5 py-2 text-[12px] text-[var(--e-a1906d)]">No labelled orders yet.</li> : null}
                 </ul>
               ) : null}
               {field === 'invoice' ? (
@@ -495,10 +495,10 @@ function DocumentsFilterMenu({
                     return (
                       <li key={k}>
                         <button type="button" onClick={() => setFilters((f) => ({ ...f, invoice: k }))} aria-pressed={on} className={`${OPTION} ${on ? OPTION_ON : ''}`}>
-                          <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[#f4eede] text-[#6b5c42]" aria-hidden="true"><FiFileText className="h-3 w-3" /></span>
+                          <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[var(--e-f4eede)] text-[var(--e-6b5c42)]" aria-hidden="true"><FiFileText className="h-3 w-3" /></span>
                           <span className="min-w-0 flex-1">
                             <span className="block text-[12.5px] font-semibold leading-tight">{label}</span>
-                            <span className="block text-[10.5px] leading-tight text-[#a1906d]">{hint}</span>
+                            <span className="block text-[10.5px] leading-tight text-[var(--e-a1906d)]">{hint}</span>
                           </span>
                           <CountBadge n={n} />
                           {on ? <Check /> : null}

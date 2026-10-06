@@ -37,7 +37,7 @@ function CheckVisual({ state, disabled }: { state: CheckState; disabled?: boolea
   return (
     <span
       className={`grid h-4 w-4 shrink-0 place-items-center rounded-[5px] border transition ${
-        state === 'unchecked' ? 'border-slate-300 bg-white' : 'border-[#412d15] bg-[#1f150c] text-[#f4eede]'
+        state === 'unchecked' ? 'border-slate-300 bg-white' : 'border-[var(--e-412d15)] bg-[var(--e-1f150c)] text-[var(--e-f4eede)]'
       } ${disabled ? 'opacity-40' : ''}`}
     >
       {state === 'checked' ? (
@@ -45,7 +45,7 @@ function CheckVisual({ state, disabled }: { state: CheckState; disabled?: boolea
           <path d="M2.5 6.5l2.5 2.5 4.5-5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       ) : state === 'indeterminate' ? (
-        <span className="h-[2px] w-2 rounded-full bg-[#f4eede]" />
+        <span className="h-[2px] w-2 rounded-full bg-[var(--e-f4eede)]" />
       ) : null}
     </span>
   )
@@ -144,10 +144,10 @@ export default function RegionCountryPicker({
                 title={locked ? 'Clear the selection to switch region' : r}
                 className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11.5px] font-semibold transition ${
                   active
-                    ? 'bg-[#1f150c] text-[#f4eede] shadow-sm'
+                    ? 'bg-[var(--e-1f150c)] text-[var(--e-f4eede)] shadow-sm'
                     : locked
                       ? 'cursor-not-allowed border border-slate-200 bg-white text-slate-300'
-                      : 'border border-slate-200 bg-white text-slate-600 hover:border-[#412d15]/40 hover:text-[#412d15]'
+                      : 'border border-slate-200 bg-white text-slate-600 hover:border-[var(--e-412d15)]/40 hover:text-[var(--e-412d15)]'
                 }`}
               >
                 {hasSelection ? <FiCheck className="h-3 w-3" /> : null}
@@ -173,8 +173,8 @@ export default function RegionCountryPicker({
                 ? 'Browse a region, then pick a country — the first pick sets the customs territory.'
                 : 'Browse a region and tick its countries. A profile covers one region.'
               : activeTerritory
-                ? <>Locked to <span className="font-semibold text-[#412d15]">{territoryLabel(activeTerritory)}</span> — one importer registration covers one customs territory. Use Clear to start over.</>
-                : <>Selecting in <span className="font-semibold text-[#412d15]">{selectionRegion}</span> — use Clear to switch region.</>}
+                ? <>Locked to <span className="font-semibold text-[var(--e-412d15)]">{territoryLabel(activeTerritory)}</span> — one importer registration covers one customs territory. Use Clear to start over.</>
+                : <>Selecting in <span className="font-semibold text-[var(--e-412d15)]">{selectionRegion}</span> — use Clear to switch region.</>}
         </p>
       </div>
 
