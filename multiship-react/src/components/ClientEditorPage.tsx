@@ -179,6 +179,9 @@ export default function ClientEditorPage() {
    *  save: the form at save time (so a post-save navigation doesn't
    *  false-fire the prompt). isDirty = snapshot !== JSON.stringify(form). */
   const initialFormJsonRef = useRef<string>(JSON.stringify(form))
+  // Set once Create succeeds so the persist effect can't re-seed the draft from
+  // the (not-yet-reset) form state between submit and the edit-mode redirect.
+  const submittedRef = useRef(false)
 
   /** Audit 2.3 (#283) — persistent warehouse-attach error. Set when the
    *  best-effort attach after a client save fails; cleared on a
@@ -504,14 +507,16 @@ export default function ClientEditorPage() {
   // on every relevant change so a browser close mid-wizard restores exactly
   // where the operator left off. Cleared on successful create.
   useEffect(() => {
-    if (isEdit) return
+    if (isEdit || submittedRef.current) return
     try {
       const snapshot: DraftShape = {
         form,
         selectedShipFromWarehouseId,
         visitedSteps: [...visitedSteps],
         activeStep,
-        carrierDrafts,
+        // Never persist carrier credentials to localStorage — Client ID /
+        // Secret stay in memory only, so a reload drops them (re-entered then).
+        carrierDrafts: carrierDrafts.map((d) => ({ ...d, clientId: '', clientSecret: '' })),
         mappingDrafts,
         importerBrokerDraft,
       }
@@ -1054,7 +1059,9 @@ export default function ClientEditorPage() {
       setMappingDrafts([])
       setImporterBrokerDraft(emptyImporterBrokerDraft())
       // Clear the draft — the wizard's committed state is now the source of
-      // truth. Any subsequent /clients/new visit starts fresh.
+      // truth. Any subsequent /clients/new visit starts fresh. submittedRef
+      // stops the persist effect re-seeding it from the still-populated form.
+      submittedRef.current = true
       try { localStorage.removeItem(draftStorageKey()) } catch { /* not fatal */ }
       navigate(`/settings/clients/${encodeURIComponent(response.data.clientCode)}`, {
         replace: true,
@@ -1519,6 +1526,7 @@ export default function ClientEditorPage() {
             }
             carrierDrafts={carrierDrafts}
             mappingDrafts={mappingDrafts}
+            services={servicesCatalog}
             importerBrokerDraft={importerBrokerDraft}
             stepComplete={stepComplete}
             stepBlockers={stepBlockers}

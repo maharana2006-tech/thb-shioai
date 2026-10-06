@@ -7,6 +7,7 @@
 import type { ReactNode } from 'react'
 import { FiChevronRight } from 'react-icons/fi'
 import type { ClientUpsertPayload } from '../../api/clientService'
+import type { ShippingServiceItem } from '../../api/shippingConfigService'
 import { formatCarrierName } from '../../utils/carrierUtils'
 import type {
   CarrierAccountDraft,
@@ -21,6 +22,8 @@ export interface SummaryStepProps {
   shipFromWarehouseLabel: string | null
   carrierDrafts: CarrierAccountDraft[]
   mappingDrafts: MappingRuleDraft[]
+  /** Service catalog, to show a mapping's target by name instead of its id. */
+  services: ShippingServiceItem[]
   importerBrokerDraft: ImporterBrokerDraft
   stepComplete: (k: StepKey) => boolean
   stepBlockers: (k: StepKey) => string[]
@@ -33,6 +36,7 @@ export function SummaryStep({
   shipFromWarehouseLabel,
   carrierDrafts,
   mappingDrafts,
+  services,
   importerBrokerDraft,
   stepComplete,
   stepBlockers,
@@ -64,6 +68,7 @@ export function SummaryStep({
             {[form.shipFrom.city, form.shipFrom.state, form.shipFrom.zip].filter(Boolean).join(', ') || <em className="text-slate-400">no city / state / zip</em>}
             {form.shipFrom.country ? ` · ${form.shipFrom.country}` : ''}
           </li>
+          {form.shipFrom.phone ? <li className="text-slate-500">{form.shipFrom.phone}</li> : null}
         </>
       ) : null}
     </ul>
@@ -86,6 +91,7 @@ export function SummaryStep({
       {carrierDrafts.slice(0, 5).map((d) => (
         <li key={d.id}>
           {formatCarrierName(d.carrierCode)} · {d.accountNumber}
+          {d.environment ? <span className="ml-1 text-[10px] uppercase tracking-wide text-slate-500">{d.environment}</span> : null}
           {d.clientDefault ? <span className="ml-1 text-[10px] font-semibold text-[#412d15]">(default)</span> : null}
         </li>
       ))}
@@ -100,7 +106,8 @@ export function SummaryStep({
       {mappingDrafts.slice(0, 5).map((d) => (
         <li key={d.id}>
           <span className="rounded bg-[#1f150c] px-1.5 py-0.5 font-mono text-[10px] text-[#e1dcc9]">{d.shipviaCd}</span>
-          {' → service #'}{d.serviceId}
+          {' → '}
+          {services.find((sv) => sv.id === d.serviceId)?.name ?? `service #${d.serviceId}`}
         </li>
       ))}
       {mappingDrafts.length > 5 ? <li className="italic text-slate-500">+ {mappingDrafts.length - 5} more…</li> : null}
