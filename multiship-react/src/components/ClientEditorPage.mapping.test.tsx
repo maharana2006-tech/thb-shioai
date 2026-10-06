@@ -49,6 +49,7 @@ const catalogMock = vi.fn().mockResolvedValue({
   ruleWarehouses: [],
   originCountries: [],
 })
+const codeMapUpsertMock = vi.fn().mockResolvedValue({ data: { id: 1 } })
 const saveRuleMock = vi.fn().mockResolvedValue({ data: {} })
 vi.mock('../api/shippingConfigService', () => ({
   shippingConfigService: {
@@ -59,6 +60,14 @@ vi.mock('../api/shippingConfigService', () => ({
     setServiceEnabled: vi.fn(),
     syncServices: vi.fn(),
     deleteRule: vi.fn(),
+  },
+}))
+
+vi.mock('../api/clientCodeMapService', () => ({
+  clientCodeMapService: {
+    upsert: (...args: unknown[]) => codeMapUpsertMock(...args),
+    list: vi.fn().mockResolvedValue({ data: [] }),
+    remove: vi.fn().mockResolvedValue({ data: null }),
   },
 }))
 
@@ -584,8 +593,8 @@ describe('handleCreate — mapping drafts fan out to shippingConfigService.saveR
     // draft (identity + ship-from + return + carriers + mapping + summary
     // visited). The Submit button lives on the Summary step, but the fan-out
     // logic under test lives in handleCreate — we exercise it by calling
-    // createClient's mocked resolver and asserting the follow-up saveRule
-    // calls fire.
+    // createClient's mocked resolver and asserting the follow-up code-map
+    // upsert calls fire.
     createClientMock.mockResolvedValue({ data: { clientCode: 'NEW1' } })
     // Pre-populated valid form + one warehouse selected so readyToCreate can
     // pass. Full-form validity is a stretch to reproduce through DOM only,

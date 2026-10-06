@@ -47,6 +47,7 @@ const catalogMock = vi.fn()
 const customsListProfilesMock = vi.fn()
 const customsListMock = vi.fn()
 const getClientMock = vi.fn()
+const codeMapUpsertMock = vi.fn().mockResolvedValue({ data: { id: 1 } })
 const saveRuleMock = vi.fn()
 
 const notifyErrorMock = vi.fn().mockResolvedValue(undefined)
@@ -132,6 +133,14 @@ vi.mock('../api/shippingConfigService', () => ({
   oversizeOf: vi.fn(),
   limitsOf: vi.fn(),
   fitAgainstService: vi.fn(),
+}))
+
+vi.mock('../api/clientCodeMapService', () => ({
+  clientCodeMapService: {
+    upsert: (...args: unknown[]) => codeMapUpsertMock(...args),
+    list: vi.fn().mockResolvedValue({ data: [] }),
+    remove: vi.fn().mockResolvedValue({ data: null }),
+  },
 }))
 
 vi.mock('../api/customsProfileService', () => ({

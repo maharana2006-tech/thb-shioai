@@ -20,6 +20,7 @@ import {
 // the wizard rail; keep commented for when the step comes back.
 // import { clientAllowedPackagesService, type ClientAllowedPackage } from '../api/clientCatalogService'
 import { shippingConfigService, type ShippingServiceItem } from '../api/shippingConfigService'
+import { clientCodeMapService } from '../api/clientCodeMapService'
 import { formatCarrierName } from '../utils/carrierUtils'
 import {
   checkClientCodeAvailable,
@@ -973,14 +974,12 @@ export default function ClientEditorPage() {
       const mappingFailures: string[] = []
       for (const m of mappingDrafts) {
         try {
-          await shippingConfigService.saveRule({
-            shipviaCd: m.shipviaCd.trim(),
-            clientCode: response.data.clientCode,
-            destType: 'ANY',
-            destValue: null,
-            serviceId: m.serviceId,
-            warehouseIds: [],
-            allowedPresetIds: [],
+          // SSM merged into Code Maps (V126–V129): the ship-via → service rule
+          // is now a SHIPVIA code-map alias. The old saveRule PUT /ship-method-rules
+          // endpoint was removed, so every staged mapping 404'd on commit.
+          await clientCodeMapService.upsert(response.data.clientCode, 'SHIPVIA', {
+            erpCode: m.shipviaCd.trim(),
+            targetId: m.serviceId,
           })
         } catch (e) {
           mappingFailures.push(`${m.shipviaCd}: ${e instanceof Error ? e.message : 'failed'}`)
