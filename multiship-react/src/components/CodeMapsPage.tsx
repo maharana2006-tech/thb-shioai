@@ -13,7 +13,7 @@ import {
   type ShippingServiceItem,
 } from '../api/shippingConfigService'
 import { clientWarehouseService, type ClientWarehouse } from '../api/warehouseService'
-import { formatCarrierName } from '../utils/carrierUtils'
+import { formatCarrierName, normalizeCarrierCode } from '../utils/carrierUtils'
 import { COUNTRIES } from '../utils/countries'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import Select from './workspace/Select'
@@ -86,6 +86,8 @@ export default function CodeMapsPage({ initialClientFilter, embedded = false }: 
    *  when the selected client changes. Default (platform) warehouses that
    *  are attached to the client are the natural options. */
   const [clientWarehouses, setClientWarehouses] = useState<ClientWarehouse[]>([])
+  /** Canonical carrier codes the selected client has an account for — the service/package pickers filter to these. */
+  const [clientCarriers, setClientCarriers] = useState<string[]>([])
 
   // Inline add form state (shared shape; interpretation depends on the tab).
   const [erpCode, setErpCode] = useState('')
@@ -169,11 +171,18 @@ export default function CodeMapsPage({ initialClientFilter, embedded = false }: 
   // changes. Empty clientCode = no fetch; keeps the picker's option set
   // scoped to warehouses the client is actually attached to.
   useEffect(() => {
-    if (!selectedClient) { setClientWarehouses([]); return }
+    if (!selectedClient) { setClientWarehouses([]); setClientCarriers([]); return }
     let alive = true
     clientWarehouseService.listForClient(selectedClient)
       .then((resp) => { if (alive) setClientWarehouses(resp.data ?? []) })
       .catch(() => { if (alive) setClientWarehouses([]) })
+    clientService.listClientAccounts(selectedClient)
+      .then((accts) => {
+        if (!alive) return
+        setClientCarriers([...new Set(accts.filter((a) => a.active !== false)
+          .map((a) => (normalizeCarrierCode(a.carrierCode) ?? "").toUpperCase()).filter(Boolean))])
+      })
+      .catch(() => { if (alive) setClientCarriers([]) })
     return () => { alive = false }
   }, [selectedClient])
 
@@ -331,6 +340,19 @@ export default function CodeMapsPage({ initialClientFilter, embedded = false }: 
     }
   }
 
+  // Pickers show only what the client can actually use: services from the
+  // client's own carriers, and CARRIER packages from those carriers (CUSTOM
+  // packages have no carrier, so they always show). No carriers known yet
+  // (still loading, or the client has none) falls back to the full catalog.
+  const visibleServices = useMemo(
+    () => (clientCarriers.length ? services.filter((sv) => clientCarriers.includes((normalizeCarrierCode(sv.carrier) ?? "").toUpperCase())) : services),
+    [services, clientCarriers],
+  )
+  const visiblePresets = useMemo(
+    () => (clientCarriers.length ? presets.filter((pp) => !pp.carrier || clientCarriers.includes((normalizeCarrierCode(pp.carrier) ?? "").toUpperCase())) : presets),
+    [presets, clientCarriers],
+  )
+
   const meta = TAB_META[tab]
   /** Audit R2 #373 — client-side substring filter. Matches on erpCode
    *  OR targetLabel (whichever column the operator recognises). */
@@ -438,8 +460,8 @@ export default function CodeMapsPage({ initialClientFilter, embedded = false }: 
               </label>
               <TargetPicker
                 tab={tab}
-                services={services}
-                presets={presets}
+                services={visibleServices}
+                presets={visiblePresets}
                 targetId={targetId}
                 onTargetId={setTargetId}
                 iso2={iso2}
@@ -524,7 +546,7 @@ export default function CodeMapsPage({ initialClientFilter, embedded = false }: 
                             Allowed packages (optional)
                           </label>
                           <PackagingMultiSelect
-                            presets={presets}
+                            presets={visiblePresets}
                             value={allowedPresetIds}
                             onChange={setAllowedPresetIds}
                           />
@@ -595,8 +617,8 @@ export default function CodeMapsPage({ initialClientFilter, embedded = false }: 
                         <span className="inline-flex items-center gap-2 align-middle">
                           <TargetPicker
                             tab={tab}
-                            services={services}
-                            presets={presets}
+                            services={visibleServices}
+                            presets={visiblePresets}
                             targetId={editTargetId}
                             onTargetId={setEditTargetId}
                             iso2={editIso2}
@@ -613,7 +635,7 @@ export default function CodeMapsPage({ initialClientFilter, embedded = false }: 
                         packaging allowlist). Row-edit mode shows the pickers
                         inline instead so the operator can retarget them. */}
                     {tab === 'SHIPVIA' && isEditing ? (
-                      <div className="mt-1.5 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+                      <div className="mt-1.5 grid grid-cols-1 items-start gap-1.5 sm:grid-cols-2">
                         <Select
                           value={editWarehouseId}
                           onChange={(e) => setEditWarehouseId(e.target.value)}
@@ -628,7 +650,7 @@ export default function CodeMapsPage({ initialClientFilter, embedded = false }: 
                           ) : null)}
                         </Select>
                         <PackagingMultiSelect
-                          presets={presets}
+                          presets={visiblePresets}
                           value={editAllowedPresetIds}
                           onChange={setEditAllowedPresetIds}
                         />

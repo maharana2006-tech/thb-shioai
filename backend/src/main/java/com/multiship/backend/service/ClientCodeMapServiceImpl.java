@@ -194,7 +194,7 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
         row.setDestCountry(destCountry);
         row.setDestRegion(destRegion);
         row.setWarehouseId(warehouseId);
-        shipviaRepo.save(row);
+        shipviaRepo.saveAndFlush(row);  // flush so @UpdateTimestamp lands before we build the response DTO
         // V127 sidecar: replace-in-place semantics. Null in the request
         // means "don't touch" so partial-update callers can't accidentally
         // wipe the allowlist; empty list means "clear it".
@@ -223,7 +223,7 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
         row.setServiceId(targetId);
         row.setDestCountry(destCountry);
         row.setDestRegion(destRegion);
-        serviceRepo.save(row);
+        serviceRepo.saveAndFlush(row);  // flush so @UpdateTimestamp lands before we build the response DTO
         return success("Service-code alias saved.", toServiceDto(row));
     }
 
@@ -237,7 +237,7 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
                 .findByClientCodeIgnoreCaseAndErpCodeIgnoreCase(code, erp)
                 .orElseGet(() -> ClientDestCountryMap.builder().clientCode(code).erpCode(erp).build());
         row.setIso2(canonical);
-        destRepo.save(row);
+        destRepo.saveAndFlush(row);  // flush so @UpdateTimestamp lands before we build the response DTO
         return success("Destination-country alias saved.", toDestDto(row));
     }
 
@@ -254,7 +254,7 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
         row.setPresetId(targetId);
         row.setDestCountry(destCountry);
         row.setDestRegion(destRegion);
-        packageRepo.save(row);
+        packageRepo.saveAndFlush(row);  // flush so @UpdateTimestamp lands before we build the response DTO
         return success("Package alias saved.", toPackageDto(row));
     }
 
