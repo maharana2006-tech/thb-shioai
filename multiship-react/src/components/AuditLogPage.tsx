@@ -9,13 +9,13 @@ import {
   FiX,
 } from 'react-icons/fi'
 import { useAppSession } from '../hooks/useAppSession'
-import type { ColumnDef, SortingState } from '@tanstack/react-table'
+import type { SortingState } from '@tanstack/react-table'
 import {
   auditLogService,
   type AuditLogEntry,
 } from '../api/auditLogService'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
-import AdvancedDataTable from './workspace/AdvancedDataTable'
+import AdvancedDataTable, { type ColumnDef } from './workspace/AdvancedDataTable'
 import { summarizeCarrierError } from '../utils/carrierErrorMap'
 import Select from './workspace/Select'
 import { notify } from '../utils/notify'

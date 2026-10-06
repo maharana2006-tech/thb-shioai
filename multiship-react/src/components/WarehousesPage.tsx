@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import type { ColumnDef, SortingState } from '@tanstack/react-table'
+import type { SortingState } from '@tanstack/react-table'
 import {
   FiActivity,
   FiEdit3,
@@ -19,7 +19,7 @@ import { countryName } from '../utils/countries'
 import AttachClientsModal from './modals/AttachClientsModal'
 import WarehouseEditorModal from './modals/WarehouseEditorModal'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
-import AdvancedDataTable from './workspace/AdvancedDataTable'
+import AdvancedDataTable, { type ColumnDef } from './workspace/AdvancedDataTable'
 import PortalMenu from './workspace/PortalMenu'
 import Select from './workspace/Select'
 import { useAppSession } from '../hooks/useAppSession'

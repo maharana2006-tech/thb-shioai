@@ -23,7 +23,6 @@ import {
   FiX,
   FiXCircle,
 } from 'react-icons/fi'
-import type { ColumnDef } from '@tanstack/react-table'
 import {
   accountRefService,
   type AccountRefUpsertPayload,
@@ -52,7 +51,7 @@ import {
   type CarrierAccountErrors,
 } from '../validation/carrierAccountValidation'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
-import AdvancedDataTable from './workspace/AdvancedDataTable'
+import AdvancedDataTable, { type ColumnDef } from './workspace/AdvancedDataTable'
 import CarrierLogo from './workspace/CarrierLogo'
 import PortalMenu from './workspace/PortalMenu'
 import Select from './workspace/Select'

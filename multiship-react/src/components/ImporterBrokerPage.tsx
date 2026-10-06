@@ -15,7 +15,7 @@ import {
   FiUsers,
   FiX,
 } from 'react-icons/fi'
-import type { ColumnDef, SortingState } from '@tanstack/react-table'
+import type { SortingState } from '@tanstack/react-table'
 import { clientService, type Client } from '../api/clientService'
 import { isAbortError } from '../api/apiClient'
 import {
@@ -32,7 +32,7 @@ import {
   type Region,
 } from '../utils/countries'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
-import AdvancedDataTable from './workspace/AdvancedDataTable'
+import AdvancedDataTable, { type ColumnDef } from './workspace/AdvancedDataTable'
 import PortalMenu from './workspace/PortalMenu'
 import Select from './workspace/Select'
 import CustomsProfileModal from './modals/CustomsProfileModal'

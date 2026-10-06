@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { FiDownloadCloud, FiFilter, FiX } from 'react-icons/fi'
-import type { ColumnDef } from '@tanstack/react-table'
-import AdvancedDataTable from './workspace/AdvancedDataTable'
+import AdvancedDataTable, { type ColumnDef } from './workspace/AdvancedDataTable'
 import Select from './workspace/Select'
 import {
   batchStatusOf, dtcService, labelStatusOf,

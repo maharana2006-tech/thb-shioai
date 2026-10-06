@@ -1,8 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { FiAlertCircle, FiArrowLeft, FiChevronDown, FiEdit2, FiFilter, FiPrinter, FiX, FiZap } from 'react-icons/fi'
-import type { ColumnDef } from '@tanstack/react-table'
-import AdvancedDataTable from './workspace/AdvancedDataTable'
+import AdvancedDataTable, { type ColumnDef } from './workspace/AdvancedDataTable'
 import { useDismissable } from '../hooks/useDismissable'
 import {
   batchStatusOf, canEditLine, dtcService, labelStatusOf, lineHasError, printableCount,
