@@ -518,7 +518,11 @@ export default function AdvancedDataTable<T extends RowData>({
   useEffect(() => {
     if (manualPagination) return
     table.setPageIndex(0)
-  }, [data, table, manualPagination])
+    // `table` is a fresh instance every render, so including it loops forever
+    // (reset → re-render → new table → reset …). Reset only when the data set
+    // actually changes; `table` is stable enough to call imperatively here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, manualPagination])
 
   const pageCount = table.getPageCount()
   const pageIndex = table.getState().pagination.pageIndex
