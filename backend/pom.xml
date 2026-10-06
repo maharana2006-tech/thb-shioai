@@ -109,12 +109,12 @@
 		<dependency>
 			<groupId>org.flywaydb</groupId>
 			<artifactId>flyway-core</artifactId>
-			<version>13.7.0</version>
+			<version>13.9.0</version>
 		</dependency>
 		<dependency>
 			<groupId>org.flywaydb</groupId>
 			<artifactId>flyway-database-postgresql</artifactId>
-			<version>13.7.0</version>
+			<version>13.9.0</version>
 		</dependency>
 		<!-- Spring Boot 4 splits auto-configuration into modules; without this
 		     one, flyway-core sits on the classpath but migrations never run. -->
