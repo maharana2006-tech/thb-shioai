@@ -18,5 +18,14 @@ export default defineConfig([
     languageOptions: {
       globals: globals.browser,
     },
+    rules: {
+      // Downgraded 2026-10-06 — eslint-plugin-react-hooks v7.1 flags the universal
+      // "fetch-with-spinner" pattern (`useEffect(() => load(), [load])` where
+      // `load()` sync-calls `setLoading(true)` before awaiting) as a cascading-
+      // render risk. React's own docs still recommend this pattern for data
+      // fetching at mount, and refactoring 30+ pages to Suspense/TanStack-Query
+      // is a separate initiative. Keeping as `warn` so new instances stay visible.
+      'react-hooks/set-state-in-effect': 'warn',
+    },
   },
 ])

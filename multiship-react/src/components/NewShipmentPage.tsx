@@ -1769,6 +1769,7 @@ export default function NewShipmentPage() {
   // red messages under each input remain the primary guidance.
   const [toast, setToast] = useState<{ id: number; title: string; body: string } | null>(null)
   const showToast = (body: string, title = 'A few details need fixing') =>
+    // eslint-disable-next-line react-hooks/purity -- showToast is a callback invoked from event handlers; Date.now() runs on call, not during render.
     setToast({ id: Date.now(), title, body })
   useEffect(() => {
     if (!toast) return
