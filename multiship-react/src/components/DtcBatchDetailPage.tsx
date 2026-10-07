@@ -137,6 +137,23 @@ export default function DtcBatchDetailPage() {
   }
 
   const [printingAll, setPrintingAll] = useState(false)
+  const [printingOne, setPrintingOne] = useState<number | null>(null)
+
+  // Per-line Print — fetch the one 4x6 label PDF and send it to the printer
+  // (not open-in-new-tab, which just previews/downloads it).
+  const printOne = async (orderNo: number) => {
+    if (printingOne) return
+    setPrintingOne(orderNo)
+    try {
+      const blob = await orderService.getLabelPdf(orderNo, undefined, { main: true })
+      printPdfBlob(blob)
+      window.setTimeout(() => void load(), 2500)
+    } catch (e) {
+      notify.apiError(e, `Could not print label for order ${orderNo}.`)
+    } finally {
+      setPrintingOne(null)
+    }
+  }
 
   // Print all — merged label PDF straight to the printer (not a ZIP download).
   const printAll = async () => {
@@ -242,9 +259,10 @@ export default function DtcBatchDetailPage() {
         return (
           <button
             type="button"
-            title={`Open the label PDF for order ${orderNo}`}
-            onClick={() => window.open(dtcService.labelPdfUrl(orderNo), '_blank')}
-            className="inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+            title={`Send the label for order ${orderNo} to the printer`}
+            onClick={() => void printOne(orderNo)}
+            disabled={printingOne === orderNo}
+            className="inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-50"
           >
             <FiPrinter className="h-3 w-3" />
             Print
@@ -317,7 +335,8 @@ export default function DtcBatchDetailPage() {
         )
       },
     },
-  ], [data, load])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [data, load, printingOne])
 
   if (!tenantId) {
     return (

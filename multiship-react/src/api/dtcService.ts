@@ -75,9 +75,6 @@ export const dtcService = {
     return res.blob()
   },
 
-  /** Label PDF for one generated order — the order endpoint, verbatim. */
-  labelPdfUrl: (orderNo: number) => `/api/v1/orders/${orderNo}/label/pdf`,
-
   /** Distinct ship dates for the summary-page date filter. */
   shipDates: () => apiClient.get<ApiResponse<string[]>>('/dtc/batches/ship-dates'),
 
