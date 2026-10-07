@@ -13,7 +13,8 @@ All phases are dark-launched behind `carrier.tx-split-phase-c` (env `CARRIER_TX_
 | `341b9c9b` | **P2** | `MultiWarehouseLabelServiceImpl.generate` outer-tx drop. Each child's own tx via its own @Transactional; final persist in own REQUIRES_NEW. 3 split tests + 10 legacy green. |
 | `96a4138e` | **P3** | `CarrierServiceImpl.generateLabel` three-phase split. LabelReservation + LabelCarrierOutcome records; runLabelReservationPhase / runLabelCarrierCallPhase / runLabelPersistPhase. **No new split test** — see Test coverage decisions below. |
 | `81eca497` | **P4α** | `CarrierServiceImpl.generateManualLabel` dispatcher + split stub. `@Transactional` removed; stub currently delegates to legacy; body renamed to `generateManualLabelLegacyBody`. Zero behaviour change. |
-| _tbd_ | **P5** | `InFlightTrackingSweeper` flips from log-only to resolve: marks stuck rows ERROR + nulls `in_flight_since` + sets actionable `error_message`. Race guard against parallel Phase C commit. 4/4 tests. |
+| `2950cdb1` | **P5** | `InFlightTrackingSweeper` flips from log-only to resolve: marks stuck rows ERROR + nulls `in_flight_since` + sets actionable `error_message`. Race guard against parallel Phase C commit. 4/4 tests. |
+| _tbd_ | **P4β-reservation** | `generateManualLabelRegenerateSplit` wraps legacy body in `in_flight_since` reserve/clear sandwich (regenerate path only). Enables sweeper visibility + concurrent-generate 409 blocking. NOT yet a tx-duration split — legacy body still @Transactional-equivalent across carrier HTTP in Phase B. |
 
 ## Design pattern (established in P1, reused in P2 + P3)
 
@@ -32,6 +33,20 @@ Why this works: the three TransactionTemplate.execute calls in split mode are ea
 Original P3 plan sized it at ~250 LoC; **actual is ~1,500 lines** (CarrierServiceImpl.java:989 → :2491). The audit author undercounted. Mid-session swap moved generateLabel's content into P3 so this slot could get its own sprint.
 
 **P4α shipped 2026-10-07**: dispatcher + split stub (`generateManualLabel` entry became orchestrator, `@Transactional` → `requiresNewTransactionTemplate` wrap; new `generateManualLabelSplit` stub delegates to legacy; body renamed to `generateManualLabelLegacyBody`). Zero behaviour change today; flag toggle now routes without crashing; the actual split can land incrementally.
+
+**P4β-reservation shipped 2026-10-07**: regenerate-only (existingOrderNo != null). New `generateManualLabelRegenerateSplit` wraps the legacy body in a `in_flight_since` reserve/clear sandwich:
+- **Phase A (short tx)**: lock Order, check already-generated / already-in-flight (409 if either), reserve `in_flight_since`, commit
+- **Phase B**: legacy body unchanged (still @Transactional-equivalent across carrier HTTP — **no perf-duration win yet**)
+- **Phase C (short tx)**: null `in_flight_since` on both success + exception paths (via try/finally — on throw: clear sentinel then re-throw)
+
+What this buys:
+- Sweeper visibility (crashed regenerates now get rows the P5 sweeper picks up)
+- Concurrent-generate blocking (double-click → 409 instead of serializing on the Order row lock)
+- Dark-launch readiness for the regenerate path
+
+What this does **NOT** buy: the tx-duration win. The legacy body still holds a DB connection across the carrier HTTP during Phase B.
+
+**P4β-full remaining**: ~550 LoC parallel implementation to split the legacy body into real A/B/C phases that actually release the connection across the carrier HTTP. Needs its own dedicated sprint — the 1,500-line method has no `CarrierServiceImplTest` fixture to catch regression, so a from-scratch regenerate reimplementation is the only safe path. Attack plan + method anatomy below.
 
 **P4β-P4δ remaining** (needs its own sprint):
 
