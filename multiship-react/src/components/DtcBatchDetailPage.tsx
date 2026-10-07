@@ -1,7 +1,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { lazyWithRetry } from '../utils/lazyWithRetry'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { FiAlertCircle, FiArrowLeft, FiChevronDown, FiEdit2, FiFilter, FiPrinter, FiX, FiZap } from 'react-icons/fi'
+import { FiAlertCircle, FiArrowLeft, FiChevronDown, FiEdit2, FiFileText, FiFilter, FiPrinter, FiX, FiZap } from 'react-icons/fi'
 import AdvancedDataTable, { type ColumnDef } from './workspace/AdvancedDataTable'
 import { useDismissable } from '../hooks/useDismissable'
 import {
@@ -138,6 +138,7 @@ export default function DtcBatchDetailPage() {
 
   const [printingAll, setPrintingAll] = useState(false)
   const [printingOne, setPrintingOne] = useState<number | null>(null)
+  const [printingInvoice, setPrintingInvoice] = useState<number | null>(null)
 
   // Per-line Print — fetch the one 4x6 label PDF and send it to the printer
   // (not open-in-new-tab, which just previews/downloads it).
@@ -152,6 +153,21 @@ export default function DtcBatchDetailPage() {
       notify.apiError(e, `Could not print label for order ${orderNo}.`)
     } finally {
       setPrintingOne(null)
+    }
+  }
+
+  // Per-line commercial invoice — international lines only. 422 (no customs
+  // data) surfaces as the endpoint's friendly "nothing to print" message.
+  const printInvoice = async (orderNo: number) => {
+    if (printingInvoice) return
+    setPrintingInvoice(orderNo)
+    try {
+      const blob = await orderService.getCommercialInvoicePdf(orderNo)
+      printPdfBlob(blob)
+    } catch (e) {
+      notify.apiError(e, `Could not print the commercial invoice for order ${orderNo}.`)
+    } finally {
+      setPrintingInvoice(null)
     }
   }
 
@@ -257,16 +273,30 @@ export default function DtcBatchDetailPage() {
           return <span className="text-[11px] text-[#9a8b70]">—</span>
         }
         return (
-          <button
-            type="button"
-            title={`Send the label for order ${orderNo} to the printer`}
-            onClick={() => void printOne(orderNo)}
-            disabled={printingOne === orderNo}
-            className="inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <FiPrinter className="h-3 w-3" />
-            Print
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              title={`Send the label for order ${orderNo} to the printer`}
+              onClick={() => void printOne(orderNo)}
+              disabled={printingOne === orderNo}
+              className="inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <FiPrinter className="h-3 w-3" />
+              Print
+            </button>
+            {row.original.intlYn === 'Y' ? (
+              <button
+                type="button"
+                title={`Send the commercial invoice for order ${orderNo} to the printer`}
+                onClick={() => void printInvoice(orderNo)}
+                disabled={printingInvoice === orderNo}
+                className="inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <FiFileText className="h-3 w-3" />
+                Invoice
+              </button>
+            ) : null}
+          </div>
         )
       },
     },
@@ -336,7 +366,7 @@ export default function DtcBatchDetailPage() {
       },
     },
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  ], [data, load, printingOne])
+  ], [data, load, printingOne, printingInvoice])
 
   if (!tenantId) {
     return (
