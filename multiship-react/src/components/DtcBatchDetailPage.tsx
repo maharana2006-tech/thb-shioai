@@ -14,6 +14,7 @@ import { ApiError } from '../api/apiClient'
 import { confirmBatchGenerate } from '../utils/dtcConfirm'
 import { summarizeCarrierError } from '../utils/carrierErrorMap'
 import { notify } from '../utils/notify'
+import { printPdfBlob } from '../utils/printPdf'
 import { workspacePaths } from '../routes/workspaceRoutes'
 
 const OrderDetailsModal = lazyWithRetry(() => import('./modals/OrderDetailsModal'))
@@ -132,6 +133,23 @@ export default function DtcBatchDetailPage() {
       }
     } finally {
       setStarting(false)
+    }
+  }
+
+  const [printingAll, setPrintingAll] = useState(false)
+
+  // Print all — merged label PDF straight to the printer (not a ZIP download).
+  const printAll = async () => {
+    if (printingAll) return
+    setPrintingAll(true)
+    try {
+      const blob = await dtcService.labelsPdf(batchId, tenantId)
+      printPdfBlob(blob)
+      window.setTimeout(() => void load(), 2500)
+    } catch (e) {
+      notify.apiError(e, 'Could not print the batch labels.')
+    } finally {
+      setPrintingAll(false)
     }
   }
 
@@ -448,11 +466,11 @@ export default function DtcBatchDetailPage() {
         </button>
         <button
           type="button"
-          onClick={() => window.open(dtcService.labelsZipUrl(batchId, tenantId), '_blank')}
-          disabled={!batch || printableCount(batch) === 0}
+          onClick={() => void printAll()}
+          disabled={!batch || printableCount(batch) === 0 || printingAll}
           title={!batch || printableCount(batch) === 0
             ? (batch?.voidedCount ? 'Every label of this batch was voided — nothing to print' : 'Generate labels first — nothing to print yet')
-            : 'Download all live label PDFs as a ZIP (voided labels are left out)'}
+            : 'Send all live label PDFs to the printer (voided labels are left out)'}
           className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40"
         >
           <FiPrinter className="h-3.5 w-3.5" />

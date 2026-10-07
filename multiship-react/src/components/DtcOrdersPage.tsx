@@ -14,11 +14,12 @@ import { normalizeRole } from '../utils/roles'
 import { notify } from '../utils/notify'
 import { dtcBatchPath } from '../routes/workspaceRoutes'
 import DtcBatchActions from './dtc/DtcBatchActions'
+import { printPdfBlob } from '../utils/printPdf'
 
 /**
  * D2C Automatic Label — Dtcal-style batch summary. One row per (client, batch)
  * in dtc_orders, filled by "Sync from Oracle". Per batch: Details → line
- * history, Print → ZIP of generated labels, Generate → "Automatic label" run
+ * history, Print → merged label PDF to the printer, Generate → "Automatic label" run
  * (background job, polled here).
  */
 export default function DtcOrdersPage() {
@@ -174,10 +175,24 @@ export default function DtcOrdersPage() {
     }
   }
 
-  const openZip = (b: DtcBatchStats) => {
-    window.open(dtcService.labelsZipUrl(String(b.batchId), b.tenantId), '_blank')
-    // The server logs the print while it builds the ZIP; re-read so the row says Reprint.
-    window.setTimeout(() => void load(), 2500)
+  const [printingKey, setPrintingKey] = useState<string | null>(null)
+
+  // Print / Reprint: fetch the batch's labels merged into one PDF and send it
+  // straight to the printer (hidden-iframe print dialog) — not a ZIP download.
+  const printBatch = async (b: DtcBatchStats) => {
+    const key = rowKey(b)
+    if (printingKey) return
+    setPrintingKey(key)
+    try {
+      const blob = await dtcService.labelsPdf(String(b.batchId), b.tenantId)
+      printPdfBlob(blob)
+      // The server logged the print while building the PDF; re-read so the row says Reprint.
+      window.setTimeout(() => void load(), 2500)
+    } catch (e) {
+      notify.apiError(e, 'Could not print the batch labels.')
+    } finally {
+      setPrintingKey(null)
+    }
   }
 
   const columns = useMemo<ColumnDef<DtcBatchStats, unknown>[]>(() => [
@@ -219,15 +234,15 @@ export default function DtcOrdersPage() {
             batch={b}
             printedAt={data?.lastPrinted?.[printedKey(b)]}
             progress={active && jobProgress ? jobProgress : null}
-            busy={active || startingKey === rowKey(b)}
+            busy={active || startingKey === rowKey(b) || printingKey === rowKey(b)}
             onDetails={() => navigate(dtcBatchPath(b.batchId, b.tenantId))}
-            onPrint={() => openZip(b)}
+            onPrint={() => void printBatch(b)}
             onGenerate={() => void generate(b)}
           />
         )
       },
     },
-  ], [activeJob, jobProgress, navigate, startingKey, data])
+  ], [activeJob, jobProgress, navigate, startingKey, printingKey, data])
 
   const filterLabel = 'block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400'
 
@@ -396,7 +411,7 @@ export default function DtcOrdersPage() {
           onPaginationChange={({ pageIndex: i, pageSize: n }) => { setPageIndex(n !== pageSize ? 0 : i); setPageSize(n) }}
           getRowId={rowKey}
           csvFilename="d2c-batches.csv"
-          caption={`${total} batch${total === 1 ? '' : 'es'} · Generate mints the labels, Print downloads them as a ZIP`}
+          caption={`${total} batch${total === 1 ? '' : 'es'} · Generate mints the labels, Print sends them to the printer`}
           emptyState={
             <p className="px-5 py-10 text-center text-sm text-[#6b5c42]">
               {loading ? 'Loading…'

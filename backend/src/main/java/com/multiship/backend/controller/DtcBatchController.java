@@ -86,6 +86,7 @@ public class DtcBatchController {
     private final TenantScopeEnforcer tenantScope;
     private final com.multiship.backend.service.printing.DocumentPrintLog printLog;
     private final com.multiship.backend.service.LabelImagePdfService labelImagePdfService;
+    private final com.multiship.backend.service.PdfMerger pdfMerger;
 
     @Operation(summary = "Batch summary (one row per tenant+batch)",
             description = "Dtcal-style aggregates. Filters: tenantId, shipDate, q (free text over batch / tote / order no / "
@@ -343,6 +344,62 @@ public class DtcBatchController {
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
                 .contentType(MediaType.parseMediaType("application/zip"))
                 .body(zipBytes.toByteArray());
+    }
+
+    @Operation(summary = "Batch labels merged PDF",
+            description = "Every GENERATED, non-voided row's label PDF merged into one 4x6 document, served inline "
+                    + "so the client can send it straight to the printer. Rows still queued on the USPS worker have no "
+                    + "PDF yet and are skipped. Same collection as labels.zip — just merged instead of archived.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping(value = "/{batchId}/labels.pdf", produces = MediaType.APPLICATION_PDF_VALUE)
+    public ResponseEntity<?> batchLabelsPdf(
+            @PathVariable BigDecimal batchId,
+            @RequestParam(defaultValue = "") String tenantId) {
+
+        String tenant = requireTenant(tenantId);
+        List<DtcOrder> rows = dtcOrderRepository.findByTenantIdAndBatchIdOrderByIdAsc(tenant, batchId)
+                .stream()
+                .filter(r -> "GENERATED".equalsIgnoreCase(
+                        r.getGeneratedStatus() == null ? "" : r.getGeneratedStatus()))
+                .filter(r -> r.getGeneratedOrderNo() != null)
+                .toList();
+        // A voided label is cancelled at the carrier — never hand it out for printing.
+        java.util.Set<Integer> voided = voidedOrderNos(rows);
+        rows = rows.stream().filter(r -> !voided.contains(r.getGeneratedOrderNo())).toList();
+
+        List<byte[]> pdfs = new java.util.ArrayList<>();
+        List<Integer> printed = new java.util.ArrayList<>();
+        for (DtcOrder row : rows) {
+            // UPS stores its label as a GIF — wrap it into a 4x6 PDF, same as the ZIP path.
+            Integer no = row.getGeneratedOrderNo();
+            Optional<byte[]> pdf = labelArtifactResolver.resolveAsBytes(no, "PDF", null)
+                    .or(() -> labelArtifactResolver.resolveImage(no, null)
+                            .map(img -> labelImagePdfService.imagesToPdf(List.of(img.bytes()))));
+            if (pdf.isEmpty()) continue;
+            pdfs.add(pdf.get());
+            printed.add(no);
+        }
+        if (pdfs.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResponse.<Void>builder()
+                            .status("ERROR").code(404)
+                            .timestamp(LocalDateTime.now())
+                            .message("No label PDFs ready for tenant " + tenant + ", batch " + batchId
+                                    + (rows.isEmpty()
+                                            ? " (generate labels first)"
+                                            : " (labels are still pending on the label queue)"))
+                            .build());
+        }
+        byte[] merged = pdfMerger.mergeToOne(pdfs);
+        // The list shows Reprint once a batch has been printed.
+        printLog.record(printed, "LABEL", com.multiship.backend.service.printing.DocumentPrintLog.BROWSER,
+                null, currentUsername());
+
+        String filename = "dtc-batch-" + batchId + "-labels.pdf";
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + filename + "\"")
+                .contentType(MediaType.APPLICATION_PDF)
+                .body(merged);
     }
 
     @Operation(summary = "Distinct ship dates", description = "Date-filter options for the summary page.")

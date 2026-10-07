@@ -1,4 +1,4 @@
-import { apiClient } from './apiClient'
+import { apiClient, BASE_URL } from './apiClient'
 import type { ApiResponse } from './orderService'
 
 /**
@@ -57,9 +57,23 @@ export const dtcService = {
   generationJob: (jobId: number) =>
     apiClient.get<ApiResponse<DtcGenerationJob>>(`/dtc/batches/generation-jobs/${jobId}`),
 
-  /** Batch label ZIP download URL (all GENERATED rows' PDFs). */
-  labelsZipUrl: (batchId: string, tenantId: string) =>
-    `/api/v1/dtc/batches/${batchId}/labels.zip?tenantId=${encodeURIComponent(tenantId)}`,
+  /**
+   * All GENERATED, non-voided labels of a batch merged into ONE PDF, for the
+   * print dialog (Print / Reprint). 404 when no label is ready yet — the
+   * JSON body's `message` says why.
+   */
+  labelsPdf: async (batchId: string, tenantId: string): Promise<Blob> => {
+    const res = await fetch(
+      `${BASE_URL}/dtc/batches/${batchId}/labels.pdf?tenantId=${encodeURIComponent(tenantId)}`,
+      { credentials: 'include' },
+    )
+    if (!res.ok) {
+      let msg = `Labels are not ready to print (HTTP ${res.status}).`
+      try { msg = (await res.json())?.message || msg } catch { /* non-JSON body */ }
+      throw Object.assign(new Error(msg), { status: res.status })
+    }
+    return res.blob()
+  },
 
   /** Label PDF for one generated order — the order endpoint, verbatim. */
   labelPdfUrl: (orderNo: number) => `/api/v1/orders/${orderNo}/label/pdf`,
