@@ -55,8 +55,9 @@ vi.mock('../api/shippingConfigService', () => ({
   shippingConfigService: {
     catalog: (...args: unknown[]) => catalogMock(...args),
     saveRule: (...args: unknown[]) => saveRuleMock(...args),
-    // Consumed by ClientShippingMappingTab (edit-mode child). Keeping the
-    // shape aligned with what the tab expects avoids a load-time crash.
+    // listPresets is consumed by the edit-mode embedded Code Maps surface
+    // (CodeMapsPage) on mount; without it the mapping panel crashes on load.
+    listPresets: vi.fn().mockResolvedValue([]),
     setServiceEnabled: vi.fn(),
     syncServices: vi.fn(),
     deleteRule: vi.fn(),
@@ -527,11 +528,11 @@ describe('MappingDraftStep — create mode negative cases', () => {
 })
 
 // ================================================================
-// EDIT MODE — ClientShippingMappingTab renders with clientCode
+// EDIT MODE — the embedded Code Maps surface renders with the client
 // ================================================================
 
-describe('Edit mode — ClientShippingMappingTab renders with clientCode', () => {
-  it('renders the shipping-mapping tab when the wizard lands on mapping with a persisted client', async () => {
+describe('Edit mode — embedded Code Maps renders with clientCode', () => {
+  it('renders the mapping panel (embedded Code Maps) when the wizard lands on mapping with a persisted client', async () => {
     // Persisted client the /clients/:code loader will resolve.
     getClientMock.mockResolvedValue({
       data: {

@@ -22,6 +22,35 @@ import { afterEach } from 'vitest'
 // asyncWrapper also uses this for findBy* queries so the lift is global.
 configure({ asyncUtilTimeout: 5000 })
 
+// After the Vitest/jsdom/Node upgrade, neither jsdom's `window.localStorage`
+// nor Node's experimental global is available in the test env (the latter
+// needs --localstorage-file), so tests calling localStorage/sessionStorage
+// hit "Cannot read properties of undefined". Install a minimal in-memory
+// Storage so both the bare global and window.* work everywhere.
+if (typeof window !== 'undefined') {
+  // Store items as own enumerable properties (methods live on the prototype,
+  // non-enumerable) so Object.keys(storage) / indexing behave like real Storage.
+  class MemoryStorage {
+    get length() { return Object.keys(this).length }
+    clear() { for (const k of Object.keys(this)) delete (this as unknown as Record<string, unknown>)[k] }
+    getItem(k: string): string | null {
+      return Object.prototype.hasOwnProperty.call(this, k) ? (this as unknown as Record<string, string>)[k] : null
+    }
+    key(i: number) { return Object.keys(this)[i] ?? null }
+    removeItem(k: string) { delete (this as unknown as Record<string, unknown>)[k] }
+    setItem(k: string, v: string) { (this as unknown as Record<string, string>)[k] = String(v) }
+  }
+  for (const name of ['localStorage', 'sessionStorage'] as const) {
+    let ok = false
+    try { ok = !!(window as unknown as Record<string, unknown>)[name] } catch { ok = false }
+    if (!ok) {
+      const store = new MemoryStorage()
+      Object.defineProperty(window, name, { configurable: true, value: store })
+      Object.defineProperty(globalThis, name, { configurable: true, value: store })
+    }
+  }
+}
+
 // Pollution guard: clear localStorage + sessionStorage + reset window.history
 // after every test regardless of file. Several files write to these and don't
 // uniformly reset — e.g. SystemChannelSection.test.tsx has beforeEach-clear
