@@ -462,6 +462,15 @@ textarea {
   /* sky = warm gold accent in dark (desaturated, readable) */
   --color-sky-50:#2a2419; --color-sky-100:#332c1f; --color-sky-200:#4a4130; --color-sky-300:#6b5a39;
   --color-sky-400:#cba86a; --color-sky-500:#d4b071; --color-sky-600:#d8b878; --color-sky-700:#e2c892; --color-sky-800:#ecdcb4; --color-sky-900:#ece4d4; --color-sky-950:#ffffff;
+  /* Semantic status ramps — lightness inverted + desaturated so the app's
+     bg-X-50 + text-X-700 badges become a dark tinted chip with light text. */
+  --color-emerald-50:#102a1d; --color-emerald-100:#15351f; --color-emerald-200:#1d4d33; --color-emerald-300:#2a6b46; --color-emerald-400:#3f9063; --color-emerald-500:#52b37c; --color-emerald-600:#5fbf8a; --color-emerald-700:#6ee7a8; --color-emerald-800:#a7f3c8; --color-emerald-900:#d1fae0; --color-emerald-950:#ecfdf2;
+  --color-green-50:#102a19; --color-green-100:#15351f; --color-green-200:#1d4d2e; --color-green-300:#2a6b40; --color-green-400:#3f905a; --color-green-500:#52b374; --color-green-600:#6ee79a; --color-green-700:#86efac; --color-green-800:#bbf7cf; --color-green-900:#dcfce4; --color-green-950:#f0fdf2;
+  --color-rose-50:#2a1317; --color-rose-100:#3a1a1f; --color-rose-200:#5c2730; --color-rose-300:#8a3a46; --color-rose-400:#c2556a; --color-rose-500:#e36b84; --color-rose-600:#f0869b; --color-rose-700:#fca5b8; --color-rose-800:#fecdd7; --color-rose-900:#ffe4ea; --color-rose-950:#fff1f4;
+  --color-red-50:#2a1210; --color-red-100:#3a1815; --color-red-200:#5c2620; --color-red-300:#8a3a30; --color-red-400:#c2554a; --color-red-500:#e36b5e; --color-red-600:#f0867a; --color-red-700:#fca59c; --color-red-800:#fecdc7; --color-red-900:#ffe4e0; --color-red-950:#fff1ef;
+  --color-amber-50:#2a2008; --color-amber-100:#382e0f; --color-amber-200:#574718; --color-amber-300:#86692a; --color-amber-400:#c09a3f; --color-amber-500:#e0bb57; --color-amber-600:#ecc766; --color-amber-700:#f0d48a; --color-amber-800:#f5e0b0; --color-amber-900:#fbf3da; --color-amber-950:#fffbeb;
+  --color-yellow-50:#2a2408; --color-yellow-100:#38320f; --color-yellow-200:#574d18; --color-yellow-300:#86742a; --color-yellow-400:#c0a63f; --color-yellow-500:#e0cb57; --color-yellow-600:#ecd666; --color-yellow-700:#f0de8a; --color-yellow-800:#f5ecb0; --color-yellow-900:#fbf8da; --color-yellow-950:#fffceb;
+  --color-violet-50:#1e1633; --color-violet-100:#281c45; --color-violet-200:#3d2d6b; --color-violet-300:#5a44a0; --color-violet-400:#7a5fd0; --color-violet-500:#9277e0; --color-violet-600:#a78bfa; --color-violet-700:#c4b5fd; --color-violet-800:#ddd6fe; --color-violet-900:#ede9fe; --color-violet-950:#f5f3ff;
 }
 :root[data-theme="dark"] body { background: #16130e; }
 :root[data-theme="dark"] ::-webkit-scrollbar-track { background: rgba(255,255,255,0.04); }
