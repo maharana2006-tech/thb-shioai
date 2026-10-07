@@ -208,7 +208,7 @@ export const settingsNavItems: Array<{
     description: 'DB-driven connection manager for external systems (Oracle WMS today, REST/gRPC/SFTP later). Set host/port/creds/pool params + per-tenant login overrides + test the connection live.',
     roles: ['ADMIN'] },
   { key: 'dtc-scheduler', label: 'DTC Scheduler', to: settingsPaths.dtcScheduler, iconKey: 'dashboard',
-    description: 'When the Oracle DTC order sync runs. Set days, hours and how often; changes apply within a minute.',
+    description: 'When the Oracle DTC order sync and the automatic label generation run, each on its own schedule. Set days, hours and how often; changes apply within a minute.',
     roles: ['ADMIN'] },
   { key: 'mail', label: 'Mail', to: settingsPaths.mail, iconKey: 'mail',
     description: 'Outbound email provider — pick SMTP today (SendGrid/SES/Postmark coming), edit host/port/creds, and send a live test message. Config lives in mail_provider + mail_config.',

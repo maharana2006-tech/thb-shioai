@@ -110,7 +110,10 @@ public class DtcSchedulerAdminService {
     public JobDto updateJob(String jobKey, JobUpdate req, String actor) {
         DtcSchedulerJob job = requireJob(jobKey);
         if (req.enabled() != null) job.setEnabled(req.enabled());
-        if (req.params() != null) job.setParamsJson(toJson(req.params()));
+        if (req.params() != null) {
+            if (DtcLabelJobRunner.KEY.equals(jobKey)) validateLabelParams(req.params());
+            job.setParamsJson(toJson(req.params()));
+        }
         if (req.windows() != null) replaceWindows(job, req.windows());
         job.setUpdatedAt(LocalDateTime.now());
         job.setUpdatedBy(actor);
@@ -119,13 +122,16 @@ public class DtcSchedulerAdminService {
         return toDto(saved, ZonedDateTime.now(engine.zoneOf(s)), Boolean.TRUE.equals(s.getEnabled()));
     }
 
-    /** Restores the ShipXSync shipped defaults on every job (master switch and timezone untouched). */
+    /**
+     * Restores the shipped windows and settings on every job. Each job's on/off,
+     * the master switch and the timezone are kept — a reset must not quietly
+     * start (or stop) label buying.
+     */
     @Transactional
     public OverviewDto resetDefaults(String actor) {
         for (DtcSchedulerJob job : jobRepo.findAllByOrderBySortOrderAscIdAsc()) {
             Defaults d = DEFAULTS.get(job.getJobKey());
             if (d == null) continue;
-            job.setEnabled(d.enabled());
             job.setParamsJson(d.paramsJson());
             replaceWindows(job, d.windows());
             job.setUpdatedAt(LocalDateTime.now());
@@ -185,6 +191,22 @@ public class DtcSchedulerAdminService {
         e.setEndTime(end);
         e.setIntervalMinutes(every);
         return e;
+    }
+
+    private static void validateLabelParams(Map<String, Object> p) {
+        Object tenants = p.get("tenants");
+        if (tenants != null && !(tenants instanceof List<?> l && l.stream().allMatch(t -> t instanceof String))) {
+            throw new IllegalArgumentException("Tenants must be a list of tenant codes.");
+        }
+        requireRange(p.get("lookbackHours"), "Lookback hours", 1, 720);
+        requireRange(p.get("maxBatchesPerRun"), "Max batches per run", 1, 500);
+    }
+
+    private static void requireRange(Object v, String name, int min, int max) {
+        if (v == null) return;
+        if (!(v instanceof Number n) || n.doubleValue() != n.intValue() || n.intValue() < min || n.intValue() > max) {
+            throw new IllegalArgumentException(name + " must be a whole number from " + min + " to " + max + ".");
+        }
     }
 
     private static LocalTime parseTime(String window, String field, String value) {
@@ -251,9 +273,9 @@ public class DtcSchedulerAdminService {
         }
     }
 
-    // ── ShipXSync shipped defaults (keep in step with the V132 seed) ────────
+    // ── ShipXSync shipped defaults (keep in step with the V132 / V134 seeds) ─
 
-    private record Defaults(boolean enabled, String paramsJson, List<WindowDto> windows) {}
+    private record Defaults(String paramsJson, List<WindowDto> windows) {}
 
     private static final List<String> WEEKDAYS = List.of("MON", "TUE", "WED", "THU", "FRI");
     private static final List<String> WEEKEND = List.of("SAT", "SUN");
@@ -262,10 +284,14 @@ public class DtcSchedulerAdminService {
         return new WindowDto(null, label, days, start, end, minutes, null, true);
     }
 
+    private static final List<WindowDto> SHIPX_WINDOWS = List.of(
+            every("Weekday morning", WEEKDAYS, "06:00", "11:59", 5),
+            every("Weekday peak", WEEKDAYS, "12:00", "21:59", 1),
+            every("Weekday night", WEEKDAYS, "22:00", "05:59", 30),
+            every("Weekend", WEEKEND, "00:00", "23:59", 5));
+
     private static final Map<String, Defaults> DEFAULTS = Map.of(
-            DtcSyncJobRunner.KEY, new Defaults(true, null, List.of(
-                    every("Weekday morning", WEEKDAYS, "06:00", "11:59", 5),
-                    every("Weekday peak", WEEKDAYS, "12:00", "21:59", 1),
-                    every("Weekday night", WEEKDAYS, "22:00", "05:59", 30),
-                    every("Weekend", WEEKEND, "00:00", "23:59", 5))));
+            DtcSyncJobRunner.KEY, new Defaults(null, SHIPX_WINDOWS),
+            DtcLabelJobRunner.KEY, new Defaults(
+                    "{\"tenants\":[],\"lookbackHours\":24,\"maxBatchesPerRun\":20}", SHIPX_WINDOWS));
 }

@@ -42,6 +42,28 @@ public interface DtcOrderRepository extends JpaRepository<DtcOrder, Long> {
     List<String> findDistinctTenantIds();
 
     /**
+     * Batches the DTC_LABELS scheduler job should queue: at least one line
+     * never attempted (generated_status empty) and synced since {@code since}.
+     * Oldest first. {@code allTenants} ignores {@code tenants} (pass a
+     * non-empty placeholder list then — JPQL can't bind an empty IN).
+     */
+    @Query("""
+        SELECT new com.multiship.backend.dto.DtcBatchKey(d.tenantId, d.batchId)
+        FROM DtcOrder d
+        WHERE (d.generatedStatus IS NULL OR d.generatedStatus = '')
+          AND d.createdAt >= :since
+          AND d.tenantId IS NOT NULL AND d.batchId IS NOT NULL
+          AND (:allTenants = true OR d.tenantId IN :tenants)
+        GROUP BY d.tenantId, d.batchId
+        ORDER BY MIN(d.createdAt)
+        """)
+    List<com.multiship.backend.dto.DtcBatchKey> findBatchesAwaitingLabels(
+            @Param("since") java.time.LocalDateTime since,
+            @Param("allTenants") boolean allTenants,
+            @Param("tenants") java.util.Collection<String> tenants,
+            org.springframework.data.domain.Pageable pageable);
+
+    /**
      * Find a DTC order by batch ID (Oracle external ID).
      */
     Optional<DtcOrder> findByBatchId(Long batchId);

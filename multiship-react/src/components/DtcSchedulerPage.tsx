@@ -8,6 +8,7 @@ import {
   type SchedulerRun,
   type SchedulerWindow,
 } from '../api/dtcSchedulerService'
+import { dtcService } from '../api/dtcService'
 import { notify } from '../utils/notify'
 
 /**
@@ -175,6 +176,14 @@ export default function DtcSchedulerPage() {
 
   useEffect(() => { void reload(false) }, [reload])
 
+  // Tenant choices for the label job's tenant picker.
+  const [tenants, setTenants] = useState<string[]>([])
+  useEffect(() => {
+    dtcService.orderTenants()
+      .then((r) => setTenants((r.data ?? []).filter((t): t is string => !!t)))
+      .catch(() => {})
+  }, [])
+
   // Keep last-run / next-run fresh without touching unsaved edits.
   useEffect(() => {
     const t = window.setInterval(() => {
@@ -252,7 +261,7 @@ export default function DtcSchedulerPage() {
   }
 
   const resetDefaults = async () => {
-    if (!confirm('Restore the ShipXSync default timings on every job? Unsaved edits are lost. The master switch and time zone are kept.')) return
+    if (!confirm('Restore the ShipXSync default timings on every job? Unsaved edits are lost. Each job’s on/off, the master switch and the time zone are kept.')) return
     try {
       apply(await dtcSchedulerService.resetDefaults(), false)
       notify.success('Defaults restored.')
@@ -515,6 +524,12 @@ export default function DtcSchedulerPage() {
                            })} />
                   </label>
                 ))}
+                {Array.isArray(draft.params.tenants) ? (
+                  <TenantPicker
+                    all={tenants}
+                    selected={draft.params.tenants as string[]}
+                    onChange={(next) => setDraft(job.jobKey, { params: { ...draft.params, tenants: next } })} />
+                ) : null}
               </div>
               <div className="flex items-center gap-2">
                 {job.updatedBy ? (
@@ -538,7 +553,41 @@ export default function DtcSchedulerPage() {
   )
 }
 
-const PARAM_LABELS: Record<string, string> = {}
+const PARAM_LABELS: Record<string, string> = {
+  lookbackHours: 'Only lines from the last (hours)',
+  maxBatchesPerRun: 'Max batches per run',
+}
+
+/** Empty selection = every tenant (the DTC_LABELS default). */
+function TenantPicker({ all, selected, onChange }: {
+  all: string[]; selected: string[]; onChange: (next: string[]) => void
+}) {
+  const allOn = selected.length === 0
+  // Keep any saved tenant that no longer has orders visible, so it can be removed.
+  const options = Array.from(new Set([...all, ...selected])).sort()
+  return (
+    <fieldset className="text-[11px] font-semibold text-slate-500">
+      <legend>Tenants</legend>
+      <div className="mt-0.5 flex max-w-xl flex-wrap items-center gap-1">
+        <button type="button" aria-pressed={allOn} onClick={() => onChange([])}
+                className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${allOn ? 'bg-slate-900 text-[#f4eede]' : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50'}`}>
+          All tenants
+        </button>
+        {options.map((t) => {
+          const on = selected.includes(t)
+          return (
+            <button key={t} type="button" aria-pressed={on}
+                    onClick={() => onChange(on ? selected.filter((x) => x !== t) : [...selected, t].sort())}
+                    className={`rounded-full px-2.5 py-1 font-mono text-[11px] font-semibold ${on ? 'bg-slate-900 text-[#f4eede]' : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50'}`}>
+              {t}
+            </button>
+          )
+        })}
+        {options.length === 0 ? <span className="font-normal text-slate-400">No DTC tenants yet.</span> : null}
+      </div>
+    </fieldset>
+  )
+}
 
 const paramLabel = (k: string) =>
   PARAM_LABELS[k] ?? k.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase())
