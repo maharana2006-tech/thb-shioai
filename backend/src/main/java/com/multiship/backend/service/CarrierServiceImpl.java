@@ -159,6 +159,15 @@ public class CarrierServiceImpl implements CarrierService {
     @org.springframework.beans.factory.annotation.Value("${carrier.tx-split-phase-c:false}")
     private boolean phaseSplitEnabled;
 
+    /** Perf P3 P4β-full sub-flag — see {@code carrier.tx-split-phase-c
+     *  .full-manual-regenerate}. Gated SEPARATELY from the main flag so
+     *  ops can enable the proven split paths (void/MW/generateLabel)
+     *  without opting into the un-fixture-tested manual-label full
+     *  split. FALSE (default) runs P4β-reservation sandwich; TRUE runs
+     *  the real three-phase A/B/C with Phase B carrier HTTP outside tx. */
+    @org.springframework.beans.factory.annotation.Value("${carrier.tx-split-phase-c.full-manual-regenerate:false}")
+    private boolean phaseSplitFullManualRegenerate;
+
     /** Sprint 48 B5 — global kill-switch for the packaging validator.
      *  Off = validator is skipped everywhere; over-packaged shipments then
      *  go straight to the carrier (which will reject them with a generic
@@ -1416,10 +1425,14 @@ public class CarrierServiceImpl implements CarrierService {
             Integer existingOrderNo) {
         // New-order path (existingOrderNo == null) has no row to lock,
         // no existing OrderTracking to reserve — stays on the legacy
-        // single-tx body. Regenerate path gets the reservation machinery.
+        // single-tx body. Regenerate path gets the reservation (or
+        // full three-phase if the sub-flag is on).
         if (existingOrderNo == null) {
             return requiresNewTransactionTemplate.execute(status ->
                     generateManualLabelLegacyBody(req, user, existingOrderNo));
+        }
+        if (phaseSplitFullManualRegenerate) {
+            return generateManualLabelRegenerateSplitFull(req, user, existingOrderNo);
         }
         return generateManualLabelRegenerateSplit(req, user, existingOrderNo);
     }
@@ -1534,6 +1547,36 @@ public class CarrierServiceImpl implements CarrierService {
         // final status (GENERATED / ERROR); we only touch the sentinel.
         clearInFlightSinceForOrder(existingOrderNo);
         return response;
+    }
+
+    /**
+     * Perf P3 P4β-full — real three-phase A/B/C tx split for the
+     * manual-label regenerate path. Phase B carrier HTTP runs with NO
+     * DB connection held (the actual tx-duration win).
+     *
+     * <p><b>Status: NOT YET IMPLEMENTED.</b> Delegates to the P4β-
+     * reservation sandwich for now with a WARN. The real implementation
+     * is a ~960-LoC parallel body: Phase A replicates the legacy
+     * preamble (validation + resolve + build DTO + auto-split), Phase B
+     * runs the AuthRetry.withAuthRetry carrier loop, Phase C persists
+     * everything. See docs/perf-p3-sprint.md for the attack plan +
+     * known hazards.
+     *
+     * <p>The sub-flag {@code carrier.tx-split-phase-c.full-manual-regenerate}
+     * is wired through this stub so a future session can replace this
+     * method body without re-threading the dispatcher. Ops flipping the
+     * sub-flag today gets the SAME behaviour as leaving it off — the
+     * WARN log is the signal that no perf win is active yet.
+     */
+    private ApiResponse<LabelGenerationResponse> generateManualLabelRegenerateSplitFull(
+            com.multiship.backend.dto.ManualShipmentRequest req,
+            org.springframework.security.core.userdetails.UserDetails user,
+            Integer existingOrderNo) {
+        log.warn("P4β-full flag=TRUE but full three-phase split not yet implemented for "
+                + "generateManualLabel regenerate path (order={}). Falling through to P4β-reservation "
+                + "sandwich. See docs/perf-p3-sprint.md for the implementation plan.",
+                existingOrderNo);
+        return generateManualLabelRegenerateSplit(req, user, existingOrderNo);
     }
 
     private void clearInFlightSinceForOrder(Integer orderNo) {

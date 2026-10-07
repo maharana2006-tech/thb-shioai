@@ -46,7 +46,9 @@ What this buys:
 
 What this does **NOT** buy: the tx-duration win. The legacy body still holds a DB connection across the carrier HTTP during Phase B.
 
-**P4β-full remaining**: ~550 LoC parallel implementation to split the legacy body into real A/B/C phases that actually release the connection across the carrier HTTP. Needs its own dedicated sprint — the 1,500-line method has no `CarrierServiceImplTest` fixture to catch regression, so a from-scratch regenerate reimplementation is the only safe path. Attack plan + method anatomy below.
+**P4β-full remaining**: ~960 LoC parallel implementation to split the legacy body into real A/B/C phases that actually release the connection across the carrier HTTP. Needs its own dedicated sprint — the 1,500-line method has no `CarrierServiceImplTest` fixture to catch regression, so a from-scratch regenerate reimplementation is the only safe path. Attack plan + method anatomy below.
+
+**P4β-full scaffolding shipped 2026-10-07**: sub-flag `carrier.tx-split-phase-c.full-manual-regenerate` (env `CARRIER_TX_SPLIT_PHASE_C_FULL_MANUAL_REGENERATE`, default FALSE) + stub method `generateManualLabelRegenerateSplitFull` wired through the dispatcher. The stub currently delegates to the P4β-reservation sandwich with a WARN log; a future session fills in the real body without re-threading the dispatcher. Flipping the sub-flag today = same behaviour as leaving it off (reservation sandwich) + WARN log.
 
 **P4β-P4δ remaining** (needs its own sprint):
 
