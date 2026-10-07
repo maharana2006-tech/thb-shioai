@@ -86,6 +86,9 @@ export const settingsPaths = {
    *  external_system_connection table + secrets + client-login
    *  overrides + Test-connection dial. ADMIN role only. */
   externalSystems: '/settings/external-systems',
+  /** V132 — DB-driven DTC background scheduler: when the Oracle DTC sync
+   *  runs. ADMIN role only. */
+  dtcScheduler: '/settings/dtc-scheduler',
   /** A4.1 — DB-driven mail provider registry (SMTP today; SendGrid/SES/
    *  Postmark in A4.3). Ops picks the active provider + sends a test
    *  email without a redeploy. Backing tables mail_provider + mail_config. */
@@ -204,6 +207,9 @@ export const settingsNavItems: Array<{
   { key: 'external-systems', label: 'External Systems', to: settingsPaths.externalSystems, iconKey: 'apiKey',
     description: 'DB-driven connection manager for external systems (Oracle WMS today, REST/gRPC/SFTP later). Set host/port/creds/pool params + per-tenant login overrides + test the connection live.',
     roles: ['ADMIN'] },
+  { key: 'dtc-scheduler', label: 'DTC Scheduler', to: settingsPaths.dtcScheduler, iconKey: 'dashboard',
+    description: 'When the Oracle DTC order sync runs. Set days, hours and how often; changes apply within a minute.',
+    roles: ['ADMIN'] },
   { key: 'mail', label: 'Mail', to: settingsPaths.mail, iconKey: 'mail',
     description: 'Outbound email provider — pick SMTP today (SendGrid/SES/Postmark coming), edit host/port/creds, and send a live test message. Config lives in mail_provider + mail_config.',
     roles: ['ADMIN'] },
@@ -281,7 +287,7 @@ export const settingsGroups: Array<{ key: string; label: string; blurb: string; 
   { key: 'email', label: 'Email & alerts', blurb: 'Who hears about what, and how it reads.',
     items: ['mail', 'notification-templates', 'my-subscriptions'] },
   { key: 'integrations', label: 'Integrations', blurb: 'Systems Multiship reads from and writes back to.',
-    items: ['external-systems'] },
+    items: ['external-systems', 'dtc-scheduler'] },
   { key: 'system', label: 'System', blurb: 'Workspace-wide defaults and wording.',
     items: ['system', 'carrier-error-messages'] },
   { key: 'activity', label: 'Activity & logs', blurb: 'History to look things up in, not settings to change.',

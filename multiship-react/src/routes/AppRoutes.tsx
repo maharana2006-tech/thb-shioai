@@ -89,6 +89,8 @@ const PrintersPage = lazy(() => import('../components/PrintersPage'))
 // S3 — DB-driven external-system connection manager (Oracle WMS today,
 // REST/gRPC/SFTP later). ADMIN-only.
 const ExternalSystemsPage = lazy(() => import('../components/ExternalSystemsPage'))
+// V132 — DB-driven DTC background scheduler (DTC sync windows). ADMIN-only.
+const DtcSchedulerPage = lazy(() => import('../components/DtcSchedulerPage'))
 // A4.1 — DB-driven mail provider config + test-send.
 const MailSettingsPage = lazy(() => import('../components/MailSettingsPage'))
 // A4.2 — Handlebars templates for outbound-email events.
@@ -224,6 +226,7 @@ export default function AppRoutes() {
                   <Route path="output-destinations" element={<OutputDestinationsPage />} />
                   <Route path="printers" element={<PrintersPage />} />
                   <Route path="external-systems" element={<ExternalSystemsPage />} />
+                  <Route path="dtc-scheduler" element={<DtcSchedulerPage />} />
                   <Route path="mail" element={<MailSettingsPage />} />
                   <Route path="notification-templates" element={<NotificationTemplatesPage />} />
                   <Route path="notification-delivery-log" element={<NotificationDeliveryLogPage />} />
