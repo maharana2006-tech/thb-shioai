@@ -1328,6 +1328,12 @@ export default function NewShipmentPage() {
     } else if (['UPS', 'DHL', 'USPS'].includes(cc)) {
       if (!labelImageFormat) missing.push('Label Type')
     }
+    // PR Y — picking a CARRIER packaging preset without an explicit
+    // service lets the connector fall back to GROUND, which rejects
+    // branded packaging at the wire. Force the pick instead.
+    if (serviceId === '' && packageChoice && packageChoice !== CUSTOM_PKG) {
+      missing.push('Service')
+    }
     // Reason of export is required on international shipments — same
     // force-pick pattern as label fields (see prefill useEffect above).
     // Not label-scoped but the guard hook is the same one used by
@@ -1362,7 +1368,9 @@ export default function NewShipmentPage() {
       sender.countryCode, recipientEffectiveCountry, currency, declaredValue, ftrExemption, aesCitation,
       // typed fields the list checks — without these the memo kept reporting
       // "Duties payor account" after the operator had typed one
-      clearanceOption, dutiesAccount])
+      clearanceOption, dutiesAccount,
+      // PR Y — carrier-preset-without-service guard
+      serviceId, packageChoice])
 
   /**
    * Select a client: fill YOUR address on the correct side and auto-pick its

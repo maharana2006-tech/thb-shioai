@@ -1415,17 +1415,32 @@ public class CarrierServiceImpl implements CarrierService {
 
         // Sprint 52 — service↔packaging compatibility. Runs on every
         // manual-pick (client or ad-hoc), because carrier-side rejects the
-        // combination regardless of tenant. Skips when either side isn't
-        // resolved (connector defaults kick in later). CUSTOM presets are
+        // combination regardless of tenant. CUSTOM presets are
         // implicit-allowed inside the guard.
+        //
+        // PR Y — resolve the fallback service BEFORE guarding so the guard
+        // sees what will actually ship. Pre-PR-Y, the operator could leave
+        // serviceId=null and pick a CARRIER-branded preset; the guard
+        // no-op'd on null service, the connector default (usually GROUND)
+        // kicked in below, and the carrier rejected branded packaging on
+        // Ground at the wire.
+        String serviceType = service != null ? service.getServiceCode()
+                : firstNonBlank(connector.getConfiguration().defaultServiceType(), "GROUND");
+        com.multiship.backend.model.ShippingService guardService = service;
+        if (guardService == null && preset != null
+                && "CARRIER".equalsIgnoreCase(preset.getKind())) {
+            String originForLookup = from != null ? from.getCountryCode() : null;
+            if (StringUtils.hasText(originForLookup)) {
+                guardService = shippingConfigService
+                        .serviceByCode(carrier, serviceType, originForLookup)
+                        .orElse(null);
+            }
+        }
         try {
-            packagingCompatibilityGuard.assertCompatible(service, preset);
+            packagingCompatibilityGuard.assertCompatible(guardService, preset);
         } catch (ShipmentResolutionException e) {
             return toResolutionFailure(e);
         }
-
-        String serviceType = service != null ? service.getServiceCode()
-                : firstNonBlank(connector.getConfiguration().defaultServiceType(), "GROUND");
         // US-territory service allowlist (2026-09-08). Fast-fail before
         // the wire so operators get an actionable message instead of the
         // carrier's cryptic error a few seconds later. Bug case: US → VI
