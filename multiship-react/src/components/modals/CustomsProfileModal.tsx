@@ -513,7 +513,7 @@ export default function CustomsProfileModal({
       ref={dialogRef}
       className={`flex w-full flex-col ${
         asPage
-          ? 'mx-auto max-w-5xl'
+          ? ''
           : 'max-h-[92vh] max-w-4xl overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]'
       }`}
       onClick={asPage ? undefined : (e) => e.stopPropagation()}
