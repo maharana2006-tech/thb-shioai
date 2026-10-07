@@ -60,22 +60,22 @@ export default function CustomFieldsSection({
     <div
       className={
         compact
-          ? 'rounded-xl border border-[var(--e-e3d9c4)] bg-white p-4'
-          : 'rounded-2xl border border-[var(--e-e3d9c4)] bg-white p-5 shadow-sm'
+          ? 'rounded-xl border border-[#e3d9c4] bg-white p-4'
+          : 'rounded-2xl border border-[#e3d9c4] bg-white p-5 shadow-sm'
       }
     >
       <div className="mb-3 flex items-start justify-between gap-3">
         <div className="flex items-center gap-2">
-          <FiTag className="text-[var(--e-6b5c42)]" />
-          <h3 className="text-[13px] font-semibold text-[var(--e-1f150c)]">Custom fields</h3>
+          <FiTag className="text-[#6b5c42]" />
+          <h3 className="text-[13px] font-semibold text-[#1f150c]">Custom fields</h3>
         </div>
-        <span className="inline-flex items-center gap-1 text-[11px] text-[var(--e-6b5c42)]">
+        <span className="inline-flex items-center gap-1 text-[11px] text-[#6b5c42]">
           <FiInfo /> Tenant-defined metadata
         </span>
       </div>
 
       {loading ? (
-        <p className="text-[12px] text-[var(--e-6b5c42)]">Loading fields…</p>
+        <p className="text-[12px] text-[#6b5c42]">Loading fields…</p>
       ) : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           {defs.map((d) => (
@@ -111,7 +111,7 @@ function FieldInput({
 
   return (
     <div>
-      <label className="mb-1 flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-[0.14em] text-[var(--e-6b5c42)]">
+      <label className="mb-1 flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-[0.14em] text-[#6b5c42]">
         {def.label}
         {def.required ? <span className="text-rose-500">*</span> : null}
       </label>
@@ -129,7 +129,7 @@ function FieldInput({
           type={def.fieldType === 'NUMBER' ? 'number' : def.fieldType === 'DATE' ? 'date' : 'text'}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="w-full rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[13px] text-slate-800 outline-none focus:border-[var(--e-1f150c)]"
+          className="w-full rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[13px] text-slate-800 outline-none focus:border-[#1f150c]"
         />
       )}
     </div>

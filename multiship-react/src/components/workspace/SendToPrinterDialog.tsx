@@ -59,7 +59,7 @@ export default function SendToPrinterDialog({
   const what = docType === 'LABEL' ? 'labels' : 'commercial invoices'
   const radio = (value: PrintDocType, label: string) => (
     <label className={`flex flex-1 cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-[13px] font-semibold ${
-      docType === value ? 'border-[var(--e-5a4526)] bg-[var(--e-faf7f0)] text-[var(--e-3b2d18)]' : 'border-[var(--e-e3d9c4)] text-slate-600'}`}>
+      docType === value ? 'border-[#5a4526] bg-[#faf7f0] text-[#3b2d18]' : 'border-[#e3d9c4] text-slate-600'}`}>
       <input type="radio" name="send-doc-type" checked={docType === value} onChange={() => { setDocType(value); setResult(null) }} />
       {label}
     </label>
@@ -69,7 +69,7 @@ export default function SendToPrinterDialog({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>
       <div role="dialog" aria-modal="true" aria-label="Send to printer"
         className="w-full max-w-[520px] rounded-2xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between border-b border-[var(--e-efe7d6)] px-5 py-3">
+        <div className="flex items-center justify-between border-b border-[#efe7d6] px-5 py-3">
           <h3 className="text-[15px] font-semibold text-slate-900">
             Send {orderNumbers.length.toLocaleString()} order{orderNumbers.length === 1 ? '' : 's'} to printer
           </h3>
@@ -88,7 +88,7 @@ export default function SendToPrinterDialog({
             <span className="mb-1 block text-[11.5px] font-semibold uppercase tracking-wide text-slate-500">Print on</span>
             <select value={target} onChange={(e) => { setDestination(e.target.value); setResult(null) }}
               disabled={printers === null}
-              className="w-full rounded-lg border border-[var(--e-e3d9c4)] bg-white px-2.5 py-2 text-[13px]">
+              className="w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-2 text-[13px]">
               <option value="client">Each client&rsquo;s assigned printer</option>
               {choices.map((p) => (
                 <option key={p.id} value={String(p.id)}>
@@ -119,14 +119,14 @@ export default function SendToPrinterDialog({
           {result ? <ResultSummary result={result} what={what} onOpenSettings={canManagePrinters ? onOpenSettings : undefined} /> : null}
         </div>
 
-        <div className="flex justify-end gap-2 border-t border-[var(--e-efe7d6)] px-5 py-3">
+        <div className="flex justify-end gap-2 border-t border-[#efe7d6] px-5 py-3">
           <button type="button" onClick={onClose}
-            className="rounded-xl border border-[var(--e-e3d9c4)] bg-white px-3 py-2 text-[13px] font-semibold text-[var(--e-5a4526)] hover:bg-[var(--e-faf7f0)]">
+            className="rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]">
             {result ? 'Done' : 'Cancel'}
           </button>
           <button type="button" onClick={() => void send()}
             disabled={sending || tooMany || orderNumbers.length === 0 || !printers || printers.length === 0}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--e-3b2d18)] px-3 py-2 text-[13px] font-semibold text-white hover:bg-[var(--e-5a4526)] disabled:opacity-50">
+            className="inline-flex items-center gap-1.5 rounded-xl bg-[#3b2d18] px-3 py-2 text-[13px] font-semibold text-white hover:bg-[#5a4526] disabled:opacity-50">
             {sending
               ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
               : <FiSend className="h-3.5 w-3.5" />}
@@ -144,7 +144,7 @@ function ResultSummary({ result, what, onOpenSettings }: { result: SendToPrinter
     : 'Settings → Printers (ask an admin)'
   const orderList = (nos: number[]) => nos.slice(0, 8).map((n) => `#${n}`).join(', ') + (nos.length > 8 ? ` and ${nos.length - 8} more` : '')
   return (
-    <div className="space-y-2 rounded-lg border border-[var(--e-efe7d6)] bg-[var(--e-fcfaf5)] px-3 py-2.5 text-[12.5px]">
+    <div className="space-y-2 rounded-lg border border-[#efe7d6] bg-[#fcfaf5] px-3 py-2.5 text-[12.5px]">
       {result.printers.length === 0 ? (
         <p className="font-semibold text-slate-700">Nothing was sent.</p>
       ) : result.printers.map((p) => (

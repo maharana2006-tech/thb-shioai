@@ -218,28 +218,28 @@ export default function LabelTemplateEditorPage() {
   return (
     <div className="space-y-4 pb-24">
       {/* ── Sticky header: back · title · actions ─────────────────────────── */}
-      <div className="sticky top-0 z-20 -mx-1 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--e-e3d9c4)] bg-[var(--e-faf7f0)]/85 px-4 py-3 backdrop-blur">
+      <div className="sticky top-0 z-20 -mx-1 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#e3d9c4] bg-[#faf7f0]/85 px-4 py-3 backdrop-blur">
         <div className="flex items-center gap-3">
           <button
             type="button"
             onClick={() => navigate('/settings/templates')}
             title="Back to templates"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-[var(--e-e3d9c4)] bg-white text-[var(--e-5a4526)] transition hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-faf7f0)]"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-[#e3d9c4] bg-white text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
           >
             <FiArrowLeft className="h-4 w-4" />
           </button>
           <div>
-            <p className="font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-[var(--e-b6a684)]">
+            <p className="font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-[#b6a684]">
               Label template
             </p>
-            <h2 className="text-[15px] font-semibold leading-tight text-[var(--e-1f150c)]">
+            <h2 className="text-[15px] font-semibold leading-tight text-[#1f150c]">
               {isEdit ? `Edit template #${template.id ?? '?'}` : 'New template'}
-              <span className="ml-2 rounded-full bg-[var(--e-412d15)]/10 px-2 py-0.5 align-middle text-[10px] font-bold uppercase tracking-[0.08em] text-[var(--e-412d15)]">
+              <span className="ml-2 rounded-full bg-[#412d15]/10 px-2 py-0.5 align-middle text-[10px] font-bold uppercase tracking-[0.08em] text-[#412d15]">
                 {scopeLabel}
               </span>
             </h2>
           </div>
-          {loading ? <FiLoader className="animate-spin text-[var(--e-b6a684)]" /> : null}
+          {loading ? <FiLoader className="animate-spin text-[#b6a684]" /> : null}
         </div>
         <div className="flex items-center gap-2">
           {isEdit && admin ? (
@@ -255,7 +255,7 @@ export default function LabelTemplateEditorPage() {
             type="button"
             onClick={save}
             disabled={saving}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--e-1f150c)] px-4 py-2 text-[12.5px] font-semibold text-[var(--e-f4eede)] shadow-sm transition hover:bg-[var(--e-412d15)] disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-4 py-2 text-[12.5px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:opacity-50"
           >
             {saving ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiSave className="h-3.5 w-3.5" />}
             {saving ? 'Saving…' : isEdit ? 'Save changes' : 'Save template'}
@@ -266,12 +266,12 @@ export default function LabelTemplateEditorPage() {
       {/* ── Two columns: form (left) · live preview (right, sticky) ────────── */}
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(340px,380px)]">
         {/* FORM COLUMN — Lightroom-style "Develop" edit rail */}
-        <div className="overflow-hidden rounded-2xl border border-[var(--e-e3d9c4)] bg-white shadow-sm">
+        <div className="overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-sm">
           {/* rail module header */}
-          <div className="flex items-center gap-2 bg-[var(--e-1f150c)] px-4 py-2.5">
-            <FiSliders className="h-3.5 w-3.5 text-[var(--e-b6a684)]" />
-            <span className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-[var(--e-e3d9c4)]">Edit</span>
-            <span className="ml-auto font-mono text-[9px] font-bold uppercase tracking-[0.14em] text-[var(--e-6b5c42)]">
+          <div className="flex items-center gap-2 bg-[#1f150c] px-4 py-2.5">
+            <FiSliders className="h-3.5 w-3.5 text-[#b6a684]" />
+            <span className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-[#e3d9c4]">Edit</span>
+            <span className="ml-auto font-mono text-[9px] font-bold uppercase tracking-[0.14em] text-[#6b5c42]">
               {humanType(templateType)}
             </span>
           </div>
@@ -325,7 +325,7 @@ export default function LabelTemplateEditorPage() {
               <label
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={(e) => { e.preventDefault(); handleLogo(e.dataTransfer.files?.[0] ?? null) }}
-                className="group relative flex h-16 w-24 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-lg border-2 border-dashed border-[var(--e-e3d9c4)] bg-[var(--e-faf7f0)]/50 transition hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-faf7f0)]"
+                className="group relative flex h-16 w-24 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-lg border-2 border-dashed border-[#e3d9c4] bg-[#faf7f0]/50 transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
                 style={template.logoBase64 ? { backgroundImage: 'linear-gradient(45deg,#eee6d6 25%,transparent 25%,transparent 75%,#eee6d6 75%),linear-gradient(45deg,#eee6d6 25%,transparent 25%,transparent 75%,#eee6d6 75%)', backgroundSize: '10px 10px', backgroundPosition: '0 0,5px 5px' } : undefined}
               >
                 {template.logoBase64 ? (
@@ -335,7 +335,7 @@ export default function LabelTemplateEditorPage() {
                     className="max-h-[80%] max-w-[85%] object-contain"
                   />
                 ) : (
-                  <FiUploadCloud className="h-5 w-5 text-[var(--e-b6a684)]" />
+                  <FiUploadCloud className="h-5 w-5 text-[#b6a684]" />
                 )}
                 <input
                   ref={logoInputRef}
@@ -346,15 +346,15 @@ export default function LabelTemplateEditorPage() {
                 />
               </label>
               <div className="min-w-0 flex-1">
-                <p className="text-[11.5px] font-semibold text-[var(--e-5a4526)]">
+                <p className="text-[11.5px] font-semibold text-[#5a4526]">
                   {template.logoBase64 ? 'Logo added' : 'Drop an image or click the tile'}
                 </p>
-                <p className="text-[10px] text-[var(--e-b6a684)]">PNG or JPEG · under 200 KB</p>
+                <p className="text-[10px] text-[#b6a684]">PNG or JPEG · under 200 KB</p>
                 {template.logoBase64 ? (
                   <button
                     type="button"
                     onClick={removeLogo}
-                    className="mt-1.5 inline-flex items-center gap-1 rounded-lg border border-[var(--e-e3d9c4)] bg-white px-2 py-1 text-[10.5px] font-semibold text-[var(--e-6b5c42)] transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700"
+                    className="mt-1.5 inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[10.5px] font-semibold text-[#6b5c42] transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700"
                   >
                     <FiTrash2 className="h-3 w-3" /> Remove logo
                   </button>
@@ -362,13 +362,13 @@ export default function LabelTemplateEditorPage() {
               </div>
             </div>
 
-            <div className="my-1 border-t border-[var(--e-eee6d6)]" />
+            <div className="my-1 border-t border-[#eee6d6]" />
 
             {/* PRIMARY COLOUR — big swatch (opens picker) + hex cell + presets */}
             <GroupLabel>Primary colour</GroupLabel>
             <div className="flex items-center gap-2">
               <label
-                className="relative h-9 w-9 shrink-0 cursor-pointer overflow-hidden rounded-lg border border-[var(--e-e3d9c4)] shadow-inner"
+                className="relative h-9 w-9 shrink-0 cursor-pointer overflow-hidden rounded-lg border border-[#e3d9c4] shadow-inner"
                 style={{ backgroundColor: primary }}
                 title="Open colour picker"
               >
@@ -386,7 +386,7 @@ export default function LabelTemplateEditorPage() {
                     value={template.primaryColor || ''}
                     onChange={(e) => updateField('primaryColor', e.target.value)}
                     placeholder={DEFAULT_COLOR}
-                    className="w-full bg-transparent font-mono text-[12px] font-semibold uppercase text-[var(--e-1f150c)] outline-none"
+                    className="w-full bg-transparent font-mono text-[12px] font-semibold uppercase text-[#1f150c] outline-none"
                   />
                 </FieldCell>
               </div>
@@ -399,54 +399,54 @@ export default function LabelTemplateEditorPage() {
                     title={c}
                     style={{ background: c }}
                     className={`h-5 w-5 rounded-full ring-2 ring-offset-1 transition ${
-                      primary.toLowerCase() === c.toLowerCase() ? 'ring-[var(--e-1f150c)]' : 'ring-transparent hover:ring-[var(--e-cdbf9f)]'
+                      primary.toLowerCase() === c.toLowerCase() ? 'ring-[#1f150c]' : 'ring-transparent hover:ring-[#cdbf9f]'
                     }`}
                   />
                 ))}
               </div>
             </div>
 
-            <div className="my-1 border-t border-[var(--e-eee6d6)]" />
+            <div className="my-1 border-t border-[#eee6d6]" />
 
             {/* COPY — header + footer as inspector field cells */}
             <GroupLabel>Copy</GroupLabel>
-            <FieldCell label="Header line" aside={<span className="normal-case tracking-normal text-[var(--e-cdbf9f)]">{(template.headerText || '').length}/200</span>}>
+            <FieldCell label="Header line" aside={<span className="normal-case tracking-normal text-[#cdbf9f]">{(template.headerText || '').length}/200</span>}>
               <input
                 type="text"
                 maxLength={200}
                 value={template.headerText || ''}
                 onChange={(e) => updateField('headerText', e.target.value)}
                 placeholder={DEFAULT_HEADER}
-                className="w-full bg-transparent text-[12.5px] font-semibold text-[var(--e-1f150c)] outline-none placeholder:font-normal placeholder:text-[var(--e-b6a684)]"
+                className="w-full bg-transparent text-[12.5px] font-semibold text-[#1f150c] outline-none placeholder:font-normal placeholder:text-[#b6a684]"
               />
             </FieldCell>
-            <FieldCell label="Footer note" aside={<span className="normal-case tracking-normal text-[var(--e-cdbf9f)]">{(template.footerText || '').length}/500</span>}>
+            <FieldCell label="Footer note" aside={<span className="normal-case tracking-normal text-[#cdbf9f]">{(template.footerText || '').length}/500</span>}>
               <textarea
                 rows={3}
                 maxLength={500}
                 value={template.footerText || ''}
                 onChange={(e) => updateField('footerText', e.target.value)}
                 placeholder={'Thanks for your order!\nReturns accepted within 30 days.'}
-                className="w-full resize-none bg-transparent text-[12px] leading-4 text-[var(--e-3f3527)] outline-none placeholder:text-[var(--e-b6a684)]"
+                className="w-full resize-none bg-transparent text-[12px] leading-4 text-[#3f3527] outline-none placeholder:text-[#b6a684]"
               />
             </FieldCell>
 
-            <div className="my-1 border-t border-[var(--e-eee6d6)]" />
+            <div className="my-1 border-t border-[#eee6d6]" />
 
             {/* toggle row with sliding switch */}
             <button
               type="button"
               onClick={() => updateField('showItems', !(template.showItems !== false))}
-              className="flex w-full items-center justify-between gap-3 rounded-lg border border-[var(--e-e3d9c4)] bg-[var(--e-faf7f0)]/50 px-3 py-2 text-left transition hover:bg-[var(--e-faf7f0)]"
+              className="flex w-full items-center justify-between gap-3 rounded-lg border border-[#e3d9c4] bg-[#faf7f0]/50 px-3 py-2 text-left transition hover:bg-[#faf7f0]"
             >
-              <span className="flex items-center gap-1.5 text-[12px] font-semibold text-[var(--e-5a4526)]">
-                <FiType className="h-3.5 w-3.5 text-[var(--e-b6a684)]" /> Order-lines table
+              <span className="flex items-center gap-1.5 text-[12px] font-semibold text-[#5a4526]">
+                <FiType className="h-3.5 w-3.5 text-[#b6a684]" /> Order-lines table
               </span>
               <span className="flex items-center gap-2">
-                <span className={`font-mono text-[9px] font-bold uppercase tracking-wide ${template.showItems !== false ? 'text-[var(--e-412d15)]' : 'text-[var(--e-b6a684)]'}`}>
+                <span className={`font-mono text-[9px] font-bold uppercase tracking-wide ${template.showItems !== false ? 'text-[#412d15]' : 'text-[#b6a684]'}`}>
                   {template.showItems !== false ? 'On' : 'Off'}
                 </span>
-                <span className={`inline-flex h-5 w-9 items-center rounded-full px-0.5 transition ${template.showItems !== false ? 'justify-end bg-[var(--e-1f150c)]' : 'justify-start bg-[var(--e-cdbf9f)]'}`}>
+                <span className={`inline-flex h-5 w-9 items-center rounded-full px-0.5 transition ${template.showItems !== false ? 'justify-end bg-[#1f150c]' : 'justify-start bg-[#cdbf9f]'}`}>
                   <span className="h-4 w-4 rounded-full bg-white shadow-sm" />
                 </span>
               </span>
@@ -475,7 +475,7 @@ export default function LabelTemplateEditorPage() {
                   if (!window.confirm('Clear the whole layout? The branding header / footer / logo will be used at render time until you rebuild.')) return
                   setTemplate((prev) => ({ ...prev, layoutJson: null }))
                 }}
-                className="mb-2 inline-flex items-center gap-1 rounded-lg border border-[var(--e-e3d9c4)] bg-white px-2 py-1 text-[10.5px] font-semibold text-[var(--e-6b5c42)] transition hover:bg-[var(--e-faf7f0)]"
+                className="mb-2 inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[10.5px] font-semibold text-[#6b5c42] transition hover:bg-[#faf7f0]"
               >
                 <FiTrash2 className="h-3 w-3" /> Clear layout
               </button>
@@ -503,11 +503,11 @@ export default function LabelTemplateEditorPage() {
           />
 
           {/* Scope explainer */}
-          <div className="mt-4 rounded-2xl border border-[var(--e-e3d9c4)] bg-[var(--e-faf7f0)]/60 p-4">
-            <h3 className="mb-2 flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.16em] text-[var(--e-b6a684)]">
+          <div className="mt-4 rounded-2xl border border-[#e3d9c4] bg-[#faf7f0]/60 p-4">
+            <h3 className="mb-2 flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.16em] text-[#b6a684]">
               <FiInfo className="h-3 w-3" /> What this covers
             </h3>
-            <ul className="space-y-1.5 text-[11.5px] leading-4 text-[var(--e-5a4526)]">
+            <ul className="space-y-1.5 text-[11.5px] leading-4 text-[#5a4526]">
               <li className="flex items-start gap-1.5">
                 <FiCheck className="mt-0.5 h-3 w-3 shrink-0 text-emerald-600" />
                 Branded packing slip slipped inside the parcel.
@@ -516,7 +516,7 @@ export default function LabelTemplateEditorPage() {
                 <FiCheck className="mt-0.5 h-3 w-3 shrink-0 text-emerald-600" />
                 Tenant-scoped — each client can override the platform default.
               </li>
-              <li className="flex items-start gap-1.5 text-[var(--e-6b5c42)]">
+              <li className="flex items-start gap-1.5 text-[#6b5c42]">
                 <FiInfo className="mt-0.5 h-3 w-3 shrink-0" />
                 The carrier's shipping label itself is <strong>not</strong> customisable.
               </li>
@@ -547,24 +547,24 @@ function Panel({ id, icon, title, summary, badge, open, onToggle, aside, childre
   children: ReactNode
 }) {
   return (
-    <div className="border-t border-[var(--e-e3d9c4)] first:border-t-0">
+    <div className="border-t border-[#e3d9c4] first:border-t-0">
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={open}
         aria-controls={`panel-${id}`}
-        className="flex w-full items-center gap-2.5 bg-[var(--e-faf7f0)]/70 px-4 py-2.5 text-left transition hover:bg-[var(--e-faf7f0)]"
+        className="flex w-full items-center gap-2.5 bg-[#faf7f0]/70 px-4 py-2.5 text-left transition hover:bg-[#faf7f0]"
       >
-        <FiChevronDown className={`h-3.5 w-3.5 shrink-0 text-[var(--e-b6a684)] transition-transform duration-200 ${open ? '' : '-rotate-90'}`} />
-        <span className="inline-flex h-5 w-5 items-center justify-center rounded text-[var(--e-412d15)]">{icon}</span>
-        <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-[var(--e-412d15)]">{title}</span>
+        <FiChevronDown className={`h-3.5 w-3.5 shrink-0 text-[#b6a684] transition-transform duration-200 ${open ? '' : '-rotate-90'}`} />
+        <span className="inline-flex h-5 w-5 items-center justify-center rounded text-[#412d15]">{icon}</span>
+        <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#412d15]">{title}</span>
         {badge ? (
-          <span className="rounded-full bg-white px-1.5 py-0.5 text-[8.5px] font-bold uppercase tracking-wide text-[var(--e-b6a684)] ring-1 ring-[var(--e-e3d9c4)]">{badge}</span>
+          <span className="rounded-full bg-white px-1.5 py-0.5 text-[8.5px] font-bold uppercase tracking-wide text-[#b6a684] ring-1 ring-[#e3d9c4]">{badge}</span>
         ) : null}
         <span className="ml-auto flex items-center gap-2">
           {aside}
           {!open && summary ? (
-            <span className="max-w-[160px] truncate font-mono text-[10px] font-semibold text-[var(--e-6b5c42)]">{summary}</span>
+            <span className="max-w-[160px] truncate font-mono text-[10px] font-semibold text-[#6b5c42]">{summary}</span>
           ) : null}
         </span>
       </button>
@@ -576,7 +576,7 @@ function Panel({ id, icon, title, summary, badge, open, onToggle, aside, childre
 /** A dim sub-group heading inside a panel (Lightroom's "Basic → Tone" style). */
 function GroupLabel({ children }: { children: ReactNode }) {
   return (
-    <p className="font-mono text-[8.5px] font-bold uppercase tracking-[0.18em] text-[var(--e-cdbf9f)]">{children}</p>
+    <p className="font-mono text-[8.5px] font-bold uppercase tracking-[0.18em] text-[#cdbf9f]">{children}</p>
   )
 }
 
@@ -596,16 +596,16 @@ function FieldCell({ label, disabled, chevron, aside, children }: {
     <div
       className={`relative rounded-lg border px-2.5 pb-1.5 pt-1 transition ${
         disabled
-          ? 'border-[var(--e-eee6d6)] bg-[var(--e-faf7f0)]/40'
-          : 'border-[var(--e-e3d9c4)] bg-[var(--e-faf7f0)]/60 focus-within:border-[var(--e-cdbf9f)] focus-within:bg-white focus-within:ring-2 focus-within:ring-[var(--e-f0e9d8)]'
+          ? 'border-[#eee6d6] bg-[#faf7f0]/40'
+          : 'border-[#e3d9c4] bg-[#faf7f0]/60 focus-within:border-[#cdbf9f] focus-within:bg-white focus-within:ring-2 focus-within:ring-[#f0e9d8]'
       }`}
     >
-      <span className="pointer-events-none flex items-center justify-between text-[8px] font-bold uppercase tracking-[0.14em] text-[var(--e-b6a684)]">
+      <span className="pointer-events-none flex items-center justify-between text-[8px] font-bold uppercase tracking-[0.14em] text-[#b6a684]">
         {label}{aside}
       </span>
       {children}
       {chevron ? (
-        <FiChevronDown className="pointer-events-none absolute bottom-2 right-2 h-3 w-3 text-[var(--e-6b5c42)]" />
+        <FiChevronDown className="pointer-events-none absolute bottom-2 right-2 h-3 w-3 text-[#6b5c42]" />
       ) : null}
     </div>
   )
@@ -613,7 +613,7 @@ function FieldCell({ label, disabled, chevron, aside, children }: {
 
 /** Borderless compact select that fills a {@link FieldCell}. */
 const cellSelect =
-  'w-full cursor-pointer appearance-none truncate bg-transparent pr-4 text-[12px] font-semibold text-[var(--e-1f150c)] outline-none disabled:cursor-not-allowed disabled:opacity-70'
+  'w-full cursor-pointer appearance-none truncate bg-transparent pr-4 text-[12px] font-semibold text-[#1f150c] outline-none disabled:cursor-not-allowed disabled:opacity-70'
 
 /** A live, paper-like packing-slip preview that reflects the current branding. */
 function TemplatePreview({ logo, color, header, footer, showItems, typeLabel }: {
@@ -627,16 +627,16 @@ function TemplatePreview({ logo, color, header, footer, showItems, typeLabel }: 
   const c = color || DEFAULT_COLOR
   const logoSrc = logo ? (logo.startsWith('data:') ? logo : `data:image/png;base64,${logo}`) : null
   return (
-    <div className="overflow-hidden rounded-2xl border border-[var(--e-e3d9c4)] bg-white shadow-sm">
-      <div className="flex items-center justify-between border-b border-[var(--e-eee6d6)] bg-[var(--e-faf7f0)]/60 px-3 py-2">
-        <span className="inline-flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-[var(--e-b6a684)]">
+    <div className="overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-sm">
+      <div className="flex items-center justify-between border-b border-[#eee6d6] bg-[#faf7f0]/60 px-3 py-2">
+        <span className="inline-flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-[#b6a684]">
           <FiEye className="h-3 w-3" /> Live preview
         </span>
-        <span className="font-mono text-[9px] font-bold uppercase tracking-[0.12em] text-[var(--e-cdbf9f)]">{typeLabel}</span>
+        <span className="font-mono text-[9px] font-bold uppercase tracking-[0.12em] text-[#cdbf9f]">{typeLabel}</span>
       </div>
-      <div className="bg-[var(--e-f4eede)]/50 p-4">
+      <div className="bg-[#f4eede]/50 p-4">
         {/* the "paper" */}
-        <div className="mx-auto max-w-[300px] overflow-hidden rounded-md border border-[var(--e-e3d9c4)] bg-white text-[8px] leading-tight text-[var(--e-3f3527)] shadow-md">
+        <div className="mx-auto max-w-[300px] overflow-hidden rounded-md border border-[#e3d9c4] bg-white text-[8px] leading-tight text-[#3f3527] shadow-md">
           {/* header band */}
           <div className="flex items-center justify-between gap-2 px-3 py-2.5 text-white" style={{ backgroundColor: c }}>
             <span className="truncate text-[11px] font-extrabold tracking-wide">{(header || DEFAULT_HEADER).toUpperCase()}</span>
@@ -646,11 +646,11 @@ function TemplatePreview({ logo, color, header, footer, showItems, typeLabel }: 
             <div className="flex justify-between gap-3">
               <div>
                 <p className="font-bold" style={{ color: c }}>SHIP TO</p>
-                <p className="mt-0.5 font-semibold text-[9px] text-[var(--e-1f150c)]">Jane Doe</p>
+                <p className="mt-0.5 font-semibold text-[9px] text-[#1f150c]">Jane Doe</p>
                 <p>221B Baker Street</p>
                 <p>London NW1 6XE, GB</p>
               </div>
-              <div className="text-right text-[var(--e-6b5c42)]">
+              <div className="text-right text-[#6b5c42]">
                 <p className="font-bold" style={{ color: c }}>ORDER</p>
                 <p className="mt-0.5">#100482</p>
                 <p>Aug 11, 2026</p>
@@ -664,21 +664,21 @@ function TemplatePreview({ logo, color, header, footer, showItems, typeLabel }: 
                     <th className="py-0.5 text-right font-bold">QTY</th>
                   </tr>
                 </thead>
-                <tbody className="text-[var(--e-3f3527)]">
-                  <tr className="border-b border-[var(--e-eee6d6)]"><td className="py-0.5">Cotton Tote Bag</td><td className="py-0.5 text-right">2</td></tr>
-                  <tr className="border-b border-[var(--e-eee6d6)]"><td className="py-0.5">Ceramic Mug</td><td className="py-0.5 text-right">1</td></tr>
+                <tbody className="text-[#3f3527]">
+                  <tr className="border-b border-[#eee6d6]"><td className="py-0.5">Cotton Tote Bag</td><td className="py-0.5 text-right">2</td></tr>
+                  <tr className="border-b border-[#eee6d6]"><td className="py-0.5">Ceramic Mug</td><td className="py-0.5 text-right">1</td></tr>
                   <tr><td className="py-0.5">Notebook Pack</td><td className="py-0.5 text-right">3</td></tr>
                 </tbody>
               </table>
             ) : null}
             {footer ? (
-              <p className="whitespace-pre-line border-t border-[var(--e-eee6d6)] pt-1.5 text-[7.5px] text-[var(--e-6b5c42)]">{footer}</p>
+              <p className="whitespace-pre-line border-t border-[#eee6d6] pt-1.5 text-[7.5px] text-[#6b5c42]">{footer}</p>
             ) : (
-              <p className="border-t border-[var(--e-eee6d6)] pt-1.5 text-[7.5px] italic text-[var(--e-cdbf9f)]">Footer text appears here…</p>
+              <p className="border-t border-[#eee6d6] pt-1.5 text-[7.5px] italic text-[#cdbf9f]">Footer text appears here…</p>
             )}
           </div>
         </div>
-        <p className="mt-2 text-center text-[10px] text-[var(--e-b6a684)]">Sample data — your live orders fill these fields.</p>
+        <p className="mt-2 text-center text-[10px] text-[#b6a684]">Sample data — your live orders fill these fields.</p>
       </div>
     </div>
   )
@@ -686,7 +686,7 @@ function TemplatePreview({ logo, color, header, footer, showItems, typeLabel }: 
 
 // ===== helpers =====
 
-const fieldHint = 'mt-1.5 text-[10.5px] leading-4 text-[var(--e-b6a684)]'
+const fieldHint = 'mt-1.5 text-[10.5px] leading-4 text-[#b6a684]'
 
 /** Quick-pick brand colours for the primary-colour control (espresso + common). */
 const COLOR_PRESETS = ['#1f150c', '#412d15', '#8a7959', '#1d4ed8', '#047857', '#b91c1c']

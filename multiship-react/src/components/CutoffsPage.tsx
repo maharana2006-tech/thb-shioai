@@ -164,7 +164,7 @@ export default function CutoffsPage() {
               <FiRefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Reload
             </button>
             <button type="button" onClick={() => void seed()} disabled={seeding}
-                    className="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-2.5 py-1.5 text-[12px] font-semibold text-[var(--e-f4eede)] hover:bg-slate-800 disabled:opacity-40">
+                    className="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-2.5 py-1.5 text-[12px] font-semibold text-[#f4eede] hover:bg-slate-800 disabled:opacity-40">
               <FiZap className="h-3.5 w-3.5" /> {seeding ? 'Seeding…' : 'Seed for all combos'}
             </button>
           </div>
@@ -239,7 +239,7 @@ export default function CutoffsPage() {
               <td className="px-3 py-2 text-slate-400 text-[11px]">on save</td>
               <td className="px-3 py-2 text-right">
                 <button type="button" onClick={() => void addRule()} disabled={addingRule}
-                        className="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-2.5 py-1 text-[11.5px] font-semibold text-[var(--e-f4eede)] hover:bg-slate-800 disabled:opacity-40">
+                        className="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-2.5 py-1 text-[11.5px] font-semibold text-[#f4eede] hover:bg-slate-800 disabled:opacity-40">
                   <FiPlus className="h-3.5 w-3.5" /> Add
                 </button>
               </td>
@@ -301,7 +301,7 @@ export default function CutoffsPage() {
               <td className="px-3 py-2 text-right">
                 <button type="button" onClick={() => void addHoliday()}
                         disabled={addingHoliday || !newHoliday.holidayDate || !newHoliday.name.trim()}
-                        className="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-2.5 py-1 text-[11.5px] font-semibold text-[var(--e-f4eede)] hover:bg-slate-800 disabled:opacity-40">
+                        className="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-2.5 py-1 text-[11.5px] font-semibold text-[#f4eede] hover:bg-slate-800 disabled:opacity-40">
                   <FiPlus className="h-3.5 w-3.5" /> Add
                 </button>
               </td>

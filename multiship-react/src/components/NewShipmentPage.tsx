@@ -3008,14 +3008,14 @@ export default function NewShipmentPage() {
               <FiAlertTriangle className="h-4 w-4" />
             </span>
             <div className="min-w-0 flex-1">
-              <p className="text-[12.5px] font-bold text-[var(--e-1f150c)]">{toast.title}</p>
-              <p className="mt-0.5 text-[12px] leading-snug text-[var(--e-5a4526)]">{toast.body}</p>
+              <p className="text-[12.5px] font-bold text-[#1f150c]">{toast.title}</p>
+              <p className="mt-0.5 text-[12px] leading-snug text-[#5a4526]">{toast.body}</p>
             </div>
             <button
               type="button"
               onClick={() => setToast(null)}
               aria-label="Dismiss"
-              className="-mr-1 -mt-1 shrink-0 rounded-lg p-1 text-[var(--e-b6a684)] transition hover:bg-[var(--e-faf7f0)] hover:text-[var(--e-5a4526)]"
+              className="-mr-1 -mt-1 shrink-0 rounded-lg p-1 text-[#b6a684] transition hover:bg-[#faf7f0] hover:text-[#5a4526]"
             >
               <FiX className="h-3.5 w-3.5" />
             </button>
@@ -3087,7 +3087,7 @@ export default function NewShipmentPage() {
           </section>
         ) : null}
         {loading ? (
-          <section className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-sm text-[var(--e-6b5c42)] shadow-sm">
+          <section className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-sm text-[#6b5c42] shadow-sm">
             Loading carriers, services and packaging…
           </section>
         ) : (
@@ -3144,14 +3144,14 @@ export default function NewShipmentPage() {
             {/* ── Shipment / Return toggle ── */}
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-3">
-                <div className="inline-flex items-center gap-1 rounded-2xl border border-[var(--e-e3d9c4)] bg-white p-1 shadow-sm">
+                <div className="inline-flex items-center gap-1 rounded-2xl border border-[#e3d9c4] bg-white p-1 shadow-sm">
                   {(['SHIPMENT', 'RETURN'] as const).map((m) => (
                     <button
                       key={m}
                       type="button"
                       onClick={() => switchMode(m)}
                       className={`inline-flex items-center justify-center gap-1.5 rounded-xl px-4 py-2 text-[12.5px] font-semibold transition ${
-                        mode === m ? 'bg-[var(--e-1f150c)] text-[var(--e-f4eede)] shadow-sm' : 'text-[var(--e-5a4526)] hover:bg-[var(--e-faf7f0)]'
+                        mode === m ? 'bg-[#1f150c] text-[#f4eede] shadow-sm' : 'text-[#5a4526] hover:bg-[#faf7f0]'
                       }`}
                     >
                       {m === 'SHIPMENT' ? <FiTruck className="h-3.5 w-3.5" /> : <FiRotateCcw className="h-3.5 w-3.5" />}
@@ -3161,14 +3161,14 @@ export default function NewShipmentPage() {
                 </div>
                 {isReturn ? (
                   <div className="flex flex-wrap items-center gap-3">
-                    <span className="text-[12px] text-[var(--e-6b5c42)]">
+                    <span className="text-[12px] text-[#6b5c42]">
                       Reverse label — the customer ships back to your address. Billed to your account.
                     </span>
                     {/* Return delivery type — PRINT | EMAIL. Threaded as
                         ManualShipmentRequest.returnType and picked up by
                         each carrier connector (UPS ReturnService.Code 8/9,
                         FedEx returnedShipmentDetail.returnType). */}
-                    <div className="inline-flex items-center gap-1 rounded-xl border border-[var(--e-e3d9c4)] bg-white p-1 shadow-sm">
+                    <div className="inline-flex items-center gap-1 rounded-xl border border-[#e3d9c4] bg-white p-1 shadow-sm">
                       {(['PRINT', 'EMAIL'] as const).map((rt) => (
                         <button
                           key={rt}
@@ -3179,8 +3179,8 @@ export default function NewShipmentPage() {
                             : 'Carrier emails the label directly to the customer.'}
                           className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11.5px] font-semibold transition ${
                             returnType === rt
-                              ? 'bg-[var(--e-1f150c)] text-[var(--e-f4eede)]'
-                              : 'text-[var(--e-5a4526)] hover:bg-[var(--e-faf7f0)]'
+                              ? 'bg-[#1f150c] text-[#f4eede]'
+                              : 'text-[#5a4526] hover:bg-[#faf7f0]'
                           }`}
                         >
                           {rt === 'PRINT' ? 'Print' : 'Email to customer'}
@@ -3191,7 +3191,7 @@ export default function NewShipmentPage() {
                         historically forced pickup.isRequested=true on every
                         return; some returns are drop-off at a ServicePoint. */}
                     {canon(carrier) === 'DHL' ? (
-                      <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-[var(--e-e3d9c4)] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[var(--e-5a4526)] shadow-sm">
+                      <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[#5a4526] shadow-sm">
                         <input
                           type="checkbox"
                           checked={returnPickupRequested}
@@ -3203,7 +3203,7 @@ export default function NewShipmentPage() {
                     ) : null}
                     {/* Returns F10 — operator-issued RMA. Free-form,
                         capped at the DB column width. Blank is fine. */}
-                    <label className="inline-flex cursor-text items-center gap-1.5 rounded-xl border border-[var(--e-e3d9c4)] bg-white px-2.5 py-1 text-[11.5px] font-semibold text-[var(--e-5a4526)] shadow-sm">
+                    <label className="inline-flex cursor-text items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11.5px] font-semibold text-[#5a4526] shadow-sm">
                       <span className="whitespace-nowrap">RMA #</span>
                       <input
                         type="text"
@@ -3211,12 +3211,12 @@ export default function NewShipmentPage() {
                         onChange={(e) => setRmaNumber(e.target.value.slice(0, 60))}
                         placeholder="optional"
                         maxLength={60}
-                        className="w-28 border-0 bg-transparent p-0 text-[11.5px] font-semibold text-[var(--e-1f150c)] placeholder:font-normal placeholder:text-[var(--e-a08f6c)] focus:outline-none focus:ring-0"
+                        className="w-28 border-0 bg-transparent p-0 text-[11.5px] font-semibold text-[#1f150c] placeholder:font-normal placeholder:text-[#a08f6c] focus:outline-none focus:ring-0"
                       />
                     </label>
                     {/* Returns F12 — original order no this is a return of.
                         Server validates existence; a typo lands as NULL. */}
-                    <label className="inline-flex cursor-text items-center gap-1.5 rounded-xl border border-[var(--e-e3d9c4)] bg-white px-2.5 py-1 text-[11.5px] font-semibold text-[var(--e-5a4526)] shadow-sm">
+                    <label className="inline-flex cursor-text items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11.5px] font-semibold text-[#5a4526] shadow-sm">
                       <span className="whitespace-nowrap">Return of #</span>
                       <input
                         type="number"
@@ -3224,17 +3224,17 @@ export default function NewShipmentPage() {
                         onChange={(e) => setOriginalOrderNo(e.target.value)}
                         placeholder="optional"
                         min={1}
-                        className="w-24 border-0 bg-transparent p-0 text-[11.5px] font-semibold text-[var(--e-1f150c)] placeholder:font-normal placeholder:text-[var(--e-a08f6c)] focus:outline-none focus:ring-0"
+                        className="w-24 border-0 bg-transparent p-0 text-[11.5px] font-semibold text-[#1f150c] placeholder:font-normal placeholder:text-[#a08f6c] focus:outline-none focus:ring-0"
                       />
                     </label>
                     {/* Returns F11 — canonical reason picklist. Codes must
                         match CarrierServiceImpl.RETURN_REASON_CODES. */}
-                    <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-[var(--e-e3d9c4)] bg-white px-2.5 py-1 text-[11.5px] font-semibold text-[var(--e-5a4526)] shadow-sm">
+                    <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11.5px] font-semibold text-[#5a4526] shadow-sm">
                       <span className="whitespace-nowrap">Reason</span>
                       <select
                         value={returnReason}
                         onChange={(e) => setReturnReason(e.target.value)}
-                        className="border-0 bg-transparent p-0 pr-5 text-[11.5px] font-semibold text-[var(--e-1f150c)] focus:outline-none focus:ring-0"
+                        className="border-0 bg-transparent p-0 pr-5 text-[11.5px] font-semibold text-[#1f150c] focus:outline-none focus:ring-0"
                       >
                         <option value="">—</option>
                         <option value="WRONG_ITEM">Wrong item</option>
@@ -3250,7 +3250,7 @@ export default function NewShipmentPage() {
               <button
                 type="button"
                 onClick={() => void leaveForm()}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--e-e3d9c4)] bg-white px-3 py-2 text-[12.5px] font-semibold text-[var(--e-5a4526)] transition hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-faf7f0)]"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[12.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
               >
                 <FiArrowLeft className="h-3.5 w-3.5" />
                 Back to orders
@@ -3409,7 +3409,7 @@ export default function NewShipmentPage() {
                                 <span key={`${p.scannedValue}:${i}`}
                                       className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11.5px] ring-1 whitespace-nowrap ${
                                         active
-                                          ? 'bg-[var(--e-1f150c)] text-[var(--e-f4eede)] ring-[var(--e-1f150c)]'
+                                          ? 'bg-[#1f150c] text-[#f4eede] ring-[#1f150c]'
                                           : `${inactiveTint} cursor-pointer`
                                       }`}
                                       onClick={active ? undefined : () => activateQueued(i)}
@@ -3420,7 +3420,7 @@ export default function NewShipmentPage() {
                                   <button
                                     type="button"
                                     className={`ml-0.5 rounded-full px-1 leading-none ${
-                                      active ? 'hover:bg-[var(--e-412d15)]' : 'hover:bg-black/10'
+                                      active ? 'hover:bg-[#412d15]' : 'hover:bg-black/10'
                                     }`}
                                     onClick={(e) => { e.stopPropagation(); removeQueued(i) }}
                                     aria-label={`Remove ${label} from queue`}
@@ -3723,9 +3723,9 @@ export default function NewShipmentPage() {
                     icon-popover on the row. */}
                 <div className="mt-4">
                   <label className="block">
-                    <span className="mb-1 flex items-center justify-between text-[11px] font-bold uppercase tracking-[0.14em] text-[var(--e-6b5c42)]">
+                    <span className="mb-1 flex items-center justify-between text-[11px] font-bold uppercase tracking-[0.14em] text-[#6b5c42]">
                       <span>Internal note (optional)</span>
-                      <span className={`normal-case tracking-normal ${note.length > 450 ? 'text-amber-600' : 'text-[var(--e-b6a684)]'}`}>
+                      <span className={`normal-case tracking-normal ${note.length > 450 ? 'text-amber-600' : 'text-[#b6a684]'}`}>
                         {note.length}/500
                       </span>
                     </span>
@@ -3735,7 +3735,7 @@ export default function NewShipmentPage() {
                       value={note}
                       onChange={(e) => setNote(e.target.value)}
                       placeholder="Driver instructions, pickup hints, handling flags… (not printed on labels)"
-                      className="w-full resize-y rounded-xl border border-[var(--e-e3d9c4)] bg-white px-3 py-2 text-[13px] text-[var(--e-1f150c)] outline-none transition placeholder:text-[var(--e-b6a684)] focus:border-[var(--e-cdbf9f)] focus:ring-4 focus:ring-[var(--e-f4eede)]"
+                      className="w-full resize-y rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13px] text-[#1f150c] outline-none transition placeholder:text-[#b6a684] focus:border-[#cdbf9f] focus:ring-4 focus:ring-[#f4eede]"
                     />
                   </label>
                 </div>
@@ -3806,9 +3806,9 @@ export default function NewShipmentPage() {
                           onFocus={() => (recipientSuggestions.length > 0 || recipientNoMatch) && setRecipientDropdownOpen(true)}
                           onBlur={() => setTimeout(() => { setRecipientDropdownOpen(false); setRecipientActive(-1) }, 150)}
                           placeholder="Search by name, street, ZIP, phone…"
-                          className="w-full rounded-lg border border-[var(--e-e3d9c4)] bg-white px-2.5 py-1.5 pl-8 text-[12px] outline-none focus:border-[var(--e-1f150c)]"
+                          className="w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 pl-8 text-[12px] outline-none focus:border-[#1f150c]"
                         />
-                        <FiSearch className="pointer-events-none absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-[var(--e-6b5c42)]" />
+                        <FiSearch className="pointer-events-none absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-[#6b5c42]" />
                       </div>
                       {recipientDropdownOpen && (recipientSuggestions.length > 0 || recipientNoMatch) ? (
                         // Wider than the input: at the input's width names read
@@ -3832,7 +3832,7 @@ export default function NewShipmentPage() {
                               onMouseDown={(e) => { e.preventDefault(); applySavedRecipient(s) }}
                               onMouseEnter={() => setRecipientActive(i)}
                               className={`flex cursor-pointer items-start justify-between gap-2 px-3 py-2 text-left text-[11.5px] ${
-                                i === recipientActive ? 'bg-[var(--e-faf7f0)]' : 'hover:bg-slate-50'}`}
+                                i === recipientActive ? 'bg-[#faf7f0]' : 'hover:bg-slate-50'}`}
                             >
                               <div className="min-w-0">
                                 <p className="truncate font-semibold text-slate-950">
@@ -3848,7 +3848,7 @@ export default function NewShipmentPage() {
                               <span className="flex shrink-0 flex-col items-end gap-0.5">
                                 {/* With no client picked an admin sees every client's entries — say whose. */}
                                 {!clientCode && s.ownerCustomerNo ? (
-                                  <span className="whitespace-nowrap rounded-full bg-[var(--e-f3ecdd)] px-1.5 py-0.5 text-[9.5px] font-semibold text-[var(--e-5a4526)]"
+                                  <span className="whitespace-nowrap rounded-full bg-[#f3ecdd] px-1.5 py-0.5 text-[9.5px] font-semibold text-[#5a4526]"
                                     title={`Saved for client ${s.ownerCustomerNo}`}>
                                     {s.ownerCustomerNo}
                                   </span>
@@ -3874,10 +3874,10 @@ export default function NewShipmentPage() {
                     title={clientCode
                       ? `Save this Ship to address to ${clientCode}'s address book`
                       : 'Save this Ship to address as a shared entry every client can use'}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--e-e3d9c4)] bg-white px-3 py-1.5 text-[12px] font-semibold text-[var(--e-5a4526)] transition hover:bg-[var(--e-faf7f0)] disabled:opacity-50"
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0] disabled:opacity-50"
                   >
                     {savingToBook ? (
-                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[var(--e-cdbf9f)] border-t-[var(--e-5a4526)]" />
+                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#5a4526]" />
                     ) : (
                       <FiBookmark className="h-3.5 w-3.5" />
                     )}
@@ -3935,16 +3935,16 @@ export default function NewShipmentPage() {
                       onClick={() => void recommendServiceAi()}
                       disabled={svcBusy}
                       title="Recommend a service & incoterm for this route"
-                      className="inline-flex items-center gap-1 rounded-lg border border-dashed border-[var(--e-cdbf9f)] bg-white px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.08em] text-[var(--e-5a4526)] transition hover:border-[var(--e-412d15)] hover:bg-[var(--e-faf7f0)] disabled:opacity-50"
+                      className="inline-flex items-center gap-1 rounded-lg border border-dashed border-[#cdbf9f] bg-white px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.08em] text-[#5a4526] transition hover:border-[#412d15] hover:bg-[#faf7f0] disabled:opacity-50"
                     >
                       {svcBusy ? (
-                        <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[var(--e-cdbf9f)] border-t-[var(--e-412d15)]" />
+                        <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#412d15]" />
                       ) : (
                         <FiZap className="h-3 w-3" />
                       )}
                       Recommend
                     </button>
-                    <span className="rounded-full bg-[var(--e-efe7d4)] px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-[var(--e-5a4526)]">
+                    <span className="rounded-full bg-[#efe7d4] px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-[#5a4526]">
                       {(senderTerritoryEarly ?? sender.countryCode) || '—'} → {(recipientTerritoryEarly ?? recipient.countryCode) || '—'} · {isInternational ? 'Intl' : 'Domestic'}
                     </span>
                   </div>
@@ -4151,10 +4151,10 @@ export default function NewShipmentPage() {
                     onClick={() => void suggestPackagingAi()}
                     disabled={pkgBusy}
                     title="Suggest packaging & weight from your items"
-                    className="inline-flex items-center gap-1 rounded-lg border border-dashed border-[var(--e-cdbf9f)] bg-white px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.08em] text-[var(--e-5a4526)] transition hover:border-[var(--e-412d15)] hover:bg-[var(--e-faf7f0)] disabled:opacity-50"
+                    className="inline-flex items-center gap-1 rounded-lg border border-dashed border-[#cdbf9f] bg-white px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.08em] text-[#5a4526] transition hover:border-[#412d15] hover:bg-[#faf7f0] disabled:opacity-50"
                   >
                     {pkgBusy ? (
-                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[var(--e-cdbf9f)] border-t-[var(--e-412d15)]" />
+                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#412d15]" />
                     ) : (
                       <FiZap className="h-3 w-3" />
                     )}
@@ -4162,29 +4162,29 @@ export default function NewShipmentPage() {
                   </button>
 
                   {/* Weight + dims unit toggles grouped in one compact pill */}
-                  <div className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--e-e3d9c4)] bg-white px-1.5 py-1">
-                    <span className="text-[8.5px] font-bold uppercase tracking-[0.1em] text-[var(--e-a1906d)]">Wt</span>
-                    <div className="inline-flex overflow-hidden rounded-md bg-[var(--e-faf7f0)]">
+                  <div className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-1.5 py-1">
+                    <span className="text-[8.5px] font-bold uppercase tracking-[0.1em] text-[#a1906d]">Wt</span>
+                    <div className="inline-flex overflow-hidden rounded-md bg-[#faf7f0]">
                       {(['LB', 'KG'] as const).map((u) => (
                         <button
                           key={u}
                           type="button"
                           onClick={() => setWeightUnit(u)}
-                          className={`px-2 py-0.5 text-[11px] font-semibold transition ${weightUnit === u ? 'bg-[var(--e-1f150c)] text-[var(--e-f4eede)]' : 'text-[var(--e-5a4526)] hover:bg-[var(--e-efe7d4)]'}`}
+                          className={`px-2 py-0.5 text-[11px] font-semibold transition ${weightUnit === u ? 'bg-[#1f150c] text-[#f4eede]' : 'text-[#5a4526] hover:bg-[#efe7d4]'}`}
                         >
                           {u.toLowerCase()}
                         </button>
                       ))}
                     </div>
-                    <span className="h-4 w-px bg-[var(--e-e3d9c4)]" />
-                    <span className="text-[8.5px] font-bold uppercase tracking-[0.1em] text-[var(--e-a1906d)]">Dim</span>
-                    <div className="inline-flex overflow-hidden rounded-md bg-[var(--e-faf7f0)]">
+                    <span className="h-4 w-px bg-[#e3d9c4]" />
+                    <span className="text-[8.5px] font-bold uppercase tracking-[0.1em] text-[#a1906d]">Dim</span>
+                    <div className="inline-flex overflow-hidden rounded-md bg-[#faf7f0]">
                       {(['IN', 'CM'] as const).map((u) => (
                         <button
                           key={u}
                           type="button"
                           onClick={() => setDimUnit(u)}
-                          className={`px-2 py-0.5 text-[11px] font-semibold transition ${dimUnit === u ? 'bg-[var(--e-1f150c)] text-[var(--e-f4eede)]' : 'text-[var(--e-5a4526)] hover:bg-[var(--e-efe7d4)]'}`}
+                          className={`px-2 py-0.5 text-[11px] font-semibold transition ${dimUnit === u ? 'bg-[#1f150c] text-[#f4eede]' : 'text-[#5a4526] hover:bg-[#efe7d4]'}`}
                         >
                           {u.toLowerCase()}
                         </button>
@@ -4235,7 +4235,7 @@ export default function NewShipmentPage() {
                       // sent to the carrier. Empty items → red hint below.
                       <>
                         <input
-                          className={`${inputCls} !bg-[var(--e-faf7f0)] !text-[var(--e-5a4526)] cursor-not-allowed`}
+                          className={`${inputCls} !bg-[#faf7f0] !text-[#5a4526] cursor-not-allowed`}
                           type="text"
                           readOnly
                           value={invoiceTotal > 0 ? invoiceTotal.toFixed(2) : '—'}
@@ -4325,25 +4325,25 @@ export default function NewShipmentPage() {
                   const needsDims = !p.packageType && isCustomPkg
                   const summary = `${p.weight || '—'} ${weightUnit.toLowerCase()} · ${p.length || '—'}×${p.width || '—'}×${p.height || '—'} ${dimUnit.toLowerCase()}`
                   return (
-                  <div key={idx} className="rounded-xl border border-dashed border-[var(--e-e3d9c4)] bg-[var(--e-faf7f0)]/60 p-3">
+                  <div key={idx} className="rounded-xl border border-dashed border-[#e3d9c4] bg-[#faf7f0]/60 p-3">
                     <div className="mb-2 flex items-center justify-between gap-2">
                       <button type="button" onClick={() => toggleBox(idx)} aria-expanded={expanded} className="flex min-w-0 items-center gap-2 text-left">
-                        <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-[var(--e-6b5c42)]">
+                        <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#6b5c42]">
                           Box {idx + 2}
                         </p>
-                        {!expanded ? <span className="truncate text-[11.5px] text-[var(--e-5a4526)]">{summary}</span> : null}
+                        {!expanded ? <span className="truncate text-[11.5px] text-[#5a4526]">{summary}</span> : null}
                       </button>
                       <div className="flex shrink-0 items-center gap-1">
                         <button
                           type="button"
                           onClick={() => duplicateBox(idx)}
                           title="Add a box with the same weight and dimensions"
-                          className="inline-flex h-9 items-center gap-1 rounded-lg border border-[var(--e-e3d9c4)] bg-white px-2 text-[11px] font-semibold text-[var(--e-5a4526)] hover:bg-[var(--e-faf7f0)]"
+                          className="inline-flex h-9 items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 text-[11px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]"
                         >
                           <FiCopy className="h-3.5 w-3.5" /> Duplicate
                         </button>
                         {filled ? (
-                          <button type="button" onClick={() => toggleBox(idx)} className="inline-flex h-9 items-center rounded-lg border border-[var(--e-e3d9c4)] bg-white px-2 text-[11px] font-semibold text-[var(--e-5a4526)] hover:bg-[var(--e-faf7f0)]">
+                          <button type="button" onClick={() => toggleBox(idx)} className="inline-flex h-9 items-center rounded-lg border border-[#e3d9c4] bg-white px-2 text-[11px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]">
                             {expanded ? 'Collapse' : 'Edit'}
                           </button>
                         ) : null}
@@ -4351,7 +4351,7 @@ export default function NewShipmentPage() {
                           type="button"
                           onClick={() => removeBox(idx)}
                           aria-label={`Remove box ${idx + 2}`}
-                          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--e-e3d9c4)] bg-white text-[var(--e-6b5c42)] hover:bg-rose-50 hover:text-rose-600"
+                          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#6b5c42] hover:bg-rose-50 hover:text-rose-600"
                         >
                           <FiTrash2 className="h-3.5 w-3.5" />
                         </button>
@@ -4417,22 +4417,22 @@ export default function NewShipmentPage() {
                   <button
                     type="button"
                     onClick={() => setExtraPackages((cur) => [...cur, blankExtraPackage()])}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-dashed border-[var(--e-e3d9c4)] bg-white px-2.5 text-[11px] font-semibold text-[var(--e-5a4526)] hover:bg-[var(--e-faf7f0)]"
+                    className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-dashed border-[#e3d9c4] bg-white px-2.5 text-[11px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]"
                   >
                     <FiPlus className="h-3 w-3" />
                     Add another box
-                    <span className="ml-1 rounded-full bg-[var(--e-f4eede)] px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-[var(--e-5a4526)]" title="Boxes on this shipment">
+                    <span className="ml-1 rounded-full bg-[#f4eede] px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-[#5a4526]" title="Boxes on this shipment">
                       {1 + extraPackages.length}
                     </span>
                   </button>
-                  <span className="inline-flex h-9 items-center gap-1 rounded-lg border border-dashed border-[var(--e-e3d9c4)] bg-white px-2 text-[11px] font-semibold text-[var(--e-5a4526)]">
+                  <span className="inline-flex h-9 items-center gap-1 rounded-lg border border-dashed border-[#e3d9c4] bg-white px-2 text-[11px] font-semibold text-[#5a4526]">
                     Add
                     <input
                       type="number" min="1" max="200"
                       value={bulkAddCount}
                       onChange={(e) => setBulkAddCount(e.target.value)}
                       aria-label="Number of boxes to add"
-                      className="w-12 rounded border border-[var(--e-e3d9c4)] px-1 py-0.5 text-center text-[11px] tabular-nums"
+                      className="w-12 rounded border border-[#e3d9c4] px-1 py-0.5 text-center text-[11px] tabular-nums"
                     />
                     <button
                       type="button"
@@ -4443,7 +4443,7 @@ export default function NewShipmentPage() {
                         const t: ExtraPackage = last && last.weight ? { ...last } : { ...blankExtraPackage(), weight, length, width, height }
                         setExtraPackages((cur) => [...cur, ...Array.from({ length: n }, () => ({ ...t }))])
                       }}
-                      className="rounded px-1 hover:bg-[var(--e-faf7f0)]"
+                      className="rounded px-1 hover:bg-[#faf7f0]"
                     >
                       boxes like the last
                     </button>
@@ -4462,7 +4462,7 @@ export default function NewShipmentPage() {
                       type="button"
                       title="Copy box 1's weight and dimensions onto every extra box"
                       onClick={() => setExtraPackages((cur) => cur.map((p) => ({ ...p, weight, length, width, height })))}
-                      className="inline-flex h-9 items-center rounded-lg border border-dashed border-[var(--e-e3d9c4)] bg-white px-2.5 text-[11px] font-semibold text-[var(--e-5a4526)] hover:bg-[var(--e-faf7f0)]"
+                      className="inline-flex h-9 items-center rounded-lg border border-dashed border-[#e3d9c4] bg-white px-2.5 text-[11px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]"
                     >
                       Apply box 1 to all
                     </button>
@@ -4492,7 +4492,7 @@ export default function NewShipmentPage() {
                     <button
                       type="button"
                       onClick={() => setOverrideEditorOpen(true)}
-                      className="inline-flex items-center gap-1 rounded-lg border border-[var(--e-e3d9c4)] bg-white px-2.5 py-1 text-[11px] font-semibold text-[var(--e-5a4526)] transition hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-faf7f0)]"
+                      className="inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
                     >
                       <FiEdit3 className="h-3 w-3" />
                       {activeParties ? 'Edit' : 'Add'}
@@ -4501,7 +4501,7 @@ export default function NewShipmentPage() {
                       <button
                         type="button"
                         onClick={() => setOverride(null)}
-                        className="text-[11px] font-semibold text-[var(--e-6b5c42)] underline-offset-2 hover:underline"
+                        className="text-[11px] font-semibold text-[#6b5c42] underline-offset-2 hover:underline"
                       >
                         Reset
                       </button>
@@ -4511,16 +4511,16 @@ export default function NewShipmentPage() {
               >
                 {activeParties && vImp && vBrk ? (
                   <div className="grid gap-3 sm:grid-cols-2">
-                    <div className="rounded-xl border border-[var(--e-e3d9c4)] bg-[var(--e-faf7f0)]/60 p-3">
-                      <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-[var(--e-6b5c42)]">Importer of record</p>
-                      <p className="mt-1 text-[13.5px] font-semibold text-[var(--e-1f150c)]">{vImp.name || '—'}</p>
+                    <div className="rounded-xl border border-[#e3d9c4] bg-[#faf7f0]/60 p-3">
+                      <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#6b5c42]">Importer of record</p>
+                      <p className="mt-1 text-[13.5px] font-semibold text-[#1f150c]">{vImp.name || '—'}</p>
                       {joinParts([vImp.addressLine1, vImp.addressLine2]) ? (
-                        <p className="text-[12px] text-[var(--e-5a4526)]">{joinParts([vImp.addressLine1, vImp.addressLine2])}</p>
+                        <p className="text-[12px] text-[#5a4526]">{joinParts([vImp.addressLine1, vImp.addressLine2])}</p>
                       ) : null}
-                      <p className="text-[12px] text-[var(--e-5a4526)]">
+                      <p className="text-[12px] text-[#5a4526]">
                         {joinParts([vImp.city, vImp.state, vImp.postalCode, vImp.countryCode])}
                       </p>
-                      {vImp.phone ? <p className="text-[11.5px] text-[var(--e-6b5c42)]">PH: {vImp.phone}</p> : null}
+                      {vImp.phone ? <p className="text-[11.5px] text-[#6b5c42]">PH: {vImp.phone}</p> : null}
                       {joinParts(
                         [
                           vImp.iec ? `IEC ${vImp.iec}` : '',
@@ -4531,7 +4531,7 @@ export default function NewShipmentPage() {
                         ],
                         ' · ',
                       ) ? (
-                        <p className="mt-1 font-mono text-[11px] text-[var(--e-6b5c42)]">
+                        <p className="mt-1 font-mono text-[11px] text-[#6b5c42]">
                           {joinParts(
                             [
                               vImp.iec ? `IEC ${vImp.iec}` : '',
@@ -4544,28 +4544,28 @@ export default function NewShipmentPage() {
                           )}
                         </p>
                       ) : null}
-                      <span className="mt-2 inline-block rounded-full bg-[var(--e-efe7d4)] px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-[var(--e-5a4526)]">
+                      <span className="mt-2 inline-block rounded-full bg-[#efe7d4] px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-[#5a4526]">
                         {vImp.type === 'RECEIVER' ? 'Receiver · DAP' : 'Business · DDP'}
                       </span>
                     </div>
-                    <div className="rounded-xl border border-[var(--e-e3d9c4)] bg-[var(--e-faf7f0)]/60 p-3">
-                      <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-[var(--e-6b5c42)]">Customs broker</p>
+                    <div className="rounded-xl border border-[#e3d9c4] bg-[#faf7f0]/60 p-3">
+                      <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#6b5c42]">Customs broker</p>
                       {vBrk.name || vBrk.company ? (
                         <>
-                          <p className="mt-1 text-[13.5px] font-semibold text-[var(--e-1f150c)]">{vBrk.name || vBrk.company}</p>
-                          {vBrk.name && vBrk.company ? <p className="text-[12px] text-[var(--e-5a4526)]">{vBrk.company}</p> : null}
+                          <p className="mt-1 text-[13.5px] font-semibold text-[#1f150c]">{vBrk.name || vBrk.company}</p>
+                          {vBrk.name && vBrk.company ? <p className="text-[12px] text-[#5a4526]">{vBrk.company}</p> : null}
                           {joinParts([vBrk.addressLine1, vBrk.city, vBrk.state, vBrk.postalCode, vBrk.countryCode]) ? (
-                            <p className="text-[12px] text-[var(--e-5a4526)]">
+                            <p className="text-[12px] text-[#5a4526]">
                               {joinParts([vBrk.addressLine1, vBrk.city, vBrk.state, vBrk.postalCode, vBrk.countryCode])}
                             </p>
                           ) : null}
-                          <span className="mt-2 inline-block rounded-full bg-[var(--e-efe7d4)] px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-[var(--e-5a4526)]">
+                          <span className="mt-2 inline-block rounded-full bg-[#efe7d4] px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-[#5a4526]">
                             Broker Select
                           </span>
                         </>
                       ) : (
-                        <p className="mt-1 text-[12.5px] text-[var(--e-5a4526)]">
-                          Carrier clears customs <span className="text-[var(--e-6b5c42)]">(carrier default brokerage)</span>
+                        <p className="mt-1 text-[12.5px] text-[#5a4526]">
+                          Carrier clears customs <span className="text-[#6b5c42]">(carrier default brokerage)</span>
                         </p>
                       )}
                     </div>
@@ -4597,7 +4597,7 @@ export default function NewShipmentPage() {
                       type="button"
                       onClick={() => setPasteOpen(true)}
                       title="Paste rows copied from Excel / Sheets"
-                      className="inline-flex items-center gap-1 rounded-lg border border-[var(--e-412d15)] bg-white px-2.5 py-1 text-[11px] font-semibold text-[var(--e-412d15)] transition hover:bg-[var(--e-faf7f0)] shadow-sm"
+                      className="inline-flex items-center gap-1 rounded-lg border border-[#412d15] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#412d15] transition hover:bg-[#faf7f0] shadow-sm"
                     >
                       <FiClipboard className="h-3.5 w-3.5" /> Paste from spreadsheet
                     </button>
@@ -4617,17 +4617,17 @@ export default function NewShipmentPage() {
                       title={canEstimateLandedCost
                         ? `Ask ${carrier} for freight + duty + tax estimate`
                         : 'Pick a carrier + fill weight + declared value first'}
-                      className="inline-flex items-center gap-1 rounded-lg border border-[var(--e-1f150c)] bg-[var(--e-1f150c)] px-2.5 py-1 text-[11px] font-semibold text-[var(--e-f4eede)] transition hover:bg-[var(--e-33221a)] disabled:cursor-not-allowed disabled:opacity-40"
+                      className="inline-flex items-center gap-1 rounded-lg border border-[#1f150c] bg-[#1f150c] px-2.5 py-1 text-[11px] font-semibold text-[#f4eede] transition hover:bg-[#33221a] disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       <FiZap className="h-3.5 w-3.5" /> Landed cost
                     </button>
                     {extraPackages.length > 0 ? (
-                      <span className="inline-flex items-center overflow-hidden rounded-lg border border-[var(--e-e3d9c4)] bg-white text-[11px] font-semibold text-[var(--e-5a4526)] shadow-sm" title="Which box each line travels in — printed per package on the commercial invoice">
-                        <span className="bg-[var(--e-f4eede)] px-2 py-1 text-[10px] font-bold uppercase tracking-[0.1em] text-[var(--e-6b5c42)]">Boxes</span>
-                        <button type="button" onClick={assignAllToBox1} className="px-2.5 py-1 transition hover:bg-[var(--e-faf7f0)]" title="Every line in box 1">
+                      <span className="inline-flex items-center overflow-hidden rounded-lg border border-[#e3d9c4] bg-white text-[11px] font-semibold text-[#5a4526] shadow-sm" title="Which box each line travels in — printed per package on the commercial invoice">
+                        <span className="bg-[#f4eede] px-2 py-1 text-[10px] font-bold uppercase tracking-[0.1em] text-[#6b5c42]">Boxes</span>
+                        <button type="button" onClick={assignAllToBox1} className="px-2.5 py-1 transition hover:bg-[#faf7f0]" title="Every line in box 1">
                           All in box 1
                         </button>
-                        <button type="button" onClick={spreadItemsAcrossBoxes} className="border-l border-[var(--e-e3d9c4)] px-2.5 py-1 transition hover:bg-[var(--e-faf7f0)]" title={`Split the lines in order into ${1 + extraPackages.length} runs, one per box`}>
+                        <button type="button" onClick={spreadItemsAcrossBoxes} className="border-l border-[#e3d9c4] px-2.5 py-1 transition hover:bg-[#faf7f0]" title={`Split the lines in order into ${1 + extraPackages.length} runs, one per box`}>
                           Spread across {1 + extraPackages.length} boxes
                         </button>
                       </span>
@@ -4635,10 +4635,10 @@ export default function NewShipmentPage() {
                     <button
                       type="button"
                       onClick={addItem}
-                      className="inline-flex items-center gap-1 rounded-lg border border-dashed border-[var(--e-cdbf9f)] bg-white px-2.5 py-1 text-[11px] font-semibold text-[var(--e-5a4526)] transition hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-faf7f0)]"
+                      className="inline-flex items-center gap-1 rounded-lg border border-dashed border-[#cdbf9f] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
                     >
                       <FiPlus className="h-3.5 w-3.5" /> Add item
-                      <span className="ml-1 rounded-full bg-[var(--e-f4eede)] px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-[var(--e-5a4526)]" title="Commodity lines on this shipment">
+                      <span className="ml-1 rounded-full bg-[#f4eede] px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-[#5a4526]" title="Commodity lines on this shipment">
                         {items.length}
                       </span>
                     </button>
@@ -4666,7 +4666,7 @@ export default function NewShipmentPage() {
                       Total packages available = primary box + extraPackages. */}
                   <div className="hidden min-w-[900px] grid-cols-[minmax(0,2fr)_1fr_0.9fr_0.55fr_0.55fr_1fr_0.7fr_1fr_0.6fr_44px] gap-2 sm:grid">
                     {['Description *', 'SKU', 'HS code', 'Origin', 'Qty', `Unit value (${currency}) *`, `Wt (${weightUnit.toLowerCase()})`, `Amount (${currency})`, 'Pkg #'].map((h) => (
-                      <span key={h} className="text-[11px] font-bold uppercase tracking-[0.14em] text-[var(--e-6b5c42)]">{h}</span>
+                      <span key={h} className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#6b5c42]">{h}</span>
                     ))}
                     <span />
                   </div>
@@ -4686,9 +4686,9 @@ export default function NewShipmentPage() {
                   />
 
                   {/* invoice total */}
-                  <div className="flex min-w-[760px] items-center justify-end gap-3 border-t border-dashed border-[var(--e-e3d9c4)] px-0.5 pt-2">
-                    <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-[var(--e-6b5c42)]">Total amount</span>
-                    <span className="font-mono text-[14px] font-semibold tabular-nums text-[var(--e-1f150c)]">
+                  <div className="flex min-w-[760px] items-center justify-end gap-3 border-t border-dashed border-[#e3d9c4] px-0.5 pt-2">
+                    <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#6b5c42]">Total amount</span>
+                    <span className="font-mono text-[14px] font-semibold tabular-nums text-[#1f150c]">
                       {invoiceTotal.toFixed(2)} {currency}
                     </span>
                   </div>
@@ -4728,12 +4728,12 @@ export default function NewShipmentPage() {
             />
           ) : null}
           {reviewWarnings ? (
-            <div className="rounded-2xl border border-[var(--e-e3d9c4)] bg-white p-3.5 shadow-[0_18px_50px_rgba(31,21,12,0.14)]">
+            <div className="rounded-2xl border border-[#e3d9c4] bg-white p-3.5 shadow-[0_18px_50px_rgba(31,21,12,0.14)]">
               <div className="mb-2 flex items-center justify-between">
-                <span className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.12em] text-[var(--e-5a4526)]">
+                <span className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.12em] text-[#5a4526]">
                   <FiZap className="h-3.5 w-3.5" /> AI pre-ship review
                 </span>
-                <button type="button" onClick={() => setReviewWarnings(null)} className="text-[11px] font-semibold text-[var(--e-6b5c42)] hover:text-[var(--e-412d15)]">
+                <button type="button" onClick={() => setReviewWarnings(null)} className="text-[11px] font-semibold text-[#6b5c42] hover:text-[#412d15]">
                   Dismiss
                 </button>
               </div>
@@ -4751,7 +4751,7 @@ export default function NewShipmentPage() {
                           ? 'bg-amber-50 text-amber-700 ring-amber-200'
                           : 'bg-slate-50 text-slate-600 ring-slate-200'
                     return (
-                      <li key={idx} className="flex items-start gap-2 text-[12.5px] text-[var(--e-3f3527)]">
+                      <li key={idx} className="flex items-start gap-2 text-[12.5px] text-[#3f3527]">
                         <span className={`mt-0.5 inline-flex shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide ring-1 ${tone}`}>
                           {w.severity}
                         </span>
@@ -4766,14 +4766,14 @@ export default function NewShipmentPage() {
               )}
             </div>
           ) : null}
-          <div className="flex items-center justify-between gap-3 rounded-2xl border border-[var(--e-e3d9c4)] bg-white px-3 py-2.5 shadow-[0_18px_50px_rgba(31,21,12,0.16)] sm:px-5 sm:py-3">
-            <span className="hidden text-[11.5px] text-[var(--e-6b5c42)] sm:block">
+          <div className="flex items-center justify-between gap-3 rounded-2xl border border-[#e3d9c4] bg-white px-3 py-2.5 shadow-[0_18px_50px_rgba(31,21,12,0.16)] sm:px-5 sm:py-3">
+            <span className="hidden text-[11.5px] text-[#6b5c42] sm:block">
               {validationGate ? (
-                <span className="font-semibold text-[var(--e-5a4526)]">
+                <span className="font-semibold text-[#5a4526]">
                   {validationGate} Generate label unlocks after a successful check.
                   {shipmentValidationResult && !checklistOpen ? (
                     <button type="button" onClick={() => setChecklistOpen(true)}
-                      className="ml-1.5 font-semibold underline underline-offset-2 hover:text-[var(--e-1f150c)]">
+                      className="ml-1.5 font-semibold underline underline-offset-2 hover:text-[#1f150c]">
                       Show the check
                     </button>
                   ) : null}
@@ -4791,10 +4791,10 @@ export default function NewShipmentPage() {
                 type="button"
                 onClick={() => void reviewShipmentAi()}
                 disabled={reviewBusy}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--e-cdbf9f)] bg-white px-3.5 py-2 text-[12.5px] font-semibold text-[var(--e-5a4526)] transition hover:border-[var(--e-412d15)] hover:bg-[var(--e-faf7f0)] disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-[#cdbf9f] bg-white px-3.5 py-2 text-[12.5px] font-semibold text-[#5a4526] transition hover:border-[#412d15] hover:bg-[#faf7f0] disabled:opacity-50"
               >
                 {reviewBusy ? (
-                  <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[var(--e-cdbf9f)] border-t-[var(--e-412d15)]" />
+                  <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#412d15]" />
                 ) : (
                   <FiZap className="h-3.5 w-3.5" />
                 )}
@@ -4803,7 +4803,7 @@ export default function NewShipmentPage() {
               <button
                 type="button"
                 onClick={() => void leaveForm()}
-                className="rounded-xl border border-[var(--e-e3d9c4)] bg-white px-3.5 py-2 text-[12.5px] font-semibold text-[var(--e-5a4526)] transition hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-faf7f0)]"
+                className="rounded-xl border border-[#e3d9c4] bg-white px-3.5 py-2 text-[12.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
               >
                 Cancel
               </button>
@@ -4816,10 +4816,10 @@ export default function NewShipmentPage() {
                   ? 'Check the whole shipment — addresses, package, service and price, customs and the carrier — without buying a label.'
                   : 'Pick a carrier first'}
                 data-testid="validate-shipment-btn"
-                className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--e-1f150c)] bg-white px-3.5 py-2 text-[12.5px] font-semibold text-[var(--e-1f150c)] transition hover:bg-[var(--e-faf7f0)] disabled:cursor-not-allowed disabled:opacity-40"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-[#1f150c] bg-white px-3.5 py-2 text-[12.5px] font-semibold text-[#1f150c] transition hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {carrierValidating ? (
-                  <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[var(--e-cdbf9f)] border-t-[var(--e-1f150c)]" />
+                  <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#1f150c]" />
                 ) : (
                   <FiCheckCircle className="h-3.5 w-3.5" />
                 )}
@@ -4834,11 +4834,11 @@ export default function NewShipmentPage() {
                   : returnEmailMissing
                     ? 'Return labels need the customer email on the sender block — carriers (UPS especially) reject return labels without it (UPS error 9120145 "Missing label delivery information").'
                     : undefined)}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--e-1f150c)] px-4 py-2 text-[12.5px] font-semibold text-[var(--e-f4eede)] shadow-sm transition hover:bg-[var(--e-412d15)] disabled:cursor-not-allowed disabled:bg-[var(--e-dcd4c4)] disabled:text-white disabled:shadow-none"
+                className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-4 py-2 text-[12.5px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4] disabled:text-white disabled:shadow-none"
               >
                 {submitting ? (
                   <>
-                    <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[var(--e-f4eede)]/40 border-t-[var(--e-f4eede)]" />
+                    <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
                     Generating…
                   </>
                 ) : (
@@ -5127,7 +5127,7 @@ const NewShipmentItemsRow = memo(function NewShipmentItemsRow({
           placeholder={wtPlaceholder}
           title={`Weight of one row (${weightUnit.toLowerCase()}) — auto-fills from package weight × qty share when blank.`}
         />
-        <div className={`${inputCls} flex items-center justify-end bg-[var(--e-faf7f0)] font-mono tabular-nums`}>
+        <div className={`${inputCls} flex items-center justify-end bg-[#faf7f0] font-mono tabular-nums`}>
           {amount > 0 ? amount.toFixed(2) : '—'}
         </div>
         <select
@@ -5146,7 +5146,7 @@ const NewShipmentItemsRow = memo(function NewShipmentItemsRow({
             type="button"
             onClick={remove}
             disabled={!canRemove}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--e-e3d9c4)] bg-white text-[var(--e-6b5c42)] transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#6b5c42] transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40"
             aria-label={`Remove item ${index + 1}`}
           >
             <FiTrash2 className="h-3.5 w-3.5" />

@@ -219,7 +219,7 @@ export default function WarehousesPage() {
               className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-semibold ${
                 platform
                   ? 'bg-sky-100 text-sky-700'
-                  : 'bg-[var(--e-412d15)]/10 text-[var(--e-412d15)]'
+                  : 'bg-[#412d15]/10 text-[#412d15]'
               }`}
             >
               {platform ? 'Platform' : `Client: ${w.ownerClientCode || '—'}`}
@@ -325,7 +325,7 @@ export default function WarehousesPage() {
                   title="Filters"
                   className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-[12px] font-semibold transition md:px-3 ${
                     showFilters || activeFilterCount
-                      ? 'bg-[var(--e-1f150c)] text-white'
+                      ? 'bg-[#1f150c] text-white'
                       : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
                   }`}
                 >
@@ -375,7 +375,7 @@ export default function WarehousesPage() {
                       <button
                         type="button"
                         onClick={() => setShowFilters(false)}
-                        className="inline-flex items-center gap-1 rounded-xl bg-[var(--e-1f150c)] px-3 py-1.5 text-[11.5px] font-semibold text-white transition hover:bg-[var(--e-412d15)]"
+                        className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[11.5px] font-semibold text-white transition hover:bg-[#412d15]"
                       >
                         Done
                       </button>
@@ -388,7 +388,7 @@ export default function WarehousesPage() {
               <button
                 type="button"
                 onClick={() => setEditor({ warehouse: null })}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--e-1f150c)] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[var(--e-412d15)]"
+                className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15]"
               >
                 <FiPlus className="h-3.5 w-3.5" /> Add Warehouse
               </button>
@@ -510,7 +510,7 @@ function RowActionsMenu({
             onClick={() => { close(); onAttach() }}
             className="flex w-full items-center gap-2 px-3 py-2 text-[12px] font-semibold text-slate-700 transition hover:bg-slate-50"
           >
-            <FiLink className="h-3.5 w-3.5 text-[var(--e-412d15)]" />
+            <FiLink className="h-3.5 w-3.5 text-[#412d15]" />
             Attach clients
           </button>
         ) : null}

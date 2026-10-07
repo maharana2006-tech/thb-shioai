@@ -144,7 +144,7 @@ export default function ClientMarkupTab({ clientCode }: { clientCode: string }) 
                 key={k}
                 className={`inline-flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-[12px] font-semibold transition ${
                   kind === k
-                    ? 'border-[var(--e-412d15)] bg-[var(--e-412d15)]/5 text-[var(--e-412d15)]'
+                    ? 'border-[#412d15] bg-[#412d15]/5 text-[#412d15]'
                     : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
                 }`}
               >
@@ -173,7 +173,7 @@ export default function ClientMarkupTab({ clientCode }: { clientCode: string }) 
                 value={valueStr}
                 onChange={(e) => setValueStr(e.target.value)}
                 placeholder={kind === 'PERCENT' ? '12.5' : '3.50'}
-                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] font-semibold text-slate-950 outline-none transition focus:border-[var(--e-412d15)]"
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] font-semibold text-slate-950 outline-none transition focus:border-[#412d15]"
               />
             </div>
             <div>
@@ -186,7 +186,7 @@ export default function ClientMarkupTab({ clientCode }: { clientCode: string }) 
                 onChange={(e) => setCurrency(e.target.value.toUpperCase())}
                 maxLength={3}
                 placeholder="USD"
-                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] font-semibold uppercase text-slate-950 outline-none transition focus:border-[var(--e-412d15)]"
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] font-semibold uppercase text-slate-950 outline-none transition focus:border-[#412d15]"
               />
               <datalist id="markup-currency-suggestions">
                 {COMMON_CURRENCIES.map((c) => (
@@ -215,7 +215,7 @@ export default function ClientMarkupTab({ clientCode }: { clientCode: string }) 
               type="button"
               onClick={() => void save()}
               disabled={saving}
-              className="rounded-xl bg-[var(--e-1f150c)] px-4 py-2 text-[12.5px] font-semibold text-white transition hover:bg-[var(--e-412d15)] disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-xl bg-[#1f150c] px-4 py-2 text-[12.5px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:opacity-50"
             >
               {saving ? 'Saving…' : 'Save markup'}
             </button>

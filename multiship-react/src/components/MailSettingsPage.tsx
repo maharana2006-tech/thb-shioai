@@ -145,12 +145,12 @@ export default function MailSettingsPage() {
   return (
     <div className="space-y-4">
       {/* Active-provider banner. */}
-      <section className="rounded-xl border border-[var(--e-e3d9c4)] bg-white p-4 shadow-sm">
+      <section className="rounded-xl border border-[#e3d9c4] bg-white p-4 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <div className="text-[13px] font-semibold text-[var(--e-1f150c)]">Active mail provider</div>
+            <div className="text-[13px] font-semibold text-[#1f150c]">Active mail provider</div>
             {activeProvider ? (
-              <div className="mt-1 text-[13px] text-[var(--e-5a4526)]">
+              <div className="mt-1 text-[13px] text-[#5a4526]">
                 <span className="rounded bg-emerald-100 px-2 py-0.5 font-semibold text-emerald-800">
                   {activeProvider.kind}
                 </span>{' '}
@@ -165,7 +165,7 @@ export default function MailSettingsPage() {
           <button
             type="button"
             onClick={openAddModal}
-            className="inline-flex items-center gap-1 rounded-xl bg-[var(--e-1f150c)] px-4 py-2 text-[12px] font-semibold text-white transition hover:bg-[var(--e-412d15)]"
+            className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-4 py-2 text-[12px] font-semibold text-white transition hover:bg-[#412d15]"
           >
             + Add provider
           </button>
@@ -173,20 +173,20 @@ export default function MailSettingsPage() {
       </section>
 
       {/* Provider list. */}
-      <section className="rounded-xl border border-[var(--e-e3d9c4)] bg-white shadow-sm">
-        <div className="border-b border-[var(--e-eee6d6)] px-4 py-2 text-[13px] font-semibold text-[var(--e-1f150c)]">
+      <section className="rounded-xl border border-[#e3d9c4] bg-white shadow-sm">
+        <div className="border-b border-[#eee6d6] px-4 py-2 text-[13px] font-semibold text-[#1f150c]">
           Registered providers
         </div>
         {loading ? (
-          <div className="px-4 py-6 text-center text-[13px] text-[var(--e-5a4526)]">Loading…</div>
+          <div className="px-4 py-6 text-center text-[13px] text-[#5a4526]">Loading…</div>
         ) : providers.length === 0 ? (
-          <div className="px-4 py-6 text-center text-[13px] text-[var(--e-5a4526)]">
+          <div className="px-4 py-6 text-center text-[13px] text-[#5a4526]">
             No providers yet. Click <span className="font-semibold">Add provider</span> above.
           </div>
         ) : (
           <table className="w-full text-[13px]">
             <thead>
-              <tr className="text-left text-[var(--e-5a4526)]">
+              <tr className="text-left text-[#5a4526]">
                 <th className="px-4 py-2 font-semibold">Kind</th>
                 <th className="px-4 py-2 font-semibold">Name</th>
                 <th className="px-4 py-2 font-semibold">Active</th>
@@ -196,17 +196,17 @@ export default function MailSettingsPage() {
             </thead>
             <tbody>
               {providers.map((p) => (
-                <tr key={p.id} className="border-t border-[var(--e-eee6d6)]">
-                  <td className="px-4 py-2 font-semibold text-[var(--e-1f150c)]">{p.kind}</td>
-                  <td className="px-4 py-2 text-[var(--e-5a4526)]">{p.displayName}</td>
+                <tr key={p.id} className="border-t border-[#eee6d6]">
+                  <td className="px-4 py-2 font-semibold text-[#1f150c]">{p.kind}</td>
+                  <td className="px-4 py-2 text-[#5a4526]">{p.displayName}</td>
                   <td className="px-4 py-2">
                     {p.active ? (
                       <span className="rounded bg-emerald-100 px-2 py-0.5 text-emerald-800">Active</span>
                     ) : (
-                      <span className="rounded bg-[var(--e-faf7f0)] px-2 py-0.5 text-[var(--e-5a4526)]">Inactive</span>
+                      <span className="rounded bg-[#faf7f0] px-2 py-0.5 text-[#5a4526]">Inactive</span>
                     )}
                   </td>
-                  <td className="px-4 py-2 text-[var(--e-b6a684)]">
+                  <td className="px-4 py-2 text-[#b6a684]">
                     {p.updatedAt ? new Date(p.updatedAt).toLocaleString() : '—'}
                   </td>
                   <td className="px-4 py-2 text-right">
@@ -214,7 +214,7 @@ export default function MailSettingsPage() {
                       <button
                         type="button"
                         onClick={() => openEditModal(p)}
-                        className="rounded border border-[var(--e-e3d9c4)] px-2 py-1 text-[12px] text-[var(--e-5a4526)] hover:bg-[var(--e-faf7f0)]"
+                        className="rounded border border-[#e3d9c4] px-2 py-1 text-[12px] text-[#5a4526] hover:bg-[#faf7f0]"
                       >
                         Edit
                       </button>
@@ -244,31 +244,31 @@ export default function MailSettingsPage() {
       </section>
 
       {/* Notification templates — quick view. */}
-      <section className="rounded-xl border border-[var(--e-e3d9c4)] bg-white shadow-sm">
-        <div className="flex items-center justify-between border-b border-[var(--e-eee6d6)] px-4 py-2">
-          <div className="text-[13px] font-semibold text-[var(--e-1f150c)]">Notification templates</div>
+      <section className="rounded-xl border border-[#e3d9c4] bg-white shadow-sm">
+        <div className="flex items-center justify-between border-b border-[#eee6d6] px-4 py-2">
+          <div className="text-[13px] font-semibold text-[#1f150c]">Notification templates</div>
           <button
             type="button"
             onClick={() => navigate('/settings/notification-templates')}
-            className="text-[11.5px] font-semibold text-[var(--e-412d15)] hover:underline"
+            className="text-[11.5px] font-semibold text-[#412d15] hover:underline"
           >
             Open editor →
           </button>
         </div>
         {loading ? (
-          <div className="px-4 py-4 text-center text-[13px] text-[var(--e-5a4526)]">Loading…</div>
+          <div className="px-4 py-4 text-center text-[13px] text-[#5a4526]">Loading…</div>
         ) : templates.length === 0 ? (
-          <div className="px-4 py-4 text-center text-[13px] text-[var(--e-5a4526)]">
+          <div className="px-4 py-4 text-center text-[13px] text-[#5a4526]">
             No templates yet. Templates seed with the first backend boot after V103.
           </div>
         ) : (
-          <ul className="divide-y divide-[var(--e-eee6d6)] text-[13px]">
+          <ul className="divide-y divide-[#eee6d6] text-[13px]">
             {templates.map((t) => (
               <li key={t.templateKey} className="flex items-center justify-between gap-4 px-4 py-2">
                 <div className="min-w-0">
-                  <div className="font-mono text-[12px] font-semibold text-[var(--e-1f150c)]">{t.templateKey}</div>
+                  <div className="font-mono text-[12px] font-semibold text-[#1f150c]">{t.templateKey}</div>
                   {t.description && (
-                    <div className="mt-0.5 truncate text-[11.5px] text-[var(--e-5a4526)]" title={t.description}>
+                    <div className="mt-0.5 truncate text-[11.5px] text-[#5a4526]" title={t.description}>
                       {t.description}
                     </div>
                   )}
@@ -277,7 +277,7 @@ export default function MailSettingsPage() {
                   {t.optOutAllowed ? (
                     <span className="rounded bg-amber-100 px-2 py-0.5 text-[10px] text-amber-800">opt-out</span>
                   ) : (
-                    <span className="rounded bg-[var(--e-faf7f0)] px-2 py-0.5 text-[10px] text-[var(--e-5a4526)]">
+                    <span className="rounded bg-[#faf7f0] px-2 py-0.5 text-[10px] text-[#5a4526]">
                       transactional
                     </span>
                   )}
@@ -286,7 +286,7 @@ export default function MailSettingsPage() {
                     onClick={() =>
                       navigate(`/settings/notification-templates?key=${encodeURIComponent(t.templateKey)}`)
                     }
-                    className="rounded border border-[var(--e-e3d9c4)] px-2 py-1 text-[11.5px] text-[var(--e-5a4526)] hover:bg-[var(--e-faf7f0)]"
+                    className="rounded border border-[#e3d9c4] px-2 py-1 text-[11.5px] text-[#5a4526] hover:bg-[#faf7f0]"
                   >
                     Edit
                   </button>
@@ -298,43 +298,43 @@ export default function MailSettingsPage() {
       </section>
 
       {/* Test send. */}
-      <section className="rounded-xl border border-[var(--e-e3d9c4)] bg-white p-4 shadow-sm">
-        <div className="mb-3 text-[13px] font-semibold text-[var(--e-1f150c)]">
+      <section className="rounded-xl border border-[#e3d9c4] bg-white p-4 shadow-sm">
+        <div className="mb-3 text-[13px] font-semibold text-[#1f150c]">
           Send test email — via the currently active provider
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <label className="text-[12px] font-semibold text-[var(--e-5a4526)]">
+          <label className="text-[12px] font-semibold text-[#5a4526]">
             To
             <input
               type="email"
               value={testTo}
               onChange={(e) => setTestTo(e.target.value)}
               placeholder="you@example.com"
-              className="mt-1 block w-full rounded-lg border border-[var(--e-e3d9c4)] px-3 py-2 text-[13px] text-[var(--e-1f150c)]"
+              className="mt-1 block w-full rounded-lg border border-[#e3d9c4] px-3 py-2 text-[13px] text-[#1f150c]"
             />
           </label>
-          <label className="text-[12px] font-semibold text-[var(--e-5a4526)] sm:col-span-2">
+          <label className="text-[12px] font-semibold text-[#5a4526] sm:col-span-2">
             Subject (optional)
             <input
               value={testSubject}
               onChange={(e) => setTestSubject(e.target.value)}
               placeholder="shioai mail test"
-              className="mt-1 block w-full rounded-lg border border-[var(--e-e3d9c4)] px-3 py-2 text-[13px] text-[var(--e-1f150c)]"
+              className="mt-1 block w-full rounded-lg border border-[#e3d9c4] px-3 py-2 text-[13px] text-[#1f150c]"
             />
           </label>
         </div>
-        <label className="mt-3 block text-[12px] font-semibold text-[var(--e-5a4526)]">
+        <label className="mt-3 block text-[12px] font-semibold text-[#5a4526]">
           Body (optional)
           <textarea
             value={testBody}
             onChange={(e) => setTestBody(e.target.value)}
             rows={3}
             placeholder="This is a test message sent from /settings/mail — you can delete it."
-            className="mt-1 block w-full rounded-lg border border-[var(--e-e3d9c4)] px-3 py-2 text-[13px] text-[var(--e-1f150c)]"
+            className="mt-1 block w-full rounded-lg border border-[#e3d9c4] px-3 py-2 text-[13px] text-[#1f150c]"
           />
         </label>
         <div className="mt-3 flex items-center justify-between">
-          <div className="text-[11px] text-[var(--e-5a4526)]">
+          <div className="text-[11px] text-[#5a4526]">
             {activeProvider
               ? `Will send via ${activeProvider.kind} — ${activeProvider.displayName}.`
               : 'No active provider — add + activate one above first.'}

@@ -140,29 +140,29 @@ export default function BatchLabelBar({
     }
   }
 
-  const spin = <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[var(--e-e3d9c4)] border-t-[var(--e-5a4526)]" />
+  const spin = <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#e3d9c4] border-t-[#5a4526]" />
 
   return (
     <div
       data-testid="batch-label-bar"
       className={floating
-        ? 'flex max-w-full flex-wrap items-center justify-center gap-2 rounded-2xl border border-[var(--e-e3d9c4)] bg-white px-3 py-2.5 shadow-[0_18px_50px_rgba(31,21,12,0.22)] sm:gap-3 sm:px-4'
-        : 'mb-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--e-e3d9c4)] bg-white px-3 py-2'}
+        ? 'flex max-w-full flex-wrap items-center justify-center gap-2 rounded-2xl border border-[#e3d9c4] bg-white px-3 py-2.5 shadow-[0_18px_50px_rgba(31,21,12,0.22)] sm:gap-3 sm:px-4'
+        : 'mb-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2'}
     >
-      <span className="flex flex-wrap items-center gap-2 text-[11.5px] text-[var(--e-6b5c42)]">
+      <span className="flex flex-wrap items-center gap-2 text-[11.5px] text-[#6b5c42]">
         {scoped ? (
           <>
-            <span className="text-[13px] font-semibold text-[var(--e-1f150c)] tabular-nums">{picked.length} selected</span>
+            <span className="text-[13px] font-semibold text-[#1f150c] tabular-nums">{picked.length} selected</span>
             {n !== picked.length ? <span>· {n} order{n === 1 ? '' : 's'} with a live label</span> : null}
-            <button type="button" onClick={onClearPick} className="inline-flex items-center gap-0.5 font-semibold text-[var(--e-5a4526)] hover:underline">
+            <button type="button" onClick={onClearPick} className="inline-flex items-center gap-0.5 font-semibold text-[#5a4526] hover:underline">
               <FiX className="h-3 w-3" /> Clear
             </button>
           </>
         ) : (
           <>
-            <span><span className="font-semibold text-[var(--e-1f150c)]">{allLive.length}</span> live label{allLive.length === 1 ? '' : 's'} in this batch</span>
-            <button type="button" onClick={onPickAllLive} className="font-semibold text-[var(--e-5a4526)] hover:underline">Tick them all</button>
-            <span className="hidden text-[var(--e-b6a684)] xl:inline">· or tick rows to act on just those</span>
+            <span><span className="font-semibold text-[#1f150c]">{allLive.length}</span> live label{allLive.length === 1 ? '' : 's'} in this batch</span>
+            <button type="button" onClick={onPickAllLive} className="font-semibold text-[#5a4526] hover:underline">Tick them all</button>
+            <span className="hidden text-[#b6a684] xl:inline">· or tick rows to act on just those</span>
           </>
         )}
       </span>
@@ -177,13 +177,13 @@ export default function BatchLabelBar({
             onClick={() => setMenuOpen((v) => !v)}
             title={`Print or send ${scopeLabel}`}
           >
-            {printing ? spin : <FiPrinter className="h-3.5 w-3.5 text-[var(--e-412d15)]" />} Print
-            <FiChevronDown className={`h-3 w-3 text-[var(--e-b6a684)] transition-transform ${menuOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
+            {printing ? spin : <FiPrinter className="h-3.5 w-3.5 text-[#412d15]" />} Print
+            <FiChevronDown className={`h-3 w-3 text-[#b6a684] transition-transform ${menuOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
           </button>
           {menuOpen ? (
-            <div role="menu" aria-label="Print" className={`bulk-pop-in absolute right-0 z-40 w-56 rounded-xl ${floating ? 'bottom-full mb-1.5' : 'mt-1.5'} border border-[var(--e-e3d9c4)] bg-white p-1 shadow-[0_12px_32px_rgba(31,21,12,0.14)]`}>
+            <div role="menu" aria-label="Print" className={`bulk-pop-in absolute right-0 z-40 w-56 rounded-xl ${floating ? 'bottom-full mb-1.5' : 'mt-1.5'} border border-[#e3d9c4] bg-white p-1 shadow-[0_12px_32px_rgba(31,21,12,0.14)]`}>
               {([
-                { key: 'LABEL', label: 'Download labels', hint: 'One print dialog, 4×6 labels', icon: <FiPrinter className="h-3.5 w-3.5 text-[var(--e-412d15)]" />,
+                { key: 'LABEL', label: 'Download labels', hint: 'One print dialog, 4×6 labels', icon: <FiPrinter className="h-3.5 w-3.5 text-[#412d15]" />,
                   run: () => void print('LABEL') },
                 ...(invoiceTarget.length > 0 ? [{ key: 'INVOICE', label: 'Download invoices',
                   hint: `Commercial invoices — ${invoiceTarget.length} international order${invoiceTarget.length === 1 ? '' : 's'}`,
@@ -197,16 +197,16 @@ export default function BatchLabelBar({
                   role="menuitem"
                   disabled={!!printing}
                   onClick={() => { setMenuOpen(false); item.run() }}
-                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition hover:bg-[var(--e-faf7f0)] disabled:cursor-not-allowed disabled:opacity-40"
+                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[var(--e-f4eede)]" aria-hidden="true">{item.icon}</span>
+                  <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[#f4eede]" aria-hidden="true">{item.icon}</span>
                   <span className="min-w-0">
-                    <span className="block text-[12px] font-semibold leading-tight text-[var(--e-1f150c)]">{item.label}</span>
-                    <span className="block text-[10.5px] leading-tight text-[var(--e-a1906d)]">{item.hint}</span>
+                    <span className="block text-[12px] font-semibold leading-tight text-[#1f150c]">{item.label}</span>
+                    <span className="block text-[10.5px] leading-tight text-[#a1906d]">{item.hint}</span>
                   </span>
                 </button>
               ))}
-              <p className="border-t border-[var(--e-f2ecdf)] px-2.5 pb-1 pt-1.5 text-[10.5px] text-[var(--e-a1906d)]">For {scopeLabel}.</p>
+              <p className="border-t border-[#f2ecdf] px-2.5 pb-1 pt-1.5 text-[10.5px] text-[#a1906d]">For {scopeLabel}.</p>
             </div>
           ) : null}
         </div>

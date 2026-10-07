@@ -222,7 +222,7 @@ function CodeBlock({ code }: { code: string }) {
   }
   return (
     <div className="relative">
-      <pre className="overflow-x-auto rounded-xl border border-slate-200 bg-[var(--e-faf9f7)] px-3 py-2.5 font-mono text-[11px] leading-relaxed text-slate-700">
+      <pre className="overflow-x-auto rounded-xl border border-slate-200 bg-[#faf9f7] px-3 py-2.5 font-mono text-[11px] leading-relaxed text-slate-700">
         {code}
       </pre>
       <button
@@ -313,10 +313,10 @@ function TryIt({ ep, apiKey }: { ep: Endpoint; apiKey: string }) {
           type="button"
           onClick={() => void send()}
           disabled={sending}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-[var(--e-1f150c)] px-3 py-1.5 text-[11.5px] font-semibold text-[var(--e-f4eede)] transition hover:bg-[var(--e-412d15)] disabled:cursor-not-allowed disabled:bg-[var(--e-dcd4c4)]"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-[#1f150c] px-3 py-1.5 text-[11.5px] font-semibold text-[#f4eede] transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
         >
           {sending ? (
-            <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[var(--e-f4eede)]/40 border-t-[var(--e-f4eede)]" />
+            <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
           ) : (
             <FiPlay className="h-3 w-3" />
           )}
@@ -348,7 +348,7 @@ function TryIt({ ep, apiKey }: { ep: Endpoint; apiKey: string }) {
             onChange={(e) => setBody(e.target.value)}
             spellCheck={false}
             rows={Math.min(16, (body.match(/\n/g)?.length ?? 0) + 2)}
-            className="w-full resize-y rounded-lg border border-slate-200 bg-[var(--e-faf9f7)] px-3 py-2 font-mono text-[11px] leading-relaxed text-slate-700 outline-none focus:border-slate-400"
+            className="w-full resize-y rounded-lg border border-slate-200 bg-[#faf9f7] px-3 py-2 font-mono text-[11px] leading-relaxed text-slate-700 outline-none focus:border-slate-400"
           />
         </div>
       ) : null}
@@ -410,12 +410,12 @@ export default function ExternalApiReference() {
 
   return (
     <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="flex items-center justify-between gap-2 bg-[var(--e-1f150c)] px-4 py-2.5">
+      <div className="flex items-center justify-between gap-2 bg-[#1f150c] px-4 py-2.5">
         <p className="flex min-w-0 items-center gap-2.5">
-          <span className="flex h-6 w-9 shrink-0 items-center justify-center rounded bg-[var(--e-e1dcc9)]/15 text-[var(--e-e1dcc9)]">
+          <span className="flex h-6 w-9 shrink-0 items-center justify-center rounded bg-[#e1dcc9]/15 text-[#e1dcc9]">
             <FiBookOpen className="h-3.5 w-3.5" />
           </span>
-          <span className="truncate text-[10px] font-black uppercase tracking-[0.2em] text-[var(--e-e1dcc9)]">
+          <span className="truncate text-[10px] font-black uppercase tracking-[0.2em] text-[#e1dcc9]">
             External API reference
           </span>
         </p>
@@ -423,7 +423,7 @@ export default function ExternalApiReference() {
           href={SWAGGER_URL}
           target="_blank"
           rel="noreferrer"
-          className="inline-flex shrink-0 items-center gap-1 rounded bg-[var(--e-e1dcc9)]/15 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-[var(--e-e1dcc9)] transition hover:bg-[var(--e-e1dcc9)]/25"
+          className="inline-flex shrink-0 items-center gap-1 rounded bg-[#e1dcc9]/15 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-[#e1dcc9] transition hover:bg-[#e1dcc9]/25"
         >
           <FiExternalLink className="h-3 w-3" />
           Swagger UI
@@ -528,7 +528,7 @@ export default function ExternalApiReference() {
               </button>
 
               {isOpen ? (
-                <div className="space-y-3 border-t border-dashed border-slate-100 bg-[var(--e-fdfcfb)] px-4 py-3">
+                <div className="space-y-3 border-t border-dashed border-slate-100 bg-[#fdfcfb] px-4 py-3">
                   <ul className="list-disc space-y-1 pl-4">
                     {ep.notes.map((n) => (
                       <li key={n} className="text-[11.5px] leading-relaxed text-slate-600">

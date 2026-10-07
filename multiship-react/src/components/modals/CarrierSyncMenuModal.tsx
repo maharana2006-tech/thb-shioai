@@ -110,8 +110,8 @@ export default function CarrierSyncMenuModal({
         aria-labelledby="sync-menu-title"
         className="w-full max-w-md overflow-hidden rounded-xl bg-white shadow-xl"
       >
-        <div className="flex items-center justify-between border-b border-[var(--e-eee6d6)] bg-[var(--e-1f150c)] px-4 py-3">
-          <p id="sync-menu-title" className="flex items-center gap-2 text-[12px] font-bold uppercase tracking-[0.14em] text-[var(--e-e1dcc9)]">
+        <div className="flex items-center justify-between border-b border-[#eee6d6] bg-[#1f150c] px-4 py-3">
+          <p id="sync-menu-title" className="flex items-center gap-2 text-[12px] font-bold uppercase tracking-[0.14em] text-[#e1dcc9]">
             <FiDownloadCloud className="h-3.5 w-3.5" />
             Sync {carrierName} {label}
           </p>
@@ -119,7 +119,7 @@ export default function CarrierSyncMenuModal({
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="rounded p-1 text-[var(--e-e1dcc9)] transition hover:bg-white/10"
+            className="rounded p-1 text-[#e1dcc9] transition hover:bg-white/10"
           >
             <FiX className="h-4 w-4" />
           </button>
@@ -136,7 +136,7 @@ export default function CarrierSyncMenuModal({
             <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">
               Environment
             </p>
-            <div className="flex overflow-hidden rounded-lg border border-[var(--e-e3d9c4)]">
+            <div className="flex overflow-hidden rounded-lg border border-[#e3d9c4]">
               {(['SANDBOX', 'PRODUCTION'] as const).map((option) => (
                 <button
                   key={option}
@@ -144,8 +144,8 @@ export default function CarrierSyncMenuModal({
                   onClick={() => setEnv(option)}
                   className={`flex-1 px-3 py-1.5 text-[11.5px] font-semibold transition ${
                     env === option
-                      ? 'bg-[var(--e-1f150c)] text-white'
-                      : 'bg-white text-[var(--e-5a4526)] hover:bg-[var(--e-faf7f0)]'
+                      ? 'bg-[#1f150c] text-white'
+                      : 'bg-white text-[#5a4526] hover:bg-[#faf7f0]'
                   }`}
                 >
                   {option === 'SANDBOX' ? 'Sandbox' : 'Production'}
@@ -172,7 +172,7 @@ export default function CarrierSyncMenuModal({
               <select
                 value={effectivePickedId ?? ''}
                 onChange={(e) => setPickedId(Number(e.target.value))}
-                className="w-full rounded-lg border border-[var(--e-e3d9c4)] bg-white px-3 py-2 text-[12px] font-medium text-[var(--e-412d15)]"
+                className="w-full rounded-lg border border-[#e3d9c4] bg-white px-3 py-2 text-[12px] font-medium text-[#412d15]"
               >
                 {filtered.map((a) => (
                   <option key={a.id} value={a.id}>
@@ -184,11 +184,11 @@ export default function CarrierSyncMenuModal({
           </div>
         </div>
 
-        <div className="flex items-center justify-end gap-2 border-t border-[var(--e-eee6d6)] bg-[var(--e-faf7f0)] px-5 py-3">
+        <div className="flex items-center justify-end gap-2 border-t border-[#eee6d6] bg-[#faf7f0] px-5 py-3">
           <button
             type="button"
             onClick={onClose}
-            className="inline-flex items-center rounded-lg border border-[var(--e-e3d9c4)] bg-white px-3 py-1.5 text-[12px] font-semibold text-[var(--e-412d15)] hover:bg-[var(--e-faf7f0)]"
+            className="inline-flex items-center rounded-lg border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#412d15] hover:bg-[#faf7f0]"
           >
             Cancel
           </button>
@@ -196,7 +196,7 @@ export default function CarrierSyncMenuModal({
             type="button"
             onClick={() => void submit()}
             disabled={effectivePickedId == null || submitting}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--e-1f150c)] px-3 py-1.5 text-[12px] font-semibold text-[var(--e-f4eede)] transition hover:bg-[var(--e-412d15)] disabled:opacity-40"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-[#f4eede] transition hover:bg-[#412d15] disabled:opacity-40"
           >
             <FiDownloadCloud className="h-3 w-3" />
             {submitting ? 'Syncing…' : 'Sync'}

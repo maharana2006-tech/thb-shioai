@@ -118,7 +118,7 @@ export default function ClientDestinationsTab({ clientCode }: { clientCode: stri
                 key={m}
                 className={`inline-flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-[12px] font-semibold transition ${
                   mode === m
-                    ? 'border-[var(--e-412d15)] bg-[var(--e-412d15)]/5 text-[var(--e-412d15)]'
+                    ? 'border-[#412d15] bg-[#412d15]/5 text-[#412d15]'
                     : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
                 }`}
               >
@@ -176,7 +176,7 @@ export default function ClientDestinationsTab({ clientCode }: { clientCode: stri
                             onClick={() => toggle(c.code)}
                             className={`flex items-center justify-between rounded-lg px-2 py-1.5 text-left text-[11.5px] transition ${
                               on
-                                ? 'bg-[var(--e-412d15)]/10 text-[var(--e-412d15)]'
+                                ? 'bg-[#412d15]/10 text-[#412d15]'
                                 : 'text-slate-700 hover:bg-slate-100'
                             }`}
                           >
@@ -208,7 +208,7 @@ export default function ClientDestinationsTab({ clientCode }: { clientCode: stri
               type="button"
               onClick={() => void save()}
               disabled={saving}
-              className="rounded-xl bg-[var(--e-1f150c)] px-4 py-2 text-[12.5px] font-semibold text-white transition hover:bg-[var(--e-412d15)] disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-xl bg-[#1f150c] px-4 py-2 text-[12.5px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:opacity-50"
             >
               {saving ? 'Saving…' : 'Save destinations'}
             </button>

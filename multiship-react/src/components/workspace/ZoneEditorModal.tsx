@@ -147,7 +147,7 @@ export default function ZoneEditorModal({
             <select
               value={pickedOrigin}
               onChange={(e) => changePickedOrigin(e.target.value)}
-              className="cursor-pointer bg-transparent py-1 pr-1 text-[12.5px] font-semibold text-[var(--e-1f150c)] outline-none"
+              className="cursor-pointer bg-transparent py-1 pr-1 text-[12.5px] font-semibold text-[#1f150c] outline-none"
             >
               {originOptions.map((code) => (
                 <option key={code} value={code}>
@@ -166,7 +166,7 @@ export default function ZoneEditorModal({
             onClick={() => switchTab('domestic')}
             className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-[12.5px] font-semibold transition ${
               tab === 'domestic'
-                ? 'bg-white text-[var(--e-1f150c)] shadow-sm'
+                ? 'bg-white text-[#1f150c] shadow-sm'
                 : 'text-slate-500 hover:text-slate-800'
             }`}
           >
@@ -181,7 +181,7 @@ export default function ZoneEditorModal({
             onClick={() => switchTab('international')}
             className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-[12.5px] font-semibold transition ${
               tab === 'international'
-                ? 'bg-white text-[var(--e-1f150c)] shadow-sm'
+                ? 'bg-white text-[#1f150c] shadow-sm'
                 : 'text-slate-500 hover:text-slate-800'
             }`}
           >
@@ -195,7 +195,7 @@ export default function ZoneEditorModal({
             <label
               className={`flex cursor-pointer items-center gap-3 rounded-2xl border p-4 transition ${
                 domesticSelected
-                  ? 'border-[var(--e-412d15)] bg-[var(--e-412d15)]/[0.04]'
+                  ? 'border-[#412d15] bg-[#412d15]/[0.04]'
                   : 'border-slate-200 bg-white hover:border-slate-300'
               }`}
             >
@@ -203,7 +203,7 @@ export default function ZoneEditorModal({
                 type="checkbox"
                 checked={domesticSelected}
                 onChange={(e) => onCodesChange(e.target.checked ? [effectiveDomestic] : [])}
-                className="h-4 w-4 accent-[var(--e-412d15)]"
+                className="h-4 w-4 accent-[#412d15]"
               />
               <div className="min-w-0 flex-1">
                 <p className="text-[13.5px] font-semibold text-slate-950">
@@ -249,7 +249,7 @@ export default function ZoneEditorModal({
             <button
               type="button"
               onClick={() => void onSave()}
-              className="rounded-xl bg-[var(--e-1f150c)] px-5 py-2 text-[13px] font-semibold text-white transition hover:bg-[var(--e-412d15)]"
+              className="rounded-xl bg-[#1f150c] px-5 py-2 text-[13px] font-semibold text-white transition hover:bg-[#412d15]"
             >
               {saveLabel}
             </button>

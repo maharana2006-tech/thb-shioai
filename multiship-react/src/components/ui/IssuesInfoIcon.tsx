@@ -118,7 +118,7 @@ export default function IssuesInfoIcon({
               onMouseEnter={cancelClose}
               onMouseLeave={scheduleClose}
               style={{ position: 'fixed', top: pos.top, left: pos.left, width: PANEL_W, transform: 'translateY(-50%)' }}
-              className="z-[120] overflow-hidden rounded-xl border border-[var(--e-e3d9c4)] bg-white shadow-[0_16px_48px_-12px_rgba(31,21,12,0.35)]"
+              className="z-[120] overflow-hidden rounded-xl border border-[#e3d9c4] bg-white shadow-[0_16px_48px_-12px_rgba(31,21,12,0.35)]"
             >
               {/* Header — what this panel is, at a glance. */}
               <div className={`flex items-center gap-1.5 border-b px-3 py-1.5 ${

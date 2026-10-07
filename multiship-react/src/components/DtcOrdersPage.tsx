@@ -242,7 +242,7 @@ export default function DtcOrdersPage() {
         aria-controls="d2c-filter-panel"
         className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[12.5px] font-semibold transition ${
           filterCount
-            ? 'border-[var(--e-1f150c)] bg-[var(--e-1f150c)] text-white'
+            ? 'border-[#1f150c] bg-[#1f150c] text-white'
             : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
         }`}
       >
@@ -315,7 +315,7 @@ export default function DtcOrdersPage() {
                 type="date"
                 value={createdFrom}
                 onChange={(e) => setCreatedFrom(e.target.value)}
-                className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-2 py-2 text-[12.5px] font-semibold text-slate-700 shadow-sm outline-none transition hover:border-slate-300 focus:border-[var(--e-412d15)] focus:ring-4 focus:ring-[var(--e-412d15)]/10"
+                className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-2 py-2 text-[12.5px] font-semibold text-slate-700 shadow-sm outline-none transition hover:border-slate-300 focus:border-[#412d15] focus:ring-4 focus:ring-[#412d15]/10"
               />
             </div>
             <div>
@@ -325,7 +325,7 @@ export default function DtcOrdersPage() {
                 type="date"
                 value={createdTo}
                 onChange={(e) => setCreatedTo(e.target.value)}
-                className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-2 py-2 text-[12.5px] font-semibold text-slate-700 shadow-sm outline-none transition hover:border-slate-300 focus:border-[var(--e-412d15)] focus:ring-4 focus:ring-[var(--e-412d15)]/10"
+                className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-2 py-2 text-[12.5px] font-semibold text-slate-700 shadow-sm outline-none transition hover:border-slate-300 focus:border-[#412d15] focus:ring-4 focus:ring-[#412d15]/10"
               />
             </div>
           </div>
@@ -350,7 +350,7 @@ export default function DtcOrdersPage() {
       onClick={sync}
       disabled={syncing}
       title={tenantId ? `Sync pending orders for ${tenantId} from Oracle` : 'Sync pending orders for all clients from Oracle'}
-      className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--e-1f150c)] px-2.5 py-1.5 text-[12px] font-semibold text-[var(--e-f4eede)] shadow-sm transition hover:bg-[var(--e-3a2a18)] disabled:opacity-60"
+      className="inline-flex items-center gap-1.5 rounded-lg bg-[#1f150c] px-2.5 py-1.5 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#3a2a18] disabled:opacity-60"
     >
       <FiDownloadCloud className={`h-3.5 w-3.5 ${syncing ? 'animate-pulse' : ''}`} />
       {syncing ? 'Syncing…' : 'Sync from Oracle'}
@@ -363,10 +363,10 @@ export default function DtcOrdersPage() {
     <div className="space-y-3 pb-8">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-1 pt-1">
         <h2
-          className="mr-auto flex items-center gap-2 text-[17px] font-semibold tracking-tight text-[var(--e-1f150c)]"
+          className="mr-auto flex items-center gap-2 text-[17px] font-semibold tracking-tight text-[#1f150c]"
           title="D2C Automatic Label — batches synced from the Oracle NDS view"
         >
-          <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[var(--e-1f150c)] text-[var(--e-f4eede)] shadow-sm" aria-hidden="true">
+          <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#1f150c] text-[#f4eede] shadow-sm" aria-hidden="true">
             <FiDownloadCloud className="h-3.5 w-3.5" />
           </span>
           D2C Automatic Label
@@ -398,7 +398,7 @@ export default function DtcOrdersPage() {
           csvFilename="d2c-batches.csv"
           caption={`${total} batch${total === 1 ? '' : 'es'} · Generate mints the labels, Print downloads them as a ZIP`}
           emptyState={
-            <p className="px-5 py-10 text-center text-sm text-[var(--e-6b5c42)]">
+            <p className="px-5 py-10 text-center text-sm text-[#6b5c42]">
               {loading ? 'Loading…'
                 : filterCount > 0 || debouncedQ ? 'No batches match your search or filters.'
                   : canSync ? 'No D2C batches yet. Use Sync from Oracle to pull the pending orders in.'

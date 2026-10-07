@@ -95,7 +95,7 @@ function fieldCls(base: string, bad: boolean): string {
   return `${base} ${
     bad
       ? 'border-rose-400 focus:border-rose-500 focus:ring-rose-400'
-      : 'border-[var(--e-cdbf9f)] focus:border-[var(--e-412d15)] focus:ring-[var(--e-412d15)]'
+      : 'border-[#cdbf9f] focus:border-[#412d15] focus:ring-[#412d15]'
   } outline-none focus:ring-1`
 }
 
@@ -388,12 +388,12 @@ export default function MultiWarehouseSplitModal({
       role="dialog"
       aria-modal="true"
       aria-label="Split shipment across warehouses"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--e-1f150c)]/45 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[#1f150c]/45 p-4"
       onClick={onClose}
     >
       <div
         ref={dialogRef}
-        className="flex h-[min(720px,92vh)] w-full max-w-[900px] flex-col overflow-hidden rounded-2xl border border-[var(--e-e3d9c4)] bg-white shadow-[0_30px_80px_rgba(31,21,12,0.35)]"
+        className="flex h-[min(720px,92vh)] w-full max-w-[900px] flex-col overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-[0_30px_80px_rgba(31,21,12,0.35)]"
         onClick={(e) => e.stopPropagation()}
       >
         <ModalHeader onClose={onClose} />
@@ -428,8 +428,8 @@ export default function MultiWarehouseSplitModal({
           {result ? <ResultPanel result={result} /> : null}
         </div>
 
-        <div className="flex items-center justify-between gap-2 border-t border-[var(--e-eee6d6)] px-5 py-3">
-          <span className={`text-[11px] ${showAll && errorCount > 0 ? 'font-semibold text-rose-600' : 'text-[var(--e-6b5c42)]'}`}>
+        <div className="flex items-center justify-between gap-2 border-t border-[#eee6d6] px-5 py-3">
+          <span className={`text-[11px] ${showAll && errorCount > 0 ? 'font-semibold text-rose-600' : 'text-[#6b5c42]'}`}>
             {showAll && errorCount > 0
               ? `${errorCount} field${errorCount === 1 ? '' : 's'} need${errorCount === 1 ? 's' : ''} attention.`
               : 'Ready — preview to see the split.'}
@@ -438,7 +438,7 @@ export default function MultiWarehouseSplitModal({
             <button
               type="button"
               onClick={onClose}
-              className="inline-flex items-center rounded-lg border border-[var(--e-e3d9c4)] bg-white px-3 py-1.5 text-[12px] font-semibold text-[var(--e-412d15)] hover:bg-[var(--e-faf7f0)]"
+              className="inline-flex items-center rounded-lg border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#412d15] hover:bg-[#faf7f0]"
             >
               Close
             </button>
@@ -446,7 +446,7 @@ export default function MultiWarehouseSplitModal({
               type="button"
               onClick={() => void runPreview()}
               disabled={previewing || !!result}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--e-cdbf9f)] bg-white px-3 py-1.5 text-[12px] font-semibold text-[var(--e-412d15)] hover:bg-[var(--e-faf7f0)] disabled:opacity-40"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[#cdbf9f] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#412d15] hover:bg-[#faf7f0] disabled:opacity-40"
             >
               {previewing ? <FiLoader className="h-3 w-3 animate-spin" /> : <FiEye className="h-3 w-3" />}
               {previewing ? 'Previewing…' : 'Preview split'}
@@ -460,7 +460,7 @@ export default function MultiWarehouseSplitModal({
                 !preview ||
                 preview.unassignedLineCount > 0
               }
-              className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--e-1f150c)] px-3 py-1.5 text-[12px] font-semibold text-[var(--e-f4eede)] transition hover:bg-[var(--e-412d15)] disabled:opacity-40"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-[#f4eede] transition hover:bg-[#412d15] disabled:opacity-40"
               title={
                 preview && preview.unassignedLineCount > 0
                   ? 'Fill in the unassigned lines first.'
@@ -497,15 +497,15 @@ function FieldError({ message }: { message: string | null }) {
 
 function ModalHeader({ onClose }: { onClose: () => void }) {
   return (
-    <div className="flex items-start justify-between gap-3 border-b border-[var(--e-eee6d6)] px-5 py-4">
+    <div className="flex items-start justify-between gap-3 border-b border-[#eee6d6] px-5 py-4">
       <div>
-        <p className="inline-flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-[0.16em] text-[var(--e-6b5c42)]">
+        <p className="inline-flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-[0.16em] text-[#6b5c42]">
           <FiTruck className="h-3 w-3" /> Split shipment
         </p>
-        <h3 className="mt-1 text-[15px] font-semibold text-[var(--e-1f150c)]">
+        <h3 className="mt-1 text-[15px] font-semibold text-[#1f150c]">
           Ship one order from multiple warehouses
         </h3>
-        <p className="mt-1 text-[11.5px] text-[var(--e-6b5c42)]">
+        <p className="mt-1 text-[11.5px] text-[#6b5c42]">
           Assign a warehouse per line, preview the split, then buy every label at once. Either
           every label is bought or none are — the backend rolls back on any failure.
         </p>
@@ -514,7 +514,7 @@ function ModalHeader({ onClose }: { onClose: () => void }) {
         type="button"
         onClick={onClose}
         aria-label="Close"
-        className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--e-e3d9c4)] bg-white text-[var(--e-6b5c42)] transition hover:bg-[var(--e-faf7f0)]"
+        className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#6b5c42] transition hover:bg-[#faf7f0]"
       >
         <FiX className="h-3.5 w-3.5" />
       </button>
@@ -539,7 +539,7 @@ function HeaderFields({
 }) {
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-      <label className="flex flex-col gap-1 text-[11.5px] font-semibold text-[var(--e-412d15)]">
+      <label className="flex flex-col gap-1 text-[11.5px] font-semibold text-[#412d15]">
         Client code *
         <input
           value={clientCode}
@@ -548,14 +548,14 @@ function HeaderFields({
           placeholder="ACME"
           maxLength={FIELD_LIMITS.clientCode}
           className={fieldCls(
-            'rounded-lg border px-2.5 py-1.5 text-[12.5px] font-normal text-[var(--e-1f150c)] placeholder:text-[var(--e-b6a684)]',
+            'rounded-lg border px-2.5 py-1.5 text-[12.5px] font-normal text-[#1f150c] placeholder:text-[#b6a684]',
             err('clientCode') != null,
           )}
         />
         <FieldError message={err('clientCode')} />
       </label>
-      <label className="flex flex-col gap-1 text-[11.5px] font-semibold text-[var(--e-412d15)]">
-        Parent order # <span className="font-normal text-[var(--e-6b5c42)]">(optional)</span>
+      <label className="flex flex-col gap-1 text-[11.5px] font-semibold text-[#412d15]">
+        Parent order # <span className="font-normal text-[#6b5c42]">(optional)</span>
         <input
           type="number"
           min={1}
@@ -565,7 +565,7 @@ function HeaderFields({
           onBlur={() => touch('orderNo')}
           placeholder="1234"
           className={fieldCls(
-            'rounded-lg border px-2.5 py-1.5 text-[12.5px] font-normal text-[var(--e-1f150c)] placeholder:text-[var(--e-b6a684)]',
+            'rounded-lg border px-2.5 py-1.5 text-[12.5px] font-normal text-[#1f150c] placeholder:text-[#b6a684]',
             err('orderNo') != null,
           )}
         />
@@ -589,8 +589,8 @@ function RecipientBlock({
   const set = <K extends keyof ManualShipmentAddress>(key: K, value: ManualShipmentAddress[K]) =>
     setRecipient({ ...recipient, [key]: value })
   return (
-    <fieldset className="rounded-xl border border-[var(--e-e3d9c4)] bg-[var(--e-faf7f0)]/40 p-3">
-      <legend className="px-1 text-[11px] font-bold uppercase tracking-[0.14em] text-[var(--e-6b5c42)]">
+    <fieldset className="rounded-xl border border-[#e3d9c4] bg-[#faf7f0]/40 p-3">
+      <legend className="px-1 text-[11px] font-bold uppercase tracking-[0.14em] text-[#6b5c42]">
         Recipient
       </legend>
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -643,7 +643,7 @@ function RecipientBlock({
           maxLength={2}
         />
       </div>
-      <p className="mt-2 text-[10.5px] text-[var(--e-6b5c42)]">
+      <p className="mt-2 text-[10.5px] text-[#6b5c42]">
         The G3 selector uses country + postal to pick a nearest warehouse for lines you leave
         without one. Providing both improves auto-assignment accuracy.
       </p>
@@ -669,7 +669,7 @@ function RecipientField({
   maxLength?: number
 }) {
   return (
-    <label className="flex flex-col gap-1 text-[11px] font-semibold text-[var(--e-412d15)]">
+    <label className="flex flex-col gap-1 text-[11px] font-semibold text-[#412d15]">
       <span>
         {label} {required ? <span className="text-rose-500">*</span> : null}
       </span>
@@ -679,7 +679,7 @@ function RecipientField({
         onBlur={onBlur}
         maxLength={maxLength}
         className={fieldCls(
-          'rounded-lg border px-2.5 py-1.5 text-[12.5px] font-normal text-[var(--e-1f150c)]',
+          'rounded-lg border px-2.5 py-1.5 text-[12.5px] font-normal text-[#1f150c]',
           error != null,
         )}
       />
@@ -721,8 +721,8 @@ function LinesTable({
     fieldCls(`rounded-md border px-2 py-1 text-[12px] ${extra}`, bad)
 
   return (
-    <fieldset className="rounded-xl border border-[var(--e-e3d9c4)] p-3">
-      <legend className="px-1 text-[11px] font-bold uppercase tracking-[0.14em] text-[var(--e-6b5c42)]">
+    <fieldset className="rounded-xl border border-[#e3d9c4] p-3">
+      <legend className="px-1 text-[11px] font-bold uppercase tracking-[0.14em] text-[#6b5c42]">
         Lines
       </legend>
       {warehousesError ? (
@@ -734,7 +734,7 @@ function LinesTable({
       <div className="overflow-x-auto">
         <table className="w-full text-[12px]">
           <thead>
-            <tr className="text-left text-[10.5px] font-bold uppercase tracking-wide text-[var(--e-6b5c42)]">
+            <tr className="text-left text-[10.5px] font-bold uppercase tracking-wide text-[#6b5c42]">
               <th className="pb-1.5 pr-2">Item *</th>
               <th className="pb-1.5 pr-2">Description</th>
               <th className="pb-1.5 pr-2 text-right">Qty *</th>
@@ -747,7 +747,7 @@ function LinesTable({
             {lines.map((line) => {
               const p = `l.${line.key}.`
               return (
-                <tr key={line.key} className="border-t border-[var(--e-eee6d6)] align-top">
+                <tr key={line.key} className="border-t border-[#eee6d6] align-top">
                   <td className="py-1.5 pr-2">
                     <input
                       value={line.itemNo ?? ''}
@@ -812,7 +812,7 @@ function LinesTable({
                       disabled={!clientCode || warehousesLoading}
                       className={cellCls(
                         err(p + 'warehouseCode') != null,
-                        'min-w-[8rem] bg-white disabled:bg-[var(--e-eee6d6)]',
+                        'min-w-[8rem] bg-white disabled:bg-[#eee6d6]',
                       )}
                     >
                       <option value="">— Auto (selector)</option>
@@ -830,7 +830,7 @@ function LinesTable({
                       onClick={() => removeLine(line.key)}
                       disabled={lines.length === 1}
                       aria-label="Remove line"
-                      className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[var(--e-e3d9c4)] text-[var(--e-6b5c42)] hover:bg-[var(--e-faf7f0)] disabled:opacity-30"
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[#e3d9c4] text-[#6b5c42] hover:bg-[#faf7f0] disabled:opacity-30"
                     >
                       <FiTrash2 className="h-3 w-3" />
                     </button>
@@ -846,12 +846,12 @@ function LinesTable({
         <button
           type="button"
           onClick={addLine}
-          className="inline-flex items-center gap-1 rounded-md border border-[var(--e-cdbf9f)] bg-white px-2 py-1 text-[11.5px] font-semibold text-[var(--e-412d15)] hover:bg-[var(--e-faf7f0)]"
+          className="inline-flex items-center gap-1 rounded-md border border-[#cdbf9f] bg-white px-2 py-1 text-[11.5px] font-semibold text-[#412d15] hover:bg-[#faf7f0]"
         >
           <FiPlus className="h-3 w-3" />
           Add line
         </button>
-        <span className="text-[10.5px] text-[var(--e-6b5c42)]">
+        <span className="text-[10.5px] text-[#6b5c42]">
           {clientCode
             ? `${options.length} warehouse${options.length === 1 ? '' : 's'} attached to ${clientCode}.`
             : 'Enter a client code to load its warehouses.'}
@@ -870,7 +870,7 @@ function PreviewPanel({ preview }: { preview: MultiWarehousePreviewResponse }) {
       }`}
     >
       <div className="flex items-center justify-between gap-2">
-        <p className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-[var(--e-412d15)]">
+        <p className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-[#412d15]">
           {hasUnassigned ? (
             <FiAlertCircle className="h-3.5 w-3.5 text-amber-700" />
           ) : (
@@ -880,7 +880,7 @@ function PreviewPanel({ preview }: { preview: MultiWarehousePreviewResponse }) {
             ? `${preview.unassignedLineCount} line${preview.unassignedLineCount === 1 ? '' : 's'} could not be auto-assigned`
             : `Split will generate ${preview.shipmentCount} shipment${preview.shipmentCount === 1 ? '' : 's'}`}
         </p>
-        <span className="text-[10.5px] text-[var(--e-5a4526)]">
+        <span className="text-[10.5px] text-[#5a4526]">
           {preview.totalLines} line{preview.totalLines === 1 ? '' : 's'} total
         </span>
       </div>
@@ -890,15 +890,15 @@ function PreviewPanel({ preview }: { preview: MultiWarehousePreviewResponse }) {
           {preview.groups.map((g, i) => (
             <div
               key={g.warehouseCode ?? `unassigned-${i}`}
-              className="flex items-center justify-between rounded-md border border-[var(--e-e3d9c4)] bg-white px-2 py-1 text-[11.5px]"
+              className="flex items-center justify-between rounded-md border border-[#e3d9c4] bg-white px-2 py-1 text-[11.5px]"
             >
-              <span className="font-semibold text-[var(--e-412d15)]">
+              <span className="font-semibold text-[#412d15]">
                 {g.warehouseCode ?? 'Unassigned'}
                 {g.warehouseName ? (
-                  <span className="ml-1 font-normal text-[var(--e-6b5c42)]">— {g.warehouseName}</span>
+                  <span className="ml-1 font-normal text-[#6b5c42]">— {g.warehouseName}</span>
                 ) : null}
               </span>
-              <span className="rounded-full bg-[var(--e-eee6d6)] px-2 py-0.5 font-semibold text-[var(--e-412d15)]">
+              <span className="rounded-full bg-[#eee6d6] px-2 py-0.5 font-semibold text-[#412d15]">
                 {g.lineCount} line{g.lineCount === 1 ? '' : 's'}
               </span>
             </div>
@@ -907,13 +907,13 @@ function PreviewPanel({ preview }: { preview: MultiWarehousePreviewResponse }) {
       ) : null}
 
       <details className="mt-2">
-        <summary className="cursor-pointer text-[11px] font-semibold text-[var(--e-5a4526)] hover:text-[var(--e-412d15)]">
+        <summary className="cursor-pointer text-[11px] font-semibold text-[#5a4526] hover:text-[#412d15]">
           Per-line trace ({preview.lines.length})
         </summary>
-        <div className="mt-1 max-h-40 overflow-y-auto rounded-md border border-[var(--e-e3d9c4)] bg-white">
+        <div className="mt-1 max-h-40 overflow-y-auto rounded-md border border-[#e3d9c4] bg-white">
           <table className="w-full text-[11px]">
             <thead>
-              <tr className="border-b border-[var(--e-eee6d6)] text-left text-[10px] font-bold uppercase tracking-wide text-[var(--e-6b5c42)]">
+              <tr className="border-b border-[#eee6d6] text-left text-[10px] font-bold uppercase tracking-wide text-[#6b5c42]">
                 <th className="px-2 py-1">#</th>
                 <th className="px-2 py-1">Item</th>
                 <th className="px-2 py-1">Warehouse</th>
@@ -923,14 +923,14 @@ function PreviewPanel({ preview }: { preview: MultiWarehousePreviewResponse }) {
             </thead>
             <tbody>
               {preview.lines.map((l) => (
-                <tr key={l.lineIndex} className="border-t border-[var(--e-eee6d6)]">
-                  <td className="px-2 py-0.5 text-[var(--e-6b5c42)]">{l.lineIndex + 1}</td>
+                <tr key={l.lineIndex} className="border-t border-[#eee6d6]">
+                  <td className="px-2 py-0.5 text-[#6b5c42]">{l.lineIndex + 1}</td>
                   <td className="px-2 py-0.5">{l.itemNo ?? '—'}</td>
                   <td className="px-2 py-0.5 font-semibold">{l.assignedWarehouseCode ?? '—'}</td>
                   <td className="px-2 py-0.5">
                     <SourceBadge source={l.source} />
                   </td>
-                  <td className="px-2 py-0.5 text-[var(--e-6b5c42)]">{l.matchReason ?? '—'}</td>
+                  <td className="px-2 py-0.5 text-[#6b5c42]">{l.matchReason ?? '—'}</td>
                 </tr>
               ))}
             </tbody>
@@ -943,11 +943,11 @@ function PreviewPanel({ preview }: { preview: MultiWarehousePreviewResponse }) {
 
 function SourceBadge({ source }: { source: string }) {
   const styles: Record<string, string> = {
-    EXPLICIT: 'bg-[var(--e-eee6d6)] text-[var(--e-412d15)]',
-    AUTO: 'bg-[var(--e-e3d9c4)] text-[var(--e-1f150c)]',
+    EXPLICIT: 'bg-[#eee6d6] text-[#412d15]',
+    AUTO: 'bg-[#e3d9c4] text-[#1f150c]',
     NONE: 'bg-rose-100 text-rose-800',
   }
-  const cls = styles[source] ?? 'bg-[var(--e-eee6d6)] text-[var(--e-412d15)]'
+  const cls = styles[source] ?? 'bg-[#eee6d6] text-[#412d15]'
   return (
     <span className={`inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${cls}`}>
       {source}
@@ -968,24 +968,24 @@ function ResultPanel({ result }: { result: MultiWarehouseLabelResponse }) {
             key={s.shipmentId ?? s.trackingNumber ?? s.warehouseCode}
             className="flex items-center justify-between gap-2 rounded-md border border-emerald-200 bg-white px-2 py-1 text-[11.5px]"
           >
-            <span className="font-semibold text-[var(--e-412d15)]">
+            <span className="font-semibold text-[#412d15]">
               {s.warehouseCode}
               {s.carrierCode ? (
-                <span className="ml-1 font-normal text-[var(--e-6b5c42)]">{s.carrierCode}</span>
+                <span className="ml-1 font-normal text-[#6b5c42]">{s.carrierCode}</span>
               ) : null}
             </span>
-            <span className="font-mono text-[var(--e-412d15)]">{s.trackingNumber ?? '—'}</span>
+            <span className="font-mono text-[#412d15]">{s.trackingNumber ?? '—'}</span>
             {s.labelUrl ? (
               <a
                 href={s.labelUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="text-[11px] font-semibold text-[var(--e-412d15)] underline hover:text-[var(--e-1f150c)]"
+                className="text-[11px] font-semibold text-[#412d15] underline hover:text-[#1f150c]"
               >
                 Label
               </a>
             ) : (
-              <span className="text-[10.5px] text-[var(--e-b6a684)]">no url</span>
+              <span className="text-[10.5px] text-[#b6a684]">no url</span>
             )}
           </div>
         ))}

@@ -14,7 +14,7 @@ import TablePagination from './workspace/TablePagination'
 import CarrierSyncMenuModal from './modals/CarrierSyncMenuModal'
 
 const inputClass =
-  'w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[var(--e-412d15)] focus:ring-4 focus:ring-[var(--e-412d15)]/10'
+  'w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15] focus:ring-4 focus:ring-[#412d15]/10'
 
 const blankPreset = (): PackagePreset => ({
   name: '', kind: 'CUSTOM', dimUnit: 'IN', weightUnit: 'LB', enabled: true,
@@ -64,7 +64,7 @@ function IsoBox({ length, width, height }: { length?: number | null; width?: num
   const pt = ([x, y]: [number, number]) => `${(x + ox).toFixed(1)} ${(y + oy).toFixed(1)}`
 
   return (
-    <svg viewBox="0 0 64 64" className="h-14 w-14 shrink-0 text-[var(--e-412d15)]" aria-hidden="true">
+    <svg viewBox="0 0 64 64" className="h-14 w-14 shrink-0 text-[#412d15]" aria-hidden="true">
       <g fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round">
         {/* visible silhouette */}
         <path d={`M ${pt(c)} L ${pt(a)} L ${pt(b)} L ${pt(b2)} L ${pt(d2)} L ${pt(c2)} Z`} />
@@ -82,7 +82,7 @@ function SpecSection({ n, title, children }: { n: number; title: string; childre
   return (
     <section>
       <p className="mb-2 flex items-center gap-2">
-        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-[var(--e-412d15)]/30 font-mono text-[9px] font-bold text-[var(--e-412d15)]">
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-[#412d15]/30 font-mono text-[9px] font-bold text-[#412d15]">
           {n}
         </span>
         <span className="font-mono text-[9.5px] font-bold uppercase tracking-[0.2em] text-slate-400">{title}</span>
@@ -439,7 +439,7 @@ export default function PackagesPage({ active = true }: { active?: boolean } = {
           <select
             value={origin}
             onChange={(e) => setOrigin(e.target.value)}
-            className="cursor-pointer bg-transparent py-1 pr-1 text-[12.5px] font-semibold text-[var(--e-1f150c)] outline-none"
+            className="cursor-pointer bg-transparent py-1 pr-1 text-[12.5px] font-semibold text-[#1f150c] outline-none"
           >
             {originOptions.map((code) => (
               <option key={code} value={code}>
@@ -457,7 +457,7 @@ export default function PackagesPage({ active = true }: { active?: boolean } = {
           <select
             value={carrierFilter}
             onChange={(e) => setCarrierFilter(e.target.value)}
-            className="cursor-pointer bg-transparent py-1 pr-1 text-[12.5px] font-semibold text-[var(--e-1f150c)] outline-none"
+            className="cursor-pointer bg-transparent py-1 pr-1 text-[12.5px] font-semibold text-[#1f150c] outline-none"
           >
             <option value="ALL">All carriers</option>
             {carrierOptions.carriers.map((c) => (
@@ -487,7 +487,7 @@ export default function PackagesPage({ active = true }: { active?: boolean } = {
         <button
           type="button"
           onClick={() => setEditing(blankPreset())}
-          className="ml-auto inline-flex items-center gap-1.5 rounded-xl bg-[var(--e-1f150c)] px-3.5 py-2 text-[12.5px] font-semibold text-white transition hover:bg-[var(--e-412d15)]"
+          className="ml-auto inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[12.5px] font-semibold text-white transition hover:bg-[#412d15]"
         >
           <FiPlus className="h-3.5 w-3.5" /> Add Package
         </button>
@@ -501,7 +501,7 @@ export default function PackagesPage({ active = true }: { active?: boolean } = {
             <div
               key={p.id}
               className={`group relative rounded-2xl border bg-white shadow-sm transition hover:shadow-md ${
-                p.default ? 'border-[var(--e-412d15)]/40 ring-1 ring-[var(--e-412d15)]/15' : 'border-slate-200'
+                p.default ? 'border-[#412d15]/40 ring-1 ring-[#412d15]/15' : 'border-slate-200'
               } ${p.enabled ? '' : 'opacity-60'}`}
             >
               {/* stamp-style default mark */}
@@ -561,7 +561,7 @@ export default function PackagesPage({ active = true }: { active?: boolean } = {
                           title={`Assigned to: ${tooltip}`}
                           className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wide ring-1 ${
                             rows.length
-                              ? 'bg-[var(--e-412d15)]/[0.06] text-[var(--e-412d15)] ring-[var(--e-412d15)]/20'
+                              ? 'bg-[#412d15]/[0.06] text-[#412d15] ring-[#412d15]/20'
                               : 'bg-white text-slate-400 ring-slate-200'
                           }`}
                         >
@@ -691,16 +691,16 @@ export default function PackagesPage({ active = true }: { active?: boolean } = {
             onClick={(e) => e.stopPropagation()}
           >
             {/* document band */}
-            <div className="flex items-center justify-between gap-3 bg-[var(--e-1f150c)] px-5 py-3">
-              <p className="text-[10px] font-black uppercase tracking-[0.22em] text-[var(--e-e1dcc9)]">Package spec sheet</p>
+            <div className="flex items-center justify-between gap-3 bg-[#1f150c] px-5 py-3">
+              <p className="text-[10px] font-black uppercase tracking-[0.22em] text-[#e1dcc9]">Package spec sheet</p>
               <div className="flex items-center gap-2">
-                <span className="rounded bg-[var(--e-e1dcc9)]/15 px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-[0.16em] text-[var(--e-e1dcc9)]">
+                <span className="rounded bg-[#e1dcc9]/15 px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-[0.16em] text-[#e1dcc9]">
                   {editing.id ? 'Revision' : 'New entry'}
                 </span>
                 <button
                   type="button"
                   onClick={closeEditor}
-                  className="rounded-lg p-1.5 text-[var(--e-e1dcc9)]/60 transition hover:bg-white/10 hover:text-[var(--e-e1dcc9)]"
+                  className="rounded-lg p-1.5 text-[#e1dcc9]/60 transition hover:bg-white/10 hover:text-[#e1dcc9]"
                   aria-label="Close"
                 >
                   <FiX className="h-4 w-4" />
@@ -709,7 +709,7 @@ export default function PackagesPage({ active = true }: { active?: boolean } = {
             </div>
 
             {/* live preview: the box takes shape as you type */}
-            <div className="flex items-center gap-4 border-b border-dashed border-slate-300 bg-[var(--e-faf9f7)] px-5 py-3">
+            <div className="flex items-center gap-4 border-b border-dashed border-slate-300 bg-[#faf9f7] px-5 py-3">
               <IsoBox length={editing.length} width={editing.width} height={editing.height} />
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[13.5px] font-semibold text-slate-950">
@@ -871,7 +871,7 @@ export default function PackagesPage({ active = true }: { active?: boolean } = {
                 type="button"
                 onClick={() => void save()}
                 disabled={saving}
-                className="rounded-xl bg-[var(--e-1f150c)] px-5 py-2 text-[13px] font-semibold text-white transition hover:bg-[var(--e-412d15)] disabled:cursor-not-allowed disabled:bg-slate-300"
+                className="rounded-xl bg-[#1f150c] px-5 py-2 text-[13px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-slate-300"
               >
                 {saving ? 'Saving…' : editing.id ? 'Save changes' : 'Register package'}
               </button>

@@ -82,7 +82,7 @@ export function ImporterBrokerStep({
         <button
           type="button"
           onClick={() => setModal({ mode: 'new' })}
-          className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--e-1f150c)] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[var(--e-412d15)]"
+          className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15]"
         >
           <FiPlus className="h-3.5 w-3.5" /> Add profile
         </button>
@@ -102,7 +102,7 @@ export function ImporterBrokerStep({
           <button
             type="button"
             onClick={() => setModal({ mode: 'new' })}
-            className="mt-3 inline-flex items-center gap-1.5 rounded-xl bg-[var(--e-1f150c)] px-4 py-2 text-[12px] font-semibold text-white transition hover:bg-[var(--e-412d15)]"
+            className="mt-3 inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-4 py-2 text-[12px] font-semibold text-white transition hover:bg-[#412d15]"
           >
             <FiPlus className="h-3.5 w-3.5" /> Add first profile
           </button>
@@ -115,7 +115,7 @@ export function ImporterBrokerStep({
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-[12px] font-semibold text-slate-800">
                     {p.importerName || <span className="text-slate-400 italic">Unnamed importer</span>}
-                    <span className="ml-2 rounded-md bg-[var(--e-412d15)]/[0.07] px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-[var(--e-412d15)]">
+                    <span className="ml-2 rounded-md bg-[#412d15]/[0.07] px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-[#412d15]">
                       {p.importerType || 'RECEIVER'}
                     </span>
                     {p.brokerName || p.brokerCompany ? (

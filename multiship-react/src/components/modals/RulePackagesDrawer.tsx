@@ -350,11 +350,11 @@ export default function RulePackagesDrawer({
                       on
                         ? overCap
                           ? 'border-amber-400 bg-amber-50'
-                          : 'border-[var(--e-412d15)] bg-[var(--e-412d15)]/[0.06]'
+                          : 'border-[#412d15] bg-[#412d15]/[0.06]'
                         : 'border-slate-200 bg-white hover:bg-slate-50'
                     }`}
                   >
-                    <FiPackage className={`h-4 w-4 shrink-0 ${overCap ? 'text-amber-600' : on ? 'text-[var(--e-412d15)]' : 'text-slate-500'}`} />
+                    <FiPackage className={`h-4 w-4 shrink-0 ${overCap ? 'text-amber-600' : on ? 'text-[#412d15]' : 'text-slate-500'}`} />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-[12px] font-semibold text-slate-900">
                         {p.name}
@@ -404,7 +404,7 @@ export default function RulePackagesDrawer({
                         Over cap
                       </span>
                     ) : null}
-                    {on ? <FiCheck className="h-4 w-4 shrink-0 text-[var(--e-412d15)]" /> : null}
+                    {on ? <FiCheck className="h-4 w-4 shrink-0 text-[#412d15]" /> : null}
                   </button>
                 )
               })}
@@ -435,7 +435,7 @@ export default function RulePackagesDrawer({
                 ? 'Pick at least one package to enable Save.'
                 : undefined
             }
-            className="rounded-xl bg-[var(--e-1f150c)] px-5 py-2 text-[13px] font-semibold text-white transition hover:bg-[var(--e-412d15)] disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-xl bg-[#1f150c] px-5 py-2 text-[13px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:opacity-50"
           >
             {saving ? 'Saving…' : 'Save packages'}
           </button>

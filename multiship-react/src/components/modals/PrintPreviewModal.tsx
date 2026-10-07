@@ -103,8 +103,8 @@ export default function PrintPreviewModal({ blob, kind, orderNo, onClose }: Prin
       >
         <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
           <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--e-412d15)]">Print preview</p>
-            <h3 className="mt-1 text-base font-semibold text-[var(--e-1f150c)]">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#412d15]">Print preview</p>
+            <h3 className="mt-1 text-base font-semibold text-[#1f150c]">
               {paper.title} · order #{orderNo}
             </h3>
             <p className="mt-1 text-xs leading-5 text-slate-500">
@@ -139,7 +139,7 @@ export default function PrintPreviewModal({ blob, kind, orderNo, onClose }: Prin
           <button
             type="button"
             onClick={onClose}
-            className="inline-flex items-center rounded-xl border border-[var(--e-e3d9c4)] bg-white px-3.5 py-2 text-[13px] font-semibold text-[var(--e-5a4526)] transition hover:bg-[var(--e-faf7f0)]"
+            className="inline-flex items-center rounded-xl border border-[#e3d9c4] bg-white px-3.5 py-2 text-[13px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
           >
             Close
           </button>

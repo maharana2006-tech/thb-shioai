@@ -478,7 +478,7 @@ export default function ClientShippingMappingTab({ clientCode }: { clientCode: s
           <button
             type="button"
             onClick={() => setAdding(true)}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--e-1f150c)] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[var(--e-412d15)]"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15]"
           >
             <FiPlus className="h-3.5 w-3.5" /> Add mapping
           </button>
@@ -490,7 +490,7 @@ export default function ClientShippingMappingTab({ clientCode }: { clientCode: s
           open (the operator is already in that flow). */}
       {!loading && rules.length === 0 && !adding ? (
         <div className="mt-3 rounded-2xl border border-dashed border-slate-300 bg-slate-50/60 px-5 py-6 text-center">
-          <div className="mx-auto inline-flex h-11 w-11 items-center justify-center rounded-xl bg-[var(--e-412d15)]/10 text-[var(--e-412d15)]">
+          <div className="mx-auto inline-flex h-11 w-11 items-center justify-center rounded-xl bg-[#412d15]/10 text-[#412d15]">
             <FiPackage className="h-5 w-5" />
           </div>
           <p className="mt-2 text-[13.5px] font-semibold text-slate-950">No shipping-service mappings yet</p>
@@ -501,7 +501,7 @@ export default function ClientShippingMappingTab({ clientCode }: { clientCode: s
           <button
             type="button"
             onClick={() => setAdding(true)}
-            className="mt-3 inline-flex items-center gap-1.5 rounded-xl bg-[var(--e-1f150c)] px-4 py-2 text-[12px] font-semibold text-white transition hover:bg-[var(--e-412d15)]"
+            className="mt-3 inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-4 py-2 text-[12px] font-semibold text-white transition hover:bg-[#412d15]"
           >
             <FiPlus className="h-3.5 w-3.5" /> Add first mapping
           </button>
@@ -520,7 +520,7 @@ export default function ClientShippingMappingTab({ clientCode }: { clientCode: s
               onChange={(e) => setDraft((c) => ({ ...c, shipviaCd: e.target.value.toUpperCase() }))}
               placeholder="Ship via *"
               aria-label="Order Ship Via"
-              className="w-28 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 font-mono text-[12.5px] font-semibold text-slate-950 outline-none transition focus:border-[var(--e-412d15)]"
+              className="w-28 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 font-mono text-[12.5px] font-semibold text-slate-950 outline-none transition focus:border-[#412d15]"
             />
 
             {/* 2) Warehouse — native <select multiple>. size=1 keeps it flush
@@ -535,7 +535,7 @@ export default function ClientShippingMappingTab({ clientCode }: { clientCode: s
               }}
               aria-label="Warehouses"
               title="Ctrl/Cmd-click to pick multiple. No selection = any warehouse."
-              className="h-[34px] w-40 rounded-xl border border-slate-200 bg-white px-2 text-[12.5px] font-semibold text-slate-700 outline-none transition focus:border-[var(--e-412d15)]"
+              className="h-[34px] w-40 rounded-xl border border-slate-200 bg-white px-2 text-[12.5px] font-semibold text-slate-700 outline-none transition focus:border-[#412d15]"
             >
               {attached.length === 0 ? (
                 <option disabled value="">No warehouses attached</option>
@@ -558,7 +558,7 @@ export default function ClientShippingMappingTab({ clientCode }: { clientCode: s
               onClick={() => openZone('new')}
               aria-label="Ship to destination zone"
               title={draft.destCodes.length ? draft.destCodes.join(', ') : 'Anywhere — click to narrow'}
-              className="inline-flex h-[34px] w-40 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2.5 text-left text-[12.5px] font-semibold text-slate-600 transition hover:border-[var(--e-412d15)]/40"
+              className="inline-flex h-[34px] w-40 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2.5 text-left text-[12.5px] font-semibold text-slate-600 transition hover:border-[#412d15]/40"
             >
               <FiGlobe className="h-3.5 w-3.5 shrink-0 text-sky-600" />
               <span className="truncate">
@@ -662,7 +662,7 @@ export default function ClientShippingMappingTab({ clientCode }: { clientCode: s
                     ? 'No packages match this carrier + origin.'
                     : 'Ctrl/Cmd-click to pick multiple. Leave empty for unrestricted.'
               }
-              className="h-[34px] w-44 rounded-xl border border-slate-200 bg-white px-2 text-[12.5px] font-semibold text-slate-700 outline-none transition focus:border-[var(--e-412d15)] disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+              className="h-[34px] w-44 rounded-xl border border-slate-200 bg-white px-2 text-[12.5px] font-semibold text-slate-700 outline-none transition focus:border-[#412d15] disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
             >
               {!effectiveServiceId ? (
                 <option disabled value="">Packages — pick service first</option>
@@ -689,7 +689,7 @@ export default function ClientShippingMappingTab({ clientCode }: { clientCode: s
                 type="button"
                 onClick={() => void saveDraft()}
                 disabled={!draft.shipviaCd.trim() || !effectiveServiceId}
-                className="rounded-xl bg-[var(--e-1f150c)] px-4 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[var(--e-412d15)] disabled:cursor-not-allowed disabled:bg-slate-300"
+                className="rounded-xl bg-[#1f150c] px-4 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-slate-300"
               >
                 Save
               </button>
@@ -745,7 +745,7 @@ export default function ClientShippingMappingTab({ clientCode }: { clientCode: s
               return (
                 <tr key={rule.id} className="align-middle">
                   <Td>
-                    <span className="rounded-lg bg-[var(--e-1f150c)] px-2.5 py-1 font-mono text-[11.5px] font-bold text-[var(--e-e1dcc9)]">
+                    <span className="rounded-lg bg-[#1f150c] px-2.5 py-1 font-mono text-[11.5px] font-bold text-[#e1dcc9]">
                       {codeOf(rule) || '—'}
                     </span>
                   </Td>
@@ -802,7 +802,7 @@ export default function ClientShippingMappingTab({ clientCode }: { clientCode: s
                             needsPackages
                               ? 'animate-pulse border-amber-400 bg-amber-50 text-amber-800 ring-2 ring-amber-200 hover:bg-amber-100'
                               : logicalCount
-                                ? 'border-[var(--e-412d15)]/25 bg-[var(--e-412d15)]/[0.06] text-[var(--e-412d15)] hover:bg-[var(--e-412d15)]/10'
+                                ? 'border-[#412d15]/25 bg-[#412d15]/[0.06] text-[#412d15] hover:bg-[#412d15]/10'
                                 : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'
                           } disabled:cursor-not-allowed disabled:opacity-40`}
                         >
@@ -955,7 +955,7 @@ function WarehouseCell({
             return (
               <span
                 key={id}
-                className="inline-flex items-center gap-1 rounded-full bg-[var(--e-412d15)]/10 px-2 py-0.5 text-[10.5px] font-semibold text-[var(--e-412d15)]"
+                className="inline-flex items-center gap-1 rounded-full bg-[#412d15]/10 px-2 py-0.5 text-[10.5px] font-semibold text-[#412d15]"
               >
                 <FiHome className="h-3 w-3" />
                 {wh?.code ?? `#${id}`}
@@ -978,7 +978,7 @@ function WarehouseCell({
                 onClick={() => setDraft([])}
                 className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-[12px] font-semibold transition ${
                   draft.length === 0
-                    ? 'bg-[var(--e-412d15)] text-white'
+                    ? 'bg-[#412d15] text-white'
                     : 'text-slate-600 hover:bg-slate-50'
                 }`}
               >
@@ -998,7 +998,7 @@ function WarehouseCell({
                       type="checkbox"
                       checked={on}
                       onChange={() => toggle(wh.id)}
-                      className="h-3.5 w-3.5 rounded border-slate-300 text-[var(--e-412d15)] focus:ring-[var(--e-412d15)]"
+                      className="h-3.5 w-3.5 rounded border-slate-300 text-[#412d15] focus:ring-[#412d15]"
                     />
                     <FiHome className="h-3 w-3 text-slate-500" />
                     <span className="flex-1 truncate font-semibold text-slate-800">
@@ -1028,7 +1028,7 @@ function WarehouseCell({
               onSave(draft)
               setOpen(false)
             }}
-            className="rounded-lg bg-[var(--e-1f150c)] px-2.5 py-1 text-[11px] font-semibold text-white transition hover:bg-[var(--e-412d15)]"
+            className="rounded-lg bg-[#1f150c] px-2.5 py-1 text-[11px] font-semibold text-white transition hover:bg-[#412d15]"
           >
             Save
           </button>
@@ -1141,7 +1141,7 @@ function CarrierServiceCell({
                   setOpen(false)
                 }}
                 className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] transition ${
-                  picked ? 'bg-[var(--e-412d15)]/[0.08] text-[var(--e-412d15)]' : 'text-slate-700 hover:bg-slate-50'
+                  picked ? 'bg-[#412d15]/[0.08] text-[#412d15]' : 'text-slate-700 hover:bg-slate-50'
                 }`}
               >
                 <span

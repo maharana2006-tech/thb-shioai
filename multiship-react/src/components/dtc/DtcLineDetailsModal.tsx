@@ -50,24 +50,24 @@ export default function DtcLineDetailsModal({ line: o, onClose, onEdit, onOpenOr
       <div
         ref={dialogRef}
         onClick={(e) => e.stopPropagation()}
-        className="bulk-pop-in flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-[var(--e-e3d9c4)] bg-white shadow-[0_30px_80px_rgba(31,21,12,0.30)]"
+        className="bulk-pop-in flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-[0_30px_80px_rgba(31,21,12,0.30)]"
       >
         {/* Header: which line, whose, and where its label stands */}
-        <div className="flex items-start justify-between gap-4 border-b border-[var(--e-f2ecdf)] bg-[var(--e-fcfaf5)] px-6 py-4">
+        <div className="flex items-start justify-between gap-4 border-b border-[#f2ecdf] bg-[#fcfaf5] px-6 py-4">
           <div className="min-w-0">
-            <p className="text-[10.5px] font-semibold uppercase tracking-[0.12em] text-[var(--e-a1906d)]">Shipment line</p>
-            <h3 className="mt-0.5 flex flex-wrap items-center gap-2 text-[17px] font-semibold tracking-tight text-[var(--e-1f150c)]">
+            <p className="text-[10.5px] font-semibold uppercase tracking-[0.12em] text-[#a1906d]">Shipment line</p>
+            <h3 className="mt-0.5 flex flex-wrap items-center gap-2 text-[17px] font-semibold tracking-tight text-[#1f150c]">
               Order {o.orderNo ?? '—'}
               <span className={`rounded-full border px-2 py-0.5 text-[10.5px] font-semibold ${status.cls}`}>{status.label}</span>
             </h3>
-            <p className="mt-1 text-[12px] text-[var(--e-6b5c42)]">
+            <p className="mt-1 text-[12px] text-[#6b5c42]">
               Tote <span className="font-mono">{o.toteNumber ?? '—'}</span>
-              <span className="mx-1.5 text-[var(--e-cdbf9f)]">·</span>Client {o.tenantId}
-              <span className="mx-1.5 text-[var(--e-cdbf9f)]">·</span>Batch {o.batchId}
-              {o.shipDate ? <><span className="mx-1.5 text-[var(--e-cdbf9f)]">·</span>Ships {o.shipDate}</> : null}
+              <span className="mx-1.5 text-[#cdbf9f]">·</span>Client {o.tenantId}
+              <span className="mx-1.5 text-[#cdbf9f]">·</span>Batch {o.batchId}
+              {o.shipDate ? <><span className="mx-1.5 text-[#cdbf9f]">·</span>Ships {o.shipDate}</> : null}
             </p>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close" className="shrink-0 rounded-lg border border-[var(--e-e3d9c4)] bg-white p-1.5 text-[var(--e-5a4526)] transition hover:bg-[var(--e-faf7f0)]">
+          <button type="button" onClick={onClose} aria-label="Close" className="shrink-0 rounded-lg border border-[#e3d9c4] bg-white p-1.5 text-[#5a4526] transition hover:bg-[#faf7f0]">
             <FiX className="h-4 w-4" />
           </button>
         </div>
@@ -76,7 +76,7 @@ export default function DtcLineDetailsModal({ line: o, onClose, onEdit, onOpenOr
           {/* What went wrong, first — it's why someone opens a failed line */}
           {o.generatedMessage ? (
             <div className={`flex items-start gap-2.5 rounded-xl border px-3.5 py-2.5 text-[12.5px] ${
-              errored ? 'border-red-200 bg-red-50 text-red-800' : 'border-[var(--e-e3d9c4)] bg-[var(--e-fcfaf5)] text-[var(--e-5a4526)]'}`}>
+              errored ? 'border-red-200 bg-red-50 text-red-800' : 'border-[#e3d9c4] bg-[#fcfaf5] text-[#5a4526]'}`}>
               {errored ? <FiAlertCircle className="mt-0.5 h-4 w-4 shrink-0" /> : null}
               <p className="min-w-0 break-words" title={o.generatedMessage}>
                 {errored ? summarizeCarrierError(o.generatedMessage) : o.generatedMessage}
@@ -86,15 +86,15 @@ export default function DtcLineDetailsModal({ line: o, onClose, onEdit, onOpenOr
 
           <div className="grid gap-4 sm:grid-cols-2">
             <Card icon={<FiMapPin className="h-3.5 w-3.5" />} title="Ship to">
-              <p className="text-[13.5px] font-semibold text-[var(--e-1f150c)]">{name || '—'}</p>
-              {o.shipAttn && o.shipAttn.trim() !== name ? <p className="text-[12.5px] text-[var(--e-5a4526)]">{o.shipAttn}</p> : null}
-              <div className="mt-1.5 space-y-0.5 text-[12.5px] leading-relaxed text-[var(--e-3d2f1c)]">
-                {street.length ? street.map((l) => <p key={l}>{l}</p>) : <p className="text-[var(--e-a1906d)]">No street address</p>}
+              <p className="text-[13.5px] font-semibold text-[#1f150c]">{name || '—'}</p>
+              {o.shipAttn && o.shipAttn.trim() !== name ? <p className="text-[12.5px] text-[#5a4526]">{o.shipAttn}</p> : null}
+              <div className="mt-1.5 space-y-0.5 text-[12.5px] leading-relaxed text-[#3d2f1c]">
+                {street.length ? street.map((l) => <p key={l}>{l}</p>) : <p className="text-[#a1906d]">No street address</p>}
                 {locality ? <p>{locality}</p> : null}
                 {country ? <p className="font-semibold">{country}</p> : null}
               </div>
               {o.phone || o.email ? (
-                <div className="mt-2.5 space-y-0.5 border-t border-[var(--e-f2ecdf)] pt-2 text-[12px] text-[var(--e-5a4526)]">
+                <div className="mt-2.5 space-y-0.5 border-t border-[#f2ecdf] pt-2 text-[12px] text-[#5a4526]">
                   {o.phone ? <p>{o.phone}</p> : null}
                   {o.email ? <p className="break-all">{o.email}</p> : null}
                 </div>
@@ -131,9 +131,9 @@ export default function DtcLineDetailsModal({ line: o, onClose, onEdit, onOpenOr
           </Card>
         </div>
 
-        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-[var(--e-f2ecdf)] bg-[var(--e-fcfaf5)] px-6 py-3">
+        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-[#f2ecdf] bg-[#fcfaf5] px-6 py-3">
           {onOpenOrder ? (
-            <button type="button" onClick={onOpenOrder} className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--e-e3d9c4)] bg-white px-3 py-1.5 text-[12px] font-semibold text-[var(--e-5a4526)] transition hover:bg-[var(--e-faf7f0)]">
+            <button type="button" onClick={onOpenOrder} className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]">
               <FiExternalLink className="h-3.5 w-3.5" /> Label order details
             </button>
           ) : null}
@@ -142,7 +142,7 @@ export default function DtcLineDetailsModal({ line: o, onClose, onEdit, onOpenOr
               <FiEdit2 className="h-3.5 w-3.5" /> Edit line
             </button>
           ) : null}
-          <button type="button" onClick={onClose} className="rounded-lg bg-[var(--e-1f150c)] px-3.5 py-1.5 text-[12px] font-semibold text-[var(--e-f4eede)] shadow-sm transition hover:bg-[var(--e-412d15)]">
+          <button type="button" onClick={onClose} className="rounded-lg bg-[#1f150c] px-3.5 py-1.5 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15]">
             Close
           </button>
         </div>

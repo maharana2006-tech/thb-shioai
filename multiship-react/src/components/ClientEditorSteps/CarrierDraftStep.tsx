@@ -180,7 +180,7 @@ export function CarrierDraftStep({
           <button
             type="button"
             onClick={() => setAdding(true)}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--e-1f150c)] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[var(--e-412d15)]"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15]"
           >
             <FiPlus className="h-3.5 w-3.5" /> Add carrier account
           </button>
@@ -414,7 +414,7 @@ export function CarrierDraftStep({
               aria-disabled={!canSave}
               title={!canSave ? 'Fix the highlighted fields to continue' : undefined}
               className={`rounded-xl px-4 py-1.5 text-[12px] font-semibold text-white transition ${
-                canSave ? 'bg-[var(--e-1f150c)] hover:bg-[var(--e-412d15)]' : 'bg-slate-300'
+                canSave ? 'bg-[#1f150c] hover:bg-[#412d15]' : 'bg-slate-300'
               }`}
             >
               Add to list
@@ -442,7 +442,7 @@ export function CarrierDraftStep({
                   <p className="truncate text-[12px] font-semibold text-slate-800">
                     {formatCarrierName(d.carrierCode)} · {d.accountNumber}
                     {d.clientDefault ? (
-                      <span className="ml-1.5 inline-flex items-center gap-1 rounded-full bg-[var(--e-412d15)]/10 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-[var(--e-412d15)]">
+                      <span className="ml-1.5 inline-flex items-center gap-1 rounded-full bg-[#412d15]/10 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-[#412d15]">
                         <FiStar className="h-2.5 w-2.5" /> default
                       </span>
                     ) : null}

@@ -525,8 +525,8 @@ describe('NewShipmentPage — unit-of-measure defaults', () => {
     expect(inButton).toBeTruthy()
     // Active state uses the dark bg class; the LB + IN buttons are the
     // active defaults on mount.
-    expect(lbButton!.className).toContain('bg-[var(--e-1f150c)]')
-    expect(inButton!.className).toContain('bg-[var(--e-1f150c)]')
+    expect(lbButton!.className).toContain('bg-[#1f150c]')
+    expect(inButton!.className).toContain('bg-[#1f150c]')
   })
 
   it('picking a client with no defaultWeightUnit/defaultDimUnit leaves the session unit intact', async () => {
@@ -542,7 +542,7 @@ describe('NewShipmentPage — unit-of-measure defaults', () => {
     await waitFor(() => {
       const lbButton = screen.getAllByRole('button').find((b) => b.textContent === 'lb')
       expect(lbButton).toBeTruthy()
-      expect(lbButton!.className).toContain('bg-[var(--e-1f150c)]')
+      expect(lbButton!.className).toContain('bg-[#1f150c]')
     })
   })
 
@@ -568,8 +568,8 @@ describe('NewShipmentPage — unit-of-measure defaults', () => {
       const cmButton = screen.getAllByRole('button').find((b) => b.textContent === 'cm')
       expect(kgButton).toBeTruthy()
       expect(cmButton).toBeTruthy()
-      expect(kgButton!.className).toContain('bg-[var(--e-1f150c)]')
-      expect(cmButton!.className).toContain('bg-[var(--e-1f150c)]')
+      expect(kgButton!.className).toContain('bg-[#1f150c]')
+      expect(cmButton!.className).toContain('bg-[#1f150c]')
     })
   })
 })

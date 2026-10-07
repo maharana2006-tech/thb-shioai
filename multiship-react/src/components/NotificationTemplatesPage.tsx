@@ -378,7 +378,7 @@ export default function NotificationTemplatesPage() {
           />
         }
       >
-        <label className="block text-[12px] font-semibold text-[var(--e-5a4526)]">
+        <label className="block text-[12px] font-semibold text-[#5a4526]">
           Template key
           <input
             autoFocus
@@ -388,10 +388,10 @@ export default function NotificationTemplatesPage() {
               if (e.key === 'Enter') confirmNewKey()
             }}
             placeholder="DOMAIN.EVENT"
-            className="mt-1 block w-full rounded-lg border border-[var(--e-e3d9c4)] px-3 py-2 font-mono text-[13px] text-[var(--e-1f150c)]"
+            className="mt-1 block w-full rounded-lg border border-[#e3d9c4] px-3 py-2 font-mono text-[13px] text-[#1f150c]"
           />
         </label>
-        <p className="mt-2 text-[11.5px] text-[var(--e-5a4526)]">
+        <p className="mt-2 text-[11.5px] text-[#5a4526]">
           After creating, fill in the subject + body templates on the right and click Save. Uppercase letters,
           digits, dots and underscores only.
         </p>

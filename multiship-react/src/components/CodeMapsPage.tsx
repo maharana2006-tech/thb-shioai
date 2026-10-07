@@ -382,7 +382,7 @@ export default function CodeMapsPage({ initialClientFilter, embedded = false }: 
             {/* Resolution pipeline — V126 merge collapsed SSM into this
                 page's SHIPVIA tab, so the chain is now 2 steps. */}
             <nav aria-label="Routing resolution pipeline" className="mt-2 flex items-center gap-1 text-[10.5px]">
-              <span className="rounded bg-[var(--e-1f150c)] px-2 py-0.5 font-semibold text-white">Code maps</span>
+              <span className="rounded bg-[#1f150c] px-2 py-0.5 font-semibold text-white">Code maps</span>
               <span className="text-slate-400">·</span>
               <span className="text-slate-500">translate ERP strings on intake, then resolve to a carrier service</span>
               <span className="mx-1 text-slate-300">→</span>
@@ -410,7 +410,7 @@ export default function CodeMapsPage({ initialClientFilter, embedded = false }: 
                 type="checkbox"
                 checked={showInactiveClients}
                 onChange={(e) => setShowInactiveClients(e.target.checked)}
-                className="h-3 w-3 accent-[var(--e-1f150c)]"
+                className="h-3 w-3 accent-[#1f150c]"
               />
               Include deactivated clients
             </label>
@@ -451,7 +451,7 @@ export default function CodeMapsPage({ initialClientFilter, embedded = false }: 
                 value={erpCode}
                 onChange={(e) => setErpCode(e.target.value)}
                 placeholder={meta.codePlaceholder}
-                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[var(--e-412d15)]"
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15]"
               />
             </div>
             <div>
@@ -473,7 +473,7 @@ export default function CodeMapsPage({ initialClientFilter, embedded = false }: 
                 type="button"
                 onClick={() => void submitAdd()}
                 disabled={!canSubmit || saving}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--e-1f150c)] px-4 py-2 text-[12px] font-semibold text-white transition hover:bg-[var(--e-412d15)] disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-4 py-2 text-[12px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <FiPlus className="h-3.5 w-3.5" />
                 {saving ? 'Saving…' : 'Add alias'}
@@ -503,7 +503,7 @@ export default function CodeMapsPage({ initialClientFilter, embedded = false }: 
                         onChange={(e) => setDestCountry(e.target.value.toUpperCase())}
                         placeholder="US"
                         maxLength={2}
-                        className="w-full rounded-lg border border-slate-200 px-2 py-1 text-[12px] outline-none focus:border-[var(--e-412d15)]"
+                        className="w-full rounded-lg border border-slate-200 px-2 py-1 text-[12px] outline-none focus:border-[#412d15]"
                       />
                     </div>
                     <div>
@@ -514,7 +514,7 @@ export default function CodeMapsPage({ initialClientFilter, embedded = false }: 
                         value={destRegion}
                         onChange={(e) => setDestRegion(e.target.value)}
                         placeholder="Europe"
-                        className="w-full rounded-lg border border-slate-200 px-2 py-1 text-[12px] outline-none focus:border-[var(--e-412d15)]"
+                        className="w-full rounded-lg border border-slate-200 px-2 py-1 text-[12px] outline-none focus:border-[#412d15]"
                       />
                     </div>
                     <p className="col-span-full text-[10.5px] text-slate-400">
@@ -572,7 +572,7 @@ export default function CodeMapsPage({ initialClientFilter, embedded = false }: 
               value={rowFilter}
               onChange={(e) => setRowFilter(e.target.value)}
               placeholder="Filter by ERP code or target…"
-              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] outline-none focus:border-[var(--e-412d15)]"
+              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] outline-none focus:border-[#412d15]"
             />
           </div>
         ) : null}
@@ -825,7 +825,7 @@ function PackagingMultiSelect({
                 onClick={() => onChange(on ? value.filter((v) => v !== id) : [...value, id])}
                 className={`rounded-full px-2 py-0.5 text-[10.5px] font-semibold transition ${
                   on
-                    ? 'bg-[var(--e-1f150c)] text-white hover:bg-[var(--e-412d15)]'
+                    ? 'bg-[#1f150c] text-white hover:bg-[#412d15]'
                     : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                 }`}
               >

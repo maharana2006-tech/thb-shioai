@@ -402,21 +402,21 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
         ref={inline ? undefined : dialogRef}
         className={
           inline
-            ? 'flex w-full flex-col overflow-hidden rounded-2xl border border-[var(--e-e3d9c4)] bg-[var(--e-fffdf8)] shadow-sm'
-            : 'flex h-[min(780px,92vh)] w-full max-w-[920px] flex-col overflow-hidden rounded-2xl border border-[var(--e-e3d9c4)] bg-[var(--e-fffdf8)] shadow-[0_30px_80px_rgba(31,21,12,0.35)]'
+            ? 'flex w-full flex-col overflow-hidden rounded-2xl border border-[#e3d9c4] bg-[#fffdf8] shadow-sm'
+            : 'flex h-[min(780px,92vh)] w-full max-w-[920px] flex-col overflow-hidden rounded-2xl border border-[#e3d9c4] bg-[#fffdf8] shadow-[0_30px_80px_rgba(31,21,12,0.35)]'
         }
         onClick={inline ? undefined : (e) => e.stopPropagation()}
       >
         {/* ── Header ── */}
-        <div className="flex items-start justify-between gap-4 border-b border-[var(--e-eee6d6)] bg-white px-6 py-4">
+        <div className="flex items-start justify-between gap-4 border-b border-[#eee6d6] bg-white px-6 py-4">
           <div className="flex items-start gap-3">
-            <span className="mt-0.5 inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--e-1f150c)] text-[var(--e-f4eede)]">
+            <span className="mt-0.5 inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[#1f150c] text-[#f4eede]">
               <FiUploadCloud className="h-4 w-4" />
             </span>
             <div>
-              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--e-b6a684)]">Bulk import</p>
-              <h3 className="text-[16px] font-semibold text-[var(--e-1f150c)]">Import orders from CSV / Excel</h3>
-              <p className="mt-0.5 text-[11.5px] text-[var(--e-6b5c42)]">
+              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#b6a684]">Bulk import</p>
+              <h3 className="text-[16px] font-semibold text-[#1f150c]">Import orders from CSV / Excel</h3>
+              <p className="mt-0.5 text-[11.5px] text-[#6b5c42]">
                 Upload a file, fix or download what fails validation, then save. Only fully valid orders are saved to Import history — generate their labels from there.
               </p>
             </div>
@@ -426,7 +426,7 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
               type="button"
               onClick={onClose}
               aria-label="Close"
-              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--e-e3d9c4)] bg-white text-[var(--e-6b5c42)] transition hover:bg-[var(--e-faf7f0)] hover:text-[var(--e-412d15)]"
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#6b5c42] transition hover:bg-[#faf7f0] hover:text-[#412d15]"
             >
               <FiX className="h-4 w-4" />
             </button>
@@ -434,7 +434,7 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
         </div>
 
         {/* ── Stepper ── */}
-        <div className="flex items-center gap-2 border-b border-[var(--e-eee6d6)] bg-[var(--e-faf7f0)] px-6 py-3">
+        <div className="flex items-center gap-2 border-b border-[#eee6d6] bg-[#faf7f0] px-6 py-3">
           <Stepper current={step} />
         </div>
 
@@ -459,23 +459,23 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
             />
           ) : null}
           {step === 1 && openUploads.length > 0 ? (
-            <div className="overflow-hidden rounded-xl border border-[var(--e-e3d9c4)] bg-white">
-              <p className="border-b border-[var(--e-eee6d6)] bg-[var(--e-faf7f0)] px-3.5 py-2 text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--e-b6a684)]">
+            <div className="overflow-hidden rounded-xl border border-[#e3d9c4] bg-white">
+              <p className="border-b border-[#eee6d6] bg-[#faf7f0] px-3.5 py-2 text-[10px] font-bold uppercase tracking-[0.14em] text-[#b6a684]">
                 Waiting in staging
               </p>
-              <ul className="divide-y divide-[var(--e-f2ecdf)]">
+              <ul className="divide-y divide-[#f2ecdf]">
                 {openUploads.map((u) => (
-                  <li key={u.id} className="flex flex-wrap items-center gap-2 px-3.5 py-2 text-[12px] text-[var(--e-3f3527)]">
-                    <FiFile className="h-3.5 w-3.5 shrink-0 text-[var(--e-6b5c42)]" />
-                    <span className="font-semibold text-[var(--e-1f150c)]">
+                  <li key={u.id} className="flex flex-wrap items-center gap-2 px-3.5 py-2 text-[12px] text-[#3f3527]">
+                    <FiFile className="h-3.5 w-3.5 shrink-0 text-[#6b5c42]" />
+                    <span className="font-semibold text-[#1f150c]">
                       Upload {u.id} · {u.fileName}
                     </span>
-                    <span className="text-[11px] text-[var(--e-6b5c42)]">
+                    <span className="text-[11px] text-[#6b5c42]">
                       {u.readyOrders} ready · {u.invalidOrders} need{u.invalidOrders === 1 ? 's' : ''} fixes
                       {u.savedOrders > 0 ? ` · ${u.savedOrders} saved` : ''}
                     </span>
                     {u.createdAt ? (
-                      <span className="text-[10.5px] text-[var(--e-b6a684)]">{new Date(u.createdAt).toLocaleString()}</span>
+                      <span className="text-[10.5px] text-[#b6a684]">{new Date(u.createdAt).toLocaleString()}</span>
                     ) : null}
                     <span className="ml-auto inline-flex items-center gap-1.5">
                       <button type="button" onClick={() => void resume(u.id)} disabled={uploading} className={GHOST_BTN}>
@@ -530,11 +530,11 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
                   </div>
                 )
               })()}
-              <div className="rounded-xl border border-[var(--e-e3d9c4)] bg-white px-3.5 py-2.5">
+              <div className="rounded-xl border border-[#e3d9c4] bg-white px-3.5 py-2.5">
                 <div className="flex flex-wrap items-center gap-2">
-                  <FiFile className="h-3.5 w-3.5 text-[var(--e-6b5c42)]" />
-                  <span className="text-[12.5px] font-semibold text-[var(--e-1f150c)]">{staging.fileName}</span>
-                  <span className="text-[10.5px] text-[var(--e-b6a684)]">
+                  <FiFile className="h-3.5 w-3.5 text-[#6b5c42]" />
+                  <span className="text-[12.5px] font-semibold text-[#1f150c]">{staging.fileName}</span>
+                  <span className="text-[10.5px] text-[#b6a684]">
                     Upload {staging.id}
                     {expires ? ` · kept until ${expires}` : ''}
                   </span>
@@ -546,7 +546,7 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
                     <StatPill tone="error" label={`${staging.invalidOrders} need${staging.invalidOrders === 1 ? 's' : ''} fixes`} />
                   ) : null}
                   {staging.savedOrders > 0 ? <StatPill tone="warn" label={`${staging.savedOrders} saved`} /> : null}
-                  <span className="ml-auto text-[10.5px] text-[var(--e-b6a684)]">
+                  <span className="ml-auto text-[10.5px] text-[#b6a684]">
                     {staging.savedOrders > 0
                       ? 'Saved orders are already in Import history — the rest stay here until you save them.'
                       : 'Nothing is in Import history until you save.'}
@@ -603,7 +603,7 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
         </div>
 
         {/* ── Footer — one primary action per state ── */}
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--e-eee6d6)] bg-white px-6 py-3.5">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#eee6d6] bg-white px-6 py-3.5">
           <div className="flex flex-wrap items-center gap-2">
             {step === 2 && staging ? (
               <>
@@ -614,9 +614,9 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
                 </button>
               </>
             ) : step === 3 ? (
-              <span className="text-[11px] text-[var(--e-b6a684)]">Generate labels from Import history.</span>
+              <span className="text-[11px] text-[#b6a684]">Generate labels from Import history.</span>
             ) : (
-              <span className="text-[11px] text-[var(--e-b6a684)]">Step 1 of 3</span>
+              <span className="text-[11px] text-[#b6a684]">Step 1 of 3</span>
             )}
           </div>
 
@@ -693,7 +693,7 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
       role="dialog"
       aria-modal="true"
       aria-label="Import orders"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--e-1f150c)]/45 p-4 backdrop-blur-[1px]"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[#1f150c]/45 p-4 backdrop-blur-[1px]"
       onClick={onClose}
     >
       {panel}
@@ -702,9 +702,9 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
 }
 
 const GHOST_BTN =
-  'inline-flex items-center gap-1.5 rounded-lg border border-[var(--e-e3d9c4)] bg-white px-3 py-1.5 text-[12px] font-semibold text-[var(--e-5a4526)] transition hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-faf7f0)] disabled:cursor-not-allowed disabled:opacity-40'
+  'inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40'
 const PRIMARY_BTN =
-  'inline-flex items-center gap-1.5 rounded-lg bg-[var(--e-1f150c)] px-3.5 py-1.5 text-[12px] font-semibold text-[var(--e-f4eede)] shadow-sm transition hover:bg-[var(--e-412d15)] disabled:cursor-not-allowed disabled:bg-[var(--e-dcd4c4)] disabled:text-white disabled:shadow-none'
+  'inline-flex items-center gap-1.5 rounded-lg bg-[#1f150c] px-3.5 py-1.5 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4] disabled:text-white disabled:shadow-none'
 
 /** A row already saved to Import history (read-only in the upload). */
 function SavedChip() {
@@ -736,21 +736,21 @@ function Stepper({ current }: { current: 1 | 2 | 3 }) {
                 done
                   ? 'bg-emerald-600 text-white'
                   : active
-                    ? 'bg-[var(--e-1f150c)] text-[var(--e-f4eede)]'
-                    : 'bg-[var(--e-efe7d4)] text-[var(--e-b6a684)]'
+                    ? 'bg-[#1f150c] text-[#f4eede]'
+                    : 'bg-[#efe7d4] text-[#b6a684]'
               }`}
             >
               {done ? <FiCheck className="h-3.5 w-3.5" /> : s.n}
             </span>
             <span
               className={`whitespace-nowrap text-[11.5px] font-semibold ${
-                active ? 'text-[var(--e-1f150c)]' : done ? 'text-[var(--e-5a4526)]' : 'text-[var(--e-b6a684)]'
+                active ? 'text-[#1f150c]' : done ? 'text-[#5a4526]' : 'text-[#b6a684]'
               }`}
             >
               {s.label}
             </span>
             {i < steps.length - 1 ? (
-              <span className={`mx-1 h-px flex-1 ${current > s.n ? 'bg-emerald-300' : 'bg-[var(--e-e3d9c4)]'}`} />
+              <span className={`mx-1 h-px flex-1 ${current > s.n ? 'bg-emerald-300' : 'bg-[#e3d9c4]'}`} />
             ) : null}
           </li>
         )
@@ -796,16 +796,16 @@ function UploadStep({
           if (f) onFileChange(f)
         }}
         className={`flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed px-6 py-10 text-center transition ${
-          dragging ? 'border-[var(--e-412d15)] bg-[var(--e-f4eede)]' : 'border-[var(--e-cdbf9f)] bg-[var(--e-faf7f0)] hover:border-[var(--e-412d15)] hover:bg-[var(--e-f4eede)]/60'
+          dragging ? 'border-[#412d15] bg-[#f4eede]' : 'border-[#cdbf9f] bg-[#faf7f0] hover:border-[#412d15] hover:bg-[#f4eede]/60'
         }`}
       >
-        <span className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-[var(--e-412d15)] shadow-sm ring-1 ring-[var(--e-e3d9c4)]">
+        <span className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-[#412d15] shadow-sm ring-1 ring-[#e3d9c4]">
           <FiUploadCloud className="h-5 w-5" />
         </span>
-        <p className="mt-3 text-[13px] font-semibold text-[var(--e-1f150c)]">
-          Drag &amp; drop your file here, or <span className="text-[var(--e-412d15)] underline underline-offset-2">browse</span>
+        <p className="mt-3 text-[13px] font-semibold text-[#1f150c]">
+          Drag &amp; drop your file here, or <span className="text-[#412d15] underline underline-offset-2">browse</span>
         </p>
-        <p className="mt-1 text-[11px] text-[var(--e-6b5c42)]">CSV or Excel (.csv, .xlsx, .xlsm) · one row per shipment</p>
+        <p className="mt-1 text-[11px] text-[#6b5c42]">CSV or Excel (.csv, .xlsx, .xlsm) · one row per shipment</p>
         <input
           type="file"
           accept=".csv,.xlsx,.xlsm,.txt"
@@ -821,21 +821,21 @@ function UploadStep({
 
       {/* Selected file chip */}
       {file ? (
-        <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--e-e3d9c4)] bg-white px-3.5 py-2.5">
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-[#e3d9c4] bg-white px-3.5 py-2.5">
           <div className="flex min-w-0 items-center gap-2.5">
-            <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--e-f4eede)] text-[var(--e-412d15)]">
+            <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#f4eede] text-[#412d15]">
               <FiFile className="h-4 w-4" />
             </span>
             <div className="min-w-0">
-              <p className="truncate text-[12.5px] font-semibold text-[var(--e-1f150c)]">{file.name}</p>
-              <p className="text-[10.5px] text-[var(--e-6b5c42)]">{prettySize(file.size)}</p>
+              <p className="truncate text-[12.5px] font-semibold text-[#1f150c]">{file.name}</p>
+              <p className="text-[10.5px] text-[#6b5c42]">{prettySize(file.size)}</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => onFileChange(null)}
-              className="rounded-lg border border-[var(--e-e3d9c4)] bg-white p-1.5 text-[var(--e-6b5c42)] transition hover:bg-[var(--e-faf7f0)] hover:text-rose-600"
+              className="rounded-lg border border-[#e3d9c4] bg-white p-1.5 text-[#6b5c42] transition hover:bg-[#faf7f0] hover:text-rose-600"
               aria-label="Remove file"
             >
               <FiX className="h-3.5 w-3.5" />
@@ -850,11 +850,11 @@ function UploadStep({
 
       {/* Template helper */}
       <div>
-        <div className="rounded-xl border border-[var(--e-e3d9c4)] bg-white p-4">
-          <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.12em] text-[var(--e-6b5c42)]">
+        <div className="rounded-xl border border-[#e3d9c4] bg-white p-4">
+          <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.12em] text-[#6b5c42]">
             <FiDownload className="h-3.5 w-3.5" /> Template
           </p>
-          <p className="mt-1.5 text-[11.5px] text-[var(--e-6b5c42)]">
+          <p className="mt-1.5 text-[11.5px] text-[#6b5c42]">
             One row per shipment: CLIENT_ID, ATTENTION, COMPANY_NAME, … SHIPVIA_CD, GROUP_ID. The Excel template has dropdowns for the client and its ship via codes.
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -864,7 +864,7 @@ function UploadStep({
             </button>
             <a
               href={csvHref}
-              className="inline-flex items-center gap-1.5 text-[11.5px] font-semibold text-[var(--e-6b5c42)] transition hover:text-[var(--e-1f150c)]"
+              className="inline-flex items-center gap-1.5 text-[11.5px] font-semibold text-[#6b5c42] transition hover:text-[#1f150c]"
               title="The same columns as a flat CSV — no dropdowns."
             >
               <FiDownload className="h-3 w-3" /> Plain CSV
@@ -878,7 +878,7 @@ function UploadStep({
 
 function StatPill({ tone, label }: { tone: 'total' | 'valid' | 'error' | 'warn'; label: string }) {
   const tones: Record<string, string> = {
-    total: 'bg-[var(--e-efe7d4)] text-[var(--e-5a4526)]',
+    total: 'bg-[#efe7d4] text-[#5a4526]',
     valid: 'bg-emerald-100 text-emerald-800',
     error: 'bg-rose-100 text-rose-800',
     warn: 'bg-amber-100 text-amber-800',
@@ -984,9 +984,9 @@ function EditCell({
     return (
       <span
         title="Saved to Import history — edit it there"
-        className={`block w-full cursor-default truncate rounded-[5px] px-1.5 py-0.5 text-left text-[11px] text-[var(--e-9a8a6c)] ${mono ? 'font-mono' : ''}`}
+        className={`block w-full cursor-default truncate rounded-[5px] px-1.5 py-0.5 text-left text-[11px] text-[#9a8a6c] ${mono ? 'font-mono' : ''}`}
       >
-        {shownValue(value) || <span className="text-[var(--e-cdbf9f)]">—</span>}
+        {shownValue(value) || <span className="text-[#cdbf9f]">—</span>}
       </span>
     )
   }
@@ -1001,7 +1001,7 @@ function EditCell({
           if (e.key === 'Enter') { e.preventDefault(); commit() }
           else if (e.key === 'Escape') { e.preventDefault(); cancel() }
         }}
-        className={`w-full rounded-[5px] border border-[var(--e-412d15)] bg-white px-1.5 py-0.5 text-[11px] text-[var(--e-1f150c)] outline-none ring-1 ring-[var(--e-412d15)] ${mono ? 'font-mono' : ''}`}
+        className={`w-full rounded-[5px] border border-[#412d15] bg-white px-1.5 py-0.5 text-[11px] text-[#1f150c] outline-none ring-1 ring-[#412d15] ${mono ? 'font-mono' : ''}`}
       />
     )
   }
@@ -1015,10 +1015,10 @@ function EditCell({
       className={`block w-full cursor-text truncate rounded-[5px] px-1.5 py-0.5 text-left text-[11px] transition ${mono ? 'font-mono' : ''} ${
         bad
           ? 'bg-rose-50 text-rose-800 ring-1 ring-inset ring-rose-300 hover:ring-rose-400'
-          : 'text-[var(--e-3f3527)] hover:bg-[var(--e-efe7d4)]'
+          : 'text-[#3f3527] hover:bg-[#efe7d4]'
       }`}
     >
-      {shownValue(value) || <span className="text-[var(--e-cdbf9f)]">—</span>}
+      {shownValue(value) || <span className="text-[#cdbf9f]">—</span>}
     </button>
   )
 }
@@ -1202,21 +1202,21 @@ function PreviewStep({
       <div className="flex flex-wrap items-center gap-2">
         {/* Counts live in the order summary above; the grid only filters its rows. */}
         {/* View toggle: dense spreadsheet grid vs one card per order */}
-        <div className="inline-flex overflow-hidden rounded-lg border border-[var(--e-e3d9c4)]">
+        <div className="inline-flex overflow-hidden rounded-lg border border-[#e3d9c4]">
           {(['table', 'detail'] as const).map((v) => (
             <button
               key={v}
               type="button"
               onClick={() => setView(v)}
               className={`px-2.5 py-1 text-[10.5px] font-semibold capitalize transition ${
-                view === v ? 'bg-[var(--e-1f150c)] text-[var(--e-f4eede)]' : 'bg-white text-[var(--e-5a4526)] hover:bg-[var(--e-faf7f0)]'
+                view === v ? 'bg-[#1f150c] text-[#f4eede]' : 'bg-white text-[#5a4526] hover:bg-[#faf7f0]'
               }`}
             >
               {v === 'table' ? 'Table' : 'Detail'}
             </button>
           ))}
         </div>
-        <div className="inline-flex overflow-hidden rounded-lg border border-[var(--e-e3d9c4)]" role="group" aria-label="Show rows">
+        <div className="inline-flex overflow-hidden rounded-lg border border-[#e3d9c4]" role="group" aria-label="Show rows">
           {([
             ['all', `All rows (${preview.rows.length})`],
             ['errors', `Rows with errors (${errorRowCount})`],
@@ -1228,18 +1228,18 @@ function PreviewStep({
               aria-pressed={rowFilter === k}
               onClick={() => setRowFilter(k)}
               className={`px-2.5 py-1 text-[10.5px] font-semibold transition ${
-                rowFilter === k ? 'bg-[var(--e-1f150c)] text-[var(--e-f4eede)]' : 'bg-white text-[var(--e-5a4526)] hover:bg-[var(--e-faf7f0)]'
+                rowFilter === k ? 'bg-[#1f150c] text-[#f4eede]' : 'bg-white text-[#5a4526] hover:bg-[#faf7f0]'
               }`}
             >
               {label}
             </button>
           ))}
         </div>
-        <span className="ml-auto inline-flex items-center gap-1.5 text-[10.5px] text-[var(--e-b6a684)]">
+        <span className="ml-auto inline-flex items-center gap-1.5 text-[10.5px] text-[#b6a684]">
           {savingCell ? (
             <>
-              <FiLoader className="h-3 w-3 animate-spin text-[var(--e-5a4526)]" />
-              <span className="font-semibold text-[var(--e-5a4526)]">Saving your edit…</span>
+              <FiLoader className="h-3 w-3 animate-spin text-[#5a4526]" />
+              <span className="font-semibold text-[#5a4526]">Saving your edit…</span>
             </>
           ) : (
             'Click any cell to edit — every change re-validates the whole upload. Scroll right for more columns.'
@@ -1255,21 +1255,21 @@ function PreviewStep({
         rowKey={(r) => r.rowNumber}
         colCount={1 + columns.length + customCols.length}
         maxHeight="60vh"
-        className="rounded-xl border border-[var(--e-e3d9c4)]"
+        className="rounded-xl border border-[#e3d9c4]"
         tableClassName="w-full border-collapse text-[11px]"
-        empty={<p className="py-6 text-center text-[11px] text-[var(--e-6b5c42)]">No rows match this filter.</p>}
+        empty={<p className="py-6 text-center text-[11px] text-[#6b5c42]">No rows match this filter.</p>}
         head={
           <thead className="sticky top-0 z-30">
-            <tr className="bg-[var(--e-faf7f0)] text-[8.5px] uppercase tracking-[0.08em] text-[var(--e-6b5c42)]">
-              <th className="sticky left-0 z-20 border-b border-r border-[var(--e-e3d9c4)] bg-[var(--e-faf7f0)] px-2 py-1.5 text-left font-bold">Row</th>
+            <tr className="bg-[#faf7f0] text-[8.5px] uppercase tracking-[0.08em] text-[#6b5c42]">
+              <th className="sticky left-0 z-20 border-b border-r border-[#e3d9c4] bg-[#faf7f0] px-2 py-1.5 text-left font-bold">Row</th>
               {columns.map((c) => (
                 <th key={c.key} title={c.name ? `${labelOfField(c.key)} (file column ${c.name})` : `File column: ${c.key}`}
-                  className="whitespace-nowrap border-b border-[var(--e-e3d9c4)] px-2 py-1.5 text-left font-bold">
+                  className="whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1.5 text-left font-bold">
                   {c.name ?? labelOfField(c.key)}
                 </th>
               ))}
               {customCols.map((k) => (
-                <th key={k} className="whitespace-nowrap border-b border-[var(--e-e3d9c4)] px-2 py-1.5 text-left font-bold">{k}</th>
+                <th key={k} className="whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1.5 text-left font-bold">{k}</th>
               ))}
             </tr>
           </thead>
@@ -1290,9 +1290,9 @@ function PreviewStep({
                 <tr key={r.rowNumber} ref={measureRef} data-index={index} className={ok ? 'bg-white' : 'bg-rose-50/40'}>
                   {/* Single frozen column: row number + status, so nothing can
                       bleed through a gap between two separate sticky columns. */}
-                  <td className={`sticky left-0 z-10 whitespace-nowrap border-b border-r border-[var(--e-e3d9c4)] px-2 py-1 ${ok ? 'bg-white' : 'bg-rose-50'}`}>
+                  <td className={`sticky left-0 z-10 whitespace-nowrap border-b border-r border-[#e3d9c4] px-2 py-1 ${ok ? 'bg-white' : 'bg-rose-50'}`}>
                     <div className="flex items-center gap-1.5">
-                      <span className="font-mono text-[10px] font-bold text-[var(--e-6b5c42)]">{r.rowNumber}</span>
+                      <span className="font-mono text-[10px] font-bold text-[#6b5c42]">{r.rowNumber}</span>
                       {savedSet.has(r.rowNumber) ? (
                         <SavedChip />
                       ) : ok ? (
@@ -1321,7 +1321,7 @@ function PreviewStep({
                     </div>
                   </td>
                   {columns.map((c) => (
-                    <td key={c.key} className="border-b border-[var(--e-f2ecdf)] px-1 py-1 align-top">
+                    <td key={c.key} className="border-b border-[#f2ecdf] px-1 py-1 align-top">
                       <div className={c.w}>
                         {cellFor(r, c, byField[c.key])}
                         {/* Unknown code: map it here rather than sending the
@@ -1333,7 +1333,7 @@ function PreviewStep({
                             <button
                               type="button"
                               onClick={() => setMapping({ code: hit[1], clientCode: (r.clientCode ?? '').trim().toUpperCase() || null })}
-                              className="mt-0.5 block w-full truncate rounded border border-[var(--e-e3d9c4)] bg-white px-1 py-0.5 text-[9px] font-semibold text-[var(--e-5a4526)] hover:bg-[var(--e-faf7f0)]"
+                              className="mt-0.5 block w-full truncate rounded border border-[#e3d9c4] bg-white px-1 py-0.5 text-[9px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]"
                             >
                               Map {hit[1]}…
                             </button>
@@ -1343,7 +1343,7 @@ function PreviewStep({
                     </td>
                   ))}
                   {customCols.map((k) => (
-                    <td key={k} className="border-b border-[var(--e-f2ecdf)] px-1 py-1 align-top">
+                    <td key={k} className="border-b border-[#f2ecdf] px-1 py-1 align-top">
                       <div className="w-32">
                         <EditCell
                           value={r.customFields?.[k] ?? ''}
@@ -1372,9 +1372,9 @@ function PreviewStep({
           : { byField: {} as Record<string, string[]>, rowLevel: [] as string[] }
 
         return (
-          <div className="flex h-[440px] overflow-hidden rounded-xl border border-[var(--e-e3d9c4)]">
+          <div className="flex h-[440px] overflow-hidden rounded-xl border border-[#e3d9c4]">
             {/* Left — row list */}
-            <div className="w-56 shrink-0 overflow-y-auto border-r border-[var(--e-eee6d6)] bg-[var(--e-faf7f0)]">
+            <div className="w-56 shrink-0 overflow-y-auto border-r border-[#eee6d6] bg-[#faf7f0]">
               {shown.map((r) => {
                 const rOk = (r.errors?.length ?? 0) === 0
                 const active = selected?.rowNumber === r.rowNumber
@@ -1383,15 +1383,15 @@ function PreviewStep({
                     key={r.rowNumber}
                     type="button"
                     onClick={() => setSelectedRowNo(r.rowNumber)}
-                    className={`flex w-full items-center gap-2 border-b border-[var(--e-f2ecdf)] px-2.5 py-1.5 text-left text-[11px] transition ${
+                    className={`flex w-full items-center gap-2 border-b border-[#f2ecdf] px-2.5 py-1.5 text-left text-[11px] transition ${
                       active ? 'bg-white shadow-[inset_2px_0_0_#1f150c]' : 'hover:bg-white/60'
                     }`}
                   >
                     <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${rOk ? 'bg-emerald-500' : 'bg-rose-500'}`} />
-                    <span className="font-mono text-[9.5px] font-bold text-[var(--e-6b5c42)]">R{r.rowNumber}</span>
+                    <span className="font-mono text-[9.5px] font-bold text-[#6b5c42]">R{r.rowNumber}</span>
                     <span className="min-w-0 flex-1 truncate">
-                      <span className="font-semibold text-[var(--e-1f150c)]">{r.orderRef || r.recipientName || '—'}</span>
-                      {r.clientCode ? <span className="ml-1 font-mono text-[9.5px] text-[var(--e-6b5c42)]">{r.clientCode}</span> : null}
+                      <span className="font-semibold text-[#1f150c]">{r.orderRef || r.recipientName || '—'}</span>
+                      {r.clientCode ? <span className="ml-1 font-mono text-[9.5px] text-[#6b5c42]">{r.clientCode}</span> : null}
                     </span>
                     {!rOk ? (
                       <span className="shrink-0 rounded-full bg-rose-100 px-1.5 text-[9px] font-bold text-rose-700">
@@ -1406,14 +1406,14 @@ function PreviewStep({
             {/* Right — detail editor for the selected row */}
             <div className="min-w-0 flex-1 overflow-y-auto p-4">
               {!selected ? (
-                <p className="py-10 text-center text-[12px] text-[var(--e-6b5c42)]">Select a row on the left.</p>
+                <p className="py-10 text-center text-[12px] text-[#6b5c42]">Select a row on the left.</p>
               ) : (
                 <>
-                  <div className="flex flex-wrap items-center gap-2 border-b border-dashed border-[var(--e-eee6d6)] pb-2.5">
-                    <span className="font-mono text-[11px] font-bold text-[var(--e-6b5c42)]">Row {selected.rowNumber}</span>
-                    {selected.orderRef ? <span className="font-mono text-[13px] font-semibold text-[var(--e-1f150c)]">{selected.orderRef}</span> : null}
+                  <div className="flex flex-wrap items-center gap-2 border-b border-dashed border-[#eee6d6] pb-2.5">
+                    <span className="font-mono text-[11px] font-bold text-[#6b5c42]">Row {selected.rowNumber}</span>
+                    {selected.orderRef ? <span className="font-mono text-[13px] font-semibold text-[#1f150c]">{selected.orderRef}</span> : null}
                     {selected.clientCode ? (
-                      <span className="rounded bg-[var(--e-faf7f0)] px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[var(--e-5a4526)]">{selected.clientCode}</span>
+                      <span className="rounded bg-[#faf7f0] px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[#5a4526]">{selected.clientCode}</span>
                     ) : null}
                     <span className="ml-auto">
                       {savedSet.has(selected.rowNumber) ? (
@@ -1446,7 +1446,7 @@ function PreviewStep({
                   <div className="mt-3 space-y-3">
                     {CARD_GROUPS.map((g) => (
                       <div key={g.title}>
-                        <p className="mb-1 text-[9px] font-bold uppercase tracking-[0.12em] text-[var(--e-b6a684)]">{g.title}</p>
+                        <p className="mb-1 text-[9px] font-bold uppercase tracking-[0.12em] text-[#b6a684]">{g.title}</p>
                         <div className="space-y-1">
                           {g.keys.map((k) => {
                             const col = COL_BY_KEY[k]
@@ -1454,7 +1454,7 @@ function PreviewStep({
                             const fe = byField[k]
                             return (
                               <div key={k} className="grid grid-cols-[120px_minmax(0,1fr)] items-start gap-2">
-                                <span className="pt-1 text-[9.5px] uppercase tracking-[0.04em] text-[var(--e-a1906d)]">{labelOfField(k)}</span>
+                                <span className="pt-1 text-[9.5px] uppercase tracking-[0.04em] text-[#a1906d]">{labelOfField(k)}</span>
                                 <div className="min-w-0">
                                   {/* Box sized to the field: state/zip narrow, address/email/description wide. */}
                                   <div className={`max-w-full ${DETAIL_FIELD_W[k] ?? col.w ?? 'w-40'}`}>{cellFor(selected, col, fe)}</div>
@@ -1468,13 +1468,13 @@ function PreviewStep({
                     ))}
                     {customKeys.length > 0 ? (
                       <div>
-                        <p className="mb-1 text-[9px] font-bold uppercase tracking-[0.12em] text-[var(--e-b6a684)]">Custom fields</p>
+                        <p className="mb-1 text-[9px] font-bold uppercase tracking-[0.12em] text-[#b6a684]">Custom fields</p>
                         <div className="space-y-1">
                           {customKeys.map((k) => {
                             const fe = byField[k]
                             return (
                               <div key={k} className="grid grid-cols-[120px_minmax(0,1fr)] items-start gap-2">
-                                <span className="pt-1 text-[9.5px] uppercase tracking-[0.04em] text-[var(--e-a1906d)]">{labelOfField(k)}</span>
+                                <span className="pt-1 text-[9.5px] uppercase tracking-[0.04em] text-[#a1906d]">{labelOfField(k)}</span>
                                 <div className="min-w-0">
                                   <div className="w-48 max-w-full">
                                     <EditCell
@@ -1530,17 +1530,17 @@ function SavedStep({
         </div>
       </div>
       <div className="grid grid-cols-3 gap-2">
-        <div className="rounded-xl border border-[var(--e-e3d9c4)] bg-white px-3 py-2.5 text-center">
-          <p className="text-[18px] font-semibold tabular-nums text-[var(--e-1f150c)]">{staging.totalOrders}</p>
-          <p className="text-[10.5px] uppercase tracking-[0.08em] text-[var(--e-b6a684)]">Orders in file</p>
+        <div className="rounded-xl border border-[#e3d9c4] bg-white px-3 py-2.5 text-center">
+          <p className="text-[18px] font-semibold tabular-nums text-[#1f150c]">{staging.totalOrders}</p>
+          <p className="text-[10.5px] uppercase tracking-[0.08em] text-[#b6a684]">Orders in file</p>
         </div>
         <div className="rounded-xl border border-emerald-200 bg-white px-3 py-2.5 text-center">
           <p className="text-[18px] font-semibold tabular-nums text-emerald-800">{staging.savedOrders}</p>
-          <p className="text-[10.5px] uppercase tracking-[0.08em] text-[var(--e-b6a684)]">Saved</p>
+          <p className="text-[10.5px] uppercase tracking-[0.08em] text-[#b6a684]">Saved</p>
         </div>
-        <div className={`rounded-xl border bg-white px-3 py-2.5 text-center ${left > 0 ? 'border-rose-200' : 'border-[var(--e-e3d9c4)]'}`}>
-          <p className={`text-[18px] font-semibold tabular-nums ${left > 0 ? 'text-rose-800' : 'text-[var(--e-1f150c)]'}`}>{left}</p>
-          <p className="text-[10.5px] uppercase tracking-[0.08em] text-[var(--e-b6a684)]">Not saved</p>
+        <div className={`rounded-xl border bg-white px-3 py-2.5 text-center ${left > 0 ? 'border-rose-200' : 'border-[#e3d9c4]'}`}>
+          <p className={`text-[18px] font-semibold tabular-nums ${left > 0 ? 'text-rose-800' : 'text-[#1f150c]'}`}>{left}</p>
+          <p className="text-[10.5px] uppercase tracking-[0.08em] text-[#b6a684]">Not saved</p>
         </div>
       </div>
       {left > 0 ? (

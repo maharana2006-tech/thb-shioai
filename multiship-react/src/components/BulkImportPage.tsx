@@ -25,7 +25,7 @@ export default function BulkImportPage() {
           <button
             type="button"
             onClick={() => toHistory(null)}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--e-e3d9c4)] bg-white px-3 py-2 text-[13.5px] font-semibold text-[var(--e-5a4526)] transition hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-faf7f0)]"
+            className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
           >
             <FiArrowLeft className="h-3.5 w-3.5" />
             Back to import history
@@ -45,7 +45,7 @@ export default function BulkImportPage() {
           <button
             type="button"
             onClick={() => toHistory(savedBatchSlug)}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--e-1f150c)] px-3 py-1.5 text-[12.5px] font-semibold text-[var(--e-f4eede)] hover:bg-[var(--e-412d15)]"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[12.5px] font-semibold text-[#f4eede] hover:bg-[#412d15]"
           >
             Open import #{savedBatchId}
             <FiArrowRight className="h-3.5 w-3.5" />

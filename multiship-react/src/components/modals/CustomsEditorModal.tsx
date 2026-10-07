@@ -130,7 +130,7 @@ export default function CustomsEditorModal({ orderNo, onClose }: CustomsEditorMo
               {/* Auto-resolved importer + broker */}
               <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-3.5">
                 <p className="inline-flex items-center gap-1.5 text-[12.5px] font-semibold text-slate-950">
-                  <FiGlobe className="h-3.5 w-3.5 text-[var(--e-412d15)]" /> Importer &amp; Broker
+                  <FiGlobe className="h-3.5 w-3.5 text-[#412d15]" /> Importer &amp; Broker
                 </p>
                 <p className="mb-3 text-[11px] leading-5 text-slate-500">
                   Resolved automatically from {clientCode || 'the client'}'s profile for {country ? countryName(country) : 'this country'}.

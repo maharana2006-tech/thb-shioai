@@ -29,7 +29,7 @@ export function CountrySelect({
   return (
     <div className="relative">
       <div className="relative">
-        <FiSearch className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--e-b6a684)]" />
+        <FiSearch className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#b6a684]" />
         <input
           className={`${inputCls} pl-8`}
           value={open ? query : selectedName ? `${selectedName} (${value})` : ''}
@@ -47,9 +47,9 @@ export function CountrySelect({
         />
       </div>
       {open ? (
-        <ul className="absolute z-40 mt-1 max-h-56 w-full overflow-auto rounded-xl border border-[var(--e-e3d9c4)] bg-white py-1 shadow-lg">
+        <ul className="absolute z-40 mt-1 max-h-56 w-full overflow-auto rounded-xl border border-[#e3d9c4] bg-white py-1 shadow-lg">
           {matches.length === 0 ? (
-            <li className="px-3 py-2 text-[12px] text-[var(--e-b6a684)]">No match</li>
+            <li className="px-3 py-2 text-[12px] text-[#b6a684]">No match</li>
           ) : (
             matches.map(([code, name]) => (
               <li key={code}>
@@ -69,12 +69,12 @@ export function CountrySelect({
                     setOpen(false)
                     setQuery('')
                   }}
-                  className={`flex w-full items-center justify-between px-3 py-1.5 text-left text-[12.5px] hover:bg-[var(--e-faf7f0)] ${
-                    code === value ? 'font-semibold text-[var(--e-1f150c)]' : 'text-[var(--e-5a4526)]'
+                  className={`flex w-full items-center justify-between px-3 py-1.5 text-left text-[12.5px] hover:bg-[#faf7f0] ${
+                    code === value ? 'font-semibold text-[#1f150c]' : 'text-[#5a4526]'
                   }`}
                 >
                   <span>{name}</span>
-                  <span className="font-mono text-[10px] text-[var(--e-b6a684)]">{code}</span>
+                  <span className="font-mono text-[10px] text-[#b6a684]">{code}</span>
                 </button>
               </li>
             ))

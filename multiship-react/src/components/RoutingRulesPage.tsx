@@ -173,7 +173,7 @@ export default function RoutingRulesPage() {
           Code Maps
         </a>
         <span className="mx-1 text-slate-300">→</span>
-        <span className="rounded bg-[var(--e-1f150c)] px-2 py-0.5 font-semibold text-white">Routing Rules</span>
+        <span className="rounded bg-[#1f150c] px-2 py-0.5 font-semibold text-white">Routing Rules</span>
         <span className="text-slate-400">·</span>
         <span className="text-slate-500">post-rate-shop REROUTE / BLOCK by priority</span>
       </nav>
@@ -204,7 +204,7 @@ export default function RoutingRulesPage() {
                 active: true,
                 actionType: 'REROUTE',
               })}
-              className="inline-flex items-center gap-1.5 rounded-md bg-[var(--e-1f150c)] px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-black"
+              className="inline-flex items-center gap-1.5 rounded-md bg-[#1f150c] px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-black"
             >
               <FiPlus /> New rule
             </button>
@@ -549,7 +549,7 @@ function RuleEditorModal({
             Cancel
           </button>
           <button type="button" onClick={save} disabled={saving}
-            className="rounded-md bg-[var(--e-1f150c)] px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-black disabled:opacity-50">
+            className="rounded-md bg-[#1f150c] px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-black disabled:opacity-50">
             {saving ? 'Saving…' : 'Save'}
           </button>
         </div>
@@ -693,7 +693,7 @@ function DryRunPanel({
           </div>
 
           <button type="button" onClick={run} disabled={running}
-            className="inline-flex items-center gap-1.5 rounded-md bg-[var(--e-1f150c)] px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-black disabled:opacity-50">
+            className="inline-flex items-center gap-1.5 rounded-md bg-[#1f150c] px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-black disabled:opacity-50">
             <FiPlay /> {running ? 'Running…' : 'Preview'}
           </button>
 
@@ -800,7 +800,7 @@ function DryRunPanel({
 
 const fieldLabel = 'mb-1 block text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-500'
 const inputCls =
-  'w-full rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[13px] text-slate-800 outline-none focus:border-[var(--e-1f150c)]'
+  'w-full rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[13px] text-slate-800 outline-none focus:border-[#1f150c]'
 
 function conditionSummary(r: RoutingRule): string {
   const parts: string[] = []

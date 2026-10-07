@@ -17,7 +17,7 @@ export default function ValidationQuote({ quote }: { quote: ShipmentRateQuote })
   const unit = (quote.weightUnit ?? 'LB').toLowerCase()
   const priced = quote.status === 'QUOTED'
   return (
-    <div data-testid="validation-quote" className="mt-2 rounded-lg border border-[var(--e-e3d9c4)] bg-white/70 px-3 py-2 text-[11.5px] text-slate-700">
+    <div data-testid="validation-quote" className="mt-2 rounded-lg border border-[#e3d9c4] bg-white/70 px-3 py-2 text-[11.5px] text-slate-700">
       <p className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-600">
         Price &amp; delivery{quote.serviceName || quote.serviceCode ? ` · ${quote.serviceName || quote.serviceCode}` : ''}
       </p>

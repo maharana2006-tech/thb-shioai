@@ -242,7 +242,7 @@ export default function ApiKeysPage() {
         <button
           type="button"
           onClick={openIssue}
-          className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--e-1f150c)] px-3.5 py-2 text-[12.5px] font-semibold text-white transition hover:bg-[var(--e-412d15)]"
+          className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[12.5px] font-semibold text-white transition hover:bg-[#412d15]"
         >
           <FiPlus className="h-3.5 w-3.5" />
           Issue API key
@@ -282,11 +282,11 @@ export default function ApiKeysPage() {
 
       {/* key ledger */}
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="flex items-center gap-2.5 bg-[var(--e-1f150c)] px-4 py-2.5">
-          <span className="flex h-6 w-9 items-center justify-center rounded bg-[var(--e-e1dcc9)]/15 font-mono text-[9px] font-black tracking-wider text-[var(--e-e1dcc9)]">
+        <div className="flex items-center gap-2.5 bg-[#1f150c] px-4 py-2.5">
+          <span className="flex h-6 w-9 items-center justify-center rounded bg-[#e1dcc9]/15 font-mono text-[9px] font-black tracking-wider text-[#e1dcc9]">
             KEY
           </span>
-          <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[var(--e-e1dcc9)]">External API keys</span>
+          <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[#e1dcc9]">External API keys</span>
         </div>
 
         {loading && !keys.length ? (
@@ -297,7 +297,7 @@ export default function ApiKeysPage() {
             <button
               type="button"
               onClick={openIssue}
-              className="mt-2.5 inline-flex items-center gap-1.5 rounded-xl bg-[var(--e-1f150c)] px-3 py-1.5 text-[11.5px] font-semibold text-white transition hover:bg-[var(--e-412d15)]"
+              className="mt-2.5 inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[11.5px] font-semibold text-white transition hover:bg-[#412d15]"
             >
               <FiPlus className="h-3.5 w-3.5" />
               Issue the first key
@@ -307,7 +307,7 @@ export default function ApiKeysPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-left">
               <thead>
-                <tr className="border-b border-slate-200 bg-[var(--e-faf9f7)]">
+                <tr className="border-b border-slate-200 bg-[#faf9f7]">
                   {['Name', 'Client', 'Token', 'Env', 'Scopes', 'Status', 'Expiry', 'Created', 'Last used', ''].map((h) => (
                     <th key={h} className="whitespace-nowrap px-4 py-2 text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-400">
                       {h}
@@ -492,7 +492,7 @@ export default function ApiKeysPage() {
                     onClick={() => setScopeMode('ALL')}
                     className={`flex-1 rounded-xl border px-3 py-2 text-[12.5px] font-semibold transition ${
                       scopeMode === 'ALL'
-                        ? 'border-[var(--e-1f150c)] bg-[var(--e-1f150c)] text-white'
+                        ? 'border-[#1f150c] bg-[#1f150c] text-white'
                         : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'
                     }`}
                   >
@@ -507,7 +507,7 @@ export default function ApiKeysPage() {
                       : undefined}
                     className={`flex-1 rounded-xl border px-3 py-2 text-[12.5px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${
                       scopeMode === 'ONE'
-                        ? 'border-[var(--e-1f150c)] bg-[var(--e-1f150c)] text-white'
+                        ? 'border-[#1f150c] bg-[#1f150c] text-white'
                         : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'
                     }`}
                   >
@@ -544,7 +544,7 @@ export default function ApiKeysPage() {
                       onClick={() => setForm((f) => ({ ...f, environment: env }))}
                       className={`flex-1 rounded-xl border px-3 py-2 text-[12.5px] font-semibold uppercase tracking-wide transition ${
                         form.environment === env
-                          ? 'border-[var(--e-1f150c)] bg-[var(--e-1f150c)] text-white'
+                          ? 'border-[#1f150c] bg-[#1f150c] text-white'
                           : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'
                       }`}
                     >
@@ -592,7 +592,7 @@ export default function ApiKeysPage() {
                               return next
                             })
                           }}
-                          className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-[var(--e-1f150c)]"
+                          className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-[#1f150c]"
                         />
                         <div className="min-w-0 flex-1">
                           <p className="text-[12px] font-semibold text-slate-800">
@@ -622,7 +622,7 @@ export default function ApiKeysPage() {
                 type="button"
                 onClick={() => void submitIssue()}
                 disabled={issuing}
-                className="rounded-xl bg-[var(--e-1f150c)] px-5 py-2 text-[13px] font-semibold text-white transition hover:bg-[var(--e-412d15)] disabled:opacity-50"
+                className="rounded-xl bg-[#1f150c] px-5 py-2 text-[13px] font-semibold text-white transition hover:bg-[#412d15] disabled:opacity-50"
               >
                 {issuing ? 'Issuing…' : 'Issue key'}
               </button>
@@ -657,7 +657,7 @@ export default function ApiKeysPage() {
             </div>
 
             <div className="mt-3 flex items-stretch gap-2">
-              <code className="flex-1 select-all break-all rounded-xl border border-slate-200 bg-[var(--e-faf9f7)] px-3 py-2.5 font-mono text-[11.5px] leading-relaxed text-slate-800">
+              <code className="flex-1 select-all break-all rounded-xl border border-slate-200 bg-[#faf9f7] px-3 py-2.5 font-mono text-[11.5px] leading-relaxed text-slate-800">
                 {issued.token}
               </code>
               <button
@@ -666,7 +666,7 @@ export default function ApiKeysPage() {
                 className={`inline-flex shrink-0 items-center gap-1.5 rounded-xl px-3 text-[12px] font-semibold transition ${
                   copied
                     ? 'border border-emerald-200 bg-emerald-50 text-emerald-700'
-                    : 'bg-[var(--e-1f150c)] text-white hover:bg-[var(--e-412d15)]'
+                    : 'bg-[#1f150c] text-white hover:bg-[#412d15]'
                 }`}
               >
                 {copied ? <FiCheck className="h-3.5 w-3.5" /> : <FiCopy className="h-3.5 w-3.5" />}
@@ -683,7 +683,7 @@ export default function ApiKeysPage() {
               <button
                 type="button"
                 onClick={() => setIssued(null)}
-                className="rounded-xl bg-[var(--e-1f150c)] px-5 py-2 text-[13px] font-semibold text-white transition hover:bg-[var(--e-412d15)]"
+                className="rounded-xl bg-[#1f150c] px-5 py-2 text-[13px] font-semibold text-white transition hover:bg-[#412d15]"
               >
                 Done — I saved the token
               </button>
@@ -727,7 +727,7 @@ export default function ApiKeysPage() {
                 type="button"
                 onClick={() => void confirmRotate()}
                 disabled={rotateBusy}
-                className="rounded-xl bg-[var(--e-1f150c)] px-5 py-2 text-[13px] font-semibold text-white transition hover:bg-[var(--e-412d15)] disabled:opacity-50"
+                className="rounded-xl bg-[#1f150c] px-5 py-2 text-[13px] font-semibold text-white transition hover:bg-[#412d15] disabled:opacity-50"
               >
                 {rotateBusy ? 'Rotating…' : 'Rotate key'}
               </button>

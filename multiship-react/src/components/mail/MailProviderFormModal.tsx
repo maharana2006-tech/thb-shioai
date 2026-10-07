@@ -134,7 +134,7 @@ export default function MailProviderFormModal({
       <div className="space-y-4">
         {/* Kind + display name */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <label className="text-[12px] font-semibold text-[var(--e-5a4526)]">
+          <label className="text-[12px] font-semibold text-[#5a4526]">
             Kind
             <select
               value={kind}
@@ -144,7 +144,7 @@ export default function MailProviderFormModal({
                 setPresetId('custom')
               }}
               disabled={isEdit}
-              className="mt-1 block w-full rounded-lg border border-[var(--e-e3d9c4)] bg-white px-3 py-2 text-[13px] text-[var(--e-1f150c)] disabled:bg-[var(--e-faf7f0)]"
+              className="mt-1 block w-full rounded-lg border border-[#e3d9c4] bg-white px-3 py-2 text-[13px] text-[#1f150c] disabled:bg-[#faf7f0]"
             >
               {kinds.length === 0 && <option value="">— no providers registered —</option>}
               {kinds.map((k) => (
@@ -154,13 +154,13 @@ export default function MailProviderFormModal({
               ))}
             </select>
           </label>
-          <label className="text-[12px] font-semibold text-[var(--e-5a4526)]">
+          <label className="text-[12px] font-semibold text-[#5a4526]">
             Display name
             <input
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
               placeholder="e.g. Company Gmail"
-              className="mt-1 block w-full rounded-lg border border-[var(--e-e3d9c4)] px-3 py-2 text-[13px] text-[var(--e-1f150c)]"
+              className="mt-1 block w-full rounded-lg border border-[#e3d9c4] px-3 py-2 text-[13px] text-[#1f150c]"
             />
           </label>
         </div>
@@ -168,12 +168,12 @@ export default function MailProviderFormModal({
         {/* Preset picker */}
         {presets.length > 1 && !isEdit && (
           <div>
-            <label className="text-[12px] font-semibold text-[var(--e-5a4526)]">
+            <label className="text-[12px] font-semibold text-[#5a4526]">
               Preset
               <select
                 value={presetId}
                 onChange={(e) => applyPreset(e.target.value)}
-                className="mt-1 block w-full rounded-lg border border-[var(--e-e3d9c4)] bg-white px-3 py-2 text-[13px] text-[var(--e-1f150c)]"
+                className="mt-1 block w-full rounded-lg border border-[#e3d9c4] bg-white px-3 py-2 text-[13px] text-[#1f150c]"
               >
                 {presets.map((p) => (
                   <option key={p.id} value={p.id}>
@@ -183,7 +183,7 @@ export default function MailProviderFormModal({
               </select>
             </label>
             {presets.find((p) => p.id === presetId)?.description && (
-              <p className="mt-1 text-[11.5px] text-[var(--e-5a4526)]">
+              <p className="mt-1 text-[11.5px] text-[#5a4526]">
                 {presets.find((p) => p.id === presetId)!.description}
               </p>
             )}
@@ -192,8 +192,8 @@ export default function MailProviderFormModal({
 
         {/* Config inputs */}
         {kindDescriptor && (
-          <fieldset className="space-y-2 rounded-xl border border-[var(--e-eee6d6)] bg-[var(--e-faf7f0)]/40 p-3">
-            <legend className="px-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--e-5a4526)]">
+          <fieldset className="space-y-2 rounded-xl border border-[#eee6d6] bg-[#faf7f0]/40 p-3">
+            <legend className="px-1 text-[11px] font-semibold uppercase tracking-wide text-[#5a4526]">
               Configuration
             </legend>
             {kindDescriptor.requiredKeys.map((key) => (
@@ -234,7 +234,7 @@ function ConfigInput({
 }) {
   return (
     <label className="grid grid-cols-[10rem_1fr] items-center gap-3 text-[12px]">
-      <span className="font-mono text-[var(--e-5a4526)]">
+      <span className="font-mono text-[#5a4526]">
         {keyName}
         {isSecret && (
           <span className="ml-1 rounded bg-amber-100 px-1 text-[10px] text-amber-800">secret</span>
@@ -245,7 +245,7 @@ function ConfigInput({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={isSecret && value === REDACTED ? 'unchanged — type to replace' : ''}
-        className="rounded-lg border border-[var(--e-e3d9c4)] px-3 py-1.5 font-mono text-[12px] text-[var(--e-1f150c)]"
+        className="rounded-lg border border-[#e3d9c4] px-3 py-1.5 font-mono text-[12px] text-[#1f150c]"
       />
     </label>
   )

@@ -223,7 +223,7 @@ export default function AuditLogPage() {
           row.original.orderNo != null ? (
             <a
               href={`/label/${row.original.orderNo}`}
-              className="font-mono text-[11.5px] font-semibold text-[var(--e-412d15)] underline-offset-2 hover:underline"
+              className="font-mono text-[11.5px] font-semibold text-[#412d15] underline-offset-2 hover:underline"
             >
               #{row.original.orderNo}
             </a>
@@ -295,7 +295,7 @@ export default function AuditLogPage() {
               onClick={() => setCategory(t.key)}
               className={`rounded-xl px-3.5 py-1.5 text-[12.5px] font-semibold transition ${
                 active
-                  ? 'bg-[var(--e-1f150c)] text-[var(--e-f4eede)]'
+                  ? 'bg-[#1f150c] text-[#f4eede]'
                   : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
               } ${t.key === 'ERROR' && !active ? 'text-rose-700' : ''}`}
             >
@@ -308,7 +308,7 @@ export default function AuditLogPage() {
           onChange={(e) => setOrderNoFilter(e.target.value.replace(/[^0-9]/g, ''))}
           placeholder="Order #…"
           inputMode="numeric"
-          className="ml-auto w-28 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[12px] outline-none focus:border-[var(--e-412d15)]"
+          className="ml-auto w-28 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[12px] outline-none focus:border-[#412d15]"
           title="Show every log entry for one order"
         />
       </div>
@@ -366,7 +366,7 @@ export default function AuditLogPage() {
                   aria-controls="audit-log-filter-panel"
                   className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[12.5px] font-semibold transition ${
                     filtersActive
-                      ? 'border-[var(--e-1f150c)] bg-[var(--e-1f150c)] text-white'
+                      ? 'border-[#1f150c] bg-[#1f150c] text-white'
                       : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
                   }`}
                 >

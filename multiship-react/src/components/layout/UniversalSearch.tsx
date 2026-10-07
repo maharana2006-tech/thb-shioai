@@ -248,7 +248,7 @@ export default function UniversalSearch() {
 
   return (
     <div ref={boxRef} className="relative hidden lg:block">
-      <label className="flex w-72 items-center gap-2 rounded-lg bg-slate-100 px-3 py-2 ring-1 ring-transparent transition focus-within:bg-white focus-within:ring-[var(--e-412d15)] xl:w-80">
+      <label className="flex w-72 items-center gap-2 rounded-lg bg-slate-100 px-3 py-2 ring-1 ring-transparent transition focus-within:bg-white focus-within:ring-[#412d15] xl:w-80">
         <FiSearch className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
         <input
           ref={inputRef}
@@ -261,7 +261,7 @@ export default function UniversalSearch() {
           onKeyDown={onKeyDown}
           placeholder="Search orders, clients, warehouses…"
           aria-label="Universal search"
-          className="w-full bg-transparent text-[12.5px] text-[var(--e-1f150c)] outline-none placeholder:text-slate-400"
+          className="w-full bg-transparent text-[12.5px] text-[#1f150c] outline-none placeholder:text-slate-400"
         />
         {loading ? (
           <FiLoader className="h-3 w-3 shrink-0 animate-spin text-slate-400" aria-hidden="true" />
@@ -273,15 +273,15 @@ export default function UniversalSearch() {
       </label>
 
       {showDropdown ? (
-        <div className="absolute right-0 top-[calc(100%+6px)] z-50 max-h-[420px] w-[26rem] overflow-y-auto rounded-xl border border-[var(--e-e3d9c4)] bg-white p-1.5 shadow-[0_20px_50px_rgba(31,21,12,0.22)]">
+        <div className="absolute right-0 top-[calc(100%+6px)] z-50 max-h-[420px] w-[26rem] overflow-y-auto rounded-xl border border-[#e3d9c4] bg-white p-1.5 shadow-[0_20px_50px_rgba(31,21,12,0.22)]">
           {hits.length === 0 ? (
-            <p className="px-3 py-4 text-center text-[11.5px] text-[var(--e-6b5c42)]">
+            <p className="px-3 py-4 text-center text-[11.5px] text-[#6b5c42]">
               {loading ? 'Searching…' : `No matches for “${term.trim()}”`}
             </p>
           ) : (
             grouped.map(({ kind, rows }) => (
               <div key={kind} className="mb-1 last:mb-0">
-                <p className="flex items-center gap-1.5 px-2 py-1 text-[9.5px] font-bold uppercase tracking-[0.14em] text-[var(--e-b6a684)]">
+                <p className="flex items-center gap-1.5 px-2 py-1 text-[9.5px] font-bold uppercase tracking-[0.14em] text-[#b6a684]">
                   {GROUP_META[kind].icon} {GROUP_META[kind].label}
                 </p>
                 {rows.map(({ hit, index }) => (
@@ -291,19 +291,19 @@ export default function UniversalSearch() {
                     onMouseEnter={() => setActive(index)}
                     onClick={() => go(hit)}
                     className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left transition ${
-                      index === active ? 'bg-[var(--e-faf7f0)]' : 'hover:bg-[var(--e-faf7f0)]/70'
+                      index === active ? 'bg-[#faf7f0]' : 'hover:bg-[#faf7f0]/70'
                     }`}
                   >
                     <span className="min-w-0">
-                      <span className="block truncate text-[12.5px] font-semibold text-[var(--e-1f150c)]">{hit.title}</span>
+                      <span className="block truncate text-[12.5px] font-semibold text-[#1f150c]">{hit.title}</span>
                       {hit.subtitle ? (
-                        <span className="block truncate text-[10.5px] text-[var(--e-6b5c42)]">{hit.subtitle}</span>
+                        <span className="block truncate text-[10.5px] text-[#6b5c42]">{hit.subtitle}</span>
                       ) : null}
                     </span>
                     {index === active ? (
-                      <FiCornerDownLeft className="h-3 w-3 shrink-0 text-[var(--e-b6a684)]" aria-hidden="true" />
+                      <FiCornerDownLeft className="h-3 w-3 shrink-0 text-[#b6a684]" aria-hidden="true" />
                     ) : (
-                      <FiArrowRight className="h-3 w-3 shrink-0 text-[var(--e-e3d9c4)]" aria-hidden="true" />
+                      <FiArrowRight className="h-3 w-3 shrink-0 text-[#e3d9c4]" aria-hidden="true" />
                     )}
                   </button>
                 ))}

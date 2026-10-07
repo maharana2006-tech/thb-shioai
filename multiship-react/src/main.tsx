@@ -3,10 +3,6 @@ import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import { Provider } from 'react-redux'
 import './App.css'
-import { applyTheme } from './utils/theme'
-
-// Stamp the saved theme on <html> before React renders (no flash).
-applyTheme()
 import App from './App.tsx'
 import { store } from './store/store'
 import AppErrorBoundary from './components/errors/AppErrorBoundary'

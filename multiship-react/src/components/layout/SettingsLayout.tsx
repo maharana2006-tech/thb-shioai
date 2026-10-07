@@ -98,10 +98,10 @@ export default function SettingsLayout() {
     `group/item flex w-full items-center rounded-lg py-[6px] text-[13px] leading-snug transition ${
       compact ? 'justify-center px-0 py-[7px]' : 'gap-2.5 px-2.5'
     } ${
-      active ? 'bg-[var(--e-1f150c)] font-semibold !text-[var(--e-f4eede)]' : 'font-medium !text-[var(--e-5a4526)] hover:bg-[var(--e-efe7d4)] hover:!text-[var(--e-1f150c)]'
+      active ? 'bg-[#1f150c] font-semibold !text-[#f4eede]' : 'font-medium !text-[#5a4526] hover:bg-[#efe7d4] hover:!text-[#1f150c]'
     }`
   const iconClass = (active: boolean) =>
-    `h-[15px] w-[15px] shrink-0 ${active ? 'text-[var(--e-e1dcc9)]' : 'text-[var(--e-a1906d)] group-hover/item:text-[var(--e-412d15)]'}`
+    `h-[15px] w-[15px] shrink-0 ${active ? 'text-[#e1dcc9]' : 'text-[#a1906d] group-hover/item:text-[#412d15]'}`
 
   return (
     // lg+: the menu is a full-height panel attached to the app sidebar — the
@@ -109,13 +109,13 @@ export default function SettingsLayout() {
     <div className="flex flex-col lg:-mx-8 lg:-my-5 lg:flex-row">
       <aside
         aria-label="Settings"
-        className={`hidden ${compact ? 'w-[60px]' : 'w-[232px]'} shrink-0 border-r border-[var(--e-e6dcc6)] bg-[var(--e-f8f3e8)] lg:sticky lg:top-14 lg:block lg:h-[calc(100vh-3.5rem)] lg:self-start lg:overflow-y-auto [scrollbar-color:#d9cfbb_transparent] [scrollbar-width:thin]`}
+        className={`hidden ${compact ? 'w-[60px]' : 'w-[232px]'} shrink-0 border-r border-[#e6dcc6] bg-[#f8f3e8] lg:sticky lg:top-14 lg:block lg:h-[calc(100vh-3.5rem)] lg:self-start lg:overflow-y-auto [scrollbar-color:#d9cfbb_transparent] [scrollbar-width:thin]`}
       >
         <div className={`${compact ? 'px-2' : 'px-3'} pb-6 pt-4`}>
           <div className={`mb-3 flex items-center ${compact ? 'justify-center' : 'justify-between gap-2 pl-2.5'}`}>
             {!compact ? (
-              <p className="flex items-center gap-2 text-[15px] font-bold tracking-tight text-[var(--e-1f150c)]">
-                <FiSettings className="h-4 w-4 text-[var(--e-412d15)]" />
+              <p className="flex items-center gap-2 text-[15px] font-bold tracking-tight text-[#1f150c]">
+                <FiSettings className="h-4 w-4 text-[#412d15]" />
                 Settings
               </p>
             ) : null}
@@ -124,7 +124,7 @@ export default function SettingsLayout() {
               onClick={toggleCompact}
               aria-label={compact ? 'Expand settings menu' : 'Collapse settings menu to icons'}
               title={compact ? 'Expand menu' : 'Collapse to icons'}
-              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--e-8a7a5a)] transition hover:bg-[var(--e-efe7d4)] hover:text-[var(--e-1f150c)]"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[#8a7a5a] transition hover:bg-[#efe7d4] hover:text-[#1f150c]"
             >
               {compact ? <FiChevronsRight className="h-4 w-4" /> : <FiChevronsLeft className="h-4 w-4" />}
             </button>
@@ -135,20 +135,20 @@ export default function SettingsLayout() {
               onClick={toggleCompact}
               aria-label="Search settings"
               title="Search settings"
-              className="mb-3 flex h-8 w-full items-center justify-center rounded-lg border border-[var(--e-e3d9c4)] bg-white text-[var(--e-a1906d)] transition hover:text-[var(--e-1f150c)]"
+              className="mb-3 flex h-8 w-full items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#a1906d] transition hover:text-[#1f150c]"
             >
               <FiSearch className="h-3.5 w-3.5" />
             </button>
           ) : (
           <label className="relative mb-3 block">
             <span className="sr-only">Search settings</span>
-            <FiSearch className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--e-a1906d)]" />
+            <FiSearch className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#a1906d]" />
             <input
               type="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search settings"
-              className="h-8 w-full rounded-lg border border-[var(--e-e3d9c4)] bg-white pl-8 pr-2 text-[12.5px] text-[var(--e-1f150c)] outline-none transition placeholder:text-[var(--e-a1906d)] focus:border-[var(--e-412d15)] focus:ring-4 focus:ring-[var(--e-efe5cf)]"
+              className="h-8 w-full rounded-lg border border-[#e3d9c4] bg-white pl-8 pr-2 text-[12.5px] text-[#1f150c] outline-none transition placeholder:text-[#a1906d] focus:border-[#412d15] focus:ring-4 focus:ring-[#efe5cf]"
             />
           </label>
           )}
@@ -161,8 +161,8 @@ export default function SettingsLayout() {
           ) : null}
 
           {shown.map((g) => (
-            <div key={g.key} className={`${compact ? 'mt-2 border-t border-[var(--e-e6dcc6)] pt-2' : 'mt-4'} space-y-px`}>
-              <p className={compact ? 'sr-only' : 'mb-1 px-2.5 font-mono text-[9.5px] font-semibold uppercase tracking-[0.14em] text-[var(--e-a1906d)]'}>{g.label}</p>
+            <div key={g.key} className={`${compact ? 'mt-2 border-t border-[#e6dcc6] pt-2' : 'mt-4'} space-y-px`}>
+              <p className={compact ? 'sr-only' : 'mb-1 px-2.5 font-mono text-[9.5px] font-semibold uppercase tracking-[0.14em] text-[#a1906d]'}>{g.label}</p>
               {g.pages.map((p) => {
                 const active = isActive(p.to)
                 const Icon = PAGE_ICONS[p.key] ?? FiCircle
@@ -176,7 +176,7 @@ export default function SettingsLayout() {
             </div>
           ))}
           {q && !shown.length ? (
-            <p className="px-2.5 py-2 text-[12.5px] text-[var(--e-8a7a5a)]">No setting matches “{query.trim()}”.</p>
+            <p className="px-2.5 py-2 text-[12.5px] text-[#8a7a5a]">No setting matches “{query.trim()}”.</p>
           ) : null}
         </div>
       </aside>
@@ -188,7 +188,7 @@ export default function SettingsLayout() {
           <select
             value={onOverview ? workspacePaths.settings : activeItem?.to ?? ''}
             onChange={(e) => navigate(e.target.value)}
-            className="h-10 w-full rounded-xl border border-[var(--e-e3d9c4)] bg-white px-3 text-[13.5px] font-semibold text-[var(--e-1f150c)]"
+            className="h-10 w-full rounded-xl border border-[#e3d9c4] bg-white px-3 text-[13.5px] font-semibold text-[#1f150c]"
           >
             <option value={workspacePaths.settings}>All settings</option>
             {groups.map((g) => (
@@ -200,11 +200,11 @@ export default function SettingsLayout() {
         </label>
 
         {!onOverview ? (
-          <div className="mb-4 flex items-start justify-between gap-4 border-b border-[var(--e-ebe3d2)] pb-4">
+          <div className="mb-4 flex items-start justify-between gap-4 border-b border-[#ebe3d2] pb-4">
             <div className="min-w-0">
-              <h1 className="text-[22px] font-bold tracking-tight text-[var(--e-1f150c)]">{activeItem?.label ?? 'Settings'}</h1>
+              <h1 className="text-[22px] font-bold tracking-tight text-[#1f150c]">{activeItem?.label ?? 'Settings'}</h1>
               {activeItem?.description ? (
-                <p className="mt-1 max-w-3xl text-[13.5px] leading-relaxed text-[var(--e-6b5c42)]">{activeItem.description}</p>
+                <p className="mt-1 max-w-3xl text-[13.5px] leading-relaxed text-[#6b5c42]">{activeItem.description}</p>
               ) : null}
             </div>
             <button
@@ -213,7 +213,7 @@ export default function SettingsLayout() {
               disabled={!refresh || refreshing}
               aria-label="Refresh"
               title={refresh ? 'Refresh this page' : 'Nothing to refresh on this page'}
-              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[var(--e-e3d9c4)] bg-white text-[var(--e-5a4526)] transition hover:bg-[var(--e-faf6ec)] disabled:cursor-not-allowed disabled:opacity-40"
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#5a4526] transition hover:bg-[#faf6ec] disabled:cursor-not-allowed disabled:opacity-40"
             >
               <FiRefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
             </button>

@@ -57,7 +57,7 @@ export function ImporterBrokerDraftStep({
                   key={v}
                   className={`inline-flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-[12px] font-semibold transition ${
                     draft.importerType === v
-                      ? 'border-[var(--e-412d15)] bg-[var(--e-412d15)]/5 text-[var(--e-412d15)]'
+                      ? 'border-[#412d15] bg-[#412d15]/5 text-[#412d15]'
                       : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
                   }`}
                 >

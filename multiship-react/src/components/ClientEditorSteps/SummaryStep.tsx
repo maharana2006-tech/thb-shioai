@@ -92,7 +92,7 @@ export function SummaryStep({
         <li key={d.id}>
           {formatCarrierName(d.carrierCode)} · {d.accountNumber}
           {d.environment ? <span className="ml-1 text-[10px] uppercase tracking-wide text-slate-500">{d.environment}</span> : null}
-          {d.clientDefault ? <span className="ml-1 text-[10px] font-semibold text-[var(--e-412d15)]">(default)</span> : null}
+          {d.clientDefault ? <span className="ml-1 text-[10px] font-semibold text-[#412d15]">(default)</span> : null}
         </li>
       ))}
       {carrierDrafts.length > 5 ? <li className="italic text-slate-500">+ {carrierDrafts.length - 5} more…</li> : null}
@@ -105,7 +105,7 @@ export function SummaryStep({
     <ul className="space-y-0.5 text-[11.5px] leading-4 text-slate-700">
       {mappingDrafts.slice(0, 5).map((d) => (
         <li key={d.id}>
-          <span className="rounded bg-[var(--e-1f150c)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--e-e1dcc9)]">{d.shipviaCd}</span>
+          <span className="rounded bg-[#1f150c] px-1.5 py-0.5 font-mono text-[10px] text-[#e1dcc9]">{d.shipviaCd}</span>
           {' → '}
           {services.find((sv) => sv.id === d.serviceId)?.name ?? `service #${d.serviceId}`}
         </li>
@@ -259,7 +259,7 @@ export function SummaryCard({
         <button
           type="button"
           onClick={() => jumpTo(stepKey)}
-          className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 transition hover:border-[var(--e-412d15)] hover:bg-[var(--e-faf7f0)] hover:text-[var(--e-412d15)]"
+          className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 transition hover:border-[#412d15] hover:bg-[#faf7f0] hover:text-[#412d15]"
         >
           {status === 'block' ? 'Fix' : 'Edit'} <FiChevronRight className="h-3 w-3" />
         </button>

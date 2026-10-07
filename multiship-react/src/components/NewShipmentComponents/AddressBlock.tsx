@@ -85,7 +85,7 @@ export function AddressBlock({
     <>
       <div className="mb-3">
         {pasteOpen ? (
-          <div className="rounded-xl border border-[var(--e-e3d9c4)] bg-[var(--e-faf7f0)] p-2.5">
+          <div className="rounded-xl border border-[#e3d9c4] bg-[#faf7f0] p-2.5">
             <textarea
               className={`${inputCls} min-h-[64px] resize-y`}
               value={pasteText}
@@ -98,7 +98,7 @@ export function AddressBlock({
                 type="button"
                 onClick={() => void runParse()}
                 disabled={parsing || !pasteText.trim()}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--e-412d15)] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[var(--e-1f150c)] disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-[#412d15] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#1f150c] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <FiZap className="h-3.5 w-3.5" />
                 {parsing ? 'Reading…' : 'Autofill fields'}
@@ -106,7 +106,7 @@ export function AddressBlock({
               <button
                 type="button"
                 onClick={() => { setPasteOpen(false); setPasteText('') }}
-                className="rounded-lg border border-[var(--e-e3d9c4)] bg-white px-3 py-1.5 text-[12px] font-semibold text-[var(--e-5a4526)] transition hover:bg-[var(--e-faf7f0)]"
+                className="rounded-lg border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
               >
                 Cancel
               </button>
@@ -118,7 +118,7 @@ export function AddressBlock({
             <button
               type="button"
               onClick={() => setPasteOpen(true)}
-              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-dashed border-[var(--e-cdbf9f)] bg-white px-3 py-1.5 text-[12px] font-semibold text-[var(--e-5a4526)] transition hover:border-[var(--e-412d15)] hover:bg-[var(--e-faf7f0)]"
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-dashed border-[#cdbf9f] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#412d15] hover:bg-[#faf7f0]"
             >
               <FiZap className="h-3.5 w-3.5" />
               Paste &amp; autofill with AI

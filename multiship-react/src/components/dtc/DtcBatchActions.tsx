@@ -62,7 +62,7 @@ export default function DtcBatchActions({ batch: b, printedAt, progress, busy, o
         onClick={onDetails}
         aria-label={`Details of batch ${b.batchId}`}
         title="Shipment lines of this batch"
-        className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[var(--e-e3d9c4)] bg-white text-[var(--e-5a4526)] transition hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-faf7f0)]"
+        className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
       >
         <FiEye className="h-3.5 w-3.5" />
       </button>
@@ -76,7 +76,7 @@ export default function DtcBatchActions({ batch: b, printedAt, progress, busy, o
           : when ? `Printed ${when.toLocaleString()} — print the ${printable} label${printable === 1 ? '' : 's'} again`
             : `Download ${printable} label PDF${printable === 1 ? '' : 's'} as a ZIP`}
         className={`inline-flex h-7 w-[5.5rem] items-center justify-center gap-1 rounded-lg px-2.5 text-[11px] font-semibold shadow-sm transition disabled:cursor-not-allowed disabled:opacity-40 ${
-          when ? 'border border-[var(--e-cdbf9f)] bg-[var(--e-f4eede)] text-[var(--e-412d15)] hover:bg-[var(--e-ece2cb)]' : 'bg-[var(--e-1f150c)] text-[var(--e-f4eede)] hover:bg-[var(--e-412d15)]'
+          when ? 'border border-[#cdbf9f] bg-[#f4eede] text-[#412d15] hover:bg-[#ece2cb]' : 'bg-[#1f150c] text-[#f4eede] hover:bg-[#412d15]'
         }`}
       >
         <FiPrinter className="h-3 w-3" />
@@ -97,15 +97,15 @@ export default function DtcBatchActions({ batch: b, printedAt, progress, busy, o
             aria-haspopup="menu"
             aria-expanded={open}
             aria-label={`More actions for batch ${b.batchId}`}
-            className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[var(--e-e3d9c4)] bg-white text-[var(--e-5a4526)] transition hover:border-[var(--e-cdbf9f)] hover:bg-[var(--e-faf7f0)] disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-50"
           >
             {busy
-              ? <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[var(--e-e3d9c4)] border-t-[var(--e-5a4526)]" />
+              ? <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#e3d9c4] border-t-[#5a4526]" />
               : <FiMoreVertical className="h-3.5 w-3.5" />}
           </button>
         )}
         {open && !running ? (
-          <div role="menu" aria-label={`Batch ${b.batchId}`} style={place} className="bulk-pop-in z-50 w-56 rounded-xl border border-[var(--e-e3d9c4)] bg-white p-1 shadow-[0_12px_32px_rgba(31,21,12,0.14)]">
+          <div role="menu" aria-label={`Batch ${b.batchId}`} style={place} className="bulk-pop-in z-50 w-56 rounded-xl border border-[#e3d9c4] bg-white p-1 shadow-[0_12px_32px_rgba(31,21,12,0.14)]">
             {items.map((it) => (
               <button
                 key={it.key}
@@ -113,12 +113,12 @@ export default function DtcBatchActions({ batch: b, printedAt, progress, busy, o
                 role="menuitem"
                 disabled={!it.enabled}
                 onClick={() => { setOpen(false); onGenerate() }}
-                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition hover:bg-[var(--e-faf7f0)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
               >
-                <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[var(--e-f4eede)] text-[var(--e-412d15)]" aria-hidden="true">{it.icon}</span>
+                <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[#f4eede] text-[#412d15]" aria-hidden="true">{it.icon}</span>
                 <span className="min-w-0">
-                  <span className="block text-[12px] font-semibold leading-tight text-[var(--e-1f150c)]">{it.label}</span>
-                  <span className="block text-[10.5px] leading-tight text-[var(--e-a1906d)]">{it.hint}</span>
+                  <span className="block text-[12px] font-semibold leading-tight text-[#1f150c]">{it.label}</span>
+                  <span className="block text-[10.5px] leading-tight text-[#a1906d]">{it.hint}</span>
                 </span>
               </button>
             ))}

@@ -85,8 +85,8 @@ export default function AccountPickerModal({
       >
         <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-3">
           <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--e-412d15)]">Choose account</p>
-            <h3 className="mt-1 text-base font-semibold text-[var(--e-1f150c)]">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#412d15]">Choose account</p>
+            <h3 className="mt-1 text-base font-semibold text-[#1f150c]">
               Ship order #{orderNo}
               {carrierCode ? <span className="text-slate-400"> · {carrierCode}</span> : null} with…
             </h3>
@@ -122,13 +122,13 @@ export default function AccountPickerModal({
                 key={account.id}
                 type="button"
                 onClick={() => onPick(account)}
-                className={`flex w-full items-center gap-3 rounded-xl border px-3.5 py-3 text-left transition hover:border-[var(--e-412d15)] hover:bg-[var(--e-412d15)]/5 ${
-                  isSuggested ? 'border-[var(--e-412d15)]/50 bg-[var(--e-412d15)]/[0.04] ring-1 ring-[var(--e-412d15)]/20' : 'border-slate-200 bg-white'
+                className={`flex w-full items-center gap-3 rounded-xl border px-3.5 py-3 text-left transition hover:border-[#412d15] hover:bg-[#412d15]/5 ${
+                  isSuggested ? 'border-[#412d15]/50 bg-[#412d15]/[0.04] ring-1 ring-[#412d15]/20' : 'border-slate-200 bg-white'
                 }`}
               >
                 <CarrierLogo carrierId={account.carrierCode} size={22} className="rounded-sm" />
                 <span className="min-w-0 flex-1">
-                  <span className="flex items-center gap-1.5 truncate text-[13px] font-semibold text-[var(--e-1f150c)]">
+                  <span className="flex items-center gap-1.5 truncate text-[13px] font-semibold text-[#1f150c]">
                     <span className="truncate">{account.accountName || formatCarrierName(account.carrierCode)}</span>
                     {account.clientDefault ? (
                       <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700">

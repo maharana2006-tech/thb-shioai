@@ -108,7 +108,7 @@ export default function CustomFieldsPage() {
               active: true,
             })
           }
-          className="inline-flex items-center gap-1.5 rounded-md bg-[var(--e-1f150c)] px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-black"
+          className="inline-flex items-center gap-1.5 rounded-md bg-[#1f150c] px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-black"
         >
           <FiPlus /> New field
         </button>
@@ -379,7 +379,7 @@ function CustomFieldEditorModal({
             type="button"
             onClick={save}
             disabled={saving}
-            className="inline-flex items-center gap-1.5 rounded-md bg-[var(--e-1f150c)] px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-black disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-md bg-[#1f150c] px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-black disabled:opacity-50"
           >
             <FiSave /> Save
           </button>
@@ -391,4 +391,4 @@ function CustomFieldEditorModal({
 
 const label = 'mb-1 block text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-500'
 const input =
-  'w-full rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[13px] text-slate-800 outline-none focus:border-[var(--e-1f150c)]'
+  'w-full rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[13px] text-slate-800 outline-none focus:border-[#1f150c]'
