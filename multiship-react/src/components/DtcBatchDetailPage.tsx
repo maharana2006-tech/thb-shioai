@@ -138,36 +138,28 @@ export default function DtcBatchDetailPage() {
 
   const [printingAll, setPrintingAll] = useState(false)
   const [printingOne, setPrintingOne] = useState<number | null>(null)
-  const [printingInvoice, setPrintingInvoice] = useState<number | null>(null)
 
-  // Per-line Print — fetch the one 4x6 label PDF and send it to the printer
-  // (not open-in-new-tab, which just previews/downloads it).
-  const printOne = async (orderNo: number) => {
+  // Per-line Print — one button for the whole parcel. International lines print
+  // the full document set (commercial invoice + label); domestic lines print
+  // just the 4x6 label. If an international line has no customs data, the doc
+  // set 422s and we fall back to the label so the parcel still goes out.
+  const printOne = async (orderNo: number, intl: boolean) => {
     if (printingOne) return
     setPrintingOne(orderNo)
     try {
-      const blob = await orderService.getLabelPdf(orderNo, undefined, { main: true })
+      let blob: Blob
+      if (intl) {
+        blob = await orderService.getShipmentDocumentsPdf(orderNo)
+          .catch(() => orderService.getLabelPdf(orderNo, undefined, { main: true }))
+      } else {
+        blob = await orderService.getLabelPdf(orderNo, undefined, { main: true })
+      }
       printPdfBlob(blob)
       window.setTimeout(() => void load(), 2500)
     } catch (e) {
-      notify.apiError(e, `Could not print label for order ${orderNo}.`)
+      notify.apiError(e, `Could not print documents for order ${orderNo}.`)
     } finally {
       setPrintingOne(null)
-    }
-  }
-
-  // Per-line commercial invoice — international lines only. 422 (no customs
-  // data) surfaces as the endpoint's friendly "nothing to print" message.
-  const printInvoice = async (orderNo: number) => {
-    if (printingInvoice) return
-    setPrintingInvoice(orderNo)
-    try {
-      const blob = await orderService.getCommercialInvoicePdf(orderNo)
-      printPdfBlob(blob)
-    } catch (e) {
-      notify.apiError(e, `Could not print the commercial invoice for order ${orderNo}.`)
-    } finally {
-      setPrintingInvoice(null)
     }
   }
 
@@ -272,31 +264,20 @@ export default function DtcBatchDetailPage() {
             || data?.voidStatuses?.[String(orderNo)] === 'VOIDED') {
           return <span className="text-[11px] text-[#9a8b70]">—</span>
         }
+        const intl = row.original.intlYn === 'Y'
         return (
-          <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              title={`Send the label for order ${orderNo} to the printer`}
-              onClick={() => void printOne(orderNo)}
-              disabled={printingOne === orderNo}
-              className="inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <FiPrinter className="h-3 w-3" />
-              Print
-            </button>
-            {row.original.intlYn === 'Y' ? (
-              <button
-                type="button"
-                title={`Send the commercial invoice for order ${orderNo} to the printer`}
-                onClick={() => void printInvoice(orderNo)}
-                disabled={printingInvoice === orderNo}
-                className="inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <FiFileText className="h-3 w-3" />
-                Invoice
-              </button>
-            ) : null}
-          </div>
+          <button
+            type="button"
+            title={intl
+              ? `Send the commercial invoice + label for order ${orderNo} to the printer`
+              : `Send the label for order ${orderNo} to the printer`}
+            onClick={() => void printOne(orderNo, intl)}
+            disabled={printingOne === orderNo}
+            className="inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {intl ? <FiFileText className="h-3 w-3" /> : <FiPrinter className="h-3 w-3" />}
+            Print
+          </button>
         )
       },
     },
@@ -366,7 +347,7 @@ export default function DtcBatchDetailPage() {
       },
     },
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  ], [data, load, printingOne, printingInvoice])
+  ], [data, load, printingOne])
 
   if (!tenantId) {
     return (
