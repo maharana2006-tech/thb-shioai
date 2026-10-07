@@ -153,6 +153,12 @@ public class CarrierServiceImpl implements CarrierService {
     @org.springframework.beans.factory.annotation.Value("${carrier.auto-split-enabled:true}")
     private boolean autoSplitEnabled;
 
+    /** Perf P3 feature flag — see {@code carrier.tx-split-phase-c}. FALSE
+     *  preserves the pre-P3 single-tx behaviour; TRUE runs the three-phase
+     *  split across generateLabel + sibling carrier dispatch paths. */
+    @org.springframework.beans.factory.annotation.Value("${carrier.tx-split-phase-c:false}")
+    private boolean phaseSplitEnabled;
+
     /** Sprint 48 B5 — global kill-switch for the packaging validator.
      *  Off = validator is skipped everywhere; over-packaged shipments then
      *  go straight to the carrier (which will reject them with a generic
@@ -443,15 +449,16 @@ public class CarrierServiceImpl implements CarrierService {
         return success("Carrier status loaded successfully.", response);
     }
 
-    // TODO(sprint49-tier2-fix6-followup): method holds a Postgres row lock
-    // (via findByOrderNoForUpdate below) for the entire duration of the
-    // carrier HTTP call. Splitting this into A) reserve IN_FLIGHT +
-    // release lock, B) carrier call, C) persist result — requires an
-    // IN_FLIGHT status column + saga for stuck rows. Deliverable in a
-    // dedicated PR. Interim mitigations shipped in Tier 2:
-    // application.properties sets 30s Hikari leak-detection + 60s tx
-    // timeout, so a wedged carrier call surfaces with a stack trace and
-    // is auto-rolled-back rather than exhausting the pool.
+    // Perf P3 (PERF-B1): single-tx mode (flag OFF) holds a Postgres row
+    // lock via findByOrderNoForUpdate below for the entire duration of
+    // the carrier HTTP call. When carrier.tx-split-phase-c=true the
+    // caller (generateLabel public method above) routes to
+    // generateLabelSplit instead, which splits into A) reserve
+    // in_flight_since + release lock, B) carrier call (no tx), C)
+    // persist result + null in_flight_since. See generateLabelSplit
+    // below. Interim single-tx safety nets: 30s Hikari leak-detection
+    // + 60s tx timeout in application.properties auto-rollback a wedged
+    // call rather than exhausting the pool.
     @Override
     @Transactional
     @Timed(value = "carrier.generateLabel", description = "Label generation end-to-end (resolve → carrier call → persist).")
@@ -463,7 +470,6 @@ public class CarrierServiceImpl implements CarrierService {
     }
 
     @Override
-    @Transactional
     @Timed(value = "carrier.generateLabel", description = "Label generation end-to-end (resolve → carrier call → persist).",
             extraTags = {"variant", "with-house-account"})
     public ApiResponse<LabelGenerationResponse> generateLabel(Long orderNo, UserDetails userDetails,
@@ -475,6 +481,18 @@ public class CarrierServiceImpl implements CarrierService {
         // calls / background workers don't inherit this orderNo.
         try (var ignored = com.multiship.backend.service.observability
                 .CarrierCallContext.forOrder(orderNo)) {
+            // Perf P3 phase 3: when flag=TRUE, run A/B/C split. Flag OFF
+            // wraps the legacy body in requiresNewTransactionTemplate for
+            // the same single-tx semantics as the removed @Transactional
+            // (this method is only called from a controller; no caller tx
+            // to join).
+            if (phaseSplitEnabled && requiresNewTransactionTemplate != null) {
+                return generateLabelSplit(orderNo, userDetails, idempotencyKey, accountId, useHouseAccount);
+            }
+            if (requiresNewTransactionTemplate != null) {
+                return requiresNewTransactionTemplate.execute(status ->
+                        generateLabelInner(orderNo, userDetails, idempotencyKey, accountId, useHouseAccount));
+            }
             return generateLabelInner(orderNo, userDetails, idempotencyKey, accountId, useHouseAccount);
         }
     }
@@ -956,6 +974,381 @@ public class CarrierServiceImpl implements CarrierService {
         }
     }
 
+    // ===== Perf P3 phase 3 — three-phase split for the order-based label path =====
+    //
+    // Phase A reserves the OrderTracking row (sets in_flight_since) in a short
+    // tx and releases the Order row lock. Phase B does the carrier HTTP with
+    // NO tx held. Phase C persists the final state + nulls in_flight_since.
+    //
+    // A process crash between B and C leaves in_flight_since set; the
+    // InFlightTrackingSweeper surfaces the stuck row (P5 resolves by querying
+    // the carrier for tracking state).
+
+    private record LabelReservation(
+            ApiResponse<LabelGenerationResponse> earlyReturn,
+            Long orderNo,
+            Order order,
+            AccountResolution resolution,
+            boolean clientOwnedResolution,
+            boolean useHouseAccount,
+            String tenantId,
+            String normalizedKey,
+            CarrierConnector connector) {}
+
+    private record LabelCarrierOutcome(
+            AutoShipmentAttempt attempt,
+            CarrierRateLimitException rateLimit,     // 429 — early-return via rateLimitedResponse
+            Exception carrierException) {}            // any other failure → markTrackingError + 502
+
+    private ApiResponse<LabelGenerationResponse> generateLabelSplit(
+            Long orderNo, UserDetails userDetails, String idempotencyKey,
+            Long accountId, boolean useHouseAccount) {
+
+        LabelReservation reservation = requiresNewTransactionTemplate.execute(status ->
+                runLabelReservationPhase(orderNo, userDetails, idempotencyKey, accountId, useHouseAccount));
+        if (reservation == null) {
+            return failure(HttpStatus.INTERNAL_SERVER_ERROR, ErrorCode.CARRIER_FAILURE,
+                    "Phase A returned no reservation for order " + orderNo + ".");
+        }
+        if (reservation.earlyReturn() != null) {
+            return reservation.earlyReturn();
+        }
+
+        // Phase B — carrier HTTP, no tx held.
+        LabelCarrierOutcome outcome = runLabelCarrierCallPhase(reservation);
+
+        // Phase C — short tx, persist + null in_flight_since.
+        return requiresNewTransactionTemplate.execute(status ->
+                runLabelPersistPhase(reservation, outcome));
+    }
+
+    private LabelReservation runLabelReservationPhase(Long orderNo, UserDetails userDetails,
+            String idempotencyKey, Long accountId, boolean useHouseAccount) {
+        User user = resolveUser(userDetails);
+
+        Order order = orderRepository.findByOrderNoForUpdate(orderNo.intValue()).orElse(null);
+        if (order == null) {
+            return new LabelReservation(
+                    failure(HttpStatus.NOT_FOUND, ErrorCode.ORDER_NOT_FOUND,
+                            "Order " + orderNo + " was not found."),
+                    orderNo, null, null, false, useHouseAccount, null, null, null);
+        }
+
+        String normalizedKey = StringUtils.hasText(idempotencyKey) ? idempotencyKey.trim() : null;
+
+        OrderTracking existingTracking = orderTrackingRepository.findByOrderNo(order.getOrderNo()).orElse(null);
+        if (existingTracking != null
+                && Boolean.TRUE.equals(existingTracking.getIsLabelGenerated())
+                && "GENERATED".equalsIgnoreCase(existingTracking.getStatus())) {
+            LabelGenerationResponse already = LabelGenerationResponse.builder()
+                    .orderNo(orderNo)
+                    .trackingNumber(existingTracking.getTrackingNumber())
+                    .trackingUrl(existingTracking.getTrackingUrl())
+                    .carrierAccountCode(existingTracking.getAccountNumber())
+                    .status("GENERATED")
+                    .message("A label for this order already exists — the existing tracking details are included.")
+                    .build();
+            if (normalizedKey != null && normalizedKey.equals(existingTracking.getIdempotencyKey())) {
+                return new LabelReservation(
+                        success("Label already generated by this request — returning the existing label.", already),
+                        orderNo, order, null, false, useHouseAccount, null, normalizedKey, null);
+            }
+            return new LabelReservation(
+                    failure(HttpStatus.CONFLICT, ErrorCode.LABEL_ALREADY_GENERATED,
+                            "Order " + orderNo + " already has a generated label ("
+                                    + existingTracking.getTrackingNumber() + ").",
+                            already),
+                    orderNo, order, null, false, useHouseAccount, null, normalizedKey, null);
+        }
+
+        // Already-in-flight guard: another concurrent generateLabel saw this
+        // row first and is waiting on the carrier.
+        if (existingTracking != null && existingTracking.getInFlightSince() != null) {
+            return new LabelReservation(
+                    failure(HttpStatus.CONFLICT, ErrorCode.LABEL_ALREADY_GENERATED,
+                            "Order " + orderNo + " already has a label dispatch in flight (started "
+                                    + existingTracking.getInFlightSince() + "). Wait for it to settle "
+                                    + "or let the sweeper reconcile it."),
+                    orderNo, order, null, false, useHouseAccount, null, normalizedKey, null);
+        }
+
+        // USPS_DIRECT routing — queue-redirect short-circuit.
+        ApiResponse<LabelGenerationResponse> routed = maybeRouteUspsDirect(orderNo, userDetails);
+        if (routed != null) {
+            return new LabelReservation(routed,
+                    orderNo, order, null, false, useHouseAccount, null, normalizedKey, null);
+        }
+
+        String tenantId = firstNonBlank(order.getTenantId(), order.getCustNo());
+
+        AccountResolution resolution;
+        if (accountId != null) {
+            CarrierAccountRef picked = carrierAccountRefRepository.findById(accountId).orElse(null);
+            if (picked == null) {
+                return new LabelReservation(
+                        failure(HttpStatus.NOT_FOUND, ErrorCode.ACCOUNT_NOT_FOUND,
+                                "Carrier account " + accountId + " was not found."),
+                        orderNo, order, null, false, useHouseAccount, tenantId, normalizedKey, null);
+            }
+            if (Boolean.FALSE.equals(picked.getActive()) || !picked.isComplete()) {
+                return new LabelReservation(
+                        failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.ACCOUNT_INCOMPLETE,
+                                "Account " + picked.getAccountNumber() + " is inactive or missing credentials."),
+                        orderNo, order, null, false, useHouseAccount, tenantId, normalizedKey, null);
+            }
+            resolution = AccountResolution.of(AccountResolution.SCENARIO_MANUAL,
+                    resolveCanonicalCarrierCode(firstNonBlank(picked.getCarrierCode(), order.getShipviaCd(),
+                            carrierProperties.getDefaultCarrierCode())),
+                    picked.getAccountNumber(), picked.getClientId(), picked.getClientSecret(),
+                    firstNonBlank(picked.getEnvironment(), carrierProperties.getDefaultEnvironment()),
+                    picked.getAccountName());
+        } else {
+            resolution = resolveAccountForOrder(order);
+        }
+
+        // Business-rule gates (same logic as legacy inner).
+        if (AccountResolution.SCENARIO_CHOOSE_ACCOUNT.equals(resolution.scenario())) {
+            LabelGenerationResponse chooseAccount = LabelGenerationResponse.builder()
+                    .orderNo(orderNo).carrierCode(resolution.carrierCode())
+                    .status("CHOOSE_ACCOUNT").clientCode(tenantId)
+                    .prefillAccountNumber(resolution.accountNumber())
+                    .message("Choose which " + resolution.carrierCode() + " account to ship this order with.")
+                    .build();
+            return new LabelReservation(
+                    failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.ACCOUNT_SELECTION_REQUIRED,
+                            "Order " + orderNo + " needs a manually selected carrier account.", chooseAccount),
+                    orderNo, order, resolution, false, useHouseAccount, tenantId, normalizedKey, null);
+        }
+        if (AccountResolution.SCENARIO_NEEDS_DETAILS.equals(resolution.scenario())) {
+            LabelGenerationResponse needsDetails = LabelGenerationResponse.builder()
+                    .orderNo(orderNo).carrierCode(resolution.carrierCode())
+                    .status("NEEDS_DETAILS").needsDetails(true)
+                    .missingFields(resolution.missingFields())
+                    .prefillAccountNumber(resolution.accountNumber())
+                    .prefillCarrierCode(resolution.carrierCode())
+                    .prefillClientId(resolution.clientId())
+                    .prefillEnvironment(resolution.environment())
+                    .message("This order has partial carrier details. Fill in the missing fields to generate the label.")
+                    .build();
+            return new LabelReservation(
+                    failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.NEEDS_CARRIER_DETAILS,
+                            "Carrier details are required before generating this label.", needsDetails),
+                    orderNo, order, resolution, false, useHouseAccount, tenantId, normalizedKey, null);
+        }
+        if (AccountResolution.SCENARIO_CLIENT_MISSING.equals(resolution.scenario())) {
+            LabelGenerationResponse clientMissing = LabelGenerationResponse.builder()
+                    .orderNo(orderNo).status("CLIENT_MISSING").clientCode(tenantId)
+                    .message("Client " + tenantId + " is not registered. Add the client, then generate again.")
+                    .build();
+            return new LabelReservation(
+                    failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.CLIENT_NOT_FOUND,
+                            "Client " + tenantId + " is not registered — add the client before generating labels.",
+                            clientMissing),
+                    orderNo, order, resolution, false, useHouseAccount, tenantId, normalizedKey, null);
+        }
+        if (AccountResolution.SCENARIO_CLIENT_INACTIVE.equals(resolution.scenario())) {
+            return new LabelReservation(
+                    failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.CLIENT_INACTIVE,
+                            "Client " + tenantId + " is inactive — reactivate the client before generating labels."),
+                    orderNo, order, resolution, false, useHouseAccount, tenantId, normalizedKey, null);
+        }
+        if (AccountResolution.SCENARIO_NO_DEFAULT.equals(resolution.scenario())) {
+            String message = "Order " + orderNo + " has no carrier details and no default account is configured. "
+                    + "Ask an admin to set a default account on the Carrier page.";
+            markTrackingError(order, message);
+            return new LabelReservation(
+                    failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.NO_DEFAULT_ACCOUNT, message),
+                    orderNo, order, resolution, false, useHouseAccount, tenantId, normalizedKey, null);
+        }
+        String customsGate = requireCustomsIfInternational(order, tenantId);
+        if (customsGate != null) {
+            LabelGenerationResponse needsCustoms = LabelGenerationResponse.builder()
+                    .orderNo(orderNo).status("CUSTOMS_REQUIRED").clientCode(tenantId)
+                    .message(customsGate).build();
+            return new LabelReservation(
+                    failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.CUSTOMS_REQUIRED, customsGate, needsCustoms),
+                    orderNo, order, resolution, false, useHouseAccount, tenantId, normalizedKey, null);
+        }
+
+        boolean clientOwnedResolution = AccountResolution.SCENARIO_ORDER.equals(resolution.scenario())
+                || AccountResolution.SCENARIO_REFERENCE.equals(resolution.scenario())
+                || AccountResolution.SCENARIO_CLIENT_DEFAULT.equals(resolution.scenario())
+                || AccountResolution.SCENARIO_MANUAL.equals(resolution.scenario());
+
+        CarrierConnector connector;
+        try {
+            connector = getCarrierConnector(resolution.carrierCode());
+        } catch (Exception ex) {
+            String msg = "Carrier " + resolution.carrierCode() + " isn't configured on this instance.";
+            markTrackingError(order, msg);
+            return new LabelReservation(
+                    failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.CARRIER_FAILURE, msg),
+                    orderNo, order, resolution, clientOwnedResolution, useHouseAccount, tenantId, normalizedKey, null);
+        }
+
+        // Reserve: set in_flight_since on the (existing or new) tracking row.
+        OrderTracking tracking = existingTracking != null
+                ? existingTracking
+                : new OrderTracking();
+        tracking.setOrderNo(order.getOrderNo());
+        tracking.setOrderSuffix(order.getOrderSuffix());
+        tracking.setInFlightSince(java.time.Instant.now());
+        if (tracking.getStatus() == null) tracking.setStatus("PENDING");
+        if (tracking.getCreatedAt() == null) tracking.setCreatedAt(LocalDateTime.now());
+        tracking.setUpdatedAt(LocalDateTime.now());
+        orderTrackingRepository.save(tracking);
+
+        return new LabelReservation(null,
+                orderNo, order, resolution, clientOwnedResolution, useHouseAccount,
+                tenantId, normalizedKey, connector);
+    }
+
+    private LabelCarrierOutcome runLabelCarrierCallPhase(LabelReservation r) {
+        try {
+            AutoShipmentAttempt attempt = attemptShipment(r.order(), r.resolution(), r.connector());
+            return new LabelCarrierOutcome(attempt, null, null);
+        } catch (CarrierRateLimitException rle) {
+            return new LabelCarrierOutcome(null, rle, null);
+        } catch (Exception ex) {
+            return new LabelCarrierOutcome(null, null, ex);
+        }
+    }
+
+    private ApiResponse<LabelGenerationResponse> runLabelPersistPhase(
+            LabelReservation r, LabelCarrierOutcome outcome) {
+
+        // Clear in_flight_since regardless of outcome — the sweeper shouldn't
+        // flag this row anymore.
+        OrderTracking tracking = orderTrackingRepository.findByOrderNoForUpdate(r.order().getOrderNo())
+                .orElseGet(OrderTracking::new);
+        tracking.setInFlightSince(null);
+
+        // 429 rate limit — don't persist, just return the standard response.
+        if (outcome.rateLimit() != null) {
+            tracking.setUpdatedAt(LocalDateTime.now());
+            orderTrackingRepository.save(tracking);
+            return rateLimitedResponse(r.order(), r.resolution().carrierCode(), outcome.rateLimit());
+        }
+
+        // Carrier exception — same error semantics as legacy inner's catch block,
+        // minus the "downgrade rollback" dance (no outer tx to downgrade in split mode).
+        if (outcome.carrierException() != null) {
+            Exception primaryEx = outcome.carrierException();
+            String msg;
+            ErrorCode errorCode;
+            if (r.clientOwnedResolution() && !r.useHouseAccount()) {
+                msg = "Client account " + r.resolution().accountNumber()
+                        + " failed at " + r.resolution().carrierCode() + ": " + primaryEx.getMessage()
+                        + ". Fix the client's carrier credentials and retry.";
+                errorCode = ErrorCode.CLIENT_CARRIER_AUTH_FAILED;
+                log.warn("Order {}: client account {} failed — no fallback, marking order ERROR.",
+                        r.orderNo(), r.resolution().accountNumber(), primaryEx);
+            } else {
+                msg = "Label generation failed for order " + r.orderNo() + " at " + r.resolution().carrierCode()
+                        + " (account " + r.resolution().accountNumber() + "): " + primaryEx.getMessage();
+                errorCode = ErrorCode.CARRIER_FAILURE;
+                log.warn("Label generation failed for order {}: {}", r.orderNo(), primaryEx.getMessage(), primaryEx);
+            }
+            // markTrackingError uses REQUIRES_NEW internally — safe to call
+            // from this phase C tx. The in_flight_since null above was in
+            // THIS tx; markTrackingError's inner tx will overwrite the row
+            // after we commit. To avoid order-of-write races, update the
+            // existing tracking row here directly instead of markTrackingError.
+            tracking.setStatus("ERROR");
+            tracking.setErrorMessage(msg);
+            tracking.setIsLabelGenerated(false);
+            tracking.setUpdatedAt(LocalDateTime.now());
+            orderTrackingRepository.save(tracking);
+            LabelGenerationResponse errorResponse = LabelGenerationResponse.builder()
+                    .orderNo(r.orderNo())
+                    .carrierCode(r.resolution().carrierCode())
+                    .carrierAccountCode(r.resolution().accountNumber())
+                    .clientCode(r.tenantId())
+                    .status("ERROR")
+                    .message(msg)
+                    .accountSource(r.resolution().scenario())
+                    .build();
+            return failure(HttpStatus.BAD_GATEWAY, errorCode, msg, errorResponse);
+        }
+
+        // Success path — mirror legacy inner lines 734-836.
+        AutoShipmentAttempt attempt = outcome.attempt();
+        CarrierConnector.ShipmentResult shipmentResult = attempt.master();
+
+        tracking.setOrderNo(r.order().getOrderNo());
+        tracking.setOrderSuffix(r.order().getOrderSuffix());
+        tracking.setTrackingNumber(shipmentResult.trackingNumber());
+        tracking.setTrackingUrl(shipmentResult.trackingUrl());
+        tracking.setShipViaCd(r.order().getShipviaCd());
+        tracking.setAccountNumber(r.resolution().accountNumber());
+        tracking.setIsLabelGenerated(true);
+        tracking.setLabelGeneratedAt(LocalDateTime.now());
+        tracking.setLabelFilePath(persistLabelPath(shipmentResult.labelUrl()));
+        tracking.setStatus("GENERATED");
+        tracking.setIdempotencyKey(r.normalizedKey());
+        tracking.setErrorMessage(null);
+        if (tracking.getCreatedAt() == null) tracking.setCreatedAt(LocalDateTime.now());
+        tracking.setUpdatedAt(LocalDateTime.now());
+        orderTrackingRepository.save(tracking);
+
+        persistPerPieceAutoLabels(r.order(), r.connector().getCarrierCode(),
+                attempt.subRequests(), attempt.results());
+
+        LabelGenerationResponse response = LabelGenerationResponse.builder()
+                .orderNo(r.orderNo())
+                .carrierCode(r.resolution().carrierCode())
+                .carrierName(r.connector().getCarrierName())
+                .carrierAccountCode(r.resolution().accountNumber())
+                .tenantId(r.tenantId())
+                .trackingNumber(shipmentResult.trackingNumber())
+                .trackingUrl(shipmentResult.trackingUrl())
+                .labelUrl(shipmentResult.labelUrl())
+                .labelPdf(shipmentResult.labelPdf())
+                .status("GENERATED")
+                .shippingCost(shipmentResult.shippingCost())
+                .estimatedDelivery(shipmentResult.estimatedDelivery())
+                .accountSource(r.resolution().scenario())
+                .message("Shipment label generated successfully using the "
+                        + r.resolution().sourceDescription() + ".")
+                .build();
+
+        if (auditService != null) {
+            try {
+                auditService.logShipment(AuditService.LABEL_GENERATED,
+                        r.order().getOrderNo(), r.order().getCustNo(),
+                        shipmentResult.trackingNumber(),
+                        r.connector().getCarrierCode() + " label on account " + r.resolution().accountNumber());
+            } catch (RuntimeException auditFail) {
+                log.warn("Perf P3: LABEL_GENERATED audit emit failed for order {}: {}",
+                        r.order().getOrderNo(), auditFail.getMessage());
+            }
+        }
+
+        try {
+            if (writebackDispatcher != null) {
+                writebackDispatcher.dispatchOnGenerate(
+                        com.multiship.backend.service.externalsystems.writeback.WritebackPayload.builder()
+                                .clientCode(r.order().getCustNo())
+                                .orderNo(r.order().getOrderNo())
+                                .source(r.order().getSource())
+                                .channel(r.order().getOrderChannel())
+                                .trackingNumber(shipmentResult.trackingNumber())
+                                .shipDate(java.time.LocalDateTime.now())
+                                .status("SHIPPED")
+                                .carrierCode(r.resolution().carrierCode())
+                                .serviceCode(r.order().getShipviaCd())
+                                .freightAmount(shipmentResult.shippingCost())
+                                .stdReplacementErpCode(r.order().getNdsResolvedShipviaCd())
+                                .build());
+            }
+        } catch (RuntimeException wbFail) {
+            log.warn("V89 writeback dispatch failed for order {} (split path, label already generated): {}",
+                    r.order().getOrderNo(), wbFail.getMessage());
+        }
+
+        return success("Label generated successfully.", response);
+    }
+
     /**
      * One-shot MANUAL shipment: the operator supplies every input explicitly
      * (ship-from, ship-to, package + weight, carrier account, service, packaging)
@@ -1415,17 +1808,32 @@ public class CarrierServiceImpl implements CarrierService {
 
         // Sprint 52 — service↔packaging compatibility. Runs on every
         // manual-pick (client or ad-hoc), because carrier-side rejects the
-        // combination regardless of tenant. Skips when either side isn't
-        // resolved (connector defaults kick in later). CUSTOM presets are
+        // combination regardless of tenant. CUSTOM presets are
         // implicit-allowed inside the guard.
+        //
+        // PR Y — resolve the fallback service BEFORE guarding so the guard
+        // sees what will actually ship. Pre-PR-Y, the operator could leave
+        // serviceId=null and pick a CARRIER-branded preset; the guard
+        // no-op'd on null service, the connector default (usually GROUND)
+        // kicked in below, and the carrier rejected branded packaging on
+        // Ground at the wire.
+        String serviceType = service != null ? service.getServiceCode()
+                : firstNonBlank(connector.getConfiguration().defaultServiceType(), "GROUND");
+        com.multiship.backend.model.ShippingService guardService = service;
+        if (guardService == null && preset != null
+                && "CARRIER".equalsIgnoreCase(preset.getKind())) {
+            String originForLookup = from != null ? from.getCountryCode() : null;
+            if (StringUtils.hasText(originForLookup)) {
+                guardService = shippingConfigService
+                        .serviceByCode(carrier, serviceType, originForLookup)
+                        .orElse(null);
+            }
+        }
         try {
-            packagingCompatibilityGuard.assertCompatible(service, preset);
+            packagingCompatibilityGuard.assertCompatible(guardService, preset);
         } catch (ShipmentResolutionException e) {
             return toResolutionFailure(e);
         }
-
-        String serviceType = service != null ? service.getServiceCode()
-                : firstNonBlank(connector.getConfiguration().defaultServiceType(), "GROUND");
         // US-territory service allowlist (2026-09-08). Fast-fail before
         // the wire so operators get an actionable message instead of the
         // carrier's cryptic error a few seconds later. Bug case: US → VI

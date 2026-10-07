@@ -61,10 +61,11 @@ export function useTrashActions({
       if (onEmptied) onEmptied()
       else setBatches([])
       const msg = res.message ?? 'Trash emptied.'
-      // ponytail: the "kept N" count only travels in the message text; parse it
-      // until the endpoint returns {purged, kept}.
-      if (/Kept \d+/.test(msg)) notify.info({ title: 'Some imports stay in Trash', body: msg })
-      else notify.success(msg)
+      if ((res.data?.keptWithLiveLabels ?? 0) > 0) {
+        notify.info({ title: 'Some imports stay in Trash', body: msg })
+      } else {
+        notify.success(msg)
+      }
     } catch (e) {
       notify.apiError(e, 'Could not empty Trash.')
     } finally {

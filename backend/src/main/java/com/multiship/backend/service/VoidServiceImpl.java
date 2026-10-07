@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -59,6 +60,19 @@ public class VoidServiceImpl implements VoidService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.service.externalsystems.writeback.ExternalSystemWritebackDispatcher writebackDispatcher;
 
+    /** Perf P3 — REQUIRES_NEW programmatic tx for phases A + C of the
+     *  split path, and for the legacy path (semantically identical to
+     *  @Transactional at method level since voidLabel is only called
+     *  from a controller — no caller tx to join). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.transaction.support.TransactionTemplate requiresNewTransactionTemplate;
+
+    /** Perf P3 feature flag — see {@code carrier.tx-split-phase-c} in
+     *  application.properties. FALSE preserves the pre-P3 single-tx
+     *  behaviour; TRUE runs the three-phase split. */
+    @org.springframework.beans.factory.annotation.Value("${carrier.tx-split-phase-c:false}")
+    private boolean phaseSplitEnabled;
+
     /**
      * Sprint 51 R1 (audit finding #1) — the void path used to read
      * {@link OrderTracking} without a row lock and without a transaction
@@ -80,11 +94,26 @@ public class VoidServiceImpl implements VoidService {
      * here; deferring for the same reason (needs a new "IN_FLIGHT" tri-state).
      */
     @Override
-    @Transactional
     public ApiResponse<VoidLabelResponseDTO> voidLabel(Integer orderNo) {
         if (orderNo == null) {
             return failure(HttpStatus.BAD_REQUEST, "Order number is required.");
         }
+        if (phaseSplitEnabled && requiresNewTransactionTemplate != null) {
+            return voidLabelSplit(orderNo);
+        }
+        // Legacy path — single @Transactional-equivalent block spanning
+        // row-lock + carrier HTTP + persist. requiresNewTransactionTemplate
+        // may be null in bare-ctor tests; fall back to a direct call so
+        // existing Mockito tests that don't wire the template still pass.
+        // (voidLabelLegacyBody mutates DB; in those tests the repos are
+        // mocked, so tx semantics don't matter.)
+        if (requiresNewTransactionTemplate != null) {
+            return requiresNewTransactionTemplate.execute(status -> voidLabelLegacyBody(orderNo));
+        }
+        return voidLabelLegacyBody(orderNo);
+    }
+
+    private ApiResponse<VoidLabelResponseDTO> voidLabelLegacyBody(Integer orderNo) {
         // Sprint 50 Tier 0.5 PR E - belt-and-braces tenant guard. The
         // controller SpEL restricts foreign-tenant access, but any
         // internal caller bypassing method security lands here first.
@@ -298,6 +327,284 @@ public class VoidServiceImpl implements VoidService {
                 .orderNo(orderNo)
                 .trackingNumber(tracking.getTrackingNumber())
                 .carrierCode(canonicalCarrier)
+                .voided(result.voided())
+                .status(result.status())
+                .message(result.message())
+                .build();
+        return success(body);
+    }
+
+    // ===== Perf P3 — three-phase split (gated by phaseSplitEnabled) =====
+    //
+    // Phase A reserves the row (sets in_flight_since) in a short tx and
+    // releases the lock. Phase B does the token acquisition + per-batch
+    // carrier HTTP calls with NO tx held. Phase C persists the final
+    // state (VOIDED or VOID_REFUSED) + nulls in_flight_since in a new tx.
+    //
+    // A process crash between B and C leaves in_flight_since set; the
+    // InFlightTrackingSweeper surfaces the stuck row (P5 will resolve by
+    // querying tracking state at the carrier).
+
+    private record Reservation(
+            ApiResponse<VoidLabelResponseDTO> earlyReturn,  // non-null = short-circuit; skip B+C
+            Integer orderNo,
+            String trackingNumber,
+            String canonicalCarrier,
+            CarrierConnector connector,
+            CarrierAccountRef account,
+            List<String> trackingNumbersToVoid,
+            String voidAccountNumber,
+            String senderCountryCode) {}
+
+    private record CarrierCallOutcome(
+            CarrierConnector.VoidResult aggregateResult,
+            List<CarrierConnector.VoidResult> perBatchResults,
+            ApiResponse<VoidLabelResponseDTO> earlyFailure) {}  // non-null = BAD_GATEWAY return
+
+    private ApiResponse<VoidLabelResponseDTO> voidLabelSplit(Integer orderNo) {
+        try (var ignored = com.multiship.backend.service.observability
+                .CarrierCallContext.forOrder(Long.valueOf(orderNo))) {
+            Reservation reservation = requiresNewTransactionTemplate.execute(
+                    status -> runReservationPhase(orderNo));
+            if (reservation == null) {
+                return failure(HttpStatus.INTERNAL_SERVER_ERROR,
+                        "Phase A returned no reservation for order " + orderNo + ".");
+            }
+            if (reservation.earlyReturn() != null) {
+                return reservation.earlyReturn();
+            }
+            // Phase B — no tx held across the carrier HTTP. MDC enrichment
+            // with trackingNumber picked up by CarrierApiLoggingInterceptor
+            // on every HTTP round-trip inside this block.
+            CarrierCallOutcome outcome;
+            try (var tracked = com.multiship.backend.service.observability
+                    .CarrierCallContext.forOrder(Long.valueOf(orderNo), reservation.trackingNumber())) {
+                outcome = runCarrierCallPhase(reservation);
+            }
+            // Phase C — short tx, persist + null in_flight_since. On
+            // outcome.earlyFailure() we still need to null in_flight_since
+            // so the sweeper doesn't flag the row; use a tiny tx just for
+            // that reset and return the BAD_GATEWAY response.
+            return requiresNewTransactionTemplate.execute(
+                    status -> runPersistPhase(reservation, outcome));
+        }
+    }
+
+    private Reservation runReservationPhase(Integer orderNo) {
+        // Belt-and-braces tenant guard (same as legacy path).
+        orderRepository.findByOrderNo(orderNo).ifPresent(o ->
+                tenantScope.requireTenantMatch(
+                        StringUtils.hasText(o.getTenantId()) ? o.getTenantId() : o.getCustNo()));
+
+        OrderTracking tracking = orderTrackingRepository.findByOrderNoForUpdate(orderNo).orElse(null);
+        if (tracking == null || !StringUtils.hasText(tracking.getTrackingNumber())) {
+            return new Reservation(failure(HttpStatus.NOT_FOUND,
+                    "Order " + orderNo + " has no tracking number to void."),
+                    orderNo, null, null, null, null, null, null, null);
+        }
+        if ("VOIDED".equalsIgnoreCase(tracking.getStatus())) {
+            return new Reservation(success(dto(orderNo, tracking, true, "ALREADY_VOIDED",
+                    "Order " + orderNo + " was already voided.")),
+                    orderNo, null, null, null, null, null, null, null);
+        }
+        // Already-in-flight guard: another concurrent void saw this row
+        // first and is waiting on the carrier. Pre-P3 the pessimistic
+        // lock serialized this; post-P3 the sentinel column does.
+        if (tracking.getInFlightSince() != null) {
+            return new Reservation(failure(HttpStatus.CONFLICT,
+                    "Order " + orderNo + " already has a void in flight (started "
+                            + tracking.getInFlightSince() + "). Wait for it to settle "
+                            + "or let the sweeper reconcile it."),
+                    orderNo, null, null, null, null, null, null, null);
+        }
+
+        String canonicalCarrier = TrackingServiceImpl.canonicalizeCarrierCode(tracking.getShipViaCd());
+        if (!java.util.Set.of("UPS", "FEDEX", "USPS", "DHL", "STAMPS").contains(
+                canonicalCarrier == null ? "" : canonicalCarrier.toUpperCase(java.util.Locale.ROOT))
+                && StringUtils.hasText(tracking.getAccountNumber())) {
+            String fromAccount = carrierAccountRefRepository
+                    .findFirstByAccountNumberIgnoreCaseOrderByUpdatedAtDesc(tracking.getAccountNumber().trim())
+                    .map(CarrierAccountRef::getCarrierCode).orElse(null);
+            if (StringUtils.hasText(fromAccount)) canonicalCarrier = fromAccount.trim().toUpperCase(java.util.Locale.ROOT);
+        }
+        if (!StringUtils.hasText(canonicalCarrier)) {
+            return new Reservation(failure(HttpStatus.UNPROCESSABLE_CONTENT,
+                    "Order " + orderNo + " has no carrier code; can't resolve credentials."),
+                    orderNo, null, null, null, null, null, null, null);
+        }
+
+        CarrierConnector connector;
+        try {
+            connector = carrierService.getCarrierConnector(canonicalCarrier);
+        } catch (Exception ex) {
+            return new Reservation(failure(HttpStatus.UNPROCESSABLE_CONTENT,
+                    "Carrier " + canonicalCarrier + " isn't configured on this instance."),
+                    orderNo, null, null, null, null, null, null, null);
+        }
+
+        CarrierAccountRef account = resolveAccount(canonicalCarrier, tracking.getAccountNumber());
+        if (account == null || !StringUtils.hasText(account.getClientId())
+                || !StringUtils.hasText(account.getClientSecret())) {
+            if (StringUtils.hasText(tracking.getAccountNumber())) {
+                return new Reservation(failure(HttpStatus.UNPROCESSABLE_CONTENT,
+                        "This label was billed to " + canonicalCarrier + " account "
+                                + tracking.getAccountNumber().trim() + ", which is no longer "
+                                + "registered (or has no credentials). Re-add that account in "
+                                + "Settings → Carriers to void " + tracking.getTrackingNumber() + "."),
+                        orderNo, null, null, null, null, null, null, null);
+            }
+            return new Reservation(failure(HttpStatus.UNPROCESSABLE_CONTENT,
+                    "No live credentials for " + canonicalCarrier
+                            + " — cannot void " + tracking.getTrackingNumber() + "."),
+                    orderNo, null, null, null, null, null, null, null);
+        }
+
+        java.util.List<com.multiship.backend.model.ShipmentBatch> batches =
+                shipmentBatchRepository.findByOrderNoOrderByBatchSeqAsc(orderNo);
+        java.util.List<String> trackingNumbersToVoid = new java.util.ArrayList<>();
+        if (batches.isEmpty()) {
+            trackingNumbersToVoid.add(tracking.getTrackingNumber());
+        } else {
+            for (com.multiship.backend.model.ShipmentBatch b : batches) {
+                if (StringUtils.hasText(b.getMasterTrackingNumber())) {
+                    trackingNumbersToVoid.add(b.getMasterTrackingNumber());
+                }
+            }
+        }
+
+        String senderCountryCode = carrierProperties.getShipper() != null
+                ? carrierProperties.getShipper().getCountryCode()
+                : null;
+
+        // Reserve: set in_flight_since + save. Commit releases the lock.
+        tracking.setInFlightSince(Instant.now());
+        orderTrackingRepository.save(tracking);
+
+        return new Reservation(null, orderNo,
+                tracking.getTrackingNumber(), canonicalCarrier, connector, account,
+                trackingNumbersToVoid, account.getAccountNumber(), senderCountryCode);
+    }
+
+    private CarrierCallOutcome runCarrierCallPhase(Reservation r) {
+        String accessToken;
+        try {
+            accessToken = r.connector().getAccessToken(
+                    r.account().getClientId(), r.account().getClientSecret(),
+                    r.account().getAccountNumber(), r.account().getEnvironment());
+        } catch (Exception ex) {
+            log.warn("Void {} — token acquisition for {} failed: {}",
+                    r.trackingNumber(), r.canonicalCarrier(), ex.getMessage());
+            return new CarrierCallOutcome(null, java.util.List.of(),
+                    failure(HttpStatus.BAD_GATEWAY,
+                            r.canonicalCarrier() + " token acquisition failed: " + ex.getMessage()));
+        }
+
+        CarrierConnector.VoidResult first = null;
+        java.util.List<CarrierConnector.VoidResult> perBatch = new java.util.ArrayList<>();
+        for (String trackNo : r.trackingNumbersToVoid()) {
+            try {
+                CarrierConnector.VoidResult vr = r.connector().voidShipment(trackNo, accessToken,
+                        r.account().getEnvironment(), r.voidAccountNumber(), r.senderCountryCode());
+                perBatch.add(vr);
+                if (first == null) first = vr;
+            } catch (Exception ex) {
+                log.warn("Void {} — carrier call failed at {}: {}", trackNo, r.canonicalCarrier(), ex.getMessage());
+                return new CarrierCallOutcome(null, perBatch,
+                        failure(HttpStatus.BAD_GATEWAY,
+                                r.canonicalCarrier() + " void call failed for " + trackNo + ": " + ex.getMessage()));
+            }
+        }
+
+        boolean allVoided = !perBatch.isEmpty()
+                && perBatch.stream().allMatch(CarrierConnector.VoidResult::voided);
+        CarrierConnector.VoidResult aggregate;
+        if (allVoided) {
+            aggregate = new CarrierConnector.VoidResult(
+                    r.trackingNumber(), true, "VOIDED",
+                    perBatch.size() + " batch(es) voided.", null);
+        } else {
+            aggregate = perBatch.stream().filter(x -> !x.voided()).findFirst().orElse(first);
+        }
+        return new CarrierCallOutcome(aggregate, perBatch, null);
+    }
+
+    private ApiResponse<VoidLabelResponseDTO> runPersistPhase(Reservation r, CarrierCallOutcome outcome) {
+        // Re-fetch under row lock. In_flight_since set by phase A guarantees
+        // no other voidLabel path raced in; this lock just protects against
+        // sibling writers (tracking updater, etc.) that touch the same row.
+        OrderTracking tracking = orderTrackingRepository.findByOrderNoForUpdate(r.orderNo()).orElse(null);
+        if (tracking == null) {
+            // Should not happen — phase A found this row. Log + return the
+            // phase B outcome anyway so the caller gets something.
+            log.warn("Void {} — persist phase could not re-fetch tracking row (concurrent delete?)", r.orderNo());
+            return outcome.earlyFailure() != null ? outcome.earlyFailure()
+                    : failure(HttpStatus.NOT_FOUND, "Tracking row vanished between phases.");
+        }
+        tracking.setInFlightSince(null);
+
+        if (outcome.earlyFailure() != null) {
+            // Phase B failed before producing a result (token or carrier
+            // exception). Clear the reservation sentinel and return.
+            orderTrackingRepository.save(tracking);
+            return outcome.earlyFailure();
+        }
+
+        CarrierConnector.VoidResult result = outcome.aggregateResult();
+        if (!result.voided()) {
+            try {
+                com.multiship.backend.util.LabelHistory.append(tracking, "VOID_REFUSED",
+                        tracking.getTrackingNumber(), null, LocalDateTime.now());
+            } catch (Exception ex) {
+                log.warn("Void {} — could not record the refusal on label history: {}",
+                        tracking.getTrackingNumber(), ex.getMessage());
+            }
+            orderTrackingRepository.save(tracking);
+            if (auditService != null) {
+                auditService.logShipment(AuditService.LABEL_VOID_REFUSED, r.orderNo(), null,
+                        tracking.getTrackingNumber(),
+                        r.canonicalCarrier() + " refused the void: "
+                                + (result.message() == null ? result.status() : result.message()));
+            }
+        } else {
+            tracking.setStatus("VOIDED");
+            tracking.setIsLabelGenerated(false);
+            tracking.setUpdatedAt(LocalDateTime.now(ZoneOffset.UTC));
+            com.multiship.backend.util.LabelHistory.append(tracking, "VOIDED",
+                    tracking.getTrackingNumber(), null, LocalDateTime.now());
+            orderTrackingRepository.save(tracking);
+            if (auditService != null) {
+                String money = "";
+                if (tracking.getBillableAmount() != null || tracking.getCarrierAmount() != null) {
+                    String ccy = tracking.getMarkupCurrency() == null ? "USD" : tracking.getMarkupCurrency();
+                    money = " · reversed"
+                            + (tracking.getCarrierAmount() != null ? " carrier " + tracking.getCarrierAmount() + " " + ccy : "")
+                            + (tracking.getBillableAmount() != null ? " / billable " + tracking.getBillableAmount() + " " + ccy : "");
+                }
+                auditService.logShipment(AuditService.LABEL_VOIDED, r.orderNo(), null,
+                        tracking.getTrackingNumber(),
+                        r.canonicalCarrier() + " label voided (" + outcome.perBatchResults().size() + " batch(es))" + money);
+            }
+            try {
+                if (writebackDispatcher != null) {
+                    java.util.Optional<com.multiship.backend.model.Order> ord =
+                            orderRepository.findByOrderNo(r.orderNo());
+                    String clientCode = ord.map(com.multiship.backend.model.Order::getCustNo).orElse(null);
+                    String source     = ord.map(com.multiship.backend.model.Order::getSource).orElse(null);
+                    String channel    = ord.map(com.multiship.backend.model.Order::getOrderChannel).orElse(null);
+                    writebackDispatcher.dispatchOnClear(
+                            com.multiship.backend.service.externalsystems.writeback.WritebackClearRequest
+                                    .of(null, tracking.getTrackingNumber(), r.orderNo(), clientCode, source, channel));
+                }
+            } catch (RuntimeException wbFail) {
+                log.warn("V89 writeback clear failed for voided order {} (void succeeded): {}",
+                        r.orderNo(), wbFail.getMessage());
+            }
+        }
+
+        VoidLabelResponseDTO body = VoidLabelResponseDTO.builder()
+                .orderNo(r.orderNo())
+                .trackingNumber(tracking.getTrackingNumber())
+                .carrierCode(r.canonicalCarrier())
                 .voided(result.voided())
                 .status(result.status())
                 .message(result.message())

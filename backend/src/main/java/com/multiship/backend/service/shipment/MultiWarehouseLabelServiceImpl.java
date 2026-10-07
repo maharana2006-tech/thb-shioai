@@ -42,16 +42,33 @@ public class MultiWarehouseLabelServiceImpl implements MultiWarehouseLabelServic
      */
     private final TenantScopeEnforcer tenantScope;
 
-    // TODO(sprint49-tier2-fix6-followup): the loop below calls
-    // generateManualLabel (itself @Transactional) N times inside this
-    // outer @Transactional, so one DB connection is held for the entire
-    // sequence of N × (5-15s) carrier RTTs. Splitting requires a saga
-    // (compensating cancels for successful children when a later one
-    // fails) to preserve the current all-or-nothing invariant. Interim:
-    // 60s global tx timeout in application.properties bounds a single
-    // stuck call; multi-child batches beyond that still risk pool pressure.
+    /** Perf P3 — REQUIRES_NEW programmatic tx for the legacy single-tx
+     *  path and for the split path's final persist. May be null in
+     *  bare-ctor tests; a null-guard falls back to direct call. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.transaction.support.TransactionTemplate requiresNewTransactionTemplate;
+
+    /** Perf P3 feature flag — see {@code carrier.tx-split-phase-c}. FALSE
+     *  keeps the single-tx behaviour (one DB connection held across every
+     *  child's carrier RTT). TRUE runs each child in its own tx. */
+    @org.springframework.beans.factory.annotation.Value("${carrier.tx-split-phase-c:false}")
+    private boolean phaseSplitEnabled;
+
+    // Perf P3 (PERF-M7): pre-P2 this loop ran inside the outer
+    // @Transactional, so one DB connection was held across N × 5-15s
+    // carrier RTTs (3 warehouses × 10s = 30s outer tx). Phase 2 moves
+    // each child into its own tx via its own @Transactional (joined when
+    // no outer tx is present); the final group + Shipment persist runs
+    // in its own short tx. Behind flag carrier.tx-split-phase-c; flag
+    // OFF preserves the single-tx behaviour byte-for-byte.
+    //
+    // Trade-off accepted: a mid-batch failure now leaves earlier
+    // children's OrderTracking rows persisted (carrier money is already
+    // spent — DB rolling back can't un-buy the label). Operators get
+    // orphan rows they can void explicitly. Pre-P2 the apparent "all or
+    // nothing" was only at the DB level; carrier state diverged either
+    // way.
     @Override
-    @Transactional
     public ApiResponse<MultiWarehouseLabelResponse> generate(
             MultiWarehouseLabelRequest request, UserDetails user) {
 
@@ -78,6 +95,22 @@ public class MultiWarehouseLabelServiceImpl implements MultiWarehouseLabelServic
                         "Line " + (i + 1) + " is missing warehouseCode — required for the split.");
             }
         }
+
+        // Dispatch: flag=TRUE runs each child in its own tx (join-when-
+        // present-else-create via child @Transactional REQUIRED), with
+        // final persist in its own short tx. Flag=FALSE wraps the entire
+        // body in a single tx — pre-P2 behaviour. Null-template falls
+        // through to direct call for bare-ctor Mockito tests.
+        boolean splitMode = phaseSplitEnabled && requiresNewTransactionTemplate != null;
+        if (!splitMode && requiresNewTransactionTemplate != null) {
+            return requiresNewTransactionTemplate.execute(status ->
+                    generateBody(request, user, false));
+        }
+        return generateBody(request, user, splitMode);
+    }
+
+    private ApiResponse<MultiWarehouseLabelResponse> generateBody(
+            MultiWarehouseLabelRequest request, UserDetails user, boolean splitMode) {
 
         // ===== Group by warehouseCode (preserve insertion order for stable
         //       response layout). =====
@@ -158,17 +191,15 @@ public class MultiWarehouseLabelServiceImpl implements MultiWarehouseLabelServic
         }
 
         // ===== Persist group + children. =====
-        ShipmentGroup group = ShipmentGroup.builder()
-                .clientCode(request.getClientCode())
-                .orderNo(request.getOrderNo())
-                .shipmentCount(children.size())
-                .createdBy(user == null ? null : user.getUsername())
-                .build();
-        group = groupRepository.save(group);
-        for (int i = 0; i < persistedRows.size(); i++) {
-            persistedRows.get(i).setGroupId(group.getId());
-            Shipment saved = shipmentRepository.save(persistedRows.get(i));
-            children.get(i).setShipmentId(saved.getId());
+        // Split mode: this runs in its own REQUIRES_NEW tx so the loop's
+        // orphan tx (if any — all children now committed independently)
+        // doesn't force this persist into an already-closed tx.
+        ShipmentGroup group;
+        if (splitMode) {
+            group = requiresNewTransactionTemplate.execute(status ->
+                    persistGroupAndChildren(request, user, children, persistedRows));
+        } else {
+            group = persistGroupAndChildren(request, user, children, persistedRows);
         }
 
         log.info("Multi-warehouse split: group={} client={} shipments={} order={}",
@@ -188,6 +219,24 @@ public class MultiWarehouseLabelServiceImpl implements MultiWarehouseLabelServic
                         .shipments(children)
                         .build())
                 .build();
+    }
+
+    private ShipmentGroup persistGroupAndChildren(
+            MultiWarehouseLabelRequest request, UserDetails user,
+            List<ChildShipment> children, List<Shipment> persistedRows) {
+        ShipmentGroup group = ShipmentGroup.builder()
+                .clientCode(request.getClientCode())
+                .orderNo(request.getOrderNo())
+                .shipmentCount(children.size())
+                .createdBy(user == null ? null : user.getUsername())
+                .build();
+        group = groupRepository.save(group);
+        for (int i = 0; i < persistedRows.size(); i++) {
+            persistedRows.get(i).setGroupId(group.getId());
+            Shipment saved = shipmentRepository.save(persistedRows.get(i));
+            children.get(i).setShipmentId(saved.getId());
+        }
+        return group;
     }
 
     /**

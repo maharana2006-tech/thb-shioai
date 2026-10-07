@@ -276,7 +276,7 @@ public class OrderImportController {
             description = "Irreversible. Hard-deletes every batch currently in Trash for the caller's tenant.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @org.springframework.web.bind.annotation.DeleteMapping("/history/trash")
-    public ResponseEntity<ApiResponse<Integer>> emptyTrash(
+    public ResponseEntity<ApiResponse<OrderImportService.PurgeResult>> emptyTrash(
             @AuthenticationPrincipal UserDetails userDetails) {
         String username = userDetails == null ? "unknown" : userDetails.getUsername();
         var result = orderImportService.purgeTrashChecked(username);
@@ -285,10 +285,10 @@ public class OrderImportController {
         String msg = (purged == 1 ? "1 import permanently deleted." : purged + " imports permanently deleted.")
                 + (kept > 0 ? " Kept " + kept + (kept == 1 ? " import that still has" : " imports that still have")
                         + " live labels — void them first." : "");
-        return ResponseEntity.ok(ApiResponse.<Integer>builder()
+        return ResponseEntity.ok(ApiResponse.<OrderImportService.PurgeResult>builder()
                 .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
                 .message(msg)
-                .data(purged).build());
+                .data(result).build());
     }
 
     /** Body of POST /history/{slug}/void — the rows to void; empty = every generated row. */

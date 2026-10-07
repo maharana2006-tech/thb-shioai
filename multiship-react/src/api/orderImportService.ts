@@ -359,9 +359,12 @@ export const orderImportService = {
     ),
 
   /** Empty the Trash — PERMANENTLY delete every soft-deleted import. Irreversible.
-   *  Resolves with the number of imports purged. */
+   *  Returns the purged count and the kept count (trashed imports whose labels
+   *  are still live are kept — the operator must void them first). */
   emptyTrash: () =>
-    apiClient.delete<ApiResponse<number>>('/orders/import/history/trash'),
+    apiClient.delete<ApiResponse<{ purged: number; keptWithLiveLabels: number }>>(
+      '/orders/import/history/trash',
+    ),
 
   /** Set a batch's bill-to account mode ('AUTO' | 'PLATFORM'). Persisted. */
   setBillingMode: (slug: string, mode: 'AUTO' | 'PLATFORM') =>
