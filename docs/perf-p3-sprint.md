@@ -13,6 +13,7 @@ All phases are dark-launched behind `carrier.tx-split-phase-c` (env `CARRIER_TX_
 | `341b9c9b` | **P2** | `MultiWarehouseLabelServiceImpl.generate` outer-tx drop. Each child's own tx via its own @Transactional; final persist in own REQUIRES_NEW. 3 split tests + 10 legacy green. |
 | `96a4138e` | **P3** | `CarrierServiceImpl.generateLabel` three-phase split. LabelReservation + LabelCarrierOutcome records; runLabelReservationPhase / runLabelCarrierCallPhase / runLabelPersistPhase. **No new split test** — see Test coverage decisions below. |
 | `81eca497` | **P4α** | `CarrierServiceImpl.generateManualLabel` dispatcher + split stub. `@Transactional` removed; stub currently delegates to legacy; body renamed to `generateManualLabelLegacyBody`. Zero behaviour change. |
+| _tbd_ | **P5** | `InFlightTrackingSweeper` flips from log-only to resolve: marks stuck rows ERROR + nulls `in_flight_since` + sets actionable `error_message`. Race guard against parallel Phase C commit. 4/4 tests. |
 
 ## Design pattern (established in P1, reused in P2 + P3)
 
@@ -97,14 +98,18 @@ Carrier HTTP = line **2231** specifically: `fConnector.createShipment(sub, t, fE
 
 Total P4 remaining: 3-4 sessions once scope is committed.
 
-## P5 — Sweeper flips to resolve (deferred)
+## P5 — Sweeper resolves stuck rows ✅ shipped 2026-10-07
 
-~40 LoC change to `InFlightTrackingSweeper` to mark stuck rows ERROR (currently just logs). Low value until:
+`InFlightTrackingSweeper.sweep()` now marks stuck rows ERROR instead of just logging:
 
-1. P4 ships (so generateManualLabel also writes in_flight_since)
-2. Ops dark-launches the flag in staging (prod default FALSE = no stuck rows ever)
+- Sets `status = "ERROR"`, nulls `in_flight_since`, flips `is_label_generated = false`
+- Sets `error_message` = "Carrier dispatch did not complete within the in-flight timeout. The carrier may or may not have accepted the shipment — query the carrier for tracking state before voiding or retrying."
+- Race guard: skips rows whose `in_flight_since` was nulled by a parallel Phase C commit between SELECT and UPDATE
+- Marked `ponytail:` — naive "mark ERROR" resolution; upgrade to carrier tracking-lookup round-trip when stuck-row counts become operationally painful
 
-Ship when both triggers fire.
+Tests: 4/4 (lock-contested, no-stuck, resolve stuck, race-settled skip).
+
+Flag flip (ops): `CARRIER_TX_SPLIT_PHASE_C=true` → voidLabel + MW + generateLabel start writing `in_flight_since`; sweeper picks up any crashed dispatches. Zero stuck rows pre-flag-flip because no caller writes the column.
 
 ## Test coverage decisions
 
