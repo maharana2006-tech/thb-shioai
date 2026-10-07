@@ -1,7 +1,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { lazyWithRetry } from '../utils/lazyWithRetry'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { FiAlertCircle, FiArrowLeft, FiChevronDown, FiEdit2, FiFileText, FiFilter, FiPrinter, FiX, FiZap } from 'react-icons/fi'
+import { FiAlertCircle, FiArrowLeft, FiChevronDown, FiEdit2, FiFilter, FiPrinter, FiX, FiZap } from 'react-icons/fi'
 import AdvancedDataTable, { type ColumnDef } from './workspace/AdvancedDataTable'
 import { useDismissable } from '../hooks/useDismissable'
 import {
@@ -9,13 +9,15 @@ import {
   type DtcBatchDetail, type DtcOrder,
 } from '../api/dtcService'
 import DtcLineDetailsModal from './dtc/DtcLineDetailsModal'
+import SendToPrinterDialog from './workspace/SendToPrinterDialog'
 import { orderService } from '../api/orderService'
 import { ApiError } from '../api/apiClient'
 import { confirmBatchGenerate } from '../utils/dtcConfirm'
 import { summarizeCarrierError } from '../utils/carrierErrorMap'
 import { notify } from '../utils/notify'
-import { printPdfBlob } from '../utils/printPdf'
-import { workspacePaths } from '../routes/workspaceRoutes'
+import { useAppSession } from '../hooks/useAppSession'
+import { normalizeRole } from '../utils/roles'
+import { settingsPaths, workspacePaths } from '../routes/workspaceRoutes'
 
 const OrderDetailsModal = lazyWithRetry(() => import('./modals/OrderDetailsModal'))
 
@@ -35,6 +37,7 @@ const OrderDetailsModal = lazyWithRetry(() => import('./modals/OrderDetailsModal
  */
 export default function DtcBatchDetailPage() {
   const navigate = useNavigate()
+  const { role } = useAppSession()
   const { batchId = '' } = useParams()
   const [searchParams] = useSearchParams()
   const tenantId = searchParams.get('tenant') ?? ''
@@ -137,42 +140,25 @@ export default function DtcBatchDetailPage() {
   }
 
   const [printingAll, setPrintingAll] = useState(false)
-  const [printingOne, setPrintingOne] = useState<number | null>(null)
+  // Orders handed to the Send-to-printer dialog (null = closed).
+  const [printerOrders, setPrinterOrders] = useState<number[] | null>(null)
 
-  // Per-line Print — one button for the whole parcel. International lines print
-  // the full document set (commercial invoice + label); domestic lines print
-  // just the 4x6 label. If an international line has no customs data, the doc
-  // set 422s and we fall back to the label so the parcel still goes out.
-  const printOne = async (orderNo: number, intl: boolean) => {
-    if (printingOne) return
-    setPrintingOne(orderNo)
-    try {
-      let blob: Blob
-      if (intl) {
-        blob = await orderService.getShipmentDocumentsPdf(orderNo)
-          .catch(() => orderService.getLabelPdf(orderNo, undefined, { main: true }))
-      } else {
-        blob = await orderService.getLabelPdf(orderNo, undefined, { main: true })
-      }
-      printPdfBlob(blob)
-      window.setTimeout(() => void load(), 2500)
-    } catch (e) {
-      notify.apiError(e, `Could not print documents for order ${orderNo}.`)
-    } finally {
-      setPrintingOne(null)
-    }
-  }
-
-  // Print all — merged label PDF straight to the printer (not a ZIP download).
+  // Print all — look up the batch's generated label order numbers and open the
+  // Send-to-printer dialog (each order to its client's printer), same method as
+  // the Orders page selection.
   const printAll = async () => {
     if (printingAll) return
     setPrintingAll(true)
     try {
-      const blob = await dtcService.labelsPdf(batchId, tenantId)
-      printPdfBlob(blob)
-      window.setTimeout(() => void load(), 2500)
+      const res = await dtcService.labelOrderNos(batchId, tenantId)
+      const nos = res.data ?? []
+      if (nos.length === 0) {
+        notify.info('No printable labels in this batch yet — generate labels first.')
+        return
+      }
+      setPrinterOrders(nos)
     } catch (e) {
-      notify.apiError(e, 'Could not print the batch labels.')
+      notify.apiError(e, 'Could not load the batch labels to print.')
     } finally {
       setPrintingAll(false)
     }
@@ -264,18 +250,14 @@ export default function DtcBatchDetailPage() {
             || data?.voidStatuses?.[String(orderNo)] === 'VOIDED') {
           return <span className="text-[11px] text-[#9a8b70]">—</span>
         }
-        const intl = row.original.intlYn === 'Y'
         return (
           <button
             type="button"
-            title={intl
-              ? `Send the commercial invoice + label for order ${orderNo} to the printer`
-              : `Send the label for order ${orderNo} to the printer`}
-            onClick={() => void printOne(orderNo, intl)}
-            disabled={printingOne === orderNo}
+            title={`Send order ${orderNo} to its client's printer — pick labels or invoice`}
+            onClick={() => setPrinterOrders([orderNo])}
             className="inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {intl ? <FiFileText className="h-3 w-3" /> : <FiPrinter className="h-3 w-3" />}
+            <FiPrinter className="h-3 w-3" />
             Print
           </button>
         )
@@ -347,7 +329,7 @@ export default function DtcBatchDetailPage() {
       },
     },
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  ], [data, load, printingOne])
+  ], [data, load])
 
   if (!tenantId) {
     return (
@@ -500,7 +482,7 @@ export default function DtcBatchDetailPage() {
           disabled={!batch || printableCount(batch) === 0 || printingAll}
           title={!batch || printableCount(batch) === 0
             ? (batch?.voidedCount ? 'Every label of this batch was voided — nothing to print' : 'Generate labels first — nothing to print yet')
-            : 'Send all live label PDFs to the printer (voided labels are left out)'}
+            : "Send every live label to its client's printer (voided labels are left out)"}
           className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40"
         >
           <FiPrinter className="h-3.5 w-3.5" />
@@ -582,6 +564,15 @@ export default function DtcBatchDetailPage() {
           <OrderDetailsModal orderNo={detailsOrderNo} onClose={() => setDetailsOrderNo(null)} />
         </Suspense>
       )}
+
+      {printerOrders ? (
+        <SendToPrinterDialog
+          orderNumbers={printerOrders}
+          canManagePrinters={normalizeRole(role) === 'ADMIN'}
+          onClose={() => setPrinterOrders(null)}
+          onOpenSettings={() => { setPrinterOrders(null); navigate(settingsPaths.printers) }}
+        />
+      ) : null}
     </div>
   )
 }
