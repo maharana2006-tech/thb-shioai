@@ -60,6 +60,7 @@ const CarrierPage = lazy(() => import('../pages/CarrierPage'))
 const ClientsPage = lazy(() => import('../pages/ClientsPage'))
 const ClientEditorPage = lazy(() => import('../components/ClientEditorPage'))
 const ImporterBrokerPage = lazy(() => import('../components/ImporterBrokerPage'))
+const CustomsProfileEditorPage = lazy(() => import('../components/CustomsProfileEditorPage'))
 const LabelTemplatesListPage = lazy(() => import('../components/LabelTemplatesListPage'))
 const LabelTemplateEditorPage = lazy(() => import('../components/LabelTemplateEditorPage'))
 const CustomFieldsPage = lazy(() => import('../components/CustomFieldsPage'))
@@ -193,6 +194,8 @@ export default function AppRoutes() {
                 <Route path="shipping-service-mapping" element={<Navigate to="/settings/code-maps?tab=shipvia" replace />} />
                 <Route path="address-book" element={<AddressBookPage />} />
                 <Route path="importer-broker" element={<ImporterBrokerPage />} />
+                <Route path="importer-broker/new" element={<CustomsProfileEditorPage />} />
+                <Route path="importer-broker/:clientCode/:id" element={<CustomsProfileEditorPage />} />
                 {/* Templates — shipping label / packing slip / commercial invoice.
                     Old label-templates URLs redirect for bookmark compatibility. */}
                 <Route path="templates" element={<LabelTemplatesListPage />} />

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useOutletContext } from 'react-router-dom'
+import { useNavigate, useOutletContext } from 'react-router-dom'
 import { notify } from '../utils/notify'
 import {
   FiBriefcase,
@@ -35,12 +35,10 @@ import type { SettingsOutletContext } from './layout/SettingsLayout'
 import AdvancedDataTable, { type ColumnDef } from './workspace/AdvancedDataTable'
 import PortalMenu from './workspace/PortalMenu'
 import Select from './workspace/Select'
-import CustomsProfileModal from './modals/CustomsProfileModal'
+import { settingsPaths } from '../routes/workspaceRoutes'
 
 const filterLabelClass =
   'mb-1 flex items-center gap-1 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400'
-
-type ModalState = { mode: 'new' } | { mode: 'edit'; profile: CustomsProfile } | null
 
 /** Region-grouped country chips (used in the Destinations cell). */
 function DestinationChips({ countries, max }: { countries: string[]; max?: number }) {
@@ -93,7 +91,7 @@ export default function ImporterBrokerPage() {
   const [pageIndex, setPageIndex] = useState(0)
   const [pageSize, setPageSize] = useState(25)
   const [reloadToken, setReloadToken] = useState(0)
-  const [modal, setModal] = useState<ModalState>(null)
+  const navigate = useNavigate()
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search.trim()), 350)
@@ -386,7 +384,10 @@ export default function ImporterBrokerPage() {
         cell: ({ row }) => (
           <div className="text-right">
             <RowActionsMenu
-              onEdit={() => setModal({ mode: 'edit', profile: row.original })}
+              onEdit={() => navigate(
+                settingsPaths.importerBrokerEdit(row.original.clientCode ?? '', row.original.id ?? 0),
+                { state: { profile: row.original } },
+              )}
               onDelete={() => void handleDelete(row.original)}
             />
           </div>
@@ -557,7 +558,7 @@ export default function ImporterBrokerPage() {
             toolbarActions={
               <button
                 type="button"
-                onClick={() => setModal({ mode: 'new' })}
+                onClick={() => navigate(settingsPaths.importerBrokerNew)}
                 className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15]"
               >
                 <FiPlus className="h-3.5 w-3.5" /> Add profile
@@ -578,15 +579,6 @@ export default function ImporterBrokerPage() {
         )}
       </section>
 
-      {modal ? (
-        <CustomsProfileModal
-          clients={clients}
-          profile={modal.mode === 'edit' ? modal.profile : null}
-          existingProfiles={profiles}
-          onClose={() => setModal(null)}
-          onSaved={() => refresh()}
-        />
-      ) : null}
     </div>
   )
 }

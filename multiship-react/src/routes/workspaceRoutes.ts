@@ -54,6 +54,9 @@ export const settingsPaths = {
   shippingServiceMapping: '/settings/code-maps?tab=shipvia',
   addressBook: '/settings/address-book',
   importerBroker: '/settings/importer-broker',
+  importerBrokerNew: '/settings/importer-broker/new',
+  importerBrokerEdit: (clientCode: string, id: number | string) =>
+    `/settings/importer-broker/${encodeURIComponent(clientCode)}/${id}`,
   /** Tenant-branded document templates — shipping label, packing slip,
    *  commercial invoice. Old `/settings/label-templates` still redirects
    *  here. */

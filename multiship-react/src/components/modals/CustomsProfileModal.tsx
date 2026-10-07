@@ -80,6 +80,8 @@ interface CustomsProfileModalProps {
   existingProfiles?: CustomsProfile[]
   onClose: () => void
   onSaved?: () => void
+  /** Render inline as a full page (no fixed overlay / focus trap) instead of a modal. */
+  asPage?: boolean
 }
 
 const inputClassName =
@@ -223,10 +225,11 @@ export default function CustomsProfileModal({
   existingProfiles = [],
   onClose,
   onSaved,
+  asPage = false,
 }: CustomsProfileModalProps) {
-  // Sprint 51 T6b — focus trap.
+  // Sprint 51 T6b — focus trap (modal only; a page must not trap focus).
   const dialogRef = useRef<HTMLDivElement>(null)
-  useFocusTrap(true, dialogRef)
+  useFocusTrap(!asPage, dialogRef)
   const [form, setForm] = useState<CustomsProfile>(() => profile ?? blank())
   const [clientCode, setClientCode] = useState<string>(
     () => (profile?.clientCode ?? lockedClientCode ?? '').toUpperCase()
@@ -495,19 +498,15 @@ export default function CustomsProfileModal({
     .map((p) => p[0]?.toUpperCase() ?? '')
     .join('')
 
-  return (
+  const card = (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[#1f150c]/45 p-4 backdrop-blur-sm"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Importer / Broker profile"
-      onClick={onClose}
+      ref={dialogRef}
+      className={`flex w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white ${
+        asPage ? 'mx-auto shadow-sm' : 'max-h-[92vh] shadow-[0_30px_80px_rgba(15,23,42,0.35)]'
+      }`}
+      onClick={asPage ? undefined : (e) => e.stopPropagation()}
+      {...(asPage ? {} : { role: 'dialog' as const, 'aria-modal': true, 'aria-label': 'Importer / Broker profile' })}
     >
-      <div
-        ref={dialogRef}
-        className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]"
-        onClick={(e) => e.stopPropagation()}
-      >
         {/* header */}
         <div className="flex items-start justify-between gap-3 border-b border-[#eee6d6] px-5 py-4">
           <div className="flex items-center gap-3">
@@ -839,6 +838,15 @@ export default function CustomsProfileModal({
           </div>
         </div>
       </div>
+  )
+
+  if (asPage) return card
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[#1f150c]/45 p-4 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      {card}
     </div>
   )
 }

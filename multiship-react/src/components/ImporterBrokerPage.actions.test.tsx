@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Route, Routes, Outlet } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, Outlet, useLocation, useParams } from 'react-router-dom'
 import type { ComponentType } from 'react'
 
 /**
@@ -70,23 +70,6 @@ vi.mock('../api/apiClient', () => ({
   apiClient: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn(), patch: vi.fn() },
 }))
 
-// Prop-spy shim for CustomsProfileModal. The SUT passes profile=null for
-// 'new' mode, profile={...} for 'edit' mode; only mounts when the SUT's
-// modal state is truthy.
-type ModalProps = { profile: { id?: number } | null; onClose: () => void; onSaved: () => void }
-let lastModalProps: ModalProps | null = null
-vi.mock('./modals/CustomsProfileModal', () => ({
-  default: (p: ModalProps) => {
-    lastModalProps = p
-    return (
-      <div data-testid="profile-modal-shim">
-        modal-{p.profile ? 'edit' : 'new'}
-      </div>
-    )
-  },
-}))
-vi.mock('./modals/CustomsEditorModal', () => ({ default: () => null }))
-
 // ---------- Fixtures ----------
 
 const profile = (id: number, overrides: Partial<{
@@ -119,7 +102,6 @@ beforeEach(() => {
   statsMock.mockResolvedValue({ profiles: 0, destinationsCovered: 0, clientsConfigured: 0 })
   listClientsMock.mockResolvedValue({ data: { content: [] } })
   notifyConfirmMock.mockResolvedValue(true)
-  lastModalProps = null
 })
 
 afterEach(() => {
@@ -132,12 +114,30 @@ async function loadPage(): Promise<ComponentType> {
   return mod.default
 }
 
+// Add profile / Row Edit now NAVIGATE to a dedicated editor page instead of
+// opening a modal. These probes stand in for that route so the tests assert the
+// destination path + the profile handed over via router state.
+function NewEditorProbe() {
+  return <div data-testid="editor-new">editor-new</div>
+}
+function EditEditorProbe() {
+  const { clientCode, id } = useParams()
+  const state = useLocation().state as { profile?: { id?: number; clientCode?: string } } | null
+  return (
+    <div data-testid="editor-edit">
+      edit:{clientCode}:{id}:{state?.profile?.id ?? 'no-state'}
+    </div>
+  )
+}
+
 function renderPage(Page: ComponentType) {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={['/settings/importer-broker']}>
       <Routes>
         <Route element={<Outlet context={{ registerRefresh: vi.fn() }} />}>
-          <Route path="*" element={<Page />} />
+          <Route path="/settings/importer-broker" element={<Page />} />
+          <Route path="/settings/importer-broker/new" element={<NewEditorProbe />} />
+          <Route path="/settings/importer-broker/:clientCode/:id" element={<EditEditorProbe />} />
         </Route>
       </Routes>
     </MemoryRouter>,
@@ -147,7 +147,7 @@ function renderPage(Page: ComponentType) {
 // ===================== Add profile =====================
 
 describe('ImporterBrokerPage — Add profile', () => {
-  it('clicking Add profile mounts the CustomsProfileModal in "new" mode', async () => {
+  it('clicking Add profile navigates to the new-profile editor page', async () => {
     listProfilesMock.mockResolvedValue(pageWith([]))
     const Page = await loadPage()
     renderPage(Page)
@@ -157,16 +157,14 @@ describe('ImporterBrokerPage — Add profile', () => {
       await userEvent.click(screen.getByRole('button', { name: /Add profile/i }))
     })
 
-    await waitFor(() => expect(screen.getByTestId('profile-modal-shim')).toBeInTheDocument())
-    expect(screen.getByTestId('profile-modal-shim').textContent).toBe('modal-new')
-    expect(lastModalProps?.profile).toBeNull()
+    await waitFor(() => expect(screen.getByTestId('editor-new')).toBeInTheDocument())
   })
 })
 
 // ===================== Row Edit (via RowActionsMenu) =====================
 
 describe('ImporterBrokerPage — Row Edit', () => {
-  it('opening Row actions and clicking Edit mounts modal in "edit" mode with the row', async () => {
+  it('opening Row actions and clicking Edit navigates to the editor with the row', async () => {
     listProfilesMock.mockResolvedValue(pageWith([profile(42, { clientCode: 'ACME' })]))
     const Page = await loadPage()
     renderPage(Page)
@@ -181,9 +179,9 @@ describe('ImporterBrokerPage — Row Edit', () => {
       await userEvent.click(await screen.findByRole('menuitem', { name: /Edit/i }))
     })
 
-    await waitFor(() => expect(screen.getByTestId('profile-modal-shim')).toBeInTheDocument())
-    expect(screen.getByTestId('profile-modal-shim').textContent).toBe('modal-edit')
-    expect(lastModalProps?.profile).toMatchObject({ id: 42, clientCode: 'ACME' })
+    // Navigates to /settings/importer-broker/ACME/42 and hands the row over via state.
+    await waitFor(() => expect(screen.getByTestId('editor-edit')).toBeInTheDocument())
+    expect(screen.getByTestId('editor-edit').textContent).toBe('edit:ACME:42:42')
   })
 })
 
