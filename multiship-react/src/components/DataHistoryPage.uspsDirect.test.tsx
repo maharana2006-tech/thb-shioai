@@ -615,7 +615,10 @@ describe('Bulk Mailer — layout', () => {
     bulkSummary.mockResolvedValue(summaryOf({ total: 1 }))
     const { orderImportService } = await import('../api/orderImportService')
     const emptyTrash = orderImportService.emptyTrash as ReturnType<typeof vi.fn>
-    emptyTrash.mockResolvedValue({ data: 2, message: '2 imports permanently deleted. Kept 1 import that still has live labels — void them first.' })
+    emptyTrash.mockResolvedValue({
+      data: { purged: 2, keptWithLiveLabels: 1 },
+      message: '2 imports permanently deleted. Kept 1 import that still has live labels — void them first.',
+    })
     await renderAt('/bulk/trash')
     expect(await screen.findByTestId('batch-row-119')).toBeInTheDocument()
     const before = listBatches.mock.calls.length
