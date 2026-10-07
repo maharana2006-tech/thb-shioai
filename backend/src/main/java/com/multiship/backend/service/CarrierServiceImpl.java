@@ -159,6 +159,15 @@ public class CarrierServiceImpl implements CarrierService {
     @org.springframework.beans.factory.annotation.Value("${carrier.tx-split-phase-c:false}")
     private boolean phaseSplitEnabled;
 
+    /** Perf P3 P4β-full sub-flag — see {@code carrier.tx-split-phase-c
+     *  .full-manual-regenerate}. Gated SEPARATELY from the main flag so
+     *  ops can enable the proven split paths (void/MW/generateLabel)
+     *  without opting into the un-fixture-tested manual-label full
+     *  split. FALSE (default) runs P4β-reservation sandwich; TRUE runs
+     *  the real three-phase A/B/C with Phase B carrier HTTP outside tx. */
+    @org.springframework.beans.factory.annotation.Value("${carrier.tx-split-phase-c.full-manual-regenerate:false}")
+    private boolean phaseSplitFullManualRegenerate;
+
     /** Sprint 48 B5 — global kill-switch for the packaging validator.
      *  Off = validator is skipped everywhere; over-packaged shipments then
      *  go straight to the carrier (which will reject them with a generic
@@ -1356,11 +1365,6 @@ public class CarrierServiceImpl implements CarrierService {
      * as a manual order (label_batch.is_manual = 'Y') + tracking so it appears in
      * the queue/archive and its label document renders.
      */
-    // TODO(sprint49-tier2-fix6-followup): method-level @Transactional
-    // holds the DB connection during the carrier HTTP call (5-15s RTT).
-    // Follow-up will split into validate → carrier-call (no tx) →
-    // persist-result (@Transactional). Interim: 60s tx timeout in
-    // application.properties bounds the worst case.
     @Override
     public ApiResponse<LabelGenerationResponse> generateManualLabel(
             com.multiship.backend.dto.ManualShipmentRequest req,
@@ -1374,11 +1378,233 @@ public class CarrierServiceImpl implements CarrierService {
      * existing order is UPDATED in place and re-labelled — the "fix a failed
      * order and regenerate" flow, which corrects the shipment data and flips the
      * order ERROR → GENERATED on the same order number.
+     *
+     * <p>Perf P3 phase 4α (dispatcher): previously {@code @Transactional}; now
+     * the annotation is removed and the body is wrapped in
+     * {@code requiresNewTransactionTemplate.execute(...)} for equivalent
+     * single-tx semantics (this method is only called from controllers /
+     * import workers — no caller tx to join). When
+     * {@code carrier.tx-split-phase-c=true} is flipped, this method still
+     * runs the legacy body: the actual three-phase split for the
+     * ~1,500-line {@link #generateManualLabelLegacyBody} is scheduled as
+     * P4β-P4δ in {@code project_perf_p3_sprint.md}. The flag toggle is
+     * accepted here so ops can enable it at the control-plane boundary
+     * without a redeploy once the split lands.
      */
     @Override
-    @org.springframework.transaction.annotation.Transactional
     @Timed(value = "carrier.generateManualLabel", description = "Manual (ad-hoc) label generation.")
     public ApiResponse<LabelGenerationResponse> generateManualLabel(
+            com.multiship.backend.dto.ManualShipmentRequest req,
+            org.springframework.security.core.userdetails.UserDetails user,
+            Integer existingOrderNo) {
+        if (phaseSplitEnabled && requiresNewTransactionTemplate != null) {
+            return generateManualLabelSplit(req, user, existingOrderNo);
+        }
+        if (requiresNewTransactionTemplate != null) {
+            return requiresNewTransactionTemplate.execute(status ->
+                    generateManualLabelLegacyBody(req, user, existingOrderNo));
+        }
+        return generateManualLabelLegacyBody(req, user, existingOrderNo);
+    }
+
+    /**
+     * Perf P3 phase 4α — split-path entry stub. Delegates to the legacy
+     * body for now. P4β-P4δ will replace the delegation with a three-
+     * phase A/B/C split matching the pattern in {@link #generateLabelSplit}.
+     *
+     * <p>Why a stub ships before the real split: the flag toggle
+     * {@code carrier.tx-split-phase-c} is already covered by the void,
+     * MW, and generateLabel paths; manual-label is the odd one out. The
+     * stub lets ops flip the flag without creating a per-path exception
+     * ("this flag covers X but not Y"). Current behaviour under the flag
+     * for manual-label is byte-identical to flag OFF.
+     */
+    private ApiResponse<LabelGenerationResponse> generateManualLabelSplit(
+            com.multiship.backend.dto.ManualShipmentRequest req,
+            org.springframework.security.core.userdetails.UserDetails user,
+            Integer existingOrderNo) {
+        // New-order path (existingOrderNo == null) has no row to lock,
+        // no existing OrderTracking to reserve — stays on the legacy
+        // single-tx body. Regenerate path gets the reservation (or
+        // full three-phase if the sub-flag is on).
+        if (existingOrderNo == null) {
+            return requiresNewTransactionTemplate.execute(status ->
+                    generateManualLabelLegacyBody(req, user, existingOrderNo));
+        }
+        if (phaseSplitFullManualRegenerate) {
+            return generateManualLabelRegenerateSplitFull(req, user, existingOrderNo);
+        }
+        return generateManualLabelRegenerateSplit(req, user, existingOrderNo);
+    }
+
+    /**
+     * Perf P3 phase 4β (regenerate reservation-only split) — wraps the
+     * legacy body in a {@code in_flight_since} reserve/clear sandwich.
+     *
+     * <p><b>What this ships:</b> the dispatch is still handled by the
+     * legacy body (one DB connection held across the carrier HTTP). What
+     * split-mode gets today for regenerate is:
+     * <ul>
+     *   <li>Phase A short tx — lock Order, check already-generated / in-
+     *       flight (409 if either), set {@code in_flight_since}, commit.
+     *       The in-flight guard blocks concurrent regenerate attempts
+     *       (double-click, scripted retries) with a clean 409 instead of
+     *       serializing on the Order row lock inside legacy.</li>
+     *   <li>Phase B — legacy body runs unchanged.</li>
+     *   <li>Phase C short tx — null {@code in_flight_since} so the
+     *       sweeper doesn't flag the row. Fires on both success and
+     *       error paths.</li>
+     * </ul>
+     *
+     * <p><b>What this does NOT ship:</b> the tx-duration split. Phase B
+     * is still @Transactional-equivalent spanning the carrier HTTP RTT.
+     * Full A/B/C tx split for generateManualLabel requires a ~550-LoC
+     * parallel implementation of the 1,500-line method body; deferred as
+     * a dedicated P4β-full sprint per docs/perf-p3-sprint.md.
+     *
+     * <p>Dark-launch readiness: with this landing, flipping
+     * {@code carrier.tx-split-phase-c=true} causes crashed regenerate
+     * dispatches to leave {@code in_flight_since != null} rows that the
+     * {@link com.multiship.backend.service.observability.InFlightTrackingSweeper}
+     * resolves (P5). Pre-P4β, generateManualLabel never wrote the column
+     * — the sweeper had nothing to find.
+     */
+    private ApiResponse<LabelGenerationResponse> generateManualLabelRegenerateSplit(
+            com.multiship.backend.dto.ManualShipmentRequest req,
+            org.springframework.security.core.userdetails.UserDetails user,
+            Integer existingOrderNo) {
+
+        // Phase A — short tx: lock Order, check short-circuits, reserve
+        // in_flight_since. Any failure here means we never ran the
+        // carrier call; return immediately without going through Phase C.
+        ApiResponse<LabelGenerationResponse> earlyReturn = requiresNewTransactionTemplate.execute(status -> {
+            Order order = orderRepository.findByOrderNoForUpdate(existingOrderNo).orElse(null);
+            if (order == null) {
+                return failure(HttpStatus.NOT_FOUND, ErrorCode.ORDER_NOT_FOUND,
+                        "Order " + existingOrderNo + " was not found.");
+            }
+            OrderTracking tracking = orderTrackingRepository.findByOrderNo(existingOrderNo).orElse(null);
+            if (tracking != null
+                    && Boolean.TRUE.equals(tracking.getIsLabelGenerated())
+                    && "GENERATED".equalsIgnoreCase(tracking.getStatus())) {
+                // Same-key retry → return existing label; different key → 409.
+                String normalizedKey = normalizeInternalIdempotencyKey(req);
+                LabelGenerationResponse already = LabelGenerationResponse.builder()
+                        .orderNo(existingOrderNo.longValue())
+                        .trackingNumber(tracking.getTrackingNumber())
+                        .trackingUrl(tracking.getTrackingUrl())
+                        .carrierAccountCode(tracking.getAccountNumber())
+                        .status("GENERATED")
+                        .message("A label for this order already exists.")
+                        .build();
+                if (StringUtils.hasText(normalizedKey)
+                        && normalizedKey.equals(tracking.getIdempotencyKey())) {
+                    return success("Label already generated by this request.", already);
+                }
+                return failure(HttpStatus.CONFLICT, ErrorCode.LABEL_ALREADY_GENERATED,
+                        "Order " + existingOrderNo + " already has a generated label ("
+                                + tracking.getTrackingNumber() + ").",
+                        already);
+            }
+            if (tracking != null && tracking.getInFlightSince() != null) {
+                return failure(HttpStatus.CONFLICT, ErrorCode.LABEL_ALREADY_GENERATED,
+                        "Order " + existingOrderNo + " already has a label dispatch in flight "
+                                + "(started " + tracking.getInFlightSince() + "). Wait for it to "
+                                + "settle or let the sweeper reconcile it.");
+            }
+            // Reserve: set in_flight_since on the (existing or new) tracking row.
+            // The legacy body will re-fetch + write this row later; we only
+            // need the sentinel visible to the sweeper + concurrent callers.
+            if (tracking == null) {
+                tracking = new OrderTracking();
+                tracking.setOrderNo(existingOrderNo);
+                tracking.setOrderSuffix(order.getOrderSuffix());
+                tracking.setStatus("PENDING");
+                tracking.setCreatedAt(LocalDateTime.now());
+            }
+            tracking.setInFlightSince(java.time.Instant.now());
+            tracking.setUpdatedAt(LocalDateTime.now());
+            orderTrackingRepository.save(tracking);
+            return null;  // no early-return — proceed to Phase B
+        });
+        if (earlyReturn != null) return earlyReturn;
+
+        // Phase B — legacy body. Still @Transactional-equivalent across
+        // the carrier HTTP; perf-duration split deferred to P4β-full.
+        ApiResponse<LabelGenerationResponse> response;
+        try {
+            response = requiresNewTransactionTemplate.execute(status ->
+                    generateManualLabelLegacyBody(req, user, existingOrderNo));
+        } catch (RuntimeException ex) {
+            // Legacy body threw — Phase C still runs to clear the sentinel.
+            // Re-throw after clearing so the caller sees the original error.
+            clearInFlightSinceForOrder(existingOrderNo);
+            throw ex;
+        }
+
+        // Phase C — short tx: null in_flight_since so the sweeper stops
+        // seeing this row as stuck. Legacy body has already written the
+        // final status (GENERATED / ERROR); we only touch the sentinel.
+        clearInFlightSinceForOrder(existingOrderNo);
+        return response;
+    }
+
+    /**
+     * Perf P3 P4β-full — real three-phase A/B/C tx split for the
+     * manual-label regenerate path. Phase B carrier HTTP runs with NO
+     * DB connection held (the actual tx-duration win).
+     *
+     * <p><b>Status: NOT YET IMPLEMENTED.</b> Delegates to the P4β-
+     * reservation sandwich for now with a WARN. The real implementation
+     * is a ~960-LoC parallel body: Phase A replicates the legacy
+     * preamble (validation + resolve + build DTO + auto-split), Phase B
+     * runs the AuthRetry.withAuthRetry carrier loop, Phase C persists
+     * everything. See docs/perf-p3-sprint.md for the attack plan +
+     * known hazards.
+     *
+     * <p>The sub-flag {@code carrier.tx-split-phase-c.full-manual-regenerate}
+     * is wired through this stub so a future session can replace this
+     * method body without re-threading the dispatcher. Ops flipping the
+     * sub-flag today gets the SAME behaviour as leaving it off — the
+     * WARN log is the signal that no perf win is active yet.
+     */
+    private ApiResponse<LabelGenerationResponse> generateManualLabelRegenerateSplitFull(
+            com.multiship.backend.dto.ManualShipmentRequest req,
+            org.springframework.security.core.userdetails.UserDetails user,
+            Integer existingOrderNo) {
+        log.warn("P4β-full flag=TRUE but full three-phase split not yet implemented for "
+                + "generateManualLabel regenerate path (order={}). Falling through to P4β-reservation "
+                + "sandwich. See docs/perf-p3-sprint.md for the implementation plan.",
+                existingOrderNo);
+        return generateManualLabelRegenerateSplit(req, user, existingOrderNo);
+    }
+
+    private void clearInFlightSinceForOrder(Integer orderNo) {
+        try {
+            requiresNewTransactionTemplate.executeWithoutResult(status -> {
+                OrderTracking tracking = orderTrackingRepository.findByOrderNo(orderNo).orElse(null);
+                if (tracking != null && tracking.getInFlightSince() != null) {
+                    tracking.setInFlightSince(null);
+                    tracking.setUpdatedAt(LocalDateTime.now());
+                    orderTrackingRepository.save(tracking);
+                }
+            });
+        } catch (RuntimeException clearFail) {
+            // In_flight_since stuck on a row the sweeper will resolve.
+            // Don't rethrow — the caller's label result is more important
+            // than a sweeper hint.
+            log.warn("P4β: failed to null in_flight_since for order {} (sweeper will resolve): {}",
+                    orderNo, clearFail.getMessage());
+        }
+    }
+
+    /**
+     * Perf P3 phase 4α — renamed from {@code generateManualLabel} so the
+     * entry point above can route between legacy and (future) split
+     * paths. Body unchanged from pre-P4α; still the ~1,500-line monolith
+     * audited as PERF-B1.
+     */
+    private ApiResponse<LabelGenerationResponse> generateManualLabelLegacyBody(
             com.multiship.backend.dto.ManualShipmentRequest req,
             org.springframework.security.core.userdetails.UserDetails user,
             Integer existingOrderNo) {

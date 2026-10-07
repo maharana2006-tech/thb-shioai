@@ -402,6 +402,30 @@ public class DtcBatchController {
                 .body(merged);
     }
 
+    @Operation(summary = "Batch label order numbers",
+            description = "The generated, non-voided label order numbers of a batch — fed to 'Send to printer' so each "
+                    + "order routes to its client's assigned printer, exactly like the Orders page selection.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping("/{batchId}/label-order-nos")
+    public ResponseEntity<?> batchLabelOrderNos(
+            @PathVariable BigDecimal batchId,
+            @RequestParam(defaultValue = "") String tenantId) {
+
+        String tenant = requireTenant(tenantId);
+        List<DtcOrder> rows = dtcOrderRepository.findByTenantIdAndBatchIdOrderByIdAsc(tenant, batchId)
+                .stream()
+                .filter(r -> "GENERATED".equalsIgnoreCase(
+                        r.getGeneratedStatus() == null ? "" : r.getGeneratedStatus()))
+                .filter(r -> r.getGeneratedOrderNo() != null)
+                .toList();
+        java.util.Set<Integer> voided = voidedOrderNos(rows);
+        List<Integer> orderNos = rows.stream()
+                .map(DtcOrder::getGeneratedOrderNo)
+                .filter(no -> !voided.contains(no))
+                .toList();
+        return ok("Label order numbers", orderNos);
+    }
+
     @Operation(summary = "Distinct ship dates", description = "Date-filter options for the summary page.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @GetMapping("/ship-dates")

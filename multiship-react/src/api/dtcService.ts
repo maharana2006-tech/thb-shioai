@@ -1,4 +1,4 @@
-import { apiClient, BASE_URL } from './apiClient'
+import { apiClient } from './apiClient'
 import type { ApiResponse } from './orderService'
 
 /**
@@ -58,22 +58,12 @@ export const dtcService = {
     apiClient.get<ApiResponse<DtcGenerationJob>>(`/dtc/batches/generation-jobs/${jobId}`),
 
   /**
-   * All GENERATED, non-voided labels of a batch merged into ONE PDF, for the
-   * print dialog (Print / Reprint). 404 when no label is ready yet — the
-   * JSON body's `message` says why.
+   * The generated, non-voided label order numbers of a batch — handed to
+   * "Send to printer" so each routes to its client's assigned printer.
    */
-  labelsPdf: async (batchId: string, tenantId: string): Promise<Blob> => {
-    const res = await fetch(
-      `${BASE_URL}/dtc/batches/${batchId}/labels.pdf?tenantId=${encodeURIComponent(tenantId)}`,
-      { credentials: 'include' },
-    )
-    if (!res.ok) {
-      let msg = `Labels are not ready to print (HTTP ${res.status}).`
-      try { msg = (await res.json())?.message || msg } catch { /* non-JSON body */ }
-      throw Object.assign(new Error(msg), { status: res.status })
-    }
-    return res.blob()
-  },
+  labelOrderNos: (batchId: string, tenantId: string) =>
+    apiClient.get<ApiResponse<number[]>>(
+      `/dtc/batches/${batchId}/label-order-nos?tenantId=${encodeURIComponent(tenantId)}`),
 
   /** Distinct ship dates for the summary-page date filter. */
   shipDates: () => apiClient.get<ApiResponse<string[]>>('/dtc/batches/ship-dates'),

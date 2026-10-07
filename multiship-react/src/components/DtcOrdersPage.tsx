@@ -12,15 +12,15 @@ import { confirmBatchGenerate } from '../utils/dtcConfirm'
 import { useAppSession } from '../hooks/useAppSession'
 import { normalizeRole } from '../utils/roles'
 import { notify } from '../utils/notify'
-import { dtcBatchPath } from '../routes/workspaceRoutes'
+import { dtcBatchPath, settingsPaths } from '../routes/workspaceRoutes'
 import DtcBatchActions from './dtc/DtcBatchActions'
-import { printPdfBlob } from '../utils/printPdf'
+import SendToPrinterDialog from './workspace/SendToPrinterDialog'
 
 /**
  * D2C Automatic Label — Dtcal-style batch summary. One row per (client, batch)
  * in dtc_orders, filled by "Sync from Oracle". Per batch: Details → line
- * history, Print → merged label PDF to the printer, Generate → "Automatic label" run
- * (background job, polled here).
+ * history, Print → Send-to-printer (each order to its client's printer),
+ * Generate → "Automatic label" run (background job, polled here).
  */
 export default function DtcOrdersPage() {
   const navigate = useNavigate()
@@ -176,20 +176,26 @@ export default function DtcOrdersPage() {
   }
 
   const [printingKey, setPrintingKey] = useState<string | null>(null)
+  // Orders handed to the Send-to-printer dialog (null = closed).
+  const [printerOrders, setPrinterOrders] = useState<number[] | null>(null)
 
-  // Print / Reprint: fetch the batch's labels merged into one PDF and send it
-  // straight to the printer (hidden-iframe print dialog) — not a ZIP download.
+  // Print / Reprint: look up the batch's generated label order numbers and open
+  // the Send-to-printer dialog — each order goes to its client's printer, the
+  // same method as the Orders page selection.
   const printBatch = async (b: DtcBatchStats) => {
     const key = rowKey(b)
     if (printingKey) return
     setPrintingKey(key)
     try {
-      const blob = await dtcService.labelsPdf(String(b.batchId), b.tenantId)
-      printPdfBlob(blob)
-      // The server logged the print while building the PDF; re-read so the row says Reprint.
-      window.setTimeout(() => void load(), 2500)
+      const res = await dtcService.labelOrderNos(String(b.batchId), b.tenantId)
+      const nos = res.data ?? []
+      if (nos.length === 0) {
+        notify.info('No printable labels in this batch yet — generate labels first.')
+        return
+      }
+      setPrinterOrders(nos)
     } catch (e) {
-      notify.apiError(e, 'Could not print the batch labels.')
+      notify.apiError(e, 'Could not load the batch labels to print.')
     } finally {
       setPrintingKey(null)
     }
@@ -422,6 +428,15 @@ export default function DtcOrdersPage() {
           }
         />
       </section>
+
+      {printerOrders ? (
+        <SendToPrinterDialog
+          orderNumbers={printerOrders}
+          canManagePrinters={normalizeRole(role) === 'ADMIN'}
+          onClose={() => setPrinterOrders(null)}
+          onOpenSettings={() => { setPrinterOrders(null); navigate(settingsPaths.printers) }}
+        />
+      ) : null}
     </div>
   )
 }
