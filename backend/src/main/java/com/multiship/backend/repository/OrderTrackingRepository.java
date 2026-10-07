@@ -45,6 +45,20 @@ public interface OrderTrackingRepository extends JpaRepository<OrderTracking, Lo
     @Query("SELECT t FROM OrderTracking t WHERE t.orderNo = :orderNo")
     Optional<OrderTracking> findByOrderNoForUpdate(@Param("orderNo") Integer orderNo);
 
+    /** Perf P3 phase 0 — rows whose carrier dispatch started before
+     *  {@code cutoff} and never completed. Scoped by the partial index
+     *  idx_olt_in_flight_since so the scan ignores every settled row. */
+    @Query("SELECT t FROM OrderTracking t WHERE t.inFlightSince IS NOT NULL AND t.inFlightSince < :cutoff")
+    List<OrderTracking> findStuckInFlight(@Param("cutoff") java.time.Instant cutoff,
+                                          org.springframework.data.domain.Pageable pageable);
+
+    /** Perf P3 phase 0 — cluster-wide advisory lock so only one node runs
+     *  the in-flight sweeper per tick. Transaction-scoped: released on
+     *  tx end. Lock id 4831277 unique to this sweeper (sibling to
+     *  writeback 4831276, DTC 4831175). */
+    @Query(value = "SELECT pg_try_advisory_xact_lock(4831277)", nativeQuery = true)
+    Boolean tryAcquireInFlightSweeperLock();
+
     Optional<OrderTracking> findByOrderNoAndOrderSuffix(Integer orderNo, Integer orderSuffix);
 
     List<OrderTracking> findByStatus(String status);

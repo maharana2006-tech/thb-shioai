@@ -443,15 +443,16 @@ public class CarrierServiceImpl implements CarrierService {
         return success("Carrier status loaded successfully.", response);
     }
 
-    // TODO(sprint49-tier2-fix6-followup): method holds a Postgres row lock
-    // (via findByOrderNoForUpdate below) for the entire duration of the
-    // carrier HTTP call. Splitting this into A) reserve IN_FLIGHT +
-    // release lock, B) carrier call, C) persist result — requires an
-    // IN_FLIGHT status column + saga for stuck rows. Deliverable in a
-    // dedicated PR. Interim mitigations shipped in Tier 2:
-    // application.properties sets 30s Hikari leak-detection + 60s tx
-    // timeout, so a wedged carrier call surfaces with a stack trace and
-    // is auto-rolled-back rather than exhausting the pool.
+    // Perf P3 (PERF-B1): method holds a Postgres row lock (via
+    // findByOrderNoForUpdate below) for the entire duration of the
+    // carrier HTTP call. Phase 0 (V131 + in_flight_since + sweeper +
+    // feature flag carrier.tx-split-phase-c) is live; phase 4 is the
+    // caller rewrite that splits this into A) reserve IN_FLIGHT +
+    // release lock, B) carrier call, C) persist result. Interim
+    // mitigations shipped in Tier 2: application.properties sets 30s
+    // Hikari leak-detection + 60s tx timeout, so a wedged carrier call
+    // surfaces with a stack trace and is auto-rolled-back rather than
+    // exhausting the pool.
     @Override
     @Transactional
     @Timed(value = "carrier.generateLabel", description = "Label generation end-to-end (resolve → carrier call → persist).")

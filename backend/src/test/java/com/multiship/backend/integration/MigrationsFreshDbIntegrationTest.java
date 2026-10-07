@@ -57,6 +57,8 @@ class MigrationsFreshDbIntegrationTest {
             "V13__cleanup_legacy_unique_constraints.sql",
             // Sprint 51 follow-up BS-M3: audit_log per-row scope filter.
             "V16__auditlog_client_code.sql",
+            // Perf P3 phase 0: in_flight_since column + partial index on order_label_tracking.
+            "V131__order_label_tracking_in_flight.sql",
     };
 
     protected static final PostgreSQLContainer<?> postgres;

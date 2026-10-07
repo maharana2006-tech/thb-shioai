@@ -50,6 +50,13 @@ public class OrderTracking {
     @Column(name = "status")
     private String status = "PENDING";
 
+    /** Perf P3 phase 0 — set by phase A when a carrier dispatch starts,
+     *  nulled by phase C on completion. Non-null + older than
+     *  {@code carrier.tx-split.in-flight-timeout} = stuck (crash between
+     *  phases B and C) and surfaces via {@code InFlightTrackingSweeper}. */
+    @Column(name = "in_flight_since")
+    private java.time.Instant inFlightSince;
+
     /** Carrier account the label was generated with (feeds account-book usage stats). */
     @Column(name = "account_number", length = 100)
     private String accountNumber;
