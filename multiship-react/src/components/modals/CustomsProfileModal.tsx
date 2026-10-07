@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useFocusTrap } from '../../hooks/useFocusTrap'
 import { notify } from '../../utils/notify'
 import {
+  FiArrowLeft,
   FiBriefcase,
   FiGlobe,
   FiMapPin,
@@ -498,51 +499,88 @@ export default function CustomsProfileModal({
     .map((p) => p[0]?.toUpperCase() ?? '')
     .join('')
 
+  const summaryPill = selectedRegion ? (
+    <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-bold ${
+      asPage ? 'bg-white/15 text-[#f4eede]' : 'bg-[#412d15]/10 text-[#412d15]'
+    }`}>
+      <FiMapPin className="h-3 w-3" />
+      {selectedRegion.region} · {(form.countries ?? []).length} destination{(form.countries ?? []).length === 1 ? '' : 's'}
+    </span>
+  ) : null
+
   const card = (
     <div
       ref={dialogRef}
-      className={`flex w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white ${
-        asPage ? 'mx-auto shadow-sm' : 'max-h-[92vh] shadow-[0_30px_80px_rgba(15,23,42,0.35)]'
+      className={`flex w-full flex-col ${
+        asPage
+          ? 'mx-auto max-w-5xl'
+          : 'max-h-[92vh] max-w-4xl overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]'
       }`}
       onClick={asPage ? undefined : (e) => e.stopPropagation()}
       {...(asPage ? {} : { role: 'dialog' as const, 'aria-modal': true, 'aria-label': 'Importer / Broker profile' })}
     >
-        {/* header */}
-        <div className="flex items-start justify-between gap-3 border-b border-[#eee6d6] px-5 py-4">
-          <div className="flex items-center gap-3">
-            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[#1f150c] text-[14px] font-bold text-[#e1dcc9] shadow-sm">
-              {initials || <FiUsers className="h-4 w-4" />}
-            </span>
-            <div>
-              <p className="inline-flex items-center gap-1.5 text-[10.5px] font-bold uppercase tracking-[0.16em] text-[#b6a684]">
-                <FiGlobe className="h-3.5 w-3.5" /> Importer / Broker profile
-              </p>
-              <h3 className="mt-1 text-[15px] font-semibold text-[#1f150c]">
-                {editing ? 'Edit profile' : 'New profile'}
-                {client ? <span className="text-[#b6a684]"> · {client.name}</span> : null}
-              </h3>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            {/* live summary pill */}
-            {selectedRegion ? (
-              <span className="hidden items-center gap-1.5 rounded-full bg-[#412d15]/10 px-3 py-1.5 text-[11px] font-bold text-[#412d15] sm:inline-flex">
-                <FiMapPin className="h-3 w-3" />
-                {selectedRegion.region} · {(form.countries ?? []).length} destination{(form.countries ?? []).length === 1 ? '' : 's'}
-              </span>
-            ) : null}
+        {asPage ? (
+          /* page hero — espresso banner with Back, title and live summary */
+          <div className="mb-4">
             <button
               type="button"
               onClick={onClose}
-              className="rounded-xl border border-[#e3d9c4] bg-white p-2 text-[#6b5c42] transition hover:bg-[#faf7f0]"
-              aria-label="Close"
+              className="mb-3 inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
             >
-              <FiX className="h-4 w-4" />
+              <FiArrowLeft className="h-3.5 w-3.5" /> Back to profiles
             </button>
+            <div className="flex items-center justify-between gap-4 overflow-hidden rounded-2xl border border-[#412d15]/40 bg-gradient-to-br from-[#241a0f] via-[#2f2113] to-[#412d15] px-6 py-5 text-[#f4eede] shadow-sm">
+              <div className="flex items-center gap-4">
+                <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white/10 text-[15px] font-bold text-[#f4eede] ring-1 ring-white/15">
+                  {initials || <FiUsers className="h-5 w-5" />}
+                </span>
+                <div>
+                  <p className="inline-flex items-center gap-1.5 text-[10.5px] font-bold uppercase tracking-[0.18em] text-[#e1dcc9]/70">
+                    <FiGlobe className="h-3.5 w-3.5" /> Importer / Broker profile
+                  </p>
+                  <h2 className="mt-1 text-[20px] font-semibold tracking-tight">
+                    {editing ? 'Edit profile' : 'New profile'}
+                    {client ? <span className="font-normal text-[#e1dcc9]/75"> · {client.name}</span> : null}
+                  </h2>
+                </div>
+              </div>
+              {summaryPill}
+            </div>
           </div>
-        </div>
+        ) : (
+          /* modal header */
+          <div className="flex items-start justify-between gap-3 border-b border-[#eee6d6] px-5 py-4">
+            <div className="flex items-center gap-3">
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[#1f150c] text-[14px] font-bold text-[#e1dcc9] shadow-sm">
+                {initials || <FiUsers className="h-4 w-4" />}
+              </span>
+              <div>
+                <p className="inline-flex items-center gap-1.5 text-[10.5px] font-bold uppercase tracking-[0.16em] text-[#b6a684]">
+                  <FiGlobe className="h-3.5 w-3.5" /> Importer / Broker profile
+                </p>
+                <h3 className="mt-1 text-[15px] font-semibold text-[#1f150c]">
+                  {editing ? 'Edit profile' : 'New profile'}
+                  {client ? <span className="text-[#b6a684]"> · {client.name}</span> : null}
+                </h3>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="hidden sm:inline-flex">{summaryPill}</span>
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-xl border border-[#e3d9c4] bg-white p-2 text-[#6b5c42] transition hover:bg-[#faf7f0]"
+                aria-label="Close"
+              >
+                <FiX className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        )}
 
-        <div className="flex-1 space-y-3.5 overflow-y-auto bg-[#faf7f0]/50 px-5 py-4">
+        <div className={asPage
+          ? 'space-y-4'
+          : 'flex-1 space-y-3.5 overflow-y-auto bg-[#faf7f0]/50 px-5 py-4'}>
           {/* 1 — Client & destinations */}
           <Section
             step="1"
@@ -805,8 +843,10 @@ export default function CustomsProfileModal({
           </Section>
         </div>
 
-        {/* footer */}
-        <div className="flex items-center justify-between gap-3 border-t border-[#eee6d6] px-5 py-4">
+        {/* footer — sticky action bar on the page, plain footer in the modal */}
+        <div className={asPage
+          ? 'sticky bottom-0 z-10 mt-4 flex items-center justify-between gap-3 rounded-2xl border border-[#e3d9c4] bg-white/90 px-4 py-3 shadow-[0_-6px_24px_rgba(31,21,12,0.08)] backdrop-blur'
+          : 'flex items-center justify-between gap-3 border-t border-[#eee6d6] px-5 py-4'}>
           <div>
             {editing ? (
               <button

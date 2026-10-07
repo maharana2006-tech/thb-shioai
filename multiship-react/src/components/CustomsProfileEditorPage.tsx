@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
-import { FiArrowLeft } from 'react-icons/fi'
 import CustomsProfileModal from './modals/CustomsProfileModal'
 import { clientService, type Client } from '../api/clientService'
 import { customsProfileService, type CustomsProfile } from '../api/customsProfileService'
@@ -64,22 +63,9 @@ export default function CustomsProfileEditorPage() {
   const back = () => navigate(settingsPaths.importerBroker)
 
   return (
-    <div className="space-y-3 pb-8">
-      <div className="flex items-center gap-2 px-1 pt-1">
-        <button
-          type="button"
-          onClick={back}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
-        >
-          <FiArrowLeft className="h-3.5 w-3.5" /> Back to profiles
-        </button>
-        <h2 className="text-[17px] font-semibold tracking-tight text-[#1f150c]">
-          {editing ? 'Edit importer / broker profile' : 'New importer / broker profile'}
-        </h2>
-      </div>
-
+    <div className="pb-8">
       {loading ? (
-        <p className="px-1 text-[13px] text-[#6b5c42]">Loading…</p>
+        <p className="px-1 py-6 text-[13px] text-[#6b5c42]">Loading…</p>
       ) : (
         <CustomsProfileModal
           asPage
