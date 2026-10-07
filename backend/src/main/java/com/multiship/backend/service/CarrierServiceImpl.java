@@ -1356,11 +1356,6 @@ public class CarrierServiceImpl implements CarrierService {
      * as a manual order (label_batch.is_manual = 'Y') + tracking so it appears in
      * the queue/archive and its label document renders.
      */
-    // TODO(sprint49-tier2-fix6-followup): method-level @Transactional
-    // holds the DB connection during the carrier HTTP call (5-15s RTT).
-    // Follow-up will split into validate → carrier-call (no tx) →
-    // persist-result (@Transactional). Interim: 60s tx timeout in
-    // application.properties bounds the worst case.
     @Override
     public ApiResponse<LabelGenerationResponse> generateManualLabel(
             com.multiship.backend.dto.ManualShipmentRequest req,
@@ -1374,11 +1369,62 @@ public class CarrierServiceImpl implements CarrierService {
      * existing order is UPDATED in place and re-labelled — the "fix a failed
      * order and regenerate" flow, which corrects the shipment data and flips the
      * order ERROR → GENERATED on the same order number.
+     *
+     * <p>Perf P3 phase 4α (dispatcher): previously {@code @Transactional}; now
+     * the annotation is removed and the body is wrapped in
+     * {@code requiresNewTransactionTemplate.execute(...)} for equivalent
+     * single-tx semantics (this method is only called from controllers /
+     * import workers — no caller tx to join). When
+     * {@code carrier.tx-split-phase-c=true} is flipped, this method still
+     * runs the legacy body: the actual three-phase split for the
+     * ~1,500-line {@link #generateManualLabelLegacyBody} is scheduled as
+     * P4β-P4δ in {@code project_perf_p3_sprint.md}. The flag toggle is
+     * accepted here so ops can enable it at the control-plane boundary
+     * without a redeploy once the split lands.
      */
     @Override
-    @org.springframework.transaction.annotation.Transactional
     @Timed(value = "carrier.generateManualLabel", description = "Manual (ad-hoc) label generation.")
     public ApiResponse<LabelGenerationResponse> generateManualLabel(
+            com.multiship.backend.dto.ManualShipmentRequest req,
+            org.springframework.security.core.userdetails.UserDetails user,
+            Integer existingOrderNo) {
+        if (phaseSplitEnabled && requiresNewTransactionTemplate != null) {
+            return generateManualLabelSplit(req, user, existingOrderNo);
+        }
+        if (requiresNewTransactionTemplate != null) {
+            return requiresNewTransactionTemplate.execute(status ->
+                    generateManualLabelLegacyBody(req, user, existingOrderNo));
+        }
+        return generateManualLabelLegacyBody(req, user, existingOrderNo);
+    }
+
+    /**
+     * Perf P3 phase 4α — split-path entry stub. Delegates to the legacy
+     * body for now. P4β-P4δ will replace the delegation with a three-
+     * phase A/B/C split matching the pattern in {@link #generateLabelSplit}.
+     *
+     * <p>Why a stub ships before the real split: the flag toggle
+     * {@code carrier.tx-split-phase-c} is already covered by the void,
+     * MW, and generateLabel paths; manual-label is the odd one out. The
+     * stub lets ops flip the flag without creating a per-path exception
+     * ("this flag covers X but not Y"). Current behaviour under the flag
+     * for manual-label is byte-identical to flag OFF.
+     */
+    private ApiResponse<LabelGenerationResponse> generateManualLabelSplit(
+            com.multiship.backend.dto.ManualShipmentRequest req,
+            org.springframework.security.core.userdetails.UserDetails user,
+            Integer existingOrderNo) {
+        return requiresNewTransactionTemplate.execute(status ->
+                generateManualLabelLegacyBody(req, user, existingOrderNo));
+    }
+
+    /**
+     * Perf P3 phase 4α — renamed from {@code generateManualLabel} so the
+     * entry point above can route between legacy and (future) split
+     * paths. Body unchanged from pre-P4α; still the ~1,500-line monolith
+     * audited as PERF-B1.
+     */
+    private ApiResponse<LabelGenerationResponse> generateManualLabelLegacyBody(
             com.multiship.backend.dto.ManualShipmentRequest req,
             org.springframework.security.core.userdetails.UserDetails user,
             Integer existingOrderNo) {
