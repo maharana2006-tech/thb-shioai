@@ -6,6 +6,7 @@ import { manifestService, type EodEvent, type ManifestResponse } from '../api/ma
 import { clientService, type Client } from '../api/clientService'
 import { settingsPaths } from '../routes/workspaceRoutes'
 import { isAbortError } from '../api/apiClient'
+import { useConnectedCarriers } from '../hooks/useConnectedCarriers'
 import { notify } from '../utils/notify'
 
 /**
@@ -49,6 +50,13 @@ export default function PickupsEodPage() {
   const [events, setEvents] = useState<EodEvent[]>([])
   const [loadingEvents, setLoadingEvents] = useState(false)
 
+  // Only carriers connected on this app; null (loading/failed) = show all.
+  const connected = useConnectedCarriers()
+  const closeCarriers = connected && connected.size > 0
+    ? CLOSE_CARRIERS.filter((c) => connected.has(c)) : [...CLOSE_CARRIERS]
+  const pickupCarriers = connected && connected.size > 0
+    ? PICKUP_CARRIERS.filter((c) => connected.has(c)) : [...PICKUP_CARRIERS]
+
   // ── Close-out form ──
   const [closeCarrier, setCloseCarrier] = useState<string>('FEDEX')
   const [closeClient, setCloseClient] = useState('')
@@ -70,6 +78,16 @@ export default function PickupsEodPage() {
 
   const setP = (k: keyof PickupRequest) => (v: string | number) =>
     setPickup((cur) => ({ ...cur, [k]: v }))
+
+  // When connected carriers load, move off a default carrier that isn't connected.
+  useEffect(() => {
+    if (!connected || connected.size === 0) return
+    if (!connected.has(closeCarrier) && closeCarriers.length > 0) setCloseCarrier(closeCarriers[0])
+    if (!connected.has(pickup.carrierCode) && pickupCarriers.length > 0) {
+      setPickup((cur) => ({ ...cur, carrierCode: pickupCarriers[0] }))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected])
 
   const loadEvents = useCallback(async () => {
     setLoadingEvents(true)
@@ -172,7 +190,7 @@ export default function PickupsEodPage() {
             <div>
               <span className={label}>Carrier</span>
               <select className={input} value={closeCarrier} onChange={(e) => setCloseCarrier(e.target.value)}>
-                {CLOSE_CARRIERS.map((c) => <option key={c} value={c}>{c}</option>)}
+                {closeCarriers.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
             <div>
@@ -231,7 +249,7 @@ export default function PickupsEodPage() {
             <div>
               <span className={label}>Carrier</span>
               <select className={input} value={pickup.carrierCode} onChange={(e) => setP('carrierCode')(e.target.value)}>
-                {PICKUP_CARRIERS.map((c) => <option key={c} value={c}>{c}</option>)}
+                {pickupCarriers.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
             <div>

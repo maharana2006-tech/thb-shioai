@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   FiAlertCircle,
   FiAlertTriangle,
@@ -15,6 +15,7 @@ import { Link } from 'react-router-dom'
 import { manifestService, type ManifestEntry, type ManifestRequest, type ManifestResponse } from '../../api/manifestService'
 import { notify } from '../../utils/notify'
 import { useModalDismiss } from '../../hooks/useModalDismiss'
+import { useConnectedCarriers } from '../../hooks/useConnectedCarriers'
 import { settingsPaths } from '../../routes/workspaceRoutes'
 
 /**
@@ -75,6 +76,18 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
   const [submitting, setSubmitting] = useState(false)
 
   const update = (patch: Partial<ManifestRequest>) => setForm((f) => ({ ...f, ...patch }))
+
+  // Show only carriers connected on this app (active account); null = unknown
+  // (loading / failed) → fall back to all carriers so the picker still works.
+  const connected = useConnectedCarriers()
+  const carriers = connected && connected.size > 0
+    ? CARRIERS.filter((c) => connected.has(c.code)) : [...CARRIERS]
+  useEffect(() => {
+    if (connected && connected.size > 0 && !connected.has(form.carrierCode) && carriers.length > 0) {
+      update({ carrierCode: carriers[0].code })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected])
 
   const parsedTracking = trackingText
     .split(/\s+/)
@@ -187,11 +200,11 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
           <div className="grid gap-3 md:grid-cols-2 md:items-start">
           <Section icon={<FiTruck className="h-3.5 w-3.5" />} title="Carrier & date">
             <span className="mb-1 block text-[10.5px] font-semibold text-[#5a4526]">Carrier</span>
-            <div className="grid grid-cols-4 gap-2">
-              {CARRIERS.map((c) => (
+            <div className="flex flex-wrap gap-2">
+              {carriers.map((c) => (
                 <button key={c.code} type="button"
                         onClick={() => update({ carrierCode: c.code })}
-                        className={pillCls(form.carrierCode === c.code)}>
+                        className={`${pillCls(form.carrierCode === c.code)} min-w-[76px] flex-1`}>
                   {c.name}
                 </button>
               ))}

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { FiAlertCircle, FiCalendar, FiCheckCircle, FiMapPin, FiPackage, FiTruck, FiX } from 'react-icons/fi'
 import { pickupService, type PickupRequest, type PickupResponse } from '../../api/pickupService'
@@ -13,6 +13,7 @@ import {
   validateZip,
 } from '../../utils/clientValidation'
 import { useModalDismiss } from '../../hooks/useModalDismiss'
+import { useConnectedCarriers } from '../../hooks/useConnectedCarriers'
 
 /**
  * Sprint 33 — schedule a courier pickup. Modal collects carrier, date,
@@ -96,6 +97,19 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
 
   const update = (patch: Partial<PickupRequest>) => setForm((f) => ({ ...f, ...patch }))
   const touch = (k: FieldKey) => setTouched((t) => (t[k] ? t : { ...t, [k]: true }))
+
+  // Show only carriers connected on this app (those with an active account);
+  // null = unknown (loading / lookup failed) → fall back to all carriers.
+  const connected = useConnectedCarriers()
+  const carriers = connected && connected.size > 0
+    ? CARRIERS.filter((c) => connected.has(c.code)) : [...CARRIERS]
+  // If the default carrier isn't connected, select the first one that is.
+  useEffect(() => {
+    if (connected && connected.size > 0 && !connected.has(form.carrierCode) && carriers.length > 0) {
+      update({ carrierCode: carriers[0].code })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected])
 
   /** Per-field errors — same validator set as the client wizard / warehouse
    *  modal so messages and limits stay consistent app-wide. */
@@ -271,11 +285,11 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
           <Section icon={<FiCalendar className="h-3.5 w-3.5" />} title="Carrier & schedule">
             {/* Carrier — segmented pills instead of a dropdown. */}
             <span className="mb-1 block text-[10.5px] font-semibold text-[#5a4526]">Carrier <span className="text-rose-500">*</span></span>
-            <div className="grid grid-cols-4 gap-2">
-              {CARRIERS.map((c) => (
+            <div className="flex flex-wrap gap-2">
+              {carriers.map((c) => (
                 <button key={c.code} type="button"
                         onClick={() => { update({ carrierCode: c.code }); touch('carrierCode') }}
-                        className={pillCls(form.carrierCode === c.code)}>
+                        className={`${pillCls(form.carrierCode === c.code)} min-w-[76px] flex-1`}>
                   <FiTruck className="h-3.5 w-3.5" /> {c.name}
                 </button>
               ))}
