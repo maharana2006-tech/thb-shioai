@@ -102,6 +102,37 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
     }
   }
 
+  // Shared with Settings → Pickups & End-of-Day: close the whole day for this
+  // carrier (the backend gathers the day's open labels) rather than only the
+  // typed/selected trackings. Same POST /manifests/close-day path.
+  const submitWholeDay = async () => {
+    if (!form.carrierCode) return
+    setSubmitting(true)
+    setResult(null)
+    try {
+      const response = await manifestService.closeOutDay({
+        carrierCode: form.carrierCode,
+        customerNo: form.customerNo,
+        closeDate: form.closeDate,
+      })
+      const d = response.data ?? null
+      setResult(d)
+      if (d?.status === 'MANIFESTED') {
+        notify.success(`Manifested ${d.trackingCount} shipment(s)${d.manifestId ? ` · ${d.manifestId}` : ''}`)
+      } else if (d?.status === 'EMPTY') {
+        notify.info(d.message)
+      } else if (d?.status === 'PARTIAL') {
+        notify.info(d.message)
+      } else if (d) {
+        notify.error(d.message)
+      }
+    } catch (e) {
+      notify.apiError(e, 'Close-out call failed.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   return (
     <div
       role="dialog"
@@ -213,17 +244,26 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
           {result ? <ResultBanner result={result} /> : null}
         </div>
 
-        <div className="flex items-center justify-end gap-2 border-t border-slate-100 px-5 py-3">
-          <button type="button" onClick={onClose}
-                  className="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-700 hover:bg-slate-50">
-            Close
-          </button>
-          <button type="button" disabled={!canSubmit || submitting}
-                  onClick={() => void submit()}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-slate-950 px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-slate-800 disabled:opacity-40">
+        <div className="flex items-center justify-between gap-2 border-t border-slate-100 px-5 py-3">
+          <button type="button" disabled={!form.carrierCode || submitting}
+                  onClick={() => void submitWholeDay()}
+                  title={`Close every open ${form.carrierCode} label for ${form.closeDate} (ignores the list above)`}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-40">
             <FiFileText className="h-3 w-3" />
-            {submitting ? 'Manifesting…' : 'Close out'}
+            Close whole day
           </button>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={onClose}
+                    className="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-700 hover:bg-slate-50">
+              Close
+            </button>
+            <button type="button" disabled={!canSubmit || submitting}
+                    onClick={() => void submit()}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-slate-950 px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-slate-800 disabled:opacity-40">
+              <FiFileText className="h-3 w-3" />
+              {submitting ? 'Manifesting…' : 'Close out selected'}
+            </button>
+          </div>
         </div>
       </div>
     </div>
