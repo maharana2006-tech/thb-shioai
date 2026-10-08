@@ -35,14 +35,22 @@ export interface CloseOutModalProps {
 }
 
 const CARRIERS = [
-  { code: 'UPS', label: 'UPS · End of Day' },
-  { code: 'FEDEX', label: 'FedEx · CloseShipment' },
-  { code: 'USPS', label: 'USPS · SCAN Form' },
-  { code: 'DHL', label: 'DHL · (via pickup)' },
+  { code: 'UPS', name: 'UPS', method: 'End of Day manifest' },
+  { code: 'FEDEX', name: 'FedEx', method: 'Ground CloseShipment' },
+  { code: 'USPS', name: 'USPS', method: 'SCAN Form' },
+  { code: 'DHL', name: 'DHL', method: 'manifest is implicit via the pickup — no separate close call' },
 ] as const
 
 const inputCls =
   'w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12.5px] text-[#1f150c] outline-none transition focus:border-[#412d15] focus:ring-1 focus:ring-[#412d15]'
+
+/** Segmented-pill button class (selected = espresso filled). */
+const pillCls = (active: boolean) =>
+  `inline-flex items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-[12px] font-semibold transition ${
+    active
+      ? 'border-[#1f150c] bg-[#1f150c] text-[#f4eede]'
+      : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
+  }`
 
 export default function CloseOutModal({ onClose, trackingNumbers, defaults }: CloseOutModalProps) {
   // A11y audit — focus trap + Escape-to-close + focus restoration.
@@ -140,7 +148,7 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
     >
       <div
         ref={dialogRef}
-        className="flex h-[min(720px,92vh)] w-full max-w-[640px] flex-col overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-[0_30px_80px_rgba(31,21,12,0.35)]"
+        className="flex max-h-[94vh] w-full max-w-[860px] flex-col overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-[0_30px_80px_rgba(31,21,12,0.35)]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* header */}
@@ -175,49 +183,53 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
           </button>
         </div>
 
-        <div className="flex-1 space-y-3 overflow-y-auto bg-[#faf7f0]/50 px-5 py-4">
-          <Section icon={<FiTruck className="h-3.5 w-3.5" />} title="Carrier & date">
-            <div className="grid grid-cols-2 gap-2.5">
-              <Field label="Carrier">
-                <select className={inputCls} value={form.carrierCode}
-                        onChange={(e) => update({ carrierCode: e.target.value })}>
-                  {CARRIERS.map((c) => (
-                    <option key={c.code} value={c.code}>{c.label}</option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Close date">
-                <div className="relative">
-                  <input type="date" className={inputCls}
-                         value={form.closeDate ?? ''}
-                         onChange={(e) => update({ closeDate: e.target.value })} />
-                  <FiCalendar className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-[#b6a684]" />
-                </div>
-              </Field>
-            </div>
-            {form.carrierCode === 'DHL' ? (
-              <p className="mt-2 flex items-start gap-1 text-[10.5px] text-[#9a8b70]">
-                <FiAlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
-                DHL manifests are implicit via the pickup request — no separate close-out call.
+        <div className="grid flex-1 grid-cols-1 gap-3 overflow-y-auto bg-[#faf7f0]/50 px-5 py-4 md:grid-cols-2 md:items-start">
+          {/* Left column — what to close */}
+          <div className="space-y-3">
+            <Section icon={<FiTruck className="h-3.5 w-3.5" />} title="Carrier & date">
+              <span className="mb-1 block text-[10.5px] font-semibold text-[#5a4526]">Carrier</span>
+              <div className="grid grid-cols-4 gap-2">
+                {CARRIERS.map((c) => (
+                  <button key={c.code} type="button"
+                          onClick={() => update({ carrierCode: c.code })}
+                          className={pillCls(form.carrierCode === c.code)}>
+                    {c.name}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-1.5 flex items-start gap-1 text-[10.5px] text-[#9a8b70]">
+                {form.carrierCode === 'DHL' ? <FiAlertTriangle className="mt-0.5 h-3 w-3 shrink-0" /> : null}
+                {CARRIERS.find((c) => c.code === form.carrierCode)?.method}
               </p>
-            ) : null}
-          </Section>
+              <div className="mt-3">
+                <Field label="Close date">
+                  <div className="relative">
+                    <input type="date" className={inputCls}
+                           value={form.closeDate ?? ''}
+                           onChange={(e) => update({ closeDate: e.target.value })} />
+                    <FiCalendar className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-[#b6a684]" />
+                  </div>
+                </Field>
+              </div>
+            </Section>
 
-          <Section icon={<FiHash className="h-3.5 w-3.5" />} title={`Tracking numbers (${parsedTracking.length})`}
-                   hint="prefilled from today's labels">
-            <textarea
-              rows={6}
-              className={`${inputCls} font-mono text-[11.5px]`}
-              value={trackingText}
-              onChange={(e) => setTrackingText(e.target.value)}
-              placeholder="One tracking number per line…"
-            />
-            <p className="mt-1.5 text-[10.5px] text-[#9a8b70]">
-              Edit to exclude any — or use <span className="font-semibold text-[#6b5c42]">Close whole day</span> to let the
-              server gather every open {form.carrierCode} label for the date.
-            </p>
-          </Section>
+            <Section icon={<FiHash className="h-3.5 w-3.5" />} title={`Tracking numbers (${parsedTracking.length})`}
+                     hint="prefilled">
+              <textarea
+                rows={5}
+                className={`${inputCls} font-mono text-[11.5px]`}
+                value={trackingText}
+                onChange={(e) => setTrackingText(e.target.value)}
+                placeholder="One tracking number per line…"
+              />
+              <p className="mt-1.5 text-[10.5px] text-[#9a8b70]">
+                Edit to exclude any — or use <span className="font-semibold text-[#6b5c42]">Close whole day</span> to let the
+                server gather every open {form.carrierCode} label for the date.
+              </p>
+            </Section>
+          </div>
 
+          {/* Right column — optional manifest header address */}
           <Section icon={<FiMapPin className="h-3.5 w-3.5" />} title="Ship-from address" hint="optional">
             <div className="grid grid-cols-2 gap-2.5">
               <Field label="Name">
@@ -248,7 +260,7 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
             </div>
           </Section>
 
-          {result ? <ResultBanner result={result} /> : null}
+          {result ? <div className="md:col-span-2"><ResultBanner result={result} /></div> : null}
         </div>
 
         {/* footer */}
