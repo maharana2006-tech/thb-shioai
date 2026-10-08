@@ -1,6 +1,6 @@
-import { useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { FiAlertCircle, FiCalendar, FiCheckCircle, FiTruck, FiX } from 'react-icons/fi'
+import { FiAlertCircle, FiCalendar, FiCheckCircle, FiMapPin, FiPackage, FiTruck, FiX } from 'react-icons/fi'
 import { pickupService, type PickupRequest, type PickupResponse } from '../../api/pickupService'
 import { settingsPaths } from '../../routes/workspaceRoutes'
 import { notify } from '../../utils/notify'
@@ -218,36 +218,39 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3 border-b border-[#eee6d6] px-5 py-4">
-          <div>
-            <p className="inline-flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-[0.16em] text-[#6b5c42]">
-              <FiTruck className="h-3 w-3" /> Pickup
-            </p>
-            <h3 className="mt-1 text-[15px] font-semibold text-[#1f150c]">
-              Schedule courier pickup
-            </h3>
-            <p className="mt-1 text-[11.5px] text-[#6b5c42]">
-              Books a driver to collect the parcels at your ship-from address.
-            </p>
-            <p className="mt-1 text-[11px] text-[#a1906d]">
-              Manage pickups and end-of-day close in{' '}
-              <Link to={settingsPaths.pickupsEod} onClick={onClose} className="font-semibold text-[#5a4526] underline">
-                Pickups &amp; End-of-Day
-              </Link>.
-            </p>
+          <div className="flex items-start gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#1f150c] text-[#f4eede] shadow-sm">
+              <FiTruck className="h-4 w-4" />
+            </span>
+            <div>
+              <p className="inline-flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-[0.16em] text-[#b6a684]">
+                Pickup
+              </p>
+              <h3 className="mt-0.5 text-[15px] font-semibold text-[#1f150c]">Schedule courier pickup</h3>
+              <p className="mt-1 text-[11.5px] text-[#6b5c42]">
+                Books a driver to collect the parcels at your ship-from address.
+              </p>
+              <p className="mt-1 text-[11px] text-[#a1906d]">
+                Manage pickups and end-of-day close in{' '}
+                <Link to={settingsPaths.pickupsEod} onClick={onClose} className="font-semibold text-[#5a4526] underline">
+                  Pickups &amp; End-of-Day
+                </Link>.
+              </p>
+            </div>
           </div>
           <button
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#6b5c42] transition hover:bg-[#faf7f0]"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#6b5c42] transition hover:bg-[#faf7f0]"
           >
             <FiX className="h-3.5 w-3.5" />
           </button>
         </div>
 
-        <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
-          <Section title="Carrier + date">
-            <div className="grid grid-cols-2 gap-2">
+        <div className="flex-1 space-y-3 overflow-y-auto bg-[#faf7f0]/50 px-5 py-4">
+          <Section icon={<FiCalendar className="h-3.5 w-3.5" />} title="Carrier & schedule">
+            <div className="grid grid-cols-2 gap-2.5">
               <Field label="Carrier" required error={err('carrierCode')}>
                 <select className={inputCls('carrierCode')} value={form.carrierCode}
                         onChange={(e) => update({ carrierCode: e.target.value })}
@@ -299,8 +302,8 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
             </div>
           </Section>
 
-          <Section title="Pickup address">
-            <div className="grid grid-cols-2 gap-2">
+          <Section icon={<FiMapPin className="h-3.5 w-3.5" />} title="Pickup address">
+            <div className="grid grid-cols-2 gap-2.5">
               <Field label="Contact name" required error={err('contactName')}>
                 <input className={inputCls('contactName')} value={form.contactName}
                        maxLength={FIELD_LIMITS.addr.name}
@@ -353,8 +356,8 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
             </div>
           </Section>
 
-          <Section title="Parcels">
-            <div className="grid grid-cols-3 gap-2">
+          <Section icon={<FiPackage className="h-3.5 w-3.5" />} title="Parcels">
+            <div className="grid grid-cols-3 gap-2.5">
               <Field label="Package count" required error={err('packageCount')}>
                 <input type="number" min="1" max={MAX_PACKAGE_COUNT} step="1" className={inputCls('packageCount')}
                        value={form.packageCount}
@@ -473,13 +476,16 @@ function ResultBanner({ result }: { result: PickupResponse }) {
   )
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+/** Icon-badged section card — shared look with the Close-out modal. */
+function Section({ icon, title, hint, children }: { icon: ReactNode; title: string; hint?: string; children: ReactNode }) {
   return (
-    <section>
-      <h4 className="mb-1.5 text-[10.5px] font-bold uppercase tracking-[0.14em] text-[#6b5c42]">
-        {title}
-      </h4>
-      {children}
+    <section className="overflow-hidden rounded-xl border border-[#eee6d6] bg-white">
+      <div className="flex items-center gap-2 border-b border-[#f3ecdd] bg-[#faf7f0]/60 px-3 py-2">
+        <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-[#f4eede] text-[#412d15]">{icon}</span>
+        <h4 className="text-[12px] font-semibold text-[#1f150c]">{title}</h4>
+        {hint ? <span className="ml-auto text-[10px] font-semibold uppercase tracking-wide text-[#b6a684]">{hint}</span> : null}
+      </div>
+      <div className="p-3">{children}</div>
     </section>
   )
 }
