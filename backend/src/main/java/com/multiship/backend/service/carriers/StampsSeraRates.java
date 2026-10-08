@@ -67,8 +67,14 @@ public class StampsSeraRates {
     /** Field-injected so unit tests can construct the helper with the
      *  2-arg constructor; the StampsConnector delegate is only used to
      *  reuse the shared per-piece-aggregator helper. Field-null-tolerant
-     *  via the flatten() fallback. */
+     *  via the flatten() fallback.
+     *
+     *  <p>{@code @Lazy} breaks the Spring bean cycle with
+     *  StampsConnector#stampsSeraRates (Spring 4.x prohibits cycles by
+     *  default). Proxied back-reference resolves on first call, by which
+     *  time both beans are fully constructed. */
     @Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
     private StampsConnector stampsConnector;
 
     private static final String CARRIER_CODE = "USPS";
