@@ -93,19 +93,21 @@ const credentialLabelsFor = (carrierCode: string) => {
   }
   if (normalized === 'USPS') {
     return {
-      accountNumberLabel: 'Username',
-      accountNumberPlaceholder: 'Your Stamps.com account username',
-      idLong: 'IntegrationID',
-      secretLong: 'Password',
-      idShort: 'IntegrationID',
-      secretShort: 'password',
-      // Placeholder + helper cover BOTH SWSIM (legacy SOAP, GUID
-      // IntegrationID) and SERA (REST OAuth, opaque client_id). The
-      // site-wide flavor toggle (Settings → System) picks which one
-      // is active; operator's key must match that flavor's shape.
-      idPlaceholder: 'GUID for SWSIM (01234567-…) OR opaque client_id for SERA (Az…)',
+      // SERA is the live flavor (carrier.stamps.api-flavor=SERA by default);
+      // labels match the SERA OAuth developer-portal vocabulary. SWSIM is
+      // still supported — the backend's getAccessToken branches on the
+      // flavor and the GUID normaliser only runs on SWSIM input, so an
+      // operator on SWSIM pastes their IntegrationID into the Client ID
+      // slot and it still works. Helper spells both out.
+      accountNumberLabel: 'Account number',
+      accountNumberPlaceholder: 'Your Stamps.com account number',
+      idLong: 'Client ID',
+      secretLong: 'Client Secret',
+      idShort: 'client ID',
+      secretShort: 'client secret',
+      idPlaceholder: 'opaque client_id for SERA (e.g. Az…) OR GUID IntegrationID for SWSIM (01234567-…)',
       helper:
-        'Stamps.com: paste the credential matching the API flavor selected in Settings → System. SWSIM (legacy SOAP) uses a GUID IntegrationID from developer.stamps.com — braces {…}, urn:uuid: prefix, and no-hyphens variants are auto-normalised. SERA (OAuth REST) uses an opaque client_id string. Username + Password / secret are the end-user\'s Stamps.com account credentials for either flavor.',
+        'Stamps.com SERA (REST OAuth, default): paste the opaque client_id + client_secret from developer.stamps.com. After saving, an ADMIN clicks "Authorize with Stamps.com" on the account row to complete the one-time browser consent that mints the refresh_token. SWSIM (legacy SOAP): use the GUID IntegrationID as the Client ID (braces {…}, urn:uuid: prefix, and no-hyphens variants are auto-normalised) and the end-user password as the Client Secret. The flavor is picked site-wide in Settings → System.',
     }
   }
   if (normalized === 'DHL') {

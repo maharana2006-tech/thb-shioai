@@ -217,8 +217,8 @@ describe('CarrierConnections · USPS drawer · STAMPS_COM mode', () => {
     // doesn't false-positive.
     await waitFor(() => {
       const labels = labelSpanTexts(dialog)
-      expect(labels).toContain('IntegrationID')
-      expect(labels).toContain('Password')
+      expect(labels).toContain('Client ID')
+      expect(labels).toContain('Client Secret')
     })
 
     // USPS Direct sub-panel and its fields must NOT be rendered.
@@ -251,8 +251,8 @@ describe('CarrierConnections · USPS drawer · PROVISIONING mode', () => {
 
     // Stamps-mode credential fields still present.
     const labels = labelSpanTexts(dialog)
-    expect(labels).toContain('IntegrationID')
-    expect(labels).toContain('Password')
+    expect(labels).toContain('Client ID')
+    expect(labels).toContain('Client Secret')
 
     // Stamps pill + USPS Direct pill both present.
     expect(within(dialog).getByText(/Active provider · Stamps\.com/i)).toBeTruthy()
@@ -289,7 +289,7 @@ describe('CarrierConnections · USPS drawer · USPS_DIRECT mode', () => {
     // (Step-4 summary references are OK — they're inside a summary, not
     // a <label>).
     const labels = labelSpanTexts(dialog)
-    expect(labels).not.toContain('IntegrationID')
+    expect(labels).not.toContain('Client ID')
     // Rotate-credentials chrome is Stamps-only too.
     expect(within(dialog).queryByText(/Rotate credentials/i)).toBeNull()
   })
@@ -320,9 +320,9 @@ describe('CarrierConnections · USPS drawer · payload shape', () => {
       if (!found) throw new Error(`label ${text} missing`)
       return found.querySelector('input, select') as HTMLElement
     }
-    await user.type(labelInput('Username'), 'stamps-user-01')
-    await user.type(labelInput('IntegrationID'), '01234567-89ab-cdef-0123-456789abcdef')
-    await user.type(labelInput('Password'), 'stamps-pass-abc')
+    await user.type(labelInput('Account number'), 'stamps-user-01')
+    await user.type(labelInput('Client ID'), '01234567-89ab-cdef-0123-456789abcdef')
+    await user.type(labelInput('Client Secret'), 'stamps-pass-abc')
 
     await user.click(
       within(dialog).getByRole('button', { name: /save to account book/i }),
