@@ -88,7 +88,9 @@ class ManifestServiceImplFleetSplitTest {
         service = new ManifestServiceImpl(
                 carrierService, accountRepo,
                 new TenantScopeEnforcer(new AccessScopePolicy(false)),
-                trackingRepo, orderRepo, clientShipviaRepo, serviceRepo);
+                trackingRepo, orderRepo, clientShipviaRepo, serviceRepo,
+                mock(com.multiship.backend.repository.CarrierEodLogRepository.class),
+                mock(com.multiship.backend.service.CarrierEodLogger.class));
     }
 
     // ===== single-fleet case (back-compat) =====
@@ -227,8 +229,8 @@ class ManifestServiceImplFleetSplitTest {
         stubTracking("1Z-G1", 100, "P80", "ACME");
         stubClientShipvia("ACME", "P80", 10L);
         stubShippingService(10L, false);
-        when(trackingRepo.findByTrackingNumberIgnoreCase("MYSTERY-1")).thenReturn(Optional.empty());
-        when(trackingRepo.findByTrackingNumberIgnoreCase("MYSTERY-2")).thenReturn(Optional.empty());
+        when(trackingRepo.findFirstByTrackingNumberIgnoreCaseOrderByIdDesc("MYSTERY-1")).thenReturn(Optional.empty());
+        when(trackingRepo.findFirstByTrackingNumberIgnoreCaseOrderByIdDesc("MYSTERY-2")).thenReturn(Optional.empty());
 
         when(connector.closeOutDay(any(CloseOutRequest.class), anyString(), anyString()))
                 .thenReturn(new CloseOutResult("FEDEX", "GROUP-G", null, null, 1, "MANIFESTED", "ok", "{}"));
@@ -246,7 +248,7 @@ class ManifestServiceImplFleetSplitTest {
 
     @Test
     void all_trackings_unresolvable_returns_error_with_failedToClassify() {
-        when(trackingRepo.findByTrackingNumberIgnoreCase(anyString())).thenReturn(Optional.empty());
+        when(trackingRepo.findFirstByTrackingNumberIgnoreCaseOrderByIdDesc(anyString())).thenReturn(Optional.empty());
 
         ManifestResponseDTO body = service.closeOut(request("FEDEX", "ACME",
                 List.of("X", "Y", "Z"))).getData();
@@ -299,7 +301,7 @@ class ManifestServiceImplFleetSplitTest {
         OrderTracking ot = new OrderTracking();
         ot.setOrderNo(orderNo);
         ot.setTrackingNumber(trackingNumber);
-        when(trackingRepo.findByTrackingNumberIgnoreCase(trackingNumber)).thenReturn(Optional.of(ot));
+        when(trackingRepo.findFirstByTrackingNumberIgnoreCaseOrderByIdDesc(trackingNumber)).thenReturn(Optional.of(ot));
         Order o = new Order();
         o.setOrderNo(orderNo);
         o.setShipviaCd(shipviaCd);

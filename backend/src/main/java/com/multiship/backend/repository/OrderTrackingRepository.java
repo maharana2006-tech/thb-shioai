@@ -91,6 +91,15 @@ public interface OrderTrackingRepository extends JpaRepository<OrderTracking, Lo
     Optional<OrderTracking> findByTrackingNumberIgnoreCase(String trackingNumber);
 
     /**
+     * V135 — defensive single-row lookup for the close-out path. A tracking
+     * number has no DB unique constraint, so duplicates do occur (a label
+     * voided then regenerated, or placeholder dev data), and
+     * {@link #findByTrackingNumberIgnoreCase} then throws
+     * NonUniqueResultException and 500s the whole close-out. Newest row wins.
+     */
+    Optional<OrderTracking> findFirstByTrackingNumberIgnoreCaseOrderByIdDesc(String trackingNumber);
+
+    /**
      * V135 — GENERATED, non-voided, non-errored labels in a time window, for
      * the end-of-day close ("close out today's open labels for carrier X").
      * Carrier is resolved per-tracking by the caller (ManifestServiceImpl) via

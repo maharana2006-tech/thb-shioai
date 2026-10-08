@@ -49,7 +49,9 @@ class ManifestServiceImplTest {
                 mock(com.multiship.backend.repository.OrderTrackingRepository.class),
                 mock(com.multiship.backend.repository.OrderRepository.class),
                 mock(com.multiship.backend.repository.ClientShipviaCodeMapRepository.class),
-                mock(com.multiship.backend.repository.ShippingServiceRepository.class));
+                mock(com.multiship.backend.repository.ShippingServiceRepository.class),
+                mock(com.multiship.backend.repository.CarrierEodLogRepository.class),
+                mock(com.multiship.backend.service.CarrierEodLogger.class));
 
         ManifestRequestDTO req = new ManifestRequestDTO();
         req.setCarrierCode("UPS");

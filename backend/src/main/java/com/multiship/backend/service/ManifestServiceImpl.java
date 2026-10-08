@@ -105,7 +105,7 @@ public class ManifestServiceImpl implements ManifestService {
         // The frontend prefilter can drift; this is the hard guard.
         for (String t : request.getTrackingNumbers()) {
             if (!StringUtils.hasText(t)) continue;
-            OrderTracking tr = orderTrackingRepository.findByTrackingNumberIgnoreCase(t).orElse(null);
+            OrderTracking tr = orderTrackingRepository.findFirstByTrackingNumberIgnoreCaseOrderByIdDesc(t).orElse(null);
             if (tr == null) continue; // unknown numbers fall to failedToClassify below
             String st = tr.getStatus() == null ? "" : tr.getStatus().trim().toUpperCase(Locale.ROOT);
             // Explicitly-dead labels only, keyed on STATUS — the generated
@@ -127,7 +127,7 @@ public class ManifestServiceImpl implements ManifestService {
         if (callerScope.isPresent()) {
             for (String t : request.getTrackingNumbers()) {
                 if (!StringUtils.hasText(t)) continue;
-                Integer orderNo = orderTrackingRepository.findByTrackingNumberIgnoreCase(t)
+                Integer orderNo = orderTrackingRepository.findFirstByTrackingNumberIgnoreCaseOrderByIdDesc(t)
                         .map(OrderTracking::getOrderNo).orElse(null);
                 String owner = orderNo == null ? null : orderRepository.findByOrderNo(orderNo)
                         .map(o -> StringUtils.hasText(o.getTenantId()) ? o.getTenantId() : o.getCustNo())
@@ -148,7 +148,7 @@ public class ManifestServiceImpl implements ManifestService {
         java.util.Set<String> recordedAccounts = new java.util.LinkedHashSet<>();
         for (String t : request.getTrackingNumbers()) {
             if (!StringUtils.hasText(t)) continue;
-            orderTrackingRepository.findByTrackingNumberIgnoreCase(t)
+            orderTrackingRepository.findFirstByTrackingNumberIgnoreCaseOrderByIdDesc(t)
                     .map(OrderTracking::getAccountNumber)
                     .filter(StringUtils::hasText)
                     .ifPresent(a -> recordedAccounts.add(a.trim()));
@@ -297,7 +297,7 @@ public class ManifestServiceImpl implements ManifestService {
 
     private Optional<TrackingResolution> resolveForTracking(String trackingNumber) {
         Optional<OrderTracking> tracking = orderTrackingRepository
-                .findByTrackingNumberIgnoreCase(trackingNumber);
+                .findFirstByTrackingNumberIgnoreCaseOrderByIdDesc(trackingNumber);
         if (tracking.isEmpty() || tracking.get().getOrderNo() == null) return Optional.empty();
 
         Optional<Order> order = orderRepository.findByOrderNo(tracking.get().getOrderNo());

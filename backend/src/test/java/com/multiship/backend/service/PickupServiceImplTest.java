@@ -41,7 +41,8 @@ class PickupServiceImplTest {
         PickupServiceImpl service = new PickupServiceImpl(
                 mock(CarrierService.class),
                 mock(CarrierAccountRefRepository.class),
-                new TenantScopeEnforcer(new AccessScopePolicy(true)));
+                new TenantScopeEnforcer(new AccessScopePolicy(true)),
+                mock(com.multiship.backend.service.CarrierEodLogger.class));
 
         PickupRequestDTO req = new PickupRequestDTO();
         req.setCarrierCode("UPS");
