@@ -70,6 +70,21 @@ public class OracleDataSourceConfig {
      */
     @Bean(name = "oracleDataSource")
     public DataSource oracleDataSource(ExternalSystemRegistry registry) {
+        // PR-I1 (audit [[inactive-external-system-skip]]) — short-circuit
+        // when the backing row is inactive. The pre-fix path threw an
+        // ExternalSystemException from registry.connect(), cascading
+        // through bean-wiring and refusing the whole context. An
+        // operator who flips active=false in /settings/external-systems
+        // should be able to boot the backend without that integration;
+        // a stub DataSource satisfies the EMF + txManager wiring here
+        // and throws clearly only if someone actually tries to borrow
+        // a connection.
+        if (!registry.isActive(NDS_CONNECTION_NAME)) {
+            log.info("nds-oracle-datasource: '{}' is inactive — registering stub DataSource. "
+                            + "DTC sync + NDS writeback paths will short-circuit at runtime.",
+                    NDS_CONNECTION_NAME);
+            return new InactiveOracleDataSource(NDS_CONNECTION_NAME);
+        }
         try {
             Object handle = registry.connect(NDS_CONNECTION_NAME,
                     LoginContext.withProfile("PRODUCTION"));
@@ -107,6 +122,13 @@ public class OracleDataSourceConfig {
         properties.put("hibernate.jdbc.batch_size", "20");
         properties.put("hibernate.default_batch_fetch_size", "16");
         properties.put("hibernate.hbm2ddl.auto", "none");
+        // PR-I1 — skip the EMF-bootstrap JDBC metadata probe. Hibernate
+        // normally opens a connection during context init to detect dialect
+        // + driver features; with an inactive stub DataSource that would
+        // throw and crash boot. Dialect is already pinned above, so the
+        // probe is unnecessary. Harmless for the live path too — pinned
+        // dialect means Hibernate uses the explicit value either way.
+        properties.put("hibernate.boot.allow_jdbc_metadata_access", "false");
         em.setJpaPropertyMap(properties);
 
         return em;
