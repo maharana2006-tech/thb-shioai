@@ -565,7 +565,7 @@ export default function CustomsProfileModal({
         )}
 
         <div className={asPage
-          ? 'space-y-4'
+          ? 'grid grid-cols-1 gap-4 lg:grid-cols-2 lg:items-start'
           : 'flex-1 space-y-3.5 overflow-y-auto bg-[#faf7f0]/50 px-5 py-4'}>
           {/* 1 — Client & destinations */}
           <Section
