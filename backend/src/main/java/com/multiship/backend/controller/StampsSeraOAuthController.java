@@ -62,8 +62,18 @@ public class StampsSeraOAuthController {
 
     /** FE-side landing page the browser lands on after the callback stores
      *  the refresh token. Query string carries {@code ok=1|0} and
-     *  {@code detail=...} so the FE can render success/error inline. */
+     *  {@code detail=...} so the FE can render success/error inline.
+     *
+     *  <p>Relative path works in prod where FE + backend share an origin
+     *  (app.company.com + api.company.com behind one gateway, say). In
+     *  split-port dev (SPA on :5173, API on :8080), set the absolute
+     *  prefix via {@code carrier.stamps.sera-fe-return-url} so the
+     *  browser lands on the FE host instead of asking the backend for
+     *  {@code /settings/carriers} (which it doesn't serve → 401 / 404). */
     private static final String FE_RETURN_PATH = "/settings/carriers?seraCallback=";
+
+    @org.springframework.beans.factory.annotation.Value("${carrier.stamps.sera-fe-return-url:}")
+    private String feReturnUrl;
 
     private final CarrierAccountRefRepository repository;
     private final StampsSeraOAuthService oauthService;
@@ -230,7 +240,12 @@ public class StampsSeraOAuthController {
     }
 
     private ResponseEntity<Void> redirect(boolean ok, String detail) {
-        String url = FE_RETURN_PATH + (ok ? "ok" : "error");
+        // Prefer the configured absolute FE host (split-port dev); fall back
+        // to the relative path (shared-origin prod).
+        String base = StringUtils.hasText(feReturnUrl)
+                ? feReturnUrl.replaceFirst("/+$", "") + FE_RETURN_PATH
+                : FE_RETURN_PATH;
+        String url = base + (ok ? "ok" : "error");
         if (!ok && StringUtils.hasText(detail)) {
             url += "&detail=" + URLEncoder.encode(detail, StandardCharsets.UTF_8);
         }
