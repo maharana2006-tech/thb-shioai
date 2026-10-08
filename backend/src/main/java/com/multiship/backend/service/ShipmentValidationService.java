@@ -585,38 +585,74 @@ public class ShipmentValidationService {
             adaptedRequest.setIntl(withIntl.getIntl());
         }
 
-        String accessToken;
-        try {
-            accessToken = connector.getAccessToken(
-                    account.getClientId(),
-                    account.getClientSecret(),
-                    account.getAccountNumber(),
-                    account.getEnvironment());
-        } catch (Exception ex) {
-            log.warn("Shipment validation — {} token acquisition failed: {}", carrier, ex.getMessage());
-            rateProblemOut.set("No price: " + carrierName(carrier) + " didn't accept this account's login keys.");
+        // PR-T-POST (audit parallel of S-B1) — StampsSeraAuthContext pushes
+        // the SERA refresh_token onto StampsConnector's ThreadLocal so the
+        // token call + the subsequent getRates/validateShipment calls can
+        // reach SERA. NOOP for non-Stamps carriers (so FedEx/UPS/DHL paths
+        // are unaffected). Scope covers BOTH the token acquisition AND the
+        // downstream HTTP calls that reuse the same ThreadLocal via the
+        // connector's internal cache.
+        try (AutoCloseable ignored = com.multiship.backend.service.carriers
+                .StampsSeraAuthContext.openFor(account)) {
+
+            String accessToken;
+            try {
+                accessToken = connector.getAccessToken(
+                        account.getClientId(),
+                        account.getClientSecret(),
+                        account.getAccountNumber(),
+                        account.getEnvironment());
+            } catch (Exception ex) {
+                log.warn("Shipment validation — {} token acquisition failed: {}", carrier, ex.getMessage());
+                rateProblemOut.set("No price: " + carrierName(carrier) + " didn't accept this account's login keys.");
+                return ShipmentValidationResult.CarrierValidationSubResult.builder()
+                        .carrierCode(carrier)
+                        .valid(false)
+                        .matchLevel("ERROR")
+                        .kind("ADDRESS_ONLY")
+                        .warnings(List.of())
+                        .errors(List.of("Token acquisition failed: " + ex.getMessage()))
+                        .message("Couldn't sign in to " + carrierName(carrier) + " with this account's login keys — "
+                                + "ask an admin to check them in Settings → Carrier Accounts.")
+                        .build();
+            }
+
+            // The price and transit time — the same rate call the rate picker
+            // makes, on the same request and account the label will use.
+            try {
+                List<com.multiship.backend.service.carriers.CarrierConnector.RateOption> quoted =
+                        connector.getRates(adaptedRequest, accessToken, account.getEnvironment());
+                ratesOut.set(quoted == null ? List.of() : quoted);
+            } catch (Exception ex) {
+                log.warn("Shipment validation — {} rate call failed: {}", carrier, ex.getMessage());
+                rateProblemOut.set("No price: " + carrier + " rate call failed — " + ex.getMessage());
+            }
+
+            return validateShipmentInContext(connector, carrier, account, accessToken, adaptedRequest);
+        } catch (Exception ctxEx) {
+            log.warn("Shipment validation — {} context close failed: {}", carrier, ctxEx.getMessage());
             return ShipmentValidationResult.CarrierValidationSubResult.builder()
                     .carrierCode(carrier)
                     .valid(false)
                     .matchLevel("ERROR")
                     .kind("ADDRESS_ONLY")
                     .warnings(List.of())
-                    .errors(List.of("Token acquisition failed: " + ex.getMessage()))
-                    .message("Couldn't sign in to " + carrierName(carrier) + " with this account's login keys — "
-                            + "ask an admin to check them in Settings → Carrier Accounts.")
+                    .errors(List.of("Context release failed: " + ctxEx.getMessage()))
+                    .message("Internal error during carrier validation.")
                     .build();
         }
+    }
 
-        // The price and transit time — the same rate call the rate picker
-        // makes, on the same request and account the label will use.
-        try {
-            List<com.multiship.backend.service.carriers.CarrierConnector.RateOption> quoted =
-                    connector.getRates(adaptedRequest, accessToken, account.getEnvironment());
-            ratesOut.set(quoted == null ? List.of() : quoted);
-        } catch (Exception ex) {
-            log.warn("Shipment validation — {} rate call failed: {}", carrier, ex.getMessage());
-            rateProblemOut.set("No price: " + carrier + " rate call failed — " + ex.getMessage());
-        }
+    /** PR-T-POST — the validateShipment half of the SERA-wrapped block.
+     *  Extracted so the try-with-resources on StampsSeraAuthContext can
+     *  encompass both the token call AND the downstream HTTP without a
+     *  nested try/catch tower. */
+    private ShipmentValidationResult.CarrierValidationSubResult validateShipmentInContext(
+            com.multiship.backend.service.carriers.CarrierConnector connector,
+            String carrier,
+            com.multiship.backend.model.CarrierAccountRef account,
+            String accessToken,
+            com.multiship.backend.dto.ShipmentRequestDTO adaptedRequest) {
 
         com.multiship.backend.service.carriers.CarrierConnector.ValidateShipmentResult result;
         try {

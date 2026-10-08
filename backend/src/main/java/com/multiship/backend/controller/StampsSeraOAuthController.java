@@ -5,6 +5,7 @@ import com.multiship.backend.model.CarrierAccountRef;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
 import com.multiship.backend.service.carriers.StampsSeraOAuthService;
 import com.multiship.backend.service.carriers.StampsSeraOAuthService.TokenExchangeResult;
+import com.multiship.backend.service.carriers.StampsSeraOAuthService.VerifiedState;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -13,6 +14,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.util.StringUtils;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -28,17 +30,20 @@ import java.util.Optional;
 /**
  * Stamps.com SERA 3-legged OAuth (authorization_code + refresh_token).
  *
- * <p>Two endpoints:
+ * <p>Endpoints:
  * <ul>
  *   <li>{@code GET /authorize/{accountId}} — ADMIN-only. Builds the signed-state
- *       authorize URL and 302s the operator's browser to
- *       {@code signin.stampsendicia.com/authorize?...}. The account
+ *       authorize URL (with PKCE S256 challenge) and 302s the operator's
+ *       browser to {@code signin.stampsendicia.com/authorize?...}. The account
  *       row's clientId + environment drive the request.</li>
  *   <li>{@code GET /callback} — public (no Bearer token; the browser 302 from
- *       Auctane doesn't carry our JWT). Verifies the signed state, exchanges
- *       the code for tokens, persists the refresh_token (encrypted at rest)
- *       on the account, marks verified, then 302s back to a FE-side landing
- *       page.</li>
+ *       Auctane doesn't carry our JWT). Verifies the signed state, extracts
+ *       the PKCE verifier from state, exchanges the code + verifier for tokens,
+ *       persists the refresh_token (encrypted at rest) on the account, marks
+ *       verified, then 302s back to a FE-side landing page.</li>
+ *   <li>{@code DELETE /authorize/{accountId}} — ADMIN-only. Disconnect: nulls
+ *       the stored refresh_token, marks the account unverified, evicts the
+ *       token cache. Returns 204 on success / 404 when the account is unknown.</li>
  * </ul>
  *
  * <p>Why 3-legged: Stamps.com developer accounts are provisioned for
@@ -49,7 +54,7 @@ import java.util.Optional;
  */
 @Slf4j
 @Tag(name = "Stamps SERA OAuth",
-        description = "3-legged OAuth for Stamps.com SERA accounts (authorize + callback)")
+        description = "3-legged OAuth for Stamps.com SERA accounts (authorize + callback + disconnect)")
 @RestController
 @RequestMapping("/api/v1/carrier-accounts/stamps-sera")
 @RequiredArgsConstructor
@@ -57,8 +62,18 @@ public class StampsSeraOAuthController {
 
     /** FE-side landing page the browser lands on after the callback stores
      *  the refresh token. Query string carries {@code ok=1|0} and
-     *  {@code detail=...} so the FE can render success/error inline. */
+     *  {@code detail=...} so the FE can render success/error inline.
+     *
+     *  <p>Relative path works in prod where FE + backend share an origin
+     *  (app.company.com + api.company.com behind one gateway, say). In
+     *  split-port dev (SPA on :5173, API on :8080), set the absolute
+     *  prefix via {@code carrier.stamps.sera-fe-return-url} so the
+     *  browser lands on the FE host instead of asking the backend for
+     *  {@code /settings/carriers} (which it doesn't serve → 401 / 404). */
     private static final String FE_RETURN_PATH = "/settings/carriers?seraCallback=";
+
+    @org.springframework.beans.factory.annotation.Value("${carrier.stamps.sera-fe-return-url:}")
+    private String feReturnUrl;
 
     private final CarrierAccountRefRepository repository;
     private final StampsSeraOAuthService oauthService;
@@ -103,9 +118,14 @@ public class StampsSeraOAuthController {
      * to after consent. Not authenticated — a redirect from an external
      * server can't carry our JWT cookie/header. Security relies on:
      * <ul>
-     *   <li>State signature — HMAC-SHA256 over {@code accountId:ts:nonce}
+     *   <li>State signature — HMAC-SHA256 over {@code accountId:ts:nonce:verifier}
      *       ties the callback to a specific account row and prevents
-     *       CSRF replay.</li>
+     *       CSRF replay. The PKCE verifier is carried in the signed state
+     *       (segment 4) so the callback can present it without a DB round-trip.</li>
+     *   <li>PKCE S256 — the authorize URL carried {@code code_challenge =
+     *       base64url(SHA-256(verifier))}; here we present the matching
+     *       {@code code_verifier} alongside the code. An intercepted code
+     *       alone can't be redeemed.</li>
      *   <li>Redirect-URI whitelist — Stamps.com only 302s here if the
      *       operator's developer portal has this URL registered on the
      *       client_id.</li>
@@ -130,14 +150,15 @@ public class StampsSeraOAuthController {
             return redirect(false, "carrier returned " + error
                     + (StringUtils.hasText(errorDescription) ? ": " + errorDescription : ""));
         }
-        Optional<Long> accountIdOpt = oauthService.verifyState(state);
-        if (accountIdOpt.isEmpty()) {
+        Optional<VerifiedState> verifiedOpt = oauthService.verifyStateWithVerifier(state);
+        if (verifiedOpt.isEmpty()) {
             return redirect(false, "state signature invalid or expired");
         }
         if (!StringUtils.hasText(code)) {
             return redirect(false, "no authorization code returned");
         }
-        Long accountId = accountIdOpt.get();
+        VerifiedState verified = verifiedOpt.get();
+        Long accountId = verified.accountId();
         CarrierAccountRef account = repository.findById(accountId).orElse(null);
         if (account == null) {
             log.warn("SERA OAuth callback: state valid but account #{} no longer exists.", accountId);
@@ -145,7 +166,7 @@ public class StampsSeraOAuthController {
         }
 
         TokenExchangeResult result = oauthService.exchangeCode(code, account.getClientId(),
-                account.getClientSecret(), account.getEnvironment());
+                account.getClientSecret(), account.getEnvironment(), verified.codeVerifier());
         if (!result.success()) {
             log.warn("SERA OAuth callback: code exchange failed for account #{}: {}",
                     accountId, result.errorMessage());
@@ -186,8 +207,45 @@ public class StampsSeraOAuthController {
                 .build());
     }
 
+    /**
+     * Disconnect: nulls the stored refresh_token, marks the account
+     * unverified, and evicts any cached access_token so a stale copy
+     * doesn't keep working until it expires. ADMIN-only — same bar as
+     * connecting. 204 on success, 404 when the account is unknown.
+     */
+    @Operation(summary = "Disconnect: clear refresh_token + unverify + evict cache",
+            description = "Requires ADMIN. Clears the SERA refresh_token on the account, "
+                    + "flips verified=false, and clears the OAuth access-token cache so a "
+                    + "cached token doesn't keep working. Reconnect via GET /authorize/{id}.")
+    @PreAuthorize("hasRole('ADMIN')")
+    @DeleteMapping("/authorize/{accountId}")
+    public ResponseEntity<Void> disconnect(@PathVariable Long accountId) {
+        CarrierAccountRef account = repository.findById(accountId).orElse(null);
+        if (account == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
+        }
+        String oldRefresh = account.getStampsRefreshToken();
+        account.setStampsRefreshToken(null);
+        account.setVerified(false);
+        repository.save(account);
+        // ponytail: nukes the whole cache rather than one entry — SERA refresh_tokens
+        // are per-account so blast radius is tiny (every subsequent call just mints
+        // a fresh access_token). Swap to clearCachedTokenFor(oldRefresh) if the cache
+        // ever grows cross-account.
+        if (StringUtils.hasText(oldRefresh)) {
+            oauthService.clearTokenCache();
+        }
+        log.info("SERA OAuth: disconnected account #{} (refresh_token cleared, verified=false).", accountId);
+        return ResponseEntity.noContent().build();
+    }
+
     private ResponseEntity<Void> redirect(boolean ok, String detail) {
-        String url = FE_RETURN_PATH + (ok ? "ok" : "error");
+        // Prefer the configured absolute FE host (split-port dev); fall back
+        // to the relative path (shared-origin prod).
+        String base = StringUtils.hasText(feReturnUrl)
+                ? feReturnUrl.replaceFirst("/+$", "") + FE_RETURN_PATH
+                : FE_RETURN_PATH;
+        String url = base + (ok ? "ok" : "error");
         if (!ok && StringUtils.hasText(detail)) {
             url += "&detail=" + URLEncoder.encode(detail, StandardCharsets.UTF_8);
         }

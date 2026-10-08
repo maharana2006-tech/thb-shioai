@@ -105,7 +105,9 @@ class StampsSeraCreateLabelTest {
         assertEquals("Widget", items.get(0).path("item_description").asText());
         assertEquals(2, items.get(0).path("quantity").asInt());
         assertEquals("eur", items.get(0).path("unit_value").path("currency").asText());
-        assertEquals("HS12345", items.get(0).path("harmonized_tariff_code").asText());
+        // PR-T10 — HS code normalised to digits-only (10-digit CBP ceiling);
+        // the "HS" prefix was alpha noise that SERA / USPS CN22 reject.
+        assertEquals("12345", items.get(0).path("harmonized_tariff_code").asText());
         assertEquals("CN", items.get(0).path("country_of_origin").asText());
         assertEquals("SKU-1", items.get(0).path("sku").asText());
     }

@@ -111,6 +111,19 @@ public final class UsTerritoryNormalizer {
         // static-only
     }
 
+    /** PR-T11 — APO / FPO / DPO military state codes. ZIP 09xxx-34xxx.
+     *  USPS treats military mail as domestic (routes through APO depots)
+     *  BUT parcels still need a CN22 customs declaration because they
+     *  cross foreign customs borders on the way to the overseas on-base
+     *  mailroom. See audit §9.1. */
+    private static final Set<String> MILITARY_STATE_CODES = Set.of("AA", "AE", "AP");
+
+    /** True when the state code is AA / AE / AP — APO / FPO / DPO. */
+    public static boolean isMilitaryState(String state) {
+        if (state == null) return false;
+        return MILITARY_STATE_CODES.contains(state.trim().toUpperCase(Locale.ROOT));
+    }
+
     /**
      * True when {@code country} is US (or blank, matching our default)
      * AND {@code state} is one of the six US-territory codes.

@@ -117,4 +117,142 @@ public final class IdempotencyKeys {
         }
         return "stamps-topup-" + carrierAccountRefId + "-" + dayHourBucket;
     }
+
+    /**
+     * PR-T2 (audit T-L1) — deterministic Idempotency-Key for Stamps SERA
+     * {@code POST /sera/v1/labels}. SERA dedupes on this key for 24h; a
+     * crash-replay with the SAME (reference, piece, shipDate) now hits the
+     * cached first-attempt response instead of printing a second paid
+     * label. UUID v3 (name-based) keeps the canonical UUID shape SERA
+     * documents on the wire.
+     *
+     * <p>Piece-indexed because SERA MPS is N × POST — each piece's key
+     * must differ or SERA 400s with {@code error_code 800001}. ShipDate
+     * is included so re-shipping an order on a later day (after a
+     * same-day void) gets a fresh key.
+     *
+     * @param referenceNumber local order reference; must be non-blank.
+     * @param pieceIndex      1-based piece number within the MPS.
+     * @param shipDate        the ship-date the label body uses.
+     */
+    public static String forStampsLabel(String referenceNumber, int pieceIndex,
+                                        java.time.LocalDate shipDate) {
+        if (referenceNumber == null || referenceNumber.isBlank()) {
+            throw new IllegalArgumentException(
+                    "IdempotencyKeys.forStampsLabel requires a non-blank referenceNumber");
+        }
+        if (pieceIndex < 1) {
+            throw new IllegalArgumentException(
+                    "IdempotencyKeys.forStampsLabel requires pieceIndex >= 1 (got " + pieceIndex + ")");
+        }
+        if (shipDate == null) {
+            throw new IllegalArgumentException(
+                    "IdempotencyKeys.forStampsLabel requires a non-null shipDate");
+        }
+        String payload = "stamps-label|" + referenceNumber.trim() + "|" + pieceIndex + "|" + shipDate;
+        return java.util.UUID.nameUUIDFromBytes(
+                payload.getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+    }
+
+    /**
+     * PR-T2 (audit T-M1) — deterministic Idempotency-Key for Stamps SERA
+     * {@code POST /sera/v1/manifests}. Scoped by (accountNumber, closeDate)
+     * so a double-click or crash-replay re-manifests the SAME batch under
+     * the SAME key instead of generating a duplicate manifest. UUID v3
+     * for the same reason as {@link #forStampsLabel}.
+     */
+    public static String forStampsManifest(String accountNumber,
+                                           java.time.LocalDate closeDate) {
+        if (accountNumber == null || accountNumber.isBlank()) {
+            throw new IllegalArgumentException(
+                    "IdempotencyKeys.forStampsManifest requires a non-blank accountNumber");
+        }
+        if (closeDate == null) {
+            throw new IllegalArgumentException(
+                    "IdempotencyKeys.forStampsManifest requires a non-null closeDate");
+        }
+        String payload = "stamps-manifest|" + accountNumber.trim() + "|" + closeDate;
+        return java.util.UUID.nameUUIDFromBytes(
+                payload.getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+    }
+
+    /**
+     * PR-T3 (audit §5.1) — deterministic Idempotency-Key for Stamps SERA
+     * {@code POST /sera/v1/rates}. SERA requires an Idempotency-Key on
+     * every POST; keying off (reference, shipDate) means a crash-replay
+     * mid-rate-shop hits SERA's cached response instead of counting as
+     * a fresh quote against the account's rate-limit window. UUID v3
+     * (name-based) keeps the canonical UUID wire shape SERA documents.
+     *
+     * <p>Ad-hoc rate shops without an order attached should mint a fresh
+     * UUID at the call site rather than pin to a stable key; blank
+     * reference numbers are rejected here.
+     *
+     * @param referenceNumber local order reference; must be non-blank.
+     * @param shipDate        the ship-date the rate request uses.
+     */
+    public static String forStampsRateQuote(String referenceNumber,
+                                            java.time.LocalDate shipDate) {
+        if (referenceNumber == null || referenceNumber.isBlank()) {
+            throw new IllegalArgumentException(
+                    "IdempotencyKeys.forStampsRateQuote requires a non-blank referenceNumber");
+        }
+        if (shipDate == null) {
+            throw new IllegalArgumentException(
+                    "IdempotencyKeys.forStampsRateQuote requires a non-null shipDate");
+        }
+        String payload = "stamps-rate|" + referenceNumber.trim() + "|" + shipDate;
+        return java.util.UUID.nameUUIDFromBytes(
+                payload.getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+    }
+
+    /**
+     * PR-T6 (audit T-V1) — deterministic Idempotency-Key for Stamps SERA
+     * {@code POST /sera/v1/addresses/validate}. Scoped by the fields that
+     * uniquely determine the match: city, state, postal code, country.
+     * Street-level fields intentionally not keyed — a retry with slightly
+     * different casing/whitespace on the street should still hit SERA's
+     * dedup cache. UUID v3 for the same canonical-wire-shape reason as
+     * {@link #forStampsLabel} and {@link #forStampsManifest}.
+     */
+    public static String forStampsAddressValidate(String city, String state,
+                                                  String postalCode, String country) {
+        String payload = "stamps-addr|" + nullTrim(city) + "|" + nullTrim(state) + "|"
+                + nullTrim(postalCode) + "|" + nullTrim(country);
+        return java.util.UUID.nameUUIDFromBytes(
+                payload.getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+    }
+
+    /**
+     * PR-T5 (audit §5.3) — deterministic Idempotency-Key for Stamps SERA
+     * {@code POST /sera/v1/pickups}. SERA requires Idempotency-Key on
+     * POSTs; keying off (scope, pickupDate) means a double-click or
+     * crash-replay books the SAME pickup under the SAME key. UUID v3
+     * (name-based) for canonical UUID wire shape SERA documents.
+     *
+     * <p>{@code scope} is typically the carrier account number; falls back
+     * to the shipper's address line at the call site when no account
+     * number is on the request DTO.
+     *
+     * @param scope      account identifier or address-line fallback.
+     * @param pickupDate the booked pickup date.
+     */
+    public static String forStampsPickup(String scope, java.time.LocalDate pickupDate) {
+        if (scope == null || scope.isBlank()) {
+            throw new IllegalArgumentException(
+                    "IdempotencyKeys.forStampsPickup requires a non-blank scope");
+        }
+        if (pickupDate == null) {
+            throw new IllegalArgumentException(
+                    "IdempotencyKeys.forStampsPickup requires a non-null pickupDate");
+        }
+        String payload = "stamps-pickup|" + scope.trim() + "|" + pickupDate;
+        return java.util.UUID.nameUUIDFromBytes(
+                payload.getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+    }
+
+    private static String nullTrim(String s) {
+        return s == null ? "" : s.trim().toLowerCase(java.util.Locale.ROOT);
+    }
+
 }
