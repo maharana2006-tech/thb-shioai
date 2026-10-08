@@ -513,9 +513,14 @@ public class ShippingConfigService {
         if (account == null) {
             return null;
         }
-        try {
+        try (AutoCloseable ignored = com.multiship.backend.service.carriers
+                .StampsSeraAuthContext.openFor(account)) {
             // F-MODE-3 — pass account.getEnvironment() so FedEx routes the
             // OAuth token URL to the matching host (sandbox vs prod).
+            // PR-T-POST (audit parallel of S-B1) — StampsSeraAuthContext
+            // pushes the SERA refresh_token onto the ThreadLocal so
+            // getAccessTokenSera has something to refresh against. No-op
+            // for non-Stamps carriers.
             String token = connector.getAccessToken(account.getClientId(), account.getClientSecret(),
                     account.getAccountNumber(), account.getEnvironment());
             return new TokenAndEnv(token, account.getEnvironment());
