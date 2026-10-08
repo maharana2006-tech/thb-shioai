@@ -1602,10 +1602,22 @@ public class StampsConnector implements CarrierConnector {
                             + (request == null ? "?" : request.getReferenceNumber())
                             + ". Detail: " + err);
         }
+        // SERA v1 label response: the spec documents labels[0].href but the
+        // live/sandbox servers actually emit labels[0].label_data (base64 of
+        // the raw PDF / ZPL / PNG bytes). Reading only `href` dropped the
+        // artifact — tracking + label_id persisted correctly but
+        // label_file_path landed NULL, forcing the FE to fall back to the
+        // local PDFBox facsimile. Prefer label_data (observed shape); fall
+        // back to href for forward-compat if Auctane ever ships that
+        // variant on the response.
         String labelHref = null;
         JsonNode labels = root.path("labels");
         if (labels.isArray() && labels.size() > 0) {
-            labelHref = labels.get(0).path("href").asText(null);
+            JsonNode first = labels.get(0);
+            labelHref = first.path("label_data").asText(null);
+            if (!StringUtils.hasText(labelHref)) {
+                labelHref = first.path("href").asText(null);
+            }
         }
         java.math.BigDecimal cost = null;
         JsonNode costNode = root.path("shipment_cost").path("total_amount");
@@ -2527,11 +2539,18 @@ public class StampsConnector implements CarrierConnector {
                         "SERA reprint response missing labels[]: " + safeHead(responseJson),
                         responseJson);
             }
-            String href = labels.get(0).path("href").asText(null);
+            // Same spec-vs-wire mismatch as createShipmentSera: the spec
+            // documents labels[0].href but SERA actually emits
+            // labels[0].label_data. Prefer label_data; fall back to href.
+            JsonNode first = labels.get(0);
+            String href = first.path("label_data").asText(null);
+            if (!StringUtils.hasText(href)) {
+                href = first.path("href").asText(null);
+            }
             if (!StringUtils.hasText(href)) {
                 return new LabelReprintResult(
                         CARRIER_CODE, null, null, "ERROR",
-                        "SERA reprint response missing labels[0].href: " + safeHead(responseJson),
+                        "SERA reprint response missing labels[0].label_data/href: " + safeHead(responseJson),
                         responseJson);
             }
             String url = null;
