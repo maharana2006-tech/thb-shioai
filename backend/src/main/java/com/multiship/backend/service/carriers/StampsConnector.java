@@ -1479,7 +1479,17 @@ public class StampsConnector implements CarrierConnector {
     static String mapPackagingTypeToSera(String pt) {
         if (!StringUtils.hasText(pt)) return "package";
         String v = pt.trim();
-        if (v.contains("_") && !v.contains(" ")) return v.toLowerCase(Locale.ROOT);
+        // Same pre-fix bug as mapSwsimServiceToSera — "has underscore" is
+        // too permissive and lets SWSIM-style YOUR_PACKAGING through as
+        // your_packaging, which SERA 400s with 899999 "The packaging_type
+        // specified is invalid." Pass through only for codes that already
+        // carry a SERA shape (bare generic or carrier-prefixed).
+        String lower = v.toLowerCase(Locale.ROOT);
+        if ("package".equals(lower) || "letter".equals(lower) || "large_envelope".equals(lower)
+                || lower.startsWith("usps_") || lower.startsWith("ups_")
+                || lower.startsWith("fedex_") || lower.startsWith("dhl_")) {
+            return lower;
+        }
         return switch (v.toUpperCase(Locale.ROOT)) {
             case "PACKAGE", "YOUR_PACKAGING" -> "package";
             case "LETTER" -> "letter";
