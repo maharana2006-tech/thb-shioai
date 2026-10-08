@@ -199,6 +199,18 @@ public class IntlShipmentBlockDTO {
     private String customsInvoiceReference;
 
     /**
+     * PR-T7 (audit T-C2) — operator-selected disposition for a non-deliverable
+     * intl parcel. SERA accepts {@code return_to_sender} (default — safer,
+     * reclaim postage via reshipping) or {@code treat_as_abandoned} (cheaper
+     * for low-value gifts where return shipping exceeds item value).
+     *
+     * <p>Null → connector applies its own default ({@code return_to_sender}
+     * for USPS SERA; other carriers map to their own vocabulary). Pre-T7
+     * callers who never set this keep today's behaviour.
+     */
+    private String nonDeliveryOption;
+
+    /**
      * Operator's chosen strategy for handling customs forms that would
      * physically overflow the carrier's printed form (USPS' ~30-line
      * CN23/PS-2976-A ceiling being the primary trigger).

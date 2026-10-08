@@ -27,6 +27,15 @@ public interface LabelPackageRepository extends JpaRepository<LabelPackage, Long
     Optional<LabelPackage> findByTrackingNumber(String trackingNumber);
 
     /**
+     * PR-T9-X1 (audit T-MPS3) — the single "lead" piece for a shipment,
+     * i.e. the row that represents the whole MPS for customer-facing
+     * display. Backed by the V135 partial index
+     * {@code ix_label_package_lead}, so this is a point-lookup regardless
+     * of shipment size.
+     */
+    Optional<LabelPackage> findFirstByOrderNoAndIsLeadPieceTrue(Integer orderNo);
+
+    /**
      * Bulk DELETE (see {@link ShipmentBatchRepository#deleteByOrderNo}) — clears
      * a reused order's prior per-piece rows on regenerate, immediately and
      * without tripping Hibernate's flush ordering against the fresh inserts.

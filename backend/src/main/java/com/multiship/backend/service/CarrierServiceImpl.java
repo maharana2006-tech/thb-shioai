@@ -964,6 +964,13 @@ public class CarrierServiceImpl implements CarrierService {
                         // UPS, DHL). Enables PR 2 (SERA void) + PR 5
                         // (SERA reprint) to key off the id from the DB.
                         .carrierLabelRef(pieceMatch != null ? pieceMatch.carrierLabelRef() : null)
+                        // PR-T9-X1 (audit T-MPS3) — V135. One lead per
+                        // shipment: the very first piece written across all
+                        // batches of this order. Downstream UI uses this
+                        // to pick a single tracking number to show the
+                        // customer. Convention aligns with V135's backfill
+                        // rule (lowest sequence_number per order).
+                        .isLeadPiece(batchIdx == 0 && i == 0)
                         .createdAt(now)
                         .updatedAt(now)
                         .build());
@@ -2837,6 +2844,8 @@ public class CarrierServiceImpl implements CarrierService {
                         // UPS, DHL). Enables PR 2 (SERA void) + PR 5
                         // (SERA reprint) to key off the id from the DB.
                         .carrierLabelRef(pieceMatch != null ? pieceMatch.carrierLabelRef() : null)
+                        // PR-T9-X1 — see parallel site around line 970 for rationale.
+                        .isLeadPiece(batchIdx == 0 && i == 0)
                         .createdAt(now)
                         .updatedAt(now)
                         .build();

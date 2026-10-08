@@ -3,8 +3,13 @@ package com.multiship.backend.service.carriers;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.multiship.backend.config.CarrierProperties;
-import lombok.RequiredArgsConstructor;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
@@ -17,6 +22,7 @@ import javax.crypto.spec.SecretKeySpec;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -42,15 +48,23 @@ import java.util.concurrent.ConcurrentHashMap;
  * tokens going forward.
  *
  * <p>State signing: an HMAC-SHA256 tag over
- * {@code accountId:timestamp:nonce} using {@link #stateSigningSecret}
+ * {@code accountId:timestamp:nonce:verifier} using {@link #stateSigningSecret}
  * prevents an attacker from forging a callback that would attach their
  * consent-code to somebody else's carrier account. The state carries
  * enough context for the callback to skip a DB lookup on the client_id
- * and instead resolve the account by id.
+ * and instead resolve the account by id, and ALSO carries the PKCE
+ * {@code code_verifier} so the exchangeCode call can present it without
+ * a server-side session store.
+ *
+ * <p>PKCE (RFC 7636): {@link #buildAuthorizeUrl} generates a 32-byte
+ * SecureRandom verifier (base64url, no padding), computes the SHA-256
+ * challenge, and sends {@code code_challenge} + {@code code_challenge_method=S256}
+ * on the authorize URL. {@link #exchangeCode} presents the matching
+ * verifier back when redeeming the code. An intercepted auth code can't
+ * be redeemed without the verifier.
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class StampsSeraOAuthService {
 
     /** State TTL — 10 minutes. Long enough for the operator to complete
@@ -58,8 +72,21 @@ public class StampsSeraOAuthService {
      *  be replayed forever. */
     private static final long STATE_TTL_SECONDS = 600;
 
+    /** SecureRandom instance used to seed the state nonce + the PKCE
+     *  code_verifier. Both of these are rolled on every authorize call —
+     *  a predictable nonce lets an attacker brute-force a replay, a
+     *  predictable verifier breaks the PKCE guarantee. */
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+
+    /** PKCE verifier length (bytes before base64url). RFC 7636 §4.1 allows
+     *  43–128 chars for the base64 output; 32 bytes → ~43 chars which hits
+     *  the lower bound and keeps the authorize URL short. */
+    private static final int PKCE_VERIFIER_BYTE_LENGTH = 32;
+
     private final CarrierProperties carrierProperties;
     private final ObjectMapper objectMapper;
+    /** ObjectProvider so unit tests without a MeterRegistry still boot. */
+    private final ObjectProvider<MeterRegistry> meterRegistryProvider;
 
     /** Base64-encoded HMAC-SHA256 key used to sign the OAuth state.
      *  Falls back to the SECRETS_ENCRYPTION_KEY (already required for
@@ -68,6 +95,11 @@ public class StampsSeraOAuthService {
      *  dedicated key to keep signing + encryption domains separate. */
     @Value("${carrier.stamps.sera-state-signing-key:${secrets.encryption-key:}}")
     private String stateSigningSecret;
+
+    /** Active Spring profile(s). Checked at startup for the localhost
+     *  redirect-URI guard — see {@link #logStartupGuards}. */
+    @Value("${spring.profiles.active:}")
+    private String activeProfiles;
 
     /**
      * SERA access-token cache keyed by {@code SHA-256(refresh_token) + "|" + env}.
@@ -99,10 +131,37 @@ public class StampsSeraOAuthService {
      */
     private final ConcurrentHashMap<String, CachedAccessToken> tokenCache = new ConcurrentHashMap<>();
 
+    /** Prometheus counter for cache hits. Populated iff MeterRegistry is on
+     *  the classpath and injected; null-safe-called elsewhere. */
+    private Counter cacheHitCounter;
+
     /** Refresh a cached access-token this many seconds before its declared
      *  expiry so an in-flight worker doesn't submit against a token that
      *  expires mid-request. */
     private static final long TOKEN_REFRESH_MARGIN_SECONDS = 60;
+
+    @Autowired
+    public StampsSeraOAuthService(CarrierProperties carrierProperties,
+                                  ObjectMapper objectMapper,
+                                  ObjectProvider<MeterRegistry> meterRegistryProvider) {
+        this.carrierProperties = carrierProperties;
+        this.objectMapper = objectMapper;
+        this.meterRegistryProvider = meterRegistryProvider;
+    }
+
+    /**
+     * Overload for unit tests that don't wire a MeterRegistry provider.
+     * Delegates to the real constructor with a no-op provider so metrics
+     * are simply disabled rather than NPE'ing on first call.
+     */
+    public StampsSeraOAuthService(CarrierProperties carrierProperties, ObjectMapper objectMapper) {
+        this(carrierProperties, objectMapper, new ObjectProvider<MeterRegistry>() {
+            @Override public MeterRegistry getObject(Object... args) { return null; }
+            @Override public MeterRegistry getObject() { return null; }
+            @Override public MeterRegistry getIfAvailable() { return null; }
+            @Override public MeterRegistry getIfUnique() { return null; }
+        });
+    }
 
     /**
      * Cached access-token entry. Does NOT store the refresh_token, only
@@ -116,10 +175,62 @@ public class StampsSeraOAuthService {
     }
 
     /**
+     * Result of {@link #verifyStateWithVerifier} — the embedded accountId
+     * from the signed state plus the PKCE {@code code_verifier} the
+     * authorize call tucked in. Callers pass the verifier back to
+     * {@link #exchangeCode}. Nullable verifier means the state came from
+     * an older authorize call that didn't include PKCE — exchangeCode
+     * degrades gracefully to the non-PKCE path.
+     */
+    public record VerifiedState(Long accountId, String codeVerifier) {}
+
+    /**
+     * Startup guards. Logs a WARN when the configured redirect-URI points
+     * at localhost in a prod profile — Stamps.com will reject the
+     * authorize callback because loopback addresses can't be registered
+     * on a production client_id. Non-fatal; the system still starts.
+     * Also wires the Prometheus gauges + counter when a MeterRegistry
+     * is available.
+     */
+    @PostConstruct
+    void logStartupGuards() {
+        String redirectUri = carrierProperties.getStamps().getSeraRedirectUri();
+        boolean prod = isProdProfile(activeProfiles);
+        if (prod && StringUtils.hasText(redirectUri)
+                && (redirectUri.contains("localhost") || redirectUri.contains("127.0.0.1"))) {
+            log.warn("SERA redirect-URI points at localhost in a prod profile — "
+                    + "Stamps.com will reject the authorize callback. "
+                    + "Set carrier.stamps.sera-redirect-uri to a routable https URL. (configured: {})",
+                    redirectUri);
+        }
+        MeterRegistry registry = meterRegistryProvider.getIfAvailable();
+        if (registry != null) {
+            Gauge.builder("stamps_sera_token_cache_size", tokenCache, Map::size)
+                    .description("Size of the Stamps.com SERA access-token cache (keys = SHA-256(refresh_token)|env)")
+                    .register(registry);
+            this.cacheHitCounter = Counter.builder("stamps_sera_token_cache_hits_total")
+                    .description("Count of Stamps.com SERA access-token cache HITs (serviced without a token POST to Auctane)")
+                    .register(registry);
+        } else {
+            log.debug("MeterRegistry not available — SERA token-cache metrics disabled.");
+        }
+    }
+
+    private static boolean isProdProfile(String profiles) {
+        if (!StringUtils.hasText(profiles)) return false;
+        for (String p : profiles.split(",")) {
+            if ("prod".equalsIgnoreCase(p.trim()) || "production".equalsIgnoreCase(p.trim())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Build the fully-formed authorize URL the frontend should redirect
      * the operator to. The {@code state} field carries a signed
-     * account-id + timestamp + nonce; the callback verifies it before
-     * accepting the {@code code}.
+     * account-id + timestamp + nonce + PKCE verifier; the callback
+     * verifies it before accepting the {@code code}.
      *
      * @param accountId  carrier_account_ref.id — the row whose refresh_token
      *                   will be populated on successful callback
@@ -137,13 +248,17 @@ public class StampsSeraOAuthService {
         }
         String redirectUri = requireRedirectUri();
         String scope = StringUtils.hasText(s.getSeraScope()) ? s.getSeraScope() : "offline_access";
-        String state = signState(accountId);
+        String codeVerifier = generatePkceVerifier();
+        String codeChallenge = computePkceChallenge(codeVerifier);
+        String state = signState(accountId, codeVerifier);
         return UriComponentsBuilder.fromUriString(authorizeUrl)
                 .queryParam("response_type", "code")
                 .queryParam("client_id", clientId)
                 .queryParam("redirect_uri", redirectUri)
                 .queryParam("scope", scope)
                 .queryParam("state", state)
+                .queryParam("code_challenge", codeChallenge)
+                .queryParam("code_challenge_method", "S256")
                 .build(true)
                 .toUriString();
     }
@@ -152,13 +267,31 @@ public class StampsSeraOAuthService {
      * Verify a state value received on the OAuth callback. Returns the
      * embedded accountId, or empty when the signature doesn't verify
      * OR the state is older than {@link #STATE_TTL_SECONDS}.
+     *
+     * <p>Legacy signature — kept for callers that only need the accountId.
+     * The PKCE-aware callback should use {@link #verifyStateWithVerifier}.
      */
     public Optional<Long> verifyState(String state) {
+        return verifyStateWithVerifier(state).map(VerifiedState::accountId);
+    }
+
+    /**
+     * Verify a state value and extract both the accountId AND the PKCE
+     * code_verifier the authorize call embedded. Returns empty when the
+     * signature doesn't verify, the state is older than
+     * {@link #STATE_TTL_SECONDS}, or the payload is malformed.
+     *
+     * <p>Payload format: {@code accountId:ts:nonce[:verifier]:hmac} —
+     * verifier is the 4th segment, which keeps the legacy 3-segment
+     * payloads (no PKCE) decoding cleanly as a {@link VerifiedState} with
+     * null codeVerifier.
+     */
+    public Optional<VerifiedState> verifyStateWithVerifier(String state) {
         if (!StringUtils.hasText(state)) return Optional.empty();
         try {
             byte[] raw = Base64.getUrlDecoder().decode(state);
             String decoded = new String(raw, StandardCharsets.UTF_8);
-            // Payload format: <accountId>:<epochSecond>:<nonce>:<hexHmac>
+            // Payload format: <accountId>:<epochSecond>:<nonce>[:<verifier>]:<hexHmac>
             int lastColon = decoded.lastIndexOf(':');
             if (lastColon < 0) return Optional.empty();
             String payload = decoded.substring(0, lastColon);
@@ -176,7 +309,9 @@ public class StampsSeraOAuthService {
                         Instant.now().getEpochSecond() - ts, STATE_TTL_SECONDS);
                 return Optional.empty();
             }
-            return Optional.of(Long.parseLong(parts[0]));
+            Long accountId = Long.parseLong(parts[0]);
+            String verifier = parts.length >= 4 ? parts[3] : null;
+            return Optional.of(new VerifiedState(accountId, verifier));
         } catch (Exception ex) {
             log.warn("SERA OAuth callback: state parse failed — rejecting. Reason: {}", ex.getMessage());
             return Optional.empty();
@@ -186,10 +321,11 @@ public class StampsSeraOAuthService {
     /**
      * Exchange an authorization {@code code} for an access + refresh
      * token pair. Called from the callback controller after state
-     * verification passes.
+     * verification passes. PKCE-aware overload: pass the
+     * {@code code_verifier} extracted from the signed state.
      */
     public TokenExchangeResult exchangeCode(String code, String clientId, String clientSecret,
-                                            String environment) {
+                                            String environment, String codeVerifier) {
         return postToken(env(environment), body -> {
             body.put("grant_type", "authorization_code");
             body.put("code", code);
@@ -198,7 +334,19 @@ public class StampsSeraOAuthService {
             if (StringUtils.hasText(clientSecret)) {
                 body.put("client_secret", clientSecret);
             }
+            if (StringUtils.hasText(codeVerifier)) {
+                body.put("code_verifier", codeVerifier);
+            }
         });
+    }
+
+    /**
+     * Legacy signature — PKCE verifier omitted. Kept for existing tests +
+     * any caller that bypassed verifyStateWithVerifier.
+     */
+    public TokenExchangeResult exchangeCode(String code, String clientId, String clientSecret,
+                                            String environment) {
+        return exchangeCode(code, clientId, clientSecret, environment, null);
     }
 
     /**
@@ -228,6 +376,7 @@ public class StampsSeraOAuthService {
             // have persisted it already, so re-emitting is a no-op).
             long remainingSeconds = Math.max(0,
                     existing.expiresAt().getEpochSecond() - Instant.now().getEpochSecond());
+            if (cacheHitCounter != null) cacheHitCounter.increment();
             return TokenExchangeResult.success(
                     existing.accessToken(), existing.rotatedRefreshToken(), remainingSeconds);
         }
@@ -247,6 +396,7 @@ public class StampsSeraOAuthService {
             if (cur != null && cur.isValid()) {
                 long rem = Math.max(0,
                         cur.expiresAt().getEpochSecond() - Instant.now().getEpochSecond());
+                if (cacheHitCounter != null) cacheHitCounter.increment();
                 outcome.set(TokenExchangeResult.success(
                         cur.accessToken(), cur.rotatedRefreshToken(), rem));
                 return cur;
@@ -275,9 +425,21 @@ public class StampsSeraOAuthService {
         return outcome.get();
     }
 
-    /** Package-private for tests + operational hygiene. */
-    void clearTokenCache() {
+    /** Public for the disconnect endpoint + tests + operational hygiene. */
+    public void clearTokenCache() {
         tokenCache.clear();
+    }
+
+    /**
+     * Evict a single refresh_token's cached access_tokens across all envs.
+     * The map is keyed by {@code SHA-256(refresh_token)|env} so we remove
+     * both sandbox + prod entries. Called from disconnect / rotation.
+     */
+    public void clearCachedTokenFor(String refreshToken) {
+        if (!StringUtils.hasText(refreshToken)) return;
+        String hash = hashForKey(refreshToken);
+        tokenCache.remove(hash + "|PRODUCTION");
+        tokenCache.remove(hash + "|SANDBOX");
     }
 
     private static String envKey(String environment) {
@@ -378,14 +540,53 @@ public class StampsSeraOAuthService {
         return uri;
     }
 
-    /** Build a signed state value: {@code base64url(accountId:timestamp:nonce:hmac)}. */
+    /** Legacy 3-segment signState (no PKCE verifier) — kept for tests that
+     *  predate the PKCE wire-up. New flow uses {@link #signState(Long, String)}. */
     String signState(Long accountId) {
+        return signState(accountId, null);
+    }
+
+    /**
+     * Build a signed state value:
+     * {@code base64url(accountId:timestamp:nonce[:verifier]:hmac)}.
+     * Nonce is drawn from {@link SecureRandom} — a predictable nonce lets
+     * an attacker brute-force a replay of a captured state.
+     */
+    String signState(Long accountId, String codeVerifier) {
         long ts = Instant.now().getEpochSecond();
-        String nonce = Long.toHexString(new java.util.Random().nextLong());
+        String nonce = Long.toHexString(SECURE_RANDOM.nextLong());
         String payload = accountId + ":" + ts + ":" + nonce;
+        if (StringUtils.hasText(codeVerifier)) {
+            payload = payload + ":" + codeVerifier;
+        }
         String hmac = hmacHex(payload);
         String combined = payload + ":" + hmac;
         return Base64.getUrlEncoder().withoutPadding().encodeToString(combined.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * Generate a PKCE {@code code_verifier} per RFC 7636 §4.1 — 32
+     * SecureRandom bytes, base64url-encoded with no padding.
+     */
+    static String generatePkceVerifier() {
+        byte[] bytes = new byte[PKCE_VERIFIER_BYTE_LENGTH];
+        SECURE_RANDOM.nextBytes(bytes);
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+    }
+
+    /**
+     * Compute the PKCE {@code code_challenge} per RFC 7636 §4.2 —
+     * {@code base64url(SHA-256(code_verifier))} with no padding.
+     */
+    static String computePkceChallenge(String codeVerifier) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] hash = md.digest(codeVerifier.getBytes(StandardCharsets.US_ASCII));
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(hash);
+        } catch (Exception ex) {
+            // SHA-256 is a JDK-required algorithm; this can't realistically fail.
+            throw new IllegalStateException("Failed to compute PKCE code_challenge", ex);
+        }
     }
 
     private String hmacHex(String payload) {

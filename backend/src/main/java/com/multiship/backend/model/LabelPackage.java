@@ -117,6 +117,22 @@ public class LabelPackage {
     @Column(name = "carrier_label_ref", length = 128)
     private String carrierLabelRef;
 
+    /**
+     * PR-T9-X1 (audit T-MPS3) — V135. True for exactly ONE piece per
+     * shipment: the "lead" piece whose tracking number represents the
+     * whole MPS for customer-facing display. Monotonically written by
+     * {@code CarrierServiceImpl} as {@code sequenceNumber == 1}.
+     *
+     * <p>Backfilled on migration for every existing shipment (lowest
+     * sequence_number per order_no becomes the lead). Partial index
+     * {@code ix_label_package_lead WHERE is_lead_piece = TRUE} makes
+     * the "find the lead tracking for order X" lookup a constant-time
+     * index hit instead of a GROUP BY.
+     */
+    @Column(name = "is_lead_piece", nullable = false)
+    @Builder.Default
+    private boolean isLeadPiece = false;
+
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 

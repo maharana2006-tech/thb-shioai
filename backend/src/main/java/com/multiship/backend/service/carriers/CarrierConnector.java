@@ -221,6 +221,10 @@ public interface CarrierConnector {
      * @param message        Operator-facing summary — one sentence.
      * @param rawResponse    Full carrier response for debugging; null on
      *                       NOT_SUPPORTED (no call was made).
+     * @param candidates     PR-T6 — SERA {@code candidate_addresses[]}: a list
+     *                       of plausible matches when SERA can't commit to a
+     *                       single canonical form (operator picks one). Empty
+     *                       for every other connector; empty on EXACT matches.
      */
     record AddressValidationResult(
             boolean valid,
@@ -229,8 +233,20 @@ public interface CarrierConnector {
             AddressToValidate suggested,
             List<String> warnings,
             String message,
-            String rawResponse
+            String rawResponse,
+            List<AddressToValidate> candidates
     ) {
+        /** Legacy 7-arg constructor — pre PR-T6, before SERA added
+         *  {@code candidate_addresses[]}. Defaults candidates to an empty
+         *  list so every pre-existing call site (SWSIM / UPS / FedEx / DHL /
+         *  USPS_DIRECT, 25+ sites) keeps compiling without churn. New SERA
+         *  code uses the 8-arg form directly. */
+        public AddressValidationResult(boolean valid, String matchLevel, String classification,
+                                       AddressToValidate suggested, List<String> warnings,
+                                       String message, String rawResponse) {
+            this(valid, matchLevel, classification, suggested, warnings, message, rawResponse,
+                    List.of());
+        }
     }
 
     /**
@@ -922,6 +938,13 @@ public interface CarrierConnector {
      *                           not exposed.
      * @param transitDays        Approximate transit business days; null when
      *                           the carrier only exposes a delivery date.
+     * @param isCustomsRequired  PR-T3 (audit §5.1 / T-C4) — the SERA rates
+     *                           response surfaces whether the corridor
+     *                           requires a customs form before the operator
+     *                           has to pay for a label. Null when the
+     *                           carrier doesn't expose this signal (every
+     *                           non-SERA path today), preserving pre-T3
+     *                           behaviour.
      */
     record RateOption(
             String carrierCode,
@@ -930,8 +953,17 @@ public interface CarrierConnector {
             java.math.BigDecimal totalAmount,
             String currency,
             LocalDateTime estimatedDelivery,
-            Integer transitDays
+            Integer transitDays,
+            Boolean isCustomsRequired
     ) {
+        /** Back-compat 7-arg constructor — pre-T3 call sites across every
+         *  non-SERA connector keep compiling with {@code isCustomsRequired=null}. */
+        public RateOption(String carrierCode, String serviceCode, String serviceName,
+                          java.math.BigDecimal totalAmount, String currency,
+                          LocalDateTime estimatedDelivery, Integer transitDays) {
+            this(carrierCode, serviceCode, serviceName, totalAmount, currency,
+                    estimatedDelivery, transitDays, null);
+        }
     }
 
     /**
