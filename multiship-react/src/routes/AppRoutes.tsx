@@ -123,6 +123,7 @@ const CarrierDropdownsPage = lazy(() => import('../components/CarrierDropdownsPa
 // A4.5 — self-serve per-user email opt-out toggles.
 const MyNotificationSubscriptionsPage = lazy(() => import('../components/MyNotificationSubscriptionsPage'))
 const CutoffsPage = lazy(() => import('../components/CutoffsPage'))
+const PickupsEodPage = lazy(() => import('../components/PickupsEodPage'))
 // PR-F4 Agent-2 — USPS Direct admin dashboard (queue + quota + retries + reconciliation).
 const UspsDirectDashboardPage = lazy(() => import('../pages/UspsDirectDashboardPage'))
 // Lazy — one-shot flows (bulky but not on every page load).
@@ -245,6 +246,7 @@ export default function AppRoutes() {
                   <Route path="carrier-error-messages" element={<CarrierErrorMessagesPage />} />
                   <Route path="carrier-dropdowns" element={<CarrierDropdownsPage />} />
                   <Route path="cutoffs" element={<CutoffsPage />} />
+                  <Route path="pickups" element={<PickupsEodPage />} />
                   {/* PR-F4 Agent-2 — USPS Direct admin dashboard: composite
                       view of queue depth, quota headroom, retry buckets and
                       void reconciliation. ADMIN only (RequireRole above +

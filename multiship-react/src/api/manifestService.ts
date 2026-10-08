@@ -38,10 +38,37 @@ export interface ManifestResponse {
   manifestPdfUrl: string | null
   manifestPdfBase64: string | null
   trackingCount: number
-  status: 'MANIFESTED' | 'PARTIAL' | 'NOT_SUPPORTED' | 'ERROR'
+  /** EMPTY (V135) — nothing open to close for that carrier/day. */
+  status: 'MANIFESTED' | 'PARTIAL' | 'NOT_SUPPORTED' | 'ERROR' | 'EMPTY'
   message: string
   manifests?: ManifestEntry[] | null
   failedToClassify?: string[] | null
+}
+
+/** V135 — close a whole day for one carrier without listing trackings. */
+export interface CloseDayRequest {
+  carrierCode: string
+  customerNo?: string | null
+  warehouseCode?: string | null
+  closeDate?: string  // YYYY-MM-DD; omit = today
+}
+
+/** V135 — one row of the pickup/close audit log. */
+export interface EodEvent {
+  id: number
+  kind: 'PICKUP' | 'CLOSEOUT'
+  carrierCode: string
+  accountNumber: string | null
+  customerNo: string | null
+  warehouseCode: string | null
+  eventDate: string | null
+  reference: string | null
+  trackingCount: number
+  status: string
+  message: string | null
+  source: 'MANUAL' | 'SCHEDULED'
+  createdBy: string | null
+  createdAt: string
 }
 
 export interface ManifestEntry {
@@ -59,4 +86,12 @@ export interface ManifestEntry {
 export const manifestService = {
   closeOut: (request: ManifestRequest) =>
     apiClient.post<ApiResponse<ManifestResponse>>('/manifests', request),
+
+  /** V135 — close a whole day for one carrier (backend gathers the labels). */
+  closeOutDay: (request: CloseDayRequest) =>
+    apiClient.post<ApiResponse<ManifestResponse>>('/manifests/close-day', request),
+
+  /** V135 — recent pickup/close events for the activity table. */
+  recentEvents: (limit = 50) =>
+    apiClient.get<ApiResponse<EodEvent[]>>(`/manifests/events?limit=${limit}`),
 }

@@ -1,6 +1,8 @@
 package com.multiship.backend.controller;
 
 import com.multiship.backend.dto.ApiResponse;
+import com.multiship.backend.dto.CloseDayRequestDTO;
+import com.multiship.backend.dto.EodEventDTO;
 import com.multiship.backend.dto.ManifestRequestDTO;
 import com.multiship.backend.dto.ManifestResponseDTO;
 import com.multiship.backend.service.ManifestService;
@@ -10,10 +12,14 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 /**
  * Sprint 34 — end-of-day close-out endpoint. Manifests a set of tracking
@@ -44,5 +50,30 @@ public class ManifestController {
             @Valid @RequestBody ManifestRequestDTO request) {
         ApiResponse<ManifestResponseDTO> response = manifestService.closeOut(request);
         return ResponseEntity.status(response.getCode()).body(response);
+    }
+
+    @Operation(summary = "Close out a whole day for one carrier",
+            description = "V135 — gathers the day's GENERATED, non-voided labels for the carrier " +
+                    "(optionally scoped to a client / warehouse) and manifests them, without the " +
+                    "caller listing tracking numbers. Powers Settings → Pickups & End-of-Day.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PostMapping("/close-day")
+    public ResponseEntity<ApiResponse<ManifestResponseDTO>> closeDay(
+            @Valid @RequestBody CloseDayRequestDTO request) {
+        ApiResponse<ManifestResponseDTO> response = manifestService.closeOutForDay(
+                request.getCarrierCode(), request.getCustomerNo(),
+                request.getCloseDate(), request.getWarehouseCode(), "MANUAL");
+        return ResponseEntity.status(response.getCode()).body(response);
+    }
+
+    @Operation(summary = "Recent pickup / end-of-day events",
+            description = "V135 — the pickup/close audit log (manual + scheduled), newest first.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping("/events")
+    public ResponseEntity<ApiResponse<List<EodEventDTO>>> events(
+            @RequestParam(defaultValue = "50") int limit) {
+        List<EodEventDTO> data = manifestService.recentEvents(limit);
+        return ResponseEntity.ok(ApiResponse.<List<EodEventDTO>>builder()
+                .status("success").code(200).message("Recent pickup/close events.").data(data).build());
     }
 }

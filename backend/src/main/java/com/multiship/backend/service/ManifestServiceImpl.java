@@ -1,6 +1,7 @@
 package com.multiship.backend.service;
 
 import com.multiship.backend.dto.ApiResponse;
+import com.multiship.backend.dto.EodEventDTO;
 import com.multiship.backend.dto.ErrorCode;
 import com.multiship.backend.dto.ManifestRequestDTO;
 import com.multiship.backend.dto.ManifestResponseDTO;
@@ -10,6 +11,7 @@ import com.multiship.backend.model.Order;
 import com.multiship.backend.model.OrderTracking;
 import com.multiship.backend.model.ShippingService;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
+import com.multiship.backend.repository.CarrierEodLogRepository;
 import com.multiship.backend.repository.ClientShipviaCodeMapRepository;
 import com.multiship.backend.repository.OrderRepository;
 import com.multiship.backend.repository.OrderTrackingRepository;
@@ -25,6 +27,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -62,9 +65,18 @@ public class ManifestServiceImpl implements ManifestService {
     private final OrderRepository orderRepository;
     private final ClientShipviaCodeMapRepository clientShipviaCodeMapRepository;
     private final ShippingServiceRepository shippingServiceRepository;
+    // V135 — audit log for pickup/close events (repo for reads, logger for writes).
+    private final CarrierEodLogRepository carrierEodLogRepository;
+    private final CarrierEodLogger eodLogger;
 
     @Override
     public ApiResponse<ManifestResponseDTO> closeOut(ManifestRequestDTO request) {
+        ApiResponse<ManifestResponseDTO> resp = doCloseOut(request);
+        recordCloseOutLog(request, resp, "MANUAL");
+        return resp;
+    }
+
+    private ApiResponse<ManifestResponseDTO> doCloseOut(ManifestRequestDTO request) {
         if (request == null) {
             return failure(HttpStatus.BAD_REQUEST, "Request body is required.");
         }
@@ -275,6 +287,15 @@ public class ManifestServiceImpl implements ManifestService {
      * Any miss returns empty — caller adds the tracking to failedToClassify.
      */
     private Optional<Boolean> lookupExpressFlagForTracking(String trackingNumber) {
+        return resolveForTracking(trackingNumber).map(TrackingResolution::express);
+    }
+
+    /** One tracking's resolved carrier, fleet (express?) and owner (tenant /
+     *  cust). Empty on any miss in the chain — callers treat that as
+     *  "unclassifiable". V135 generalised {@link #lookupExpressFlagForTracking}. */
+    private record TrackingResolution(String carrier, boolean express, String owner) {}
+
+    private Optional<TrackingResolution> resolveForTracking(String trackingNumber) {
         Optional<OrderTracking> tracking = orderTrackingRepository
                 .findByTrackingNumberIgnoreCase(trackingNumber);
         if (tracking.isEmpty() || tracking.get().getOrderNo() == null) return Optional.empty();
@@ -296,8 +317,104 @@ public class ManifestServiceImpl implements ManifestService {
         if (matches.isEmpty()) return Optional.empty();
         Long serviceId = matches.get(0).getServiceId();
 
-        // Resolve service → is_express flag.
-        return shippingServiceRepository.findById(serviceId).map(ShippingService::isExpress);
+        return shippingServiceRepository.findById(serviceId)
+                .map(svc -> new TrackingResolution(svc.getCarrier(), svc.isExpress(),
+                        tenantCode == null ? null : tenantCode.trim()));
+    }
+
+    // ===== V135: close out a whole day for a carrier + audit log =====
+
+    @Override
+    public ApiResponse<ManifestResponseDTO> closeOutForDay(String carrierCode, String customerNo,
+                                                           LocalDate closeDate, String warehouseCode,
+                                                           String source) {
+        if (!StringUtils.hasText(carrierCode)) {
+            return failure(HttpStatus.BAD_REQUEST, "carrierCode is required.");
+        }
+        String carrier = carrierCode.trim().toUpperCase(Locale.ROOT);
+        String client = tenantScope.clampClientCode(customerNo);
+        LocalDate date = closeDate == null ? LocalDate.now() : closeDate;
+        String wh = StringUtils.hasText(warehouseCode) ? warehouseCode.trim() : null;
+
+        List<String> trackings = gatherTrackings(carrier, client, date, wh);
+        if (trackings.isEmpty()) {
+            ManifestResponseDTO empty = ManifestResponseDTO.builder()
+                    .carrierCode(carrier).trackingCount(0).status("EMPTY")
+                    .message("No open " + carrier + " labels to close for " + date + ".")
+                    .build();
+            logEod("CLOSEOUT", carrier, null, client, wh, date, null, 0, "EMPTY",
+                    empty.getMessage(), source);
+            return success(empty);
+        }
+        ManifestRequestDTO dto = ManifestRequestDTO.builder()
+                .carrierCode(carrier).customerNo(client)
+                .trackingNumbers(trackings).closeDate(date).build();
+        ApiResponse<ManifestResponseDTO> resp = doCloseOut(dto);
+        recordCloseOutLog(dto, resp, source, wh);
+        return resp;
+    }
+
+    @Override
+    public List<EodEventDTO> recentEvents(int limit) {
+        int n = limit <= 0 || limit > 200 ? 50 : limit;
+        return carrierEodLogRepository
+                .findAllByOrderByCreatedAtDesc(org.springframework.data.domain.PageRequest.of(0, n))
+                .stream().map(EodEventDTO::from).toList();
+    }
+
+    /**
+     * Gather the day's GENERATED, non-voided tracking numbers whose resolved
+     * carrier matches, optionally scoped to one client / warehouse. Carrier is
+     * resolved per tracking via the ship-via → ShippingService chain (same as
+     * the fleet classifier) since it isn't stored on the tracking row.
+     * ponytail: O(n) resolution (3 lookups/tracking) — fine for a daily batch;
+     * add a joined query if volume ever makes it slow.
+     */
+    private List<String> gatherTrackings(String carrier, String customerNo,
+                                         LocalDate date, String warehouseCode) {
+        LocalDateTime start = date.atStartOfDay();
+        LocalDateTime end = date.plusDays(1).atStartOfDay();
+        List<OrderTracking> rows = orderTrackingRepository.findGeneratedBetween(start, end);
+        List<String> out = new ArrayList<>();
+        for (OrderTracking t : rows) {
+            if (!StringUtils.hasText(t.getTrackingNumber())) continue;
+            if (warehouseCode != null && !warehouseCode.equalsIgnoreCase(t.getWarehouseCode())) continue;
+            Optional<TrackingResolution> r = resolveForTracking(t.getTrackingNumber());
+            if (r.isEmpty()) continue;
+            if (!carrier.equalsIgnoreCase(r.get().carrier())) continue;
+            if (StringUtils.hasText(customerNo)
+                    && (r.get().owner() == null || !customerNo.trim().equalsIgnoreCase(r.get().owner()))) {
+                continue;
+            }
+            out.add(t.getTrackingNumber());
+        }
+        return out;
+    }
+
+    private void recordCloseOutLog(ManifestRequestDTO request,
+                                   ApiResponse<ManifestResponseDTO> resp, String source) {
+        recordCloseOutLog(request, resp, source, null);
+    }
+
+    private void recordCloseOutLog(ManifestRequestDTO request,
+                                   ApiResponse<ManifestResponseDTO> resp,
+                                   String source, String warehouseCode) {
+        ManifestResponseDTO d = resp == null ? null : resp.getData();
+        String status = d != null ? d.getStatus()
+                : resp != null && resp.getCode() >= 400 ? "ERROR" : "ERROR";
+        String message = d != null ? d.getMessage() : (resp == null ? null : resp.getMessage());
+        String reference = d != null ? d.getManifestId() : null;
+        int count = d != null ? d.getTrackingCount()
+                : (request.getTrackingNumbers() == null ? 0 : request.getTrackingNumbers().size());
+        logEod("CLOSEOUT", request.getCarrierCode(), null, request.getCustomerNo(),
+                warehouseCode, request.getCloseDate(), reference, count, status, message, source);
+    }
+
+    private void logEod(String kind, String carrier, String accountNumber, String customerNo,
+                        String warehouseCode, LocalDate eventDate, String reference, int count,
+                        String status, String message, String source) {
+        eodLogger.record(kind, carrier, accountNumber, customerNo, warehouseCode,
+                eventDate, reference, count, status, message, source);
     }
 
     // ===== FDX-G2 close-out call + response assembly =====

@@ -112,6 +112,8 @@ export const settingsPaths = {
    *  global holiday list. Shipments past cutoff or on a holiday get
    *  their SHIP_DATE pushed to next working day. ADMIN role only. */
   cutoffs: '/settings/cutoffs',
+  /** V135 — schedule carrier pickups + end-of-day close (manifest / SCAN form). */
+  pickupsEod: '/settings/pickups',
   /** D1 — framework-wide external-system writeback dispatch journal
    *  (PENDING / OK / SKIPPED / FAILED) with filter + per-row Retry.
    *  Backing table external_system_writeback_journal. ADMIN only. */
@@ -228,6 +230,9 @@ export const settingsNavItems: Array<{
   { key: 'cutoffs', label: 'Cutoffs & Holidays', to: settingsPaths.cutoffs, iconKey: 'dashboard',
     description: 'Per (source × carrier × warehouse) cutoff rules + global holiday list. Shipments past cutoff or on a holiday get their SHIP_DATE pushed to the next working day.',
     roles: ['ADMIN'] },
+  { key: 'pickups-eod', label: 'Pickups & End-of-Day', to: settingsPaths.pickupsEod, iconKey: 'carrier',
+    description: 'Schedule carrier pickups and close out the day (FedEx manifest / UPS End of Day / USPS SCAN form). Automate the close via the DTC Scheduler.',
+    roles: ['ADMIN', 'USER'] },
   { key: 'writeback-journal', label: 'Writeback Journal', to: settingsPaths.writebackJournal, iconKey: 'dashboard',
     description: 'Every external-system writeback dispatch — PENDING, OK, SKIPPED and FAILED — with connection, order and latency. Retry any failed row to re-fire through the dispatcher.',
     roles: ['ADMIN'] },
@@ -282,7 +287,7 @@ export const settingsGroups: Array<{ key: string; label: string; blurb: string; 
   { key: 'org', label: 'Organization', blurb: 'Who you ship for, from where, and who can sign in.',
     items: ['clients', 'warehouses', 'address-book', 'users', 'roles'] },
   { key: 'carriers', label: 'Carriers & services', blurb: 'Accounts, services and the rules that pick them.',
-    items: ['carriers', 'carriers-platform', 'shipping-catalog', 'code-maps', 'carrier-limits', 'carrier-dropdowns', 'cutoffs'] },
+    items: ['carriers', 'carriers-platform', 'shipping-catalog', 'code-maps', 'carrier-limits', 'carrier-dropdowns', 'cutoffs', 'pickups-eod'] },
   { key: 'intl', label: 'International', blurb: 'What customs paperwork needs.',
     items: ['importer-broker', 'countries', 'reasons-for-export', 'currencies'] },
   { key: 'docs', label: 'Labels & documents', blurb: 'What gets printed, and where it goes.',

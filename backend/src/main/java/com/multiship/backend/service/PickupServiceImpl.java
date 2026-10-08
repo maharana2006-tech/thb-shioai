@@ -35,9 +35,29 @@ public class PickupServiceImpl implements PickupService {
      * schedule a pickup on a foreign tenant's behalf.
      */
     private final TenantScopeEnforcer tenantScope;
+    // V135 — audit log for pickup events.
+    private final CarrierEodLogger eodLogger;
 
     @Override
     public ApiResponse<PickupResponseDTO> schedule(PickupRequestDTO request) {
+        ApiResponse<PickupResponseDTO> resp = doSchedule(request);
+        recordPickupLog(request, resp);
+        return resp;
+    }
+
+    private void recordPickupLog(PickupRequestDTO request, ApiResponse<PickupResponseDTO> resp) {
+        if (request == null) return;
+        PickupResponseDTO d = resp == null ? null : resp.getData();
+        eodLogger.record("PICKUP", request.getCarrierCode(), null, request.getCustomerNo(), null,
+                request.getPickupDate(),
+                d == null ? null : d.getConfirmationNumber(),
+                request.getPackageCount(),
+                d == null ? "ERROR" : d.getStatus(),
+                d == null ? (resp == null ? null : resp.getMessage()) : d.getMessage(),
+                "MANUAL");
+    }
+
+    private ApiResponse<PickupResponseDTO> doSchedule(PickupRequestDTO request) {
         if (request == null) {
             return failure(HttpStatus.BAD_REQUEST, "Request body is required.");
         }

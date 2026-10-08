@@ -91,6 +91,19 @@ public interface OrderTrackingRepository extends JpaRepository<OrderTracking, Lo
     Optional<OrderTracking> findByTrackingNumberIgnoreCase(String trackingNumber);
 
     /**
+     * V135 — GENERATED, non-voided, non-errored labels in a time window, for
+     * the end-of-day close ("close out today's open labels for carrier X").
+     * Carrier is resolved per-tracking by the caller (ManifestServiceImpl) via
+     * the ship-via → ShippingService chain, since the carrier isn't stored here.
+     */
+    @Query("SELECT t FROM OrderTracking t WHERE t.isLabelGenerated = true "
+            + "AND UPPER(t.status) NOT IN ('VOIDED', 'ERROR') "
+            + "AND t.labelGeneratedAt >= :start AND t.labelGeneratedAt < :end "
+            + "AND t.trackingNumber IS NOT NULL")
+    List<OrderTracking> findGeneratedBetween(@Param("start") java.time.LocalDateTime start,
+                                             @Param("end") java.time.LocalDateTime end);
+
+    /**
      * PR-D USPS_DIRECT — VOIDED USPS shipments in the given window that
      * have not yet been reconciled against USPS's eVS Refund report.
      * Feeds {@code UspsRefundCsvExporter}: every row in this list is a
