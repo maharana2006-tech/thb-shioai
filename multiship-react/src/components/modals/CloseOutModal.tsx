@@ -183,7 +183,8 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
           </button>
         </div>
 
-        <div className="grid flex-1 grid-cols-1 gap-3 overflow-y-auto bg-[#faf7f0]/50 px-5 py-4 md:grid-cols-2 md:items-start">
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-[#faf7f0]/50 px-5 py-4">
+          <div className="grid gap-3 md:grid-cols-2 md:items-start">
           <Section icon={<FiTruck className="h-3.5 w-3.5" />} title="Carrier & date">
             <span className="mb-1 block text-[10.5px] font-semibold text-[#5a4526]">Carrier</span>
             <div className="grid grid-cols-4 gap-2">
@@ -237,8 +238,9 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
               </Field>
             </div>
           </Section>
+          </div>
 
-          <Section className="md:col-span-2" icon={<FiHash className="h-3.5 w-3.5" />}
+          <Section icon={<FiHash className="h-3.5 w-3.5" />}
                    title={`Tracking numbers (${parsedTracking.length})`} hint="prefilled">
             <textarea
               rows={4}
@@ -253,7 +255,7 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
             </p>
           </Section>
 
-          {result ? <div className="md:col-span-2"><ResultBanner result={result} /></div> : null}
+          {result ? <ResultBanner result={result} /> : null}
         </div>
 
         {/* footer */}
@@ -340,7 +342,7 @@ function ResultBanner({ result }: { result: ManifestResponse }) {
     <div className="space-y-2">
       <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-800">
         <p className="flex items-center gap-1.5 font-semibold">
-          <FiAlertCircle className="h-3.5 w-3.5" /> Carrier rejected the manifest
+          <FiAlertCircle className="h-3.5 w-3.5" /> Manifest not created
         </p>
         <p className="mt-1">{result.message}</p>
       </div>
@@ -419,8 +421,8 @@ function FailedToClassifyList({ trackings }: { trackings: string[] }) {
         chain. Fix the mapping and re-run.
       </p>
       <ul className="mt-2 max-h-40 overflow-y-auto rounded-lg border border-amber-200 bg-white/60 px-2 py-1.5 font-mono text-[11px]">
-        {trackings.map((t) => (
-          <li key={t}>{t || '(blank)'}</li>
+        {trackings.map((t, i) => (
+          <li key={`${i}-${t}`}>{t || '(blank)'}</li>
         ))}
       </ul>
     </div>

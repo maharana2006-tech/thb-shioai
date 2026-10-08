@@ -266,7 +266,8 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
           </button>
         </div>
 
-        <div className="grid flex-1 grid-cols-1 gap-3 overflow-y-auto bg-[#faf7f0]/50 px-5 py-4 md:grid-cols-2 md:items-start">
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-[#faf7f0]/50 px-5 py-4">
+          <div className="grid gap-3 md:grid-cols-2 md:items-start">
           <Section icon={<FiCalendar className="h-3.5 w-3.5" />} title="Carrier & schedule">
             {/* Carrier — segmented pills instead of a dropdown. */}
             <span className="mb-1 block text-[10.5px] font-semibold text-[#5a4526]">Carrier <span className="text-rose-500">*</span></span>
@@ -373,8 +374,9 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
               </Field>
             </div>
           </Section>
+          </div>
 
-          <Section icon={<FiPackage className="h-3.5 w-3.5" />} title="Parcels" className="md:col-span-2">
+          <Section icon={<FiPackage className="h-3.5 w-3.5" />} title="Parcels">
             <div className="grid grid-cols-3 gap-2.5">
               <Field label="Package count" required error={err('packageCount')}>
                 <input type="number" min="1" max={MAX_PACKAGE_COUNT} step="1" className={inputCls('packageCount')}
@@ -440,7 +442,7 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
           </Section>
 
           {apiError || result ? (
-            <div className="space-y-3 md:col-span-2">
+            <div className="space-y-3">
               {apiError ? (
                 <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-800">
                   <p className="flex items-center gap-1.5 font-semibold">
