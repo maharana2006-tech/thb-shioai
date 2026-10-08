@@ -259,6 +259,26 @@ public class ExternalSystemsAdminController {
         String channel    = req == null ? "D2C"    : req.channel;
         int orderNo       = req == null || req.orderNo == null ? 999_999_999 : req.orderNo;
         String mode       = req == null || req.mode == null ? "GENERATE" : req.mode.trim().toUpperCase();
+        // PR-I4 (audit [[inactive-external-system-skip]]) — surface the
+        // active=false state explicitly to the admin triggering the probe
+        // rather than letting the dispatcher silently journal-skip. The
+        // probe's job is to confirm the gate matrix; "we didn't call
+        // because you turned the integration off" is the honest answer.
+        if (!c.isActive()) {
+            return ResponseEntity.status(org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY)
+                    .body(ApiResponse.<Map<String, Object>>builder()
+                            .status("error")
+                            .code(422)
+                            .errorCode("CONNECTION_INACTIVE")
+                            .message("Connection '" + c.getName() + "' is inactive. "
+                                    + "Reactivate at /settings/external-systems to probe.")
+                            .data(Map.of(
+                                    "connectionName", c.getName(),
+                                    "systemType", c.getSystemType(),
+                                    "active", false,
+                                    "mode", mode))
+                            .build());
+        }
 
         if ("CLEAR".equals(mode)) {
             var clear = com.multiship.backend.service.externalsystems.writeback.WritebackClearRequest
