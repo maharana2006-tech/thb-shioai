@@ -1,6 +1,8 @@
 import { useMemo, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { FiAlertCircle, FiCalendar, FiCheckCircle, FiTruck, FiX } from 'react-icons/fi'
 import { pickupService, type PickupRequest, type PickupResponse } from '../../api/pickupService'
+import { settingsPaths } from '../../routes/workspaceRoutes'
 import { notify } from '../../utils/notify'
 import {
   FIELD_LIMITS,
@@ -225,6 +227,12 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
             </h3>
             <p className="mt-1 text-[11.5px] text-[#6b5c42]">
               Books a driver to collect the parcels at your ship-from address.
+            </p>
+            <p className="mt-1 text-[11px] text-[#a1906d]">
+              Manage pickups and end-of-day close in{' '}
+              <Link to={settingsPaths.pickupsEod} onClick={onClose} className="font-semibold text-[#5a4526] underline">
+                Pickups &amp; End-of-Day
+              </Link>.
             </p>
           </div>
           <button

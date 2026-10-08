@@ -190,8 +190,9 @@ export default function PickupsEodPage() {
             </div>
           </div>
           <p className="mt-2 text-[11.5px] text-[#9a8b70]">
-            Closes every open (generated, non-voided) label for the chosen carrier on that date. DHL manifests
-            implicitly via its pickup, so it isn't listed here.
+            Closes every open (generated, non-voided) label for the chosen carrier on that date. To close only
+            specific orders instead, use <span className="font-semibold text-[#6b5c42]">Close out</span> on the Orders
+            page. DHL manifests implicitly via its pickup, so it isn't listed here.
           </p>
           <button type="button" onClick={() => void runClose()} disabled={closing} className={`${primaryBtn} mt-3`}>
             {closing ? <FiRefreshCw className="h-3.5 w-3.5 animate-spin" /> : <FiCheckSquare className="h-3.5 w-3.5" />}

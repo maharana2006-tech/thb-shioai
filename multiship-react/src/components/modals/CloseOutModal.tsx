@@ -8,9 +8,11 @@ import {
   FiTruck,
   FiX,
 } from 'react-icons/fi'
+import { Link } from 'react-router-dom'
 import { manifestService, type ManifestEntry, type ManifestRequest, type ManifestResponse } from '../../api/manifestService'
 import { notify } from '../../utils/notify'
 import { useModalDismiss } from '../../hooks/useModalDismiss'
+import { settingsPaths } from '../../routes/workspaceRoutes'
 
 /**
  * Sprint 34 — end-of-day close-out modal. Operator picks a carrier,
@@ -123,6 +125,12 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
             </h3>
             <p className="mt-1 text-[11.5px] text-slate-500">
               Manifests today's tracking numbers so the driver can accept the parcels at pickup.
+            </p>
+            <p className="mt-1 text-[11px] text-slate-400">
+              Close a whole day by carrier, automate it, or see history in{' '}
+              <Link to={settingsPaths.pickupsEod} onClick={onClose} className="font-semibold text-slate-600 underline">
+                Pickups &amp; End-of-Day
+              </Link>.
             </p>
           </div>
           <button
