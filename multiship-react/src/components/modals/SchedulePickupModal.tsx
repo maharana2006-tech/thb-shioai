@@ -228,7 +228,7 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
     >
       <div
         ref={dialogRef}
-        className="flex h-[min(760px,92vh)] w-full max-w-[640px] flex-col overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-[0_30px_80px_rgba(31,21,12,0.35)]"
+        className="flex max-h-[94vh] w-full max-w-[860px] flex-col overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-[0_30px_80px_rgba(31,21,12,0.35)]"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3 border-b border-[#eee6d6] px-5 py-4">
@@ -262,7 +262,7 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
           </button>
         </div>
 
-        <div className="flex-1 space-y-3 overflow-y-auto bg-[#faf7f0]/50 px-5 py-4">
+        <div className="grid flex-1 grid-cols-1 gap-3 overflow-y-auto bg-[#faf7f0]/50 px-5 py-4 md:grid-cols-2 md:items-start">
           <Section icon={<FiCalendar className="h-3.5 w-3.5" />} title="Carrier & schedule">
             {/* Carrier — segmented pills instead of a dropdown. */}
             <span className="mb-1 block text-[10.5px] font-semibold text-[#5a4526]">Carrier <span className="text-rose-500">*</span></span>
@@ -371,7 +371,7 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
             </div>
           </Section>
 
-          <Section icon={<FiPackage className="h-3.5 w-3.5" />} title="Parcels">
+          <Section icon={<FiPackage className="h-3.5 w-3.5" />} title="Parcels" className="md:col-span-2">
             <div className="grid grid-cols-3 gap-2.5">
               <Field label="Package count" required error={err('packageCount')}>
                 <input type="number" min="1" max={MAX_PACKAGE_COUNT} step="1" className={inputCls('packageCount')}
@@ -435,15 +435,19 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
             </div>
           </Section>
 
-          {apiError ? (
-            <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-800">
-              <p className="flex items-center gap-1.5 font-semibold">
-                <FiAlertCircle className="h-3.5 w-3.5" /> Request failed
-              </p>
-              <p className="mt-1">{apiError}</p>
+          {apiError || result ? (
+            <div className="space-y-3 md:col-span-2">
+              {apiError ? (
+                <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-800">
+                  <p className="flex items-center gap-1.5 font-semibold">
+                    <FiAlertCircle className="h-3.5 w-3.5" /> Request failed
+                  </p>
+                  <p className="mt-1">{apiError}</p>
+                </div>
+              ) : null}
+              {result ? <ResultBanner result={result} /> : null}
             </div>
           ) : null}
-          {result ? <ResultBanner result={result} /> : null}
         </div>
 
         <div className="flex items-center justify-end gap-2 border-t border-[#eee6d6] px-5 py-3">
@@ -496,9 +500,9 @@ function ResultBanner({ result }: { result: PickupResponse }) {
 }
 
 /** Icon-badged section card — shared look with the Close-out modal. */
-function Section({ icon, title, hint, children }: { icon: ReactNode; title: string; hint?: string; children: ReactNode }) {
+function Section({ icon, title, hint, className = '', children }: { icon: ReactNode; title: string; hint?: string; className?: string; children: ReactNode }) {
   return (
-    <section className="overflow-hidden rounded-xl border border-[#eee6d6] bg-white">
+    <section className={`overflow-hidden rounded-xl border border-[#eee6d6] bg-white ${className}`}>
       <div className="flex items-center gap-2 border-b border-[#f3ecdd] bg-[#faf7f0]/60 px-3 py-2">
         <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-[#f4eede] text-[#412d15]">{icon}</span>
         <h4 className="text-[12px] font-semibold text-[#1f150c]">{title}</h4>
