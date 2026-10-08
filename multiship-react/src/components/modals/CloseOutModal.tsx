@@ -184,52 +184,33 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
         </div>
 
         <div className="grid flex-1 grid-cols-1 gap-3 overflow-y-auto bg-[#faf7f0]/50 px-5 py-4 md:grid-cols-2 md:items-start">
-          {/* Left column — what to close */}
-          <div className="space-y-3">
-            <Section icon={<FiTruck className="h-3.5 w-3.5" />} title="Carrier & date">
-              <span className="mb-1 block text-[10.5px] font-semibold text-[#5a4526]">Carrier</span>
-              <div className="grid grid-cols-4 gap-2">
-                {CARRIERS.map((c) => (
-                  <button key={c.code} type="button"
-                          onClick={() => update({ carrierCode: c.code })}
-                          className={pillCls(form.carrierCode === c.code)}>
-                    {c.name}
-                  </button>
-                ))}
-              </div>
-              <p className="mt-1.5 flex items-start gap-1 text-[10.5px] text-[#9a8b70]">
-                {form.carrierCode === 'DHL' ? <FiAlertTriangle className="mt-0.5 h-3 w-3 shrink-0" /> : null}
-                {CARRIERS.find((c) => c.code === form.carrierCode)?.method}
-              </p>
-              <div className="mt-3">
-                <Field label="Close date">
-                  <div className="relative">
-                    <input type="date" className={inputCls}
-                           value={form.closeDate ?? ''}
-                           onChange={(e) => update({ closeDate: e.target.value })} />
-                    <FiCalendar className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-[#b6a684]" />
-                  </div>
-                </Field>
-              </div>
-            </Section>
+          <Section icon={<FiTruck className="h-3.5 w-3.5" />} title="Carrier & date">
+            <span className="mb-1 block text-[10.5px] font-semibold text-[#5a4526]">Carrier</span>
+            <div className="grid grid-cols-4 gap-2">
+              {CARRIERS.map((c) => (
+                <button key={c.code} type="button"
+                        onClick={() => update({ carrierCode: c.code })}
+                        className={pillCls(form.carrierCode === c.code)}>
+                  {c.name}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1.5 flex items-start gap-1 text-[10.5px] text-[#9a8b70]">
+              {form.carrierCode === 'DHL' ? <FiAlertTriangle className="mt-0.5 h-3 w-3 shrink-0" /> : null}
+              {CARRIERS.find((c) => c.code === form.carrierCode)?.method}
+            </p>
+            <div className="mt-3">
+              <Field label="Close date">
+                <div className="relative">
+                  <input type="date" className={inputCls}
+                         value={form.closeDate ?? ''}
+                         onChange={(e) => update({ closeDate: e.target.value })} />
+                  <FiCalendar className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-[#b6a684]" />
+                </div>
+              </Field>
+            </div>
+          </Section>
 
-            <Section icon={<FiHash className="h-3.5 w-3.5" />} title={`Tracking numbers (${parsedTracking.length})`}
-                     hint="prefilled">
-              <textarea
-                rows={5}
-                className={`${inputCls} font-mono text-[11.5px]`}
-                value={trackingText}
-                onChange={(e) => setTrackingText(e.target.value)}
-                placeholder="One tracking number per line…"
-              />
-              <p className="mt-1.5 text-[10.5px] text-[#9a8b70]">
-                Edit to exclude any — or use <span className="font-semibold text-[#6b5c42]">Close whole day</span> to let the
-                server gather every open {form.carrierCode} label for the date.
-              </p>
-            </Section>
-          </div>
-
-          {/* Right column — optional manifest header address */}
           <Section icon={<FiMapPin className="h-3.5 w-3.5" />} title="Ship-from address" hint="optional">
             <div className="grid grid-cols-2 gap-2.5">
               <Field label="Name">
@@ -258,6 +239,21 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
                        maxLength={2} />
               </Field>
             </div>
+          </Section>
+
+          <Section className="md:col-span-2" icon={<FiHash className="h-3.5 w-3.5" />}
+                   title={`Tracking numbers (${parsedTracking.length})`} hint="prefilled">
+            <textarea
+              rows={4}
+              className={`${inputCls} font-mono text-[11.5px]`}
+              value={trackingText}
+              onChange={(e) => setTrackingText(e.target.value)}
+              placeholder="One tracking number per line…"
+            />
+            <p className="mt-1.5 text-[10.5px] text-[#9a8b70]">
+              Edit to exclude any — or use <span className="font-semibold text-[#6b5c42]">Close whole day</span> to let the
+              server gather every open {form.carrierCode} label for the date.
+            </p>
           </Section>
 
           {result ? <div className="md:col-span-2"><ResultBanner result={result} /></div> : null}
@@ -435,9 +431,9 @@ function FailedToClassifyList({ trackings }: { trackings: string[] }) {
 }
 
 /** Icon-badged section card — shared look with the Schedule-pickup modal. */
-function Section({ icon, title, hint, children }: { icon: ReactNode; title: string; hint?: string; children: ReactNode }) {
+function Section({ icon, title, hint, className = '', children }: { icon: ReactNode; title: string; hint?: string; className?: string; children: ReactNode }) {
   return (
-    <section className="overflow-hidden rounded-xl border border-[#eee6d6] bg-white">
+    <section className={`overflow-hidden rounded-xl border border-[#eee6d6] bg-white ${className}`}>
       <div className="flex items-center gap-2 border-b border-[#f3ecdd] bg-[#faf7f0]/60 px-3 py-2">
         <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-[#f4eede] text-[#412d15]">{icon}</span>
         <h4 className="text-[12px] font-semibold text-[#1f150c]">{title}</h4>
