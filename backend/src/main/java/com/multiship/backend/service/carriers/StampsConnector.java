@@ -1447,9 +1447,18 @@ public class StampsConnector implements CarrierConnector {
     static String mapSwsimServiceToSera(String service) {
         if (!StringUtils.hasText(service)) return null;
         String v = service.trim();
-        // Pass through if it already looks SERA-shaped (has an underscore
-        // and no space, e.g. "usps_priority_mail").
-        if (v.contains("_") && !v.contains(" ")) return v.toLowerCase(Locale.ROOT);
+        // Pass through ONLY when the code already carries a SERA carrier
+        // prefix (e.g. "usps_priority_mail", "ups_ground", "fedex_2day").
+        // The pre-fix shape-check (just "has underscore + no space") was
+        // too permissive — it let SWSIM-style upper_case codes like
+        // GROUND_ADVANTAGE through verbatim; SERA then 400'd with 899999
+        // "The service_type specified is invalid." Codes without the
+        // prefix fall through to the SWSIM/historical-code mapping below.
+        String lower = v.toLowerCase(Locale.ROOT);
+        if (lower.startsWith("usps_") || lower.startsWith("ups_")
+                || lower.startsWith("fedex_") || lower.startsWith("dhl_")) {
+            return lower;
+        }
         return switch (v.toUpperCase(Locale.ROOT)) {
             case "USPS PM", "PRIORITY" -> "usps_priority_mail";
             case "USPS PME", "PRIORITY_EXPRESS" -> "usps_priority_mail_express";
