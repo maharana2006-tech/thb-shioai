@@ -26,11 +26,25 @@ export interface SchedulePickupModalProps {
 }
 
 const CARRIERS = [
-  { code: 'UPS', label: 'UPS · PRN' },
-  { code: 'FEDEX', label: 'FedEx · Pickup Confirmation' },
-  { code: 'DHL', label: 'DHL · Dispatch Confirmation' },
-  { code: 'USPS', label: 'USPS · Confirmation Number' },
+  { code: 'UPS', name: 'UPS' },
+  { code: 'FEDEX', name: 'FedEx' },
+  { code: 'USPS', name: 'USPS' },
+  { code: 'DHL', name: 'DHL' },
 ] as const
+
+const SERVICE_TYPES = [
+  { value: 'GROUND', label: 'Ground' },
+  { value: 'EXPRESS', label: 'Express' },
+  { value: 'INTERNATIONAL', label: 'International' },
+] as const
+
+/** Segmented-pill button class (selected = espresso filled). */
+const pillCls = (active: boolean) =>
+  `inline-flex items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-[12px] font-semibold transition ${
+    active
+      ? 'border-[#1f150c] bg-[#1f150c] text-[#f4eede]'
+      : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
+  }`
 
 /** Carriers won't book a pickup further out than this many days. */
 const MAX_PICKUP_DAYS_AHEAD = 30
@@ -250,16 +264,20 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
 
         <div className="flex-1 space-y-3 overflow-y-auto bg-[#faf7f0]/50 px-5 py-4">
           <Section icon={<FiCalendar className="h-3.5 w-3.5" />} title="Carrier & schedule">
-            <div className="grid grid-cols-2 gap-2.5">
-              <Field label="Carrier" required error={err('carrierCode')}>
-                <select className={inputCls('carrierCode')} value={form.carrierCode}
-                        onChange={(e) => update({ carrierCode: e.target.value })}
-                        onBlur={() => touch('carrierCode')}>
-                  {CARRIERS.map((c) => (
-                    <option key={c.code} value={c.code}>{c.label}</option>
-                  ))}
-                </select>
-              </Field>
+            {/* Carrier — segmented pills instead of a dropdown. */}
+            <span className="mb-1 block text-[10.5px] font-semibold text-[#5a4526]">Carrier <span className="text-rose-500">*</span></span>
+            <div className="grid grid-cols-4 gap-2">
+              {CARRIERS.map((c) => (
+                <button key={c.code} type="button"
+                        onClick={() => { update({ carrierCode: c.code }); touch('carrierCode') }}
+                        className={pillCls(form.carrierCode === c.code)}>
+                  <FiTruck className="h-3.5 w-3.5" /> {c.name}
+                </button>
+              ))}
+            </div>
+            {err('carrierCode') ? <p data-field-error className="mt-1 text-[10.5px] text-rose-600">{err('carrierCode')}</p> : null}
+
+            <div className="mt-3 grid grid-cols-3 gap-2.5">
               <Field label="Pickup date" required error={err('pickupDate')}>
                 <div className="relative">
                   <input type="date" className={inputCls('pickupDate')}
@@ -282,23 +300,20 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
                        onChange={(e) => update({ pickupWindowEnd: e.target.value })}
                        onBlur={() => touch('pickupWindowEnd')} />
               </Field>
-              {/* FDX-F — pickup service selector. Determines which driver
-                  fleet the carrier dispatches:
-                    · FedEx  → carrierCode FDXE (Express) vs FDXG (Ground)
-                    · UPS    → ServiceCode 007 (Express) vs 003 (Ground)
-                    · DHL/USPS accept the field but have one fleet;
-                      picker still shown so the operator's mental model
-                      stays consistent across carriers.
-                  Undefined falls to GROUND — matches the pre-FDX-F
-                  hardcode so existing operators see no behavior change. */}
-              <Field label="Service">
-                <select className={inputCls()} value={form.pickupServiceType ?? 'GROUND'}
-                        onChange={(e) => update({ pickupServiceType: e.target.value as 'GROUND' | 'EXPRESS' | 'INTERNATIONAL' })}>
-                  <option value="GROUND">Ground</option>
-                  <option value="EXPRESS">Express</option>
-                  <option value="INTERNATIONAL">International</option>
-                </select>
-              </Field>
+            </div>
+
+            {/* Service — segmented pills. Determines the driver fleet (FedEx
+                FDXE/FDXG · UPS 007/003); DHL/USPS accept but have one fleet.
+                Undefined falls to GROUND (pre-FDX-F default). */}
+            <span className="mb-1 mt-3 block text-[10.5px] font-semibold text-[#5a4526]">Service</span>
+            <div className="grid grid-cols-3 gap-2">
+              {SERVICE_TYPES.map((s) => (
+                <button key={s.value} type="button"
+                        onClick={() => update({ pickupServiceType: s.value })}
+                        className={pillCls((form.pickupServiceType ?? 'GROUND') === s.value)}>
+                  {s.label}
+                </button>
+              ))}
             </div>
           </Section>
 
@@ -377,35 +392,39 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
                   <option value="KG">KG</option>
                 </select>
               </Field>
-              {/* DHL-8 — per-package dims flow through to DHL's pickup body
-                  so its routing reflects real parcel size. Optional; DHL
-                  falls back to 30 × 20 × 10 cm when unset. Other carriers
-                  accept but no-op. */}
-              <Field label="Default length (per box)">
-                <input type="number" min="0" step="0.1"
-                       className={inputCls()}
-                       value={form.defaultLength ?? ''}
-                       onChange={(e) => update({ defaultLength: e.target.value ? Number(e.target.value) : undefined })} />
-              </Field>
-              <Field label="Default width">
-                <input type="number" min="0" step="0.1"
-                       className={inputCls()}
-                       value={form.defaultWidth ?? ''}
-                       onChange={(e) => update({ defaultWidth: e.target.value ? Number(e.target.value) : undefined })} />
-              </Field>
-              <Field label="Default height / Unit">
-                <div className="flex gap-1">
-                  <input type="number" min="0" step="0.1"
-                         className={`${inputCls()} flex-1`}
-                         value={form.defaultHeight ?? ''}
-                         onChange={(e) => update({ defaultHeight: e.target.value ? Number(e.target.value) : undefined })} />
-                  <select className={inputCls()} value={form.dimUnit ?? 'CM'}
-                          onChange={(e) => update({ dimUnit: e.target.value as 'CM' | 'IN' })}>
-                    <option value="CM">CM</option>
-                    <option value="IN">IN</option>
-                  </select>
-                </div>
-              </Field>
+              {/* DHL-8 — per-package dims only matter to DHL's pickup routing
+                  (van vs truck). Shown only for DHL so the form stays
+                  uncluttered for the other carriers; DHL falls back to
+                  30 × 20 × 10 cm when unset. */}
+              {form.carrierCode === 'DHL' ? (
+                <>
+                  <Field label="Default length (per box)">
+                    <input type="number" min="0" step="0.1"
+                           className={inputCls()}
+                           value={form.defaultLength ?? ''}
+                           onChange={(e) => update({ defaultLength: e.target.value ? Number(e.target.value) : undefined })} />
+                  </Field>
+                  <Field label="Default width">
+                    <input type="number" min="0" step="0.1"
+                           className={inputCls()}
+                           value={form.defaultWidth ?? ''}
+                           onChange={(e) => update({ defaultWidth: e.target.value ? Number(e.target.value) : undefined })} />
+                  </Field>
+                  <Field label="Default height / Unit">
+                    <div className="flex gap-1">
+                      <input type="number" min="0" step="0.1"
+                             className={`${inputCls()} flex-1`}
+                             value={form.defaultHeight ?? ''}
+                             onChange={(e) => update({ defaultHeight: e.target.value ? Number(e.target.value) : undefined })} />
+                      <select className={inputCls()} value={form.dimUnit ?? 'CM'}
+                              onChange={(e) => update({ dimUnit: e.target.value as 'CM' | 'IN' })}>
+                        <option value="CM">CM</option>
+                        <option value="IN">IN</option>
+                      </select>
+                    </div>
+                  </Field>
+                </>
+              ) : null}
               <Field label="Notes for driver" className="col-span-3" error={err('specialInstructions')}>
                 <textarea rows={2} className={inputCls('specialInstructions')}
                           maxLength={NOTES_MAX}
