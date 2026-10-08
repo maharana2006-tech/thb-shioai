@@ -207,10 +207,14 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
     try {
       const response = await pickupService.schedule(form)
       setResult(response.data ?? null)
+      // Toast + inline banner, matching the Settings pickup form.
       if (response.data?.status === 'SCHEDULED') {
         notify.success(`Pickup scheduled — ${response.data.confirmationNumber}`)
+      } else if (response.data?.status === 'NOT_SUPPORTED') {
+        notify.info(`Pickup not scheduled — ${response.data.message}`)
+      } else if (response.data) {
+        notify.error(`Pickup not scheduled — ${response.data.message}`)
       }
-      // Non-scheduled outcomes render via the inline ResultBanner only.
     } catch (e) {
       setApiError(e instanceof Error ? e.message : 'Pickup call failed.')
     } finally {
@@ -223,7 +227,7 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
       role="dialog"
       aria-modal="true"
       aria-label="Schedule courier pickup"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[#1f150c]/45 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[#1f150c]/45 p-4 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
@@ -277,17 +281,16 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
             </div>
             {err('carrierCode') ? <p data-field-error className="mt-1 text-[10.5px] text-rose-600">{err('carrierCode')}</p> : null}
 
-            <div className="mt-3 grid grid-cols-3 gap-2.5">
+            <div className="mt-3">
               <Field label="Pickup date" required error={err('pickupDate')}>
-                <div className="relative">
-                  <input type="date" className={inputCls('pickupDate')}
-                         value={form.pickupDate}
-                         min={today}
-                         onChange={(e) => update({ pickupDate: e.target.value })}
-                         onBlur={() => touch('pickupDate')} />
-                  <FiCalendar className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-[#b6a684]" />
-                </div>
+                <input type="date" className={inputCls('pickupDate')}
+                       value={form.pickupDate}
+                       min={today}
+                       onChange={(e) => update({ pickupDate: e.target.value })}
+                       onBlur={() => touch('pickupDate')} />
               </Field>
+            </div>
+            <div className="mt-2.5 grid grid-cols-2 gap-2.5">
               <Field label="Window start" required error={err('pickupWindowStart')}>
                 <input type="time" className={inputCls('pickupWindowStart')}
                        value={form.pickupWindowStart ?? ''}
@@ -411,12 +414,13 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
                            onChange={(e) => update({ defaultWidth: e.target.value ? Number(e.target.value) : undefined })} />
                   </Field>
                   <Field label="Default height / Unit">
-                    <div className="flex gap-1">
+                    <div className="flex gap-1.5">
                       <input type="number" min="0" step="0.1"
-                             className={`${inputCls()} flex-1`}
+                             className={`${inputCls()} min-w-0 flex-1`}
                              value={form.defaultHeight ?? ''}
                              onChange={(e) => update({ defaultHeight: e.target.value ? Number(e.target.value) : undefined })} />
-                      <select className={inputCls()} value={form.dimUnit ?? 'CM'}
+                      <select className="w-16 shrink-0 rounded-lg border border-[#e3d9c4] bg-white px-1.5 py-1.5 text-[12.5px] text-[#1f150c] outline-none focus:border-[#412d15] focus:ring-1 focus:ring-[#412d15]"
+                              value={form.dimUnit ?? 'CM'}
                               onChange={(e) => update({ dimUnit: e.target.value as 'CM' | 'IN' })}>
                         <option value="CM">CM</option>
                         <option value="IN">IN</option>

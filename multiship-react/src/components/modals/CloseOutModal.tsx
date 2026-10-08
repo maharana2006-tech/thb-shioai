@@ -201,12 +201,9 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
             </p>
             <div className="mt-3">
               <Field label="Close date">
-                <div className="relative">
-                  <input type="date" className={inputCls}
-                         value={form.closeDate ?? ''}
-                         onChange={(e) => update({ closeDate: e.target.value })} />
-                  <FiCalendar className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-[#b6a684]" />
-                </div>
+                <input type="date" className={inputCls}
+                       value={form.closeDate ?? ''}
+                       onChange={(e) => update({ closeDate: e.target.value })} />
               </Field>
             </div>
           </Section>
