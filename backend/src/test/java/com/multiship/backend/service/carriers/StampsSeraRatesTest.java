@@ -134,6 +134,23 @@ class StampsSeraRatesTest {
 
     // ===== response parsing =====
 
+    /** What SERA sandbox actually returned on 2026-10-09: a bare array, string delivery days. */
+    @Test
+    void parseResponse_bareArrayAsSeraSendsIt_isQuotedUnderTheCatalogCode() {
+        String json = """
+                [{"carrier":"usps","service_type":"usps_ground_advantage","packaging_type":"package",
+                  "estimated_delivery_days":"5","estimated_delivery_date":"2026-10-16T00:00:00",
+                  "is_guaranteed_service":false,"trackable":"yes","is_return_label":false,
+                  "is_customs_required":false,
+                  "shipment_cost":{"total_amount":10.15,"currency":"usd","cost_details":[]}}]
+                """;
+        List<SeraRateQuote> options = rates.parseSeraRatesResponse(json);
+        assertEquals(1, options.size(), "a bare array is the real response shape — it must not read as 'no rates'");
+        assertEquals("GROUND_ADVANTAGE", options.get(0).option().serviceCode());
+        assertEquals(0, new BigDecimal("10.15").compareTo(options.get(0).option().totalAmount()));
+        assertEquals(Integer.valueOf(5), options.get(0).option().transitDays());
+    }
+
     @Test
     void parseResponse_twoRateQuotes_unpackIntoTwoRateOptions() {
         // Happy path: SERA returns an array of rate quotes under `rates`,
@@ -171,7 +188,8 @@ class StampsSeraRatesTest {
 
         SeraRateQuote first = options.get(0);
         assertEquals("USPS", first.option().carrierCode(), "carrier code is our canonical USPS, not SERA's lowercase");
-        assertEquals("usps_priority_mail", first.option().serviceCode());
+        assertEquals("PRIORITY", first.option().serviceCode(), "quoted under the catalog code the order picked");
+        assertEquals("USPS Priority Mail", first.option().serviceName());
         // compareTo rather than equals — Jackson strips BigDecimal's trailing
         // zero ("8.50" → scale 1 "8.5") and we care about value, not scale.
         assertEquals(0, new BigDecimal("8.50").compareTo(first.option().totalAmount()),
@@ -182,7 +200,7 @@ class StampsSeraRatesTest {
                 "is_customs_required=false must land on SeraRateQuote so the FE can skip the customs-missing banner");
 
         SeraRateQuote second = options.get(1);
-        assertEquals("usps_ground_advantage", second.option().serviceCode());
+        assertEquals("GROUND_ADVANTAGE", second.option().serviceCode());
         assertEquals(0, new BigDecimal("5.75").compareTo(second.option().totalAmount()),
                 "total must equal 5.75 (value-equal); got: " + second.option().totalAmount());
         assertEquals(Integer.valueOf(4), second.option().transitDays());

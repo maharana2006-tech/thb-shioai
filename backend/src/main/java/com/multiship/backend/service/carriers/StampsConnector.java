@@ -282,13 +282,29 @@ public class StampsConnector implements CarrierConnector {
         if (!"US".equals(o) && !"PR".equals(o)) {
             return List.of();
         }
-        return List.of(
-                new ServiceOffering("GROUND_ADVANTAGE", "USPS Ground Advantage", "DOMESTIC"),
-                new ServiceOffering("PRIORITY", "USPS Priority Mail", "DOMESTIC"),
-                new ServiceOffering("PRIORITY_EXPRESS", "USPS Priority Mail Express", "DOMESTIC"),
-                new ServiceOffering("FIRST_CLASS_INTL", "USPS First-Class Package Intl", "INTERNATIONAL"),
-                new ServiceOffering("PRIORITY_INTL", "USPS Priority Mail Intl", "INTERNATIONAL"),
-                new ServiceOffering("EXPRESS_INTL", "USPS Priority Mail Express Intl", "INTERNATIONAL"));
+        return US_SERVICES;
+    }
+
+    /** The USPS services the catalog syncs (codes are what orders and rate picks carry). */
+    private static final List<ServiceOffering> US_SERVICES = List.of(
+            new ServiceOffering("GROUND_ADVANTAGE", "USPS Ground Advantage", "DOMESTIC"),
+            new ServiceOffering("PRIORITY", "USPS Priority Mail", "DOMESTIC"),
+            new ServiceOffering("PRIORITY_EXPRESS", "USPS Priority Mail Express", "DOMESTIC"),
+            new ServiceOffering("FIRST_CLASS_INTL", "USPS First-Class Package Intl", "INTERNATIONAL"),
+            new ServiceOffering("PRIORITY_INTL", "USPS Priority Mail Intl", "INTERNATIONAL"),
+            new ServiceOffering("EXPRESS_INTL", "USPS Priority Mail Express Intl", "INTERNATIONAL"));
+
+    /**
+     * A SERA {@code service_type} back to the catalog service it came from
+     * ({@code usps_ground_advantage} → GROUND_ADVANTAGE), so a quote matches the
+     * service the order picked. Unknown types pass through unchanged.
+     */
+    static ServiceOffering catalogServiceForSera(String seraServiceType) {
+        if (seraServiceType == null) return null;
+        for (ServiceOffering o : US_SERVICES) {
+            if (mapSwsimServiceToSera(o.serviceCode()).equalsIgnoreCase(seraServiceType.trim())) return o;
+        }
+        return null;
     }
 
     @Override
@@ -2392,7 +2408,7 @@ public class StampsConnector implements CarrierConnector {
 
     /**
      * A one-use link into the Stamps.com web app ({@code GET /url?url_type=…}),
-     * e.g. {@code store_auto_buy} or {@code store_history}. Valid for one
+     * e.g. {@code store_default_payment_methods} or {@code reports_balances}. Valid for one
      * request only, so it is fetched when the user clicks, never stored.
      *
      * @throws IllegalStateException with Stamps.com's message when it refuses.

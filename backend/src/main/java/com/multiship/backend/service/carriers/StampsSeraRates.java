@@ -386,7 +386,8 @@ public class StampsSeraRates {
             log.warn("Stamps SERA /rates returned non-JSON (first 200 chars): {}", safeHead(responseJson));
             return List.of();
         }
-        JsonNode rates = root.path("rates");
+        // SERA answers with a bare array; older docs showed {"rates": [...]}.
+        JsonNode rates = root.isArray() ? root : root.path("rates");
         if (!rates.isArray() || rates.isEmpty()) return List.of();
         List<SeraRateQuote> out = new ArrayList<>();
         for (JsonNode rate : rates) {
@@ -410,8 +411,12 @@ public class StampsSeraRates {
             Boolean isCustomsRequired = rate.hasNonNull("is_customs_required")
                     ? rate.path("is_customs_required").asBoolean()
                     : null;
-            RateOption option = new RateOption(CARRIER_CODE, service, service, amount, currency,
-                    estimatedDelivery, transitDays);
+            // Quote under the catalog's code/name so it matches the service the order picked.
+            var catalog = StampsConnector.catalogServiceForSera(service);
+            RateOption option = new RateOption(CARRIER_CODE,
+                    catalog != null ? catalog.serviceCode() : service,
+                    catalog != null ? catalog.name() : service,
+                    amount, currency, estimatedDelivery, transitDays);
             out.add(new SeraRateQuote(option, isCustomsRequired));
         }
         return out;
