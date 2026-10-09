@@ -470,11 +470,54 @@ public class StampsSeraOAuthService {
 
     // ===== implementation helpers =====
 
+    /** Transient-retry backoffs for {@link #postToken}: three total
+     *  attempts, 300ms then 1s between them. Covers the 'Remote host
+     *  terminated the handshake' / connect-reset blips Stamps.com's
+     *  Auth0-fronted sandbox occasionally throws without warning. */
+    private static final long[] TOKEN_RETRY_BACKOFF_MS = {300L, 1000L};
+
     private TokenExchangeResult postToken(String tokenUrl,
                                           java.util.function.Consumer<Map<String, String>> fillBody) {
         if (!StringUtils.hasText(tokenUrl)) {
             return TokenExchangeResult.failure("SERA token URL is not configured");
         }
+        TokenExchangeResult last = null;
+        for (int attempt = 0; attempt <= TOKEN_RETRY_BACKOFF_MS.length; attempt++) {
+            last = postTokenOnce(tokenUrl, fillBody);
+            // Succeeded OR failed permanently — short-circuit. "Permanent"
+            // = HTTP 4xx (invalid_grant / unsupported_grant_type / wrong
+            // credentials); the detector below targets ONLY the transient
+            // network family (IOException, connection reset, TLS handshake
+            // failures) that benefit from retry.
+            if (last.success() || !isTransientNetworkFailure(last.errorMessage())) {
+                return last;
+            }
+            if (attempt < TOKEN_RETRY_BACKOFF_MS.length) {
+                long sleep = TOKEN_RETRY_BACKOFF_MS[attempt];
+                log.warn("SERA token exchange transient failure (attempt {}/{}): {} — retrying in {}ms",
+                        attempt + 1, TOKEN_RETRY_BACKOFF_MS.length + 1,
+                        last.errorMessage(), sleep);
+                try { Thread.sleep(sleep); }
+                catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return TokenExchangeResult.failure(
+                            "token exchange interrupted during retry backoff");
+                }
+            }
+        }
+        // All attempts exhausted on transient failure.
+        log.warn("SERA token exchange failed after {} attempts: {}",
+                TOKEN_RETRY_BACKOFF_MS.length + 1,
+                last == null ? "unknown" : last.errorMessage());
+        return TokenExchangeResult.failure(
+                "SERA token endpoint unreachable after " + (TOKEN_RETRY_BACKOFF_MS.length + 1)
+                        + " attempts (" + (last == null ? "unknown" : last.errorMessage())
+                        + "). Likely a transient Stamps.com/Auctane blip; please retry.");
+    }
+
+    /** Single attempt — kept as the inner retry unit. */
+    private TokenExchangeResult postTokenOnce(String tokenUrl,
+                                               java.util.function.Consumer<Map<String, String>> fillBody) {
         // SERA v1 token endpoint requires an application/json body per
         // developer.stamps.com/rest-api/reference/serav1.html#tag/qs_connect
         // (unusual — most OAuth2 servers take form-urlencoded). LinkedHashMap
@@ -509,6 +552,24 @@ public class StampsSeraOAuthService {
             log.warn("SERA token exchange call failed: {}", ex.getMessage());
             return TokenExchangeResult.failure("token exchange call failed: " + ex.getMessage());
         }
+    }
+
+    /** Signatures of transient network-side failures that benefit from
+     *  retry. HTTP 4xx (OAuth-rejected credentials) + explicit "no
+     *  access_token" responses are NOT transient; they'd fail the same
+     *  way next attempt and we must not loop on them. */
+    static boolean isTransientNetworkFailure(String errorMessage) {
+        if (errorMessage == null) return false;
+        String m = errorMessage.toLowerCase(Locale.ROOT);
+        return m.contains("i/o error")
+                || m.contains("remote host terminated")
+                || m.contains("connection reset")
+                || m.contains("connection refused")
+                || m.contains("timed out")
+                || m.contains("timeout")
+                || m.contains("sslhandshake")
+                || m.contains("unknownhost")
+                || m.contains("call failed:"); // generic wrapper from the catch above
     }
 
     private String extractOAuthError(String body) {
