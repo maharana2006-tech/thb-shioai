@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { FiTruck, FiCheckSquare, FiRefreshCw, FiClock, FiCalendar } from 'react-icons/fi'
+import { FiTruck, FiCheckSquare, FiRefreshCw, FiClock, FiCalendar, FiMapPin, FiPackage } from 'react-icons/fi'
 import { pickupService, type PickupRequest, type PickupServiceType } from '../api/pickupService'
 import { manifestService, type EodEvent, type ManifestResponse } from '../api/manifestService'
 import { clientService, type Client } from '../api/clientService'
@@ -29,11 +29,38 @@ const SERVICE_TYPES: PickupServiceType[] = ['GROUND', 'EXPRESS', 'INTERNATIONAL'
 const label = 'mb-1 block text-[10.5px] font-semibold uppercase tracking-[0.1em] text-[#b6a684]'
 const input =
   'w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[13px] text-[#1f150c] outline-none transition focus:border-[#412d15] focus:ring-4 focus:ring-[#412d15]/10'
-const card = 'rounded-2xl border border-[#e3d9c4] bg-white p-4'
 const primaryBtn =
-  'inline-flex items-center justify-center gap-1.5 rounded-xl bg-[#1f150c] px-4 py-2 text-[13px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#cdbf9f]'
+  'inline-flex items-center justify-center gap-1.5 rounded-xl bg-[#1f150c] px-4 py-2.5 text-[13px] font-semibold text-white shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#cdbf9f]'
 
 const today = () => new Date().toISOString().slice(0, 10)
+
+/** Section card with an icon-badge header bar — the look used across the
+ *  pickup/close modals, for a consistent feature design. */
+function Card({ icon, title, hint, action, children }: {
+  icon: ReactNode; title: string; hint?: string; action?: ReactNode; children: ReactNode
+}) {
+  return (
+    <section className="overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-sm">
+      <div className="flex items-center gap-2.5 border-b border-[#eee6d6] bg-[#faf7f0]/50 px-4 py-2.5">
+        <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#1f150c] text-[#f4eede]">{icon}</span>
+        <h3 className="text-[13px] font-semibold text-[#1f150c]">{title}</h3>
+        {hint ? <span className="text-[10.5px] text-[#b6a684]">{hint}</span> : null}
+        {action ? <div className="ml-auto">{action}</div> : null}
+      </div>
+      <div className="p-4">{children}</div>
+    </section>
+  )
+}
+
+/** Thin labelled divider that groups fields inside a form card. */
+function GroupLabel({ children }: { children: ReactNode }) {
+  return (
+    <div className="mb-2 mt-3 flex items-center gap-2 first:mt-0">
+      <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#a1906d]">{children}</span>
+      <span className="h-px flex-1 bg-[#eee6d6]" />
+    </div>
+  )
+}
 
 function StatusPill({ status }: { status: string }) {
   const s = (status || '').toUpperCase()
@@ -181,10 +208,7 @@ export default function PickupsEodPage() {
         {/* Left column — close + activity (fills the space next to the taller pickup form) */}
         <div className="space-y-4">
         {/* End-of-day close */}
-        <section className={card}>
-          <h3 className="mb-3 flex items-center gap-2 text-[13.5px] font-semibold text-[#1f150c]">
-            <FiCheckSquare className="h-4 w-4 text-[#412d15]" /> End-of-day close
-          </h3>
+        <Card icon={<FiCheckSquare className="h-3.5 w-3.5" />} title="End-of-day close">
           <div className="grid grid-cols-2 gap-3">
             <div>
               <span className={label}>Carrier</span>
@@ -213,7 +237,7 @@ export default function PickupsEodPage() {
             <Link to={settingsPaths.dtcScheduler} className="font-semibold text-[#412d15] underline">Carrier end-of-day close</Link> job.
             DHL manifests implicitly via its pickup, so it isn't listed here.
           </p>
-          <button type="button" onClick={() => void runClose()} disabled={closing} className={`${primaryBtn} mt-3`}>
+          <button type="button" onClick={() => void runClose()} disabled={closing} className={`${primaryBtn} mt-3 w-full`}>
             {closing ? <FiRefreshCw className="h-3.5 w-3.5 animate-spin" /> : <FiCheckSquare className="h-3.5 w-3.5" />}
             {closing ? 'Closing…' : 'Close out'}
           </button>
@@ -239,16 +263,16 @@ export default function PickupsEodPage() {
               ) : null}
             </div>
           ) : null}
-        </section>
+        </Card>
 
         {/* Recent activity (compact list, paginated) */}
-        <section className={card}>
-          <div className="mb-2 flex items-center justify-between">
-            <h3 className="text-[13.5px] font-semibold text-[#1f150c]">Recent activity</h3>
-            <button type="button" onClick={() => void loadEvents()} className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]">
-              <FiRefreshCw className={`h-3.5 w-3.5 ${loadingEvents ? 'animate-spin' : ''}`} /> Refresh
-            </button>
-          </div>
+        <Card icon={<FiClock className="h-3.5 w-3.5" />} title="Recent activity"
+              action={
+                <button type="button" onClick={() => void loadEvents()} aria-label="Refresh activity"
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#5a4526] transition hover:bg-[#faf7f0]">
+                  <FiRefreshCw className={`h-3.5 w-3.5 ${loadingEvents ? 'animate-spin' : ''}`} />
+                </button>
+              }>
           {events.length === 0 ? (
             <p className="py-8 text-center text-[12px] text-[#9a8b70]">
               {loadingEvents ? 'Loading…' : 'No pickups or close-outs yet.'}
@@ -291,14 +315,12 @@ export default function PickupsEodPage() {
               ) : null}
             </>
           )}
-        </section>
+        </Card>
         </div>
 
         {/* Schedule a pickup */}
-        <section className={card}>
-          <h3 className="mb-3 flex items-center gap-2 text-[13.5px] font-semibold text-[#1f150c]">
-            <FiTruck className="h-4 w-4 text-[#412d15]" /> Schedule a pickup
-          </h3>
+        <Card icon={<FiTruck className="h-3.5 w-3.5" />} title="Schedule a pickup">
+          <GroupLabel>Carrier &amp; schedule</GroupLabel>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <span className={label}>Carrier</span>
@@ -328,6 +350,10 @@ export default function PickupsEodPage() {
               <span className={label}>Window to</span>
               <input type="time" className={input} value={pickup.pickupWindowEnd} onChange={(e) => setP('pickupWindowEnd')(e.target.value)} />
             </div>
+          </div>
+
+          <GroupLabel><FiMapPin className="inline h-3 w-3" /> Pickup address</GroupLabel>
+          <div className="grid grid-cols-2 gap-3">
             <div>
               <span className={label}>Contact name</span>
               <input className={input} value={pickup.contactName} onChange={(e) => setP('contactName')(e.target.value)} />
@@ -359,26 +385,29 @@ export default function PickupsEodPage() {
               <span className={label}>Country</span>
               <input className={input} value={pickup.countryCode} onChange={(e) => setP('countryCode')(e.target.value.toUpperCase())} maxLength={2} />
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <span className={label}>Packages</span>
-                <input type="number" min={1} className={input} value={pickup.packageCount} onChange={(e) => setP('packageCount')(Number(e.target.value))} />
-              </div>
-              <div>
-                <span className={label}>Total wt ({pickup.weightUnit})</span>
-                <input type="number" min={0.1} step={0.1} className={input} value={pickup.totalWeight} onChange={(e) => setP('totalWeight')(Number(e.target.value))} />
-              </div>
+          </div>
+
+          <GroupLabel><FiPackage className="inline h-3 w-3" /> Parcels</GroupLabel>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <span className={label}>Packages</span>
+              <input type="number" min={1} className={input} value={pickup.packageCount} onChange={(e) => setP('packageCount')(Number(e.target.value))} />
+            </div>
+            <div>
+              <span className={label}>Total wt ({pickup.weightUnit})</span>
+              <input type="number" min={0.1} step={0.1} className={input} value={pickup.totalWeight} onChange={(e) => setP('totalWeight')(Number(e.target.value))} />
             </div>
             <div className="col-span-2">
               <span className={label}>Driver instructions (optional)</span>
               <input className={input} value={pickup.specialInstructions ?? ''} onChange={(e) => setP('specialInstructions')(e.target.value)} />
             </div>
           </div>
-          <button type="button" onClick={() => void runPickup()} disabled={scheduling} className={`${primaryBtn} mt-3`}>
+
+          <button type="button" onClick={() => void runPickup()} disabled={scheduling} className={`${primaryBtn} mt-4 w-full`}>
             {scheduling ? <FiRefreshCw className="h-3.5 w-3.5 animate-spin" /> : <FiTruck className="h-3.5 w-3.5" />}
             {scheduling ? 'Scheduling…' : 'Schedule pickup'}
           </button>
-        </section>
+        </Card>
       </div>
     </div>
   )
