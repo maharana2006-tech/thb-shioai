@@ -62,7 +62,7 @@ public class StampsPostageController {
     }
 
     @Operation(summary = "One-use link to a Stamps.com page",
-            description = "page = store_auto_buy (auto-funding), store_history or store_payment_methods.")
+            description = "page = store_default_payment_methods (which card pays) or reports_balances (statement).")
     @GetMapping("/page-url/{accountId}")
     public ResponseEntity<ApiResponse<Map<String, String>>> pageUrl(@PathVariable Long accountId,
                                                                     @RequestParam String page) {

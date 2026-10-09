@@ -26,8 +26,7 @@ import java.util.UUID;
 /**
  * Postage balance and manual top-up for USPS accounts on Stamps.com (SERA).
  * Stamps.com charges the payment method saved on its own account; this app
- * never sees card details. Auto top-up is left to Stamps.com's own auto-buy
- * setting (linked from the Carriers screen) so an account is never funded twice.
+ * never sees card details.
  */
 @Slf4j
 @Service
@@ -37,8 +36,13 @@ public class StampsPostageService {
     /** Stamps.com's smallest postage purchase. */
     static final BigDecimal MIN_TOPUP = new BigDecimal("10");
 
-    /** Stamps.com pages the Carriers screen links to (SERA {@code url_type}s). */
-    static final Set<String> PAGES = Set.of("store_auto_buy", "store_history", "store_payment_methods");
+    /**
+     * Stamps.com pages the Carriers screen links to (SERA {@code url_type}s):
+     * Payment settings (which card pays for postage, with a link to manage
+     * cards) and the balance report. Stamps.com retired {@code store_auto_buy}
+     * ("Invalid URLType"), so there is no auto-funding page to link to.
+     */
+    static final Set<String> PAGES = Set.of("store_default_payment_methods", "reports_balances");
 
     private final CarrierAccountRefRepository accounts;
     private final StampsFundingRepository fundings;
@@ -135,7 +139,7 @@ public class StampsPostageService {
                 .map(StampsPostageService::toRow).toList();
     }
 
-    /** A one-use link to a Stamps.com page (auto-buy settings, history, payment methods). */
+    /** A one-use link to a Stamps.com page (payment settings, balance report). */
     public String pageUrl(long accountId, String page) {
         if (!PAGES.contains(page)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown Stamps.com page: " + page);

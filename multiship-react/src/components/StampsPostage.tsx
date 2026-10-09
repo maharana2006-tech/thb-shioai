@@ -1,8 +1,7 @@
 /**
  * USPS postage on Stamps.com: the balance pill on a USPS account row and the
  * "Add funds" dialog. Stamps.com charges the payment method saved on its own
- * account — this screen never asks for card details. Auto top-up stays in
- * Stamps.com (linked below) so an account is never funded from two places.
+ * account — this screen never asks for card details.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { FiAlertTriangle, FiCreditCard, FiExternalLink, FiMail, FiX } from 'react-icons/fi'
@@ -264,9 +263,8 @@ export function StampsAddFundsDialog({ account, onClose }: {
           )}
           <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px]">
             {([
-              ['store_auto_buy', 'Auto-funding on Stamps.com'],
-              ['store_payment_methods', 'Payment methods'],
-              ['store_history', 'Full statement'],
+              ['store_default_payment_methods', 'Payment settings on Stamps.com'],
+              ['reports_balances', 'Full statement'],
             ] as const).map(([page, label]) => (
               <button key={page} type="button" onClick={() => void openStampsPage(account.id, page)}
                 className="inline-flex items-center gap-1 font-semibold text-[#412d15] underline-offset-2 hover:underline">

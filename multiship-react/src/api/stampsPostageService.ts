@@ -20,7 +20,7 @@ export interface PostageFunding {
 }
 
 /** Stamps.com pages the screen links to; each link works once, so it's fetched on click. */
-export type StampsPage = 'store_auto_buy' | 'store_history' | 'store_payment_methods'
+export type StampsPage = 'store_default_payment_methods' | 'reports_balances'
 
 const base = '/carrier-accounts/stamps-sera'
 

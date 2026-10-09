@@ -136,6 +136,8 @@ class StampsPostageServiceTest {
     void onlyKnownStampsPagesCanBeOpened() {
         var ex = assertThrows(ResponseStatusException.class, () -> service.pageUrl(9L, "store_password"));
         assertEquals(400, ex.getStatusCode().value());
+        // Stamps.com retired store_auto_buy ("Invalid URLType").
+        assertThrows(ResponseStatusException.class, () -> service.pageUrl(9L, "store_auto_buy"));
         verifyNoInteractions(stamps);
     }
 
