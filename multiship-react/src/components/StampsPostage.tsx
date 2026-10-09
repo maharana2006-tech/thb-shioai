@@ -5,7 +5,7 @@
  * Stamps.com (linked below) so an account is never funded from two places.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { FiAlertTriangle, FiCreditCard, FiExternalLink, FiX } from 'react-icons/fi'
+import { FiAlertTriangle, FiCreditCard, FiExternalLink, FiMail, FiX } from 'react-icons/fi'
 import { notify } from '../utils/notify'
 import type { CarrierAccountRef } from '../api/accountRefService'
 import {
@@ -59,18 +59,25 @@ export function StampsBalancePill({ accountId, version, onOpen }: {
 
   const available = balance?.available ?? null
   const low = available !== null && available < LOW_BALANCE
-  const label = failed ? 'Postage —' : available === null ? 'Postage …' : `Postage ${usd(available)}`
+  const amount = failed ? '—' : available === null ? '…' : usd(available)
   return (
     <button
       type="button"
       onClick={(e) => { e.stopPropagation(); onOpen() }}
-      title={failed ? "Couldn't read the balance from Stamps.com. Click to try again or add funds." : 'Add funds'}
-      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold transition ${
+      title={failed
+        ? "Couldn't read the postage balance from Stamps.com. Click to try again or add funds."
+        : `Postage balance${low ? ' is low' : ''}. Click to add funds.`}
+      aria-label={`Postage balance ${amount}${low ? ', low' : ''}. Add funds`}
+      className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 transition ${
         low ? 'bg-amber-100 text-amber-800 hover:bg-amber-200' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
     >
-      {low ? <FiAlertTriangle className="h-3 w-3" aria-hidden="true" /> : null}
-      {label}
-      {low ? ' · low' : null}
+      {/* Text styles on the span: the app's global button rule outranks utility classes on <button>. */}
+      <span className="inline-flex items-center gap-1 whitespace-nowrap text-[10px] font-bold leading-4">
+        {low
+          ? <FiAlertTriangle className="h-3 w-3" aria-hidden="true" />
+          : <FiMail className="h-3 w-3" aria-hidden="true" />}
+        {amount}
+      </span>
     </button>
   )
 }

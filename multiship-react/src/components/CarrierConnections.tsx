@@ -1100,7 +1100,7 @@ export default function CarrierConnections({
         cell: ({ row }) => {
           const account = row.original
           return (
-            <div className="flex items-center gap-2.5">
+            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
               <ActiveToggle
                 active={account.active}
                 busy={busyId !== null}
