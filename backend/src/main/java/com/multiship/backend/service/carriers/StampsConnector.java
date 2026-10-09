@@ -1336,9 +1336,26 @@ public class StampsConnector implements CarrierConnector {
         if (intl.getCommodities() != null && !intl.getCommodities().isEmpty()) {
             contentsDesc = intl.getCommodities().get(0).getDescription();
         }
-        if (StringUtils.hasText(contentsDesc)) {
-            customs.put("contents_description", CustomsCommodityNormaliser.truncateDescription(contentsDesc));
+        // Shipment-level contents_description → CN22 form line. SERA/USPS
+        // rejects ANY contents_description that mirrors (even cleaned)
+        // the first commodity's item_description with carrier error
+        // 4522242 "contents_description specified is invalid" — the
+        // field is apparently meant for a SHORT generic shipment summary
+        // ("bicycle parts", "clothing", "electronics"), not a verbatim
+        // item line. Since IntlShipmentBlockDTO has no shipment-level
+        // summary field yet, omit the field entirely and let USPS infer
+        // the summary from contents_type. Operator-visible WARN on hit
+        // of this path so the gap is tracked:
+        // ponytail: omitting contents_description; add a dedicated
+        // IntlShipmentBlockDTO.contentsSummary field when operators want
+        // their own CN22 summary line.
+        String normalisedContents = CustomsCommodityNormaliser.normaliseContentsDescription(contentsDesc);
+        if (StringUtils.hasText(normalisedContents)) {
+            log.debug("SERA customs: omitting contents_description '{}' (derived from first commodity; "
+                    + "SERA rejects item-shaped values). CN22 summary will fall back to contents_type.",
+                    normalisedContents);
         }
+        // customs.put("contents_description", normalisedContents);  // temporarily disabled — see above.
         // PR-T7 (audit T-C2) — non_delivery_option is operator-configurable.
         // DTO value wins; fall back to the safer return-to-sender default.
         // SERA accepts only `return_to_sender` and `treat_as_abandoned`;
@@ -1360,7 +1377,15 @@ public class StampsConnector implements CarrierConnector {
         Map<String, Object> senderInfo = new LinkedHashMap<>();
         String licenseNumber = nonBlank(intl.getAesCitation(), intl.getExportDeclarationReference());
         if (StringUtils.hasText(licenseNumber)) senderInfo.put("license_number", licenseNumber);
-        if (StringUtils.hasText(intl.getFtrExemption())) senderInfo.put("certificate_number", intl.getFtrExemption());
+        // T7 originally mapped ftrExemption → certificate_number but SERA
+        // rejects the FTR exemption codes (NO_EEI_30_37_a / _h / _36) with
+        // carrier error 4522242 "certificate_number specified is invalid."
+        // SERA's certificate_number is for DOT/USDA/NMFC-style product
+        // certificates, not FTR exemption text. USPS auto-derives the
+        // §30.37(a) exemption from shipment value (<$2500) on its side,
+        // so dropping our ftrExemption from the wire body doesn't lose
+        // the regulatory signal. aesCitation (ITN) still rides as
+        // license_number above — that one IS a valid certificate.
         if (!senderInfo.isEmpty()) customs.put("sender_info", senderInfo);
         // PR-T7 (audit T-C3) — recipient_info.tax_id for EU IOSS / UK VAT /
         // BR CPF / etc. required post-ICS2. Precedence: generic importerTaxId

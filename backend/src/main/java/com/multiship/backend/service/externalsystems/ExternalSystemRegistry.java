@@ -106,6 +106,22 @@ public class ExternalSystemRegistry {
      * {@link ExternalSystemConnector#connect}. Caller casts the returned
      * object to their expected handle type.
      */
+    /**
+     * I1 (audit {@code [[inactive-external-system-skip]]}) — read-only
+     * probe of the row's {@code active} flag. Never throws; returns
+     * {@code false} when the row is missing OR explicitly inactive. Used
+     * at startup to decide whether to even register integration beans
+     * (Oracle DataSource / JPA) and at runtime by the writeback
+     * dispatcher before every POST/GET so an operator toggling
+     * {@code active=false} mid-run causes a silent-skip rather than
+     * a surprise HTTP call.
+     */
+    public boolean isActive(String connectionName) {
+        return config.findByName(connectionName)
+                .map(ExternalSystemConnection::isActive)
+                .orElse(false);
+    }
+
     @SuppressWarnings({"rawtypes", "unchecked"})
     public Object connect(String connectionName, LoginContext ctx) {
         ExternalSystemConnection row = requireActive(connectionName);

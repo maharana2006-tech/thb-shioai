@@ -42,6 +42,18 @@ public class WritebackJournalService {
     public static final String STATUS_OK = "OK";
     public static final String STATUS_SKIPPED = "SKIPPED";
     public static final String STATUS_FAILED = "FAILED";
+    /**
+     * PR-I3 (audit {@code [[inactive-external-system-skip]]}) — terminal
+     * status for writeback attempts the dispatcher chose not to make
+     * because the backing {@code external_system_connection} row was
+     * {@code active=false} at dispatch time. Distinct from
+     * {@link #STATUS_SKIPPED} (connector-side "nothing to do") because
+     * the SKIPPED_INACTIVE path represents an operator-chosen integration
+     * off-state, not a connector decision — it needs its own row so
+     * audit queries can distinguish "we had the data but the operator
+     * had the integration off" from "the connector didn't apply."
+     */
+    public static final String STATUS_SKIPPED_INACTIVE = "SKIPPED_INACTIVE";
 
     // D1b — retry policy. ponytail: global cap + exponential backoff;
     // promote to a retry_policy table if per-connection tuning is ever
@@ -106,6 +118,57 @@ public class WritebackJournalService {
                 .payloadJson(safeSerialize(req))
                 .attemptNumber(attempt)
                 .retryOfId(retryOfId)
+                .createdAt(now)
+                .updatedAt(now)
+                .build());
+    }
+
+    /**
+     * PR-I3 — journal a GENERATE attempt that was skipped because the
+     * backing connection is inactive. No connector call made; writes a
+     * terminal {@link #STATUS_SKIPPED_INACTIVE} row so admin queries +
+     * dashboards can show "integration off" without reading the log.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public WritebackJournalEntity recordSkippedInactive(String connectionName, String systemType,
+                                                         String mode, WritebackPayload payload) {
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        return repo.save(WritebackJournalEntity.builder()
+                .connectionName(connectionName)
+                .systemType(systemType)
+                .mode(mode)
+                .status(STATUS_SKIPPED_INACTIVE)
+                .ackDetail("connection '" + connectionName + "' inactive at dispatch time")
+                .clientCode(payload == null ? null : payload.clientCode())
+                .orderNo(payload == null ? null : payload.orderNo())
+                .trackingNumber(payload == null ? null : payload.trackingNumber())
+                .source(payload == null ? null : payload.source())
+                .channel(payload == null ? null : payload.channel())
+                .payloadJson(safeSerialize(payload))
+                .attemptNumber(1)
+                .createdAt(now)
+                .updatedAt(now)
+                .build());
+    }
+
+    /** PR-I3 — CLEAR-mode variant of {@link #recordSkippedInactive}. */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public WritebackJournalEntity recordSkippedInactive(String connectionName, String systemType,
+                                                         WritebackClearRequest req) {
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        return repo.save(WritebackJournalEntity.builder()
+                .connectionName(connectionName)
+                .systemType(systemType)
+                .mode(MODE_CLEAR)
+                .status(STATUS_SKIPPED_INACTIVE)
+                .ackDetail("connection '" + connectionName + "' inactive at dispatch time")
+                .clientCode(req == null ? null : req.clientCode())
+                .orderNo(req == null ? null : req.orderNo())
+                .trackingNumber(req == null ? null : req.trackingNumber())
+                .source(req == null ? null : req.source())
+                .channel(req == null ? null : req.channel())
+                .payloadJson(safeSerialize(req))
+                .attemptNumber(1)
                 .createdAt(now)
                 .updatedAt(now)
                 .build());

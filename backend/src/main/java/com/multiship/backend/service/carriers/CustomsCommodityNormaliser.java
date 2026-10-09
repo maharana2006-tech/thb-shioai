@@ -99,6 +99,45 @@ public final class CustomsCommodityNormaliser {
         return raw.substring(0, DESCRIPTION_MAX_CHARS - 1) + "…";
     }
 
+    /** USPS CN22 contents_description cap. The customs form prints this
+     *  on a short line; USPS validates against ~50 chars and rejects
+     *  longer values with carrier error 4522242 "contents_description
+     *  specified is invalid." Separate from {@link #DESCRIPTION_MAX_CHARS}
+     *  (255) which bounds per-commodity {@code item_description}. */
+    public static final int CONTENTS_DESCRIPTION_MAX_CHARS = 50;
+
+    /**
+     * Normalise the shipment-level {@code contents_description} that lands
+     * on the CN22 form. Stricter than {@link #truncateDescription} because
+     * USPS validates this field aggressively (SERA error 4522242 for
+     * "Carbon road bicycle frame, unassembled" — comma + length suspected):
+     *
+     * <ul>
+     *   <li>Commas / semicolons / pipes / slashes replaced with space —
+     *       USPS internally parses the field and rejects list-shaped
+     *       values.</li>
+     *   <li>Non-printable-ASCII dropped — CN22 is a printed form, ink
+     *       stays Latin-1.</li>
+     *   <li>Whitespace collapsed.</li>
+     *   <li>Truncated to {@link #CONTENTS_DESCRIPTION_MAX_CHARS}.</li>
+     * </ul>
+     *
+     * <p>Returns {@code null} for null / all-whitespace input so callers
+     * can omit the field rather than send a blank string.
+     */
+    public static String normaliseContentsDescription(String raw) {
+        if (raw == null) return null;
+        String cleaned = raw
+                .replaceAll("[,;|/\\\\]+", " ")        // list separators → space
+                .replaceAll("[^\\x20-\\x7E]+", " ")    // non-printable-ASCII → space
+                .replaceAll("\\s+", " ")               // collapse whitespace
+                .trim();
+        if (cleaned.isEmpty()) return null;
+        return cleaned.length() > CONTENTS_DESCRIPTION_MAX_CHARS
+                ? cleaned.substring(0, CONTENTS_DESCRIPTION_MAX_CHARS).trim()
+                : cleaned;
+    }
+
     /**
      * Advisory reconciliation of declared contents weight against the
      * package weight. Returns {@code true} when the sum of

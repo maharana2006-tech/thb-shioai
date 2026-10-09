@@ -585,6 +585,33 @@ public class ShipmentValidationService {
             adaptedRequest.setIntl(withIntl.getIntl());
         }
 
+        // Retired-service pre-check — short-circuit before the carrier
+        // call for USPS service codes that are no longer offered by SERA.
+        // Rejects at validation time with an actionable message instead
+        // of letting SERA 400 with the opaque 899999 "service_type
+        // specified is invalid." Catalog-side gate (shipping_service
+        // .enabled=false) is the primary defence; this is belt-and-braces
+        // for stale FE caches / external API callers still sending the
+        // retired code.
+        String retiredReplacement = retiredUspsServiceReplacement(carrier, serviceType);
+        if (retiredReplacement != null) {
+            String msg = "USPS retired this service — pick " + retiredReplacement
+                    + " instead. (The carrier API no longer accepts "
+                    + serviceType + ".)";
+            log.info("Shipment validation — {} rejecting retired service {} pre-SERA: {}",
+                    carrier, serviceType, msg);
+            rateProblemOut.set("No price: " + msg);
+            return ShipmentValidationResult.CarrierValidationSubResult.builder()
+                    .carrierCode(carrier)
+                    .valid(false)
+                    .matchLevel("ERROR")
+                    .kind("ADDRESS_ONLY")
+                    .warnings(List.of())
+                    .errors(List.of(msg))
+                    .message(msg)
+                    .build();
+        }
+
         // PR-T-POST (audit parallel of S-B1) — StampsSeraAuthContext pushes
         // the SERA refresh_token onto StampsConnector's ThreadLocal so the
         // token call + the subsequent getRates/validateShipment calls can
@@ -1536,6 +1563,42 @@ public class ShipmentValidationService {
      */
     private static String blankTo(String primary, String fallback) {
         return StringUtils.hasText(primary) ? primary : fallback;
+    }
+
+    /**
+     * Known-retired USPS service codes mapped to their current replacement.
+     * SERA / Stamps.com drops retired product classes from the valid
+     * {@code service_type} enum, so a late-cache FE or an external caller
+     * sending the old code hits SERA's opaque 899999 "service_type specified
+     * is invalid." We pre-check in {@code validateCarrierSync} and surface
+     * an actionable "USPS retired this service — pick X instead" message.
+     *
+     * <p>Returns {@code null} when the code is still live or doesn't apply.
+     *
+     * <p>Known retirements:
+     * <ul>
+     *   <li><b>FIRST_CLASS_INTL</b> — USPS First-Class Package International
+     *       Service (FCPIS), retired by USPS on 2024-01-21 (Postal
+     *       Bulletin 22644). Replacement: {@code PRIORITY_INTL}
+     *       (Priority Mail International, up to 70 lb). Also mapped at
+     *       the catalog level ({@code shipping_service.enabled=false}).</li>
+     * </ul>
+     *
+     * <p>REGULATORY_REFERENCE pattern — see
+     * [[regulatory-ref-javadoc]]: statutory/postal-rule changes get a
+     * dated citation here so the next operator who adds a retirement
+     * knows where the authority came from.
+     */
+    static String retiredUspsServiceReplacement(String carrier, String serviceCode) {
+        if (!"USPS".equalsIgnoreCase(carrier) && !"STAMPS".equalsIgnoreCase(carrier)) {
+            return null;
+        }
+        if (serviceCode == null) return null;
+        return switch (serviceCode.trim().toUpperCase(Locale.ROOT)) {
+            case "FIRST_CLASS_INTL", "USPS_FIRST_CLASS_PACKAGE_INTERNATIONAL_SERVICE" ->
+                    "PRIORITY_INTL (USPS Priority Mail International)";
+            default -> null;
+        };
     }
 
     /**

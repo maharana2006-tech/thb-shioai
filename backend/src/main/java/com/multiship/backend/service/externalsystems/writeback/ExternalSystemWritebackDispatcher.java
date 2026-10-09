@@ -96,7 +96,14 @@ public class ExternalSystemWritebackDispatcher {
                 return;
             }
             if (!row.get().isActive()) {
-                log.debug("writeback: skipping generate — connection '{}' inactive", name);
+                // PR-I3 — operator-chosen integration off-state. Journal a
+                // SKIPPED_INACTIVE row + log at INFO so admin dashboards +
+                // audit queries can tell "integration off" apart from
+                // "nothing to do." Terminal status; no retry scheduled.
+                log.info("writeback: skipping generate on inactive connection '{}' order={}",
+                        name, payload.orderNo());
+                journal.recordSkippedInactive(name, row.get().getSystemType(),
+                        WritebackJournalService.MODE_GENERATE, payload);
                 return;
             }
             if (!isSourceAllowed(payload.source(), row.get())) {
@@ -160,8 +167,15 @@ public class ExternalSystemWritebackDispatcher {
                 return;
             }
             Optional<ExternalSystemConnection> row = config.findByName(name);
-            if (row.isEmpty() || !row.get().isActive()) {
-                log.debug("writeback: skipping clear — connection '{}' missing/inactive", name);
+            if (row.isEmpty()) {
+                log.debug("writeback: skipping clear — connection '{}' does not exist", name);
+                return;
+            }
+            if (!row.get().isActive()) {
+                // PR-I3 — same inactive handling as generate.
+                log.info("writeback: skipping clear on inactive connection '{}' order={}",
+                        name, req.orderNo());
+                journal.recordSkippedInactive(name, row.get().getSystemType(), req);
                 return;
             }
             if (noFlagsEnabled(row.get())) {
