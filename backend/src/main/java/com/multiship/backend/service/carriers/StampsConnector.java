@@ -926,9 +926,9 @@ public class StampsConnector implements CarrierConnector {
         // API call and returns a bewildering 401 to the operator.
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             throw new com.multiship.backend.exception.CarrierConnectionException(
-                    "USPS via Stamps.com (SERA): this account's credentials aren't verified "
-                            + "(no live SERA access_token). Re-verify the account on the "
-                            + "Carriers page before shipping.");
+                    "This USPS account isn't authorized with Stamps.com yet (or the authorization "
+                            + "expired). An admin must open Settings → Carriers and click "
+                            + "\"Authorize with Stamps.com\" on this account.");
         }
         if (!StringUtils.hasText(request.getRecipientCountryCode())) {
             throw new IllegalArgumentException(

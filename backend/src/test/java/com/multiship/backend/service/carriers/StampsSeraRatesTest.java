@@ -321,9 +321,8 @@ class StampsSeraRatesTest {
         ShipmentRequestDTO req = baseDomesticRequest();
         IllegalStateException ex = assertThrows(IllegalStateException.class,
                 () -> rates.getRates(req, "", "PRODUCTION"));
-        assertTrue(ex.getMessage().contains("not authorized")
-                        || ex.getMessage().toLowerCase().contains("authoriz"),
-                "blank token must point the operator at the authorization flow; got: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("\"Authorize with Stamps.com\""),
+                "blank token must name the button that fixes it; got: " + ex.getMessage());
 
         assertThrows(IllegalStateException.class,
                 () -> rates.getRates(req, "stamps-local-abc", "PRODUCTION"));

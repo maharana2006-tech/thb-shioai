@@ -111,8 +111,9 @@ public class StampsSeraRates {
     public List<SeraRateQuote> getRates(ShipmentRequestDTO request, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             throw new IllegalStateException(
-                    "Stamps.com SERA is not authorized on this account — complete the "
-                            + "Stamps.com SERA authorization flow before rate-shopping USPS.");
+                    "This USPS account isn't authorized with Stamps.com yet (or the authorization "
+                            + "expired). An admin must open Settings → Carriers and click "
+                            + "\"Authorize with Stamps.com\" on this account.");
         }
         if (!StringUtils.hasText(request.getRecipientCountryCode())) {
             throw new IllegalArgumentException(
