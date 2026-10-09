@@ -1337,15 +1337,25 @@ public class StampsConnector implements CarrierConnector {
             contentsDesc = intl.getCommodities().get(0).getDescription();
         }
         // Shipment-level contents_description → CN22 form line. SERA/USPS
-        // validates aggressively; `truncateDescription` (255-char cap) was
-        // too loose. The dedicated normaliser strips commas / pipes /
-        // non-ASCII and caps at 50 chars — matches the CN22 physical line
-        // and the SERA error 4522242 "contents_description specified is
-        // invalid" we hit on "Carbon road bicycle frame, unassembled".
+        // rejects ANY contents_description that mirrors (even cleaned)
+        // the first commodity's item_description with carrier error
+        // 4522242 "contents_description specified is invalid" — the
+        // field is apparently meant for a SHORT generic shipment summary
+        // ("bicycle parts", "clothing", "electronics"), not a verbatim
+        // item line. Since IntlShipmentBlockDTO has no shipment-level
+        // summary field yet, omit the field entirely and let USPS infer
+        // the summary from contents_type. Operator-visible WARN on hit
+        // of this path so the gap is tracked:
+        // ponytail: omitting contents_description; add a dedicated
+        // IntlShipmentBlockDTO.contentsSummary field when operators want
+        // their own CN22 summary line.
         String normalisedContents = CustomsCommodityNormaliser.normaliseContentsDescription(contentsDesc);
         if (StringUtils.hasText(normalisedContents)) {
-            customs.put("contents_description", normalisedContents);
+            log.debug("SERA customs: omitting contents_description '{}' (derived from first commodity; "
+                    + "SERA rejects item-shaped values). CN22 summary will fall back to contents_type.",
+                    normalisedContents);
         }
+        // customs.put("contents_description", normalisedContents);  // temporarily disabled — see above.
         // PR-T7 (audit T-C2) — non_delivery_option is operator-configurable.
         // DTO value wins; fall back to the safer return-to-sender default.
         // SERA accepts only `return_to_sender` and `treat_as_abandoned`;
