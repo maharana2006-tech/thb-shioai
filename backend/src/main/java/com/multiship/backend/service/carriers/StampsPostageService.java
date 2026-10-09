@@ -76,57 +76,77 @@ public class StampsPostageService {
      */
     public AddFundsResult addFunds(long accountId, BigDecimal amount, String requestKey, String user) {
         String key = requestKey(requestKey);
-        StampsFunding earlier = fundings.findByIdempotencyKey(key).orElse(null);
-        if (earlier != null) return replay(earlier);
+        StampsFunding existing = fundings.findByIdempotencyKey(key).orElse(null);
+        // Already settled under this key — replay the first answer, never re-charge.
+        if (existing != null && !StampsFunding.PENDING.equals(existing.getStatus())) {
+            return replay(existing);
+        }
 
-        if (amount == null || amount.compareTo(MIN_TOPUP) < 0) {
+        // When recovering a PENDING reservation (a prior call that didn't return),
+        // the reserved amount is authoritative; otherwise use the caller's.
+        BigDecimal amt = existing != null ? existing.getAmount() : amount;
+        if (amt == null || amt.compareTo(MIN_TOPUP) < 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Add at least " + money(MIN_TOPUP) + ".");
         }
-        if (amount.stripTrailingZeros().scale() > 2) {
+        if (amt.stripTrailingZeros().scale() > 2) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Enter dollars and cents, like 25.50.");
         }
         CarrierAccountRef account = account(accountId);
         String token = accessToken(account);
 
-        // Stamps.com caps the balance (new accounts: $500); say how much fits instead of letting it refuse.
-        BalanceResult now = stampsConnector.getAccountBalance(token, account.getEnvironment());
-        if ("OK".equals(now.status()) && now.maxBalance() != null && now.amountAvailable() != null) {
-            BigDecimal room = now.maxBalance().subtract(now.amountAvailable());
-            if (room.compareTo(MIN_TOPUP) < 0) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "The balance is already at Stamps.com's limit of "
-                        + money(now.maxBalance()) + ". Ask Stamps.com to raise it to add more.");
-            }
-            if (amount.compareTo(room) > 0) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "That would go over Stamps.com's balance limit of "
-                        + money(now.maxBalance()) + ". You can add up to " + money(room) + ".");
+        // Balance-cap guard only for a brand-new purchase. When recovering a
+        // PENDING row the charge may already be in flight at Stamps.com, so we
+        // must call through (idempotently) rather than block on a stale cap read.
+        if (existing == null) {
+            BalanceResult now = stampsConnector.getAccountBalance(token, account.getEnvironment());
+            if ("OK".equals(now.status()) && now.maxBalance() != null && now.amountAvailable() != null) {
+                BigDecimal room = now.maxBalance().subtract(now.amountAvailable());
+                if (room.compareTo(MIN_TOPUP) < 0) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "The balance is already at Stamps.com's limit of "
+                            + money(now.maxBalance()) + ". Ask Stamps.com to raise it to add more.");
+                }
+                if (amt.compareTo(room) > 0) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "That would go over Stamps.com's balance limit of "
+                            + money(now.maxBalance()) + ". You can add up to " + money(room) + ".");
+                }
             }
         }
 
-        BalanceResult r = stampsConnector.addFundsSera(token, amount, "usd", key, account.getEnvironment());
-        boolean ok = "OK".equals(r.status());
-        StampsFunding row = StampsFunding.builder()
-                .carrierAccountRefId(accountId)
-                .amount(amount)
-                .currency("USD")
-                .status(ok ? StampsFunding.ADDED : StampsFunding.FAILED)
-                .balanceAfter(ok ? r.amountAvailable() : null)
-                .message(ok ? null : plain(r.message()))
-                .idempotencyKey(key)
-                .createdBy(user)
-                .createdAt(LocalDateTime.now())
-                .build();
-        try {
-            row = fundings.save(row);
-        } catch (DataIntegrityViolationException raced) {
-            // The same purchase landed twice at once; Stamps.com charged it once.
-            return replay(fundings.findByIdempotencyKey(key).orElseThrow(() -> raced));
+        // Reserve: record the key as PENDING *before* charging, so a crash
+        // between the charge and the write still leaves a trace and the UNIQUE
+        // key blocks a duplicate charge on resubmit. Committed in its own tx.
+        StampsFunding row = existing;
+        if (row == null) {
+            try {
+                row = fundings.save(StampsFunding.builder()
+                        .carrierAccountRefId(accountId).amount(amt).currency("USD")
+                        .status(StampsFunding.PENDING).idempotencyKey(key)
+                        .createdBy(user).createdAt(LocalDateTime.now()).build());
+            } catch (DataIntegrityViolationException raced) {
+                // Another request reserved the same key first.
+                StampsFunding other = fundings.findByIdempotencyKey(key).orElseThrow(() -> raced);
+                if (!StampsFunding.PENDING.equals(other.getStatus())) return replay(other);
+                row = other; // both settle idempotently against Stamps below
+            }
         }
+
+        // Execute. Stamps.com is idempotent on the key, so re-calling after a
+        // crash replays the original charge instead of charging twice.
+        BalanceResult r = stampsConnector.addFundsSera(token, amt, "usd", key, account.getEnvironment());
+        boolean ok = "OK".equals(r.status());
+
+        // Settle the reserved row.
+        row.setStatus(ok ? StampsFunding.ADDED : StampsFunding.FAILED);
+        row.setBalanceAfter(ok ? r.amountAvailable() : null);
+        row.setMessage(ok ? null : plain(r.message()));
+        row = fundings.save(row);
+
         auditService.record(AuditService.UPDATE, AuditService.CARRIER_ACCOUNT, accountId,
                 account.getCarrierCode() + " · " + account.getAccountNumber(),
-                Map.of("amount", amount, "status", row.getStatus()),
-                ok ? "Added " + money(amount) + " postage on Stamps.com"
-                        : "Stamps.com refused a " + money(amount) + " top-up: " + row.getMessage());
-        log.info("Stamps.com add-funds: account #{} +{} → {}", accountId, amount, row.getStatus());
+                Map.of("amount", amt, "status", row.getStatus()),
+                ok ? "Added " + money(amt) + " postage on Stamps.com"
+                        : "Stamps.com refused a " + money(amt) + " top-up: " + row.getMessage());
+        log.info("Stamps.com add-funds: account #{} +{} → {}", accountId, amt, row.getStatus());
         if (!ok) {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
                     "Stamps.com didn't add the funds: " + row.getMessage());

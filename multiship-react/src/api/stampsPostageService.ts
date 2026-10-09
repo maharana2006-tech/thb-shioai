@@ -12,7 +12,7 @@ export interface PostageFunding {
   id: number
   amount: number
   currency: string
-  status: 'ADDED' | 'FAILED'
+  status: 'ADDED' | 'FAILED' | 'PENDING'
   balanceAfter: number | null
   message: string | null
   createdBy: string | null

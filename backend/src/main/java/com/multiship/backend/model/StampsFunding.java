@@ -25,6 +25,10 @@ public class StampsFunding {
 
     public static final String ADDED = "ADDED";
     public static final String FAILED = "FAILED";
+    /** V140 — reserved (key recorded) before the Stamps.com charge; settled to
+     *  ADDED/FAILED after. A row left PENDING means the charge call didn't
+     *  return (crash/timeout); resubmitting the same key recovers it. */
+    public static final String PENDING = "PENDING";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

@@ -254,8 +254,8 @@ export function StampsAddFundsDialog({ account, onClose }: {
                     {f.createdBy ? ` · ${f.createdBy}` : ''}
                   </span>
                   <span className="font-semibold text-slate-800">{usd(f.amount)}</span>
-                  <span className={f.status === 'ADDED' ? 'text-emerald-700' : 'text-rose-700'} title={f.message ?? undefined}>
-                    {f.status === 'ADDED' ? 'Added' : 'Failed'}
+                  <span className={f.status === 'ADDED' ? 'text-emerald-700' : f.status === 'PENDING' ? 'text-amber-700' : 'text-rose-700'} title={f.message ?? undefined}>
+                    {f.status === 'ADDED' ? 'Added' : f.status === 'PENDING' ? 'Pending' : 'Failed'}
                   </span>
                 </li>
               ))}

@@ -111,6 +111,26 @@ class StampsPostageServiceTest {
     }
 
     @Test
+    void aPendingReservation_isRecoveredByReChargingIdempotently() {
+        // A prior call reserved the key but didn't return (crash/timeout). The
+        // retry must re-call Stamps (which is idempotent on the key) and settle
+        // the SAME row, never reserve a second one or block on a stale cap read.
+        StampsFunding pending = StampsFunding.builder().id(2L).carrierAccountRefId(9L)
+                .amount(new BigDecimal("50")).currency("USD").status(StampsFunding.PENDING)
+                .idempotencyKey(KEY).build();
+        when(fundings.findByIdempotencyKey(KEY)).thenReturn(Optional.of(pending));
+        when(stamps.addFundsSera("tok", new BigDecimal("50"), "usd", KEY, "SANDBOX")).thenReturn(balance("68.40"));
+
+        var result = service.addFunds(9L, new BigDecimal("50"), KEY, "admin");
+
+        assertEquals(StampsFunding.ADDED, result.funding().status());
+        assertEquals(new BigDecimal("68.40"), result.balance().available());
+        verify(stamps).addFundsSera("tok", new BigDecimal("50"), "usd", KEY, "SANDBOX");
+        // No fresh reservation: the pre-charge balance read is skipped on recovery.
+        verify(stamps, never()).getAccountBalance(any(), any());
+    }
+
+    @Test
     void stampsRefusing_isRecordedAndShownInItsOwnWords() {
         when(stamps.addFundsSera(any(), any(), any(), any(), any())).thenReturn(new BalanceResult("USPS", null, null,
                 "usd", "ERROR", "SERA add-funds rejected (HTTP 400): Card declined", null));
@@ -120,7 +140,9 @@ class StampsPostageServiceTest {
 
         assertEquals(502, ex.getStatusCode().value());
         assertEquals("Stamps.com didn't add the funds: Card declined", ex.getReason());
-        verify(fundings).save(org.mockito.ArgumentMatchers.argThat(f ->
+        // Reserve-then-execute saves twice (PENDING then FAILED) on the same row,
+        // so the settled state is asserted with atLeastOnce rather than once.
+        verify(fundings, org.mockito.Mockito.atLeastOnce()).save(org.mockito.ArgumentMatchers.argThat(f ->
                 StampsFunding.FAILED.equals(f.getStatus()) && "Card declined".equals(f.getMessage())));
     }
 
