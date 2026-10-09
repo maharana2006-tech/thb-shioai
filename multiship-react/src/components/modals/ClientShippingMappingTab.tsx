@@ -230,6 +230,11 @@ export default function ClientShippingMappingTab({ clientCode }: { clientCode: s
   const draftServiceGroups = useMemo(
     () => groupServiceVariants(
       services.filter((s) => {
+        // Hide retired / disabled services from the "add new mapping"
+        // picker. The full catalog stays in `services` state (used by
+        // serviceById to render historical rules' service names), but a
+        // new mapping must only point at a currently-live service.
+        if (!s.enabled) return false
         if (!serviceEligible(s, draftOrigins, draftScope)) return false
         // Carrier filter — hide services whose carrier isn't in the allowed
         // set. Empty set = the client has no accounts and nothing was picked
@@ -1072,7 +1077,11 @@ function CarrierServiceCell({
   // connector sync split into separate shipping_service rows.
   const eligibleGroups = useMemo(
     () => groupServiceVariants(
-      services.filter((s) => serviceEligible(s, origins, scope)),
+      // Disabled services are hidden from the edit-rule picker for the
+      // same reason as the draft picker above — a new/edited mapping
+      // must point at a live service. serviceById still resolves the
+      // disabled row when displaying an existing rule that targets it.
+      services.filter((s) => s.enabled && serviceEligible(s, origins, scope)),
       origins,
     ),
     [services, origins, scope],
