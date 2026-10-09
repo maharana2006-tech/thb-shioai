@@ -33,6 +33,22 @@ class CarrierApiLoggingInterceptorTest {
     }
 
     @Test
+    void secretsAreBlankedBeforeTheyReachTheLog() {
+        String sera = "{\"grant_type\":\"refresh_token\",\"client_id\":\"cid\",\"client_secret\":\"S3cr3t\",\"refresh_token\" : \"RT-1\"}";
+        assertEquals("{\"grant_type\":\"refresh_token\",\"client_id\":\"cid\",\"client_secret\":\"***\",\"refresh_token\" : \"***\"}",
+                CarrierApiLoggingInterceptor.redact(sera));
+        assertEquals("{\"access_token\":\"***\",\"expires_in\":3600}",
+                CarrierApiLoggingInterceptor.redact("{\"access_token\":\"eyJabc\",\"expires_in\":3600}"));
+        assertEquals("grant_type=client_credentials&client_id=cid&client_secret=***",
+                CarrierApiLoggingInterceptor.redact("grant_type=client_credentials&client_id=cid&client_secret=S3cr3t"));
+        assertEquals("<Username>u</Username><Password>***</Password>",
+                CarrierApiLoggingInterceptor.redact("<Username>u</Username><Password>pw</Password>"));
+        assertEquals("{\"code\":\"E100\",\"message\":\"Bad ZIP\"}",
+                CarrierApiLoggingInterceptor.redact("{\"code\":\"E100\",\"message\":\"Bad ZIP\"}"), "carrier error codes stay readable");
+        assertEquals("STAMPS_COM", CarrierApiLoggingInterceptor.carrierFromHost(URI.create("https://signin.testing.stampsendicia.com/oauth/token")));
+    }
+
+    @Test
     void successRecordsRowWithStatusAndBodies() throws IOException {
         CarrierApiLogService svc = mock(CarrierApiLogService.class);
         CarrierApiLoggingInterceptor interceptor = new CarrierApiLoggingInterceptor(svc, true);

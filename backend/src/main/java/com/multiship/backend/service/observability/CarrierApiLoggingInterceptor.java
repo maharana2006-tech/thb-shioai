@@ -27,8 +27,8 @@ import java.nio.charset.StandardCharsets;
  *
  * <p>Bodies are clamped by {@link CarrierApiLogService} (60 kB each). A
  * carrier that returns a 2 MB response gets its body truncated, not
- * dropped. Request / response bodies are stored as plaintext — if the
- * carrier ever sends secrets in a response body, redact at this layer.
+ * dropped. Secrets (client secrets, tokens, passwords) are blanked out
+ * by {@link #redact} before anything is stored — any admin can read this log.
  *
  * <p>Install at the factory via
  * {@link org.springframework.http.client.BufferingClientHttpRequestFactory}
@@ -55,9 +55,9 @@ public class CarrierApiLoggingInterceptor implements ClientHttpRequestIntercepto
         long start = System.currentTimeMillis();
         String carrier = carrierFromHost(request.getURI());
         String method = request.getMethod() == null ? "?" : request.getMethod().name();
-        String url = request.getURI().toString();
+        String url = redact(request.getURI().toString());
         String requestBody = body == null || body.length == 0
-                ? null : new String(body, StandardCharsets.UTF_8);
+                ? null : redact(new String(body, StandardCharsets.UTF_8));
         // MDC context — requestId is set by MdcCorrelationFilter on every
         // HTTP-triggered flow; orderNo + tracking come from CarrierCallContext
         // when a connector call site tagged itself. All three may be null
@@ -68,7 +68,7 @@ public class CarrierApiLoggingInterceptor implements ClientHttpRequestIntercepto
         try {
             ClientHttpResponse response = execution.execute(request, body);
             int status = response.getStatusCode().value();
-            String responseBody = readBodySafely(response);
+            String responseBody = redact(readBodySafely(response));
             long latency = System.currentTimeMillis() - start;
             logService.record(carrier, method, url, requestBody, responseBody,
                     status, (int) latency, null, orderNo, tracking, requestId);
@@ -80,6 +80,27 @@ public class CarrierApiLoggingInterceptor implements ClientHttpRequestIntercepto
                     orderNo, tracking, requestId);
             throw ex;
         }
+    }
+
+    private static final String SECRET_KEYS =
+            "client_secret|clientSecret|refresh_token|refreshToken|access_token|accessToken|id_token"
+            + "|code_verifier|password|api_key|apiKey";
+    /** "client_secret": "…" in JSON. */
+    private static final java.util.regex.Pattern JSON_SECRET = java.util.regex.Pattern.compile(
+            "(\"(?:" + SECRET_KEYS + ")\"\\s*:\\s*\")[^\"]*(\")");
+    /** client_secret=… in a form body or a query string. */
+    private static final java.util.regex.Pattern FORM_SECRET = java.util.regex.Pattern.compile(
+            "((?:^|[?&])(?:" + SECRET_KEYS + ")=)[^&\\s]*");
+    /** <Password>…</Password> in SOAP (Stamps.com SWSIM). */
+    private static final java.util.regex.Pattern XML_SECRET = java.util.regex.Pattern.compile(
+            "(<(?:\\w+:)?Password>)[^<]*", java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /** The text with every secret value replaced by "***". */
+    static String redact(String text) {
+        if (text == null) return null;
+        String out = JSON_SECRET.matcher(text).replaceAll("$1***$2");
+        out = XML_SECRET.matcher(out).replaceAll("$1***");
+        return FORM_SECRET.matcher(out).replaceAll("$1***");
     }
 
     private static Long parseLong(String s) {
@@ -96,7 +117,7 @@ public class CarrierApiLoggingInterceptor implements ClientHttpRequestIntercepto
         if (host.contains("fedex.com")) return "FEDEX";
         if (host.contains("ups.com")) return "UPS";
         if (host.contains("usps.com") || host.contains("uspsapis.com")) return "USPS";
-        if (host.contains("stamps.com")) return "STAMPS_COM";
+        if (host.contains("stamps.com") || host.contains("stampsendicia.com")) return "STAMPS_COM";
         if (host.contains("dhl.com") || host.contains("dhlapi.com")) return "DHL";
         return "UNKNOWN";
     }

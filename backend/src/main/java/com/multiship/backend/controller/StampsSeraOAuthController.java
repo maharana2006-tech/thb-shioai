@@ -75,6 +75,14 @@ public class StampsSeraOAuthController {
     @org.springframework.beans.factory.annotation.Value("${carrier.stamps.sera-fe-return-url:}")
     private String feReturnUrl;
 
+    /** The app's own origins (the CORS list) — a returnTo must be one of them. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.beans.factory.annotation.Qualifier("corsConfigurationSource")
+    private org.springframework.web.cors.CorsConfigurationSource corsConfigurationSource;
+
+    /** Holds the screen's origin from authorize to callback (Stamps.com only sends code + state back). */
+    static final String RETURN_COOKIE = "sera_return";
+
     private final CarrierAccountRefRepository repository;
     private final StampsSeraOAuthService oauthService;
     private final com.multiship.backend.service.carriers.StampsConnector stampsConnector;
@@ -90,7 +98,9 @@ public class StampsSeraOAuthController {
                     + "SERA server 302s back to /callback which persists the refresh token.")
     @PreAuthorize("hasRole('ADMIN')")
     @GetMapping("/authorize/{accountId}")
-    public ResponseEntity<Void> authorize(@PathVariable Long accountId) {
+    public ResponseEntity<Void> authorize(@PathVariable Long accountId,
+                                          @RequestParam(value = "returnTo", required = false) String returnTo,
+                                          jakarta.servlet.http.HttpServletRequest request) {
         CarrierAccountRef account = repository.findById(accountId).orElse(null);
         if (account == null) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
@@ -109,9 +119,14 @@ public class StampsSeraOAuthController {
         // not registered on the client_id in the developer portal.
         // client_id is masked in production logs elsewhere but exposed
         // here at INFO so ops can compare against the developer portal.
+        // Host + path only: the query carries the signed state (with the PKCE verifier).
         log.info("SERA authorize: redirecting operator for account #{} (env={}) → {}",
-                accountId, account.getEnvironment(), url);
-        return ResponseEntity.status(HttpStatus.FOUND).location(URI.create(url)).build();
+                accountId, account.getEnvironment(), url.replaceFirst("\\?.*", ""));
+        var redirect = ResponseEntity.status(HttpStatus.FOUND).location(URI.create(url));
+        if (isOwnOrigin(returnTo, request)) {
+            redirect.header(org.springframework.http.HttpHeaders.SET_COOKIE, returnCookie(returnTo, 600).toString());
+        }
+        return redirect.build();
     }
 
     /**
@@ -144,26 +159,29 @@ public class StampsSeraOAuthController {
             @RequestParam(value = "code", required = false) String code,
             @RequestParam(value = "state", required = false) String state,
             @RequestParam(value = "error", required = false) String error,
-            @RequestParam(value = "error_description", required = false) String errorDescription) {
+            @RequestParam(value = "error_description", required = false) String errorDescription,
+            @org.springframework.web.bind.annotation.CookieValue(value = RETURN_COOKIE, required = false) String returnTo,
+            jakarta.servlet.http.HttpServletRequest request) {
+        String back = isOwnOrigin(returnTo, request) ? returnTo : null;
 
         if (StringUtils.hasText(error)) {
             log.warn("SERA OAuth callback: server returned error={}, description={}", error, errorDescription);
-            return redirect(false, "carrier returned " + error
+            return redirect(back, false, "carrier returned " + error
                     + (StringUtils.hasText(errorDescription) ? ": " + errorDescription : ""));
         }
         Optional<VerifiedState> verifiedOpt = oauthService.verifyStateWithVerifier(state);
         if (verifiedOpt.isEmpty()) {
-            return redirect(false, "state signature invalid or expired");
+            return redirect(back, false, "state signature invalid or expired");
         }
         if (!StringUtils.hasText(code)) {
-            return redirect(false, "no authorization code returned");
+            return redirect(back, false, "no authorization code returned");
         }
         VerifiedState verified = verifiedOpt.get();
         Long accountId = verified.accountId();
         CarrierAccountRef account = repository.findById(accountId).orElse(null);
         if (account == null) {
             log.warn("SERA OAuth callback: state valid but account #{} no longer exists.", accountId);
-            return redirect(false, "carrier account no longer exists");
+            return redirect(back, false, "carrier account no longer exists");
         }
 
         TokenExchangeResult result = oauthService.exchangeCode(code, account.getClientId(),
@@ -171,12 +189,12 @@ public class StampsSeraOAuthController {
         if (!result.success()) {
             log.warn("SERA OAuth callback: code exchange failed for account #{}: {}",
                     accountId, result.errorMessage());
-            return redirect(false, result.errorMessage());
+            return redirect(back, false, result.errorMessage());
         }
         if (!StringUtils.hasText(result.refreshToken())) {
             log.warn("SERA OAuth callback: exchange succeeded but no refresh_token returned. "
                     + "Check that scope=offline_access is registered on the client_id.");
-            return redirect(false, "SERA returned no refresh_token — scope offline_access missing");
+            return redirect(back, false, "SERA returned no refresh_token — scope offline_access missing");
         }
 
         account.setStampsRefreshToken(result.refreshToken());
@@ -184,7 +202,7 @@ public class StampsSeraOAuthController {
         account.setLastVerifiedAt(LocalDateTime.now());
         repository.save(account);
         log.info("SERA OAuth callback: refresh_token stored and account #{} marked verified.", accountId);
-        return redirect(true, null);
+        return redirect(back, true, null);
     }
 
     /**
@@ -318,17 +336,34 @@ public class StampsSeraOAuthController {
     /** Admin add-funds request body. */
     public record AddFundsRequest(java.math.BigDecimal amount, String currency) {}
 
-    private ResponseEntity<Void> redirect(boolean ok, String detail) {
-        // Prefer the configured absolute FE host (split-port dev); fall back
-        // to the relative path (shared-origin prod).
-        String base = StringUtils.hasText(feReturnUrl)
-                ? feReturnUrl.replaceFirst("/+$", "") + FE_RETURN_PATH
+    private ResponseEntity<Void> redirect(String returnTo, boolean ok, String detail) {
+        // Back to the screen that started it; else the configured FE host
+        // (split-port dev); else the relative path (shared-origin prod).
+        String host = StringUtils.hasText(returnTo) ? returnTo : feReturnUrl;
+        String base = StringUtils.hasText(host)
+                ? host.replaceFirst("/+$", "") + FE_RETURN_PATH
                 : FE_RETURN_PATH;
         String url = base + (ok ? "ok" : "error");
         if (!ok && StringUtils.hasText(detail)) {
             url += "&detail=" + URLEncoder.encode(detail, StandardCharsets.UTF_8);
         }
-        return ResponseEntity.status(HttpStatus.FOUND).location(URI.create(url)).build();
+        return ResponseEntity.status(HttpStatus.FOUND).location(URI.create(url))
+                .header(org.springframework.http.HttpHeaders.SET_COOKIE, returnCookie("", 0).toString())
+                .build();
+    }
+
+    /** A bare http(s) origin that the app's CORS list allows — never an arbitrary redirect target. */
+    private boolean isOwnOrigin(String origin, jakarta.servlet.http.HttpServletRequest request) {
+        if (!StringUtils.hasText(origin) || !origin.matches("https?://[^/?#\\s]+")
+                || corsConfigurationSource == null || request == null) return false;
+        var cors = corsConfigurationSource.getCorsConfiguration(request);
+        return cors != null && cors.checkOrigin(origin) != null;
+    }
+
+    private static org.springframework.http.ResponseCookie returnCookie(String value, long maxAgeSeconds) {
+        return org.springframework.http.ResponseCookie.from(RETURN_COOKIE, value)
+                .httpOnly(true).sameSite("Lax").path("/api/v1/carrier-accounts/stamps-sera")
+                .maxAge(maxAgeSeconds).build();
     }
 
     /** Small DTO for the status endpoint. */

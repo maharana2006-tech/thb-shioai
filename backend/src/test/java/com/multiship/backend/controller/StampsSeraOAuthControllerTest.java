@@ -43,6 +43,27 @@ class StampsSeraOAuthControllerTest {
         controller = new StampsSeraOAuthController(repository, oauthService, stampsConnector);
     }
 
+    /** The screen that started the authorization gets the result — only if it's one of the app's own origins. */
+    @Test
+    void callback_returnsToTheScreenThatStartedIt_butNeverToAForeignSite() {
+        org.springframework.web.cors.CorsConfiguration cors = new org.springframework.web.cors.CorsConfiguration();
+        cors.setAllowedOriginPatterns(java.util.List.of("http://localhost:*"));
+        org.springframework.test.util.ReflectionTestUtils.setField(controller, "corsConfigurationSource",
+                (org.springframework.web.cors.CorsConfigurationSource) r -> cors);
+        org.springframework.test.util.ReflectionTestUtils.setField(controller, "feReturnUrl", "http://localhost:5173");
+        var request = new org.springframework.mock.web.MockHttpServletRequest();
+
+        ResponseEntity<Void> own = controller.callback(null, null, "access_denied", null, "http://localhost:5175", request);
+        assertEquals("http://localhost:5175/settings/carriers?seraCallback=error&detail=carrier+returned+access_denied",
+                own.getHeaders().getLocation().toString());
+        org.junit.jupiter.api.Assertions.assertTrue(own.getHeaders().getFirst("Set-Cookie").contains("Max-Age=0"),
+                "the return cookie is cleared");
+
+        ResponseEntity<Void> foreign = controller.callback(null, null, "access_denied", null, "https://evil.example", request);
+        org.junit.jupiter.api.Assertions.assertTrue(foreign.getHeaders().getLocation().toString()
+                .startsWith("http://localhost:5173/settings/carriers"));
+    }
+
     @Test
     void disconnect_happyPath_clearsTokenAndFlipsVerifiedAndReturns204() {
         CarrierAccountRef account = new CarrierAccountRef();

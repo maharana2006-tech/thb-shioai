@@ -1,6 +1,6 @@
 import { relativeTime } from '../utils/relativeTime'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { useOutletContext } from 'react-router-dom'
+import { useOutletContext, useSearchParams } from 'react-router-dom'
 import { notify } from '../utils/notify'
 import {
   FiActivity,
@@ -367,6 +367,32 @@ export default function CarrierConnections({
         })
       })
   }, [loadAccounts])
+
+  // Back from Stamps.com (?seraCallback=ok|error&detail=…): say how it went, then tidy the address.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const seraShown = useRef(false)
+  useEffect(() => {
+    const sera = searchParams.get('seraCallback')
+    if (!sera || seraShown.current) return
+    seraShown.current = true
+    if (sera === 'ok') notify.success('Stamps.com authorized — USPS is connected.')
+    else notify.error({
+      title: 'Stamps.com authorization failed',
+      body: searchParams.get('detail') || 'Try "Authorize with Stamps.com" again.',
+    })
+    setSearchParams((p) => { p.delete('seraCallback'); p.delete('detail'); return p }, { replace: true })
+  }, [searchParams, setSearchParams])
+
+  // The tab that opened Stamps.com: pick up the new status when the operator comes back to it.
+  const awaitingStamps = accounts.some(
+    (a) => normalizeCarrierCode(a.carrierCode) === 'usps' && a.verified !== true,
+  )
+  useEffect(() => {
+    if (!awaitingStamps) return
+    const onVisible = () => { if (document.visibilityState === 'visible') void loadAccounts() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [awaitingStamps, loadAccounts])
 
   const { registerRefresh } = useOutletContext<SettingsOutletContext>()
   useEffect(() => {

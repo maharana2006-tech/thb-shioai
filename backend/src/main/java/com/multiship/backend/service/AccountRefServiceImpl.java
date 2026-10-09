@@ -173,7 +173,10 @@ public class AccountRefServiceImpl implements AccountRefService {
         eventPublisher.publishEvent(
                 new CarrierConfigChangedEvent(account.getCarrierCode(), "account-verified"));
 
-        return success(check.getMessage(), toDTO(account));
+        CarrierAccountRefDTO dto = toDTO(account);
+        dto.setNeedsAuthorization(check.getNeedsAuthorization());
+        dto.setAuthorizeUrl(check.getAuthorizeUrl());
+        return success(check.getMessage(), dto);
     }
 
     @Override
@@ -353,6 +356,17 @@ public class AccountRefServiceImpl implements AccountRefService {
         if (isNewAccount && (!clientIdProvided || !clientSecretProvided)) {
             return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
                     "Client ID and Client Secret are required when creating a new carrier account.");
+        }
+        // A Stamps.com SERA refresh token belongs to one client ID/secret in one
+        // environment: a real change to any of them needs a fresh authorization.
+        boolean seraTokenStale = (clientIdProvided && !rawClientId.trim().equals(account.getClientId()))
+                || (clientSecretProvided && !rawClientSecret.trim().equals(account.getClientSecret()))
+                || (StringUtils.hasText(request.getEnvironment()) && account.getEnvironment() != null
+                    && !request.getEnvironment().trim().equalsIgnoreCase(account.getEnvironment()));
+        if (seraTokenStale && account.getStampsRefreshToken() != null) {
+            account.setStampsRefreshToken(null);
+            account.setVerified(null);
+            account.setLastVerifiedAt(null);
         }
         boolean credentialsChanged = false;
         if (clientIdProvided) {
