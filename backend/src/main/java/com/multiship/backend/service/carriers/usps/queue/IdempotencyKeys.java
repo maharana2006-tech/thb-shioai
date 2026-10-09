@@ -115,7 +115,15 @@ public final class IdempotencyKeys {
             throw new IllegalArgumentException(
                     "IdempotencyKeys.forStampsTopup requires a non-blank dayHourBucket");
         }
-        return "stamps-topup-" + carrierAccountRefId + "-" + dayHourBucket;
+        // S-track D5 originally returned the raw string "stamps-topup-{id}-{bucket}"
+        // but SERA rejects non-UUID-shaped Idempotency-Keys with carrier error
+        // 800001 "Idempotency-Key provided was invalid." Coerce to UUID v3 so the
+        // key stays deterministic for the same (accountId, bucket) but passes SERA's
+        // shape check. Matches the forStampsLabel / forStampsManifest pattern
+        // shipped in T2.
+        String payload = "stamps-topup|" + carrierAccountRefId + "|" + dayHourBucket;
+        return java.util.UUID.nameUUIDFromBytes(
+                payload.getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
     }
 
     /**
