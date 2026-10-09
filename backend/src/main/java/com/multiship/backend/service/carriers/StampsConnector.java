@@ -1336,8 +1336,15 @@ public class StampsConnector implements CarrierConnector {
         if (intl.getCommodities() != null && !intl.getCommodities().isEmpty()) {
             contentsDesc = intl.getCommodities().get(0).getDescription();
         }
-        if (StringUtils.hasText(contentsDesc)) {
-            customs.put("contents_description", CustomsCommodityNormaliser.truncateDescription(contentsDesc));
+        // Shipment-level contents_description → CN22 form line. SERA/USPS
+        // validates aggressively; `truncateDescription` (255-char cap) was
+        // too loose. The dedicated normaliser strips commas / pipes /
+        // non-ASCII and caps at 50 chars — matches the CN22 physical line
+        // and the SERA error 4522242 "contents_description specified is
+        // invalid" we hit on "Carbon road bicycle frame, unassembled".
+        String normalisedContents = CustomsCommodityNormaliser.normaliseContentsDescription(contentsDesc);
+        if (StringUtils.hasText(normalisedContents)) {
+            customs.put("contents_description", normalisedContents);
         }
         // PR-T7 (audit T-C2) — non_delivery_option is operator-configurable.
         // DTO value wins; fall back to the safer return-to-sender default.

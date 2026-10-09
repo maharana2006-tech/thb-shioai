@@ -78,6 +78,52 @@ class CustomsCommodityNormaliserTest {
         assertNull(CustomsCommodityNormaliser.normaliseCountryOfOrigin(null));
     }
 
+    // ========== contents_description normalisation (CN22 form field) ==========
+
+    @Test
+    void contentsDescription_stripsCommas_theReal933787Fix() {
+        // SERA error 4522242 on "Carbon road bicycle frame, unassembled"
+        String out = CustomsCommodityNormaliser.normaliseContentsDescription(
+                "Carbon road bicycle frame, unassembled");
+        assertNotNull(out);
+        assertFalse(out.contains(","), "comma must be stripped from CN22 contents_description: " + out);
+        assertTrue(out.length() <= CustomsCommodityNormaliser.CONTENTS_DESCRIPTION_MAX_CHARS);
+    }
+
+    @Test
+    void contentsDescription_stripsOtherListSeparators() {
+        assertFalse(CustomsCommodityNormaliser.normaliseContentsDescription("a;b|c/d\\e").contains(";"));
+        assertFalse(CustomsCommodityNormaliser.normaliseContentsDescription("a;b|c/d\\e").contains("|"));
+    }
+
+    @Test
+    void contentsDescription_truncatesTo50Chars() {
+        String long60 = "a".repeat(60);
+        assertEquals(50, CustomsCommodityNormaliser.normaliseContentsDescription(long60).length());
+    }
+
+    @Test
+    void contentsDescription_collapsesWhitespace() {
+        assertEquals("foo bar baz",
+                CustomsCommodityNormaliser.normaliseContentsDescription("foo    bar\t\tbaz"));
+    }
+
+    @Test
+    void contentsDescription_dropsNonAscii() {
+        // SERA/USPS CN22 prints Latin-1 only.
+        String out = CustomsCommodityNormaliser.normaliseContentsDescription("café résumé");
+        assertNotNull(out);
+        assertFalse(out.contains("é"));
+    }
+
+    @Test
+    void contentsDescription_blankReturnsNull() {
+        assertNull(CustomsCommodityNormaliser.normaliseContentsDescription(null));
+        assertNull(CustomsCommodityNormaliser.normaliseContentsDescription(""));
+        assertNull(CustomsCommodityNormaliser.normaliseContentsDescription("   "));
+        assertNull(CustomsCommodityNormaliser.normaliseContentsDescription(",,,"));
+    }
+
     // ========== description truncation ==========
 
     @Test
