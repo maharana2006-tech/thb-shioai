@@ -115,7 +115,7 @@ public final class IdempotencyKeys {
             throw new IllegalArgumentException(
                     "IdempotencyKeys.forStampsTopup requires a non-blank dayHourBucket");
         }
-        return "stamps-topup-" + carrierAccountRefId + "-" + dayHourBucket;
+        return stampsKey("stamps-topup-" + carrierAccountRefId + "-" + dayHourBucket);
     }
 
     /**
@@ -150,8 +150,7 @@ public final class IdempotencyKeys {
                     "IdempotencyKeys.forStampsLabel requires a non-null shipDate");
         }
         String payload = "stamps-label|" + referenceNumber.trim() + "|" + pieceIndex + "|" + shipDate;
-        return java.util.UUID.nameUUIDFromBytes(
-                payload.getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+        return stampsKey(payload);
     }
 
     /**
@@ -172,8 +171,7 @@ public final class IdempotencyKeys {
                     "IdempotencyKeys.forStampsManifest requires a non-null closeDate");
         }
         String payload = "stamps-manifest|" + accountNumber.trim() + "|" + closeDate;
-        return java.util.UUID.nameUUIDFromBytes(
-                payload.getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+        return stampsKey(payload);
     }
 
     /**
@@ -202,8 +200,7 @@ public final class IdempotencyKeys {
                     "IdempotencyKeys.forStampsRateQuote requires a non-null shipDate");
         }
         String payload = "stamps-rate|" + referenceNumber.trim() + "|" + shipDate;
-        return java.util.UUID.nameUUIDFromBytes(
-                payload.getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+        return stampsKey(payload);
     }
 
     /**
@@ -219,8 +216,7 @@ public final class IdempotencyKeys {
                                                   String postalCode, String country) {
         String payload = "stamps-addr|" + nullTrim(city) + "|" + nullTrim(state) + "|"
                 + nullTrim(postalCode) + "|" + nullTrim(country);
-        return java.util.UUID.nameUUIDFromBytes(
-                payload.getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+        return stampsKey(payload);
     }
 
     /**
@@ -247,12 +243,24 @@ public final class IdempotencyKeys {
                     "IdempotencyKeys.forStampsPickup requires a non-null pickupDate");
         }
         String payload = "stamps-pickup|" + scope.trim() + "|" + pickupDate;
-        return java.util.UUID.nameUUIDFromBytes(
-                payload.getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+        return stampsKey(payload);
     }
 
     private static String nullTrim(String s) {
         return s == null ? "" : s.trim().toLowerCase(java.util.Locale.ROOT);
     }
 
+
+    /**
+     * Stamps.com SERA rejects an Idempotency-Key that isn't a version-4 UUID
+     * (error 800001). Retries must still send the SAME key, so it is derived
+     * from the payload (name-based, as before) and stamped with the v4
+     * version bits; the IETF variant bits are already set.
+     */
+    public static String stampsKey(String payload) {
+        java.util.UUID u = java.util.UUID.nameUUIDFromBytes(
+                payload.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        long msb = (u.getMostSignificantBits() & ~0xF000L) | 0x4000L;
+        return new java.util.UUID(msb, u.getLeastSignificantBits()).toString();
+    }
 }

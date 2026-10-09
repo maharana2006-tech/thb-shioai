@@ -2352,7 +2352,8 @@ public class StampsConnector implements CarrierConnector {
                     .accept(MediaType.APPLICATION_JSON)
                     .contentType(MediaType.APPLICATION_JSON)
                     .header("Authorization", "Bearer " + accessToken)
-                    .header("Idempotency-Key", idempotencyKey == null ? "" : idempotencyKey)
+                    .header("Idempotency-Key", StringUtils.hasText(idempotencyKey)
+                            ? idempotencyKey : java.util.UUID.randomUUID().toString())
                     .body(body)
                     .retrieve()
                     .body(String.class);

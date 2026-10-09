@@ -137,8 +137,8 @@ public class StampsSeraRates {
                 // suffix so a crash-replay mid-rate-shop hits SERA's cached
                 // response instead of counting as fresh quotes.
                 String idemKey = StringUtils.hasText(request.getReferenceNumber())
-                        ? IdempotencyKeys.forStampsRateQuote(request.getReferenceNumber(), shipDate)
-                                + "-pkg" + (i + 1)
+                        ? IdempotencyKeys.stampsKey(IdempotencyKeys.forStampsRateQuote(
+                                request.getReferenceNumber(), shipDate) + "-pkg" + (i + 1))
                         : UUID.randomUUID().toString();
                 String response = HttpClients.newBuilder().baseUrl(baseUrl + "/rates").build()
                         .post()
