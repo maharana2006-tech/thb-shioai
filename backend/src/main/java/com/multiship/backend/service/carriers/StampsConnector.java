@@ -920,6 +920,20 @@ public class StampsConnector implements CarrierConnector {
      * same compensating-transaction pattern as the SWSIM path uses via
      * {@link #rollbackSuccessfulPieces}.
      */
+    static final String LOW_POSTAGE_MESSAGE = "Not enough USPS postage on the Stamps.com account to buy "
+            + "this label. An admin can click \"Add funds\" on the USPS account in Settings → Carriers, "
+            + "then generate the label again.";
+
+    /** SERA has no error code for a short balance — only its message says so. */
+    private static final java.util.regex.Pattern LOW_POSTAGE = java.util.regex.Pattern.compile(
+            "insufficient\\s+(funds|postage|balance)|not\\s+enough\\s+(funds|postage|balance)"
+                    + "|balance\\s+(is\\s+)?too\\s+low",
+            java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    static boolean isLowPostage(String carrierMessage) {
+        return carrierMessage != null && LOW_POSTAGE.matcher(carrierMessage).find();
+    }
+
     ShipmentResult createShipmentSera(ShipmentRequestDTO request, String accessToken, String environment) {
         // Same fallback-token guard as the SWSIM path — a `-local-*` token
         // is a rejected credential, calling SERA with it just wastes an
@@ -1002,6 +1016,9 @@ public class StampsConnector implements CarrierConnector {
                             i + 1, packages.size(), errMsg);
                 }
                 rollbackSuccessfulPiecesSera(perPackage, accessToken, environment);
+                if (isLowPostage(errMsg)) {
+                    throw new com.multiship.backend.exception.CarrierConnectionException(LOW_POSTAGE_MESSAGE);
+                }
                 throw com.multiship.backend.service.carriers.exceptions.CarrierExceptionMapper
                         .map("STAMPS", ex, "createShipmentSera[pkg " + (i + 1) + "/" + packages.size() + "]");
             }
@@ -2370,6 +2387,36 @@ public class StampsConnector implements CarrierConnector {
             log.warn("Stamps SERA /balance/add-funds call failed: {}", ex.getMessage());
             return new BalanceResult(CARRIER_CODE, null, null, cur, "ERROR",
                     "SERA add-funds call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /**
+     * A one-use link into the Stamps.com web app ({@code GET /url?url_type=…}),
+     * e.g. {@code store_auto_buy} or {@code store_history}. Valid for one
+     * request only, so it is fetched when the user clicks, never stored.
+     *
+     * @throws IllegalStateException with Stamps.com's message when it refuses.
+     */
+    public String getHostedUrlSera(String accessToken, String urlType, String environment) {
+        try {
+            String response = HttpClients.newBuilder().baseUrl(seraApiBaseUrl(environment)).build()
+                    .get()
+                    .uri(b -> b.path("/url").queryParam("url_type", urlType).build())
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .retrieve()
+                    .body(String.class);
+            String url = objectMapper.readTree(Optional.ofNullable(response).orElse("{}")).path("url").asText("");
+            if (!url.startsWith("https://")) {
+                throw new IllegalStateException("Stamps.com didn't return a link.");
+            }
+            return url;
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            throw new IllegalStateException(extractSeraError(ex.getResponseBodyAsString()), ex);
+        } catch (IllegalStateException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new IllegalStateException("Couldn't reach Stamps.com: " + ex.getMessage(), ex);
         }
     }
 
