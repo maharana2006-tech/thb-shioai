@@ -36,18 +36,19 @@ const today = () => new Date().toISOString().slice(0, 10)
 
 /** Section card with an icon-badge header bar — the look used across the
  *  pickup/close modals, for a consistent feature design. */
-function Card({ icon, title, hint, action, children }: {
-  icon: ReactNode; title: string; hint?: string; action?: ReactNode; children: ReactNode
+function Card({ icon, title, hint, action, className = '', bodyClassName = '', children }: {
+  icon: ReactNode; title: string; hint?: string; action?: ReactNode
+  className?: string; bodyClassName?: string; children: ReactNode
 }) {
   return (
-    <section className="overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-sm">
+    <section className={`overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-sm ${className}`}>
       <div className="flex items-center gap-2.5 border-b border-[#eee6d6] bg-[#faf7f0]/50 px-4 py-2.5">
         <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#1f150c] text-[#f4eede]">{icon}</span>
         <h3 className="text-[13px] font-semibold text-[#1f150c]">{title}</h3>
         {hint ? <span className="text-[10.5px] text-[#b6a684]">{hint}</span> : null}
         {action ? <div className="ml-auto">{action}</div> : null}
       </div>
-      <div className="p-4">{children}</div>
+      <div className={`p-4 ${bodyClassName}`}>{children}</div>
     </section>
   )
 }
@@ -204,9 +205,10 @@ export default function PickupsEodPage() {
 
   return (
     <div className="space-y-4 pb-10">
-      <div className="grid gap-4 lg:grid-cols-2 lg:items-start">
-        {/* Left column — close + activity (fills the space next to the taller pickup form) */}
-        <div className="space-y-4">
+      <div className="grid gap-4 lg:grid-cols-2 lg:items-stretch">
+        {/* Left column — close + activity; activity stretches so the column
+            bottom lines up with the taller pickup form on the right. */}
+        <div className="flex flex-col gap-4">
         {/* End-of-day close */}
         <Card icon={<FiCheckSquare className="h-3.5 w-3.5" />} title="End-of-day close">
           <div className="grid grid-cols-2 gap-3">
@@ -267,6 +269,7 @@ export default function PickupsEodPage() {
 
         {/* Recent activity (compact list, paginated) */}
         <Card icon={<FiClock className="h-3.5 w-3.5" />} title="Recent activity"
+              className="flex flex-1 flex-col" bodyClassName="flex flex-1 flex-col"
               action={
                 <button type="button" onClick={() => void loadEvents()} aria-label="Refresh activity"
                         className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#5a4526] transition hover:bg-[#faf7f0]">
@@ -303,7 +306,7 @@ export default function PickupsEodPage() {
                 ))}
               </ul>
               {pageCount > 1 ? (
-                <div className="mt-2 flex items-center justify-between border-t border-[#f3ecdd] pt-2 text-[11px] text-[#6b5c42]">
+                <div className="mt-auto flex items-center justify-between border-t border-[#f3ecdd] pt-2 text-[11px] text-[#6b5c42]">
                   <span>{page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, events.length)} of {events.length}</span>
                   <div className="flex gap-1.5">
                     <button type="button" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}
