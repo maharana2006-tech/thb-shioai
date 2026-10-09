@@ -49,6 +49,8 @@ export default function PickupsEodPage() {
   const [clients, setClients] = useState<Client[]>([])
   const [events, setEvents] = useState<EodEvent[]>([])
   const [loadingEvents, setLoadingEvents] = useState(false)
+  const [page, setPage] = useState(0)
+  const PAGE_SIZE = 6
 
   // Only carriers connected on this app; null (loading/failed) = show all.
   const connected = useConnectedCarriers()
@@ -93,6 +95,7 @@ export default function PickupsEodPage() {
     setLoadingEvents(true)
     try {
       setEvents((await manifestService.recentEvents(50)).data ?? [])
+      setPage(0)
     } catch (e) {
       if (!isAbortError(e)) notify.apiError(e, 'Could not load recent activity.')
     } finally {
@@ -169,6 +172,9 @@ export default function PickupsEodPage() {
     </>
   )
 
+  const pageCount = Math.max(1, Math.ceil(events.length / PAGE_SIZE))
+  const pageEvents = events.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE)
+
   return (
     <div className="space-y-4 pb-10">
       <div className="px-1">
@@ -181,6 +187,8 @@ export default function PickupsEodPage() {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2 lg:items-start">
+        {/* Left column — close + activity (fills the space next to the taller pickup form) */}
+        <div className="space-y-4">
         {/* End-of-day close */}
         <section className={card}>
           <h3 className="mb-3 flex items-center gap-2 text-[13.5px] font-semibold text-[#1f150c]">
@@ -239,6 +247,59 @@ export default function PickupsEodPage() {
             </div>
           ) : null}
         </section>
+
+        {/* Recent activity (compact list, paginated) */}
+        <section className={card}>
+          <div className="mb-2 flex items-center justify-between">
+            <h3 className="text-[13.5px] font-semibold text-[#1f150c]">Recent activity</h3>
+            <button type="button" onClick={() => void loadEvents()} className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]">
+              <FiRefreshCw className={`h-3.5 w-3.5 ${loadingEvents ? 'animate-spin' : ''}`} /> Refresh
+            </button>
+          </div>
+          {events.length === 0 ? (
+            <p className="py-8 text-center text-[12px] text-[#9a8b70]">
+              {loadingEvents ? 'Loading…' : 'No pickups or close-outs yet.'}
+            </p>
+          ) : (
+            <>
+              <ul className="divide-y divide-[#f3ecdd]">
+                {pageEvents.map((e) => (
+                  <li key={e.id} className="flex items-start gap-2.5 py-2">
+                    <span className="mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#f4eede] text-[#412d15]">
+                      {e.kind === 'PICKUP' ? <FiTruck className="h-3.5 w-3.5" /> : <FiCheckSquare className="h-3.5 w-3.5" />}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[12.5px] font-semibold text-[#3d2f1c]">{e.carrierCode}</span>
+                        <span className="text-[11px] text-[#9a8b70]">{e.kind === 'PICKUP' ? 'pickup' : 'close'}</span>
+                        <span className="ml-auto"><StatusPill status={e.status} /></span>
+                      </div>
+                      <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[10.5px] text-[#9a8b70]">
+                        <span className="whitespace-nowrap">{new Date(e.createdAt).toLocaleString()}</span>
+                        <span>· {e.trackingCount} {e.kind === 'PICKUP' ? 'pkg' : 'label'}{e.trackingCount === 1 ? '' : 's'}</span>
+                        <span>· {e.customerNo || 'all'}</span>
+                        {e.reference ? <span className="font-mono">· {e.reference}</span> : null}
+                        <span>· {e.source === 'SCHEDULED' ? 'Auto' : 'Manual'}</span>
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              {pageCount > 1 ? (
+                <div className="mt-2 flex items-center justify-between border-t border-[#f3ecdd] pt-2 text-[11px] text-[#6b5c42]">
+                  <span>{page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, events.length)} of {events.length}</span>
+                  <div className="flex gap-1.5">
+                    <button type="button" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}
+                      className="rounded-md border border-[#e3d9c4] bg-white px-2 py-1 font-semibold text-[#5a4526] transition hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40">Prev</button>
+                    <button type="button" disabled={page >= pageCount - 1} onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+                      className="rounded-md border border-[#e3d9c4] bg-white px-2 py-1 font-semibold text-[#5a4526] transition hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40">Next</button>
+                  </div>
+                </div>
+              ) : null}
+            </>
+          )}
+        </section>
+        </div>
 
         {/* Schedule a pickup */}
         <section className={card}>
@@ -326,51 +387,6 @@ export default function PickupsEodPage() {
           </button>
         </section>
       </div>
-
-      {/* Recent activity */}
-      <section className={card}>
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-[13.5px] font-semibold text-[#1f150c]">Recent activity</h3>
-          <button type="button" onClick={() => void loadEvents()} className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]">
-            <FiRefreshCw className={`h-3.5 w-3.5 ${loadingEvents ? 'animate-spin' : ''}`} /> Refresh
-          </button>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-[12px]">
-            <thead>
-              <tr className="border-b border-[#eee6d6] text-[10px] font-bold uppercase tracking-[0.1em] text-[#a1906d]">
-                <th className="py-1.5 pr-3">When</th>
-                <th className="pr-3">Kind</th>
-                <th className="pr-3">Carrier</th>
-                <th className="pr-3">Client</th>
-                <th className="pr-3">Date</th>
-                <th className="pr-3">Count</th>
-                <th className="pr-3">Status</th>
-                <th className="pr-3">Reference</th>
-                <th className="pr-3">Source</th>
-              </tr>
-            </thead>
-            <tbody>
-              {events.length === 0 ? (
-                <tr><td colSpan={9} className="py-6 text-center text-[#9a8b70]">
-                  {loadingEvents ? 'Loading…' : 'No pickups or close-outs yet.'}</td></tr>
-              ) : events.map((e) => (
-                <tr key={e.id} className="border-b border-[#f3ecdd] last:border-0">
-                  <td className="py-1.5 pr-3 whitespace-nowrap text-[#6b5c42]">{new Date(e.createdAt).toLocaleString()}</td>
-                  <td className="pr-3">{e.kind === 'PICKUP' ? 'Pickup' : 'Close'}</td>
-                  <td className="pr-3 font-semibold text-[#3d2f1c]">{e.carrierCode}</td>
-                  <td className="pr-3">{e.customerNo || 'all'}</td>
-                  <td className="pr-3 whitespace-nowrap">{e.eventDate ?? '—'}</td>
-                  <td className="pr-3">{e.trackingCount}</td>
-                  <td className="pr-3"><StatusPill status={e.status} /></td>
-                  <td className="pr-3 font-mono text-[11px]">{e.reference ?? '—'}</td>
-                  <td className="pr-3">{e.source === 'SCHEDULED' ? 'Auto' : 'Manual'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
     </div>
   )
 }
