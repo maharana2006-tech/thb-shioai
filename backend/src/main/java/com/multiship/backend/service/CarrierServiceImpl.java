@@ -3197,7 +3197,7 @@ public class CarrierServiceImpl implements CarrierService {
         // token state to the next order it services.
         AutoCloseable stampsSeraCtx =
                 com.multiship.backend.service.carriers.StampsSeraAuthContext.openFor(
-                        carrierAccountRefRepository, res.carrierCode(), res.accountNumber());
+                        carrierAccountRefRepository, res.carrierCode(), res.accountNumber(), res.clientId());
         try {
         connector.validateCredentials(res.clientId(), res.clientSecret());
         // F-MODE-3 — pass the resolved account's env so FedEx routes the

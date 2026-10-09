@@ -50,6 +50,9 @@ public interface CarrierAccountRefRepository extends JpaRepository<CarrierAccoun
 
     Optional<CarrierAccountRef> findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase(String accountNumber, String carrierCode);
 
+    /** Every row for an account number — one per client since V82/V85. */
+    List<CarrierAccountRef> findByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase(String accountNumber, String carrierCode);
+
     /**
      * Natural-key lookup that respects per-client ownership (V82 constraint).
      * Use this from any code path that KNOWS the client — critically, the
