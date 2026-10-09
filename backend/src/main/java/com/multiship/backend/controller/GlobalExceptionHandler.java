@@ -184,6 +184,29 @@ public class GlobalExceptionHandler {
                 .build());
     }
 
+    /**
+     * CarrierConnectionException is a well-defined domain exception (carrier
+     * disabled, credentials missing, operator-recoverable auth error). Prior
+     * to this handler it was only mapped to 400 by {@code CarrierExceptionHandler}
+     * which is scoped to {@code CarrierController} — so a save on
+     * {@code AccountRefController} that triggered the same exception fell
+     * through to {@link #handleUnexpectedRuntime} and surfaced as a generic
+     * 500 "Something went wrong" with a correlation id. The user has no way
+     * to recover from an opaque 500 for what is a config problem they can
+     * fix in /settings/carriers. Return a 400 + the actual message instead.
+     */
+    @ExceptionHandler(com.multiship.backend.exception.CarrierConnectionException.class)
+    public ResponseEntity<ApiResponse<Void>> handleCarrierConnection(
+            com.multiship.backend.exception.CarrierConnectionException ex) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.<Void>builder()
+                        .status("error")
+                        .code(HttpStatus.BAD_REQUEST.value())
+                        .errorCode(com.multiship.backend.dto.ErrorCode.CARRIER_CONNECTION_FAILED.name())
+                        .message(ex.getMessage())
+                        .build());
+    }
+
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<ApiResponse<Void>> handleUnexpectedRuntime(RuntimeException ex) {
         // Client-disconnect detection: HttpMessageNotWritableException
