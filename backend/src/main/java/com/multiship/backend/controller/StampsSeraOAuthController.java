@@ -77,6 +77,7 @@ public class StampsSeraOAuthController {
 
     private final CarrierAccountRefRepository repository;
     private final StampsSeraOAuthService oauthService;
+    private final com.multiship.backend.service.carriers.StampsConnector stampsConnector;
 
     /**
      * Kick off the SERA authorize flow for the given account. Only
@@ -238,6 +239,84 @@ public class StampsSeraOAuthController {
         log.info("SERA OAuth: disconnected account #{} (refresh_token cleared, verified=false).", accountId);
         return ResponseEntity.noContent().build();
     }
+
+    /**
+     * One-off manual top-up of a SERA account's postage balance. Posts
+     * {@code POST /sera/v1/balance/add-funds} with the authenticated
+     * account's refresh_token → access_token round-trip. ADMIN-only.
+     *
+     * <p>Sandbox play-money accounts run out fast under test load (one
+     * US→AU heavy intl label is $200+); the scheduled
+     * {@link com.multiship.backend.service.carriers.StampsTopupService}
+     * polls at 30 min and only fires when a {@code stamps_topup_policy}
+     * row exists. This endpoint is the human-driven alternative — one
+     * click adds the requested amount now.
+     *
+     * <p>Idempotency key: {@code (accountId, yyyy-MM-dd-HH-mm)} so a
+     * fast double-click doesn't double-charge; a second POST in the
+     * same minute returns the cached top-up (SERA dedups on key for
+     * 24h). Different minute = fresh top-up allowed.
+     */
+    @Operation(summary = "Manual top-up of a SERA account's postage balance",
+            description = "Requires ADMIN. Dials POST /sera/v1/balance/add-funds "
+                    + "with the given amount. Idempotent within the same minute. "
+                    + "Returns the post-topup balance.")
+    @PreAuthorize("hasRole('ADMIN')")
+    @org.springframework.web.bind.annotation.PostMapping("/add-funds/{accountId}")
+    public ResponseEntity<ApiResponse<com.multiship.backend.service.carriers.CarrierConnector.BalanceResult>>
+            addFunds(@PathVariable Long accountId,
+                     @org.springframework.web.bind.annotation.RequestBody AddFundsRequest req) {
+        CarrierAccountRef account = repository.findById(accountId).orElse(null);
+        if (account == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
+        }
+        if (!"USPS".equalsIgnoreCase(account.getCarrierCode())
+                && !"STAMPS".equalsIgnoreCase(account.getCarrierCode())) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).build();
+        }
+        if (req == null || req.amount == null || req.amount.signum() <= 0) {
+            return ResponseEntity.badRequest().build();
+        }
+        String refresh = account.getStampsRefreshToken();
+        if (!StringUtils.hasText(refresh)) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(ApiResponse.<com.multiship.backend.service.carriers.CarrierConnector.BalanceResult>builder()
+                            .status("error").code(409)
+                            .message("Account not authorized with SERA — complete /authorize/{id} first.")
+                            .build());
+        }
+        StampsSeraOAuthService.TokenExchangeResult tok = oauthService.refreshToken(
+                refresh, account.getClientId(), account.getClientSecret(), account.getEnvironment());
+        if (!tok.success()) {
+            return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+                    .body(ApiResponse.<com.multiship.backend.service.carriers.CarrierConnector.BalanceResult>builder()
+                            .status("error").code(502)
+                            .message("SERA auth failed: " + tok.errorMessage())
+                            .build());
+        }
+        String currency = StringUtils.hasText(req.currency) ? req.currency.trim().toLowerCase() : "usd";
+        String idemKey = com.multiship.backend.service.carriers.usps.queue.IdempotencyKeys
+                .forStampsTopup(accountId,
+                        java.time.LocalDateTime.now(java.time.ZoneOffset.UTC)
+                                .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd-HH-mm")));
+        com.multiship.backend.service.carriers.CarrierConnector.BalanceResult result =
+                stampsConnector.addFundsSera(tok.accessToken(), req.amount, currency, idemKey,
+                        account.getEnvironment());
+        log.info("SERA add-funds: account #{} env={} +{} {} → status={}", accountId,
+                account.getEnvironment(), req.amount, currency, result.status());
+        HttpStatus status = "OK".equals(result.status()) || "SUCCESS".equals(result.status())
+                ? HttpStatus.OK : HttpStatus.BAD_GATEWAY;
+        return ResponseEntity.status(status)
+                .body(ApiResponse.<com.multiship.backend.service.carriers.CarrierConnector.BalanceResult>builder()
+                        .code(status.value())
+                        .status("OK".equals(result.status()) ? "ok" : "error")
+                        .message(result.message())
+                        .data(result)
+                        .build());
+    }
+
+    /** Admin add-funds request body. */
+    public record AddFundsRequest(java.math.BigDecimal amount, String currency) {}
 
     private ResponseEntity<Void> redirect(boolean ok, String detail) {
         // Prefer the configured absolute FE host (split-port dev); fall back

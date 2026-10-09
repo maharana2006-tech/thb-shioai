@@ -32,13 +32,15 @@ class StampsSeraOAuthControllerTest {
 
     private CarrierAccountRefRepository repository;
     private StampsSeraOAuthService oauthService;
+    private com.multiship.backend.service.carriers.StampsConnector stampsConnector;
     private StampsSeraOAuthController controller;
 
     @BeforeEach
     void setUp() {
         repository = mock(CarrierAccountRefRepository.class);
         oauthService = mock(StampsSeraOAuthService.class);
-        controller = new StampsSeraOAuthController(repository, oauthService);
+        stampsConnector = mock(com.multiship.backend.service.carriers.StampsConnector.class);
+        controller = new StampsSeraOAuthController(repository, oauthService, stampsConnector);
     }
 
     @Test
