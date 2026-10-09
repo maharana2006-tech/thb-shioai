@@ -1,4 +1,4 @@
--- V135 — Carrier pickups & end-of-day close-out: an audit log for every
+-- V138 — Carrier pickups & end-of-day close-out: an audit log for every
 -- pickup/close event (manual from Settings → Pickups & End-of-Day, or from the
 -- scheduled CARRIER_CLOSEOUT job), plus the scheduler job that runs the close
 -- automatically at end of day.
