@@ -332,6 +332,11 @@ export const accountRefService = {
       + `?returnTo=${encodeURIComponent(window.location.origin)}`
   },
 
+  /** Forget the account's Stamps.com authorization (it must be authorized again to ship). */
+  disconnectStampsSera: (accountId: number) => {
+    return apiClient.delete<void>(`/carrier-accounts/stamps-sera/authorize/${accountId}`)
+  },
+
   /** Poll whether the given SERA account has completed the authorize flow. */
   stampsSeraStatus: (accountId: number) => {
     return apiClient.get<ApiResponse<{ authorized: boolean; lastVerifiedAt: string | null }>>(

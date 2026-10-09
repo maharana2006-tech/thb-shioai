@@ -906,6 +906,22 @@ export default function CarrierConnections({
     }
   }
 
+  const handleDisconnectStamps = async (account: CarrierAccountRef) => {
+    if (!window.confirm(
+      `Disconnect ${account.accountNumber} from Stamps.com? USPS labels on this account stop until an admin authorizes it again.`,
+    )) return
+    setBusyId(account.id)
+    try {
+      await accountRefService.disconnectStampsSera(account.id)
+      notify.success(`${account.accountNumber} disconnected from Stamps.com.`)
+      await loadAccounts()
+    } catch (error) {
+      notify.apiError(error, 'Failed to disconnect from Stamps.com.')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   const handleDelete = async (account: CarrierAccountRef) => {
     if (
       !window.confirm(
@@ -1143,6 +1159,7 @@ export default function CarrierConnections({
               onVerify={() => void handleVerify(row.original)}
               onEdit={() => openDrawer(row.original)}
               onDelete={() => void handleDelete(row.original)}
+              onDisconnectStamps={() => void handleDisconnectStamps(row.original)}
             />
           </div>
         ),
@@ -2321,6 +2338,7 @@ function RowActionsMenu({
   onVerify,
   onEdit,
   onDelete,
+  onDisconnectStamps,
 }: {
   account: CarrierAccountRef
   busy: boolean
@@ -2328,6 +2346,7 @@ function RowActionsMenu({
   onVerify: () => void
   onEdit: () => void
   onDelete: () => void
+  onDisconnectStamps: () => void
 }) {
   const [open, setOpen] = useState(false)
   const buttonRef = useRef<HTMLButtonElement>(null)
@@ -2382,6 +2401,19 @@ function RowActionsMenu({
             <FiShield className="h-3.5 w-3.5" />
             Authorize with Stamps.com
           </a>
+        ) : null}
+        {admin && normalizeCarrierCode(account.carrierCode) === 'usps'
+            && account.verified === true ? (
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => { setOpen(false); onDisconnectStamps() }}
+            disabled={busy}
+            className="flex w-full items-center gap-2 px-3 py-2 text-[12px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+          >
+            <FiShield className="h-3.5 w-3.5 text-slate-500" />
+            Disconnect from Stamps.com
+          </button>
         ) : null}
         <button
           type="button"

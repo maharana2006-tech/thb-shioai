@@ -71,8 +71,16 @@ class StampsSeraOAuthControllerTest {
         account.setStampsRefreshToken("rt-live");
         account.setVerified(true);
         when(repository.findById(42L)).thenReturn(Optional.of(account));
+        var audit = mock(com.multiship.backend.service.AuditService.class);
+        var events = mock(org.springframework.context.ApplicationEventPublisher.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(controller, "auditService", audit);
+        org.springframework.test.util.ReflectionTestUtils.setField(controller, "eventPublisher", events);
 
         ResponseEntity<Void> resp = controller.disconnect(42L);
+
+        verify(audit).record(eq("UPDATE"), eq("CARRIER_ACCOUNT"), eq(42L), anyString(), any(),
+                org.mockito.ArgumentMatchers.startsWith("Disconnected from Stamps.com"));
+        verify(events).publishEvent(any(com.multiship.backend.service.events.CarrierConfigChangedEvent.class));
 
         assertEquals(HttpStatus.NO_CONTENT, resp.getStatusCode(),
                 "Disconnect must return 204 on success");
@@ -97,20 +105,21 @@ class StampsSeraOAuthControllerTest {
     }
 
     @Test
-    void disconnect_alreadyDisconnected_stillReturns204AndSkipsCacheEvict() {
-        // Already-disconnected account (no stored refresh_token) must still
-        // 204 — idempotent delete. Cache evict is skipped because there's
-        // nothing to evict; keeps the admin page safe to double-click.
+    void disconnect_withoutAStampsToken_returns204AndLeavesTheAccountAlone() {
+        // Never authorized, already disconnected, or a USPS Direct account
+        // (verified, but nothing from Stamps.com to forget): idempotent 204,
+        // and the account is not touched — safe to double-click.
         CarrierAccountRef account = new CarrierAccountRef();
         account.setId(7L);
         account.setStampsRefreshToken(null);
-        account.setVerified(false);
+        account.setVerified(true);
         when(repository.findById(7L)).thenReturn(Optional.of(account));
 
         ResponseEntity<Void> resp = controller.disconnect(7L);
 
         assertEquals(HttpStatus.NO_CONTENT, resp.getStatusCode());
-        verify(repository).save(account);
+        assertEquals(Boolean.TRUE, account.getVerified());
+        verify(repository, never()).save(any());
         verify(oauthService, never()).clearTokenCache();
     }
 }

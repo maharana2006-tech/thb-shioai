@@ -31,6 +31,7 @@ const deleteAccount = vi.fn()
 const setClientDefault = vi.fn()
 const toggleActive = vi.fn()
 const verifyAccount = vi.fn()
+const disconnectStampsSera = vi.fn()
 const verifyCredentials = vi.fn()
 const getPlatformCredentials = vi.fn()
 
@@ -42,6 +43,8 @@ vi.mock('../api/accountRefService', () => ({
     setClientDefault: (...a: unknown[]) => setClientDefault(...a),
     toggleActive: (...a: unknown[]) => toggleActive(...a),
     verifyAccount: (...a: unknown[]) => verifyAccount(...a),
+    disconnectStampsSera: (...a: unknown[]) => disconnectStampsSera(...a),
+    authorizeStampsSera: (id: number) => `http://stub/authorize/${id}`,
     verifyCredentials: (...a: unknown[]) => verifyCredentials(...a),
     getPlatformCredentials: (...a: unknown[]) => getPlatformCredentials(...a),
     resolveOrders: vi.fn().mockResolvedValue([]),
@@ -295,6 +298,23 @@ describe('Per-account actions — positive', () => {
     await waitFor(() => {
       expect(screen.getAllByText(/^Verified$/).length).toBeGreaterThan(0)
     })
+  })
+
+  it('Disconnect from Stamps.com asks first, then disconnects and refetches', async () => {
+    listAccounts.mockResolvedValue([makeAccount({ id: 9, carrierCode: 'USPS', accountNumber: 'A1', verified: true })])
+    disconnectStampsSera.mockReset().mockResolvedValue({})
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    const user = userEvent.setup()
+    await renderPage()
+    await waitForRow('A1')
+    const menu = await openRowActions()
+    expect(menu.queryByRole('menuitem', { name: /Authorize with Stamps.com/i })).toBeNull()
+    await user.click(menu.getByRole('menuitem', { name: /Disconnect from Stamps.com/i }))
+
+    expect(confirmSpy).toHaveBeenCalled()
+    await waitFor(() => expect(disconnectStampsSera).toHaveBeenCalledWith(9))
+    await waitFor(() => expect(notifySuccess).toHaveBeenCalledWith('A1 disconnected from Stamps.com.'))
   })
 
   it('Toggle-active calls toggleActive(id) + refetches the list', async () => {

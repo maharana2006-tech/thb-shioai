@@ -80,6 +80,12 @@ public class StampsSeraOAuthController {
     @org.springframework.beans.factory.annotation.Qualifier("corsConfigurationSource")
     private org.springframework.web.cors.CorsConfigurationSource corsConfigurationSource;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.AuditService auditService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.context.ApplicationEventPublisher eventPublisher;
+
     /** Holds the screen's origin from authorize to callback (Stamps.com only sends code + state back). */
     static final String RETURN_COOKIE = "sera_return";
 
@@ -202,6 +208,7 @@ public class StampsSeraOAuthController {
         account.setLastVerifiedAt(LocalDateTime.now());
         repository.save(account);
         log.info("SERA OAuth callback: refresh_token stored and account #{} marked verified.", accountId);
+        recordChange(account, "Authorized with Stamps.com", "stamps-authorized");
         return redirect(back, true, null);
     }
 
@@ -244,6 +251,8 @@ public class StampsSeraOAuthController {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
         }
         String oldRefresh = account.getStampsRefreshToken();
+        // Nothing to disconnect (never authorized, or a USPS Direct account): leave it as it is.
+        if (!StringUtils.hasText(oldRefresh)) return ResponseEntity.noContent().build();
         account.setStampsRefreshToken(null);
         account.setVerified(false);
         repository.save(account);
@@ -251,10 +260,9 @@ public class StampsSeraOAuthController {
         // are per-account so blast radius is tiny (every subsequent call just mints
         // a fresh access_token). Swap to clearCachedTokenFor(oldRefresh) if the cache
         // ever grows cross-account.
-        if (StringUtils.hasText(oldRefresh)) {
-            oauthService.clearTokenCache();
-        }
+        oauthService.clearTokenCache();
         log.info("SERA OAuth: disconnected account #{} (refresh_token cleared, verified=false).", accountId);
+        recordChange(account, "Disconnected from Stamps.com", "stamps-disconnected");
         return ResponseEntity.noContent().build();
     }
 
@@ -350,6 +358,21 @@ public class StampsSeraOAuthController {
         return ResponseEntity.status(HttpStatus.FOUND).location(URI.create(url))
                 .header(org.springframework.http.HttpHeaders.SET_COOKIE, returnCookie("", 0).toString())
                 .build();
+    }
+
+    /** Audit row + rate-cache refresh — the same trail an account edit leaves. */
+    private void recordChange(CarrierAccountRef account, String what, String reason) {
+        if (auditService != null) {
+            auditService.record(com.multiship.backend.service.AuditService.UPDATE,
+                    com.multiship.backend.service.AuditService.CARRIER_ACCOUNT, account.getId(),
+                    account.getCarrierCode() + " · " + account.getAccountNumber(),
+                    java.util.Map.of("verified", String.valueOf(account.getVerified())),
+                    what + ": " + account.getCarrierCode() + "/" + account.getAccountNumber());
+        }
+        if (eventPublisher != null) {
+            eventPublisher.publishEvent(new com.multiship.backend.service.events.CarrierConfigChangedEvent(
+                    account.getCarrierCode(), reason));
+        }
     }
 
     /** A bare http(s) origin that the app's CORS list allows — never an arbitrary redirect target. */
