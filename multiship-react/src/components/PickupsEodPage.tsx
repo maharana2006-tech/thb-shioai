@@ -322,7 +322,8 @@ export default function PickupsEodPage() {
         </div>
 
         {/* Schedule a pickup */}
-        <Card icon={<FiTruck className="h-3.5 w-3.5" />} title="Schedule a pickup">
+        <Card icon={<FiTruck className="h-3.5 w-3.5" />} title="Schedule a pickup"
+              className="flex flex-col" bodyClassName="flex flex-1 flex-col">
           <GroupLabel>Carrier &amp; schedule</GroupLabel>
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -406,10 +407,12 @@ export default function PickupsEodPage() {
             </div>
           </div>
 
-          <button type="button" onClick={() => void runPickup()} disabled={scheduling} className={`${primaryBtn} mt-4 w-full`}>
-            {scheduling ? <FiRefreshCw className="h-3.5 w-3.5 animate-spin" /> : <FiTruck className="h-3.5 w-3.5" />}
-            {scheduling ? 'Scheduling…' : 'Schedule pickup'}
-          </button>
+          <div className="mt-auto pt-4">
+            <button type="button" onClick={() => void runPickup()} disabled={scheduling} className={`${primaryBtn} w-full`}>
+              {scheduling ? <FiRefreshCw className="h-3.5 w-3.5 animate-spin" /> : <FiTruck className="h-3.5 w-3.5" />}
+              {scheduling ? 'Scheduling…' : 'Schedule pickup'}
+            </button>
+          </div>
         </Card>
       </div>
     </div>
