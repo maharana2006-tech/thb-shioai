@@ -1377,7 +1377,15 @@ public class StampsConnector implements CarrierConnector {
         Map<String, Object> senderInfo = new LinkedHashMap<>();
         String licenseNumber = nonBlank(intl.getAesCitation(), intl.getExportDeclarationReference());
         if (StringUtils.hasText(licenseNumber)) senderInfo.put("license_number", licenseNumber);
-        if (StringUtils.hasText(intl.getFtrExemption())) senderInfo.put("certificate_number", intl.getFtrExemption());
+        // T7 originally mapped ftrExemption → certificate_number but SERA
+        // rejects the FTR exemption codes (NO_EEI_30_37_a / _h / _36) with
+        // carrier error 4522242 "certificate_number specified is invalid."
+        // SERA's certificate_number is for DOT/USDA/NMFC-style product
+        // certificates, not FTR exemption text. USPS auto-derives the
+        // §30.37(a) exemption from shipment value (<$2500) on its side,
+        // so dropping our ftrExemption from the wire body doesn't lose
+        // the regulatory signal. aesCitation (ITN) still rides as
+        // license_number above — that one IS a valid certificate.
         if (!senderInfo.isEmpty()) customs.put("sender_info", senderInfo);
         // PR-T7 (audit T-C3) — recipient_info.tax_id for EU IOSS / UK VAT /
         // BR CPF / etc. required post-ICS2. Precedence: generic importerTaxId

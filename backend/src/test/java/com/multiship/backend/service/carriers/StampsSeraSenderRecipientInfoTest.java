@@ -56,11 +56,23 @@ class StampsSeraSenderRecipientInfoTest {
     }
 
     @Test
-    void senderInfo_ftrExemptionLandsOnCertificateNumber() throws Exception {
-        ShipmentRequestDTO req = intlRequestWith(block -> block.setFtrExemption("NO_EEI_30_37_a"));
+    void senderInfo_ftrExemptionIsNotMappedToCertificateNumber() throws Exception {
+        // Pre-fix: ftrExemption → sender_info.certificate_number, which
+        // SERA rejects with carrier error 4522242 "certificate_number
+        // specified is invalid." USPS auto-derives §30.37(a) from
+        // shipment value, so we drop the wire mapping entirely. The
+        // AES ITN (aesCitation) continues to ride on license_number.
+        ShipmentRequestDTO req = intlRequestWith(block -> {
+            block.setAesCitation(null);
+            block.setExportDeclarationReference(null);
+            block.setFtrExemption("NO_EEI_30_37_a");
+        });
         JsonNode customs = emitAndRead(req);
-        assertEquals("NO_EEI_30_37_a",
-                customs.path("sender_info").path("certificate_number").asText());
+        // Entire sender_info block should be omitted when only ftrExemption
+        // was set (there's no other populated certificate / license field).
+        assertTrue(customs.path("sender_info").isMissingNode()
+                        || customs.path("sender_info").isNull(),
+                "ftrExemption alone must NOT emit sender_info — SERA rejects it as certificate_number");
     }
 
     @Test
