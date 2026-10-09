@@ -131,6 +131,10 @@ public class StampsSeraOAuthService {
      */
     private final ConcurrentHashMap<String, CachedAccessToken> tokenCache = new ConcurrentHashMap<>();
 
+    /** Where a rotated refresh token is saved back to its account. */
+    @Autowired(required = false)
+    private com.multiship.backend.repository.CarrierAccountRefRepository accountRepository;
+
     /** Prometheus counter for cache hits. Populated iff MeterRegistry is on
      *  the classpath and injected; null-safe-called elsewhere. */
     private Counter cacheHitCounter;
@@ -392,6 +396,7 @@ public class StampsSeraOAuthService {
         // is on the exchange response, not the cache entry.
         java.util.concurrent.atomic.AtomicReference<TokenExchangeResult> outcome =
                 new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicBoolean fetched = new java.util.concurrent.atomic.AtomicBoolean();
         tokenCache.compute(cacheKey, (k, cur) -> {
             if (cur != null && cur.isValid()) {
                 long rem = Math.max(0,
@@ -410,6 +415,7 @@ public class StampsSeraOAuthService {
                 }
             });
             outcome.set(fresh);
+            fetched.set(true);
             if (!fresh.success() || fresh.expiresInSeconds() <= 0) {
                 // Don't cache failures, and don't cache a zero-TTL success
                 // (safety — SERA should always provide expires_in, but if
@@ -422,7 +428,32 @@ public class StampsSeraOAuthService {
                     fresh.refreshToken(),
                     Instant.now().plusSeconds(fresh.expiresInSeconds()));
         });
+        if (fetched.get()) saveRotatedRefreshToken(refreshToken, outcome.get());
         return outcome.get();
+    }
+
+    /**
+     * SERA may answer a refresh with a NEW refresh token and retire the old
+     * one. Save it on the account that held the old one, or that account
+     * stops working once the cached access token expires (or on restart).
+     * The column is encrypted with a random IV, so the match is done in Java.
+     */
+    void saveRotatedRefreshToken(String oldRefreshToken, TokenExchangeResult result) {
+        if (accountRepository == null || result == null || !result.success()) return;
+        String rotated = result.refreshToken();
+        if (!StringUtils.hasText(rotated) || rotated.equals(oldRefreshToken)) return;
+        try {
+            for (var account : accountRepository.findAll()) {
+                if (oldRefreshToken.equals(account.getStampsRefreshToken())) {
+                    account.setStampsRefreshToken(rotated);
+                    accountRepository.save(account);
+                    log.info("SERA: saved the rotated refresh token on carrier account #{}", account.getId());
+                }
+            }
+        } catch (RuntimeException ex) {
+            log.error("SERA: could not save a rotated refresh token — the account must be authorized again "
+                    + "if Stamps.com retired the old one: {}", ex.getMessage());
+        }
     }
 
     /** Public for the disconnect endpoint + tests + operational hygiene. */
