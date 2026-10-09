@@ -53,6 +53,7 @@ import {
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import AdvancedDataTable, { type ColumnDef } from './workspace/AdvancedDataTable'
 import CarrierLogo from './workspace/CarrierLogo'
+import { StampsAddFundsDialog, StampsBalancePill } from './StampsPostage'
 import PortalMenu from './workspace/PortalMenu'
 import Select from './workspace/Select'
 import { useAppSession } from '../hooks/useAppSession'
@@ -275,6 +276,9 @@ export default function CarrierConnections({
   const filtersRef = useRef<HTMLDivElement>(null)
   const [query, setQuery] = useState('')
   const [busyId, setBusyId] = useState<number | null>(null)
+  /** USPS account whose Add funds dialog is open; postageVersion re-reads the balance pills after a top-up. */
+  const [postageFor, setPostageFor] = useState<CarrierAccountRef | null>(null)
+  const [postageVersion, setPostageVersion] = useState(0)
 
   // Close the Filters popover on outside click / Escape.
   useEffect(() => {
@@ -1109,6 +1113,10 @@ export default function CarrierConnections({
               ) : (
                 <VerifiedChip account={account} />
               )}
+              {admin && account.active && account.verified === true
+                && normalizeCarrierCode(account.carrierCode) === 'usps' ? (
+                <StampsBalancePill accountId={account.id} version={postageVersion} onOpen={() => setPostageFor(account)} />
+              ) : null}
             </div>
           )
         },
@@ -1160,6 +1168,7 @@ export default function CarrierConnections({
               onEdit={() => openDrawer(row.original)}
               onDelete={() => void handleDelete(row.original)}
               onDisconnectStamps={() => void handleDisconnectStamps(row.original)}
+              onAddFunds={() => setPostageFor(row.original)}
             />
           </div>
         ),
@@ -1172,7 +1181,7 @@ export default function CarrierConnections({
     // column model every render. busyId is the one value the columns visually
     // depend on for disabled states; admin flips row-action visibility.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [busyId, admin],
+    [busyId, admin, postageVersion],
   )
 
   // PR-F4 (FE-PERF-1) — health-strip card definitions memoised on the four
@@ -1192,6 +1201,15 @@ export default function CarrierConnections({
 
   return (
     <div className="space-y-4">
+      {postageFor ? (
+        <StampsAddFundsDialog
+          account={postageFor}
+          onClose={(changed) => {
+            setPostageFor(null)
+            if (changed) setPostageVersion((v) => v + 1)
+          }}
+        />
+      ) : null}
       {/* ===== health strip — hidden in embedded mode so the tab doesn't duplicate totals from the outer page ===== */}
       {!embedded ? (
         <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -2339,6 +2357,7 @@ function RowActionsMenu({
   onEdit,
   onDelete,
   onDisconnectStamps,
+  onAddFunds,
 }: {
   account: CarrierAccountRef
   busy: boolean
@@ -2347,6 +2366,7 @@ function RowActionsMenu({
   onEdit: () => void
   onDelete: () => void
   onDisconnectStamps: () => void
+  onAddFunds: () => void
 }) {
   const [open, setOpen] = useState(false)
   const buttonRef = useRef<HTMLButtonElement>(null)
@@ -2413,6 +2433,18 @@ function RowActionsMenu({
           >
             <FiShield className="h-3.5 w-3.5 text-slate-500" />
             Disconnect from Stamps.com
+          </button>
+        ) : null}
+        {admin && normalizeCarrierCode(account.carrierCode) === 'usps'
+            && account.verified === true ? (
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => { setOpen(false); onAddFunds() }}
+            className="flex w-full items-center gap-2 px-3 py-2 text-[12px] font-semibold text-slate-700 transition hover:bg-slate-50"
+          >
+            <FiPlus className="h-3.5 w-3.5 text-[#412d15]" />
+            Add funds
           </button>
         ) : null}
         <button
