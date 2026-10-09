@@ -8,10 +8,13 @@
 
 export type FieldErrorMap = Record<string, string>
 
-/** Pull the human `"message":"..."` texts out of a carrier error blob. */
+/** Pull the human `"message":"..."` / `"error_message":"..."` texts out of
+ *  a carrier error blob. FedEx/UPS/DHL use `"message"`; Stamps.com SERA
+ *  uses `"error_message"` — accept both so the SERA 400 shape doesn't
+ *  fall through to the empty-stripper branch. */
 function extractMessages(raw: string): string[] {
   const out: string[] = []
-  const re = /"message"\s*:\s*"((?:[^"\\]|\\.)*)"/g
+  const re = /"(?:error_)?message"\s*:\s*"((?:[^"\\]|\\.)*)"/g
   let m: RegExpExecArray | null
   while ((m = re.exec(raw)) !== null) {
     const t = m[1].replace(/\\"/g, '"').trim()
@@ -33,7 +36,15 @@ export function summarizeCarrierError(raw?: string | null): string {
   // No JSON messages — strip our wrapper prefix and any HTTP/transaction noise.
   return fixSentenceSpacing(raw
     .replace(/^The carrier rejected[^:]*:\s*/i, '')
-    .replace(/\b[A-Z]+ createShipment HTTP \d+:?\s*/i, '')
+    // Connector prefix shapes we emit:
+    //   FEDEX createShipment HTTP 400           (FedEx)
+    //   UPS createShipment HTTP 503             (UPS)
+    //   DHL createShipment HTTP 429             (DHL)
+    //   STAMPS createShipmentSera[pkg 1/1] HTTP 400   (SERA — has method suffix + piece bracket)
+    //   STAMPS getRatesSera[pkg 1/1] HTTP 400         (SERA rate flow)
+    // Allow optional \w+ after createShipment / any carrier verb +
+    // optional [...] bracket, before the HTTP token.
+    .replace(/\b[A-Z]+ \w+(?:\[[^\]]*\])? HTTP \d+:?\s*/i, '')
     // From the first brace on is carrier JSON — also when the stored message
     // was cut off mid-blob and never closes.
     .replace(/\{.*$/s, '')
