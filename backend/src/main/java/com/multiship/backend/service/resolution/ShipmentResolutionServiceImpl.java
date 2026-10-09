@@ -51,7 +51,7 @@ public class ShipmentResolutionServiceImpl implements ShipmentResolutionService 
     // ===== Warehouse =====
 
     @Override
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, noRollbackFor = ShipmentResolutionException.class)
     public Optional<Warehouse> resolveWarehouse(String clientCode, String requestedWarehouseCode) {
         String code = normalize(clientCode);
         if (code.isEmpty()) return Optional.empty();
@@ -88,7 +88,7 @@ public class ShipmentResolutionServiceImpl implements ShipmentResolutionService 
     }
 
     @Override
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, noRollbackFor = ShipmentResolutionException.class)
     public Warehouse assertWarehouseById(String clientCode, Long warehouseId) {
         String code = normalize(clientCode);
         if (warehouseId == null) {
@@ -110,7 +110,7 @@ public class ShipmentResolutionServiceImpl implements ShipmentResolutionService 
     // ===== Ship-to =====
 
     @Override
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, noRollbackFor = ShipmentResolutionException.class)
     public boolean canShipTo(String clientCode, String destCountryCode) {
         String country = normalize(destCountryCode);
         if (country.isEmpty()) return true; // caller should validate presence separately
@@ -134,7 +134,7 @@ public class ShipmentResolutionServiceImpl implements ShipmentResolutionService 
     // ===== Allowlists =====
 
     @Override
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, noRollbackFor = ShipmentResolutionException.class)
     public Set<Long> allowedServiceIds(String clientCode) {
         return allowedServiceRepository
                 .findByClientCodeIgnoreCaseOrderByIsDefaultDescCreatedAtAsc(normalize(clientCode))
@@ -144,7 +144,7 @@ public class ShipmentResolutionServiceImpl implements ShipmentResolutionService 
     }
 
     @Override
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, noRollbackFor = ShipmentResolutionException.class)
     public Set<Long> allowedServiceIds(String clientCode, Long warehouseId) {
         var rows = allowedServiceRepository
                 .findByClientCodeIgnoreCaseOrderByIsDefaultDescCreatedAtAsc(normalize(clientCode));
@@ -170,7 +170,7 @@ public class ShipmentResolutionServiceImpl implements ShipmentResolutionService 
     }
 
     @Override
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, noRollbackFor = ShipmentResolutionException.class)
     public Set<Long> allowedPackageIds(String clientCode) {
         return allowedPackageRepository
                 .findByClientCodeIgnoreCaseOrderByIsDefaultDescCreatedAtAsc(normalize(clientCode))
@@ -255,7 +255,7 @@ public class ShipmentResolutionServiceImpl implements ShipmentResolutionService 
     // ===== Policy + rate strategy =====
 
     @Override
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, noRollbackFor = ShipmentResolutionException.class)
     public Optional<ClientShippingPolicy> policyFor(String clientCode) {
         return policyRepository.findByClientCodeIgnoreCase(normalize(clientCode));
     }
@@ -304,7 +304,7 @@ public class ShipmentResolutionServiceImpl implements ShipmentResolutionService 
     // ===== Markup =====
 
     @Override
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, noRollbackFor = ShipmentResolutionException.class)
     public MarkupApplied applyMarkup(String clientCode, BigDecimal carrierRate, String carrierCurrency) {
         BigDecimal safeRate = carrierRate != null ? carrierRate : BigDecimal.ZERO;
         String normalizedClient = normalize(clientCode);
@@ -347,7 +347,7 @@ public class ShipmentResolutionServiceImpl implements ShipmentResolutionService 
     // ===== Cutoff =====
 
     @Override
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, noRollbackFor = ShipmentResolutionException.class)
     public boolean isPastCutoff(String clientCode, Instant now) {
         if (now == null) now = Instant.now();
         Optional<ClientShippingPolicy> row = policyRepository.findByClientCodeIgnoreCase(normalize(clientCode));
