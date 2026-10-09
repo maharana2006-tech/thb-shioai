@@ -177,15 +177,6 @@ export default function PickupsEodPage() {
 
   return (
     <div className="space-y-4 pb-10">
-      <div className="px-1">
-        <h2 className="text-[17px] font-semibold tracking-tight text-[#1f150c]">Pickups &amp; End-of-Day</h2>
-        <p className="mt-0.5 text-[12.5px] text-[#6b5c42]">
-          Schedule a courier pickup, or close out the day so the driver can accept the whole batch
-          (FedEx manifest · UPS End of Day · USPS SCAN form). To close automatically every evening,
-          turn on the <Link to={settingsPaths.dtcScheduler} className="font-semibold text-[#412d15] underline">Carrier end-of-day close</Link> job in the scheduler.
-        </p>
-      </div>
-
       <div className="grid gap-4 lg:grid-cols-2 lg:items-start">
         {/* Left column — close + activity (fills the space next to the taller pickup form) */}
         <div className="space-y-4">
@@ -218,7 +209,9 @@ export default function PickupsEodPage() {
           <p className="mt-2 text-[11.5px] text-[#9a8b70]">
             Closes every open (generated, non-voided) label for the chosen carrier on that date. To close only
             specific orders instead, use <span className="font-semibold text-[#6b5c42]">Close out</span> on the Orders
-            page. DHL manifests implicitly via its pickup, so it isn't listed here.
+            page. To close automatically every evening, turn on the{' '}
+            <Link to={settingsPaths.dtcScheduler} className="font-semibold text-[#412d15] underline">Carrier end-of-day close</Link> job.
+            DHL manifests implicitly via its pickup, so it isn't listed here.
           </p>
           <button type="button" onClick={() => void runClose()} disabled={closing} className={`${primaryBtn} mt-3`}>
             {closing ? <FiRefreshCw className="h-3.5 w-3.5 animate-spin" /> : <FiCheckSquare className="h-3.5 w-3.5" />}
