@@ -86,12 +86,21 @@ export function buildCheckGroups(result: ShipmentValidationResult): CheckGroup[]
     carrier.warnings.push(...(c.warnings ?? []))
   }
   // No price is something to look at, not a pass: every UPS rate failing (HTTP 400)
-  // still showed "Passed" beside an empty price.
+  // still showed "Passed" beside an empty price. UNAVAILABLE and NOT_OFFERED
+  // are HARD rejections (carrier won't price this combo) — route to errors
+  // so the panel reads "N issues to fix" instead of "Ready to ship" after
+  // the carrier already refused. WEIGHT_ONLY = operator skipped the rate
+  // call deliberately, stays a warning.
   const q = result.quote
   if (q && q.status !== 'QUOTED') {
-    groups.get('service')!.warnings.push(q.status === 'NOT_OFFERED'
+    const msg = q.status === 'NOT_OFFERED'
       ? (q.message || 'The carrier does not offer this service on this route')
-      : `No price from the carrier${q.message ? `: ${q.message}` : ''}`)
+      : `No price from the carrier${q.message ? `: ${q.message}` : ''}`
+    if (q.status === 'UNAVAILABLE' || q.status === 'NOT_OFFERED') {
+      groups.get('service')!.errors.push(msg)
+    } else {
+      groups.get('service')!.warnings.push(msg)
+    }
   }
   const customsRan = result.international
   return GROUPS.map(({ key }) => {

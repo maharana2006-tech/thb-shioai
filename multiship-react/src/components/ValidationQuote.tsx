@@ -35,8 +35,11 @@ export default function ValidationQuote({ quote }: { quote: ShipmentRateQuote })
             </dd>
             <dt className="text-slate-500">Delivery</dt>
             <dd>
-              {quote.transitDays != null ? `${quote.transitDays} business day${quote.transitDays === 1 ? '' : 's'}` : 'Transit time not given'}
-              {quote.estimatedDelivery ? ` · by ${formatDate(quote.estimatedDelivery)}` : ''}
+              {quote.estimatedDelivery
+                ? `by ${formatDate(quote.estimatedDelivery)}`
+                : quote.transitDays != null
+                  ? `${quote.transitDays} business day${quote.transitDays === 1 ? '' : 's'}`
+                  : 'Transit time not given'}
             </dd>
           </>
         ) : null}
