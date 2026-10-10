@@ -943,9 +943,10 @@ public class StampsConnector implements CarrierConnector {
         // and the request body share the same date (midnight-boundary race).
         java.time.LocalDate shipDate = com.multiship.backend.util.LabelDates
                 .today(request.getShipperTimezone());
+        boolean sandbox = isSandbox(environment);
         for (int i = 0; i < packages.size(); i++) {
             String jsonBody = buildSeraCreateLabelBody(request, packages.get(i),
-                    i + 1, packages.size(), shipDate);
+                    i + 1, packages.size(), shipDate, sandbox);
             try {
                 // Audit: SERA requires Idempotency-Key on POSTs (developer.stamps.com
                 // §Idempotency). PR-T2 — deterministic key keyed on
@@ -1109,18 +1110,30 @@ public class StampsConnector implements CarrierConnector {
     /** PR-T2 — convenience overload for tests + callers that don't already
      *  hold a {@code shipDate}; preserves the pre-T2 signature by computing
      *  the date internally. The MPS loop in {@link #createShipmentSera}
-     *  passes the pre-computed date so key + body share one value. */
+     *  passes the pre-computed date so key + body share one value.
+     *  Defaults sandbox=false; the real MPS loop passes the real flag. */
     String buildSeraCreateLabelBody(ShipmentRequestDTO request,
                                      com.multiship.backend.dto.PackageDetailDTO pkg,
                                      int packageIndex, int packageTotal) {
         return buildSeraCreateLabelBody(request, pkg, packageIndex, packageTotal,
-                com.multiship.backend.util.LabelDates.today(request.getShipperTimezone()));
+                com.multiship.backend.util.LabelDates.today(request.getShipperTimezone()),
+                false);
+    }
+
+    /** PR-T-SANDBOX — sandbox flag added so sandbox-env labels auto-flag
+     *  as test (Stamps.com stamps VOID). */
+    String buildSeraCreateLabelBody(ShipmentRequestDTO request,
+                                     com.multiship.backend.dto.PackageDetailDTO pkg,
+                                     int packageIndex, int packageTotal,
+                                     java.time.LocalDate shipDate) {
+        return buildSeraCreateLabelBody(request, pkg, packageIndex, packageTotal, shipDate, false);
     }
 
     String buildSeraCreateLabelBody(ShipmentRequestDTO request,
                                      com.multiship.backend.dto.PackageDetailDTO pkg,
                                      int packageIndex, int packageTotal,
-                                     java.time.LocalDate shipDate) {
+                                     java.time.LocalDate shipDate,
+                                     boolean sandbox) {
         Map<String, Object> body = new LinkedHashMap<>();
 
         // Addresses. SERA uses from_address / to_address (snake_case, mirroring
@@ -1245,6 +1258,13 @@ public class StampsConnector implements CarrierConnector {
         body.put("ship_date", shipDate.toString());
 
         if (Boolean.TRUE.equals(request.getIsReturn())) body.put("is_return_label", true);
+        // Sandbox env → auto-flag as test label. Per SERA v1 docs: "Test
+        // labels display 'VOID' stamp and cannot ship. Test labels
+        // auto-void with no action needed." Without this, sandbox labels
+        // look visually identical to prod labels and operators risk
+        // mistaking a staging print for a shippable one. Prod labels
+        // leave the field unset so the carrier processes them normally.
+        if (sandbox) body.put("is_test_label", true);
 
         // Label preferences — size / format / output type. Format follows
         // the request's labelImageFormat override; default is 4x6 PDF as
