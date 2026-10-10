@@ -2697,7 +2697,18 @@ export default function NewShipmentPage() {
         packages: [
           {
             sequenceNumber: 1,
-            packageType: isCustomPkg ? undefined : String(packageChoice),
+            // packageChoice is the PackagePreset.id as a string; resolve
+            // to the carrier's packaging code (e.g. "FLAT_RATE_ENVELOPE")
+            // before sending. Pre-fix we posted the raw id ("19") and SERA
+            // rejected with 899999 "packaging_type specified is invalid."
+            // Backend uses PackageDetailDTO.packageType verbatim for the
+            // carrier wire body; top-level packagePresetId (line below)
+            // handles the non-MPS single-piece path. For MPS, each piece
+            // needs its own carrier code.
+            packageType: isCustomPkg
+              ? undefined
+              : (packagesForCarrier.find((pk) => String(pk.id) === packageChoice)?.carrierPackageCode
+                  || undefined),
             weight: w,
             weightUnit,
             length: isCustomPkg ? Number(length) : undefined,

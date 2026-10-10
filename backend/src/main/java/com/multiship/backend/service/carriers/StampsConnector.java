@@ -1525,7 +1525,13 @@ public class StampsConnector implements CarrierConnector {
             case "REGIONAL_RATE_BOX_A" -> "usps_regional_rate_box_a";
             case "REGIONAL_RATE_BOX_B" -> "usps_regional_rate_box_b";
             case "FLAT_RATE_ENVELOPE" -> "usps_flat_rate_envelope";
-            default -> v.toLowerCase(Locale.ROOT).replace(' ', '_');
+            // Defense-in-depth: unknown values (e.g. a numeric preset.id
+            // leaked by a mis-configured caller) default to the generic
+            // "package" rather than the pass-through-rewrite that SERA
+            // 899999s on. Observed in production from an MPS submit where
+            // the FE sent packages[0].packageType="19" (preset DB id).
+            default -> v.matches("\\d+") ? "package"
+                    : v.toLowerCase(Locale.ROOT).replace(' ', '_');
         };
     }
 
