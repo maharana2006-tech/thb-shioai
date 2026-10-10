@@ -72,6 +72,13 @@ export default defineConfig(({ mode, command }) => {
         target: env.VITE_DEV_BACKEND_URL || 'http://localhost:8080',
         changeOrigin: false,
       },
+      // Dashboard System-status card calls /actuator/health directly;
+      // without a proxy entry Vite returns index.html and the JSON parse
+      // silently fails. Spring Boot exposes /actuator/health as permitAll.
+      '/actuator': {
+        target: env.VITE_DEV_BACKEND_URL || 'http://localhost:8080',
+        changeOrigin: false,
+      },
     },
   },
   // `npm run preview -- --host` serves the production build (dist/) on the
@@ -81,6 +88,10 @@ export default defineConfig(({ mode, command }) => {
   preview: {
     proxy: {
       '/api': {
+        target: env.VITE_DEV_BACKEND_URL || 'http://localhost:8080',
+        changeOrigin: false,
+      },
+      '/actuator': {
         target: env.VITE_DEV_BACKEND_URL || 'http://localhost:8080',
         changeOrigin: false,
       },
