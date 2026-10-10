@@ -2707,7 +2707,7 @@ export default function NewShipmentPage() {
             // needs its own carrier code.
             packageType: isCustomPkg
               ? undefined
-              : (packagesForCarrier.find((pk) => String(pk.id) === packageChoice)?.carrierPackageCode
+              : ([...packagesForCarrier, ...customBoxes].find((pk) => String(pk.id) === packageChoice)?.carrierPackageCode
                   || undefined),
             weight: w,
             weightUnit,
@@ -2724,18 +2724,18 @@ export default function NewShipmentPage() {
             //     and dimensions" during QA R6.
             length: isCustomPkg
               ? Number(length)
-              : ((packagesForCarrier.find((pk) => String(pk.id) === packageChoice)?.kind === 'CUSTOM')
-                  ? (packagesForCarrier.find((pk) => String(pk.id) === packageChoice)?.length ?? undefined)
+              : (([...packagesForCarrier, ...customBoxes].find((pk) => String(pk.id) === packageChoice)?.kind === 'CUSTOM')
+                  ? ([...packagesForCarrier, ...customBoxes].find((pk) => String(pk.id) === packageChoice)?.length ?? undefined)
                   : undefined),
             width: isCustomPkg
               ? Number(width)
-              : ((packagesForCarrier.find((pk) => String(pk.id) === packageChoice)?.kind === 'CUSTOM')
-                  ? (packagesForCarrier.find((pk) => String(pk.id) === packageChoice)?.width ?? undefined)
+              : (([...packagesForCarrier, ...customBoxes].find((pk) => String(pk.id) === packageChoice)?.kind === 'CUSTOM')
+                  ? ([...packagesForCarrier, ...customBoxes].find((pk) => String(pk.id) === packageChoice)?.width ?? undefined)
                   : undefined),
             height: isCustomPkg
               ? Number(height)
-              : ((packagesForCarrier.find((pk) => String(pk.id) === packageChoice)?.kind === 'CUSTOM')
-                  ? (packagesForCarrier.find((pk) => String(pk.id) === packageChoice)?.height ?? undefined)
+              : (([...packagesForCarrier, ...customBoxes].find((pk) => String(pk.id) === packageChoice)?.kind === 'CUSTOM')
+                  ? ([...packagesForCarrier, ...customBoxes].find((pk) => String(pk.id) === packageChoice)?.height ?? undefined)
                   : undefined),
             dimUnit,
             declaredValue: declaredValue ? Number(declaredValue) : undefined,
@@ -2745,8 +2745,13 @@ export default function NewShipmentPage() {
             // was given a packageType (preset's carrier code), look up the
             // preset to decide: thread L/W/H when CUSTOM-kind, omit when
             // CARRIER-kind. User-typed p.length/width/height always win.
+            // Also search customBoxes — CUSTOM-kind presets may store
+            // their name in packageType when extraPackage's packageType is
+            // populated from "Apply box 1 to all". Match by code OR name.
             const extraPreset = p.packageType
-              ? packagesForCarrier.find((pk) => (pk.carrierPackageCode || '') === p.packageType)
+              ? [...packagesForCarrier, ...customBoxes].find(
+                  (pk) => (pk.carrierPackageCode || '') === p.packageType
+                      || pk.name === p.packageType)
               : null
             const extraPresetIsCustom = extraPreset?.kind === 'CUSTOM'
             return {
@@ -4518,7 +4523,7 @@ export default function NewShipmentPage() {
                         // every box.
                         const preset = isCustomPkg
                           ? null
-                          : packagesForCarrier.find((pk) => String(pk.id) === packageChoice)
+                          : [...packagesForCarrier, ...customBoxes].find((pk) => String(pk.id) === packageChoice)
                         const effLength = isCustomPkg
                           ? length
                           : (preset?.length != null ? String(preset.length) : '')
