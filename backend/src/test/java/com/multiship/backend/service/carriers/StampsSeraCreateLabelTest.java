@@ -85,7 +85,10 @@ class StampsSeraCreateLabelTest {
         // Label options — output type MUST be base64 so the persister writes
         // bytes to disk (SWSIM parity).
         assertEquals("base64", root.path("label_options").path("label_output_type").asText());
-        assertEquals("pdf", root.path("label_options").path("label_format").asText());
+        // Default label_format flipped to ZPL — the ZPL Viewer tab needs
+        // the carrier's own thermal markup, and the resolver's PDF view
+        // path rasterises ZPL → PDF via zebrash.
+        assertEquals("zpl", root.path("label_options").path("label_format").asText());
         // Ship date is populated (LabelDates.today).
         assertNotNull(root.path("ship_date").asText(null));
     }

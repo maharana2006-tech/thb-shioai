@@ -1595,13 +1595,19 @@ public class StampsConnector implements CarrierConnector {
      *  GIF; SERA speaks pdf / png / zpl / zpl_ascii. GIF and JPG have no
      *  SERA equivalent — silently default to PDF (the safe universal). */
     static String normaliseSeraLabelFormat(String raw) {
-        if (!StringUtils.hasText(raw)) return "pdf";
+        // Default to ZPL so the stored artefact is the carrier's own
+        // thermal-label markup. The /label/zpl endpoint's resolver can
+        // then passthrough directly; the PDF view path rasterises ZPL →
+        // PDF via zebrash (install the native binary) OR falls back to
+        // the JSX facsimile. Operators who need the carrier PDF
+        // specifically can still pick PDF explicitly on the shipment form.
+        if (!StringUtils.hasText(raw)) return "zpl";
         return switch (raw.trim().toUpperCase(Locale.ROOT)) {
             case "PDF" -> "pdf";
             case "PNG" -> "png";
             case "ZPL" -> "zpl";
             case "ZPL_ASCII" -> "zpl_ascii";
-            default -> "pdf";
+            default -> "zpl";
         };
     }
 
