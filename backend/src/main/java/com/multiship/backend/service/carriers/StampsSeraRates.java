@@ -418,7 +418,17 @@ public class StampsSeraRates {
             Boolean isCustomsRequired = rate.hasNonNull("is_customs_required")
                     ? rate.path("is_customs_required").asBoolean()
                     : null;
-            RateOption option = new RateOption(CARRIER_CODE, service, service, amount, currency,
+            // Back-map SERA's snake-case service_type to our local
+            // shipping_service.service_code shape (e.g. usps_priority_mail
+            // → PRIORITY) so ShipmentValidationService's "did carrier
+            // quote this service" picker compares like-for-like. Pre-fix
+            // the raw SERA code never equalsIgnoreCase'd the local code
+            // and every valid lane triggered a bogus "did not quote USPS
+            // Priority Mail" warning right next to the actual quote.
+            // serviceName keeps the SERA shape so the operator-visible
+            // display shows the carrier-authoritative name.
+            String localCode = StampsConnector.mapSeraServiceToLocal(service);
+            RateOption option = new RateOption(CARRIER_CODE, localCode, service, amount, currency,
                     estimatedDelivery, transitDays);
             out.add(new SeraRateQuote(option, isCustomsRequired));
         }

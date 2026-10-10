@@ -2711,35 +2711,59 @@ export default function NewShipmentPage() {
                   || undefined),
             weight: w,
             weightUnit,
-            // When a preset is chosen (non-custom), thread the preset's L/W/H
-            // too. Pre-fix we only sent dims for the Custom entry, so a
-            // user-named preset like "THB-PACKAGE" (10×6×2) shipped as a
-            // generic SERA "package" with no dims and USPS rejected with
-            // "Dimensions are required." Flat-rate boxes still work because
-            // SERA ignores dims when packaging_type is usps_*_flat_rate_box.
+            // Dim threading — rules by preset kind:
+            //   · Custom (user typed dims directly): send typed dims.
+            //   · CUSTOM-kind preset (e.g. "THB-PACKAGE" 10×6×2): send
+            //     preset's L/W/H. SERA treats these as generic "package"
+            //     and rejects with "Dimensions are required" without dims.
+            //   · CARRIER-kind preset (flat-rate boxes, UPS branded boxes):
+            //     OMIT dims. SERA knows the dims for these codes; sending
+            //     our rounded seed values (8.69×5.44×1.75 vs USPS official
+            //     8.6875×5.4375×1.75) tripped SERA's dim validation with
+            //     "No rate found for the specified mail class, package,
+            //     and dimensions" during QA R6.
             length: isCustomPkg
               ? Number(length)
-              : (packagesForCarrier.find((pk) => String(pk.id) === packageChoice)?.length ?? undefined),
+              : ((packagesForCarrier.find((pk) => String(pk.id) === packageChoice)?.kind === 'CUSTOM')
+                  ? (packagesForCarrier.find((pk) => String(pk.id) === packageChoice)?.length ?? undefined)
+                  : undefined),
             width: isCustomPkg
               ? Number(width)
-              : (packagesForCarrier.find((pk) => String(pk.id) === packageChoice)?.width ?? undefined),
+              : ((packagesForCarrier.find((pk) => String(pk.id) === packageChoice)?.kind === 'CUSTOM')
+                  ? (packagesForCarrier.find((pk) => String(pk.id) === packageChoice)?.width ?? undefined)
+                  : undefined),
             height: isCustomPkg
               ? Number(height)
-              : (packagesForCarrier.find((pk) => String(pk.id) === packageChoice)?.height ?? undefined),
+              : ((packagesForCarrier.find((pk) => String(pk.id) === packageChoice)?.kind === 'CUSTOM')
+                  ? (packagesForCarrier.find((pk) => String(pk.id) === packageChoice)?.height ?? undefined)
+                  : undefined),
             dimUnit,
             declaredValue: declaredValue ? Number(declaredValue) : undefined,
           },
-          ...extraPackages.map((p, i) => ({
-            sequenceNumber: i + 2,
-            packageType: p.packageType || undefined,
-            weight: Number(p.weight),
-            weightUnit,
-            length: p.length ? Number(p.length) : undefined,
-            width: p.width ? Number(p.width) : undefined,
-            height: p.height ? Number(p.height) : undefined,
-            dimUnit,
-            declaredValue: p.declaredValue ? Number(p.declaredValue) : undefined,
-          })),
+          ...extraPackages.map((p, i) => {
+            // Mirror the box-1 dim-threading rule for box 2+. If the box
+            // was given a packageType (preset's carrier code), look up the
+            // preset to decide: thread L/W/H when CUSTOM-kind, omit when
+            // CARRIER-kind. User-typed p.length/width/height always win.
+            const extraPreset = p.packageType
+              ? packagesForCarrier.find((pk) => (pk.carrierPackageCode || '') === p.packageType)
+              : null
+            const extraPresetIsCustom = extraPreset?.kind === 'CUSTOM'
+            return {
+              sequenceNumber: i + 2,
+              packageType: p.packageType || undefined,
+              weight: Number(p.weight),
+              weightUnit,
+              length: p.length ? Number(p.length)
+                : (extraPresetIsCustom ? extraPreset?.length ?? undefined : undefined),
+              width: p.width ? Number(p.width)
+                : (extraPresetIsCustom ? extraPreset?.width ?? undefined : undefined),
+              height: p.height ? Number(p.height)
+                : (extraPresetIsCustom ? extraPreset?.height ?? undefined : undefined),
+              dimUnit,
+              declaredValue: p.declaredValue ? Number(p.declaredValue) : undefined,
+            }
+          }),
         ],
       } : {}),
       // Currency moved to top-level (always sent). Intl still carries the
@@ -4484,7 +4508,38 @@ export default function NewShipmentPage() {
                     <button
                       type="button"
                       title="Copy box 1's weight and dimensions onto every extra box"
-                      onClick={() => setExtraPackages((cur) => cur.map((p) => ({ ...p, weight, length, width, height })))}
+                      onClick={() => {
+                        // Read EFFECTIVE box-1 dims — top-level state is
+                        // only populated when "Custom" is picked. For a
+                        // preset-selected box 1 (e.g. THB-PACKAGE), fall
+                        // back to the preset's own L/W/H so the applied
+                        // row isn't blank. packageType also carries over
+                        // so the operator doesn't have to re-select it on
+                        // every box.
+                        const preset = isCustomPkg
+                          ? null
+                          : packagesForCarrier.find((pk) => String(pk.id) === packageChoice)
+                        const effLength = isCustomPkg
+                          ? length
+                          : (preset?.length != null ? String(preset.length) : '')
+                        const effWidth = isCustomPkg
+                          ? width
+                          : (preset?.width != null ? String(preset.width) : '')
+                        const effHeight = isCustomPkg
+                          ? height
+                          : (preset?.height != null ? String(preset.height) : '')
+                        const effPackageType = isCustomPkg
+                          ? ''
+                          : (preset?.carrierPackageCode || '')
+                        setExtraPackages((cur) => cur.map((p) => ({
+                          ...p,
+                          weight,
+                          length: effLength,
+                          width: effWidth,
+                          height: effHeight,
+                          packageType: effPackageType,
+                        })))
+                      }}
                       className="inline-flex h-9 items-center rounded-lg border border-dashed border-[#e3d9c4] bg-white px-2.5 text-[11px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]"
                     >
                       Apply box 1 to all

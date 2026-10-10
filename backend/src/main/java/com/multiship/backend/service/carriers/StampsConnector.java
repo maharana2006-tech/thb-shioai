@@ -1489,6 +1489,34 @@ public class StampsConnector implements CarrierConnector {
     /** Map a SWSIM-style service code ("USPS PM", "USPS GA", ...) to
      *  SERA's snake-case vocabulary. When the input is already snake_case
      *  (SERA-native), pass through. Blank input → null. */
+    /** Inverse of {@link #mapSwsimServiceToSera} — SERA service_type back
+     *  to our local {@code shipping_service.service_code} shape. Used by
+     *  the rate-shop parser so downstream code (ShipmentValidationService's
+     *  "did carrier quote this service" picker) can compare rate rows
+     *  against local service codes without a case-mismatch false negative.
+     *
+     *  <p>Unknown codes pass through unchanged — upper-case + replace
+     *  hyphen → underscore so a hypothetical SERA extension still slots
+     *  into the local comparison heuristic.
+     */
+    public static String mapSeraServiceToLocal(String seraServiceType) {
+        if (!StringUtils.hasText(seraServiceType)) return seraServiceType;
+        String v = seraServiceType.trim().toLowerCase(Locale.ROOT);
+        return switch (v) {
+            case "usps_priority_mail" -> "PRIORITY";
+            case "usps_priority_mail_express" -> "PRIORITY_EXPRESS";
+            case "usps_ground_advantage" -> "GROUND_ADVANTAGE";
+            case "usps_priority_mail_international" -> "PRIORITY_INTL";
+            case "usps_priority_mail_express_international" -> "EXPRESS_INTL";
+            case "usps_first_class_package_international_service" -> "FIRST_CLASS_INTL";
+            case "usps_first_class_mail" -> "USPS FCM";
+            case "usps_media_mail" -> "USPS MM";
+            case "usps_global_express_guaranteed" -> "USPS GXG";
+            case "usps_first_class_mail_international" -> "USPS FCMI";
+            default -> seraServiceType.trim().toUpperCase(Locale.ROOT).replace('-', '_');
+        };
+    }
+
     static String mapSwsimServiceToSera(String service) {
         if (!StringUtils.hasText(service)) return null;
         String v = service.trim();
