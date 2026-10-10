@@ -385,7 +385,16 @@ public class StampsSeraRates {
             log.warn("Stamps SERA /rates returned non-JSON (first 200 chars): {}", safeHead(responseJson));
             return List.of();
         }
-        JsonNode rates = root.path("rates");
+        // SERA /rates returns a bare top-level array of rate objects,
+        // not {"rates": [...]} as the pre-release reference docs implied.
+        // Observed live (QA run #3, 2026-10-10): every 200 response for a
+        // valid lane came back as `[{"carrier":"usps", ...}]`. Pre-fix the
+        // parser looked for root.path("rates") only, found MissingNode on
+        // every call, and the rate-shop aggregated to 0 services even
+        // though SERA had quoted the lane. Accept both shapes: a top-level
+        // array wins; otherwise fall back to the documented .rates key so
+        // a hypothetical future SERA wrap doesn't break us.
+        JsonNode rates = root.isArray() ? root : root.path("rates");
         if (!rates.isArray() || rates.isEmpty()) return List.of();
         List<SeraRateQuote> out = new ArrayList<>();
         for (JsonNode rate : rates) {

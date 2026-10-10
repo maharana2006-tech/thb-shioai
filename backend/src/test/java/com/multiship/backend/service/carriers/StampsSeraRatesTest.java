@@ -204,6 +204,22 @@ class StampsSeraRatesTest {
     }
 
     @Test
+    void parseResponse_bareTopLevelArray_returnsQuotes() {
+        // SERA actually returns a bare top-level array, not {"rates":[...]}.
+        // Observed live during QA run #3 (2026-10-10). Regression guard so
+        // the parser's shape-tolerance survives future rewrites.
+        String json = """
+                [{"carrier":"usps","service_type":"usps_priority_mail_express",
+                  "packaging_type":"package","is_customs_required":false,
+                  "shipment_cost":{"total_amount":54.41,"currency":"usd"}}]
+                """;
+        List<SeraRateQuote> options = rates.parseSeraRatesResponse(json);
+        assertEquals(1, options.size());
+        assertEquals("usps_priority_mail_express", options.get(0).option().serviceCode());
+        assertEquals(0, options.get(0).option().totalAmount().compareTo(new BigDecimal("54.41")));
+    }
+
+    @Test
     void parseResponse_blankBody_returnsEmptyList() {
         // Blank 200 body (SERA's answer when the account has no live
         // service linked) — zero quotes, no exception.
