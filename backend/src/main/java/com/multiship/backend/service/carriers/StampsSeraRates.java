@@ -267,12 +267,19 @@ public class StampsSeraRates {
             pkgBlock.put("weight", weight);
             pkgBlock.put("weight_unit", StampsConnector.normaliseSeraWeightUnit(weightUnit));
         }
-        if (pkg.getLength() != null) pkgBlock.put("length", pkg.getLength());
-        if (pkg.getWidth() != null) pkgBlock.put("width", pkg.getWidth());
-        if (pkg.getHeight() != null) pkgBlock.put("height", pkg.getHeight());
-        String dimUnit = nonBlank(pkg.getDimUnit(), request.getDimUnit());
-        if (StringUtils.hasText(dimUnit)) pkgBlock.put("dimension_unit",
-                StampsConnector.normaliseSeraDimUnit(dimUnit));
+        // Skip dim block for SERA-known flat-rate codes (see StampsConnector
+        // comment at the matching /labels site). Rate-shop path must mirror
+        // because top-level length/width/height from the FE preset pre-fill
+        // leaked into the /rates body and SERA validated the rounded dims
+        // against its exact catalogue values.
+        if (!StampsConnector.isSeraKnownFixedDimPackaging(packagingType)) {
+            if (pkg.getLength() != null) pkgBlock.put("length", pkg.getLength());
+            if (pkg.getWidth() != null) pkgBlock.put("width", pkg.getWidth());
+            if (pkg.getHeight() != null) pkgBlock.put("height", pkg.getHeight());
+            String dimUnit = nonBlank(pkg.getDimUnit(), request.getDimUnit());
+            if (StringUtils.hasText(dimUnit)) pkgBlock.put("dimension_unit",
+                    StampsConnector.normaliseSeraDimUnit(dimUnit));
+        }
         body.put("package", pkgBlock);
 
         body.put("ship_date", shipDate.toString());
@@ -420,15 +427,14 @@ public class StampsSeraRates {
                     : null;
             // Back-map SERA's snake-case service_type to our local
             // shipping_service.service_code shape (e.g. usps_priority_mail
-            // → PRIORITY) so ShipmentValidationService's "did carrier
-            // quote this service" picker compares like-for-like. Pre-fix
-            // the raw SERA code never equalsIgnoreCase'd the local code
-            // and every valid lane triggered a bogus "did not quote USPS
-            // Priority Mail" warning right next to the actual quote.
-            // serviceName keeps the SERA shape so the operator-visible
-            // display shows the carrier-authoritative name.
+            // → PRIORITY) for ShipmentValidationService's picker.
+            // serviceName gets a human display string (e.g. "USPS Priority
+            // Mail") so the operator-visible picker doesn't render raw
+            // snake_case like "USPS_PRIORITY_MAIL" — the FE uppercases
+            // whatever we return and that stayed ugly pre-fix.
             String localCode = StampsConnector.mapSeraServiceToLocal(service);
-            RateOption option = new RateOption(CARRIER_CODE, localCode, service, amount, currency,
+            String displayName = StampsConnector.seraServiceDisplayName(service);
+            RateOption option = new RateOption(CARRIER_CODE, localCode, displayName, amount, currency,
                     estimatedDelivery, transitDays);
             out.add(new SeraRateQuote(option, isCustomsRequired));
         }

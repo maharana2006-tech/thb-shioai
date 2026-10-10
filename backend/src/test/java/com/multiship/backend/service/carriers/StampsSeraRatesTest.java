@@ -175,7 +175,7 @@ class StampsSeraRatesTest {
         // can compare against shipping_service.service_code. serviceName keeps
         // the SERA shape for carrier-authoritative display.
         assertEquals("PRIORITY", first.option().serviceCode());
-        assertEquals("usps_priority_mail", first.option().serviceName());
+        assertEquals("USPS Priority Mail", first.option().serviceName());
         // compareTo rather than equals — Jackson strips BigDecimal's trailing
         // zero ("8.50" → scale 1 "8.5") and we care about value, not scale.
         assertEquals(0, new BigDecimal("8.50").compareTo(first.option().totalAmount()),
@@ -187,7 +187,7 @@ class StampsSeraRatesTest {
 
         SeraRateQuote second = options.get(1);
         assertEquals("GROUND_ADVANTAGE", second.option().serviceCode());
-        assertEquals("usps_ground_advantage", second.option().serviceName());
+        assertEquals("USPS Ground Advantage", second.option().serviceName());
         assertEquals(0, new BigDecimal("5.75").compareTo(second.option().totalAmount()),
                 "total must equal 5.75 (value-equal); got: " + second.option().totalAmount());
         assertEquals(Integer.valueOf(4), second.option().transitDays());
@@ -221,7 +221,7 @@ class StampsSeraRatesTest {
         List<SeraRateQuote> options = rates.parseSeraRatesResponse(json);
         assertEquals(1, options.size());
         assertEquals("PRIORITY_EXPRESS", options.get(0).option().serviceCode());
-        assertEquals("usps_priority_mail_express", options.get(0).option().serviceName());
+        assertEquals("USPS Priority Mail Express", options.get(0).option().serviceName());
         assertEquals(0, options.get(0).option().totalAmount().compareTo(new BigDecimal("54.41")));
     }
 

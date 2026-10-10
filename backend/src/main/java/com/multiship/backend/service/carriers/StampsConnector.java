@@ -1174,11 +1174,19 @@ public class StampsConnector implements CarrierConnector {
             pkgBlock.put("weight", weight);
             pkgBlock.put("weight_unit", normaliseSeraWeightUnit(weightUnit));
         }
-        if (pkg.getLength() != null) pkgBlock.put("length", pkg.getLength());
-        if (pkg.getWidth() != null) pkgBlock.put("width", pkg.getWidth());
-        if (pkg.getHeight() != null) pkgBlock.put("height", pkg.getHeight());
-        String dimUnit = nonBlank(pkg.getDimUnit(), request.getDimUnit());
-        if (StringUtils.hasText(dimUnit)) pkgBlock.put("dimension_unit", normaliseSeraDimUnit(dimUnit));
+        // Skip dim block for SERA-known flat-rate codes — SERA validates
+        // against its exact catalogue dims and refuses our rounded preset
+        // values (observed R6/R9: 8.69×5.44×1.75 vs USPS exact
+        // 8.6875×5.4375×1.75 → "No rate found for the specified mail class,
+        // package, and dimensions"). For generic "package" and non-flat
+        // codes, dims are still required.
+        if (!isSeraKnownFixedDimPackaging(packagingType)) {
+            if (pkg.getLength() != null) pkgBlock.put("length", pkg.getLength());
+            if (pkg.getWidth() != null) pkgBlock.put("width", pkg.getWidth());
+            if (pkg.getHeight() != null) pkgBlock.put("height", pkg.getHeight());
+            String dimUnit = nonBlank(pkg.getDimUnit(), request.getDimUnit());
+            if (StringUtils.hasText(dimUnit)) pkgBlock.put("dimension_unit", normaliseSeraDimUnit(dimUnit));
+        }
         body.put("package", pkgBlock);
 
         // Signature options — SERA's delivery_confirmation_type enum.
@@ -1544,6 +1552,45 @@ public class StampsConnector implements CarrierConnector {
             case "USPS FCMI" -> "usps_first_class_mail_international";
             case "USPS FCPIS", "FIRST_CLASS_INTL" -> "usps_first_class_package_international_service";
             default -> v.toLowerCase(Locale.ROOT).replace(' ', '_');
+        };
+    }
+
+    /** True when the SERA packaging code is one with fixed, catalogue-known
+     *  dimensions (flat-rate boxes + flat-rate envelope + regional-rate).
+     *  SERA validates submitted dims against its exact values for these;
+     *  rounded seed dims cause "No rate found for the specified mail
+     *  class, package, and dimensions." Call sites should omit the dim
+     *  block when this is true. */
+    static boolean isSeraKnownFixedDimPackaging(String seraPackagingType) {
+        if (!StringUtils.hasText(seraPackagingType)) return false;
+        String v = seraPackagingType.trim().toLowerCase(Locale.ROOT);
+        return v.equals("usps_flat_rate_envelope")
+                || v.equals("usps_small_flat_rate_box")
+                || v.equals("usps_medium_flat_rate_box")
+                || v.equals("usps_large_flat_rate_box")
+                || v.equals("usps_regional_rate_box_a")
+                || v.equals("usps_regional_rate_box_b")
+                || v.equals("usps_padded_flat_rate_envelope")
+                || v.equals("usps_legal_flat_rate_envelope");
+    }
+
+    /** Human display name for a SERA service_type — avoids the FE showing
+     *  the raw snake_case code. Pairs with {@link #mapSeraServiceToLocal}
+     *  which supplies the local service_code for picker matching. */
+    public static String seraServiceDisplayName(String seraServiceType) {
+        if (!StringUtils.hasText(seraServiceType)) return seraServiceType;
+        return switch (seraServiceType.trim().toLowerCase(Locale.ROOT)) {
+            case "usps_priority_mail" -> "USPS Priority Mail";
+            case "usps_priority_mail_express" -> "USPS Priority Mail Express";
+            case "usps_ground_advantage" -> "USPS Ground Advantage";
+            case "usps_priority_mail_international" -> "USPS Priority Mail International";
+            case "usps_priority_mail_express_international" -> "USPS Priority Mail Express International";
+            case "usps_first_class_package_international_service" -> "USPS First-Class Package International";
+            case "usps_first_class_mail" -> "USPS First-Class Mail";
+            case "usps_media_mail" -> "USPS Media Mail";
+            case "usps_global_express_guaranteed" -> "USPS Global Express Guaranteed";
+            case "usps_first_class_mail_international" -> "USPS First-Class Mail International";
+            default -> seraServiceType;
         };
     }
 
