@@ -2711,9 +2711,21 @@ export default function NewShipmentPage() {
                   || undefined),
             weight: w,
             weightUnit,
-            length: isCustomPkg ? Number(length) : undefined,
-            width: isCustomPkg ? Number(width) : undefined,
-            height: isCustomPkg ? Number(height) : undefined,
+            // When a preset is chosen (non-custom), thread the preset's L/W/H
+            // too. Pre-fix we only sent dims for the Custom entry, so a
+            // user-named preset like "THB-PACKAGE" (10×6×2) shipped as a
+            // generic SERA "package" with no dims and USPS rejected with
+            // "Dimensions are required." Flat-rate boxes still work because
+            // SERA ignores dims when packaging_type is usps_*_flat_rate_box.
+            length: isCustomPkg
+              ? Number(length)
+              : (packagesForCarrier.find((pk) => String(pk.id) === packageChoice)?.length ?? undefined),
+            width: isCustomPkg
+              ? Number(width)
+              : (packagesForCarrier.find((pk) => String(pk.id) === packageChoice)?.width ?? undefined),
+            height: isCustomPkg
+              ? Number(height)
+              : (packagesForCarrier.find((pk) => String(pk.id) === packageChoice)?.height ?? undefined),
             dimUnit,
             declaredValue: declaredValue ? Number(declaredValue) : undefined,
           },
