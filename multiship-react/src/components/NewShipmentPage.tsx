@@ -1766,6 +1766,22 @@ export default function NewShipmentPage() {
     return `Exceeds ${preset.name}'s ${preset.maxWeight} ${(preset.weightUnit || 'LB').toLowerCase()} max — carrier will reject. Pick a larger box or Custom package.`
   }, [isCustomPkg, weight, weightUnit, packagesForCarrier, packageChoice])
 
+  // UPS Letter is single-piece only — a 2+ box request 400s with 111375
+  // "The requested service is not valid for shipments with the requested
+  // packaging." Hardcoded tactical check — proper fix is max_pieces on
+  // carrier_package_catalog + entity + API. Scoped to UPS so no other
+  // envelope-like preset trips the guard.
+  // ponytail: hardcoded, replace with carrier_package_catalog.max_pieces
+  //           when a second single-piece-only preset shows up.
+  const singlePieceOnlyWarning = useMemo(() => {
+    if (isCustomPkg || extraPackages.length === 0) return null
+    if (canon(carrier) !== 'UPS') return null
+    const preset = packagesForCarrier.find((p) => String(p.id) === packageChoice)
+    if ((preset?.carrierPackageCode || '').trim() !== '01') return null
+    return `${preset?.name || 'UPS Letter'} ships only one box per label — UPS will reject this `
+      + `${1 + extraPackages.length}-box shipment. Remove the extra boxes or pick a larger packaging.`
+  }, [isCustomPkg, extraPackages.length, carrier, packagesForCarrier, packageChoice])
+
   // ── Yup + Formik validation ────────────────────────────────────────────────
   // The page keeps its own useState for each field (needed by AI autofill, the
   // rate picker, warehouse resolution, etc.), so Formik is wired as a pure
@@ -2067,6 +2083,10 @@ export default function NewShipmentPage() {
     }
     if (pkgServiceWarning) {
       showToast(pkgServiceWarning, 'Incompatible package + service')
+      return
+    }
+    if (singlePieceOnlyWarning) {
+      showToast(singlePieceOnlyWarning, 'Too many boxes for this packaging')
       return
     }
     setCarrierValidating(true)
@@ -2898,6 +2918,10 @@ export default function NewShipmentPage() {
     // Packaging ↔ service compatibility gate (carrier would otherwise 400).
     if (pkgServiceWarning) {
       showToast(pkgServiceWarning, 'Incompatible package + service')
+      return
+    }
+    if (singlePieceOnlyWarning) {
+      showToast(singlePieceOnlyWarning, 'Too many boxes for this packaging')
       return
     }
 
@@ -4309,6 +4333,12 @@ export default function NewShipmentPage() {
                   <div className="mt-2 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
                     <FiAlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                     <span>{pkgServiceWarning}</span>
+                  </div>
+                ) : null}
+                {singlePieceOnlyWarning ? (
+                  <div className="mt-2 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
+                    <FiAlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <span>{singlePieceOnlyWarning}</span>
                   </div>
                 ) : null}
                 {isRecipientUsTerritory ? (
