@@ -1000,7 +1000,18 @@ public class FedExConnector implements CarrierConnector {
         // box is missing full dims, drop dims from every box so the
         // fanout returns a usable (if DIM-weight-generic) quote instead
         // of a 400.
+        //
+        // FedEx branded-packaging rule (QA R11, 2026-10-11): FedEx
+        // rejects dim < 1 inch on their own branded packaging (e.g.
+        // FEDEX_ENVELOPE height=0.5"). Their own suggestion: "If you're
+        // not sure of the dimensions, you can leave these fields blank."
+        // Omit the dim block for every FEDEX_* code — FedEx uses its
+        // catalogue values. YOUR_PACKAGING / unknown codes always need
+        // dims per the first rule above.
         List<com.multiship.backend.dto.PackageDetailDTO> boxes = request.effectivePackages();
+        String pkgTypeUpper = request.getPackageType() != null
+                ? request.getPackageType().trim().toUpperCase(Locale.ROOT) : "";
+        boolean brandedFedex = pkgTypeUpper.startsWith("FEDEX_");
         boolean allBoxesHaveDims = boxes.stream().allMatch(p ->
                 p.getLength() != null && p.getWidth() != null && p.getHeight() != null);
         java.util.List<java.util.Map<String, Object>> lineItems = new java.util.ArrayList<>();
@@ -1013,9 +1024,10 @@ public class FedExConnector implements CarrierConnector {
                     : (pkg.getWeightUnit() != null ? pkg.getWeightUnit().toUpperCase() : fedexWeightUnit);
             item.put("weight", java.util.Map.of("units", pieceWeightUnit, "value", pieceWeight));
             // Include dims when the box carries them AND every sibling
-            // box does too — matters for DIM-weight surcharges on
-            // oversize-but-light shipments.
-            if (allBoxesHaveDims
+            // box does too AND the packaging isn't FedEx-branded (FedEx
+            // has catalogue dims for its own packaging and rejects
+            // sub-1-inch rounded preset values).
+            if (!brandedFedex && allBoxesHaveDims
                     && pkg.getLength() != null && pkg.getWidth() != null && pkg.getHeight() != null) {
                 String pieceDimUnit = pkg.getDimUnit() != null
                         ? ("CM".equalsIgnoreCase(pkg.getDimUnit()) ? "CM" : "IN")
