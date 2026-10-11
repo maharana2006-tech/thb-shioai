@@ -990,8 +990,21 @@ public class FedExConnector implements CarrierConnector {
 
         // One entry per box; effectivePackages() returns a synthetic
         // 1-element list when packages[] wasn't supplied.
+        //
+        // FedEx MPS rule (QA R10, 2026-10-11): all packageLineItems must
+        // have the SAME shape — either every box carries dimensions, or
+        // none do. Mixing produces 400 "Package dimensions must be at
+        // least 1 cm/inch for length, width and height. If you're not
+        // sure of the dimensions, you can leave these fields blank."
+        // (plural "fields" means the entire block). Scan first; if any
+        // box is missing full dims, drop dims from every box so the
+        // fanout returns a usable (if DIM-weight-generic) quote instead
+        // of a 400.
+        List<com.multiship.backend.dto.PackageDetailDTO> boxes = request.effectivePackages();
+        boolean allBoxesHaveDims = boxes.stream().allMatch(p ->
+                p.getLength() != null && p.getWidth() != null && p.getHeight() != null);
         java.util.List<java.util.Map<String, Object>> lineItems = new java.util.ArrayList<>();
-        for (com.multiship.backend.dto.PackageDetailDTO pkg : request.effectivePackages()) {
+        for (com.multiship.backend.dto.PackageDetailDTO pkg : boxes) {
             java.util.Map<String, Object> item = new java.util.LinkedHashMap<>();
             item.put("groupPackageCount", 1);
             BigDecimal pieceWeight = pkg.getWeight() != null ? pkg.getWeight()
@@ -999,9 +1012,11 @@ public class FedExConnector implements CarrierConnector {
             String pieceWeightUnit = "KG".equalsIgnoreCase(pkg.getWeightUnit()) ? "KG"
                     : (pkg.getWeightUnit() != null ? pkg.getWeightUnit().toUpperCase() : fedexWeightUnit);
             item.put("weight", java.util.Map.of("units", pieceWeightUnit, "value", pieceWeight));
-            // Include dims when the box carries them — matters for DIM-weight
-            // surcharges (oversize-but-light boxes are underpriced without dims).
-            if (pkg.getLength() != null && pkg.getWidth() != null && pkg.getHeight() != null) {
+            // Include dims when the box carries them AND every sibling
+            // box does too — matters for DIM-weight surcharges on
+            // oversize-but-light shipments.
+            if (allBoxesHaveDims
+                    && pkg.getLength() != null && pkg.getWidth() != null && pkg.getHeight() != null) {
                 String pieceDimUnit = pkg.getDimUnit() != null
                         ? ("CM".equalsIgnoreCase(pkg.getDimUnit()) ? "CM" : "IN")
                         : fedexDimUnit;
