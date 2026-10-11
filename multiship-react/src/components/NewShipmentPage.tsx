@@ -1766,19 +1766,53 @@ export default function NewShipmentPage() {
     return `Exceeds ${preset.name}'s ${preset.maxWeight} ${(preset.weightUnit || 'LB').toLowerCase()} max — carrier will reject. Pick a larger box or Custom package.`
   }, [isCustomPkg, weight, weightUnit, packagesForCarrier, packageChoice])
 
-  // Single-piece-only packaging gate — reads preset.maxPieces (V141)
-  // and blocks the 2+ box selection. Current known offender: UPS
-  // Letter (code 01, max_pieces=1). Backend returns null on all other
-  // presets so this is a no-op until another single-piece-only
-  // packaging gets flagged in carrier_package_catalog.
+  // Effective pieces-per-label cap — min(packaging, service). Null on
+  // both sides = no limit. V141 added package-level cap (UPS Letter = 1);
+  // V142 added service-level cap for the symmetric case (rare but
+  // real for return/LTL add-ons). The lower of the two wins; whichever
+  // dimension drove the cap gets named in the warning so the operator
+  // knows what to change.
+  const maxPiecesContext = useMemo(() => {
+    const preset = isCustomPkg
+      ? null
+      : packagesForCarrier.find((p) => String(p.id) === packageChoice)
+    const svc = servicesForCarrier.find((s) => s.id === serviceId)
+    const presetCap = preset?.maxPieces ?? null
+    const serviceCap = svc?.maxPieces ?? null
+    let cap: number | null = null
+    let source: string | null = null
+    if (presetCap != null && (serviceCap == null || presetCap <= serviceCap)) {
+      cap = presetCap
+      source = preset?.name || 'This packaging'
+    } else if (serviceCap != null) {
+      cap = serviceCap
+      source = svc?.name || 'This service'
+    }
+    return { cap, source }
+  }, [isCustomPkg, packagesForCarrier, packageChoice, servicesForCarrier, serviceId])
+  const currentBoxCount = 1 + extraPackages.length
+  const canAddMoreBoxes = maxPiecesContext.cap == null || currentBoxCount < maxPiecesContext.cap
+  const splitHint = useMemo(() => {
+    if (maxPiecesContext.cap !== 1) return ''
+    return currentBoxCount >= 2
+      ? ' To ship multiple boxes, create each one as a separate shipment.'
+      : ' If you need to ship more than one box, create each one as a separate shipment.'
+  }, [maxPiecesContext.cap, currentBoxCount])
+  const addBoxBlockedMessage = useMemo(() => {
+    if (maxPiecesContext.cap == null) return null
+    return `${maxPiecesContext.source} ships at most ${maxPiecesContext.cap} `
+      + `box${maxPiecesContext.cap === 1 ? '' : 'es'} per label.${splitHint}`
+  }, [maxPiecesContext, splitHint])
+  // Submit-gate warning — a mismatch from switching to a lower cap
+  // AFTER the operator already added extras. The add buttons HARD-block
+  // growth; this catches the switch-after case so submit still refuses.
   const singlePieceOnlyWarning = useMemo(() => {
-    if (isCustomPkg || extraPackages.length === 0) return null
-    const preset = packagesForCarrier.find((p) => String(p.id) === packageChoice)
-    if (!preset?.maxPieces || preset.maxPieces >= 1 + extraPackages.length) return null
-    return `${preset.name || 'This packaging'} ships at most ${preset.maxPieces} `
-      + `box${preset.maxPieces === 1 ? '' : 'es'} per label — the carrier will reject this `
-      + `${1 + extraPackages.length}-box shipment. Remove the extra boxes or pick a larger packaging.`
-  }, [isCustomPkg, extraPackages.length, packagesForCarrier, packageChoice])
+    if (maxPiecesContext.cap == null || currentBoxCount <= maxPiecesContext.cap) return null
+    return `${maxPiecesContext.source} ships at most ${maxPiecesContext.cap} `
+      + `box${maxPiecesContext.cap === 1 ? '' : 'es'} per label — the carrier will reject this `
+      + `${currentBoxCount}-box shipment. Remove the extra boxes or pick a larger packaging.`
+      + splitHint
+  }, [maxPiecesContext, currentBoxCount, splitHint])
 
   // ── Yup + Formik validation ────────────────────────────────────────────────
   // The page keeps its own useState for each field (needed by AI autofill, the
@@ -4417,8 +4451,9 @@ export default function NewShipmentPage() {
                         <button
                           type="button"
                           onClick={() => duplicateBox(idx)}
-                          title="Add a box with the same weight and dimensions"
-                          className="inline-flex h-9 items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 text-[11px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]"
+                          disabled={!canAddMoreBoxes}
+                          title={canAddMoreBoxes ? 'Add a box with the same weight and dimensions' : (addBoxBlockedMessage || 'Add a box with the same weight and dimensions')}
+                          className="inline-flex h-9 items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 text-[11px] font-semibold text-[#5a4526] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white"
                         >
                           <FiCopy className="h-3.5 w-3.5" /> Duplicate
                         </button>
@@ -4497,7 +4532,9 @@ export default function NewShipmentPage() {
                   <button
                     type="button"
                     onClick={() => setExtraPackages((cur) => [...cur, blankExtraPackage()])}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-dashed border-[#e3d9c4] bg-white px-2.5 text-[11px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]"
+                    disabled={!canAddMoreBoxes}
+                    title={canAddMoreBoxes ? undefined : (addBoxBlockedMessage || undefined)}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-dashed border-[#e3d9c4] bg-white px-2.5 text-[11px] font-semibold text-[#5a4526] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white"
                   >
                     <FiPlus className="h-3 w-3" />
                     Add another box
@@ -4505,25 +4542,33 @@ export default function NewShipmentPage() {
                       {1 + extraPackages.length}
                     </span>
                   </button>
-                  <span className="inline-flex h-9 items-center gap-1 rounded-lg border border-dashed border-[#e3d9c4] bg-white px-2 text-[11px] font-semibold text-[#5a4526]">
+                  <span className={`inline-flex h-9 items-center gap-1 rounded-lg border border-dashed border-[#e3d9c4] bg-white px-2 text-[11px] font-semibold text-[#5a4526] ${canAddMoreBoxes ? '' : 'opacity-40'}`}>
                     Add
                     <input
                       type="number" min="1" max="200"
                       value={bulkAddCount}
                       onChange={(e) => setBulkAddCount(e.target.value)}
+                      disabled={!canAddMoreBoxes}
                       aria-label="Number of boxes to add"
-                      className="w-12 rounded border border-[#e3d9c4] px-1 py-0.5 text-center text-[11px] tabular-nums"
+                      className="w-12 rounded border border-[#e3d9c4] px-1 py-0.5 text-center text-[11px] tabular-nums disabled:cursor-not-allowed"
                     />
                     <button
                       type="button"
-                      title="Adds boxes copying the last box's weight and dimensions (box 1's when there is no extra box yet)"
+                      disabled={!canAddMoreBoxes}
+                      title={canAddMoreBoxes
+                        ? "Adds boxes copying the last box's weight and dimensions (box 1's when there is no extra box yet)"
+                        : (addBoxBlockedMessage || undefined)}
                       onClick={() => {
-                        const n = Math.max(1, Math.min(200, Number(bulkAddCount) || 1))
+                        if (!canAddMoreBoxes) return
+                        const roomLeft = maxPiecesContext.cap != null
+                          ? Math.max(0, maxPiecesContext.cap - currentBoxCount)
+                          : 200
+                        const n = Math.max(1, Math.min(200, Math.min(roomLeft, Number(bulkAddCount) || 1)))
                         const last = extraPackages[extraPackages.length - 1]
                         const t: ExtraPackage = last && last.weight ? { ...last } : { ...blankExtraPackage(), weight, length, width, height }
                         setExtraPackages((cur) => [...cur, ...Array.from({ length: n }, () => ({ ...t }))])
                       }}
-                      className="rounded px-1 hover:bg-[#faf7f0]"
+                      className="rounded px-1 hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:hover:bg-transparent"
                     >
                       boxes like the last
                     </button>

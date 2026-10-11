@@ -21,6 +21,10 @@ export interface ShippingServiceItem {
   maxLengthIn?: number | null
   maxLengthGirthIn?: number | null
   surchargeLengthGirthIn?: number | null
+  /** Pieces-per-label cap at the SERVICE level (V142). null = no limit;
+   *  1 = single-piece-only. Symmetric with PackagePreset.maxPieces. FE
+   *  picker gates the add-box UI against min(servicesMaxPieces, presetMaxPieces). */
+  maxPieces?: number | null
   /**
    * Sprint 52 PR X — false when this service intentionally accepts only
    * YOUR_PACKAGING (CUSTOM presets), no carrier-branded packaging.

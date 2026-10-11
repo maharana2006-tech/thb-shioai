@@ -78,6 +78,14 @@ public class ShippingService {
     @Column(name = "max_weight_lb")
     private Integer maxWeightLb;
 
+    /** Pieces-per-label cap at the SERVICE level. Null = no limit;
+     *  1 = single-piece-only. Rare — most parcel services allow MPS —
+     *  but defensible for return/LTL services that are 1-pkg-only
+     *  regardless of packaging. FE picker gates the add-box UI the
+     *  same way it does for carrier_package_catalog.max_pieces (V141). */
+    @Column(name = "max_pieces")
+    private Integer maxPieces;
+
     @Column(name = "max_length_in")
     private Integer maxLengthIn;
 
