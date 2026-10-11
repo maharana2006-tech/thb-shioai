@@ -59,6 +59,12 @@ public class CarrierPackageCatalog {
     @Column(name = "max_weight", precision = 8, scale = 2)
     private BigDecimal maxWeight;
 
+    /** Pieces-per-label cap. Null = no limit. 1 = single-piece-only
+     *  packaging (UPS Letter is the current only known case); the FE
+     *  picker gates MPS selection + submit against this. */
+    @Column(name = "max_pieces")
+    private Integer maxPieces;
+
     @Column(name = "flat_rate", nullable = false)
     @Builder.Default
     private Boolean flatRate = false;

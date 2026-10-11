@@ -120,6 +120,14 @@ public class PackagePreset {
     @Column(name = "max_weight", precision = 8, scale = 2)
     private BigDecimal maxWeight;
 
+    /** Pieces-per-label cap mirrored from
+     *  {@link CarrierPackageCatalog#getMaxPieces()}. Null = no limit;
+     *  1 = single-piece-only (e.g. UPS Letter). The FE picker warns +
+     *  blocks submit when the operator pairs a maxPieces=1 preset with
+     *  2+ boxes — pre-fix those shipments 400'd at the carrier. */
+    @Column(name = "max_pieces")
+    private Integer maxPieces;
+
     /** LB | KG */
     @Column(name = "weight_unit", nullable = false, length = 5)
     @Builder.Default

@@ -96,6 +96,10 @@ export interface PackagePreset {
   height?: number | null
   dimUnit: string
   maxWeight?: number | null
+  /** Pieces-per-label cap. null = no limit; 1 = single-piece-only
+   *  (UPS Letter today). FE picker warns + blocks submit when the
+   *  operator pairs maxPieces=1 preset with 2+ boxes. */
+  maxPieces?: number | null
   weightUnit: string
   tareWeight?: number | null
   /** Internal (usable) dimensions — packing space; external dims drive rating. */

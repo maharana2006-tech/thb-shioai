@@ -1766,21 +1766,19 @@ export default function NewShipmentPage() {
     return `Exceeds ${preset.name}'s ${preset.maxWeight} ${(preset.weightUnit || 'LB').toLowerCase()} max — carrier will reject. Pick a larger box or Custom package.`
   }, [isCustomPkg, weight, weightUnit, packagesForCarrier, packageChoice])
 
-  // UPS Letter is single-piece only — a 2+ box request 400s with 111375
-  // "The requested service is not valid for shipments with the requested
-  // packaging." Hardcoded tactical check — proper fix is max_pieces on
-  // carrier_package_catalog + entity + API. Scoped to UPS so no other
-  // envelope-like preset trips the guard.
-  // ponytail: hardcoded, replace with carrier_package_catalog.max_pieces
-  //           when a second single-piece-only preset shows up.
+  // Single-piece-only packaging gate — reads preset.maxPieces (V141)
+  // and blocks the 2+ box selection. Current known offender: UPS
+  // Letter (code 01, max_pieces=1). Backend returns null on all other
+  // presets so this is a no-op until another single-piece-only
+  // packaging gets flagged in carrier_package_catalog.
   const singlePieceOnlyWarning = useMemo(() => {
     if (isCustomPkg || extraPackages.length === 0) return null
-    if (canon(carrier) !== 'UPS') return null
     const preset = packagesForCarrier.find((p) => String(p.id) === packageChoice)
-    if ((preset?.carrierPackageCode || '').trim() !== '01') return null
-    return `${preset?.name || 'UPS Letter'} ships only one box per label — UPS will reject this `
+    if (!preset?.maxPieces || preset.maxPieces >= 1 + extraPackages.length) return null
+    return `${preset.name || 'This packaging'} ships at most ${preset.maxPieces} `
+      + `box${preset.maxPieces === 1 ? '' : 'es'} per label — the carrier will reject this `
       + `${1 + extraPackages.length}-box shipment. Remove the extra boxes or pick a larger packaging.`
-  }, [isCustomPkg, extraPackages.length, carrier, packagesForCarrier, packageChoice])
+  }, [isCustomPkg, extraPackages.length, packagesForCarrier, packageChoice])
 
   // ── Yup + Formik validation ────────────────────────────────────────────────
   // The page keeps its own useState for each field (needed by AI autofill, the

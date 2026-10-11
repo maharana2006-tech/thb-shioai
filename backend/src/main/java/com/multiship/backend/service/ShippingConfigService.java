@@ -460,6 +460,7 @@ public class ShippingConfigService {
             p.setHeight(off.height());
             p.setDimUnit("IN");
             p.setMaxWeight(off.maxWeight());
+            p.setMaxPieces(off.maxPieces());
             p.setWeightUnit("LB");
             p.setFlatRate(off.flatRate());
             if (p.getEnabled() == null) p.setEnabled(true);

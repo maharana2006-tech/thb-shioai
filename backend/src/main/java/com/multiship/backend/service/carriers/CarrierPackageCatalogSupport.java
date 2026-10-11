@@ -27,7 +27,8 @@ final class CarrierPackageCatalogSupport {
                 .filter(r -> !Boolean.TRUE.equals(r.getUsDomesticOnly()) || usOrPr)
                 .map(r -> new CarrierConnector.PackageOffering(
                         r.getCode(), r.getName(), r.getLength(), r.getWidth(), r.getHeight(),
-                        r.getMaxWeight(), Boolean.TRUE.equals(r.getFlatRate()), r.getScope()))
+                        r.getMaxWeight(), Boolean.TRUE.equals(r.getFlatRate()), r.getScope(),
+                        r.getMaxPieces()))
                 .toList();
     }
 }
