@@ -2370,7 +2370,7 @@ public class UpsConnector implements CarrierConnector {
         // preserves back-compat for callers that don't populate the field.
         String labelFormat = StringUtils.hasText(request.getLabelImageFormat())
                 ? request.getLabelImageFormat().trim().toUpperCase(Locale.ROOT)
-                : "GIF";
+                : "ZPL";
         // UPS-5 — HTTPUserAgent is UPS's LabelSpecification-side UA that
         // UPS uses when rendering the label image. UPS validates the shape
         // (must look like a real HTTP User-Agent string) and rejects

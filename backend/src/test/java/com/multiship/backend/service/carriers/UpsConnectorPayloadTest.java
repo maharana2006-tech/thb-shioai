@@ -396,16 +396,17 @@ class UpsConnectorPayloadTest {
 
     @SuppressWarnings("unchecked")
     @Test
-    void labelImageFormat_defaultsToGIF_whenDtoLeavesItNull() throws Exception {
-        // Pre-UPS-4b behavior preserved for callers that don't populate
-        // the new DTO field. Matches the pre-fix hardcode exactly.
+    void labelImageFormat_defaultsToZpl_whenDtoLeavesItNull() throws Exception {
+        // ZPL-first policy (2026-10-11): null DTO field → UPS gets "ZPL"
+        // on the wire so the stored artifact is carrier-authoritative
+        // ZPL. Serve-time renderers produce PDF/PNG from the ZPL source.
         ShipmentRequestDTO r = domesticRequest();
         r.setLabelImageFormat(null);
         Map<String, Object> shipmentRequest = (Map<String, Object>) build(r).get("ShipmentRequest");
         Map<String, Object> labelSpec = (Map<String, Object>) shipmentRequest.get("LabelSpecification");
         Map<String, Object> format = (Map<String, Object>) labelSpec.get("LabelImageFormat");
-        assertEquals("GIF", format.get("Code"),
-                "null labelImageFormat must fall to the pre-UPS-4b hardcode for back-compat");
+        assertEquals("ZPL", format.get("Code"),
+                "null labelImageFormat must default to ZPL per the ZPL-first policy");
     }
 
     @SuppressWarnings("unchecked")

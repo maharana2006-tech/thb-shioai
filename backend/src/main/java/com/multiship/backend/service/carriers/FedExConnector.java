@@ -2259,7 +2259,7 @@ public class FedExConnector implements CarrierConnector {
         // matches the thermal 4x6 format the other carriers default to).
         requestedShipment.put("labelSpecification", Map.of(
                 "imageType", StringUtils.hasText(request.getLabelImageType())
-                        ? request.getLabelImageType() : "PDF",
+                        ? request.getLabelImageType() : "ZPLII",
                 "labelStockType", StringUtils.hasText(request.getLabelStockType())
                         ? request.getLabelStockType() : "PAPER_4X6"));
 
