@@ -87,6 +87,14 @@ public class CarrierServiceImpl implements CarrierService {
     private final com.multiship.backend.repository.OrderCustomsRepository orderCustomsRepository;
     private final com.multiship.backend.repository.LabelPackageRepository labelPackageRepository;
     private final com.multiship.backend.repository.ShipmentBatchRepository shipmentBatchRepository;
+    /** V143 (ZPL-first Stage 2): pre-renders ZPL+PDF+PNG at label-generate
+     *  time. @Autowired field (not ctor arg) to avoid shifting constructor
+     *  signature across the ~30 pure-Mockito unit tests that construct
+     *  this service directly. Null in those tests → pre-render skipped,
+     *  label_file_path still stored, legacy serve-time conversion kicks
+     *  in. See [[feedback_autowired_field_for_test_compat]]. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private LabelFormatConverter labelFormatConverter;
     private final CarrierLimitService carrierLimitService;
     private final ShipmentSplitter shipmentSplitter;
     /** F6-B3 — resolves per-shipment defaults (currency, weight/dim unit,
@@ -938,6 +946,8 @@ public class CarrierServiceImpl implements CarrierService {
                 String pieceTrackingUrl = pieceMatch != null ? pieceMatch.trackingUrl() : null;
                 if (!StringUtils.hasText(pieceTrackingUrl)) pieceTrackingUrl = batchResult.trackingUrl();
 
+                String persistedLabel = persistLabelPath(pieceLabel);
+                LabelFormatConverter.RenderedFormats rendered = prerenderLabelFormats(persistedLabel);
                 pieceRows.add(com.multiship.backend.model.LabelPackage.builder()
                         .orderNo(orderNo)
                         .batchId(batch.getId())
@@ -947,7 +957,16 @@ public class CarrierServiceImpl implements CarrierService {
                         // PR #550 — pre-fetch URL labels so DB carries base64
                         // (survives URL expiry) instead of a signed URL that
                         // dies in 24-48h.
-                        .labelFilePath(persistLabelPath(pieceLabel))
+                        .labelFilePath(persistedLabel)
+                        // V143 (ZPL-first Stage 2) — all three serve-time
+                        // formats pre-rendered so /label/{zpl,pdf,png} are
+                        // zero-conversion reads. Null when the converter
+                        // bean wasn't wired (unit tests) OR for a specific
+                        // direction that failed (logged); resolver falls
+                        // back to label_file_path + on-demand conversion.
+                        .zplData(rendered.zpl())
+                        .pdfData(rendered.pdf())
+                        .pngData(rendered.png())
                         .weight(p.getWeight())
                         .weightUnit(p.getWeightUnit())
                         .length(p.getLength())
@@ -4131,6 +4150,55 @@ public class CarrierServiceImpl implements CarrierService {
     private String persistLabelPath(String candidate) {
         if (labelBytesPersister == null) return candidate;
         return labelBytesPersister.toPersistable(candidate);
+    }
+
+    /**
+     * V143 (ZPL-first Stage 2) — resolve the persisted label artifact
+     * into bytes, sniff the format, and pre-render ZPL+PDF+PNG via
+     * {@link LabelFormatConverter}. Null converter bean (unit tests) or
+     * blank input returns all-null formats — the serve-time endpoints
+     * fall back to {@code label_file_path} + on-demand conversion.
+     */
+    private LabelFormatConverter.RenderedFormats prerenderLabelFormats(String persisted) {
+        if (labelFormatConverter == null || !StringUtils.hasText(persisted)) {
+            return new LabelFormatConverter.RenderedFormats(null, null, null);
+        }
+        byte[] bytes = decodePersistedLabel(persisted);
+        if (bytes == null || bytes.length == 0) {
+            return new LabelFormatConverter.RenderedFormats(null, null, null);
+        }
+        String format = sniffLabelFormat(bytes);
+        if (format == null) {
+            log.debug("prerenderLabelFormats: couldn't sniff format for persisted label, skipping pre-render");
+            return new LabelFormatConverter.RenderedFormats(null, null, null);
+        }
+        return labelFormatConverter.renderAll(bytes, format);
+    }
+
+    private static byte[] decodePersistedLabel(String persisted) {
+        String trimmed = persisted.trim();
+        String lower = trimmed.toLowerCase(Locale.ROOT);
+        if (lower.startsWith("http://") || lower.startsWith("https://")) {
+            return null;  // URL label — labelBytesPersister downloads inline for /550 paths; skip here.
+        }
+        if (trimmed.startsWith("^XA")) {
+            return trimmed.getBytes();
+        }
+        try {
+            return java.util.Base64.getDecoder().decode(trimmed);
+        } catch (IllegalArgumentException notBase64) {
+            return null;
+        }
+    }
+
+    private static String sniffLabelFormat(byte[] bytes) {
+        int i = 0;
+        while (i < bytes.length && (bytes[i] == '\n' || bytes[i] == '\r' || bytes[i] == ' ' || bytes[i] == '\t')) i++;
+        if (bytes.length - i >= 3 && bytes[i] == '^' && bytes[i + 1] == 'X' && bytes[i + 2] == 'A') return "ZPL";
+        if (bytes.length - i >= 4 && bytes[i] == '%' && bytes[i + 1] == 'P' && bytes[i + 2] == 'D' && bytes[i + 3] == 'F') return "PDF";
+        if (bytes.length - i >= 4 && bytes[i] == 'G' && bytes[i + 1] == 'I' && bytes[i + 2] == 'F' && bytes[i + 3] == '8') return "GIF";
+        if (bytes.length - i >= 4 && (bytes[i] & 0xff) == 0x89 && bytes[i + 1] == 'P' && bytes[i + 2] == 'N' && bytes[i + 3] == 'G') return "PNG";
+        return null;
     }
 
     /**

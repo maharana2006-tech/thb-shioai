@@ -100,6 +100,21 @@ public class LabelArtifactResolver {
         if (orderNo == null || !StringUtils.hasText(desiredFormat)) return Optional.empty();
         String normalized = desiredFormat.trim().toUpperCase(Locale.ROOT);
 
+        // V143 fast path (ZPL-first Stage 2) — rows stamped after
+        // 2026-10-11 carry pre-rendered ZPL/PDF/PNG in dedicated
+        // columns. Zero conversion at serve time when the requested
+        // format matches a populated column. Falls through to the
+        // legacy label_file_path path when the column is null (pre-V143
+        // orders, URL-only labels, or a conversion that failed at
+        // generate time).
+        if (pkgIndex != null && pkgIndex > 0) {
+            Optional<com.multiship.backend.model.LabelPackage> pkg =
+                    labelPackageRepository.findByOrderNoAndSequenceNumber(orderNo, pkgIndex);
+            if (pkg.isEmpty()) return Optional.empty();
+            Optional<byte[]> prerendered = readPrerendered(pkg.get(), normalized);
+            if (prerendered.isPresent()) return prerendered;
+        }
+
         String stored;
         if (pkgIndex != null && pkgIndex > 0) {
             // Per-package path: read the specific label_package row.
@@ -127,6 +142,28 @@ public class LabelArtifactResolver {
         if (!detected.equals(normalized)) return Optional.empty();
 
         return Optional.of(bytes);
+    }
+
+    /** V143 — read the pre-rendered column for the requested format.
+     *  Empty if the column is null OR the stored value couldn't be
+     *  decoded (returns empty rather than throwing — caller falls to
+     *  the legacy label_file_path path). */
+    private Optional<byte[]> readPrerendered(com.multiship.backend.model.LabelPackage pkg, String format) {
+        String raw = switch (format) {
+            case "ZPL" -> pkg.getZplData();
+            case "PDF" -> pkg.getPdfData();
+            case "PNG" -> pkg.getPngData();
+            default -> null;
+        };
+        if (!StringUtils.hasText(raw)) return Optional.empty();
+        try {
+            if ("ZPL".equals(format)) return Optional.of(raw.getBytes());
+            return Optional.of(Base64.getDecoder().decode(raw));
+        } catch (IllegalArgumentException notBase64) {
+            log.debug("LabelArtifactResolver: pre-rendered {} for order {} pkg {} not valid base64 — falling to legacy path",
+                    format, pkg.getOrderNo(), pkg.getSequenceNumber());
+            return Optional.empty();
+        }
     }
 
     // ─── Fetch ──────────────────────────────────────────────────────────────
