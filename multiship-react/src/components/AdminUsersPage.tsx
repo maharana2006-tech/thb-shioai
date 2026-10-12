@@ -25,6 +25,14 @@ export default function AdminUsersPage() {
   const [clientOptions, setClientOptions] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  // BUG-047 — debounce the search input so every keystroke doesn't fire
+  // two network requests (users list + audit reload). 350 ms matches
+  // WarehousesPage.
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 350)
+    return () => clearTimeout(t)
+  }, [search])
   const [roleFilter, setRoleFilter] = useState('')
   const [activeOnly, setActiveOnly] = useState(false)
   const [assignFor, setAssignFor] = useState<AdminUser | null>(null)
@@ -42,7 +50,7 @@ export default function AdminUsersPage() {
     try {
       const [userRes, auditRes] = await Promise.all([
         adminUserService.list({
-          search: search || undefined,
+          search: debouncedSearch || undefined,
           role: roleFilter || undefined,
           activeOnly: activeOnly || undefined,
           page,
@@ -57,14 +65,14 @@ export default function AdminUsersPage() {
     } finally {
       setLoading(false)
     }
-  }, [search, roleFilter, activeOnly, page, size])
+  }, [debouncedSearch, roleFilter, activeOnly, page, size])
 
   // Snap back to page 0 whenever a filter or page-size changes so the
   // operator doesn't land on an empty page after narrowing the result set.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- reset paging on filter change; user-input-driven, not derivable at render
     setPage(0)
-  }, [search, roleFilter, activeOnly, size])
+  }, [debouncedSearch, roleFilter, activeOnly, size])
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount / filter change; load() sets loading + result state
   useEffect(() => { void load() }, [load])
