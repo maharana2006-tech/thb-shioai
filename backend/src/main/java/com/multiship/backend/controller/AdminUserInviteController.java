@@ -109,6 +109,38 @@ public class AdminUserInviteController {
                 .data(data).build());
     }
 
+    @Operation(summary = "Resend an existing invite (admin)")
+    @PostMapping("/{id}/resend")
+    public ResponseEntity<ApiResponse<UserInviteResponse>> resend(
+            @PathVariable Long id, HttpServletRequest request) {
+        String baseUrl = resolveBaseUrl(request);
+        try {
+            UserInvite invite = inviteService.resend(id, baseUrl);
+            UserInviteResponse body = UserInviteResponse.of(invite,
+                    baseUrl + "/invite/" + invite.getToken());
+            return ResponseEntity.ok(ApiResponse.<UserInviteResponse>builder()
+                    .status("SUCCESS").code(200).timestamp(LocalDateTime.now())
+                    .message("Invite re-sent and expiry extended.")
+                    .data(body).build());
+        } catch (IllegalArgumentException notFound) {
+            return ResponseEntity.status(404).body(error(404, ErrorCode.VALIDATION_ERROR,
+                    notFound.getMessage()));
+        } catch (IllegalStateException consumed) {
+            return ResponseEntity.status(409).body(error(409, ErrorCode.VALIDATION_ERROR,
+                    consumed.getMessage()));
+        }
+    }
+
+    @Operation(summary = "Revoke an invite (admin)")
+    @DeleteMapping("/{id}")
+    public ResponseEntity<ApiResponse<Void>> revoke(@PathVariable Long id) {
+        inviteService.revoke(id);
+        return ResponseEntity.ok(ApiResponse.<Void>builder()
+                .status("SUCCESS").code(200).timestamp(LocalDateTime.now())
+                .message("Invite revoked. The accept link is no longer valid.")
+                .build());
+    }
+
     private String resolveBaseUrl(HttpServletRequest request) {
         if (acceptLinkBaseUrl != null && !acceptLinkBaseUrl.isBlank()) {
             return acceptLinkBaseUrl;

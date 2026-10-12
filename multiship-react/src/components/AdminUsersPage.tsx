@@ -22,6 +22,10 @@ import IconButton from './ui/IconButton'
 export default function AdminUsersPage() {
   const [users, setUsers] = useState<AdminUser[]>([])
   const [audit, setAudit] = useState<AdminUserAudit[]>([])
+  // BUG-050 — pending (not yet consumed) invites so the operator can
+  // see what's outstanding + resend / revoke each row. The audit row
+  // records the mint; this is the live list.
+  const [invites, setInvites] = useState<InviteMintResponse[]>([])
   const [clientOptions, setClientOptions] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -48,7 +52,7 @@ export default function AdminUsersPage() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [userRes, auditRes] = await Promise.all([
+      const [userRes, auditRes, inviteRes] = await Promise.all([
         adminUserService.list({
           search: debouncedSearch || undefined,
           role: roleFilter || undefined,
@@ -57,9 +61,13 @@ export default function AdminUsersPage() {
           size,
         }),
         adminUserService.recentAudit(50),
+        // BUG-050 — pending-invites surface. Best-effort: never fail the
+        // page on a transient 500; just surface an empty list.
+        adminInviteService.list().catch(() => ({ data: [] as InviteMintResponse[] })),
       ])
       setUsers(userRes.data ?? [])
       setAudit(auditRes.data ?? [])
+      setInvites((inviteRes.data ?? []).filter((i) => !i.consumedAt))
     } catch (e) {
       notify.apiError(e, 'Failed to load users.')
     } finally {
@@ -347,7 +355,7 @@ export default function AdminUsersPage() {
                   <button
                     onClick={() => setAssignFor(u)}
                     disabled={u.role === 'ADMIN'}
-                    title={u.role === 'ADMIN' ? 'ADMIN is always org-wide' : 'Assign clientCode'}
+                    title={u.role === 'ADMIN' ? 'ADMIN is always org-wide' : 'Assign to a client'}
                     className="mr-2 rounded-md border border-slate-300 px-2 py-1 text-[12px] hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Assign client
@@ -460,6 +468,68 @@ export default function AdminUsersPage() {
           </div>
         </div>
       </section>
+
+      {/* BUG-050 — pending invites list. Hidden when none outstanding. */}
+      {invites.length > 0 && (
+        <section className="rounded-xl border border-slate-200 bg-white">
+          <header className="flex items-center justify-between border-b border-slate-100 px-3 py-2 text-[12.5px] font-semibold text-slate-700">
+            <span>Pending invites ({invites.length})</span>
+            <span className="text-[11px] font-normal text-slate-500">Not yet accepted. Resend extends the expiry; Revoke invalidates the link.</span>
+          </header>
+          <ul className="max-h-56 divide-y divide-slate-100 overflow-y-auto text-[12.5px]">
+            {invites.map((inv) => {
+              const expired = new Date(inv.expiresAt).getTime() < Date.now()
+              return (
+                <li key={inv.id} className="flex items-center justify-between gap-3 px-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-medium text-slate-900">{inv.email}</div>
+                    <div className="truncate text-[11.5px] text-slate-500">
+                      {inv.clientCode} · {inv.role} · invited by {inv.invitedBy} ·
+                      {expired ? ' expired ' : ' expires '}
+                      {new Date(inv.expiresAt).toLocaleString()}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(inv.acceptLink)
+                      void notify.success('Accept link copied.')
+                    }}
+                    className="rounded-md border border-slate-300 px-2 py-1 text-[11.5px] hover:bg-slate-50"
+                  >Copy link</button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await adminInviteService.resend(inv.id)
+                        void notify.success('Invite resent and expiry extended.')
+                        void load()
+                      } catch (e) { notify.apiError(e, 'Failed to resend invite.') }
+                    }}
+                    className="rounded-md border border-slate-300 px-2 py-1 text-[11.5px] hover:bg-slate-50"
+                  >Resend</button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const ok = await notify.confirm(
+                        `Revoke the invite for ${inv.email}? The accept link stops working immediately.`,
+                        { danger: true, confirmLabel: 'Revoke' },
+                      )
+                      if (!ok) return
+                      try {
+                        await adminInviteService.revoke(inv.id)
+                        void notify.success('Invite revoked.')
+                        void load()
+                      } catch (e) { notify.apiError(e, 'Failed to revoke invite.') }
+                    }}
+                    className="rounded-md border border-red-300 px-2 py-1 text-[11.5px] text-red-700 hover:bg-red-50"
+                  >Revoke</button>
+                </li>
+              )
+            })}
+          </ul>
+        </section>
+      )}
 
       <section className="rounded-xl border border-slate-200 bg-white">
         <header className="border-b border-slate-100 px-3 py-2 text-[12.5px] font-semibold text-slate-700">
@@ -736,8 +806,14 @@ function actionLabel(a: AdminUserAudit): string {
       return 'deactivated'
     case 'REACTIVATE':
       return 'reactivated'
+    // BUG-050 — humanize the invite audit so the row doesn't print the
+    // raw enum code "invite_sent".
+    case 'INVITE_SENT':
+      return 'invited'
+    case 'PASSWORD_RESET_SENT':
+      return 'sent a password reset to'
     default:
-      return a.action.toLowerCase()
+      return a.action.toLowerCase().replace(/_/g, ' ')
   }
 }
 
