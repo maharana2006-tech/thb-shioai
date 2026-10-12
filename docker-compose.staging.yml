@@ -1,0 +1,94 @@
+## Staging stack — one command (docker compose -f docker-compose.staging.yml up -d)
+## brings up Postgres + Redis + backend + frontend + reverse-proxy nginx.
+##
+## Oracle NDS is DISABLED entirely via multiship.oracle.enabled=false — the whole
+## OracleDataSourceConfig @ConditionalOnProperty skips, no Oracle beans exist.
+## Flip to true + supply nds-default secrets via /settings/external-systems only
+## when staging actually needs DTC-sync QA.
+##
+## Secrets live in .env (NOT committed). Copy .env.staging.example → .env and
+## fill the four required blanks:
+##     POSTGRES_PASSWORD, JWT_SECRET, APP_ENCRYPTION_KEY, GITHUB_REPO_URL
+## See docs/staging-deployment.md for the runbook.
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-multiship_db}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-multiship_db}"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1000", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.staging
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+    environment:
+      SPRING_PROFILES_ACTIVE: staging
+      # Postgres — resolver reads these from env, matches application.properties
+      # ${DB_URL:...} / ${DB_USERNAME:...} / ${DB_PASSWORD:...} defaults.
+      DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-multiship_db}
+      DB_USERNAME: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      # Redis — Spring Data Redis defaults.
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      # Secrets — see .env.staging.example for how to generate.
+      JWT_SECRET: ${JWT_SECRET}
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
+      # Oracle NDS OFF — @ConditionalOnProperty on OracleDataSourceConfig
+      # skips the whole module, no startup DataSource probe.
+      MULTISHIP_ORACLE_ENABLED: "false"
+      # Cookie policy for plain-HTTP staging. SameSite=Lax works over HTTP;
+      # Secure flag OFF (TLS not terminated at nginx yet).
+      COOKIE_SAMESITE: Lax
+      COOKIE_SECURE: "false"
+      # Observability — carrier_api_log is useful in staging for QA diagnostics.
+      CARRIER_API_LOG_ENABLED: "true"
+    # No ports exposed on the host — nginx proxies to :8080 inside the compose network.
+
+  frontend:
+    build:
+      context: ./multiship-react
+      dockerfile: Dockerfile.staging
+      args:
+        VITE_API_BASE_URL: /api/v1
+    restart: unless-stopped
+    # No ports exposed on the host — nginx proxies to :80 inside the compose network.
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on: [backend, frontend]
+    ports:
+      - "${STAGING_PORT:-8080}:80"
+    volumes:
+      - ./nginx/staging.conf:/etc/nginx/conf.d/default.conf:ro
+
+volumes:
+  postgres-data:
+  redis-data:

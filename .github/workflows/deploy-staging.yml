@@ -1,0 +1,48 @@
+name: Deploy staging
+
+# Fires on every push to the 'staging' branch. SSHes into the staging box
+# and runs scripts/deploy-staging.sh (which pulls + rebuilds + rolls over).
+#
+# Required secrets (Repo Settings → Secrets and variables → Actions):
+#   STAGING_HOST        — public hostname or IP of the staging box
+#   STAGING_SSH_USER    — SSH user with sudo + docker group membership
+#   STAGING_SSH_KEY     — PRIVATE key paired with an authorized_keys entry
+#   STAGING_SSH_PORT    — optional, defaults to 22
+#
+# One-time server setup: see docs/staging-deployment.md.
+
+on:
+  push:
+    branches: [staging]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-staging
+      cancel-in-progress: false   # don't abandon a half-finished deploy
+    steps:
+      - name: Preflight — required secrets present
+        run: |
+          : "${STAGING_HOST:?STAGING_HOST secret missing — set it in Repo → Settings → Secrets}"
+          : "${STAGING_SSH_USER:?STAGING_SSH_USER secret missing}"
+          : "${STAGING_SSH_KEY:?STAGING_SSH_KEY secret missing}"
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+          STAGING_SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+
+      - name: Install SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.STAGING_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.STAGING_SSH_PORT || 22 }}" -H "${{ secrets.STAGING_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Trigger remote deploy
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+              -p "${{ secrets.STAGING_SSH_PORT || 22 }}" \
+              "${{ secrets.STAGING_SSH_USER }}@${{ secrets.STAGING_HOST }}" \
+              'bash -lc "/opt/shipai/scripts/deploy-staging.sh"'
