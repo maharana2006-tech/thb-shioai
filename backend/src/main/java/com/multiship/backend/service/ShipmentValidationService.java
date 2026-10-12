@@ -1036,10 +1036,11 @@ public class ShipmentValidationService {
                     : req.getSender().getName().trim();
             String senderCompany = req.getSender().getCompany() == null ? ""
                     : req.getSender().getCompany().trim();
-            // USPS accepts either a two-word personal name OR a company
-            // name as the sender identity. Fail only when BOTH are weak.
-            boolean nameLooksLikeFull = senderName.contains(" ")
-                    && senderName.split("\\s+").length >= 2;
+            // USPS accepts either a SERA-valid personal name OR a company
+            // name as the sender identity. Match the exact SERA rule so
+            // pre-flight and connector agree.
+            boolean nameLooksLikeFull = com.multiship.backend.service.carriers
+                    .StampsConnector.isSeraValidFullname(senderName);
             if (!nameLooksLikeFull && senderCompany.isBlank()) {
                 errors.add(issue(ErrorCode.VALIDATION_ERROR,
                         "USPS international needs a sender full name (first + last) "

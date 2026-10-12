@@ -1342,7 +1342,15 @@ public class StampsConnector implements CarrierConnector {
                                                   String country, String phone, String email,
                                                   String residentialIndicator) {
         Map<String, Object> a = new LinkedHashMap<>();
-        if (StringUtils.hasText(name)) a.put("name", name);
+        // BUG-001 — SERA validates "fullname" when the `name` field is
+        // provided: "If provided, fullname must contain at least 2
+        // alphabetic characters, followed by a space, followed by at
+        // least another 2 alphabetic characters." (error 6619409). A
+        // client-default sender like "MKL" (3 chars, no space) tripped
+        // this and sent order #<N> to ERROR after save. Omit the field
+        // when it doesn't match the rule, so SERA falls back to
+        // company_name as the entity identity.
+        if (StringUtils.hasText(name) && isSeraValidFullname(name)) a.put("name", name);
         if (StringUtils.hasText(company)) a.put("company_name", company);
         if (StringUtils.hasText(line1)) a.put("address_line1", line1);
         if (StringUtils.hasText(line2)) a.put("address_line2", line2);
@@ -1638,9 +1646,18 @@ public class StampsConnector implements CarrierConnector {
         // specified is invalid." Pass through only for codes that already
         // carry a SERA shape (bare generic or carrier-prefixed).
         String lower = v.toLowerCase(Locale.ROOT);
+        // Non-USPS carrier-prefixed packaging (fedex_tube, ups_envelope,
+        // dhl_box, …) is not a valid USPS SERA packaging — SERA rejects
+        // the whole /rates call with 4522242 "The carrier specified does
+        // not match the service requested." Operators MPS-shipping with
+        // a mix of per-package packagings must be tolerated here, not
+        // 400'd. Collapse any foreign-carrier packaging to the generic
+        // "package" so the rate shop keeps going.
+        if (lower.startsWith("fedex_") || lower.startsWith("ups_") || lower.startsWith("dhl_")) {
+            return "package";
+        }
         if ("package".equals(lower) || "letter".equals(lower) || "large_envelope".equals(lower)
-                || lower.startsWith("usps_") || lower.startsWith("ups_")
-                || lower.startsWith("fedex_") || lower.startsWith("dhl_")) {
+                || lower.startsWith("usps_")) {
             return lower;
         }
         return switch (v.toUpperCase(Locale.ROOT)) {
@@ -3182,13 +3199,23 @@ public class StampsConnector implements CarrierConnector {
 
     /** Field-level equality for the SERA matched_address echo. Case-
      *  insensitive + trim-tolerant on the comparable fields; nulls equal. */
+    /** BUG-001 — SERA 6619409 fullname rule: "If provided, fullname must
+     *  contain at least 2 alphabetic characters, followed by a space,
+     *  followed by at least another 2 alphabetic characters." Used by
+     *  both buildSeraAddress (wire) and ShipmentValidationService
+     *  (pre-flight) so the two agree. */
+    public static boolean isSeraValidFullname(String name) {
+        if (name == null) return false;
+        return name.trim().matches("[A-Za-z]{2,}\\s+[A-Za-z]{2,}.*");
+    }
+
     private static boolean seraAddressesEqual(AddressToValidate a, AddressToValidate b) {
         if (a == null || b == null) return false;
-        return eqCI(a.addressLine1(), b.addressLine1())
-                && eqCI(a.addressLine2(), b.addressLine2())
+        return eqAddressLine(a.addressLine1(), b.addressLine1())
+                && eqAddressLine(a.addressLine2(), b.addressLine2())
                 && eqCI(a.city(), b.city())
                 && eqCI(a.state(), b.state())
-                && eqCI(a.postalCode(), b.postalCode())
+                && eqZip(a.postalCode(), b.postalCode())
                 && eqCI(a.countryCode(), b.countryCode());
     }
 
@@ -3196,6 +3223,57 @@ public class StampsConnector implements CarrierConnector {
         String ta = a == null ? "" : a.trim();
         String tb = b == null ? "" : b.trim();
         return ta.equalsIgnoreCase(tb);
+    }
+
+    /** BUG-018 — USPS normalises common street-type suffixes (STREET→ST,
+     *  AVENUE→AVE, BOULEVARD→BLVD, ROAD→RD, DRIVE→DR, LANE→LN, COURT→CT,
+     *  SUITE→STE, APARTMENT→APT) and lower-casing / punctuation changes.
+     *  Pre-fix we flagged all of those as "USPS normalised the address",
+     *  which fired on every validate. Compare on a canonical form so only
+     *  real street changes trip the warning. */
+    private static boolean eqAddressLine(String a, String b) {
+        return canonAddressLine(a).equalsIgnoreCase(canonAddressLine(b));
+    }
+
+    private static String canonAddressLine(String s) {
+        if (s == null) return "";
+        String out = s.trim().toUpperCase(java.util.Locale.ROOT)
+                .replaceAll("[.,#]+", " ")
+                .replaceAll("\\s+", " ");
+        // Common USPS abbreviations — map long form → short so either input matches.
+        out = out.replaceAll("\\bSTREET\\b", "ST")
+                .replaceAll("\\bAVENUE\\b", "AVE")
+                .replaceAll("\\bBOULEVARD\\b", "BLVD")
+                .replaceAll("\\bROAD\\b", "RD")
+                .replaceAll("\\bDRIVE\\b", "DR")
+                .replaceAll("\\bLANE\\b", "LN")
+                .replaceAll("\\bCOURT\\b", "CT")
+                .replaceAll("\\bHIGHWAY\\b", "HWY")
+                .replaceAll("\\bSUITE\\b", "STE")
+                .replaceAll("\\bAPARTMENT\\b", "APT")
+                .replaceAll("\\bPARKWAY\\b", "PKWY")
+                .replaceAll("\\bPLACE\\b", "PL")
+                .replaceAll("\\bNORTH\\b", "N")
+                .replaceAll("\\bSOUTH\\b", "S")
+                .replaceAll("\\bEAST\\b", "E")
+                .replaceAll("\\bWEST\\b", "W");
+        return out.trim();
+    }
+
+    /** BUG-018 — ZIP+4 expansion (10001 → 10001-0001) is a benign
+     *  carrier addition, not a street change. Compare on the 5-digit
+     *  base so the expansion doesn't trip the "normalised" warning. */
+    private static boolean eqZip(String a, String b) {
+        String ca = canonZip(a);
+        String cb = canonZip(b);
+        return ca.equals(cb);
+    }
+
+    private static String canonZip(String s) {
+        if (s == null) return "";
+        String out = s.trim();
+        int dash = out.indexOf('-');
+        return dash > 0 ? out.substring(0, dash) : out;
     }
 
 
