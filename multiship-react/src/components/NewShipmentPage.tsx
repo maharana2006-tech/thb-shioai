@@ -3613,10 +3613,14 @@ export default function NewShipmentPage() {
                     </select>
                   </Field>
                 ) : null}
-                {/* US Export EEI — FTR §30.37 exemption OR AES ITN. Only on
-                    US-origin exports to non-Canada destinations (Canada
-                    uses §30.36 which is bilateral / auto-applied by
-                    carriers). Empty on shipments where the rule doesn't
+                {/* US Export EEI — FTR §30.37 exemption OR AES ITN. Shown
+                    for ALL US-origin international exports including Canada
+                    (BUG-005: FedEx explicitly requires FTR Exemption /
+                    AES ITN on CA when Export declaration ref is empty;
+                    the §30.36 bilateral is NOT auto-applied by every
+                    carrier). FTR_EXEMPTIONS already carries NO_EEI_30_36
+                    "export to Canada" so the operator picks it. Empty on
+                    shipments where the rule doesn't
                     apply keeps the form terse. Mutually-exclusive picker:
                     filling one disables the other so the wire payload can
                     never carry both.
@@ -3631,7 +3635,7 @@ export default function NewShipmentPage() {
                     the $2,500 mark. */}
                 {isInternational
                     && (sender.countryCode ?? '').trim().toUpperCase() === 'US'
-                    && !['CA', 'US', ''].includes(recipientEffectiveCountry) ? (
+                    && !['US', ''].includes(recipientEffectiveCountry) ? (
                   <>
                     <Field label="FTR exemption"
                            error={submitAttempted
