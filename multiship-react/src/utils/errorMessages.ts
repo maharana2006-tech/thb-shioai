@@ -179,7 +179,10 @@ export const errorMessages: Readonly<Record<string, FriendlyError>> = {
  *  exact gap and where to fix it) but whose toast deserved a better heading
  *  than the generic "Something went wrong" — e.g. the customs BN gate. */
 const errorTitles: Readonly<Record<string, string>> = {
-  VALIDATION_ERROR: 'This shipment needs attention',
+  // BUG-048 — the pre-fix wording was shipment-centric and leaked onto
+  // non-shipment forms (e.g. Invite user bad-email). Generic phrasing
+  // works for every form that uses VALIDATION_ERROR.
+  VALIDATION_ERROR: 'Check the form for errors',
   IMPORT_BATCH_STATE: 'Not available for this import',
   MALFORMED_REQUEST: 'Request not understood',
 }
