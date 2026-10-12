@@ -61,15 +61,18 @@ public class ClientServiceImpl implements ClientService {
     @Override
     @Transactional(readOnly = true)
     public String exportClientsCsv(ClientListFilters filters) {
-        String keyword = norm(filters.getSearch());
+        // BUG-022 — escape LIKE wildcards on fields that reach a LIKE
+        // pattern in the repo. Status / carrier / hasOrders are literal
+        // equality compares; those keep plain norm().
+        String keyword = escapeLike(filters.getSearch());
         String status = norm(filters.getStatus());
         String carrier = norm(filters.getCarrier());
         String hasOrders = norm(filters.getHasOrders());
         // Sprint 50 Tier 0.5 PR E - clamp so a scoped USER exports only
         // their own client row even when they omit / spoof the code param.
-        String code = norm(tenantScope.clampClientCode(filters.getCode()));
-        String name = norm(filters.getName());
-        String city = norm(filters.getCity());
+        String code = escapeLike(tenantScope.clampClientCode(filters.getCode()));
+        String name = escapeLike(filters.getName());
+        String city = escapeLike(filters.getCity());
         String sortBy = filters.getSortBy() != null ? filters.getSortBy() : "code";
         String sortDirection = filters.getSortDirection() != null ? filters.getSortDirection() : "ASC";
 
@@ -127,7 +130,9 @@ public class ClientServiceImpl implements ClientService {
     public ApiResponse<PageResponseDTO<ClientDTO>> listClients(ClientListFilters filters) {
         int page = Math.max(filters.getPage(), 0);
         int size = Math.min(Math.max(filters.getSize(), 1), 100);
-        String keyword = norm(filters.getSearch());
+        // BUG-022 — escape LIKE wildcards on fields that reach a LIKE
+        // pattern in the repo. See exportClientsCsv for the same rule.
+        String keyword = escapeLike(filters.getSearch());
         String status = norm(filters.getStatus());
         String carrier = norm(filters.getCarrier());
         String hasOrders = norm(filters.getHasOrders());
@@ -135,9 +140,9 @@ public class ClientServiceImpl implements ClientService {
         // to the caller's own tenant when scoped. Platform operators pass
         // through unchanged; tenant-scoped callers see only their own row
         // even if they omitted the code param.
-        String code = norm(tenantScope.clampClientCode(filters.getCode()));
-        String name = norm(filters.getName());
-        String city = norm(filters.getCity());
+        String code = escapeLike(tenantScope.clampClientCode(filters.getCode()));
+        String name = escapeLike(filters.getName());
+        String city = escapeLike(filters.getCity());
         String sortBy = filters.getSortBy() != null ? filters.getSortBy() : "code";
         String sortDirection = filters.getSortDirection() != null ? filters.getSortDirection() : "ASC";
 
@@ -157,6 +162,18 @@ public class ClientServiceImpl implements ClientService {
 
     private String norm(String value) {
         return value != null ? value.trim().toUpperCase(Locale.ROOT) : "";
+    }
+
+    /** BUG-022: operator-typed '%' and '_' were leaking into LIKE patterns
+     *  and matching every row. Escape them (plus backslash) at the service
+     *  boundary so the repo's CONCAT('%', :keyword, '%') treats them as
+     *  literals. Postgres LIKE honours backslash by default. */
+    private String escapeLike(String value) {
+        String v = norm(value);
+        if (v.isEmpty()) return v;
+        return v.replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_");
     }
 
     @Override
