@@ -419,7 +419,15 @@ export function CarrierDraftStep({
               type="button"
               onClick={save}
               aria-disabled={!canSave}
-              title={!canSave ? 'Fix the highlighted fields to continue' : undefined}
+              // BUG-031: tooltip said "Fix the highlighted fields" before
+              // any field had been blurred (nothing highlighted). Pick a
+              // message that matches the current visibility state —
+              // highlights only exist after the operator has interacted.
+              title={!canSave
+                ? (Object.values(touched).some(Boolean)
+                    ? 'Fix the highlighted fields to continue'
+                    : 'Fill in the required fields to continue')
+                : undefined}
               className={`rounded-xl px-4 py-1.5 text-[12px] font-semibold text-white transition ${
                 canSave ? 'bg-[#1f150c] hover:bg-[#412d15]' : 'bg-slate-300'
               }`}
