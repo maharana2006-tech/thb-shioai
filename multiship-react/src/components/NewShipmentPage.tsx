@@ -4907,6 +4907,7 @@ export default function NewShipmentPage() {
                     weightUnit={weightUnit}
                     autoItemWeight={autoItemWeight}
                     hsPlaceholder={hsExampleFor(destCountry)}
+                    destCountry={destCountry}
                   />
 
                   {/* invoice total */}
@@ -5228,6 +5229,7 @@ export function VirtualizedNewShipmentItems({
   weightUnit,
   autoItemWeight,
   hsPlaceholder,
+  destCountry,
 }: {
   items: NewShipmentItemRow[]
   patchItem: (i: number, patch: Partial<NewShipmentItemRow>) => void
@@ -5243,6 +5245,8 @@ export function VirtualizedNewShipmentItems({
   autoItemWeight: (it: NewShipmentItemRow) => number
   /** Destination-aware HS example (hsExampleFor) for the code placeholder. */
   hsPlaceholder?: string
+  /** BUG-011 — forwarded to each row's HsCodeCombobox for min-digit padding. */
+  destCountry?: string
 }) {
   const parentRef = useRef<HTMLDivElement>(null)
   // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Virtual's useVirtualizer() returns functions that cannot be memoized safely — library-level incompatibility with react-hooks analyzer, not a code issue
@@ -5292,6 +5296,7 @@ export function VirtualizedNewShipmentItems({
               weightUnit={weightUnit}
               autoItemWeight={autoItemWeight}
               hsPlaceholder={hsPlaceholder}
+              destCountry={destCountry}
             />
           </div>
         ))}
@@ -5313,6 +5318,7 @@ const NewShipmentItemsRow = memo(function NewShipmentItemsRow({
   weightUnit,
   autoItemWeight,
   hsPlaceholder,
+  destCountry,
 }: {
   index: number
   it: NewShipmentItemRow
@@ -5327,6 +5333,8 @@ const NewShipmentItemsRow = memo(function NewShipmentItemsRow({
   /** Destination-aware HS example (from hsExampleFor) so the placeholder
    *  never suggests a code the country-minimum rule would reject. */
   hsPlaceholder?: string
+  /** BUG-011 — passed through to HsCodeCombobox for min-digit padding. */
+  destCountry?: string
 }) {
   const patch = useCallback((delta: Partial<NewShipmentItemRow>) => patchItem(index, delta), [patchItem, index])
   const remove = useCallback(() => removeItem(index), [removeItem, index])
@@ -5344,6 +5352,7 @@ const NewShipmentItemsRow = memo(function NewShipmentItemsRow({
         <HsCodeCombobox
           value={it.hsCode}
           placeholder={hsPlaceholder}
+          destCountry={destCountry}
           onChange={(v) => patch({ hsCode: v })}
           onDescriptionSuggest={(desc) => {
             if (!it.description || !it.description.trim()) patch({ description: desc })
