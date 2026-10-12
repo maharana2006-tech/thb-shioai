@@ -227,9 +227,7 @@ export default function AdminUsersPage() {
             Users
           </h2>
           <p className="mt-1 text-[12.5px] text-slate-500">
-            Manage user accounts, assign each USER to a client, and revoke access. Sprint 50
-            rollout: every legacy USER should be assigned a client before the tenant-scope
-            flag is flipped.
+            Manage user accounts, assign each USER to a client, and revoke access.
           </p>
         </div>
         {/* Fix #294 — invite modal launcher. Wires the existing
