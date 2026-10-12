@@ -193,8 +193,32 @@ export function getFriendlyError(
     return errorMessages[errorCode]
   }
   const title = errorCode ? errorTitles[errorCode] : undefined
-  if (serverMessage && serverMessage.trim().length > 0) {
-    return title ? { title, message: serverMessage } : { message: serverMessage }
+  // BUG-016 — strip the raw "HTTP error! status: NNN" prefix the fetch
+  // wrapper leaks when the backend returns a bare 5xx with no body.
+  // Map common infra statuses to operator-friendly text; everything else
+  // falls through to the (now trimmed) server message.
+  const clean = cleanServerMessage(serverMessage)
+  if (clean && clean.length > 0) {
+    return title ? { title, message: clean } : { message: clean }
   }
   return title ? { title, message: fallback } : { message: fallback }
+}
+
+/** BUG-016 helper — strip "HTTP error! status: NNN" and map 502/503/504
+ *  to a friendlier line. Returns the cleaned text (never null); empty
+ *  string signals "fall through to fallback". */
+function cleanServerMessage(raw?: string | null): string {
+  if (!raw) return ''
+  let s = raw.trim()
+  const match = s.match(/^HTTP error!\s*status:\s*(\d{3})\s*(.*)$/i)
+  if (match) {
+    const status = match[1]
+    const rest = (match[2] || '').trim()
+    if (status === '502' || status === '503' || status === '504') {
+      return 'Backend is temporarily unavailable — please try again in a moment.'
+    }
+    // Non-infra 4xx without a body: show status + any trailing text.
+    s = rest || `Request failed with status ${status}.`
+  }
+  return s
 }
