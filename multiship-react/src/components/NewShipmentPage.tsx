@@ -2422,7 +2422,9 @@ export default function NewShipmentPage() {
     requestAnimationFrame(() => document.querySelector('[data-items-scroll]')?.scrollTo({ top: 0 }))
   }
   const addItem = () => {
-    setItems((rows) => [blankItem(), ...rows])
+    // BUG-013: append to end, not prepend — the operator sees the new
+    // blank row below their last filled row and keeps typing downward.
+    setItems((rows) => [...rows, blankItem()])
     // New rows are prepended; the virtualised list only paints the rows in
     // its window, so scroll to the top or the new row is invisible and the
     // click looks ignored (the stress test read that as a 16-row cap).
