@@ -481,6 +481,11 @@ export default function AdvancedDataTable<T extends RowData>({
       pagination: { pageIndex: currentPageIndex, pageSize: currentPageSize },
     },
     manualSorting,
+    // BUG-026 — TanStack's default sort cycle (asc → desc → unsorted)
+    // let the operator click past the two visible arrow states into a
+    // 'no arrow' third state, while the data layer kept the previous
+    // sort. Disable removal so the cycle is just asc ↔ desc.
+    enableSortingRemoval: false,
     manualPagination,
     pageCount: manualPagination ? pageCountProp ?? -1 : undefined,
     onSortingChange: (updater) => {
