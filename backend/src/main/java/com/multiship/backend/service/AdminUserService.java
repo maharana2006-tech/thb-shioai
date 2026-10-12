@@ -365,6 +365,25 @@ public class AdminUserService {
                 .build());
     }
 
+    /** BUG-050 — invitation minted via AdminUserInviteController leaves
+     *  no audit trail. Record it so Recent-admin-actions shows the mint.
+     *  The invitee doesn't exist as a user row yet (lives in user_invites
+     *  until consumed), so subject_user_id is null + subject_username is
+     *  the invited email for traceability. */
+    @Transactional
+    public void recordInviteSent(String email, String clientCode, String actorUsername) {
+        auditRepository.save(UserAdminAudit.builder()
+                .subjectUserId(null)
+                .subjectUsername(email)
+                .action("INVITE_SENT")
+                .oldClientCode(null)
+                .newClientCode(clientCode)
+                .actorUsername(actorUsername == null ? "system" : actorUsername)
+                .reason(null)
+                .createdAt(LocalDateTime.now())
+                .build());
+    }
+
     private static AdminUserDTO toDTO(User u) {
         return AdminUserDTO.builder()
                 .id(u.getId())
