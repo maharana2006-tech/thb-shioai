@@ -22,6 +22,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
+import com.multiship.backend.model.ClientWarehouse;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -241,6 +242,26 @@ public class WarehouseServiceImpl implements WarehouseService {
         auditService.record(AuditService.DELETE, AuditService.WAREHOUSE,
                 deletedId, c, null, detail);
         return success(detail.replace(" deleted", " deleted successfully"), null);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ApiResponse<java.util.List<String>> listAttachedClientCodes(String code) {
+        // BUG-041 — Attach-Clients dialog needs to know which rows are
+        // already attached so it can show a badge + offer Detach rather
+        // than silently re-attaching.
+        String c = normalize(code);
+        Warehouse w = warehouseRepository.findByCodeIgnoreCase(c).orElse(null);
+        if (w == null) {
+            return failure(HttpStatus.NOT_FOUND, ErrorCode.WAREHOUSE_NOT_FOUND,
+                    "Warehouse " + c + " was not found.");
+        }
+        java.util.List<String> codes = clientWarehouseRepository.findByWarehouseId(w.getId()).stream()
+                .map(ClientWarehouse::getClientCode)
+                .filter(StringUtils::hasText)
+                .sorted(String.CASE_INSENSITIVE_ORDER)
+                .toList();
+        return success(codes.size() + " client(s) attached.", codes);
     }
 
     // ===== helpers =====

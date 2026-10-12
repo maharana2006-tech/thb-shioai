@@ -19,4 +19,8 @@ public interface WarehouseService {
     ApiResponse<WarehouseDTO> toggleActive(String code);
 
     ApiResponse<Void> deleteWarehouse(String code);
+
+    /** BUG-041 — client codes currently attached to this warehouse. Powers
+     *  the Attach-Clients dialog's "already attached" badge + detach button. */
+    ApiResponse<java.util.List<String>> listAttachedClientCodes(String code);
 }
