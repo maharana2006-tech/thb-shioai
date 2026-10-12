@@ -4569,7 +4569,31 @@ export default function NewShipmentPage() {
                           : 200
                         const n = Math.max(1, Math.min(200, Math.min(roomLeft, Number(bulkAddCount) || 1)))
                         const last = extraPackages[extraPackages.length - 1]
-                        const t: ExtraPackage = last && last.weight ? { ...last } : { ...blankExtraPackage(), weight, length, width, height }
+                        // BUG-006: when no previous extra and a CARRIER
+                        // preset is active, top-level length/width/height are
+                        // blank (isCustomPkg=false). Read effective dims from
+                        // the selected preset so each cloned box carries the
+                        // preset's L/W/H instead of empty strings.
+                        const preset = isCustomPkg
+                          ? null
+                          : packagesForCarrier.find((p) => String(p.id) === packageChoice)
+                        const effLength = isCustomPkg
+                          ? length
+                          : (preset?.length != null ? String(preset.length) : '')
+                        const effWidth = isCustomPkg
+                          ? width
+                          : (preset?.width != null ? String(preset.width) : '')
+                        const effHeight = isCustomPkg
+                          ? height
+                          : (preset?.height != null ? String(preset.height) : '')
+                        const effPackageType = isCustomPkg
+                          ? ''
+                          : (preset?.carrierPackageCode || '')
+                        const t: ExtraPackage = last && last.weight
+                          ? { ...last }
+                          : { ...blankExtraPackage(), weight,
+                              length: effLength, width: effWidth, height: effHeight,
+                              packageType: effPackageType }
                         setExtraPackages((cur) => [...cur, ...Array.from({ length: n }, () => ({ ...t }))])
                       }}
                       className="rounded px-1 hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:hover:bg-transparent"
