@@ -162,20 +162,36 @@ export default function ClientMarkupTab({ clientCode }: { clientCode: string }) 
           </div>
 
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            <div>
-              <label className="mb-1 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
-                Value {kind === 'PERCENT' ? '(%)' : ''}
-                <span className="ml-1 text-rose-500">*</span>
-              </label>
-              <input
-                type="text"
-                inputMode="decimal"
-                value={valueStr}
-                onChange={(e) => setValueStr(e.target.value)}
-                placeholder={kind === 'PERCENT' ? '12.5' : '3.50'}
-                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] font-semibold text-slate-950 outline-none transition focus:border-[#412d15]"
-              />
-            </div>
+            {(() => {
+              // BUG-034 — inline validity on the Value field so the operator
+              // sees the problem without clicking Save + reading a toast.
+              const parsed = Number(valueStr)
+              const invalid = valueStr.trim() !== '' && (!Number.isFinite(parsed) || parsed < 0)
+              return (
+                <div>
+                  <label className="mb-1 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+                    Value {kind === 'PERCENT' ? '(%)' : ''}
+                    <span className="ml-1 text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={valueStr}
+                    onChange={(e) => setValueStr(e.target.value)}
+                    placeholder={kind === 'PERCENT' ? '12.5' : '3.50'}
+                    aria-invalid={invalid || undefined}
+                    className={`w-full rounded-xl border bg-white px-3 py-2 text-[13px] font-semibold text-slate-950 outline-none transition focus:border-[#412d15] ${
+                      invalid ? 'border-rose-400' : 'border-slate-200'
+                    }`}
+                  />
+                  {invalid ? (
+                    <p className="mt-1 text-[11px] font-semibold text-rose-600">
+                      Value must be a non-negative number.
+                    </p>
+                  ) : null}
+                </div>
+              )
+            })()}
             <div>
               <label className="mb-1 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
                 Currency <span className="text-rose-500">*</span>
