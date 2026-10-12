@@ -111,9 +111,8 @@ public class StampsSeraRates {
     public List<SeraRateQuote> getRates(ShipmentRequestDTO request, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             throw new IllegalStateException(
-                    "This USPS account isn't authorized with Stamps.com yet (or the authorization "
-                            + "expired). An admin must open Settings → Carriers and click "
-                            + "\"Authorize with Stamps.com\" on this account.");
+                    "Stamps.com SERA is not authorized on this account — complete the "
+                            + "Stamps.com SERA authorization flow before rate-shopping USPS.");
         }
         if (!StringUtils.hasText(request.getRecipientCountryCode())) {
             throw new IllegalArgumentException(
@@ -137,8 +136,8 @@ public class StampsSeraRates {
                 // suffix so a crash-replay mid-rate-shop hits SERA's cached
                 // response instead of counting as fresh quotes.
                 String idemKey = StringUtils.hasText(request.getReferenceNumber())
-                        ? IdempotencyKeys.stampsKey(IdempotencyKeys.forStampsRateQuote(
-                                request.getReferenceNumber(), shipDate) + "-pkg" + (i + 1))
+                        ? IdempotencyKeys.forStampsRateQuote(request.getReferenceNumber(), shipDate)
+                                + "-pkg" + (i + 1)
                         : UUID.randomUUID().toString();
                 String response = HttpClients.newBuilder().baseUrl(baseUrl + "/rates").build()
                         .post()
@@ -268,12 +267,19 @@ public class StampsSeraRates {
             pkgBlock.put("weight", weight);
             pkgBlock.put("weight_unit", StampsConnector.normaliseSeraWeightUnit(weightUnit));
         }
-        if (pkg.getLength() != null) pkgBlock.put("length", pkg.getLength());
-        if (pkg.getWidth() != null) pkgBlock.put("width", pkg.getWidth());
-        if (pkg.getHeight() != null) pkgBlock.put("height", pkg.getHeight());
-        String dimUnit = nonBlank(pkg.getDimUnit(), request.getDimUnit());
-        if (StringUtils.hasText(dimUnit)) pkgBlock.put("dimension_unit",
-                StampsConnector.normaliseSeraDimUnit(dimUnit));
+        // Skip dim block for SERA-known flat-rate codes (see StampsConnector
+        // comment at the matching /labels site). Rate-shop path must mirror
+        // because top-level length/width/height from the FE preset pre-fill
+        // leaked into the /rates body and SERA validated the rounded dims
+        // against its exact catalogue values.
+        if (!StampsConnector.isSeraKnownFixedDimPackaging(packagingType)) {
+            if (pkg.getLength() != null) pkgBlock.put("length", pkg.getLength());
+            if (pkg.getWidth() != null) pkgBlock.put("width", pkg.getWidth());
+            if (pkg.getHeight() != null) pkgBlock.put("height", pkg.getHeight());
+            String dimUnit = nonBlank(pkg.getDimUnit(), request.getDimUnit());
+            if (StringUtils.hasText(dimUnit)) pkgBlock.put("dimension_unit",
+                    StampsConnector.normaliseSeraDimUnit(dimUnit));
+        }
         body.put("package", pkgBlock);
 
         body.put("ship_date", shipDate.toString());
@@ -386,7 +392,15 @@ public class StampsSeraRates {
             log.warn("Stamps SERA /rates returned non-JSON (first 200 chars): {}", safeHead(responseJson));
             return List.of();
         }
-        // SERA answers with a bare array; older docs showed {"rates": [...]}.
+        // SERA /rates returns a bare top-level array of rate objects,
+        // not {"rates": [...]} as the pre-release reference docs implied.
+        // Observed live (QA run #3, 2026-10-10): every 200 response for a
+        // valid lane came back as `[{"carrier":"usps", ...}]`. Pre-fix the
+        // parser looked for root.path("rates") only, found MissingNode on
+        // every call, and the rate-shop aggregated to 0 services even
+        // though SERA had quoted the lane. Accept both shapes: a top-level
+        // array wins; otherwise fall back to the documented .rates key so
+        // a hypothetical future SERA wrap doesn't break us.
         JsonNode rates = root.isArray() ? root : root.path("rates");
         if (!rates.isArray() || rates.isEmpty()) return List.of();
         List<SeraRateQuote> out = new ArrayList<>();
@@ -411,12 +425,17 @@ public class StampsSeraRates {
             Boolean isCustomsRequired = rate.hasNonNull("is_customs_required")
                     ? rate.path("is_customs_required").asBoolean()
                     : null;
-            // Quote under the catalog's code/name so it matches the service the order picked.
-            var catalog = StampsConnector.catalogServiceForSera(service);
-            RateOption option = new RateOption(CARRIER_CODE,
-                    catalog != null ? catalog.serviceCode() : service,
-                    catalog != null ? catalog.name() : service,
-                    amount, currency, estimatedDelivery, transitDays);
+            // Back-map SERA's snake-case service_type to our local
+            // shipping_service.service_code shape (e.g. usps_priority_mail
+            // → PRIORITY) for ShipmentValidationService's picker.
+            // serviceName gets a human display string (e.g. "USPS Priority
+            // Mail") so the operator-visible picker doesn't render raw
+            // snake_case like "USPS_PRIORITY_MAIL" — the FE uppercases
+            // whatever we return and that stayed ugly pre-fix.
+            String localCode = StampsConnector.mapSeraServiceToLocal(service);
+            String displayName = StampsConnector.seraServiceDisplayName(service);
+            RateOption option = new RateOption(CARRIER_CODE, localCode, displayName, amount, currency,
+                    estimatedDelivery, transitDays);
             out.add(new SeraRateQuote(option, isCustomsRequired));
         }
         return out;

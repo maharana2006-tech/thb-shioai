@@ -73,6 +73,20 @@ public class LabelPackage {
     @Column(name = "label_file_path", columnDefinition = "text")
     private String labelFilePath;
 
+    /** V143 (ZPL-first Stage 2): pre-rendered ZPL/PDF/PNG for this
+     *  package. All three populated at label-generate time so the
+     *  /label/{zpl,pdf,png} endpoints are zero-conversion reads.
+     *  Base64 for binary formats; raw text for ZPL. Null on rows
+     *  predating V143 — resolver falls back to label_file_path. */
+    @Column(name = "zpl_data", columnDefinition = "text")
+    private String zplData;
+
+    @Column(name = "pdf_data", columnDefinition = "text")
+    private String pdfData;
+
+    @Column(name = "png_data", columnDefinition = "text")
+    private String pngData;
+
     @Column(name = "weight", precision = 12, scale = 4)
     private BigDecimal weight;
 

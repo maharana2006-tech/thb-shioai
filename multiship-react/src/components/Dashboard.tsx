@@ -2,6 +2,7 @@ import { relativeTime } from '../utils/relativeTime'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
+  FiActivity,
   FiAlertTriangle,
   FiArrowDownRight,
   FiArrowRight,
@@ -26,6 +27,22 @@ import { countryName } from '../utils/countries'
 import { settingsPaths } from '../routes/workspaceRoutes'
 
 const CARD = 'rounded-2xl border border-slate-200 bg-white shadow-sm'
+
+/** Pull a short display string out of a HealthIndicator's details map.
+ *  Spring surfaces component-specific fields (error / status / database);
+ *  pick the first useful one so the dashboard shows WHY a component is
+ *  down without the full JSON blob. Returns null when the component is
+ *  healthy + has no interesting detail. */
+function pickDetail(details?: Record<string, unknown>): string | undefined {
+  if (!details) return undefined
+  const err = details.error
+  if (typeof err === 'string' && err) return err.length > 120 ? err.slice(0, 117) + '…' : err
+  const st = details.status
+  if (typeof st === 'string' && st) return st
+  const db = details.database
+  if (typeof db === 'string' && db) return db
+  return undefined
+}
 const POLL_MS = 45_000
 /**
  * A queue board on the operator's second monitor is a common failure mode:
@@ -284,6 +301,46 @@ export default function Dashboard() {
     ]
   }, [health])
   const healthWarnings = healthItems.filter((i) => !i.ok).length
+
+  // Spring Boot /actuator/health roll-up. Admin-only — the endpoint allows
+  // unauth GET for probe UX but show-details=when-authorized means our
+  // JWT cookie is required to see component status beyond the aggregate.
+  // Flattened: top-level components + db children (postgresDataSource,
+  // oracleDataSource) show side-by-side. Fetched once per Dashboard
+  // mount; aggregate status drives the overall UP/DOWN pill.
+  type SysHealthNode = {
+    status: 'UP' | 'DOWN' | 'OUT_OF_SERVICE' | 'UNKNOWN' | string
+    details?: Record<string, unknown>
+    components?: Record<string, SysHealthNode>
+  }
+  type SysHealth = { status: string; components?: Record<string, SysHealthNode> }
+  const [sysHealth, setSysHealth] = useState<SysHealth | null>(null)
+  useEffect(() => {
+    if (!isAdmin) return
+    let alive = true
+    fetch('/actuator/health', { credentials: 'include' })
+      .then((r) => r.ok || r.status === 503 ? r.json() : null)
+      .then((j) => { if (alive && j) setSysHealth(j as SysHealth) })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [isAdmin])
+  // Flatten db.* children next to top-level entries so the operator sees
+  // every component on one line. "db" composite itself is skipped (its
+  // status is the roll-up of its children, already visible).
+  const sysHealthFlat = useMemo(() => {
+    if (!sysHealth?.components) return [] as Array<{ key: string; status: string; detail?: string }>
+    const out: Array<{ key: string; status: string; detail?: string }> = []
+    for (const [k, v] of Object.entries(sysHealth.components)) {
+      if (v.components && Object.keys(v.components).length > 0) {
+        for (const [ck, cv] of Object.entries(v.components)) {
+          out.push({ key: ck, status: cv.status, detail: pickDetail(cv.details) })
+        }
+      } else {
+        out.push({ key: k, status: v.status, detail: pickDetail(v.details) })
+      }
+    }
+    return out
+  }, [sysHealth])
 
   const splitEntries = Object.entries(data?.carrierSplit ?? {}).sort((a, b) => b[1] - a[1])
   const splitTotal = splitEntries.reduce((s, [, c]) => s + c, 0)
@@ -605,6 +662,59 @@ export default function Dashboard() {
                 </button>
               </li>
             ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {/* System status — Spring Boot /actuator/health roll-up for admins. */}
+      {isAdmin && sysHealthFlat.length > 0 ? (
+        <section className={`${CARD} p-5`}>
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="inline-flex items-center gap-2 text-[13.5px] font-semibold text-slate-950">
+              <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-indigo-50 text-indigo-700">
+                <FiActivity className="h-3.5 w-3.5" />
+              </span>
+              System status
+            </h3>
+            {sysHealth?.status === 'UP' ? (
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[10.5px] font-bold text-emerald-700 ring-1 ring-emerald-100">
+                <FiCheckCircle className="h-3 w-3" /> All UP
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2.5 py-1 text-[10.5px] font-bold text-rose-700 ring-1 ring-rose-100">
+                <FiAlertTriangle className="h-3 w-3" /> {sysHealth?.status ?? 'UNKNOWN'}
+              </span>
+            )}
+          </div>
+          <ul className="grid gap-2 sm:grid-cols-2">
+            {sysHealthFlat.map((c) => {
+              const up = c.status === 'UP'
+              return (
+                <li key={c.key}
+                    className={`flex items-start gap-2.5 rounded-xl border px-3.5 py-3 ${
+                      up
+                        ? 'border-slate-100 bg-white'
+                        : 'border-rose-200 bg-rose-50/60'
+                    }`}>
+                  <span className={`mt-1 inline-block h-2 w-2 shrink-0 rounded-full ${
+                    up ? 'bg-emerald-500' : 'bg-rose-500'
+                  }`} />
+                  <span className="min-w-0 flex-1">
+                    <span className={`block text-[12.5px] font-semibold ${up ? 'text-slate-700' : 'text-rose-900'}`}>
+                      {c.key}
+                    </span>
+                    {c.detail ? (
+                      <span className={`mt-0.5 block truncate text-[11px] ${
+                        up ? 'text-slate-500' : 'text-rose-700/80'
+                      }`}>{c.detail}</span>
+                    ) : null}
+                  </span>
+                  <span className={`shrink-0 text-[10.5px] font-bold ${up ? 'text-emerald-700' : 'text-rose-700'}`}>
+                    {c.status}
+                  </span>
+                </li>
+              )
+            })}
           </ul>
         </section>
       ) : null}

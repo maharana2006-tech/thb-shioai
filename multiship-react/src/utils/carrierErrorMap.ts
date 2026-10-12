@@ -57,7 +57,7 @@ function humanizeStampsError(raw: string): string | null {
     return 'USPS doesn’t offer this shipping service on the lane. Pick a different service (e.g. Priority Mail International for heavy intl parcels).'
   }
   if (r.includes('packaging_type') && r.includes('invalid')) {
-    return 'USPS doesn’t recognise this packaging type. Pick "package" or a USPS flat-rate box.'
+    return 'USPS rejected the packaging type for this service. Flat-rate boxes work with Priority Mail only — pick Priority Mail, or switch the packaging to a Custom box.'
   }
   if (r.includes('license_number') && r.includes('invalid')) {
     return 'USPS rejected the export license / ITN. Check the AES citation on the shipment’s customs block.'

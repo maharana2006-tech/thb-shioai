@@ -176,6 +176,14 @@ public class SecurityConfig {
                             .permitAll()
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
+                        // K8s liveness/readiness + external uptime probes hit these.
+                        // The /actuator exposure allowlist in application.properties
+                        // (management.endpoints.web.exposure.include=health,info,prometheus)
+                        // decides WHICH endpoints exist; this permitAll decides which
+                        // can be hit without auth. Prometheus stays protected
+                        // (sensitive metric labels) — scrapers run behind a sidecar auth.
+                        .requestMatchers(HttpMethod.GET, "/actuator/health", "/actuator/health/**", "/actuator/info")
+                            .permitAll()
                         // CSV template is static schema (headers + one dummy row) — safe
                         // to expose publicly so the browser can download it via a plain
                         // <a href>, no Bearer header to attach.

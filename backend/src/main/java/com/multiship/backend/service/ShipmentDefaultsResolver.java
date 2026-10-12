@@ -71,13 +71,18 @@ public class ShipmentDefaultsResolver {
      *  without a standing pickup (they'll reject at label-buy time with an
      *  actionable error); every other carrier ignores the field. */
     static final String DEFAULT_PICKUP_TYPE = "USE_SCHEDULED_PICKUP";
-    /** UPS-4b — pre-fix UPS hardcode. GIF is the smallest wire size and
-     *  UPS's own default; every other carrier ignores the field. */
-    static final String DEFAULT_LABEL_IMAGE_FORMAT = "GIF";
-    /** FDX-H3 — pre-fix FedEx labelSpecification hardcode. PDF/PAPER_4X6
-     *  matches the thermal 4x6 format the other carriers default to; every
-     *  other carrier ignores these fields. */
-    static final String DEFAULT_LABEL_IMAGE_TYPE = "PDF";
+    /** ZPL-first policy (2026-10-11): when the operator has not explicitly
+     *  picked a label format, request ZPL from the carrier. ZPL is the
+     *  carrier-authoritative thermal format every major (UPS/FedEx/USPS/DHL)
+     *  supports and the only one that round-trips through our resolver +
+     *  zebrash renderer losslessly. PDF/PNG/GIF only kick in when operator
+     *  picked them in the FE or the account override says so. */
+    static final String DEFAULT_LABEL_IMAGE_FORMAT = "ZPL";
+    /** FDX-H3 — FedEx labelSpecification.imageType default. Aligned with
+     *  the ZPL-first policy on 2026-10-11 (was PDF/PAPER_4X6). FedEx
+     *  accepts "ZPLII" as the ZPL variant; the UPS-shape "ZPL" maps to
+     *  ZPLII in FedExConnector. Operator can still override via the FE. */
+    static final String DEFAULT_LABEL_IMAGE_TYPE = "ZPLII";
     static final String DEFAULT_LABEL_STOCK_TYPE = "PAPER_4X6";
 
     /**

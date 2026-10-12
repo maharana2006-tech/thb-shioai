@@ -337,11 +337,14 @@ class ShipmentDefaultsResolverTest {
     // ===== labelImageFormat (UPS-4b) =====
 
     @Test
-    void labelImageFormat_defaultGIF_whenNoRequestNoAccount() {
-        // Matches pre-UPS-4b UPS hardcode; keeps back-compat for callers
-        // that don't populate the field.
+    void labelImageFormat_defaultsToZpl_whenNoRequestNoAccount() {
+        // ZPL-first policy (2026-10-11): operator didn't pick, account
+        // didn't override → ask carrier for ZPL. Replaces the pre-fix
+        // GIF default so the stored artifact is carrier-authoritative
+        // thermal ZPL and the serve-time ZPL/PDF/PNG trio can be
+        // rendered from a lossless source.
         var out = resolver.resolve(inputsFor(null, null, null, false));
-        assertEquals("GIF", out.labelImageFormat());
+        assertEquals("ZPL", out.labelImageFormat());
     }
 
     @Test

@@ -830,7 +830,15 @@ public interface CarrierConnector {
      * dims/maxWeight in inches/pounds; scope = DOMESTIC | INTERNATIONAL | BOTH.
      */
     record PackageOffering(String code, String name, java.math.BigDecimal length, java.math.BigDecimal width,
-                           java.math.BigDecimal height, java.math.BigDecimal maxWeight, boolean flatRate, String scope) {
+                           java.math.BigDecimal height, java.math.BigDecimal maxWeight, boolean flatRate, String scope,
+                           Integer maxPieces) {
+        /** Back-compat 8-arg ctor — pre-maxPieces call sites keep compiling
+         *  with {@code maxPieces=null} (no cap). */
+        public PackageOffering(String code, String name, java.math.BigDecimal length, java.math.BigDecimal width,
+                               java.math.BigDecimal height, java.math.BigDecimal maxWeight, boolean flatRate,
+                               String scope) {
+            this(code, name, length, width, height, maxWeight, flatRate, scope, null);
+        }
     }
 
     record PackageAvailability(List<PackageOffering> offerings, boolean live, String via) {

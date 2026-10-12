@@ -973,9 +973,10 @@ public class StampsConnector implements CarrierConnector {
         // and the request body share the same date (midnight-boundary race).
         java.time.LocalDate shipDate = com.multiship.backend.util.LabelDates
                 .today(request.getShipperTimezone());
+        boolean sandbox = isSandbox(environment);
         for (int i = 0; i < packages.size(); i++) {
             String jsonBody = buildSeraCreateLabelBody(request, packages.get(i),
-                    i + 1, packages.size(), shipDate);
+                    i + 1, packages.size(), shipDate, sandbox);
             try {
                 // Audit: SERA requires Idempotency-Key on POSTs (developer.stamps.com
                 // §Idempotency). PR-T2 — deterministic key keyed on
@@ -1142,18 +1143,30 @@ public class StampsConnector implements CarrierConnector {
     /** PR-T2 — convenience overload for tests + callers that don't already
      *  hold a {@code shipDate}; preserves the pre-T2 signature by computing
      *  the date internally. The MPS loop in {@link #createShipmentSera}
-     *  passes the pre-computed date so key + body share one value. */
+     *  passes the pre-computed date so key + body share one value.
+     *  Defaults sandbox=false; the real MPS loop passes the real flag. */
     String buildSeraCreateLabelBody(ShipmentRequestDTO request,
                                      com.multiship.backend.dto.PackageDetailDTO pkg,
                                      int packageIndex, int packageTotal) {
         return buildSeraCreateLabelBody(request, pkg, packageIndex, packageTotal,
-                com.multiship.backend.util.LabelDates.today(request.getShipperTimezone()));
+                com.multiship.backend.util.LabelDates.today(request.getShipperTimezone()),
+                false);
+    }
+
+    /** PR-T-SANDBOX — sandbox flag added so sandbox-env labels auto-flag
+     *  as test (Stamps.com stamps VOID). */
+    String buildSeraCreateLabelBody(ShipmentRequestDTO request,
+                                     com.multiship.backend.dto.PackageDetailDTO pkg,
+                                     int packageIndex, int packageTotal,
+                                     java.time.LocalDate shipDate) {
+        return buildSeraCreateLabelBody(request, pkg, packageIndex, packageTotal, shipDate, false);
     }
 
     String buildSeraCreateLabelBody(ShipmentRequestDTO request,
                                      com.multiship.backend.dto.PackageDetailDTO pkg,
                                      int packageIndex, int packageTotal,
-                                     java.time.LocalDate shipDate) {
+                                     java.time.LocalDate shipDate,
+                                     boolean sandbox) {
         Map<String, Object> body = new LinkedHashMap<>();
 
         // Addresses. SERA uses from_address / to_address (snake_case, mirroring
@@ -1194,11 +1207,19 @@ public class StampsConnector implements CarrierConnector {
             pkgBlock.put("weight", weight);
             pkgBlock.put("weight_unit", normaliseSeraWeightUnit(weightUnit));
         }
-        if (pkg.getLength() != null) pkgBlock.put("length", pkg.getLength());
-        if (pkg.getWidth() != null) pkgBlock.put("width", pkg.getWidth());
-        if (pkg.getHeight() != null) pkgBlock.put("height", pkg.getHeight());
-        String dimUnit = nonBlank(pkg.getDimUnit(), request.getDimUnit());
-        if (StringUtils.hasText(dimUnit)) pkgBlock.put("dimension_unit", normaliseSeraDimUnit(dimUnit));
+        // Skip dim block for SERA-known flat-rate codes — SERA validates
+        // against its exact catalogue dims and refuses our rounded preset
+        // values (observed R6/R9: 8.69×5.44×1.75 vs USPS exact
+        // 8.6875×5.4375×1.75 → "No rate found for the specified mail class,
+        // package, and dimensions"). For generic "package" and non-flat
+        // codes, dims are still required.
+        if (!isSeraKnownFixedDimPackaging(packagingType)) {
+            if (pkg.getLength() != null) pkgBlock.put("length", pkg.getLength());
+            if (pkg.getWidth() != null) pkgBlock.put("width", pkg.getWidth());
+            if (pkg.getHeight() != null) pkgBlock.put("height", pkg.getHeight());
+            String dimUnit = nonBlank(pkg.getDimUnit(), request.getDimUnit());
+            if (StringUtils.hasText(dimUnit)) pkgBlock.put("dimension_unit", normaliseSeraDimUnit(dimUnit));
+        }
         body.put("package", pkgBlock);
 
         // Signature options — SERA's delivery_confirmation_type enum.
@@ -1278,6 +1299,13 @@ public class StampsConnector implements CarrierConnector {
         body.put("ship_date", shipDate.toString());
 
         if (Boolean.TRUE.equals(request.getIsReturn())) body.put("is_return_label", true);
+        // Sandbox env → auto-flag as test label. Per SERA v1 docs: "Test
+        // labels display 'VOID' stamp and cannot ship. Test labels
+        // auto-void with no action needed." Without this, sandbox labels
+        // look visually identical to prod labels and operators risk
+        // mistaking a staging print for a shippable one. Prod labels
+        // leave the field unset so the carrier processes them normally.
+        if (sandbox) body.put("is_test_label", true);
 
         // Label preferences — size / format / output type. Format follows
         // the request's labelImageFormat override; default is 4x6 PDF as
@@ -1502,6 +1530,34 @@ public class StampsConnector implements CarrierConnector {
     /** Map a SWSIM-style service code ("USPS PM", "USPS GA", ...) to
      *  SERA's snake-case vocabulary. When the input is already snake_case
      *  (SERA-native), pass through. Blank input → null. */
+    /** Inverse of {@link #mapSwsimServiceToSera} — SERA service_type back
+     *  to our local {@code shipping_service.service_code} shape. Used by
+     *  the rate-shop parser so downstream code (ShipmentValidationService's
+     *  "did carrier quote this service" picker) can compare rate rows
+     *  against local service codes without a case-mismatch false negative.
+     *
+     *  <p>Unknown codes pass through unchanged — upper-case + replace
+     *  hyphen → underscore so a hypothetical SERA extension still slots
+     *  into the local comparison heuristic.
+     */
+    public static String mapSeraServiceToLocal(String seraServiceType) {
+        if (!StringUtils.hasText(seraServiceType)) return seraServiceType;
+        String v = seraServiceType.trim().toLowerCase(Locale.ROOT);
+        return switch (v) {
+            case "usps_priority_mail" -> "PRIORITY";
+            case "usps_priority_mail_express" -> "PRIORITY_EXPRESS";
+            case "usps_ground_advantage" -> "GROUND_ADVANTAGE";
+            case "usps_priority_mail_international" -> "PRIORITY_INTL";
+            case "usps_priority_mail_express_international" -> "EXPRESS_INTL";
+            case "usps_first_class_package_international_service" -> "FIRST_CLASS_INTL";
+            case "usps_first_class_mail" -> "USPS FCM";
+            case "usps_media_mail" -> "USPS MM";
+            case "usps_global_express_guaranteed" -> "USPS GXG";
+            case "usps_first_class_mail_international" -> "USPS FCMI";
+            default -> seraServiceType.trim().toUpperCase(Locale.ROOT).replace('-', '_');
+        };
+    }
+
     static String mapSwsimServiceToSera(String service) {
         if (!StringUtils.hasText(service)) return null;
         String v = service.trim();
@@ -1532,6 +1588,45 @@ public class StampsConnector implements CarrierConnector {
         };
     }
 
+    /** True when the SERA packaging code is one with fixed, catalogue-known
+     *  dimensions (flat-rate boxes + flat-rate envelope + regional-rate).
+     *  SERA validates submitted dims against its exact values for these;
+     *  rounded seed dims cause "No rate found for the specified mail
+     *  class, package, and dimensions." Call sites should omit the dim
+     *  block when this is true. */
+    static boolean isSeraKnownFixedDimPackaging(String seraPackagingType) {
+        if (!StringUtils.hasText(seraPackagingType)) return false;
+        String v = seraPackagingType.trim().toLowerCase(Locale.ROOT);
+        return v.equals("usps_flat_rate_envelope")
+                || v.equals("usps_small_flat_rate_box")
+                || v.equals("usps_medium_flat_rate_box")
+                || v.equals("usps_large_flat_rate_box")
+                || v.equals("usps_regional_rate_box_a")
+                || v.equals("usps_regional_rate_box_b")
+                || v.equals("usps_padded_flat_rate_envelope")
+                || v.equals("usps_legal_flat_rate_envelope");
+    }
+
+    /** Human display name for a SERA service_type — avoids the FE showing
+     *  the raw snake_case code. Pairs with {@link #mapSeraServiceToLocal}
+     *  which supplies the local service_code for picker matching. */
+    public static String seraServiceDisplayName(String seraServiceType) {
+        if (!StringUtils.hasText(seraServiceType)) return seraServiceType;
+        return switch (seraServiceType.trim().toLowerCase(Locale.ROOT)) {
+            case "usps_priority_mail" -> "USPS Priority Mail";
+            case "usps_priority_mail_express" -> "USPS Priority Mail Express";
+            case "usps_ground_advantage" -> "USPS Ground Advantage";
+            case "usps_priority_mail_international" -> "USPS Priority Mail International";
+            case "usps_priority_mail_express_international" -> "USPS Priority Mail Express International";
+            case "usps_first_class_package_international_service" -> "USPS First-Class Package International";
+            case "usps_first_class_mail" -> "USPS First-Class Mail";
+            case "usps_media_mail" -> "USPS Media Mail";
+            case "usps_global_express_guaranteed" -> "USPS Global Express Guaranteed";
+            case "usps_first_class_mail_international" -> "USPS First-Class Mail International";
+            default -> seraServiceType;
+        };
+    }
+
     /** Map a SWSIM-style packaging code to SERA. Pass-through when
      *  snake-case, else best-effort translate. */
     static String mapPackagingTypeToSera(String pt) {
@@ -1558,7 +1653,13 @@ public class StampsConnector implements CarrierConnector {
             case "REGIONAL_RATE_BOX_A" -> "usps_regional_rate_box_a";
             case "REGIONAL_RATE_BOX_B" -> "usps_regional_rate_box_b";
             case "FLAT_RATE_ENVELOPE" -> "usps_flat_rate_envelope";
-            default -> v.toLowerCase(Locale.ROOT).replace(' ', '_');
+            // Defense-in-depth: unknown values (e.g. a numeric preset.id
+            // leaked by a mis-configured caller) default to the generic
+            // "package" rather than the pass-through-rewrite that SERA
+            // 899999s on. Observed in production from an MPS submit where
+            // the FE sent packages[0].packageType="19" (preset DB id).
+            default -> v.matches("\\d+") ? "package"
+                    : v.toLowerCase(Locale.ROOT).replace(' ', '_');
         };
     }
 
@@ -1602,13 +1703,19 @@ public class StampsConnector implements CarrierConnector {
      *  GIF; SERA speaks pdf / png / zpl / zpl_ascii. GIF and JPG have no
      *  SERA equivalent — silently default to PDF (the safe universal). */
     static String normaliseSeraLabelFormat(String raw) {
-        if (!StringUtils.hasText(raw)) return "pdf";
+        // Default to ZPL so the stored artefact is the carrier's own
+        // thermal-label markup. The /label/zpl endpoint's resolver can
+        // then passthrough directly; the PDF view path rasterises ZPL →
+        // PDF via zebrash (install the native binary) OR falls back to
+        // the JSX facsimile. Operators who need the carrier PDF
+        // specifically can still pick PDF explicitly on the shipment form.
+        if (!StringUtils.hasText(raw)) return "zpl";
         return switch (raw.trim().toUpperCase(Locale.ROOT)) {
             case "PDF" -> "pdf";
             case "PNG" -> "png";
             case "ZPL" -> "zpl";
             case "ZPL_ASCII" -> "zpl_ascii";
-            default -> "pdf";
+            default -> "zpl";
         };
     }
 

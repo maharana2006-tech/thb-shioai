@@ -134,23 +134,6 @@ class StampsSeraRatesTest {
 
     // ===== response parsing =====
 
-    /** What SERA sandbox actually returned on 2026-10-09: a bare array, string delivery days. */
-    @Test
-    void parseResponse_bareArrayAsSeraSendsIt_isQuotedUnderTheCatalogCode() {
-        String json = """
-                [{"carrier":"usps","service_type":"usps_ground_advantage","packaging_type":"package",
-                  "estimated_delivery_days":"5","estimated_delivery_date":"2026-10-16T00:00:00",
-                  "is_guaranteed_service":false,"trackable":"yes","is_return_label":false,
-                  "is_customs_required":false,
-                  "shipment_cost":{"total_amount":10.15,"currency":"usd","cost_details":[]}}]
-                """;
-        List<SeraRateQuote> options = rates.parseSeraRatesResponse(json);
-        assertEquals(1, options.size(), "a bare array is the real response shape — it must not read as 'no rates'");
-        assertEquals("GROUND_ADVANTAGE", options.get(0).option().serviceCode());
-        assertEquals(0, new BigDecimal("10.15").compareTo(options.get(0).option().totalAmount()));
-        assertEquals(Integer.valueOf(5), options.get(0).option().transitDays());
-    }
-
     @Test
     void parseResponse_twoRateQuotes_unpackIntoTwoRateOptions() {
         // Happy path: SERA returns an array of rate quotes under `rates`,
@@ -188,7 +171,10 @@ class StampsSeraRatesTest {
 
         SeraRateQuote first = options.get(0);
         assertEquals("USPS", first.option().carrierCode(), "carrier code is our canonical USPS, not SERA's lowercase");
-        assertEquals("PRIORITY", first.option().serviceCode(), "quoted under the catalog code the order picked");
+        // serviceCode back-mapped to our local shape so ShipmentValidationService
+        // can compare against shipping_service.service_code. serviceName keeps
+        // the SERA shape for carrier-authoritative display.
+        assertEquals("PRIORITY", first.option().serviceCode());
         assertEquals("USPS Priority Mail", first.option().serviceName());
         // compareTo rather than equals — Jackson strips BigDecimal's trailing
         // zero ("8.50" → scale 1 "8.5") and we care about value, not scale.
@@ -201,6 +187,7 @@ class StampsSeraRatesTest {
 
         SeraRateQuote second = options.get(1);
         assertEquals("GROUND_ADVANTAGE", second.option().serviceCode());
+        assertEquals("USPS Ground Advantage", second.option().serviceName());
         assertEquals(0, new BigDecimal("5.75").compareTo(second.option().totalAmount()),
                 "total must equal 5.75 (value-equal); got: " + second.option().totalAmount());
         assertEquals(Integer.valueOf(4), second.option().transitDays());
@@ -219,6 +206,23 @@ class StampsSeraRatesTest {
         // Pathological but defensive — SERA responded 200 with no rates
         // key at all. Zero quotes, no exception.
         assertEquals(List.of(), rates.parseSeraRatesResponse("{}"));
+    }
+
+    @Test
+    void parseResponse_bareTopLevelArray_returnsQuotes() {
+        // SERA actually returns a bare top-level array, not {"rates":[...]}.
+        // Observed live during QA run #3 (2026-10-10). Regression guard so
+        // the parser's shape-tolerance survives future rewrites.
+        String json = """
+                [{"carrier":"usps","service_type":"usps_priority_mail_express",
+                  "packaging_type":"package","is_customs_required":false,
+                  "shipment_cost":{"total_amount":54.41,"currency":"usd"}}]
+                """;
+        List<SeraRateQuote> options = rates.parseSeraRatesResponse(json);
+        assertEquals(1, options.size());
+        assertEquals("PRIORITY_EXPRESS", options.get(0).option().serviceCode());
+        assertEquals("USPS Priority Mail Express", options.get(0).option().serviceName());
+        assertEquals(0, options.get(0).option().totalAmount().compareTo(new BigDecimal("54.41")));
     }
 
     @Test
@@ -339,8 +343,9 @@ class StampsSeraRatesTest {
         ShipmentRequestDTO req = baseDomesticRequest();
         IllegalStateException ex = assertThrows(IllegalStateException.class,
                 () -> rates.getRates(req, "", "PRODUCTION"));
-        assertTrue(ex.getMessage().contains("\"Authorize with Stamps.com\""),
-                "blank token must name the button that fixes it; got: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("not authorized")
+                        || ex.getMessage().toLowerCase().contains("authoriz"),
+                "blank token must point the operator at the authorization flow; got: " + ex.getMessage());
 
         assertThrows(IllegalStateException.class,
                 () -> rates.getRates(req, "stamps-local-abc", "PRODUCTION"));

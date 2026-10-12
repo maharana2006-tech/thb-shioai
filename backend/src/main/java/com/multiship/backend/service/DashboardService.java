@@ -209,10 +209,14 @@ public class DashboardService {
         // rulesToDisabledServices is a platform-wide catalog signal. A scoped
         // USER shouldn't be seeing catalog debt for services they don't own —
         // report 0 for scoped callers rather than leak the global count.
+        // Code Maps / SSM merge dropped shipvia_service_mapping (V129).
+        // The replacement is client_shipvia_code_map (same service_id FK;
+        // nullable client_code = platform-wide rule). Query re-pointed
+        // so the dashboard metric runs again instead of 500-ing.
         health.put("rulesToDisabledServices", scope.isPresent()
                 ? 0L
                 : jdbc.queryForObject(
-                    "SELECT COUNT(*) FROM shipvia_service_mapping m JOIN shipping_service s ON s.id = m.service_id "
+                    "SELECT COUNT(*) FROM client_shipvia_code_map m JOIN shipping_service s ON s.id = m.service_id "
                             + "WHERE s.enabled = false", Long.class));
 
         // Customs-gap lanes: pending cross-BORDER shipments whose client has no

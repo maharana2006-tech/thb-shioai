@@ -1766,6 +1766,54 @@ export default function NewShipmentPage() {
     return `Exceeds ${preset.name}'s ${preset.maxWeight} ${(preset.weightUnit || 'LB').toLowerCase()} max — carrier will reject. Pick a larger box or Custom package.`
   }, [isCustomPkg, weight, weightUnit, packagesForCarrier, packageChoice])
 
+  // Effective pieces-per-label cap — min(packaging, service). Null on
+  // both sides = no limit. V141 added package-level cap (UPS Letter = 1);
+  // V142 added service-level cap for the symmetric case (rare but
+  // real for return/LTL add-ons). The lower of the two wins; whichever
+  // dimension drove the cap gets named in the warning so the operator
+  // knows what to change.
+  const maxPiecesContext = useMemo(() => {
+    const preset = isCustomPkg
+      ? null
+      : packagesForCarrier.find((p) => String(p.id) === packageChoice)
+    const svc = servicesForCarrier.find((s) => s.id === serviceId)
+    const presetCap = preset?.maxPieces ?? null
+    const serviceCap = svc?.maxPieces ?? null
+    let cap: number | null = null
+    let source: string | null = null
+    if (presetCap != null && (serviceCap == null || presetCap <= serviceCap)) {
+      cap = presetCap
+      source = preset?.name || 'This packaging'
+    } else if (serviceCap != null) {
+      cap = serviceCap
+      source = svc?.name || 'This service'
+    }
+    return { cap, source }
+  }, [isCustomPkg, packagesForCarrier, packageChoice, servicesForCarrier, serviceId])
+  const currentBoxCount = 1 + extraPackages.length
+  const canAddMoreBoxes = maxPiecesContext.cap == null || currentBoxCount < maxPiecesContext.cap
+  const splitHint = useMemo(() => {
+    if (maxPiecesContext.cap !== 1) return ''
+    return currentBoxCount >= 2
+      ? ' To ship multiple boxes, create each one as a separate shipment.'
+      : ' If you need to ship more than one box, create each one as a separate shipment.'
+  }, [maxPiecesContext.cap, currentBoxCount])
+  const addBoxBlockedMessage = useMemo(() => {
+    if (maxPiecesContext.cap == null) return null
+    return `${maxPiecesContext.source} ships at most ${maxPiecesContext.cap} `
+      + `box${maxPiecesContext.cap === 1 ? '' : 'es'} per label.${splitHint}`
+  }, [maxPiecesContext, splitHint])
+  // Submit-gate warning — a mismatch from switching to a lower cap
+  // AFTER the operator already added extras. The add buttons HARD-block
+  // growth; this catches the switch-after case so submit still refuses.
+  const singlePieceOnlyWarning = useMemo(() => {
+    if (maxPiecesContext.cap == null || currentBoxCount <= maxPiecesContext.cap) return null
+    return `${maxPiecesContext.source} ships at most ${maxPiecesContext.cap} `
+      + `box${maxPiecesContext.cap === 1 ? '' : 'es'} per label — the carrier will reject this `
+      + `${currentBoxCount}-box shipment. Remove the extra boxes or pick a larger packaging.`
+      + splitHint
+  }, [maxPiecesContext, currentBoxCount, splitHint])
+
   // ── Yup + Formik validation ────────────────────────────────────────────────
   // The page keeps its own useState for each field (needed by AI autofill, the
   // rate picker, warehouse resolution, etc.), so Formik is wired as a pure
@@ -2067,6 +2115,10 @@ export default function NewShipmentPage() {
     }
     if (pkgServiceWarning) {
       showToast(pkgServiceWarning, 'Incompatible package + service')
+      return
+    }
+    if (singlePieceOnlyWarning) {
+      showToast(singlePieceOnlyWarning, 'Too many boxes for this packaging')
       return
     }
     setCarrierValidating(true)
@@ -2697,26 +2749,78 @@ export default function NewShipmentPage() {
         packages: [
           {
             sequenceNumber: 1,
-            packageType: isCustomPkg ? undefined : String(packageChoice),
+            // packageChoice is the PackagePreset.id as a string; resolve
+            // to the carrier's packaging code (e.g. "FLAT_RATE_ENVELOPE")
+            // before sending. Pre-fix we posted the raw id ("19") and SERA
+            // rejected with 899999 "packaging_type specified is invalid."
+            // Backend uses PackageDetailDTO.packageType verbatim for the
+            // carrier wire body; top-level packagePresetId (line below)
+            // handles the non-MPS single-piece path. For MPS, each piece
+            // needs its own carrier code.
+            packageType: isCustomPkg
+              ? undefined
+              : ([...packagesForCarrier, ...customBoxes].find((pk) => String(pk.id) === packageChoice)?.carrierPackageCode
+                  || undefined),
             weight: w,
             weightUnit,
-            length: isCustomPkg ? Number(length) : undefined,
-            width: isCustomPkg ? Number(width) : undefined,
-            height: isCustomPkg ? Number(height) : undefined,
+            // Dim threading — rules by preset kind:
+            //   · Custom (user typed dims directly): send typed dims.
+            //   · CUSTOM-kind preset (e.g. "THB-PACKAGE" 10×6×2): send
+            //     preset's L/W/H. SERA treats these as generic "package"
+            //     and rejects with "Dimensions are required" without dims.
+            //   · CARRIER-kind preset (flat-rate boxes, UPS branded boxes):
+            //     OMIT dims. SERA knows the dims for these codes; sending
+            //     our rounded seed values (8.69×5.44×1.75 vs USPS official
+            //     8.6875×5.4375×1.75) tripped SERA's dim validation with
+            //     "No rate found for the specified mail class, package,
+            //     and dimensions" during QA R6.
+            length: isCustomPkg
+              ? Number(length)
+              : (([...packagesForCarrier, ...customBoxes].find((pk) => String(pk.id) === packageChoice)?.kind === 'CUSTOM')
+                  ? ([...packagesForCarrier, ...customBoxes].find((pk) => String(pk.id) === packageChoice)?.length ?? undefined)
+                  : undefined),
+            width: isCustomPkg
+              ? Number(width)
+              : (([...packagesForCarrier, ...customBoxes].find((pk) => String(pk.id) === packageChoice)?.kind === 'CUSTOM')
+                  ? ([...packagesForCarrier, ...customBoxes].find((pk) => String(pk.id) === packageChoice)?.width ?? undefined)
+                  : undefined),
+            height: isCustomPkg
+              ? Number(height)
+              : (([...packagesForCarrier, ...customBoxes].find((pk) => String(pk.id) === packageChoice)?.kind === 'CUSTOM')
+                  ? ([...packagesForCarrier, ...customBoxes].find((pk) => String(pk.id) === packageChoice)?.height ?? undefined)
+                  : undefined),
             dimUnit,
             declaredValue: declaredValue ? Number(declaredValue) : undefined,
           },
-          ...extraPackages.map((p, i) => ({
-            sequenceNumber: i + 2,
-            packageType: p.packageType || undefined,
-            weight: Number(p.weight),
-            weightUnit,
-            length: p.length ? Number(p.length) : undefined,
-            width: p.width ? Number(p.width) : undefined,
-            height: p.height ? Number(p.height) : undefined,
-            dimUnit,
-            declaredValue: p.declaredValue ? Number(p.declaredValue) : undefined,
-          })),
+          ...extraPackages.map((p, i) => {
+            // Mirror the box-1 dim-threading rule for box 2+. If the box
+            // was given a packageType (preset's carrier code), look up the
+            // preset to decide: thread L/W/H when CUSTOM-kind, omit when
+            // CARRIER-kind. User-typed p.length/width/height always win.
+            // Also search customBoxes — CUSTOM-kind presets may store
+            // their name in packageType when extraPackage's packageType is
+            // populated from "Apply box 1 to all". Match by code OR name.
+            const extraPreset = p.packageType
+              ? [...packagesForCarrier, ...customBoxes].find(
+                  (pk) => (pk.carrierPackageCode || '') === p.packageType
+                      || pk.name === p.packageType)
+              : null
+            const extraPresetIsCustom = extraPreset?.kind === 'CUSTOM'
+            return {
+              sequenceNumber: i + 2,
+              packageType: p.packageType || undefined,
+              weight: Number(p.weight),
+              weightUnit,
+              length: p.length ? Number(p.length)
+                : (extraPresetIsCustom ? extraPreset?.length ?? undefined : undefined),
+              width: p.width ? Number(p.width)
+                : (extraPresetIsCustom ? extraPreset?.width ?? undefined : undefined),
+              height: p.height ? Number(p.height)
+                : (extraPresetIsCustom ? extraPreset?.height ?? undefined : undefined),
+              dimUnit,
+              declaredValue: p.declaredValue ? Number(p.declaredValue) : undefined,
+            }
+          }),
         ],
       } : {}),
       // Currency moved to top-level (always sent). Intl still carries the
@@ -2846,6 +2950,10 @@ export default function NewShipmentPage() {
     // Packaging ↔ service compatibility gate (carrier would otherwise 400).
     if (pkgServiceWarning) {
       showToast(pkgServiceWarning, 'Incompatible package + service')
+      return
+    }
+    if (singlePieceOnlyWarning) {
+      showToast(singlePieceOnlyWarning, 'Too many boxes for this packaging')
       return
     }
 
@@ -4259,6 +4367,12 @@ export default function NewShipmentPage() {
                     <span>{pkgServiceWarning}</span>
                   </div>
                 ) : null}
+                {singlePieceOnlyWarning ? (
+                  <div className="mt-2 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
+                    <FiAlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <span>{singlePieceOnlyWarning}</span>
+                  </div>
+                ) : null}
                 {isRecipientUsTerritory ? (
                   <div className="mt-2 flex items-start gap-2 rounded-lg border border-sky-300 bg-sky-50 px-3 py-2 text-[12px] text-sky-800">
                     <FiAlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -4337,8 +4451,9 @@ export default function NewShipmentPage() {
                         <button
                           type="button"
                           onClick={() => duplicateBox(idx)}
-                          title="Add a box with the same weight and dimensions"
-                          className="inline-flex h-9 items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 text-[11px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]"
+                          disabled={!canAddMoreBoxes}
+                          title={canAddMoreBoxes ? 'Add a box with the same weight and dimensions' : (addBoxBlockedMessage || 'Add a box with the same weight and dimensions')}
+                          className="inline-flex h-9 items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 text-[11px] font-semibold text-[#5a4526] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white"
                         >
                           <FiCopy className="h-3.5 w-3.5" /> Duplicate
                         </button>
@@ -4417,7 +4532,9 @@ export default function NewShipmentPage() {
                   <button
                     type="button"
                     onClick={() => setExtraPackages((cur) => [...cur, blankExtraPackage()])}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-dashed border-[#e3d9c4] bg-white px-2.5 text-[11px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]"
+                    disabled={!canAddMoreBoxes}
+                    title={canAddMoreBoxes ? undefined : (addBoxBlockedMessage || undefined)}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-dashed border-[#e3d9c4] bg-white px-2.5 text-[11px] font-semibold text-[#5a4526] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white"
                   >
                     <FiPlus className="h-3 w-3" />
                     Add another box
@@ -4425,25 +4542,33 @@ export default function NewShipmentPage() {
                       {1 + extraPackages.length}
                     </span>
                   </button>
-                  <span className="inline-flex h-9 items-center gap-1 rounded-lg border border-dashed border-[#e3d9c4] bg-white px-2 text-[11px] font-semibold text-[#5a4526]">
+                  <span className={`inline-flex h-9 items-center gap-1 rounded-lg border border-dashed border-[#e3d9c4] bg-white px-2 text-[11px] font-semibold text-[#5a4526] ${canAddMoreBoxes ? '' : 'opacity-40'}`}>
                     Add
                     <input
                       type="number" min="1" max="200"
                       value={bulkAddCount}
                       onChange={(e) => setBulkAddCount(e.target.value)}
+                      disabled={!canAddMoreBoxes}
                       aria-label="Number of boxes to add"
-                      className="w-12 rounded border border-[#e3d9c4] px-1 py-0.5 text-center text-[11px] tabular-nums"
+                      className="w-12 rounded border border-[#e3d9c4] px-1 py-0.5 text-center text-[11px] tabular-nums disabled:cursor-not-allowed"
                     />
                     <button
                       type="button"
-                      title="Adds boxes copying the last box's weight and dimensions (box 1's when there is no extra box yet)"
+                      disabled={!canAddMoreBoxes}
+                      title={canAddMoreBoxes
+                        ? "Adds boxes copying the last box's weight and dimensions (box 1's when there is no extra box yet)"
+                        : (addBoxBlockedMessage || undefined)}
                       onClick={() => {
-                        const n = Math.max(1, Math.min(200, Number(bulkAddCount) || 1))
+                        if (!canAddMoreBoxes) return
+                        const roomLeft = maxPiecesContext.cap != null
+                          ? Math.max(0, maxPiecesContext.cap - currentBoxCount)
+                          : 200
+                        const n = Math.max(1, Math.min(200, Math.min(roomLeft, Number(bulkAddCount) || 1)))
                         const last = extraPackages[extraPackages.length - 1]
                         const t: ExtraPackage = last && last.weight ? { ...last } : { ...blankExtraPackage(), weight, length, width, height }
                         setExtraPackages((cur) => [...cur, ...Array.from({ length: n }, () => ({ ...t }))])
                       }}
-                      className="rounded px-1 hover:bg-[#faf7f0]"
+                      className="rounded px-1 hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:hover:bg-transparent"
                     >
                       boxes like the last
                     </button>
@@ -4461,7 +4586,38 @@ export default function NewShipmentPage() {
                     <button
                       type="button"
                       title="Copy box 1's weight and dimensions onto every extra box"
-                      onClick={() => setExtraPackages((cur) => cur.map((p) => ({ ...p, weight, length, width, height })))}
+                      onClick={() => {
+                        // Read EFFECTIVE box-1 dims — top-level state is
+                        // only populated when "Custom" is picked. For a
+                        // preset-selected box 1 (e.g. THB-PACKAGE), fall
+                        // back to the preset's own L/W/H so the applied
+                        // row isn't blank. packageType also carries over
+                        // so the operator doesn't have to re-select it on
+                        // every box.
+                        const preset = isCustomPkg
+                          ? null
+                          : [...packagesForCarrier, ...customBoxes].find((pk) => String(pk.id) === packageChoice)
+                        const effLength = isCustomPkg
+                          ? length
+                          : (preset?.length != null ? String(preset.length) : '')
+                        const effWidth = isCustomPkg
+                          ? width
+                          : (preset?.width != null ? String(preset.width) : '')
+                        const effHeight = isCustomPkg
+                          ? height
+                          : (preset?.height != null ? String(preset.height) : '')
+                        const effPackageType = isCustomPkg
+                          ? ''
+                          : (preset?.carrierPackageCode || '')
+                        setExtraPackages((cur) => cur.map((p) => ({
+                          ...p,
+                          weight,
+                          length: effLength,
+                          width: effWidth,
+                          height: effHeight,
+                          packageType: effPackageType,
+                        })))
+                      }}
                       className="inline-flex h-9 items-center rounded-lg border border-dashed border-[#e3d9c4] bg-white px-2.5 text-[11px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]"
                     >
                       Apply box 1 to all
