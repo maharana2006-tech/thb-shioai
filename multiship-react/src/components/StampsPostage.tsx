@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { FiAlertTriangle, FiCreditCard, FiExternalLink, FiMail, FiX } from 'react-icons/fi'
 import { notify } from '../utils/notify'
+import { ApiError } from '../api/apiClient'
 import type { CarrierAccountRef } from '../api/accountRefService'
 import {
   stampsPostageService,
@@ -151,6 +152,14 @@ export function StampsAddFundsDialog({ account, onClose }: {
         ? `Added ${usd(amount)}. New balance ${usd(next.available)}.`
         : `Added ${usd(amount)}.`)
     } catch (e) {
+      // Rotate the (spent) key only when the charge definitely did NOT happen:
+      // a client-side rejection (4xx), or a carrier rejection the backend tagged
+      // CARRIER_FAILURE (Stamps responded "no"). A bare 5xx / network error is an
+      // unknown outcome — keep the key so the retry is idempotent against a
+      // charge that may still be in flight (avoids a double top-up).
+      if (e instanceof ApiError && (e.status < 500 || e.errorCode === 'CARRIER_FAILURE')) {
+        requestKey.current = null
+      }
       setError(errorText(e))
     } finally {
       setBusy(false)

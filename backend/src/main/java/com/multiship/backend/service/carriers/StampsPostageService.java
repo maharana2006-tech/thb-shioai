@@ -1,5 +1,7 @@
 package com.multiship.backend.service.carriers;
 
+import com.multiship.backend.dto.ErrorCode;
+import com.multiship.backend.exception.CodedStatusException;
 import com.multiship.backend.model.CarrierAccountRef;
 import com.multiship.backend.model.StampsFunding;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
@@ -148,7 +150,10 @@ public class StampsPostageService {
                         : "Stamps.com refused a " + money(amt) + " top-up: " + row.getMessage());
         log.info("Stamps.com add-funds: account #{} +{} → {}", accountId, amt, row.getStatus());
         if (!ok) {
-            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+            // Stamps responded with a rejection — the charge definitely did not
+            // happen (row settled FAILED). CARRIER_FAILURE tells the client this
+            // outcome is final, so it can safely retry with a fresh key.
+            throw new CodedStatusException(HttpStatus.BAD_GATEWAY, ErrorCode.CARRIER_FAILURE,
                     "Stamps.com didn't add the funds: " + row.getMessage());
         }
         return new AddFundsResult(toRow(row), new Balance(r.amountAvailable(), r.maxBalance(), r.currency()));
@@ -174,7 +179,7 @@ public class StampsPostageService {
 
     private AddFundsResult replay(StampsFunding earlier) {
         if (StampsFunding.FAILED.equals(earlier.getStatus())) {
-            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+            throw new CodedStatusException(HttpStatus.BAD_GATEWAY, ErrorCode.CARRIER_FAILURE,
                     "Stamps.com didn't add the funds: " + earlier.getMessage());
         }
         return new AddFundsResult(toRow(earlier), null);
@@ -197,8 +202,10 @@ public class StampsPostageService {
         StampsSeraOAuthService.TokenExchangeResult t = oauthService.refreshToken(account.getStampsRefreshToken(),
                 account.getClientId(), account.getClientSecret(), account.getEnvironment());
         if (!t.success()) {
-            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Stamps.com didn't accept this account's "
-                    + "authorization (" + t.errorMessage() + "). Click \"Authorize with Stamps.com\" again.");
+            // Auth failed before any charge — definite no-charge, so tag it final.
+            throw new CodedStatusException(HttpStatus.BAD_GATEWAY, ErrorCode.CARRIER_FAILURE,
+                    "Stamps.com didn't accept this account's authorization (" + t.errorMessage()
+                    + "). Click \"Authorize with Stamps.com\" again.");
         }
         return t.accessToken();
     }

@@ -329,7 +329,11 @@ export default function DtcSchedulerPage() {
         const draft = drafts[job.jobKey]
         if (!draft) return null
         const dirty = dirtyKeys.includes(job.jobKey)
-        const numericParams = Object.entries(draft.params).filter(([, v]) => typeof v === 'number')
+        // Keys come from the saved job (stable) so a field stays visible after
+        // it's cleared; the current (possibly null) value is read from the draft.
+        const numericParams = Object.keys(job.params)
+          .filter((k) => typeof job.params[k] === 'number' || job.params[k] === null)
+          .map((k) => [k, draft.params[k]] as const)
         const grid = weekGrid(draft.windows)
         return (
           <section key={job.jobKey} className="rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -518,9 +522,11 @@ export default function DtcSchedulerPage() {
                 {numericParams.map(([k, v]) => (
                   <label key={k} className="text-[11px] font-semibold text-slate-500">
                     {paramLabel(k)}
-                    <input type="number" min={1} className={`${inputCls} mt-0.5 w-28`} value={v as number}
+                    <input type="number" min={1} className={`${inputCls} mt-0.5 w-28`}
+                           value={typeof v === 'number' ? v : ''}
+                           placeholder={typeof job.params[k] === 'number' ? `${job.params[k]} (default)` : 'Default'}
                            onChange={(e) => setDraft(job.jobKey, {
-                             params: { ...draft.params, [k]: e.target.value === '' ? 0 : Number(e.target.value) },
+                             params: { ...draft.params, [k]: e.target.value === '' ? null : Number(e.target.value) },
                            })} />
                   </label>
                 ))}
@@ -556,6 +562,8 @@ export default function DtcSchedulerPage() {
 const PARAM_LABELS: Record<string, string> = {
   lookbackHours: 'Only lines from the last (hours)',
   maxBatchesPerRun: 'Max batches per run',
+  thresholdUsd: 'Threshold (USD)',
+  refillUsd: 'Refill (USD)',
 }
 
 /** Empty selection = every tenant (the DTC_LABELS default). */

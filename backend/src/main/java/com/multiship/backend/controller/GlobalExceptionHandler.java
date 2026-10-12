@@ -177,10 +177,13 @@ public class GlobalExceptionHandler {
             org.springframework.web.server.ResponseStatusException ex) {
         int code = ex.getStatusCode().value();
         log.debug("Deliberate {} from a controller: {}", code, ex.getReason());
+        String errorCode = ex instanceof com.multiship.backend.exception.CodedStatusException coded
+                && coded.getErrorCode() != null
+                ? coded.getErrorCode().name() : HttpStatus.valueOf(code).name();
         return ResponseEntity.status(code).body(ApiResponse.<Void>builder()
                 .status("error").code(code)
                 .message(ex.getReason() != null ? ex.getReason() : "Request refused.")
-                .errorCode(HttpStatus.valueOf(code).name())
+                .errorCode(errorCode)
                 .build());
     }
 
