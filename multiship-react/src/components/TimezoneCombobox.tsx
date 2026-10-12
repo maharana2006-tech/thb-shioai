@@ -32,6 +32,18 @@ interface TimezoneOption {
 // API supported in every evergreen browser since ~2022; the try/catch
 // fallback keeps the component safe on older engines (input still
 // works as a plain text field with the Detect button as the only picker).
+// BUG-027: pairs of lower-case tzdata city segments (modern <-> legacy).
+// Query containing one is also searched against the other. Expand as new
+// renames surface; the IANA tzdata changelog is the source of truth.
+const TZ_ALIASES: ReadonlyArray<readonly [string, string]> = [
+  ['kolkata', 'calcutta'],
+  ['kyiv', 'kiev'],
+  ['yangon', 'rangoon'],
+  ['thimphu', 'thimbu'],
+  ['ho_chi_minh', 'saigon'],
+  ['uzhhorod', 'uzhgorod'],
+]
+
 const RAW_ZONES: string[] = (() => {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Intl.supportedValuesOf isn't in older TS lib defs.
@@ -99,7 +111,20 @@ export function TimezoneCombobox({
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     if (!q) return options
-    return options.filter((o) => o.id.toLowerCase().includes(q))
+    // BUG-027 — some browser tz tables ship the legacy spelling while
+    // operators type the modern one (or vice versa). Expand the query
+    // to any known alias so 'Kolkata'/'Calcutta', 'Kyiv'/'Kiev',
+    // 'Yangon'/'Rangoon', 'Thimphu'/'Thimbu' all find the same zone.
+    const expanded = new Set<string>([q])
+    for (const [a, b] of TZ_ALIASES) {
+      if (q.includes(a)) expanded.add(q.replace(a, b))
+      if (q.includes(b)) expanded.add(q.replace(b, a))
+    }
+    return options.filter((o) => {
+      const lower = o.id.toLowerCase()
+      for (const term of expanded) if (lower.includes(term)) return true
+      return false
+    })
   }, [options, query])
 
   useEffect(() => {
