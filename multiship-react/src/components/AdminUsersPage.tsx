@@ -384,13 +384,24 @@ export default function AdminUsersPage() {
                       Reset password
                     </button>
                   ) : null}
+                  {/* BUG-051: don't let an admin deactivate their own row —
+                      self-fire is already guarded by the self-confirm prompt
+                      + the backend's last-admin check, but when the current
+                      user IS the sole admin they can still open the prompt
+                      and see a confusing error. Disable the button for self.
+                      Reactivate stays available if someone else deactivated
+                      the row and the admin is self-reactivating (edge case). */}
                   <button
                     onClick={() => toggleActive(u)}
+                    disabled={Boolean(isSelf) && !u.deactivatedAt}
+                    title={isSelf && !u.deactivatedAt
+                      ? "You can't deactivate your own account — ask another admin."
+                      : undefined}
                     className={`rounded-md px-2 py-1 text-[12px] ${
                       u.deactivatedAt
                         ? 'border border-emerald-300 text-emerald-700 hover:bg-emerald-50'
                         : 'border border-red-300 text-red-700 hover:bg-red-50'
-                    }`}
+                    } disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent`}
                   >
                     {u.deactivatedAt ? 'Reactivate' : 'Deactivate'}
                   </button>
