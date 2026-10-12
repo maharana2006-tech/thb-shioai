@@ -1058,6 +1058,49 @@ public class ShipmentValidationService {
         // right row.
         java.util.List<ManualShipmentRequest.Item> items = req.getItems();
         if (items == null || items.isEmpty()) return; // IntlShipmentValidator flags commodities.empty
+
+        // BUG-002 — USPS MPS international: carrier requires customs lines
+        // on EVERY piece, but the "Spread items across N boxes" button
+        // can leave a piece empty if the operator removes assignments.
+        // Pre-flight guard: when international + 2+ boxes, every box must
+        // have at least one item (boxSeq=N). Pre-fix the first piece
+        // bought successfully and the second piece failed "Missing customs
+        // lines", leaving the shipment partially booked.
+        int boxCount = req.getPackages() == null ? 0 : req.getPackages().size();
+        if (boxCount >= 2) {
+            boolean[] boxHasItem = new boolean[boxCount + 1]; // 1-based
+            boolean anyUnassigned = false;
+            for (ManualShipmentRequest.Item it : items) {
+                if (it == null) continue;
+                Integer bs = it.getBoxSeq();
+                if (bs == null || bs < 1 || bs > boxCount) {
+                    anyUnassigned = true;
+                } else {
+                    boxHasItem[bs] = true;
+                }
+            }
+            if (anyUnassigned) {
+                // Any item lacking boxSeq means we can't tell which box
+                // should carry it. Spread + unassigned is operator-visible
+                // on the FE; still flag so the carrier hop doesn't 500.
+                errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                        "One or more items don't have a box assigned. "
+                                + "Click 'Spread across " + boxCount + " boxes' "
+                                + "or set Pkg# on each item.",
+                        "items"));
+            } else {
+                for (int b = 1; b <= boxCount; b++) {
+                    if (!boxHasItem[b]) {
+                        errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                                "Box " + b + " has no customs lines. "
+                                        + "Every box in a multi-box international "
+                                        + "shipment needs at least one item — "
+                                        + "redistribute items or remove the box.",
+                                "packages[" + (b - 1) + "]"));
+                    }
+                }
+            }
+        }
         boolean canSpreadWeight = req.getWeight() != null && req.getWeight().signum() > 0;
         for (int i = 0; i < items.size(); i++) {
             ManualShipmentRequest.Item it = items.get(i);
