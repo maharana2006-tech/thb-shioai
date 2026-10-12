@@ -39,10 +39,13 @@ export interface CarrierAccountRule {
 
 export const CARRIER_ACCOUNT_RULES: Record<CarrierCode, CarrierAccountRule> = {
   UPS: {
-    maxLength: 6,
-    placeholder: '6-digit UPS shipper number',
-    pattern: '[A-Za-z0-9]{6}',
-    helper: 'UPS shipper numbers are exactly 6 alphanumerics.',
+    // BUG-029 — the Yup validation accepts 6-10 chars but this rule's
+    // helper + pattern claimed "exactly 6", causing a validator vs
+    // hint mismatch. UPS shipper numbers are 6-10 alphanumerics.
+    maxLength: 10,
+    placeholder: '6–10 letters or digits (UPS shipper #)',
+    pattern: '[A-Za-z0-9]{6,10}',
+    helper: 'UPS shipper numbers are 6–10 letters or digits.',
   },
   FEDEX: {
     maxLength: 12,
