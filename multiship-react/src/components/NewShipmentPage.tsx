@@ -1303,6 +1303,9 @@ export default function NewShipmentPage() {
     // operator already picked instead of silently blanking it.
     setLabelImageType((cur) => matchedAccount?.labelImageType ?? cur)
     setLabelStockType((cur) => matchedAccount?.labelStockType ?? cur)
+    // BUG-020 — handled in a separate effect below; this account-switch
+    // path keeps the saved stock type verbatim so the operator's account
+    // defaults aren't overwritten here.
     setLabelImageFormat((cur) => matchedAccount?.labelImageFormat ?? cur)
     setPickupType(matchedAccount?.pickupType ?? 'USE_SCHEDULED_PICKUP')
     setReasonForExport(matchedAccount?.shippingPurpose ?? '')
@@ -1311,6 +1314,21 @@ export default function NewShipmentPage() {
     setClearanceOption(saved && allowed.some((o) => o.value === saved) ? saved : '')
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [matchedAccount, carrier])
+
+  // BUG-020 — Label size should track Label type for FedEx: switching
+  // to PDF/PNG implies paper stock, switching back to ZPLII implies
+  // thermal stock. Only auto-flip when the current value is in the
+  // other family so the operator's custom pick isn't blown away.
+  useEffect(() => {
+    const type = (labelImageType ?? '').toUpperCase()
+    const stock = (labelStockType ?? '').toUpperCase()
+    if ((type === 'PDF' || type === 'PNG') && stock.startsWith('STOCK_')) {
+      setLabelStockType('PAPER_4X6')
+    } else if (type === 'ZPLII' && stock.startsWith('PAPER_')) {
+      setLabelStockType('STOCK_4X6')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only fires on labelImageType change; reading stock here would re-trigger ourselves
+  }, [labelImageType])
 
   /**
    * Which label fields are required-but-blank for the currently-picked
