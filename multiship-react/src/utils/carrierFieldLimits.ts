@@ -84,7 +84,11 @@ export interface AddressCaps {
 }
 
 export const CARRIER_ADDRESS_CAPS: Record<CarrierCode, AddressCaps> = {
-  UPS: { name: 35, line: 35, city: 30, state: 5, zip: 9, phone: 15 },
+  // BUG-028: UPS zip raised 9 → 10 so ZIP+4 "12345-6789" fits in the input.
+  // UPS Ship API wants 9 digits no separator; the connector strips the dash
+  // before send. Previously the intersection (min across UPS+USPS) capped
+  // the Return address at 9, truncating the dashed form on type.
+  UPS: { name: 35, line: 35, city: 30, state: 5, zip: 10, phone: 15 },
   FEDEX: { name: 70, line: 35, city: 35, state: 5, zip: 16, phone: 15 },
   USPS: { name: 40, line: 40, city: 40, state: 2, zip: 10, phone: 30 },
   DHL: { name: 60, line: 45, city: 45, state: 35, zip: 12, phone: 25 },
