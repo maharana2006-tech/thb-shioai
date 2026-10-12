@@ -4688,9 +4688,17 @@ export default function NewShipmentPage() {
                       <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-amber-700">
                         Overridden · this shipment
                       </span>
-                    ) : (
+                    ) : activeParties ? (
+                      // BUG-010: only show the "Resolved" badge when a profile
+                      // actually covers destCountry. Pre-fix the badge rendered
+                      // next to the "No importer/broker profile covers MX"
+                      // warning, which was contradictory.
                       <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-sky-700">
                         Resolved for {destCountry || '—'}
+                      </span>
+                    ) : (
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-slate-600">
+                        Not configured
                       </span>
                     )}
                     <button
