@@ -104,7 +104,8 @@ public class AdminUserController {
                     + "stored email. Returns 200 on success, 404 if the id is unknown or the "
                     + "user has no email on file.")
     @PostMapping("/{id}/send-password-reset")
-    public ResponseEntity<ApiResponse<Void>> sendPasswordReset(@PathVariable Long id) {
+    public ResponseEntity<ApiResponse<Void>> sendPasswordReset(@PathVariable Long id,
+            @AuthenticationPrincipal UserDetails actor) {
         if (passwordService == null) {
             return ResponseEntity.status(503).body(ApiResponse.<Void>builder()
                     .status("ERROR").code(503).errorCode(ErrorCode.VALIDATION_ERROR.name())
@@ -118,6 +119,8 @@ public class AdminUserController {
                     .message("User " + id + " was not found, or has no email on file.")
                     .timestamp(LocalDateTime.now()).build());
         }
+        // BUG-052 — record the admin action so Recent-admin-actions reflects it.
+        adminUserService.recordPasswordResetSent(id, actor != null ? actor.getUsername() : "system");
         return ResponseEntity.ok(ApiResponse.<Void>builder()
                 .status("SUCCESS").code(200)
                 .message("Password-reset link emailed to the user.")

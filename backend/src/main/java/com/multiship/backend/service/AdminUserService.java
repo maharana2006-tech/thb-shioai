@@ -343,6 +343,28 @@ public class AdminUserService {
                 .toList();
     }
 
+    /** BUG-052 — admin-triggered password-reset leaves no audit trail
+     *  pre-fix. Call this from the controller after the mail provider
+     *  accepts the reset-link request so Recent-admin-actions reflects
+     *  the admin action. Null username → "system" (unauthenticated
+     *  callers shouldn't reach here anyway via @PreAuthorize ADMIN). */
+    @Transactional
+    public void recordPasswordResetSent(Long userId, String actorUsername) {
+        Optional<User> found = userRepository.findById(userId);
+        if (found.isEmpty()) return;
+        User u = found.get();
+        auditRepository.save(UserAdminAudit.builder()
+                .subjectUserId(u.getId())
+                .subjectUsername(u.getUsername())
+                .action("PASSWORD_RESET_SENT")
+                .oldClientCode(u.getClientCode())
+                .newClientCode(u.getClientCode())
+                .actorUsername(actorUsername == null ? "system" : actorUsername)
+                .reason(null)
+                .createdAt(LocalDateTime.now())
+                .build());
+    }
+
     private static AdminUserDTO toDTO(User u) {
         return AdminUserDTO.builder()
                 .id(u.getId())
