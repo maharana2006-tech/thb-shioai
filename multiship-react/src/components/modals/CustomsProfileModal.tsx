@@ -868,11 +868,43 @@ export default function CustomsProfileModal({
 
   if (asPage) return card
   return (
+    <ModalShell onClose={onClose}>{card}</ModalShell>
+  )
+}
+
+/** BUG-024 — backdrop click used to call onClose directly, which lost
+ *  typed data (e.g. a half-filled importer profile). Esc did nothing.
+ *  Shell now:
+ *    - swallows backdrop clicks on the inner card (stopPropagation);
+ *    - only closes on backdrop click when the operator confirms;
+ *    - wires Escape to the same confirm so Esc isn't dead. */
+function ModalShell({
+  onClose,
+  children,
+}: {
+  onClose: () => void
+  children: React.ReactNode
+}) {
+  const confirmClose = () => {
+    // Lightweight guard: a native confirm is clumsy but keeps the fix
+    // boundary tiny. If the operator wants to resume the draft, they
+    // tap Cancel on the confirm and the dialog stays open.
+    if (window.confirm('Discard this draft and close?')) onClose()
+  }
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') confirmClose()
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-[#1f150c]/45 p-4 backdrop-blur-sm"
-      onClick={onClose}
+      onClick={confirmClose}
     >
-      {card}
+      <div onClick={(e) => e.stopPropagation()}>{children}</div>
     </div>
   )
 }

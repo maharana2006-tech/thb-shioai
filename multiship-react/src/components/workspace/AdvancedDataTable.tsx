@@ -385,7 +385,19 @@ export default function AdvancedDataTable<T extends RowData>({
     () => persisted?.columnSizing ?? {},
   )
   const [columnPinning, setColumnPinning] = useState<ColumnPinningState>(
-    () => persisted?.columnPinning ?? { start: [], end: [] },
+    () => {
+      if (persisted?.columnPinning) return persisted.columnPinning
+      // BUG-025: auto-pin columns marked meta.pinnedByDefault='end' so the
+      // row-actions column stays visible when the table scrolls horizontally
+      // on narrow viewports. Operator can still unpin via the Columns menu.
+      const end: string[] = []
+      for (const col of columns) {
+        const id = (col as { id?: string }).id ?? (col as { accessorKey?: string }).accessorKey
+        const meta = (col as { meta?: { pinnedByDefault?: 'start' | 'end' } }).meta
+        if (meta?.pinnedByDefault === 'end' && id) end.push(id)
+      }
+      return { start: [], end }
+    },
   )
   const [density, setDensity] = useState<Density>(persisted?.density ?? initialDensity)
   const [openMenu, setOpenMenu] = useState<null | 'columns' | 'density'>(null)
@@ -481,6 +493,11 @@ export default function AdvancedDataTable<T extends RowData>({
       pagination: { pageIndex: currentPageIndex, pageSize: currentPageSize },
     },
     manualSorting,
+    // BUG-026 — TanStack's default sort cycle (asc → desc → unsorted)
+    // let the operator click past the two visible arrow states into a
+    // 'no arrow' third state, while the data layer kept the previous
+    // sort. Disable removal so the cycle is just asc ↔ desc.
+    enableSortingRemoval: false,
     manualPagination,
     pageCount: manualPagination ? pageCountProp ?? -1 : undefined,
     onSortingChange: (updater) => {
@@ -770,15 +787,32 @@ export default function AdvancedDataTable<T extends RowData>({
                           <FiChevronDown className="h-2.5 w-2.5" />
                         </button>
                       </div>
-                      <label className="flex flex-1 cursor-pointer items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={col.getIsVisible()}
-                          onChange={col.getToggleVisibilityHandler()}
-                          className="h-3.5 w-3.5 accent-[#412d15]"
-                        />
-                        {label}
-                      </label>
+                      {/* BUG-023 — don't let the operator untick the last
+                          visible column, which would leave blank rows with
+                          only the row menu. Disable the uncheck when this
+                          column is the sole visible one. */}
+                      {(() => {
+                        const visibleCount = idToCol.size
+                          ? orderedIds.reduce((n, cid) => {
+                              const c = idToCol.get(cid)
+                              return c && c.getIsVisible() ? n + 1 : n
+                            }, 0)
+                          : 0
+                        const isLastVisible = col.getIsVisible() && visibleCount <= 1
+                        return (
+                          <label className="flex flex-1 cursor-pointer items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={col.getIsVisible()}
+                              onChange={col.getToggleVisibilityHandler()}
+                              disabled={isLastVisible}
+                              title={isLastVisible ? 'At least one column must stay visible' : undefined}
+                              className="h-3.5 w-3.5 accent-[#412d15] disabled:cursor-not-allowed disabled:opacity-50"
+                            />
+                            {label}
+                          </label>
+                        )
+                      })()}
                       <button
                         type="button"
                         onClick={() => cyclePin(col)}

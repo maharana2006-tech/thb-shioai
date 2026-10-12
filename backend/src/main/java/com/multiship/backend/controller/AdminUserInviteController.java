@@ -43,6 +43,11 @@ public class AdminUserInviteController {
      *  Set.of("USER","TENANT") lives inside the service as the bootstrap
      *  default, so first boot + DB outage still accept the same two codes. */
     private final RolePlatformService rolePlatformService;
+    /** BUG-050 — audit the invite mint via the admin-user service's
+     *  recordInviteSent helper. @Autowired(required=false) so pure-Mockito
+     *  constructor-arg tests built pre-fix still compile. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.AdminUserService adminUserService;
 
     /**
      * Base URL the invite-accept link points at. Defaults to the
@@ -74,6 +79,13 @@ public class AdminUserInviteController {
         String baseUrl = resolveBaseUrl(request);
         UserInvite invite = inviteService.mint(req.getEmail(), clientCode, role,
                 admin != null ? admin.getUsername() : "system", baseUrl);
+
+        // BUG-050 — record the mint on user_admin_audit so Recent-admin-actions
+        // shows the invite. subject_user_id is null (invitee not yet a user row).
+        if (adminUserService != null) {
+            adminUserService.recordInviteSent(req.getEmail(), clientCode,
+                    admin != null ? admin.getUsername() : "system");
+        }
 
         UserInviteResponse body = UserInviteResponse.of(invite,
                 baseUrl + "/invite/" + invite.getToken());

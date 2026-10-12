@@ -442,7 +442,7 @@ export default function ClientsPage() {
             />
           </div>
         ),
-        meta: { headerLabel: 'Actions', hideable: false, exportable: false },
+        meta: { headerLabel: 'Actions', hideable: false, exportable: false, pinnedByDefault: 'end' },
       },
     ],
     // Handlers close over admin + refresh + toggle/delete which are stable

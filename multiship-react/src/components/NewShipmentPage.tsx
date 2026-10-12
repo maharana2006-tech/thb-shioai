@@ -1303,6 +1303,9 @@ export default function NewShipmentPage() {
     // operator already picked instead of silently blanking it.
     setLabelImageType((cur) => matchedAccount?.labelImageType ?? cur)
     setLabelStockType((cur) => matchedAccount?.labelStockType ?? cur)
+    // BUG-020 — handled in a separate effect below; this account-switch
+    // path keeps the saved stock type verbatim so the operator's account
+    // defaults aren't overwritten here.
     setLabelImageFormat((cur) => matchedAccount?.labelImageFormat ?? cur)
     setPickupType(matchedAccount?.pickupType ?? 'USE_SCHEDULED_PICKUP')
     setReasonForExport(matchedAccount?.shippingPurpose ?? '')
@@ -1311,6 +1314,21 @@ export default function NewShipmentPage() {
     setClearanceOption(saved && allowed.some((o) => o.value === saved) ? saved : '')
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [matchedAccount, carrier])
+
+  // BUG-020 — Label size should track Label type for FedEx: switching
+  // to PDF/PNG implies paper stock, switching back to ZPLII implies
+  // thermal stock. Only auto-flip when the current value is in the
+  // other family so the operator's custom pick isn't blown away.
+  useEffect(() => {
+    const type = (labelImageType ?? '').toUpperCase()
+    const stock = (labelStockType ?? '').toUpperCase()
+    if ((type === 'PDF' || type === 'PNG') && stock.startsWith('STOCK_')) {
+      setLabelStockType('PAPER_4X6')
+    } else if (type === 'ZPLII' && stock.startsWith('PAPER_')) {
+      setLabelStockType('STOCK_4X6')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only fires on labelImageType change; reading stock here would re-trigger ourselves
+  }, [labelImageType])
 
   /**
    * Which label fields are required-but-blank for the currently-picked
@@ -2891,6 +2909,18 @@ export default function NewShipmentPage() {
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
   }, [formHasWork, submitting])
+
+  // BUG-014: the sticky Validate/Generate footer is ~96 px above the viewport
+  // bottom; the default toast position (bottom-4 = 1rem) sits directly over
+  // the buttons. Lift the toast stack above the footer while this page is
+  // mounted and restore on unmount so other pages keep the default.
+  useEffect(() => {
+    document.documentElement.style.setProperty('--toast-bottom', '7rem')
+    return () => {
+      document.documentElement.style.removeProperty('--toast-bottom')
+    }
+  }, [])
+
   const leaveForm = async () => {
     if (formHasWork && !(await notify.confirm(
       "This shipment hasn't been created yet. Leave and lose what you've entered?",
@@ -4670,9 +4700,17 @@ export default function NewShipmentPage() {
                       <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-amber-700">
                         Overridden · this shipment
                       </span>
-                    ) : (
+                    ) : activeParties ? (
+                      // BUG-010: only show the "Resolved" badge when a profile
+                      // actually covers destCountry. Pre-fix the badge rendered
+                      // next to the "No importer/broker profile covers MX"
+                      // warning, which was contradictory.
                       <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-sky-700">
                         Resolved for {destCountry || '—'}
+                      </span>
+                    ) : (
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-slate-600">
+                        Not configured
                       </span>
                     )}
                     <button
@@ -4869,6 +4907,7 @@ export default function NewShipmentPage() {
                     weightUnit={weightUnit}
                     autoItemWeight={autoItemWeight}
                     hsPlaceholder={hsExampleFor(destCountry)}
+                    destCountry={destCountry}
                   />
 
                   {/* invoice total */}
@@ -5075,6 +5114,18 @@ export default function NewShipmentPage() {
           importer={editorSeed.importer}
           broker={editorSeed.broker}
           destCountry={destCountry}
+          // BUG-021 — pass the ship-to so Type=Receiver can autofill.
+          recipient={{
+            name: recipient.name ?? '',
+            phone: recipient.phone ?? '',
+            email: recipient.email ?? '',
+            addressLine1: recipient.addressLine1 ?? '',
+            addressLine2: recipient.addressLine2 ?? '',
+            city: recipient.city ?? '',
+            state: recipient.state ?? '',
+            postalCode: recipient.postalCode ?? '',
+            countryCode: recipient.countryCode ?? '',
+          }}
           onClose={() => setOverrideEditorOpen(false)}
           onSave={(importer, broker) => {
             setOverride({ importer, broker })
@@ -5178,6 +5229,7 @@ export function VirtualizedNewShipmentItems({
   weightUnit,
   autoItemWeight,
   hsPlaceholder,
+  destCountry,
 }: {
   items: NewShipmentItemRow[]
   patchItem: (i: number, patch: Partial<NewShipmentItemRow>) => void
@@ -5193,6 +5245,8 @@ export function VirtualizedNewShipmentItems({
   autoItemWeight: (it: NewShipmentItemRow) => number
   /** Destination-aware HS example (hsExampleFor) for the code placeholder. */
   hsPlaceholder?: string
+  /** BUG-011 — forwarded to each row's HsCodeCombobox for min-digit padding. */
+  destCountry?: string
 }) {
   const parentRef = useRef<HTMLDivElement>(null)
   // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Virtual's useVirtualizer() returns functions that cannot be memoized safely — library-level incompatibility with react-hooks analyzer, not a code issue
@@ -5242,6 +5296,7 @@ export function VirtualizedNewShipmentItems({
               weightUnit={weightUnit}
               autoItemWeight={autoItemWeight}
               hsPlaceholder={hsPlaceholder}
+              destCountry={destCountry}
             />
           </div>
         ))}
@@ -5263,6 +5318,7 @@ const NewShipmentItemsRow = memo(function NewShipmentItemsRow({
   weightUnit,
   autoItemWeight,
   hsPlaceholder,
+  destCountry,
 }: {
   index: number
   it: NewShipmentItemRow
@@ -5277,6 +5333,8 @@ const NewShipmentItemsRow = memo(function NewShipmentItemsRow({
   /** Destination-aware HS example (from hsExampleFor) so the placeholder
    *  never suggests a code the country-minimum rule would reject. */
   hsPlaceholder?: string
+  /** BUG-011 — passed through to HsCodeCombobox for min-digit padding. */
+  destCountry?: string
 }) {
   const patch = useCallback((delta: Partial<NewShipmentItemRow>) => patchItem(index, delta), [patchItem, index])
   const remove = useCallback(() => removeItem(index), [removeItem, index])
@@ -5294,6 +5352,7 @@ const NewShipmentItemsRow = memo(function NewShipmentItemsRow({
         <HsCodeCombobox
           value={it.hsCode}
           placeholder={hsPlaceholder}
+          destCountry={destCountry}
           onChange={(v) => patch({ hsCode: v })}
           onDescriptionSuggest={(desc) => {
             if (!it.description || !it.description.trim()) patch({ description: desc })

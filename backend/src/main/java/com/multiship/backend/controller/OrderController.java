@@ -1345,7 +1345,14 @@ public class OrderController {
                     + "feature flag is off or the carrier artifact isn't ZPL; FE "
                     + "falls back to its JSX facsimile.")
     @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
-    @GetMapping(value = "/{orderNo}/label/preview.png",
+    // BUG-015 — also serve HEAD so the FE's existence-probe doesn't get
+    // 503 from the dispatcher. Spring maps HEAD to GET automatically for
+    // explicitly-named methods; this entry declares both so Spring Security
+    // + the method-matcher short-circuit for HEAD stop at a cheap 200/404.
+    @org.springframework.web.bind.annotation.RequestMapping(
+            value = "/{orderNo}/label/preview.png",
+            method = { org.springframework.web.bind.annotation.RequestMethod.GET,
+                       org.springframework.web.bind.annotation.RequestMethod.HEAD },
             produces = org.springframework.http.MediaType.IMAGE_PNG_VALUE)
     public ResponseEntity<byte[]> getLabelPreviewPng(@PathVariable Integer orderNo,
             @org.springframework.web.bind.annotation.RequestParam(name = "pkg", required = false) Integer pkgIndex) {

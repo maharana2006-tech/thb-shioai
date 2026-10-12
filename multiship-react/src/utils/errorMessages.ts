@@ -179,7 +179,10 @@ export const errorMessages: Readonly<Record<string, FriendlyError>> = {
  *  exact gap and where to fix it) but whose toast deserved a better heading
  *  than the generic "Something went wrong" — e.g. the customs BN gate. */
 const errorTitles: Readonly<Record<string, string>> = {
-  VALIDATION_ERROR: 'This shipment needs attention',
+  // BUG-048 — the pre-fix wording was shipment-centric and leaked onto
+  // non-shipment forms (e.g. Invite user bad-email). Generic phrasing
+  // works for every form that uses VALIDATION_ERROR.
+  VALIDATION_ERROR: 'Check the form for errors',
   IMPORT_BATCH_STATE: 'Not available for this import',
   MALFORMED_REQUEST: 'Request not understood',
 }
@@ -193,8 +196,32 @@ export function getFriendlyError(
     return errorMessages[errorCode]
   }
   const title = errorCode ? errorTitles[errorCode] : undefined
-  if (serverMessage && serverMessage.trim().length > 0) {
-    return title ? { title, message: serverMessage } : { message: serverMessage }
+  // BUG-016 — strip the raw "HTTP error! status: NNN" prefix the fetch
+  // wrapper leaks when the backend returns a bare 5xx with no body.
+  // Map common infra statuses to operator-friendly text; everything else
+  // falls through to the (now trimmed) server message.
+  const clean = cleanServerMessage(serverMessage)
+  if (clean && clean.length > 0) {
+    return title ? { title, message: clean } : { message: clean }
   }
   return title ? { title, message: fallback } : { message: fallback }
+}
+
+/** BUG-016 helper — strip "HTTP error! status: NNN" and map 502/503/504
+ *  to a friendlier line. Returns the cleaned text (never null); empty
+ *  string signals "fall through to fallback". */
+function cleanServerMessage(raw?: string | null): string {
+  if (!raw) return ''
+  let s = raw.trim()
+  const match = s.match(/^HTTP error!\s*status:\s*(\d{3})\s*(.*)$/i)
+  if (match) {
+    const status = match[1]
+    const rest = (match[2] || '').trim()
+    if (status === '502' || status === '503' || status === '504') {
+      return 'Backend is temporarily unavailable — please try again in a moment.'
+    }
+    // Non-infra 4xx without a body: show status + any trailing text.
+    s = rest || `Request failed with status ${status}.`
+  }
+  return s
 }

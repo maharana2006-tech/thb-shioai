@@ -330,6 +330,18 @@ export default function ClientEditorPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fetch-on-mount + on-clientCode-change; loadPickWarehouses is defined inline and only reads editingCode via closure
   }, [editingCode])
 
+  // BUG-039 — the browser tab stayed on "multiship-react" (Vite default)
+  // regardless of which client the wizard was editing. Give it a clear
+  // title that includes the client code when known. Restored on unmount
+  // so other pages aren't stuck with a client-scoped title.
+  useEffect(() => {
+    const prev = document.title
+    document.title = editingCode
+      ? `${editingCode} — Client · Settings`
+      : 'New client · Settings'
+    return () => { document.title = prev }
+  }, [editingCode])
+
   // Pre-select the client's default attached warehouse in edit mode so the
   // Ship From picker isn't empty when reopening an existing client, AND
   // record the full attached-id set so the picker can filter them out (only
@@ -579,9 +591,14 @@ export default function ClientEditorPage() {
    * DB-column defaults (empty carrier set) rather than intersecting
    * enabled-carrier caps.
    */
+  // BUG-033 — return address was validated against the loose DB defaults
+  // (empty-carriers intersection) while ship-from used the real carrier
+  // intersection, so a client without a USPS account on create saw "max
+  // 5 chars" where edit saw "max 2 chars". Return address is sent to the
+  // same carriers as ship-from on returns, so share the same cap.
   const returnAddressCaps = useMemo<AddressCaps>(
-    () => intersectionAddressCaps([]),
-    [],
+    () => intersectionAddressCaps(enabledCarrierCodes),
+    [enabledCarrierCodes],
   )
 
   const returnErrors = useMemo(() => {
@@ -932,8 +949,11 @@ export default function ClientEditorPage() {
       // doesn't seed markup) but we guard on hasBillingMarkup=false so a
       // future default-seeder wouldn't false-fire this toast.
       if (response.data.hasBillingMarkup === false) {
+        // BUG-032 — pre-fix the raw code "MARKUP_REQUIRED_FOR_CLIENT"
+        // leaked into the operator-visible toast. Keep the operator-
+        // facing wording free of internal error codes.
         notify.info(
-          `Set a billing markup for ${response.data.clientCode} on the Markup tab before generating labels — MARKUP_REQUIRED_FOR_CLIENT will otherwise reject every label call for this client.`,
+          `Set a billing markup for ${response.data.clientCode} on the Markup tab before generating labels — otherwise every label call for this client will be rejected until one is configured.`,
         )
       }
 

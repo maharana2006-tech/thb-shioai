@@ -25,6 +25,14 @@ export default function AdminUsersPage() {
   const [clientOptions, setClientOptions] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  // BUG-047 — debounce the search input so every keystroke doesn't fire
+  // two network requests (users list + audit reload). 350 ms matches
+  // WarehousesPage.
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 350)
+    return () => clearTimeout(t)
+  }, [search])
   const [roleFilter, setRoleFilter] = useState('')
   const [activeOnly, setActiveOnly] = useState(false)
   const [assignFor, setAssignFor] = useState<AdminUser | null>(null)
@@ -42,7 +50,7 @@ export default function AdminUsersPage() {
     try {
       const [userRes, auditRes] = await Promise.all([
         adminUserService.list({
-          search: search || undefined,
+          search: debouncedSearch || undefined,
           role: roleFilter || undefined,
           activeOnly: activeOnly || undefined,
           page,
@@ -57,14 +65,14 @@ export default function AdminUsersPage() {
     } finally {
       setLoading(false)
     }
-  }, [search, roleFilter, activeOnly, page, size])
+  }, [debouncedSearch, roleFilter, activeOnly, page, size])
 
   // Snap back to page 0 whenever a filter or page-size changes so the
   // operator doesn't land on an empty page after narrowing the result set.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- reset paging on filter change; user-input-driven, not derivable at render
     setPage(0)
-  }, [search, roleFilter, activeOnly, size])
+  }, [debouncedSearch, roleFilter, activeOnly, size])
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount / filter change; load() sets loading + result state
   useEffect(() => { void load() }, [load])
@@ -219,9 +227,7 @@ export default function AdminUsersPage() {
             Users
           </h2>
           <p className="mt-1 text-[12.5px] text-slate-500">
-            Manage user accounts, assign each USER to a client, and revoke access. Sprint 50
-            rollout: every legacy USER should be assigned a client before the tenant-scope
-            flag is flipped.
+            Manage user accounts, assign each USER to a client, and revoke access.
           </p>
         </div>
         {/* Fix #294 — invite modal launcher. Wires the existing
@@ -384,13 +390,24 @@ export default function AdminUsersPage() {
                       Reset password
                     </button>
                   ) : null}
+                  {/* BUG-051: don't let an admin deactivate their own row —
+                      self-fire is already guarded by the self-confirm prompt
+                      + the backend's last-admin check, but when the current
+                      user IS the sole admin they can still open the prompt
+                      and see a confusing error. Disable the button for self.
+                      Reactivate stays available if someone else deactivated
+                      the row and the admin is self-reactivating (edge case). */}
                   <button
                     onClick={() => toggleActive(u)}
+                    disabled={Boolean(isSelf) && !u.deactivatedAt}
+                    title={isSelf && !u.deactivatedAt
+                      ? "You can't deactivate your own account — ask another admin."
+                      : undefined}
                     className={`rounded-md px-2 py-1 text-[12px] ${
                       u.deactivatedAt
                         ? 'border border-emerald-300 text-emerald-700 hover:bg-emerald-50'
                         : 'border border-red-300 text-red-700 hover:bg-red-50'
-                    }`}
+                    } disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent`}
                   >
                     {u.deactivatedAt ? 'Reactivate' : 'Deactivate'}
                   </button>

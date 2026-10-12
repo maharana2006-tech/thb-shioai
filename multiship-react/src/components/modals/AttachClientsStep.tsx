@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { FiCheck, FiLink, FiSearch } from 'react-icons/fi'
 import { notify } from '../../utils/notify'
 import { clientService, type Client } from '../../api/clientService'
-import { clientWarehouseService, type Warehouse } from '../../api/warehouseService'
+import { clientWarehouseService, warehouseService, type Warehouse } from '../../api/warehouseService'
 
 /**
  * Pick clients to attach a warehouse to. Rendered inline inside a modal shell
@@ -34,26 +34,59 @@ export default function AttachClientsStep({
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [makeDefault, setMakeDefault] = useState(false)
   const [attaching, setAttaching] = useState(false)
+  // BUG-041 — set of client codes currently attached to this warehouse,
+  // loaded in parallel with the client list. Rows in this set render a
+  // "Attached" badge + Detach button instead of the Attach checkbox.
+  const [attachedCodes, setAttachedCodes] = useState<Set<string>>(new Set())
+  const [detachingCode, setDetachingCode] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
     // eslint-disable-next-line react-hooks/set-state-in-effect -- flip loading spinner before async client-list fetch
     setLoading(true)
-    clientService
-      .listClients({ size: 200, sortBy: 'code', sortDirection: 'ASC' })
-      .then((r) => {
+    Promise.all([
+      clientService.listClients({ size: 200, sortBy: 'code', sortDirection: 'ASC' }),
+      warehouseService.listAttachedClientCodes(warehouse.code),
+    ])
+      .then(([clientsRes, attachedRes]) => {
         if (cancelled) return
-        const all = r.data?.content ?? []
+        const all = clientsRes.data?.content ?? []
         setClients(
           ownerRestricted
             ? all.filter((c) => c.clientCode === warehouse.ownerClientCode)
             : all,
         )
+        setAttachedCodes(new Set(attachedRes.data ?? []))
       })
       .catch(() => { /* notify layer covers it */ })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [ownerRestricted, warehouse.ownerClientCode])
+  }, [ownerRestricted, warehouse.ownerClientCode, warehouse.code])
+
+  // BUG-041 — detach one client. Mutates attachedCodes in-place so the
+  // dialog reflects the change without a full reload.
+  const detach = async (clientCode: string) => {
+    if (detachingCode) return
+    const ok = await notify.confirm(
+      `Detach ${clientCode} from warehouse ${warehouse.code}?`,
+      { title: 'Detach client', confirmLabel: 'Detach', danger: true },
+    )
+    if (!ok) return
+    setDetachingCode(clientCode)
+    try {
+      await clientWarehouseService.detach(clientCode, warehouse.code)
+      setAttachedCodes((prev) => {
+        const next = new Set(prev)
+        next.delete(clientCode)
+        return next
+      })
+      notify.success(`Detached ${clientCode}.`)
+    } catch (error) {
+      notify.apiError(error, `Could not detach ${clientCode}.`)
+    } finally {
+      setDetachingCode(null)
+    }
+  }
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -130,7 +163,33 @@ export default function AttachClientsStep({
         ) : (
           <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white">
             {filtered.map((c) => {
+              const isAttached = attachedCodes.has(c.clientCode)
               const checked = selected.has(c.clientCode)
+              // BUG-041 — attached rows show a badge + Detach button
+              // instead of the Attach checkbox. Non-attached rows keep the
+              // original checkbox/attach flow.
+              if (isAttached) {
+                return (
+                  <li key={c.clientCode} className="flex items-center gap-3 bg-emerald-50/40 px-3 py-2.5">
+                    <FiCheck className="h-4 w-4 text-emerald-600" />
+                    <span className="flex-1">
+                      <span className="block text-[13px] font-semibold text-slate-900">{c.clientCode}</span>
+                      <span className="block text-[11.5px] text-slate-500">{c.name}</span>
+                    </span>
+                    <span className="rounded-full border border-emerald-200 bg-emerald-100 px-2 py-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-emerald-700">
+                      Attached
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => detach(c.clientCode)}
+                      disabled={detachingCode === c.clientCode}
+                      className="rounded-lg border border-red-200 bg-white px-2 py-1 text-[11px] font-semibold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {detachingCode === c.clientCode ? 'Detaching…' : 'Detach'}
+                    </button>
+                  </li>
+                )
+              }
               return (
                 <li key={c.clientCode}>
                   <label className="flex cursor-pointer items-center gap-3 px-3 py-2.5 transition hover:bg-slate-50">

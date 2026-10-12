@@ -114,9 +114,10 @@ export default function CarrierShippingLimitsPage() {
           </h2>
           <p className="mt-1 text-[12.5px] text-slate-500">
             Per-carrier / per-service caps on packages, commodities, weight and free declared
-            value. Sprint 52 direction-aware (FORWARD / RETURN); the shipment-create resolver
+            value. Direction-aware (FORWARD / RETURN); the shipment-create resolver
             picks the most specific match and falls back to a high default when unset. Every
-            edit invalidates the 5-min in-memory cache so it takes effect on the next call.
+            edit takes effect on the next shipment call (short in-memory cache invalidates
+            automatically).
           </p>
         </div>
         <button

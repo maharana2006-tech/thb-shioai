@@ -66,7 +66,11 @@ export function CarrierDraftStep({
   removeDraft,
 }: CarrierDraftStepProps) {
   const [adding, setAdding] = useState(false)
-  const [f, setF] = useState<Omit<CarrierAccountDraft, 'id'>>({
+  // BUG-030: factored out so Cancel can reset to a clean draft instead of
+  // keeping the typed clientSecret in memory for the next Add. drafts.length
+  // snapshot is still ok — the only drift is whether this new entry defaults
+  // to clientDefault=true (first-account flag).
+  const blankDraft = (): Omit<CarrierAccountDraft, 'id'> => ({
     carrierCode: 'UPS',
     accountNumber: '',
     accountName: '',
@@ -84,6 +88,7 @@ export function CarrierDraftStep({
     thirdPartyPostcode: '',
     thirdPartyCountry: '',
   })
+  const [f, setF] = useState<Omit<CarrierAccountDraft, 'id'>>(blankDraft)
 
   const [touched, setTouched] = useState<Record<string, boolean>>({})
   const markTouched = (k: string) => setTouched((cur) => ({ ...cur, [k]: true }))
@@ -403,7 +408,9 @@ export function CarrierDraftStep({
           <div className="mt-3 flex items-center justify-end gap-2 border-t border-slate-100 pt-3">
             <button
               type="button"
-              onClick={() => { setTouched({}); setAdding(false) }}
+              // BUG-030 — reset the draft so clientSecret / clientId don't
+              // persist after Cancel. Reopening + Add starts clean.
+              onClick={() => { setTouched({}); setF(blankDraft()); setAdding(false) }}
               className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-600 transition hover:bg-slate-100"
             >
               Cancel
@@ -412,7 +419,15 @@ export function CarrierDraftStep({
               type="button"
               onClick={save}
               aria-disabled={!canSave}
-              title={!canSave ? 'Fix the highlighted fields to continue' : undefined}
+              // BUG-031: tooltip said "Fix the highlighted fields" before
+              // any field had been blurred (nothing highlighted). Pick a
+              // message that matches the current visibility state —
+              // highlights only exist after the operator has interacted.
+              title={!canSave
+                ? (Object.values(touched).some(Boolean)
+                    ? 'Fix the highlighted fields to continue'
+                    : 'Fill in the required fields to continue')
+                : undefined}
               className={`rounded-xl px-4 py-1.5 text-[12px] font-semibold text-white transition ${
                 canSave ? 'bg-[#1f150c] hover:bg-[#412d15]' : 'bg-slate-300'
               }`}

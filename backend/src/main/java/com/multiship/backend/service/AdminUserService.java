@@ -343,6 +343,47 @@ public class AdminUserService {
                 .toList();
     }
 
+    /** BUG-052 — admin-triggered password-reset leaves no audit trail
+     *  pre-fix. Call this from the controller after the mail provider
+     *  accepts the reset-link request so Recent-admin-actions reflects
+     *  the admin action. Null username → "system" (unauthenticated
+     *  callers shouldn't reach here anyway via @PreAuthorize ADMIN). */
+    @Transactional
+    public void recordPasswordResetSent(Long userId, String actorUsername) {
+        Optional<User> found = userRepository.findById(userId);
+        if (found.isEmpty()) return;
+        User u = found.get();
+        auditRepository.save(UserAdminAudit.builder()
+                .subjectUserId(u.getId())
+                .subjectUsername(u.getUsername())
+                .action("PASSWORD_RESET_SENT")
+                .oldClientCode(u.getClientCode())
+                .newClientCode(u.getClientCode())
+                .actorUsername(actorUsername == null ? "system" : actorUsername)
+                .reason(null)
+                .createdAt(LocalDateTime.now())
+                .build());
+    }
+
+    /** BUG-050 — invitation minted via AdminUserInviteController leaves
+     *  no audit trail. Record it so Recent-admin-actions shows the mint.
+     *  The invitee doesn't exist as a user row yet (lives in user_invites
+     *  until consumed), so subject_user_id is null + subject_username is
+     *  the invited email for traceability. */
+    @Transactional
+    public void recordInviteSent(String email, String clientCode, String actorUsername) {
+        auditRepository.save(UserAdminAudit.builder()
+                .subjectUserId(null)
+                .subjectUsername(email)
+                .action("INVITE_SENT")
+                .oldClientCode(null)
+                .newClientCode(clientCode)
+                .actorUsername(actorUsername == null ? "system" : actorUsername)
+                .reason(null)
+                .createdAt(LocalDateTime.now())
+                .build());
+    }
+
     private static AdminUserDTO toDTO(User u) {
         return AdminUserDTO.builder()
                 .id(u.getId())

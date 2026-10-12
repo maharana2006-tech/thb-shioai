@@ -34,16 +34,35 @@ export function toCents(input: string | number | null | undefined): number {
  * Format integer cents as a locale-aware currency string.
  * fromCents(1234, "USD") === "$12.34"; fromCents(1234, "INR") === "₹12.34" in en-IN.
  */
+// BUG-035 — formatting USD / EUR / GBP with the operator's browser locale
+// produced non-Western digit grouping (e.g. en-IN turns $250,000,000,024.75
+// into $2,50,00,00,00,024.75). Pin common western-settled currencies to a
+// locale that matches operator expectations; let INR legitimately render
+// Indian grouping; fall back to the browser locale only for currencies
+// without an obvious canonical display locale.
+const CURRENCY_LOCALE: Readonly<Record<string, string>> = {
+  USD: 'en-US',
+  EUR: 'de-DE',
+  GBP: 'en-GB',
+  AUD: 'en-AU',
+  CAD: 'en-CA',
+  INR: 'en-IN',
+  JPY: 'ja-JP',
+  CNY: 'zh-CN',
+}
+
 export function fromCents(cents: number, currency: string = 'USD', locale?: string): string {
   const dollars = (cents ?? 0) / 100
+  const normalised = (currency || 'USD').toUpperCase()
+  const effectiveLocale = locale ?? CURRENCY_LOCALE[normalised] ?? navigator.language ?? 'en-US'
   try {
-    return new Intl.NumberFormat(locale ?? navigator.language ?? 'en-US', {
+    return new Intl.NumberFormat(effectiveLocale, {
       style: 'currency',
-      currency,
+      currency: normalised,
     }).format(dollars)
   } catch {
     // Unknown currency code → fall back to a plain number with the code.
-    return dollars.toFixed(2) + ' ' + currency
+    return dollars.toFixed(2) + ' ' + normalised
   }
 }
 

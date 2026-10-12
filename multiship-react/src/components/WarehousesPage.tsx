@@ -128,6 +128,24 @@ export default function WarehousesPage() {
   }
 
   const handleToggleActive = async (warehouse: Warehouse) => {
+    // BUG-043 — deactivating a warehouse that clients ship from used to
+    // happen on one click. The client-delete path (handleDelete below)
+    // already prompts + lists the cascade; mirror the pattern here.
+    // Only ask for Deactivate — Activate stays single-click (no risk).
+    if (warehouse.active) {
+      const attached = warehouse.attachedClientCount ?? 0
+      const body = attached > 0
+        ? `Deactivate warehouse ${warehouse.code}? It is currently attached to ${attached} `
+          + `client${attached === 1 ? '' : 's'} — any shipment that resolves ship-from to this `
+          + `warehouse will error until it is reactivated.`
+        : `Deactivate warehouse ${warehouse.code}? Clients can be re-pointed to another `
+          + `warehouse at any time; the warehouse itself is not deleted.`
+      if (!(await notify.confirm(body, {
+        title: 'Deactivate warehouse',
+        confirmLabel: 'Deactivate',
+        danger: true,
+      }))) return
+    }
     setBusyId(warehouse.id)
     try {
       const r = await warehouseService.toggleActive(warehouse.code)

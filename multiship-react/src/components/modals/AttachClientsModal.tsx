@@ -37,7 +37,7 @@ export default function AttachClientsModal({
                 Attach {warehouse.code} to clients
               </h2>
               <p className="mt-0.5 text-[11.5px] text-slate-500">
-                Pick the clients that should see this warehouse. Existing attachments are unaffected.
+                Pick clients to attach. Rows already attached carry a badge + Detach button.
               </p>
             </div>
           </div>

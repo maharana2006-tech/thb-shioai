@@ -30,6 +30,21 @@ export interface HsCodeComboboxProps {
   placeholder?: string
   /** Extra classNames to compose with the built-in input styles. */
   className?: string
+  /** BUG-011 — destination ISO alpha-2 for min-digit auto-padding.
+   *  Lookup returns 6-digit HS codes (international root); CA / EU want
+   *  8-digit, US wants 10-digit. When set, pick() pads the lookup code
+   *  with trailing zeros to the destination's minimum so the operator
+   *  isn't told "needs 8 digits (you entered 6)" right after the
+   *  dropdown handed them 6 digits. */
+  destCountry?: string
+}
+
+// Destination min-digit requirement — matches the backend
+// IntlShipmentValidator / FE shipmentSchema HS_MIN_DIGITS map.
+const HS_MIN_DIGITS_BY_DEST: Record<string, number> = {
+  US: 10, CA: 8, MX: 8,
+  GB: 8, DE: 8, FR: 8, NL: 8, IT: 8, ES: 8, SE: 8, PL: 8,
+  IN: 8, JP: 9, AU: 8, BR: 8,
 }
 
 export default function HsCodeCombobox({
@@ -38,6 +53,7 @@ export default function HsCodeCombobox({
   onDescriptionSuggest,
   placeholder = '6109.10',
   className = '',
+  destCountry,
 }: HsCodeComboboxProps) {
   const [query, setQuery] = useState(value)
   const [matches, setMatches] = useState<HsCodeEntry[]>([])
@@ -88,8 +104,14 @@ export default function HsCodeCombobox({
   }, [open])
 
   const pick = (entry: HsCodeEntry) => {
-    onChange(entry.code)
-    setQuery(entry.code)
+    // BUG-011 — pad lookup code to destination's minimum digit count.
+    const destMin = destCountry ? HS_MIN_DIGITS_BY_DEST[destCountry.toUpperCase()] : undefined
+    const digits = entry.code.replace(/\D/g, '')
+    const padded = destMin && digits.length < destMin
+      ? digits + '0'.repeat(destMin - digits.length)
+      : entry.code
+    onChange(padded)
+    setQuery(padded)
     setOpen(false)
     if (onDescriptionSuggest) onDescriptionSuggest(entry.description)
   }

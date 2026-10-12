@@ -26,7 +26,10 @@ public class UserAdminAudit {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "subject_user_id", nullable = false)
+    // BUG-050 — null allowed for INVITE_SENT entries (invitee doesn't
+    // have a users row until the invite is consumed). All existing
+    // audit actions still populate this.
+    @Column(name = "subject_user_id")
     private Long subjectUserId;
 
     @Column(name = "subject_username", nullable = false, length = 100)
