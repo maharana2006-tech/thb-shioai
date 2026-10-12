@@ -591,9 +591,14 @@ export default function ClientEditorPage() {
    * DB-column defaults (empty carrier set) rather than intersecting
    * enabled-carrier caps.
    */
+  // BUG-033 — return address was validated against the loose DB defaults
+  // (empty-carriers intersection) while ship-from used the real carrier
+  // intersection, so a client without a USPS account on create saw "max
+  // 5 chars" where edit saw "max 2 chars". Return address is sent to the
+  // same carriers as ship-from on returns, so share the same cap.
   const returnAddressCaps = useMemo<AddressCaps>(
-    () => intersectionAddressCaps([]),
-    [],
+    () => intersectionAddressCaps(enabledCarrierCodes),
+    [enabledCarrierCodes],
   )
 
   const returnErrors = useMemo(() => {
