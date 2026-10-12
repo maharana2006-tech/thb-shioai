@@ -5093,6 +5093,18 @@ export default function NewShipmentPage() {
           importer={editorSeed.importer}
           broker={editorSeed.broker}
           destCountry={destCountry}
+          // BUG-021 — pass the ship-to so Type=Receiver can autofill.
+          recipient={{
+            name: recipient.name ?? '',
+            phone: recipient.phone ?? '',
+            email: recipient.email ?? '',
+            addressLine1: recipient.addressLine1 ?? '',
+            addressLine2: recipient.addressLine2 ?? '',
+            city: recipient.city ?? '',
+            state: recipient.state ?? '',
+            postalCode: recipient.postalCode ?? '',
+            countryCode: recipient.countryCode ?? '',
+          }}
           onClose={() => setOverrideEditorOpen(false)}
           onSave={(importer, broker) => {
             setOverride({ importer, broker })

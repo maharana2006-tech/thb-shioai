@@ -24,18 +24,41 @@ export default function ShipmentPartiesOverrideModal({
   importer,
   broker,
   destCountry,
+  recipient,
   onSave,
   onClose,
 }: {
   importer: Party
   broker: Party
   destCountry: string
+  /** BUG-021 — ship-to details used to prefill the importer when
+   *  the operator switches Type to Receiver · DAP. Optional for
+   *  back-compat; absent = no autofill (previous behaviour). */
+  recipient?: Party
   onSave: (importer: Party, broker: Party) => void
   onClose: () => void
 }) {
   const [imp, setImp] = useState<Party>({ ...importer })
   const [brk, setBrk] = useState<Party>({ ...broker })
   const si = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setImp((p) => ({ ...p, [k]: e.target.value }))
+  // BUG-021 — Type change to RECEIVER prefills every address field from
+  // the ship-to that's otherwise blank. Doesn't overwrite data the
+  // operator already typed; switching away from RECEIVER leaves the
+  // current values alone so they can still be edited.
+  const onTypeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const next = e.target.value
+    setImp((p) => {
+      const merged: Party = { ...p, type: next }
+      if (next === 'RECEIVER' && recipient) {
+        for (const k of ['name', 'contact', 'phone', 'email',
+                         'addressLine1', 'addressLine2',
+                         'city', 'state', 'postalCode', 'countryCode']) {
+          if (!merged[k] && recipient[k]) merged[k] = recipient[k]
+        }
+      }
+      return merged
+    })
+  }
   const sb = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) => setBrk((p) => ({ ...p, [k]: e.target.value }))
   // A11y audit — dialog semantics (was missing entirely), focus trap, Escape.
   const dialogRef = useRef<HTMLDivElement>(null)
@@ -79,7 +102,7 @@ export default function ShipmentPartiesOverrideModal({
             </h3>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <Field label="Type">
-                <select className={inputCls} value={imp.type || 'BUSINESS'} onChange={si('type')}>
+                <select className={inputCls} value={imp.type || 'BUSINESS'} onChange={onTypeChange}>
                   <option value="BUSINESS">Business · DDP</option>
                   <option value="RECEIVER">Receiver · DAP</option>
                 </select>
