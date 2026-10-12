@@ -25,6 +25,13 @@ import {
   validatePhone,
   validateZip,
 } from '../../utils/clientValidation'
+import { intersectionAddressCaps } from '../../utils/carrierFieldLimits'
+
+// BUG-040 — warehouse address is ship-from for EVERY carrier on the account.
+// Use the strictest intersection (USPS state=2, min(10) zip, min(30) city,
+// min(35) name/line) so operators can't save a state='ILLINOIS' + 10-char
+// postal that the carrier would reject at label time.
+const WAREHOUSE_CAPS = intersectionAddressCaps(['UPS', 'FEDEX', 'USPS', 'DHL'])
 
 interface Props {
   /** null = create; otherwise edit. */
@@ -195,12 +202,12 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
     ownerClientCode: ownerType === 'CLIENT' && !ownerClientCode.trim()
       ? 'Owner client is required.'
       : null,
-    line1: validateLength(line1, FIELD_LIMITS.addr.line1, 'Street address', true, 2),
-    line2: line2 ? validateLength(line2, FIELD_LIMITS.addr.line2, 'Suite / unit', false) : null,
-    city: validateLength(city, FIELD_LIMITS.addr.city, 'City', true, 2),
-    state: validateLength(state, FIELD_LIMITS.addr.state, 'State / region', true),
+    line1: validateLength(line1, WAREHOUSE_CAPS.line, 'Street address', true, 2),
+    line2: line2 ? validateLength(line2, WAREHOUSE_CAPS.line, 'Suite / unit', false) : null,
+    city: validateLength(city, WAREHOUSE_CAPS.city, 'City', true, 2),
+    state: validateLength(state, WAREHOUSE_CAPS.state, 'State / region', true),
     country: validateCountry(country, true),
-    zip: validateZip(zip, country, true),
+    zip: validateZip(zip, country, true, WAREHOUSE_CAPS.zip),
     phone: validatePhone(phone, true),
   }), [code, name, ownerType, ownerClientCode, line1, line2, city, state, zip, country, phone])
 
