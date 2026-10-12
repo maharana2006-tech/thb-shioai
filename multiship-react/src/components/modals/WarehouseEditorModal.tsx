@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { FiCheck, FiCheckCircle, FiHome, FiSearch, FiX } from 'react-icons/fi'
+import { FiAlertTriangle, FiCheck, FiCheckCircle, FiHome, FiInfo, FiSearch, FiX, FiXCircle } from 'react-icons/fi'
 import { notify } from '../../utils/notify'
 import { ApiError } from '../../api/apiClient'
 import { clientService, type Client } from '../../api/clientService'
@@ -614,14 +614,27 @@ function VerifyResultPanel({
         : level === 'NOT_SUPPORTED'
           ? { bar: 'border-slate-200 bg-slate-50/70', pill: 'bg-slate-100 text-slate-700', icon: 'text-slate-600' }
           : { bar: 'border-rose-200 bg-rose-50/70', pill: 'bg-rose-100 text-rose-800', icon: 'text-rose-700' }
+  // BUG-042 — the green check-circle icon fired for every status
+  // including NOT_SUPPORTED, making a carrier refusal look like a pass.
+  // Pick a semantically-correct icon per status.
+  const Icon = level === 'EXACT'
+    ? FiCheckCircle
+    : level === 'NOT_SUPPORTED'
+      ? FiInfo
+      : level === 'CORRECTED' || level === 'AMBIGUOUS'
+        ? FiAlertTriangle
+        : FiXCircle
+  const prettyStatus = level === 'NOT_SUPPORTED'
+    ? 'Verification not supported for this country'
+    : level
 
   return (
     <div className={`mt-3 rounded-xl border ${tone.bar} px-3 py-2.5`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="flex items-center gap-1.5 text-[11.5px] font-semibold text-slate-800">
-            <FiCheckCircle className={`h-3.5 w-3.5 ${tone.icon}`} />
-            {result.carrierCode} · <span className={`rounded-full ${tone.pill} px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide`}>{level}</span>
+            <Icon className={`h-3.5 w-3.5 ${tone.icon}`} />
+            {result.carrierCode} · <span className={`rounded-full ${tone.pill} px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide`}>{prettyStatus}</span>
             {result.classification && result.classification !== 'UNKNOWN' ? (
               <span className="text-[10.5px] font-normal text-slate-500">· {result.classification.toLowerCase()}</span>
             ) : null}
