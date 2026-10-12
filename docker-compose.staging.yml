@@ -38,6 +38,15 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # Redis entrypoint boots as root, chowns /data, then drops to the
+    # 'redis' user via gosu. Needs these three caps for the handoff:
+    # CHOWN   — chown /data at startup
+    # SETUID  — gosu transitioning from root to redis uid
+    # SETGID  — gosu transitioning to redis gid
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
     command: ["redis-server", "--save", "60", "1000", "--appendonly", "yes"]
     volumes:
       - redis-data:/data
