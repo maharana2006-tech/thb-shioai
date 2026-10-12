@@ -20,7 +20,11 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      # Postgres 18+ expects the mount one level up — the server places
+      # version-specific subdirs under /var/lib/postgresql itself. Pre-18
+      # used /var/lib/postgresql/data; mounting there on 18 triggers the
+      # "unused mount/volume" bail-out at bootstrap.
+      - postgres-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-multiship_db}"]
       interval: 10s
