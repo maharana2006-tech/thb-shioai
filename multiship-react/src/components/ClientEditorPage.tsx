@@ -330,6 +330,18 @@ export default function ClientEditorPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fetch-on-mount + on-clientCode-change; loadPickWarehouses is defined inline and only reads editingCode via closure
   }, [editingCode])
 
+  // BUG-039 — the browser tab stayed on "multiship-react" (Vite default)
+  // regardless of which client the wizard was editing. Give it a clear
+  // title that includes the client code when known. Restored on unmount
+  // so other pages aren't stuck with a client-scoped title.
+  useEffect(() => {
+    const prev = document.title
+    document.title = editingCode
+      ? `${editingCode} — Client · Settings`
+      : 'New client · Settings'
+    return () => { document.title = prev }
+  }, [editingCode])
+
   // Pre-select the client's default attached warehouse in edit mode so the
   // Ship From picker isn't empty when reopening an existing client, AND
   // record the full attached-id set so the picker can filter them out (only
