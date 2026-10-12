@@ -147,7 +147,7 @@ export default function DtcOrdersPage() {
       setPageIndex(0)
       await Promise.all([load(), loadFilters()])
     } catch (e) {
-      notify.apiError(e, 'Oracle sync failed. Is ORACLE_ENABLED=true on the backend?')
+      notify.apiError(e, 'Oracle sync failed. Is the nds-default connection active in Settings → External Systems?')
     } finally {
       setSyncing(false)
     }

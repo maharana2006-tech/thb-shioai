@@ -26,8 +26,9 @@ import java.util.Map;
 /**
  * D2C History — pulls pending DTC orders from the Oracle NDS view
  * (TB_SHIPX_DTC_UVW / _TEST) into Multiship as one ImportBatch per fetch,
- * mirroring the WMS pull flow. Off by default when {@code multiship.oracle.enabled}
- * is false — status endpoint reports {@code configured=false} and pull is a no-op.
+ * mirroring the WMS pull flow. Off while the {@code nds-default} connection is
+ * inactive in Settings → External Systems — status endpoint reports
+ * {@code configured=false} and pull is a no-op.
  */
 @Tag(name = "D2C", description = "Pull pending DTC shipments from the Oracle NDS view")
 @RestController
@@ -40,7 +41,7 @@ public class DtcController {
     private final com.multiship.backend.repository.ImportBatchRepository importBatchRepository;
 
     @Operation(summary = "Is the D2C (Oracle NDS view) integration configured?",
-            description = "Returns { configured: true|false }. False until multiship.oracle.enabled=true and the view is reachable.")
+            description = "Returns { configured: true|false }. False until the nds-default connection is active in Settings → External Systems and the view is reachable.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @GetMapping("/status")
     public ResponseEntity<ApiResponse<Map<String, Object>>> status() {

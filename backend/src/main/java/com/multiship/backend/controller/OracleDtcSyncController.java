@@ -20,7 +20,6 @@ import java.util.Map;
  *   GET  /api/v1/dtc/pending-count     - Get pending order count in Oracle
  */
 @RestController
-@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "multiship.oracle.enabled", havingValue = "true")
 @RequestMapping("/api/v1/dtc")
 @RequiredArgsConstructor
 public class OracleDtcSyncController {
@@ -40,6 +39,8 @@ public class OracleDtcSyncController {
     @PostMapping("/sync/oracle")
     public ResponseEntity<ApiResponse<Map<String, Object>>> syncOracleDtcOrders(
             @RequestParam(value = "tenantId", defaultValue = "") String tenantId) {
+
+        if (!oracleDtcSyncService.isEnabled()) return disabled();
 
         OracleDtcSyncService.OracleSyncResult result =
                 oracleDtcSyncService.syncPendingDtcOrders(tenantId);
@@ -72,6 +73,8 @@ public class OracleDtcSyncController {
     public ResponseEntity<ApiResponse<Map<String, Object>>> getPendingCount(
             @RequestParam String tenantId) {
 
+        if (!oracleDtcSyncService.isEnabled()) return disabled();
+
         long count = oracleDtcSyncService.getPendingOrderCount(tenantId);
 
         Map<String, Object> data = new HashMap<>();
@@ -87,5 +90,16 @@ public class OracleDtcSyncController {
                 .build();
 
         return ResponseEntity.ok(response);
+    }
+
+    /** 409 when the nds-default row is switched off in Settings → External Systems. */
+    private static ResponseEntity<ApiResponse<Map<String, Object>>> disabled() {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiResponse.<Map<String, Object>>builder()
+                        .status("ERROR")
+                        .code(HttpStatus.CONFLICT.value())
+                        .message(OracleDtcSyncService.DISABLED_MESSAGE)
+                        .timestamp(LocalDateTime.now())
+                        .build());
     }
 }
