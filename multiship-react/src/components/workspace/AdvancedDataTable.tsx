@@ -385,7 +385,19 @@ export default function AdvancedDataTable<T extends RowData>({
     () => persisted?.columnSizing ?? {},
   )
   const [columnPinning, setColumnPinning] = useState<ColumnPinningState>(
-    () => persisted?.columnPinning ?? { start: [], end: [] },
+    () => {
+      if (persisted?.columnPinning) return persisted.columnPinning
+      // BUG-025: auto-pin columns marked meta.pinnedByDefault='end' so the
+      // row-actions column stays visible when the table scrolls horizontally
+      // on narrow viewports. Operator can still unpin via the Columns menu.
+      const end: string[] = []
+      for (const col of columns) {
+        const id = (col as { id?: string }).id ?? (col as { accessorKey?: string }).accessorKey
+        const meta = (col as { meta?: { pinnedByDefault?: 'start' | 'end' } }).meta
+        if (meta?.pinnedByDefault === 'end' && id) end.push(id)
+      }
+      return { start: [], end }
+    },
   )
   const [density, setDensity] = useState<Density>(persisted?.density ?? initialDensity)
   const [openMenu, setOpenMenu] = useState<null | 'columns' | 'density'>(null)
