@@ -932,8 +932,11 @@ export default function ClientEditorPage() {
       // doesn't seed markup) but we guard on hasBillingMarkup=false so a
       // future default-seeder wouldn't false-fire this toast.
       if (response.data.hasBillingMarkup === false) {
+        // BUG-032 — pre-fix the raw code "MARKUP_REQUIRED_FOR_CLIENT"
+        // leaked into the operator-visible toast. Keep the operator-
+        // facing wording free of internal error codes.
         notify.info(
-          `Set a billing markup for ${response.data.clientCode} on the Markup tab before generating labels — MARKUP_REQUIRED_FOR_CLIENT will otherwise reject every label call for this client.`,
+          `Set a billing markup for ${response.data.clientCode} on the Markup tab before generating labels — otherwise every label call for this client will be rejected until one is configured.`,
         )
       }
 
