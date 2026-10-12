@@ -1355,9 +1355,25 @@ public class OrderController {
                        org.springframework.web.bind.annotation.RequestMethod.HEAD },
             produces = org.springframework.http.MediaType.IMAGE_PNG_VALUE)
     public ResponseEntity<byte[]> getLabelPreviewPng(@PathVariable Integer orderNo,
-            @org.springframework.web.bind.annotation.RequestParam(name = "pkg", required = false) Integer pkgIndex) {
+            @org.springframework.web.bind.annotation.RequestParam(name = "pkg", required = false) Integer pkgIndex,
+            jakarta.servlet.http.HttpServletRequest httpReq) {
         if (!renderCarrierZplEnabled) {
             return ResponseEntity.status(404).build();
+        }
+        // BUG-015 — HEAD is a cheap existence probe (the FE calls it to
+        // decide between the carrier PNG and the local facsimile). If
+        // zebrash isn't installed, the render path throws and we 502;
+        // the FE then re-reads it as "503" and the page shows a slow
+        // fallback. Short-circuit on HEAD: return 200 if the ZPL bytes
+        // resolve, 404 otherwise, with no render involved.
+        if ("HEAD".equalsIgnoreCase(httpReq.getMethod())) {
+            Integer probePkg = (pkgIndex != null && pkgIndex > 0) ? pkgIndex : null;
+            java.util.Optional<byte[]> zpl =
+                    labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", probePkg);
+            return zpl.isPresent()
+                    ? ResponseEntity.ok().header("Content-Type",
+                            org.springframework.http.MediaType.IMAGE_PNG_VALUE).build()
+                    : ResponseEntity.status(404).build();
         }
         try {
             byte[] png;
