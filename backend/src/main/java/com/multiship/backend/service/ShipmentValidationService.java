@@ -1001,6 +1001,25 @@ public class ShipmentValidationService {
      *       operator → ClientCustomsProfile.incoterms.</li>
      * </ul>
      */
+    /** BUG-004 — compare rate-quote serviceCode to the picked service code
+     *  tolerant of carrier prefix drift. FedEx /rate returns "FEDEX_INTERNATIONAL_PRIORITY"
+     *  while the local shipping_service.service_code is "INTERNATIONAL_PRIORITY"
+     *  (same for UPS/USPS/DHL on some codes). equalsIgnoreCase on raw strings
+     *  false-negatived valid matches; normalise by stripping any
+     *  FEDEX_/UPS_/USPS_/DHL_ prefix from both sides before comparing. */
+    private static boolean matchServiceCode(String a, String b) {
+        if (a == null || b == null) return false;
+        return stripCarrierPrefix(a).equalsIgnoreCase(stripCarrierPrefix(b));
+    }
+
+    private static String stripCarrierPrefix(String code) {
+        String u = code.trim().toUpperCase(Locale.ROOT);
+        for (String p : new String[]{"FEDEX_", "UPS_", "USPS_", "DHL_"}) {
+            if (u.startsWith(p)) return u.substring(p.length());
+        }
+        return u;
+    }
+
     private void checkIntlRequiredFields(ManualShipmentRequest req,
                                          String recipientCountry,
                                          List<ValidationIssue> errors) {
@@ -1422,10 +1441,18 @@ public class ShipmentValidationService {
                 .filter(r -> r.totalAmount() != null)
                 .sorted(java.util.Comparator.comparing(com.multiship.backend.service.carriers.CarrierConnector.RateOption::totalAmount))
                 .toList();
+        // BUG-004 — FedEx returns serviceType with inconsistent carrier
+        // prefix: INTERNATIONAL_PRIORITY arrives as "FEDEX_INTERNATIONAL_PRIORITY"
+        // while INTERNATIONAL_FIRST arrives as-is. Local DB stores the no-prefix
+        // form, so equalsIgnoreCase failed on IP + reported "did not quote"
+        // even though IP was in the quoted list. Normalize both sides by
+        // stripping the carrier prefix before compare.
         com.multiship.backend.service.carriers.CarrierConnector.RateOption picked = serviceCode == null ? null
-                : sorted.stream().filter(r -> serviceCode.equalsIgnoreCase(r.serviceCode())).findFirst().orElse(null);
+                : sorted.stream()
+                        .filter(r -> matchServiceCode(serviceCode, r.serviceCode()))
+                        .findFirst().orElse(null);
         List<String> others = sorted.stream()
-                .filter(r -> picked == null || !r.serviceCode().equalsIgnoreCase(picked.serviceCode()))
+                .filter(r -> picked == null || !matchServiceCode(r.serviceCode(), picked.serviceCode()))
                 .limit(5)
                 .map(r -> blankTo(r.serviceName(), r.serviceCode()) + " — " + r.currency() + " "
                         + r.totalAmount().setScale(2, java.math.RoundingMode.HALF_UP)
