@@ -1004,6 +1004,31 @@ public class ShipmentValidationService {
     private void checkIntlRequiredFields(ManualShipmentRequest req,
                                          String recipientCountry,
                                          List<ValidationIssue> errors) {
+        // BUG-001 — USPS SERA validates sender_info.name for international
+        // shipments and rejects single-token names like "MKL" (the client's
+        // company name typed into the Full name field). Pre-flight guard
+        // so the operator sees "needs a full name" BEFORE the label hop
+        // instead of a cryptic carrier reject after order #<N> is saved
+        // as ERROR. Scoped to USPS international + where no company name
+        // supplies the entity identity.
+        if ("USPS".equalsIgnoreCase(req.getCarrierCode())
+                && req.getSender() != null) {
+            String senderName = req.getSender().getName() == null ? ""
+                    : req.getSender().getName().trim();
+            String senderCompany = req.getSender().getCompany() == null ? ""
+                    : req.getSender().getCompany().trim();
+            // USPS accepts either a two-word personal name OR a company
+            // name as the sender identity. Fail only when BOTH are weak.
+            boolean nameLooksLikeFull = senderName.contains(" ")
+                    && senderName.split("\\s+").length >= 2;
+            if (!nameLooksLikeFull && senderCompany.isBlank()) {
+                errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                        "USPS international needs a sender full name (first + last) "
+                                + "or a company name. Current ship-from name '"
+                                + senderName + "' is a single token with no company set.",
+                        "sender.name"));
+            }
+        }
         // Currency + incoterms — resolvable via precedence, else error.
         if (resolveCustomsCurrency(req) == null) {
             errors.add(issue(ErrorCode.VALIDATION_ERROR,
