@@ -115,6 +115,45 @@ docker compose -f docker-compose.staging.yml up -d --build
 | Rotate `JWT_SECRET` | Edit `.env`, `docker compose restart backend` — every session invalidates |
 | Enable Oracle NDS | Set `MULTISHIP_ORACLE_ENABLED=true` in `.env`, restart backend, configure `nds-default` credentials via `/settings/external-systems` |
 
+## Server-level hardening (one-shot after first-deploy green)
+
+Once the stack is reachable + login works, apply host-level security:
+
+```bash
+sudo /opt/shipai/scripts/harden-staging.sh
+```
+
+Idempotent — safe to re-run. By default it:
+
+| Layer | What |
+|---|---|
+| **UFW** | Default deny-in, allow 22 (SSH) + `STAGING_PORT`, allow all egress |
+| **fail2ban** | SSH jail — 5 fails in 10 min → 10 min ban |
+| **unattended-upgrades** | Ubuntu security + updates channels auto-apply |
+| **auditd** | Tracks sudo, user DB changes, SSH config edits, root activity |
+
+**Opt-in SSH password-auth disable** (only after confirming key-based login works from a second terminal):
+
+```bash
+sudo /opt/shipai/scripts/harden-staging.sh --disable-ssh-password
+```
+
+Script hard-aborts if no non-empty `authorized_keys` is found anywhere — won't lock you out.
+
+Container-side hardening already baked into `docker-compose.staging.yml`:
+- `no-new-privileges` on backend/redis/nginx
+- `cap_drop: ALL` + minimal `cap_add` per service
+- Backend runs as non-root uid 10001
+
+Verify after:
+
+```bash
+ufw status
+fail2ban-client status sshd
+auditctl -l
+docker inspect shipai-backend-1 --format '{{.HostConfig.CapDrop}} / {{.HostConfig.SecurityOpt}} / {{.Config.User}}'
+```
+
 ## Caveats this setup accepts
 
 - **Plain HTTP** per the deployment choice. The httpOnly JWT cookie uses `SameSite=Lax` + `Secure=false` so it survives HTTP same-origin. Browsers on a non-localhost HTTP origin will refuse `SameSite=None` cookies — the stack explicitly avoids them.
