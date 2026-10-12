@@ -198,7 +198,7 @@ export const settingsNavItems: Array<{
     description: 'Admin-managed encrypted secrets — OpenAI key and other overrides for env vars. AES-GCM at rest.',
     roles: ['ADMIN'] },
   { key: 'users', label: 'Users', to: settingsPaths.users, iconKey: 'clients',
-    description: 'Assign each USER account to a client, deactivate revoked accounts, and audit the changes. Backfill client_code before flipping the tenant-scope flag.',
+    description: 'Assign each user account to a client, deactivate revoked accounts, and audit the changes.',
     roles: ['ADMIN'] },
   { key: 'carrier-limits', label: 'Carrier Limits', to: settingsPaths.carrierLimits, iconKey: 'carrier',
     description: 'Per-carrier / per-service caps on packages, commodities, weight and free declared value. Direction-aware (FORWARD vs RETURN); edits invalidate the resolver cache immediately.',
@@ -216,7 +216,7 @@ export const settingsNavItems: Array<{
     description: 'When the Oracle DTC order sync and the automatic label generation run, each on its own schedule. Set days, hours and how often; changes apply within a minute.',
     roles: ['ADMIN'] },
   { key: 'mail', label: 'Mail', to: settingsPaths.mail, iconKey: 'mail',
-    description: 'Outbound email provider — pick SMTP today (SendGrid/SES/Postmark coming), edit host/port/creds, and send a live test message. Config lives in mail_provider + mail_config.',
+    description: 'Outbound email provider — pick SMTP, SendGrid, SES or Postmark, edit host/port/creds, and send a live test message.',
     roles: ['ADMIN'] },
   { key: 'notification-templates', label: 'Email Templates', to: settingsPaths.notificationTemplates, iconKey: 'apiDocs',
     description: 'Handlebars templates for every outbound email event (invite, verify, password reset, and future alerts). Live preview against a JSON var map before saving.',
@@ -249,7 +249,7 @@ export const settingsNavItems: Array<{
     description: 'Per-request carrier API round-trips with request / response bodies. Infrastructure present; connector wiring lands as follow-ups.',
     roles: ['ADMIN'] },
   { key: 'roles', label: 'Roles', to: settingsPaths.roles, iconKey: 'clients',
-    description: 'Platform-wide role registry. Read-only; add roles via SQL today.',
+    description: 'Platform-wide role registry. Read-only.',
     roles: ['ADMIN'] },
   { key: 'countries', label: 'Countries', to: settingsPaths.countries, iconKey: 'mapping',
     description: 'ISO country list + is_us_territory flag. Read-only; edit via SQL today.',
@@ -389,7 +389,13 @@ export const resolveBreadcrumb = (
     return { section: 'Operations', label: 'Automatic Label', iconKey: 'd2c' }
   }
   if (pathname.startsWith('/settings') || pathname === '/clients' || pathname === '/carrier') {
-    const sub = settingsNavItems.find((i) => i.to === pathname)
+    // BUG-039 — sub-routes like /settings/clients/new or
+    // /settings/clients/MKL246/edit used to miss the parent nav item
+    // (which has `to = /settings/clients`) and fell back to the generic
+    // "Settings" label. Prefix-match so child pages carry the parent
+    // crumb.
+    const sub = settingsNavItems.find((i) =>
+      pathname === i.to || pathname.startsWith(i.to + '/'))
     return { section: 'Settings', label: sub?.label ?? 'Settings', iconKey: sub?.iconKey ?? 'settings' }
   }
   return null
