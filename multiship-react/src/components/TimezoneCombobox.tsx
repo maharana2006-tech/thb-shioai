@@ -44,15 +44,30 @@ const TZ_ALIASES: ReadonlyArray<readonly [string, string]> = [
   ['uzhhorod', 'uzhgorod'],
 ]
 
+// BUG-027 — modern IANA names some browser ICUs still omit (ships
+// `Asia/Calcutta` only, missing `Asia/Kolkata`, etc.). Merged into
+// RAW_ZONES so the alias search finds either spelling regardless of
+// which the runtime ships. Dedup is handled by the Set below.
+const MODERN_NAMES: readonly string[] = [
+  'Asia/Kolkata', 'Asia/Calcutta',
+  'Europe/Kyiv', 'Europe/Kiev',
+  'Asia/Yangon', 'Asia/Rangoon',
+  'Asia/Thimphu', 'Asia/Thimbu',
+  'Asia/Ho_Chi_Minh', 'Asia/Saigon',
+  'Europe/Uzhhorod', 'Europe/Uzhgorod',
+]
+
 const RAW_ZONES: string[] = (() => {
+  const set = new Set<string>()
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Intl.supportedValuesOf isn't in older TS lib defs.
     const anyIntl = Intl as any
     if (typeof anyIntl.supportedValuesOf === 'function') {
-      return anyIntl.supportedValuesOf('timeZone') as string[]
+      for (const z of anyIntl.supportedValuesOf('timeZone') as string[]) set.add(z)
     }
   } catch { /* fall through */ }
-  return []
+  for (const z of MODERN_NAMES) set.add(z)
+  return [...set]
 })()
 
 /** Normalise `Intl.DateTimeFormat`'s "GMT+5:30" / "GMT-5" / "GMT" style
