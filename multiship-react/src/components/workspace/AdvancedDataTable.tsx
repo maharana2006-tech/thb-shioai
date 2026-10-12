@@ -770,15 +770,32 @@ export default function AdvancedDataTable<T extends RowData>({
                           <FiChevronDown className="h-2.5 w-2.5" />
                         </button>
                       </div>
-                      <label className="flex flex-1 cursor-pointer items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={col.getIsVisible()}
-                          onChange={col.getToggleVisibilityHandler()}
-                          className="h-3.5 w-3.5 accent-[#412d15]"
-                        />
-                        {label}
-                      </label>
+                      {/* BUG-023 — don't let the operator untick the last
+                          visible column, which would leave blank rows with
+                          only the row menu. Disable the uncheck when this
+                          column is the sole visible one. */}
+                      {(() => {
+                        const visibleCount = idToCol.size
+                          ? orderedIds.reduce((n, cid) => {
+                              const c = idToCol.get(cid)
+                              return c && c.getIsVisible() ? n + 1 : n
+                            }, 0)
+                          : 0
+                        const isLastVisible = col.getIsVisible() && visibleCount <= 1
+                        return (
+                          <label className="flex flex-1 cursor-pointer items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={col.getIsVisible()}
+                              onChange={col.getToggleVisibilityHandler()}
+                              disabled={isLastVisible}
+                              title={isLastVisible ? 'At least one column must stay visible' : undefined}
+                              className="h-3.5 w-3.5 accent-[#412d15] disabled:cursor-not-allowed disabled:opacity-50"
+                            />
+                            {label}
+                          </label>
+                        )
+                      })()}
                       <button
                         type="button"
                         onClick={() => cyclePin(col)}
