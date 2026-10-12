@@ -2508,7 +2508,7 @@ public class CarrierServiceImpl implements CarrierService {
                     errOrder.setShiptoCountryCd(to.getCountryCode());
                     errOrder.setCountryName(to.getCountryCode());
                     errOrder.setPhone(to.getPhone());
-                    errOrder.setWeight(req.getWeight());
+                    errOrder.setWeight(aggregateShipmentWeight(req.getPackages(), req.getWeight()));
                     errOrder.setWeightUnit(firstNonBlank(req.getWeightUnit(), "LB"));
                     if (fromForErr != null) {
                         errOrder.setShipFromName(fromForErr.getName());
@@ -2731,7 +2731,12 @@ public class CarrierServiceImpl implements CarrierService {
         order.setShiptoCountryCd(to.getCountryCode());
         order.setCountryName(to.getCountryCode());
         order.setPhone(to.getPhone());
-        order.setWeight(req.getWeight());
+        // BUG-017 — MPS orders used to persist req.weight (the first
+        // box's weight) as the shipment-level total, which the Order
+        // API then surfaced as shippingDetails.weight. Sum per-package
+        // weights when the request carries a packages[] list; fall back
+        // to req.weight on single-box legacy requests.
+        order.setWeight(aggregateShipmentWeight(req.getPackages(), req.getWeight()));
         order.setWeightUnit(firstNonBlank(req.getWeightUnit(), "LB"));
         // Persist the ship-FROM the operator entered (the effective `from`,
         // after any warehouse merge) so the label document + commercial invoice
@@ -5390,6 +5395,27 @@ public class CarrierServiceImpl implements CarrierService {
 
     private <T> T firstNonNull(T first, T second) {
         return first != null ? first : second;
+    }
+
+    /** BUG-017 — sum per-package weights for MPS persistence. Falls back
+     *  to the supplied shipment-level weight on single-box legacy
+     *  requests (null packages[]) or when every package's weight is
+     *  null. Returns null when both sources are empty rather than
+     *  inventing a zero. Package-list source lets this work for both
+     *  ShipmentRequestDTO (regen path) and ManualShipmentRequest
+     *  (manual-label path). */
+    private static java.math.BigDecimal aggregateShipmentWeight(
+            java.util.List<com.multiship.backend.dto.PackageDetailDTO> pkgs,
+            java.math.BigDecimal fallback) {
+        if (pkgs == null || pkgs.isEmpty()) return fallback;
+        java.math.BigDecimal sum = java.math.BigDecimal.ZERO;
+        boolean any = false;
+        for (com.multiship.backend.dto.PackageDetailDTO p : pkgs) {
+            if (p == null || p.getWeight() == null) continue;
+            sum = sum.add(p.getWeight());
+            any = true;
+        }
+        return any ? sum : fallback;
     }
 
     /**
