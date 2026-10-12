@@ -2909,6 +2909,18 @@ export default function NewShipmentPage() {
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
   }, [formHasWork, submitting])
+
+  // BUG-014: the sticky Validate/Generate footer is ~96 px above the viewport
+  // bottom; the default toast position (bottom-4 = 1rem) sits directly over
+  // the buttons. Lift the toast stack above the footer while this page is
+  // mounted and restore on unmount so other pages keep the default.
+  useEffect(() => {
+    document.documentElement.style.setProperty('--toast-bottom', '7rem')
+    return () => {
+      document.documentElement.style.removeProperty('--toast-bottom')
+    }
+  }, [])
+
   const leaveForm = async () => {
     if (formHasWork && !(await notify.confirm(
       "This shipment hasn't been created yet. Leave and lose what you've entered?",
