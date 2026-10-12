@@ -54,10 +54,10 @@ export const CARRIER_ACCOUNT_RULES: Record<CarrierCode, CarrierAccountRule> = {
     helper: 'FedEx account numbers are up to 12 digits.',
   },
   DHL: {
-    maxLength: 9,
-    placeholder: 'Up to 9 digits (DHL account #)',
-    pattern: '[0-9A-Za-z]{1,9}',
-    helper: 'DHL Express account numbers are up to 9 digits.',
+    maxLength: 12,
+    placeholder: '9–12 digits (DHL account #)',
+    pattern: '[0-9]{9,12}',
+    helper: 'DHL Express account numbers are 9–12 digits.',
   },
   USPS: {
     maxLength: 40,
