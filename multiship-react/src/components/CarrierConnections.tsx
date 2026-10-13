@@ -442,7 +442,12 @@ export default function CarrierConnections({
     }
   }, [drawerOpen, drawer.carrierCode, drawer.editingId, admin])
 
-  const readyCount = accounts.filter((a) => a.complete && a.active).length
+  // BUG-054 — "Ready to ship" previously counted complete + active, which
+  // overlapped with the "Unverified 2" tile beside it (both tiles bumped on
+  // the same row). An operator who sees 5/5 reasonably believes every
+  // account can produce a label; a Check-failed row broke that. Require
+  // verified === true so Ready + Unverified are mutually exclusive.
+  const readyCount = accounts.filter((a) => a.complete && a.active && a.verified === true).length
   const unverifiedCount = accounts.filter((a) => a.active && a.complete && a.verified !== true).length
   const platformCount = accounts.filter(isPlatform).length
   const clientCount = accounts.length - platformCount
