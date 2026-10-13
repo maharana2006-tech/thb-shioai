@@ -3755,10 +3755,17 @@ export default function NewShipmentPage() {
                               value={labelImageType}
                               onChange={(e) => setLabelImageType(e.target.value)}>
                         <option value="">-- Select --</option>
-                        <option value="PDF">PDF (vector, sharp)</option>
+                        {/* BUG-057 — label names must match the Carrier
+                            Dropdowns registry so the Settings page and
+                            the order form speak the same vocabulary.
+                            Registry seed (V120) uses "PDF (plain)" + "ZPL
+                            (thermal)" across every carrier; previously
+                            this FEDEX branch said "PDF (vector, sharp)"
+                            + "ZPLII (Zebra)", which diverged. */}
+                        <option value="PDF">PDF (plain)</option>
                         <option value="PNG">PNG (raster)</option>
-                        <option value="ZPLII">ZPLII (Zebra)</option>
-                        <option value="EPL2">EPL2 (Eltron/legacy Zebra)</option>
+                        <option value="ZPLII">ZPL (thermal)</option>
+                        <option value="EPL2">EPL (Eltron/legacy Zebra)</option>
                         <option value="DPL">DPL (Datamax)</option>
                       </select>
                     </Field>
