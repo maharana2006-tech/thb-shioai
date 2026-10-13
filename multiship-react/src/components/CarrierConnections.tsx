@@ -1,6 +1,7 @@
 import { relativeTime } from '../utils/relativeTime'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { useOutletContext, useSearchParams } from 'react-router-dom'
+import { useNavigate, useOutletContext, useSearchParams } from 'react-router-dom'
+import { settingsPaths } from '../routes/workspaceRoutes'
 import { notify } from '../utils/notify'
 import {
   FiActivity,
@@ -53,7 +54,7 @@ import {
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import AdvancedDataTable, { type ColumnDef } from './workspace/AdvancedDataTable'
 import CarrierLogo from './workspace/CarrierLogo'
-import { StampsAddFundsDialog, StampsBalancePill } from './StampsPostage'
+import { StampsBalancePill } from './StampsPostage'
 import PortalMenu from './workspace/PortalMenu'
 import Select from './workspace/Select'
 import { useAppSession } from '../hooks/useAppSession'
@@ -276,9 +277,10 @@ export default function CarrierConnections({
   const filtersRef = useRef<HTMLDivElement>(null)
   const [query, setQuery] = useState('')
   const [busyId, setBusyId] = useState<number | null>(null)
-  /** USPS account whose Add funds dialog is open; postageVersion re-reads the balance pills after a top-up. */
-  const [postageFor, setPostageFor] = useState<CarrierAccountRef | null>(null)
-  const [postageVersion, setPostageVersion] = useState(0)
+  const navigate = useNavigate()
+  /** Open the full-page add-funds screen; the balance pills re-read on return (this page remounts). */
+  const openAddFunds = useCallback((account: CarrierAccountRef) =>
+    navigate(settingsPaths.carrierAddFunds(account.id)), [navigate])
 
   // Close the Filters popover on outside click / Escape.
   useEffect(() => {
@@ -1115,7 +1117,7 @@ export default function CarrierConnections({
               )}
               {admin && account.active && account.verified === true
                 && normalizeCarrierCode(account.carrierCode) === 'usps' ? (
-                <StampsBalancePill accountId={account.id} version={postageVersion} onOpen={() => setPostageFor(account)} />
+                <StampsBalancePill accountId={account.id} version={0} onOpen={() => openAddFunds(account)} />
               ) : null}
             </div>
           )
@@ -1168,7 +1170,7 @@ export default function CarrierConnections({
               onEdit={() => openDrawer(row.original)}
               onDelete={() => void handleDelete(row.original)}
               onDisconnectStamps={() => void handleDisconnectStamps(row.original)}
-              onAddFunds={() => setPostageFor(row.original)}
+              onAddFunds={() => openAddFunds(row.original)}
             />
           </div>
         ),
@@ -1181,7 +1183,7 @@ export default function CarrierConnections({
     // column model every render. busyId is the one value the columns visually
     // depend on for disabled states; admin flips row-action visibility.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [busyId, admin, postageVersion],
+    [busyId, admin],
   )
 
   // PR-F4 (FE-PERF-1) — health-strip card definitions memoised on the four
@@ -1201,15 +1203,6 @@ export default function CarrierConnections({
 
   return (
     <div className="space-y-4">
-      {postageFor ? (
-        <StampsAddFundsDialog
-          account={postageFor}
-          onClose={(changed) => {
-            setPostageFor(null)
-            if (changed) setPostageVersion((v) => v + 1)
-          }}
-        />
-      ) : null}
       {/* ===== health strip — hidden in embedded mode so the tab doesn't duplicate totals from the outer page ===== */}
       {!embedded ? (
         <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">

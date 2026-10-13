@@ -60,6 +60,7 @@ const CarrierPage = lazy(() => import('../pages/CarrierPage'))
 const ClientsPage = lazy(() => import('../pages/ClientsPage'))
 const ClientEditorPage = lazy(() => import('../components/ClientEditorPage'))
 const ImporterBrokerPage = lazy(() => import('../components/ImporterBrokerPage'))
+const StampsAddFundsPage = lazy(() => import('../components/StampsPostage'))
 const CustomsProfileEditorPage = lazy(() => import('../components/CustomsProfileEditorPage'))
 const LabelTemplatesListPage = lazy(() => import('../components/LabelTemplatesListPage'))
 const LabelTemplateEditorPage = lazy(() => import('../components/LabelTemplateEditorPage'))
@@ -216,6 +217,7 @@ export default function AppRoutes() {
                     have redirected USER role to /dashboard even though the
                     sidebar shows the entry. */}
                 <Route path="carriers" element={<CarrierPage />} />
+                <Route path="carriers/:accountId/add-funds" element={<StampsAddFundsPage />} />
                 <Route path="audit-log" element={<AuditLogPage />} />
                 {/* A4.5 — self-serve email opt-outs. USER + ADMIN so any
                     authenticated user can silence alert-style templates

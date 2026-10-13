@@ -44,6 +44,8 @@ export const settingsPaths = {
   clients: '/settings/clients',
   warehouses: '/settings/warehouses',
   carriers: '/settings/carriers',
+  /** Full-page USPS postage top-up for one carrier account. */
+  carrierAddFunds: (accountId: number | string) => `/settings/carriers/${accountId}/add-funds`,
   /** Merged catalog: shipping services + packages under sub-tabs. Replaces
    *  the old `shipping-services` and `packages` routes. Deep-link the tab
    *  with `?tab=services` or `?tab=packages`. */

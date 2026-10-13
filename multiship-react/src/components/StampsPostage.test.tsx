@@ -28,11 +28,11 @@ const account = {
 } as CarrierAccountRef
 
 async function openDialog() {
-  const { StampsAddFundsDialog } = await import('./StampsPostage')
-  const onClose = vi.fn()
-  render(<StampsAddFundsDialog account={account} onClose={onClose} />)
+  const { AddFundsForm } = await import('./StampsPostage')
+  const onDone = vi.fn()
+  render(<AddFundsForm account={account} onDone={onDone} />)
   await screen.findByText('$18.40')
-  return onClose
+  return onDone
 }
 
 beforeEach(() => {

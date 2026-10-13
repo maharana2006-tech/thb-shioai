@@ -4,10 +4,12 @@
  * account — this screen never asks for card details.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { FiAlertTriangle, FiCreditCard, FiExternalLink, FiMail, FiX } from 'react-icons/fi'
+import { useNavigate, useParams } from 'react-router-dom'
+import { FiAlertTriangle, FiArrowLeft, FiCreditCard, FiExternalLink, FiMail } from 'react-icons/fi'
 import { notify } from '../utils/notify'
 import { ApiError } from '../api/apiClient'
-import type { CarrierAccountRef } from '../api/accountRefService'
+import { accountRefService, type CarrierAccountRef } from '../api/accountRefService'
+import { settingsPaths } from '../routes/workspaceRoutes'
 import {
   stampsPostageService,
   type PostageBalance,
@@ -83,9 +85,10 @@ export function StampsBalancePill({ accountId, version, onOpen }: {
 }
 
 /** Add postage to a USPS account on Stamps.com, with its recent top-ups. */
-export function StampsAddFundsDialog({ account, onClose }: {
+/** The add-funds form: balance, amount picker, recent top-ups. Router-free so it stays unit-testable. */
+export function AddFundsForm({ account, onDone }: {
   account: CarrierAccountRef
-  onClose: (changed: boolean) => void
+  onDone: (changed: boolean) => void
 }) {
   const [balance, setBalance] = useState<PostageBalance | null>(null)
   const [balanceError, setBalanceError] = useState<string | null>(null)
@@ -108,12 +111,6 @@ export function StampsAddFundsDialog({ account, onClose }: {
       .catch((e) => setBalanceError(errorText(e)))
     loadHistory()
   }, [account.id, loadHistory])
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !busy) onClose(changed.current) }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [busy, onClose])
 
   const available = balance?.available ?? null
   const room = balance?.maxBalance != null && available !== null ? balance.maxBalance - available : null
@@ -168,31 +165,8 @@ export function StampsAddFundsDialog({ account, onClose }: {
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="stamps-add-funds-title"
-      onClick={() => { if (!busy) onClose(changed.current) }}
-    >
-      <div
-        className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_30px_80px_rgba(15,23,42,0.35)]"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="mb-3 flex items-start justify-between gap-3">
-          <div>
-            <h3 id="stamps-add-funds-title" className="text-[15px] font-semibold text-slate-950">Add postage funds</h3>
-            <p className="text-[12px] text-slate-500">
-              USPS · {account.accountName || account.accountNumber} ({account.accountNumber})
-              {account.environment === 'SANDBOX' ? ' · Sandbox (play money)' : ''}
-            </p>
-          </div>
-          <button type="button" aria-label="Close" disabled={busy} onClick={() => onClose(changed.current)}
-            className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600">
-            <FiX className="h-4 w-4" />
-          </button>
-        </div>
-
+    <div className="grid gap-4 lg:grid-cols-2 lg:items-stretch">
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="mb-4 grid grid-cols-2 gap-2">
           <div className="rounded-xl bg-slate-50 px-3 py-2">
             <p className="text-[11px] text-slate-500">Current balance</p>
@@ -240,8 +214,8 @@ export function StampsAddFundsDialog({ account, onClose }: {
           </p>
         </div>
 
-        <div className="mb-4 flex justify-end gap-2">
-          <button type="button" disabled={busy} onClick={() => onClose(changed.current)}
+        <div className="flex justify-end gap-2">
+          <button type="button" disabled={busy} onClick={() => onDone(changed.current)}
             className="rounded-lg border border-slate-200 px-3 py-1.5 text-[13px] text-slate-700 hover:bg-slate-50">Cancel</button>
           <button type="button" onClick={() => void submit()} aria-busy={busy}
             className="rounded-lg bg-[#1f150c] px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-[#412d15] disabled:opacity-60"
@@ -249,9 +223,15 @@ export function StampsAddFundsDialog({ account, onClose }: {
             {busy ? 'Adding…' : amount && !problem ? `Add ${usd(amount)}` : 'Add funds'}
           </button>
         </div>
+      </div>
 
-        <div className="border-t border-slate-100 pt-3">
-          <p className="mb-1.5 text-[12px] font-semibold text-slate-700">Recent top-ups</p>
+      <div className="flex flex-col rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <p className="mb-1.5 text-[12px] font-semibold text-slate-700">Recent top-ups</p>
+        {/* Absolute inner keeps the list out of height flow, so the left card
+            sets the row height and the list scrolls to fill it; min-h for the
+            stacked mobile layout where there's no sibling to match. */}
+        <div className="relative min-h-[220px] flex-1 lg:min-h-0">
+          <div className="absolute inset-0 overflow-y-auto">
           {history.length === 0 ? (
             <p className="text-[12px] text-slate-500">None yet.</p>
           ) : (
@@ -270,19 +250,72 @@ export function StampsAddFundsDialog({ account, onClose }: {
               ))}
             </ul>
           )}
-          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px]">
-            {([
-              ['store_default_payment_methods', 'Payment settings on Stamps.com'],
-              ['reports_balances', 'Full statement'],
-            ] as const).map(([page, label]) => (
-              <button key={page} type="button" onClick={() => void openStampsPage(account.id, page)}
-                className="inline-flex items-center gap-1 font-semibold text-[#412d15] underline-offset-2 hover:underline">
-                {label} <FiExternalLink className="h-3 w-3" aria-hidden="true" />
-              </button>
-            ))}
           </div>
         </div>
+        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t border-slate-100 pt-3 text-[12px]">
+          {([
+            ['store_default_payment_methods', 'Payment settings on Stamps.com'],
+            ['reports_balances', 'Full statement'],
+          ] as const).map(([page, label]) => (
+            <button key={page} type="button" onClick={() => void openStampsPage(account.id, page)}
+              className="inline-flex items-center gap-1 font-semibold text-[#412d15] underline-offset-2 hover:underline">
+              {label} <FiExternalLink className="h-3 w-3" aria-hidden="true" />
+            </button>
+          ))}
+        </div>
       </div>
+    </div>
+  )
+}
+
+/** Full-page "Add postage funds", reached from a USPS carrier row. Resolves the account from the URL. */
+export default function StampsAddFundsPage() {
+  const { accountId } = useParams()
+  const navigate = useNavigate()
+  const id = Number(accountId)
+  const [account, setAccount] = useState<CarrierAccountRef | null>(null)
+  const [state, setState] = useState<'loading' | 'ready' | 'notfound'>('loading')
+
+  useEffect(() => {
+    let live = true
+    accountRefService.listAccounts()
+      .then((list) => {
+        if (!live) return
+        const found = list.find((a) => a.id === id) ?? null
+        setAccount(found)
+        setState(found ? 'ready' : 'notfound')
+      })
+      .catch(() => { if (live) setState('notfound') })
+    return () => { live = false }
+  }, [id])
+
+  const back = useCallback(() => navigate(settingsPaths.carriers), [navigate])
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <button type="button" onClick={back} aria-label="Back to carrier accounts"
+          className="rounded-lg border border-slate-200 bg-white p-2 text-slate-600 transition hover:bg-slate-50">
+          <FiArrowLeft className="h-4 w-4" />
+        </button>
+        <div>
+          <h2 className="text-[18px] font-semibold text-slate-950">Add postage funds</h2>
+          {account ? (
+            <p className="text-[12px] text-slate-500">
+              USPS · {account.accountName || account.accountNumber} ({account.accountNumber})
+              {account.environment === 'SANDBOX' ? ' · Sandbox (play money)' : ''}
+            </p>
+          ) : null}
+        </div>
+      </div>
+
+      {state === 'loading' ? (
+        <p className="text-[13px] text-slate-500">Loading…</p>
+      ) : state === 'notfound' ? (
+        <p className="text-[13px] text-rose-700">That USPS account wasn’t found.</p>
+      ) : account ? (
+        <AddFundsForm account={account} onDone={back} />
+      ) : null}
     </div>
   )
 }
