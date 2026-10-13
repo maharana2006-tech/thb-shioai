@@ -207,14 +207,25 @@ export function CarrierDraftStep({
               <span className="mb-0.5 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Account number *</span>
               {(() => {
                 const rule = accountRuleFor(f.carrierCode)
+                // BUG-029 — on a digits-only carrier (DHL, FEDEX), strip
+                // non-digits on input so the field physically can't hold
+                // letters. The HTML pattern + Yup regex only fire on
+                // submit, which left QA typing "QA1013QA1013" and reading
+                // the "9-12 digits" error as a length problem.
+                const digitsOnly = rule?.pattern?.startsWith('[0-9]')
                 return (
                   <>
                     <input
                       value={f.accountNumber}
-                      onChange={(e) => setF((c) => ({ ...c, accountNumber: e.target.value }))}
+                      onChange={(e) => {
+                        const raw = e.target.value
+                        const next = digitsOnly ? raw.replace(/\D/g, '') : raw
+                        setF((c) => ({ ...c, accountNumber: next }))
+                      }}
                       onBlur={() => markTouched('accountNumber')}
                       maxLength={rule?.maxLength ?? 100}
                       pattern={rule?.pattern}
+                      inputMode={digitsOnly ? 'numeric' : undefined}
                       placeholder={rule?.placeholder}
                       autoComplete="off"
                       aria-invalid={err('accountNumber') ? true : undefined}
