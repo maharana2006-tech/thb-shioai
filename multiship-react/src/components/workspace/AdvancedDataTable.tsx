@@ -386,10 +386,19 @@ export default function AdvancedDataTable<T extends RowData>({
   )
   const [columnPinning, setColumnPinning] = useState<ColumnPinningState>(
     () => {
-      if (persisted?.columnPinning) return persisted.columnPinning
       // BUG-025: auto-pin columns marked meta.pinnedByDefault='end' so the
       // row-actions column stays visible when the table scrolls horizontally
-      // on narrow viewports. Operator can still unpin via the Columns menu.
+      // on narrow viewports. R4 retest confirmed the default was being
+      // overridden by a persisted {start:[], end:[]} from an older session —
+      // treat an all-empty persisted state as "no explicit pinning" and
+      // fall through to the default. Operator can still unpin by explicitly
+      // cycling the pin button; once they pin or unpin anything the
+      // persisted state is non-empty and will be respected on reload.
+      const persistedHasPins =
+        !!persisted?.columnPinning
+        && ((persisted.columnPinning.start?.length ?? 0) > 0
+            || (persisted.columnPinning.end?.length ?? 0) > 0)
+      if (persistedHasPins) return persisted!.columnPinning!
       const end: string[] = []
       for (const col of columns) {
         const id = (col as { id?: string }).id ?? (col as { accessorKey?: string }).accessorKey
