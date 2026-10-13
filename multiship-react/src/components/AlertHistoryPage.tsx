@@ -11,6 +11,7 @@ import {
   type AlertHistoryPage,
   type AlertHistoryRow,
 } from '../api/alertHistoryService'
+import { summarizeCarrierError } from '../utils/carrierErrorMap'
 
 const PAGE_SIZE = 50
 
@@ -102,7 +103,13 @@ export default function AlertHistoryPageView() {
                   <td className="px-3 py-2 font-mono text-[12px] text-slate-700">{row.source}</td>
                   <td className="px-3 py-2 text-slate-700">{row.tenantCode ?? '—'}</td>
                   <td className="px-3 py-2 tabular-nums text-slate-700">{row.targetOrderNo ?? '—'}</td>
-                  <td className="px-3 py-2 text-slate-700">{row.reason ?? '—'}</td>
+                  {/* BUG-066 — reasons used to render the raw carrier
+                      payload. Humanize via the same mapper /orders/new
+                      uses so the sentence form shows here too; keep raw
+                      text in title for the correlation-id case. */}
+                  <td className="px-3 py-2 text-slate-700" title={row.reason ?? ''}>
+                    {row.reason ? summarizeCarrierError(row.reason) : '—'}
+                  </td>
                 </tr>
               ))}
             </tbody>
