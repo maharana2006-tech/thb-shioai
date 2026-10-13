@@ -98,7 +98,18 @@ export default function CutoffsPage() {
   }
 
   const deleteRule = async (r: CutoffRule) => {
-    if (!confirm(`Delete rule #${r.id}?`)) return
+    // BUG-058 — native confirm() can be blocked by the browser and
+    // doesn't carry rule context. Use the app's own confirm so the
+    // operator sees source/carrier/warehouse before the irreversible
+    // change to a dated SHIP_DATE rule.
+    const ok = await notify.confirm(
+      `Delete cutoff rule #${r.id}?\n\n`
+        + `Source: ${r.source || 'any'} · Carrier: ${r.carrierCode || 'any'} · `
+        + `Warehouse: ${r.warehouseId ?? 'any'}\n\n`
+        + 'Shipments that match this rule will roll forward using the next-matching rule or the platform default.',
+      { title: 'Delete cutoff rule?', confirmLabel: 'Delete', danger: true },
+    )
+    if (!ok) return
     try {
       await cutoffService.deleteRule(r.id)
       await reload()
@@ -126,7 +137,13 @@ export default function CutoffsPage() {
   }
 
   const deleteHoliday = async (h: Holiday) => {
-    if (!confirm(`Delete "${h.name}" (${h.holidayDate})?`)) return
+    const ok = await notify.confirm(
+      `Delete holiday "${h.name}" (${h.holidayDate})?\n\n`
+        + 'Removing a holiday changes which day the cutoff rules treat as the next working day. '
+        + 'Shipments due that day will no longer roll forward.',
+      { title: 'Delete holiday?', confirmLabel: 'Delete', danger: true },
+    )
+    if (!ok) return
     try {
       await cutoffService.deleteHoliday(h.id)
       await reload()
