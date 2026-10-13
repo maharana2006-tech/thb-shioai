@@ -3,6 +3,7 @@ package com.multiship.backend.controller;
 import com.multiship.backend.dto.AcceptInviteRequest;
 import com.multiship.backend.dto.ErrorCode;
 import com.multiship.backend.dto.LoginRequest;
+import com.multiship.backend.dto.ProfileUpdateRequest;
 import com.multiship.backend.dto.MessageResponse;
 import com.multiship.backend.dto.SignupRequest;
 import com.multiship.backend.service.AuthService;
@@ -82,6 +83,24 @@ public class AuthController {
     @GetMapping("/session")
     public ResponseEntity<?> currentSession() {
         return authService.currentSession();
+    }
+
+    @Operation(summary = "The logged-in user's own profile")
+    @GetMapping("/profile")
+    public ResponseEntity<?> profile() {
+        return authService.currentProfile();
+    }
+
+    @Operation(summary = "Update the logged-in user's own profile (display name)")
+    @PutMapping("/profile")
+    public ResponseEntity<?> updateProfile(@Valid @RequestBody ProfileUpdateRequest request) {
+        return authService.updateProfile(request);
+    }
+
+    @Operation(summary = "Deactivate the logged-in user's own account")
+    @PostMapping("/profile/deactivate")
+    public ResponseEntity<?> deactivateProfile() {
+        return authService.deactivateSelf();
     }
 
     @PostMapping("/logout")

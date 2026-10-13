@@ -1,12 +1,11 @@
 import { Link } from 'react-router-dom'
-import { getSettingsGroupsForRole } from '../../routes/workspaceRoutes'
+import { getSettingsGroupsForAccess } from '../../routes/workspaceRoutes'
 import { useAppSession } from '../../hooks/useAppSession'
-import { normalizeRole } from '../../utils/roles'
 
 /** /settings — every settings page the role can open, by group. */
 export default function SettingsOverview() {
-  const { role } = useAppSession()
-  const groups = getSettingsGroupsForRole(normalizeRole(role))
+  const { effectiveRole, modules } = useAppSession()
+  const groups = getSettingsGroupsForAccess(effectiveRole, modules)
   return (
     <div>
       <h1 className="text-[24px] font-bold tracking-tight text-[#1f150c]">All settings</h1>

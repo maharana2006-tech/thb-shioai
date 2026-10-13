@@ -94,6 +94,12 @@ public class JwtService {
      * legacy internal ADMIN + USER accounts (org-wide operator scope).
      */
     public String generateToken(String username, String role, String clientCode, long tokenVersion) {
+        return generateToken(username, role, clientCode, tokenVersion, null);
+    }
+
+    /** {@code baseRole} is set for custom roles so the filter can grant the
+     *  inherited built-in role's authorities; null for built-in roles. */
+    public String generateToken(String username, String role, String clientCode, long tokenVersion, String baseRole) {
         Date now = new Date();
 
         var builder = Jwts.builder()
@@ -103,6 +109,9 @@ public class JwtService {
                 .claim("tv", tokenVersion);
         if (clientCode != null && !clientCode.isBlank()) {
             builder.claim("clientCode", clientCode);
+        }
+        if (baseRole != null && !baseRole.isBlank()) {
+            builder.claim("baseRole", baseRole);
         }
         return builder
                 .issuedAt(now)

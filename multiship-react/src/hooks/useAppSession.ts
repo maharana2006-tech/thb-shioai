@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import { normalizeCarrierCode } from '../utils/carrierUtils'
 import { clearAppStorage } from '../utils/session'
+import { normalizeRole, type UserRole } from '../utils/roles'
 
 // Internal types — no external caller needs these.
 type CarrierId = 'fedex' | 'ups' | 'usps' | 'dhl'
@@ -23,6 +24,12 @@ interface CarrierConnection extends CarrierDefinition {
 interface SessionSnapshot {
   username: string | null
   role: string | null
+  /** For a custom role, the built-in role it inherits; null for built-in roles. */
+  baseRole: string | null
+  /** Module keys a custom role may see; null = no restriction (built-in role). */
+  modules: string[] | null
+  /** The role to gate with: the base role for custom roles, else the role itself. */
+  effectiveRole: UserRole
   connectedCarriers: CarrierConnection[]
   hasConnectedCarrier: boolean
 }
@@ -34,6 +41,8 @@ interface SessionSnapshot {
 const STORAGE_KEYS = {
   username: 'multiship_user',
   role: 'multiship_role',
+  baseRole: 'multiship_base_role',
+  modules: 'multiship_modules',
   carriers: 'multiship_connected_carriers',
 } as const
 
@@ -69,6 +78,9 @@ const carrierCatalog: CarrierDefinition[] = [
 const emptySnapshot: SessionSnapshot = {
   username: null,
   role: null,
+  baseRole: null,
+  modules: null,
+  effectiveRole: 'USER',
   connectedCarriers: [],
   hasConnectedCarrier: false,
 }
@@ -159,11 +171,25 @@ const writeConnectedCarriers = (connections: CarrierConnection[]) => {
   emitSessionChange()
 }
 
+const parseModules = (raw: string | null): string[] | null => {
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed)) {
+      const keys = parsed.filter((k): k is string => typeof k === 'string')
+      return keys.length > 0 ? keys : null
+    }
+  } catch { /* ignore */ }
+  return null
+}
+
 const getSnapshot = (): SessionSnapshot => {
   const username = readStorageValue(STORAGE_KEYS.username)
   const role = readStorageValue(STORAGE_KEYS.role)
+  const baseRole = readStorageValue(STORAGE_KEYS.baseRole)
+  const modulesRaw = readStorageValue(STORAGE_KEYS.modules)
   const carriersRaw = readStorageValue(STORAGE_KEYS.carriers)
-  const nextSnapshotKey = JSON.stringify([username, role, carriersRaw])
+  const nextSnapshotKey = JSON.stringify([username, role, baseRole, modulesRaw, carriersRaw])
 
   if (nextSnapshotKey === cachedSnapshotKey) {
     return cachedSnapshot
@@ -175,6 +201,9 @@ const getSnapshot = (): SessionSnapshot => {
   cachedSnapshot = {
     username,
     role,
+    baseRole: baseRole || null,
+    modules: parseModules(modulesRaw),
+    effectiveRole: normalizeRole(baseRole || role),
     connectedCarriers,
     hasConnectedCarrier: connectedCarriers.length > 0,
   }
@@ -226,12 +255,13 @@ export const bootstrapSessionFromCookie = async (): Promise<void> => {
       clearAuthSession()
       return
     }
-    const s = (await res.json()) as { username?: string; role?: string }
+    const s = (await res.json()) as { username?: string; role?: string; baseRole?: string | null; modules?: string[] | null }
     if (s?.username && s?.role) {
       // Non-sensitive; drives UI gating (multiship_role reads across
       // several settings pages). Token stays httpOnly.
       window.localStorage.setItem(STORAGE_KEYS.username, s.username)
       window.localStorage.setItem(STORAGE_KEYS.role, s.role)
+      storeAccess({ baseRole: s.baseRole ?? null, modules: s.modules ?? null })
       emitSessionChange()
 
       // Reconcile the carrier mirror too. It drives a routing decision
@@ -293,6 +323,19 @@ export const storeAuthSession = (payload: { username: string; role: string }) =>
   emitSessionChange()
 }
 
+/** Store the custom-role access facts (base role + visible modules). */
+export const storeAccess = (payload: { baseRole: string | null; modules: string[] | null }) => {
+  if (!isBrowser()) return
+  if (payload.baseRole) window.localStorage.setItem(STORAGE_KEYS.baseRole, payload.baseRole)
+  else window.localStorage.removeItem(STORAGE_KEYS.baseRole)
+  if (payload.modules && payload.modules.length > 0) {
+    window.localStorage.setItem(STORAGE_KEYS.modules, JSON.stringify(payload.modules))
+  } else {
+    window.localStorage.removeItem(STORAGE_KEYS.modules)
+  }
+  emitSessionChange()
+}
+
 export const clearAuthSession = () => {
   if (!isBrowser()) {
     return
@@ -300,6 +343,8 @@ export const clearAuthSession = () => {
 
   window.localStorage.removeItem(STORAGE_KEYS.username)
   window.localStorage.removeItem(STORAGE_KEYS.role)
+  window.localStorage.removeItem(STORAGE_KEYS.baseRole)
+  window.localStorage.removeItem(STORAGE_KEYS.modules)
   // Sprint 51 FE-M2 — sweep per-user caches too (drafts, table layouts,
   // connected-carrier snapshot) so a shared machine doesn't hand the
   // next operator the previous user's in-progress state. Supersedes the

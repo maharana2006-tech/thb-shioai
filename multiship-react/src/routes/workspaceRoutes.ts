@@ -1,4 +1,4 @@
-import { getNavKeysForRole, type UserRole } from '../utils/roles'
+import { getNavKeysForRole, roleSatisfies, type UserRole } from '../utils/roles'
 
 /** Top-level nav destinations. Master-data pages now live under Settings. */
 export const workspacePaths = {
@@ -326,7 +326,25 @@ export const getNavItemsForRole = (role: UserRole) => {
 }
 
 export const getSettingsNavForRole = (role: UserRole) =>
-  settingsNavItems.filter((item) => item.roles.includes(role))
+  settingsNavItems.filter((item) => item.roles.some((r) => roleSatisfies(role, r)))
+
+/**
+ * Access-aware nav: start from what the effective (base) role allows, then —
+ * for a custom role — keep only the modules it was granted. `modules` is null
+ * for built-in roles (no extra restriction).
+ */
+export const getNavItemsForAccess = (effectiveRole: UserRole, modules: string[] | null) => {
+  const items = getNavItemsForRole(effectiveRole)
+  return modules ? items.filter((i) => modules.includes(i.key)) : items
+}
+
+export const getSettingsGroupsForAccess = (effectiveRole: UserRole, modules: string[] | null) => {
+  const groups = getSettingsGroupsForRole(effectiveRole)
+  if (!modules) return groups
+  return groups
+    .map((g) => ({ ...g, pages: g.pages.filter((p) => modules.includes(p.key)) }))
+    .filter((g) => g.pages.length)
+}
 
 /** Which main sidebar item is active for a path (Settings owns all master data). */
 export const resolveWorkspaceRouteKey = (pathname: string): WorkspaceRouteKey | null => {

@@ -46,6 +46,14 @@ public class AuthServiceImpl implements AuthService {
     @Autowired
     private UserRepository userRepository;
 
+    /** Reused for self-deactivation so the last-admin guard + audit apply. */
+    @Autowired
+    private AdminUserService adminUserService;
+
+    /** Resolves a custom role's base role for the JWT baseRole claim. */
+    @Autowired
+    private com.multiship.backend.service.role.RolePlatformService rolePlatformService;
+
     /** Logs page: login / failed-login events. Optional for unit tests. */
     @Autowired(required = false)
     private AuditService auditService;
@@ -494,7 +502,7 @@ public class AuthServiceImpl implements AuthService {
             // this JWT on the next request.
             long tv = user.getTokenVersion() == null ? 0L : user.getTokenVersion();
             String token = jwtService.generateToken(user.getUsername(), user.getRole(),
-                    user.getClientCode(), tv);
+                    user.getClientCode(), tv, rolePlatformService.baseRoleOf(user.getRole()));
 
             // Sprint 50 PR Q1 — write the JWT as an httpOnly cookie so the SPA
             // can't be XSS-exfiltrated. PR Q3 dropped the transitional body
@@ -592,6 +600,65 @@ public class AuthServiceImpl implements AuthService {
         if (auth.getDetails() instanceof JwtAuthenticationFilter.AuthDetails d) {
             clientCode = d.clientCode();
         }
-        return ResponseEntity.ok(new SessionResponse(auth.getName(), role, clientCode));
+        return ResponseEntity.ok(new SessionResponse(auth.getName(), role, clientCode,
+                rolePlatformService.baseRoleOf(role),
+                new java.util.ArrayList<>(rolePlatformService.modulesOf(role))));
+    }
+
+    @Override
+    public ResponseEntity<?> currentProfile() {
+        User user = currentUserOrNull();
+        if (user == null) return notAuthenticated();
+        return ResponseEntity.ok(toProfile(user));
+    }
+
+    @Override
+    @org.springframework.transaction.annotation.Transactional
+    public ResponseEntity<?> updateProfile(com.multiship.backend.dto.ProfileUpdateRequest request) {
+        User user = currentUserOrNull();
+        if (user == null) return notAuthenticated();
+        user.setFullName(request.getFullName().trim());
+        userRepository.save(user);
+        return ResponseEntity.ok(toProfile(user));
+    }
+
+    /** The authenticated user as a full entity, or null when the context has no real user. */
+    private User currentUserOrNull() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null || !auth.isAuthenticated()
+                || "anonymousUser".equals(String.valueOf(auth.getPrincipal()))) {
+            return null;
+        }
+        return userRepository.findByUsername(auth.getName()).orElse(null);
+    }
+
+    private static ResponseEntity<MessageResponse> notAuthenticated() {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(new MessageResponse("Not authenticated.", ErrorCode.UNAUTHORIZED));
+    }
+
+    @Override
+    public ResponseEntity<?> deactivateSelf() {
+        User user = currentUserOrNull();
+        if (user == null) return notAuthenticated();
+        // Reuse the admin path so the last-admin guard, token-version bump and
+        // audit row all apply — actor and subject are the same user.
+        AdminUserService.MutationOutcome outcome = adminUserService.deactivate(
+                user.getId(), "Self-service account deactivation", user.getUsername());
+        return switch (outcome.result()) {
+            case OK, ALREADY_IN_TARGET_STATE ->
+                    ResponseEntity.ok(new MessageResponse("Account deactivated."));
+            case LAST_ADMIN_CANNOT_DEACTIVATE ->
+                    ResponseEntity.status(HttpStatus.CONFLICT).body(new MessageResponse(
+                            "You’re the last active admin. Make another user an admin before deactivating your account."));
+            default ->
+                    ResponseEntity.status(HttpStatus.BAD_REQUEST).body(new MessageResponse("Could not deactivate the account."));
+        };
+    }
+
+    private static com.multiship.backend.dto.ProfileResponse toProfile(User u) {
+        return new com.multiship.backend.dto.ProfileResponse(
+                u.getUsername(), u.getEmail(), u.getFullName(), u.getRole(), u.getClientCode(),
+                Boolean.TRUE.equals(u.getEmailVerified()));
     }
 }

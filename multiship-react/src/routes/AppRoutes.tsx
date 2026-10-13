@@ -61,6 +61,7 @@ const ClientsPage = lazy(() => import('../pages/ClientsPage'))
 const ClientEditorPage = lazy(() => import('../components/ClientEditorPage'))
 const ImporterBrokerPage = lazy(() => import('../components/ImporterBrokerPage'))
 const StampsAddFundsPage = lazy(() => import('../components/StampsPostage'))
+const ProfilePage = lazy(() => import('../components/ProfilePage'))
 const CustomsProfileEditorPage = lazy(() => import('../components/CustomsProfileEditorPage'))
 const LabelTemplatesListPage = lazy(() => import('../components/LabelTemplatesListPage'))
 const LabelTemplateEditorPage = lazy(() => import('../components/LabelTemplateEditorPage'))
@@ -175,6 +176,8 @@ export default function AppRoutes() {
 
         <Route element={<ProtectedRoute />}>
           <Route element={<WorkspaceLayout />}>
+            {/* Self-service profile — every authenticated role (incl. TENANT). */}
+            <Route path="/profile" element={<ProfilePage />} />
             <Route element={<RequireRole roles={['ADMIN', 'USER']} />}>
               <Route path={workspacePaths.dashboard} element={<DashboardPage />} />
 

@@ -4,10 +4,11 @@ import { useFormik } from 'formik'
 import { notify } from '../utils/notify'
 import { FiArrowRight, FiLock, FiShield, FiUser } from 'react-icons/fi'
 import { authService, type AuthResponse } from '../api/authService'
+import { accessService } from '../api/accessService'
 import { carrierService } from '../api/carrierService'
 import AuthField from './auth/AuthField'
 import AuthLayout from './auth/AuthLayout'
-import { storeAuthSession, syncCarrierSession } from '../hooks/useAppSession'
+import { storeAuthSession, storeAccess, syncCarrierSession } from '../hooks/useAppSession'
 import { getHomePathForRole, normalizeRole } from '../utils/roles'
 import { loginValidationSchema } from '../validation/yup/loginSchema'
 import { loginFormConfig } from '../validation/formik/loginFormConfig'
@@ -56,6 +57,11 @@ export default function Login() {
             username: authData.username || values.username,
             role: authData.role || role,
           })
+
+          // Load custom-role access (base role + visible modules) so nav/routes
+          // gate correctly for custom roles; built-in roles get null/empty.
+          const access = await accessService.get().catch(() => null)
+          if (access) storeAccess({ baseRole: access.baseRole, modules: access.modules })
 
           // Pull the live operator carrier session so the redirect reflects
           // real backend state instead of a stale local mirror.

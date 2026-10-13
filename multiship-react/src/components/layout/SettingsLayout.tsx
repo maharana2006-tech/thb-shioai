@@ -7,9 +7,8 @@ import {
   FiLayout, FiLink, FiList, FiMail, FiMap, FiMessageSquare, FiPackage, FiPrinter, FiRefreshCw, FiRepeat,
   FiSearch, FiSend, FiSettings, FiShield, FiShuffle, FiSliders, FiTerminal, FiTruck, FiUsers,
 } from 'react-icons/fi'
-import { getSettingsGroupsForRole, settingsNavItems, workspacePaths } from '../../routes/workspaceRoutes'
+import { getSettingsGroupsForAccess, settingsNavItems, workspacePaths } from '../../routes/workspaceRoutes'
 import { useAppSession } from '../../hooks/useAppSession'
-import { normalizeRole } from '../../utils/roles'
 
 /** One icon per settings page, by settingsNavItems key. */
 const COMPACT_KEY = 'multiship_settings_menu_compact'
@@ -44,10 +43,10 @@ export interface SettingsOutletContext {
  * Below lg the menu collapses into a select so the page keeps the width.
  */
 export default function SettingsLayout() {
-  const { role } = useAppSession()
+  const { effectiveRole, modules } = useAppSession()
   const location = useLocation()
   const navigate = useNavigate()
-  const groups = getSettingsGroupsForRole(normalizeRole(role))
+  const groups = getSettingsGroupsForAccess(effectiveRole, modules)
   const [query, setQuery] = useState('')
   // Icons-only menu (~60px) for wide tables; remembered per browser.
   const [compact, setCompact] = useState(readCompact)

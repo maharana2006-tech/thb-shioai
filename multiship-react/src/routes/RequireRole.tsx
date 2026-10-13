@@ -1,6 +1,6 @@
 import { Navigate, Outlet, useOutletContext } from 'react-router-dom'
 import { useAppSession } from '../hooks/useAppSession'
-import { getHomePathForRole, normalizeRole, type UserRole } from '../utils/roles'
+import { getHomePathForRole, roleSatisfies, type UserRole } from '../utils/roles'
 
 interface RequireRoleProps {
   roles: UserRole[]
@@ -12,12 +12,11 @@ interface RequireRoleProps {
  * inside SettingsLayout) can read `registerRefresh` via useOutletContext.
  */
 export default function RequireRole({ roles }: RequireRoleProps) {
-  const { role, hasConnectedCarrier } = useAppSession()
-  const normalizedRole = normalizeRole(role)
+  const { effectiveRole, hasConnectedCarrier } = useAppSession()
   const parentContext = useOutletContext()
 
-  if (!roles.includes(normalizedRole)) {
-    return <Navigate to={getHomePathForRole(normalizedRole, hasConnectedCarrier)} replace />
+  if (!roles.some((r) => roleSatisfies(effectiveRole, r))) {
+    return <Navigate to={getHomePathForRole(effectiveRole, hasConnectedCarrier)} replace />
   }
 
   return <Outlet context={parentContext} />
