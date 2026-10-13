@@ -138,6 +138,19 @@ public class SecurityConfig {
                                 "/api/v1/printers/discovered"
                         )
                 )
+                // BUG-064 — Spring Security sets X-Frame-Options,
+                // X-Content-Type-Options and Cache-Control by default
+                // but not Content-Security-Policy or Referrer-Policy.
+                // Adds both — CSP uses a `default-src 'self'` baseline
+                // appropriate for a JSON API (the SPA bundle is served
+                // from the same origin via nginx), Referrer-Policy uses
+                // `strict-origin-when-cross-origin` so URLs aren't
+                // leaked to third parties on carrier redirects.
+                .headers(h -> h
+                        .contentSecurityPolicy(csp -> csp
+                                .policyDirectives("default-src 'self'; frame-ancestors 'none'"))
+                        .referrerPolicy(rp -> rp
+                                .policy(org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter.ReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN)))
                 .sessionManagement(session -> session
                         .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
                         // Default strategy bundles CsrfAuthenticationStrategy, which
