@@ -253,6 +253,13 @@ export default function AppRoutes() {
                       inline defense-in-depth check inside the page). */}
                   <Route path="usps-direct/dashboard" element={<UspsDirectDashboardPage />} />
                 </Route>
+                {/* BUG-062 — unknown /settings/* used to silently fall
+                    through to whatever matched first (observed: dropped on
+                    Carrier Accounts with the URL rewritten). Explicit
+                    catch-all renders the overview so the operator sees
+                    where they are instead of a wrong page claiming
+                    otherwise. */}
+                <Route path="*" element={<SettingsOverview />} />
               </Route>
             </Route>
 
