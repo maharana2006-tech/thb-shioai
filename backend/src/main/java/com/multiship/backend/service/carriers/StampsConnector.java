@@ -2983,7 +2983,19 @@ public class StampsConnector implements CarrierConnector {
                     "USPS confirmed this address is deliverable.", responseXml);
         }
         if (cityStateZipOk) {
+            // BUG-018 — USPS SWSIM returns AddressMatch=false + CityStateZipOK=true
+            // for every intl address (it can validate the ZIP but not the foreign
+            // street). Pre-fix we unconditionally flagged "USPS normalised the
+            // address" even when the SWSIM echo equaled the input character for
+            // character. Compare on the canonicalised form; emit the warning
+            // only when SWSIM actually changed something.
             AddressToValidate suggested = readSwsimAddressEcho(responseXml, input);
+            boolean sameAsInput = suggested != null && seraAddressesEqual(input, suggested);
+            if (sameAsInput) {
+                return new AddressValidationResult(true, "EXACT", "UNKNOWN", null,
+                        java.util.List.of(),
+                        "USPS confirmed this address is deliverable.", responseXml);
+            }
             return new AddressValidationResult(true, "CORRECTED", "UNKNOWN", suggested,
                     java.util.List.of("USPS normalised the street address; review before shipping."),
                     "USPS suggested a corrected address.", responseXml);
