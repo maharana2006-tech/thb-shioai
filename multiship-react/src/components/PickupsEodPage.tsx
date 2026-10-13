@@ -142,6 +142,24 @@ export default function PickupsEodPage() {
   useEffect(() => { void loadEvents() }, [loadEvents])
 
   const runClose = async () => {
+    // BUG-059 — bulk carrier close is irreversible from this screen and
+    // defaults to "All clients", so a mis-click closes every open label
+    // for the carrier + date. Confirm with the carrier + date + scope
+    // named before firing.
+    const scope = closeClient
+      ? `client ${closeClient}${closeWarehouse ? ` · warehouse ${closeWarehouse}` : ''}`
+      : (closeWarehouse ? `every client · warehouse ${closeWarehouse}` : 'EVERY client')
+    const ok = await notify.confirm(
+      `Close out ${closeCarrier} for ${closeDate || 'today'}?\n\n`
+        + `Scope: ${scope}\n\n`
+        + 'This files the end-of-day manifest with the carrier and closes every open (generated, non-voided) label in scope. It cannot be undone from this screen.',
+      {
+        title: `Close out ${closeCarrier} ${closeDate || 'today'}?`,
+        confirmLabel: 'Close out',
+        danger: true,
+      },
+    )
+    if (!ok) return
     setClosing(true)
     setCloseResult(null)
     try {
