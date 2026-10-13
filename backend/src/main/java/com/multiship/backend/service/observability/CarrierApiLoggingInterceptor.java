@@ -82,8 +82,14 @@ public class CarrierApiLoggingInterceptor implements ClientHttpRequestIntercepto
         }
     }
 
+    // BUG-065 — client_id is the public half of an OAuth client credential
+    // and treating it as public leaks on carriers that mint long-lived +
+    // non-rotatable client_ids (Stamps.com SERA, UPS 3.0). Admin-visible
+    // logs persist for weeks; mask it too. If a carrier's client_id ever
+    // needs to be read raw, the operator still has the carrier-account
+    // row at /settings/carriers.
     private static final String SECRET_KEYS =
-            "client_secret|clientSecret|refresh_token|refreshToken|access_token|accessToken|id_token"
+            "client_secret|clientSecret|client_id|clientId|refresh_token|refreshToken|access_token|accessToken|id_token"
             + "|code_verifier|password|api_key|apiKey";
     /** "client_secret": "…" in JSON. */
     private static final java.util.regex.Pattern JSON_SECRET = java.util.regex.Pattern.compile(
