@@ -1,9 +1,9 @@
--- BUG-060 � Countries page claimed 'ISO country list' but held only
+-- BUG-060  Countries page claimed 'ISO country list' but held only
 -- six US-territory flags. V151 seeds the full 249-country ISO 3166-1
 -- alpha-2 list on INSERT ON CONFLICT DO NOTHING so the six existing
 -- US-territory rows (and any operator-edited name) are preserved.
 --
--- Idempotent � re-running is a no-op.
+-- Idempotent  re-running is a no-op.
 DO $$
 BEGIN
     IF to_regclass('public.country') IS NOT NULL THEN
@@ -22,7 +22,7 @@ BEGIN
             ('AT', 'Austria', FALSE, NOW(), NOW()),
             ('AU', 'Australia', FALSE, NOW(), NOW()),
             ('AW', 'Aruba', FALSE, NOW(), NOW()),
-            ('AX', '�land Islands', FALSE, NOW(), NOW()),
+            ('AX', 'land Islands', FALSE, NOW(), NOW()),
             ('AZ', 'Azerbaijan', FALSE, NOW(), NOW()),
             ('BA', 'Bosnia and Herzegovina', FALSE, NOW(), NOW()),
             ('BB', 'Barbados', FALSE, NOW(), NOW()),
@@ -33,7 +33,7 @@ BEGIN
             ('BH', 'Bahrain', FALSE, NOW(), NOW()),
             ('BI', 'Burundi', FALSE, NOW(), NOW()),
             ('BJ', 'Benin', FALSE, NOW(), NOW()),
-            ('BL', 'Saint Barth�lemy', FALSE, NOW(), NOW()),
+            ('BL', 'Saint Barthlemy', FALSE, NOW(), NOW()),
             ('BM', 'Bermuda', FALSE, NOW(), NOW()),
             ('BN', 'Brunei Darussalam', FALSE, NOW(), NOW()),
             ('BO', 'Bolivia, Plurinational State of', FALSE, NOW(), NOW()),
@@ -51,7 +51,7 @@ BEGIN
             ('CF', 'Central African Republic', FALSE, NOW(), NOW()),
             ('CG', 'Congo', FALSE, NOW(), NOW()),
             ('CH', 'Switzerland', FALSE, NOW(), NOW()),
-            ('CI', 'C�te d''Ivoire', FALSE, NOW(), NOW()),
+            ('CI', 'Cte d''Ivoire', FALSE, NOW(), NOW()),
             ('CK', 'Cook Islands', FALSE, NOW(), NOW()),
             ('CL', 'Chile', FALSE, NOW(), NOW()),
             ('CM', 'Cameroon', FALSE, NOW(), NOW()),
@@ -60,7 +60,7 @@ BEGIN
             ('CR', 'Costa Rica', FALSE, NOW(), NOW()),
             ('CU', 'Cuba', FALSE, NOW(), NOW()),
             ('CV', 'Cabo Verde', FALSE, NOW(), NOW()),
-            ('CW', 'Cura�ao', FALSE, NOW(), NOW()),
+            ('CW', 'Curaao', FALSE, NOW(), NOW()),
             ('CX', 'Christmas Island', FALSE, NOW(), NOW()),
             ('CY', 'Cyprus', FALSE, NOW(), NOW()),
             ('CZ', 'Czechia', FALSE, NOW(), NOW()),
@@ -195,7 +195,7 @@ BEGIN
             ('PW', 'Palau', FALSE, NOW(), NOW()),
             ('PY', 'Paraguay', FALSE, NOW(), NOW()),
             ('QA', 'Qatar', FALSE, NOW(), NOW()),
-            ('RE', 'R�union', FALSE, NOW(), NOW()),
+            ('RE', 'Runion', FALSE, NOW(), NOW()),
             ('RO', 'Romania', FALSE, NOW(), NOW()),
             ('RS', 'Serbia', FALSE, NOW(), NOW()),
             ('RU', 'Russian Federation', FALSE, NOW(), NOW()),
@@ -232,7 +232,7 @@ BEGIN
             ('TM', 'Turkmenistan', FALSE, NOW(), NOW()),
             ('TN', 'Tunisia', FALSE, NOW(), NOW()),
             ('TO', 'Tonga', FALSE, NOW(), NOW()),
-            ('TR', 'T�rkiye', FALSE, NOW(), NOW()),
+            ('TR', 'Trkiye', FALSE, NOW(), NOW()),
             ('TT', 'Trinidad and Tobago', FALSE, NOW(), NOW()),
             ('TV', 'Tuvalu', FALSE, NOW(), NOW()),
             ('TW', 'Taiwan, Province of China', FALSE, NOW(), NOW()),

@@ -1,8 +1,8 @@
--- BUG-060 — Currencies page held only 10 rows. V152 seeds the full
+-- BUG-060 - Currencies page held only 10 rows. V152 seeds the full
 -- ISO 4217 currency catalog on INSERT ON CONFLICT DO NOTHING so any
 -- operator-edited name or the existing 10 rows are preserved.
 --
--- Idempotent — re-running is a no-op.
+-- Idempotent - re-running is a no-op.
 DO $$
 BEGIN
     IF to_regclass('public.iso_currency') IS NOT NULL THEN
