@@ -149,6 +149,26 @@ public class GlobalExceptionHandler {
                 .build());
     }
 
+    /**
+     * BUG-063 — a path variable or query parameter that doesn't convert
+     * to its declared type (e.g. {@code GET /api/v1/orders/abc} when
+     * {@code orderNo} is Integer) is the caller's mistake, not a server
+     * fault. Pre-fix the catch-all RuntimeException handler mapped
+     * {@link org.springframework.web.method.annotation.MethodArgumentTypeMismatchException}
+     * to 500 INTERNAL_ERROR; map it to 400 with the parameter name named.
+     */
+    @ExceptionHandler(org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiResponse<Void>> handleTypeMismatch(
+            org.springframework.web.method.annotation.MethodArgumentTypeMismatchException ex) {
+        log.debug("Type mismatch on {}: {}", ex.getName(), ex.getMessage());
+        String expected = ex.getRequiredType() != null ? ex.getRequiredType().getSimpleName() : "the expected type";
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(ApiResponse.<Void>builder()
+                .status("error").code(400)
+                .message("Parameter '" + ex.getName() + "' must be " + expected + ".")
+                .errorCode(ErrorCode.MALFORMED_REQUEST.name())
+                .build());
+    }
+
     /** A missing body, or one that isn't valid JSON for the endpoint, is the caller's mistake — 400, not 500. */
     @ExceptionHandler(org.springframework.http.converter.HttpMessageNotReadableException.class)
     public ResponseEntity<ApiResponse<Void>> handleUnreadableBody(

@@ -136,7 +136,11 @@ export interface AdvancedDataTableProps<T extends RowData> {
    * row from the backend and trigger the download. When set, the Export menu
    * item calls this instead of building CSV from the current table view.
    */
-  onExport?: () => void | Promise<void>
+  /** BUG-038 — callers that fetch a server-side CSV need to know which
+   *  columns are visible so hidden columns don't appear in the file.
+   *  Receives a snake-case list of column ids (table-cell order) when
+   *  invoked. Omit when the server ignores it. */
+  onExport?: (visibleColumnIds?: string[]) => void | Promise<void>
   /** Optional caption above the table body (e.g. "Showing N of M …"). */
   caption?: React.ReactNode
   /** Cap the table body height and give it its own scroll region. `null` opts out. */
@@ -386,10 +390,19 @@ export default function AdvancedDataTable<T extends RowData>({
   )
   const [columnPinning, setColumnPinning] = useState<ColumnPinningState>(
     () => {
-      if (persisted?.columnPinning) return persisted.columnPinning
       // BUG-025: auto-pin columns marked meta.pinnedByDefault='end' so the
       // row-actions column stays visible when the table scrolls horizontally
-      // on narrow viewports. Operator can still unpin via the Columns menu.
+      // on narrow viewports. R4 retest confirmed the default was being
+      // overridden by a persisted {start:[], end:[]} from an older session —
+      // treat an all-empty persisted state as "no explicit pinning" and
+      // fall through to the default. Operator can still unpin by explicitly
+      // cycling the pin button; once they pin or unpin anything the
+      // persisted state is non-empty and will be respected on reload.
+      const persistedHasPins =
+        !!persisted?.columnPinning
+        && ((persisted.columnPinning.start?.length ?? 0) > 0
+            || (persisted.columnPinning.end?.length ?? 0) > 0)
+      if (persistedHasPins) return persisted!.columnPinning!
       const end: string[] = []
       for (const col of columns) {
         const id = (col as { id?: string }).id ?? (col as { accessorKey?: string }).accessorKey
@@ -550,7 +563,13 @@ export default function AdvancedDataTable<T extends RowData>({
 
   const runExport = () => {
     // Server-side export: the parent fetches every filtered row and downloads it.
-    if (onExport) { void onExport(); return }
+    if (onExport) {
+      // BUG-038 — snapshot the visible leaf columns so the server-side
+      // export call can filter the CSV to match what's on screen.
+      const visibleIds = table.getVisibleLeafColumns().map((c) => c.id)
+      void onExport(visibleIds)
+      return
+    }
     const stamp = new Date().toISOString().replace(/[:.]/g, '-')
     downloadCsv(`${csvFilename || tableKey}-${stamp}.csv`, exportRowValues(table))
   }
@@ -788,14 +807,23 @@ export default function AdvancedDataTable<T extends RowData>({
                         </button>
                       </div>
                       {/* BUG-023 — don't let the operator untick the last
-                          visible column, which would leave blank rows with
-                          only the row menu. Disable the uncheck when this
-                          column is the sole visible one. */}
+                          visible HIDEABLE column, which would leave blank
+                          rows with only the row menu. Previously the count
+                          included the un-hideable actions column, so the
+                          last user column could still be unticked (actions
+                          stayed visible but doesn't carry data). Count
+                          hideable columns only. */}
                       {(() => {
                         const visibleCount = idToCol.size
                           ? orderedIds.reduce((n, cid) => {
                               const c = idToCol.get(cid)
-                              return c && c.getIsVisible() ? n + 1 : n
+                              if (!c || !c.getIsVisible()) return n
+                              const meta = (c.columnDef as { meta?: { hideable?: boolean } }).meta
+                              // Skip non-hideable columns (e.g. row actions) —
+                              // they're always visible and shouldn't gate
+                              // whether the operator can hide a user column.
+                              if (meta?.hideable === false) return n
+                              return n + 1
                             }, 0)
                           : 0
                         const isLastVisible = col.getIsVisible() && visibleCount <= 1

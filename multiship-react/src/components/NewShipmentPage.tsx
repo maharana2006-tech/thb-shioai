@@ -2992,6 +2992,18 @@ export default function NewShipmentPage() {
       return
     }
 
+    // BUG-067 — Returns Analytics was 100% "Unknown" because the reason
+    // picker was optional and operators left it blank. Make it required
+    // when isReturn so every new return rolls up into a real bucket.
+    // The picker options match CarrierServiceImpl.RETURN_REASON_CODES.
+    if (isReturn && !returnReason) {
+      showToast(
+        'Pick a return reason — it drives the Returns Analytics breakdown. '
+          + 'Options: Wrong item, Defective, No longer needed, Size, Other.',
+        'Return reason required',
+      )
+      return
+    }
     // Packaging ↔ service compatibility gate (carrier would otherwise 400).
     if (pkgServiceWarning) {
       showToast(pkgServiceWarning, 'Incompatible package + service')
@@ -3382,8 +3394,17 @@ export default function NewShipmentPage() {
                     </label>
                     {/* Returns F11 — canonical reason picklist. Codes must
                         match CarrierServiceImpl.RETURN_REASON_CODES. */}
-                    <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11.5px] font-semibold text-[#5a4526] shadow-sm">
-                      <span className="whitespace-nowrap">Reason</span>
+                    {/* BUG-067 — reason is required on return submit now
+                        (handleGenerateLabel guards). Flag the asterisk
+                        + an inline red note when the submit guard would
+                        fire, matching the pattern on other required
+                        fields across the form. */}
+                    <label className={`inline-flex cursor-pointer items-center gap-1.5 rounded-xl border bg-white px-2.5 py-1 text-[11.5px] font-semibold shadow-sm ${
+                      submitAttempted && !returnReason
+                        ? 'border-rose-300 text-rose-800'
+                        : 'border-[#e3d9c4] text-[#5a4526]'
+                    }`}>
+                      <span className="whitespace-nowrap">Reason<span className="text-rose-600">*</span></span>
                       <select
                         value={returnReason}
                         onChange={(e) => setReturnReason(e.target.value)}
@@ -3755,10 +3776,17 @@ export default function NewShipmentPage() {
                               value={labelImageType}
                               onChange={(e) => setLabelImageType(e.target.value)}>
                         <option value="">-- Select --</option>
-                        <option value="PDF">PDF (vector, sharp)</option>
+                        {/* BUG-057 — label names must match the Carrier
+                            Dropdowns registry so the Settings page and
+                            the order form speak the same vocabulary.
+                            Registry seed (V120) uses "PDF (plain)" + "ZPL
+                            (thermal)" across every carrier; previously
+                            this FEDEX branch said "PDF (vector, sharp)"
+                            + "ZPLII (Zebra)", which diverged. */}
+                        <option value="PDF">PDF (plain)</option>
                         <option value="PNG">PNG (raster)</option>
-                        <option value="ZPLII">ZPLII (Zebra)</option>
-                        <option value="EPL2">EPL2 (Eltron/legacy Zebra)</option>
+                        <option value="ZPLII">ZPL (thermal)</option>
+                        <option value="EPL2">EPL (Eltron/legacy Zebra)</option>
                         <option value="DPL">DPL (Datamax)</option>
                       </select>
                     </Field>

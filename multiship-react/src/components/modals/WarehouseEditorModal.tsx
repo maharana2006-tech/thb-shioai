@@ -26,6 +26,7 @@ import {
   validateZip,
 } from '../../utils/clientValidation'
 import { intersectionAddressCaps } from '../../utils/carrierFieldLimits'
+import { CountrySelect } from '../NewShipmentComponents/CountrySelect'
 
 // BUG-040 — warehouse address is ship-from for EVERY carrier on the account.
 // Use the strictest intersection (USPS state=2, min(10) zip, min(30) city,
@@ -534,9 +535,17 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
                 <input value={zip} onChange={(e) => setZip(e.target.value)} onBlur={() => markTouched('zip')}
                   maxLength={FIELD_LIMITS.addr.zip} aria-invalid={err('zip') ? true : undefined} className={inputCls('zip')} />
               </Field>
-              <Field label="Country (ISO-2)" required error={err('country')}>
-                <input value={country} onChange={(e) => setCountry(e.target.value.toUpperCase())} onBlur={() => markTouched('country')}
-                  maxLength={2} aria-invalid={err('country') ? true : undefined} className={inputCls('country', 'font-semibold uppercase')} />
+              {/* BUG-046 — Country was a free-text ISO-2 box with no list,
+                  diverging from the client wizard (searchable combobox)
+                  and the address book (250-entry select). Use the shared
+                  CountrySelect so the three Settings surfaces speak the
+                  same vocabulary, and a mistyped code can't reach the
+                  carrier (the box used to accept "ZZ" without complaint). */}
+              <Field label="Country" required error={err('country')}>
+                <CountrySelect
+                  value={country}
+                  onChange={(code) => { setCountry(code); markTouched('country') }}
+                />
               </Field>
               <Field label="Phone" required span={2} error={err('phone')} hint="Required by UPS, FedEx and DHL on both domestic and international labels.">
                 <input value={phone} onChange={(e) => setPhone(e.target.value)} onBlur={() => markTouched('phone')}

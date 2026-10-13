@@ -244,7 +244,7 @@ export default function ClientsPage() {
     }
   }
 
-  const handleExport = async () => {
+  const handleExport = async (visibleColumnIds?: string[]) => {
     try {
       await clientService.exportClientsCsv({
         search: debouncedSearch || undefined,
@@ -256,6 +256,10 @@ export default function ClientsPage() {
         city: debouncedCols.city || undefined,
         sortBy,
         sortDirection,
+        // BUG-038 — pass the visible column ids so hidden columns don't
+        // appear in the CSV. Backend treats a missing param as "all
+        // columns" so this is backwards-compatible with older clients.
+        columns: visibleColumnIds?.length ? visibleColumnIds.join(',') : undefined,
       })
     } catch (error) {
       notify.apiError(error, 'Failed to export clients.')

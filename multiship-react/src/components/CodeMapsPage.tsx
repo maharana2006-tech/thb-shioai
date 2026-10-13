@@ -469,15 +469,35 @@ export default function CodeMapsPage({ initialClientFilter, embedded = false }: 
               />
             </div>
             <div className="sm:self-end">
-              <button
-                type="button"
-                onClick={() => void submitAdd()}
-                disabled={!canSubmit || saving}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-4 py-2 text-[12px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <FiPlus className="h-3.5 w-3.5" />
-                {saving ? 'Saving…' : 'Add alias'}
-              </button>
+              {/* BUG-056 — context-aware tooltip so the operator sees
+                  WHY the button is disabled (same pattern as the client
+                  wizard's "Add to list" button). Previously disabled with
+                  no title + no field marked. */}
+              {(() => {
+                const missing: string[] = []
+                if (!selectedClient) missing.push('a client')
+                if (erpCode.trim().length === 0) missing.push('an ERP code')
+                if (tab === 'DEST_COUNTRY'
+                    ? iso2.trim().length !== 2
+                    : !targetId) {
+                  missing.push(tab === 'DEST_COUNTRY' ? 'a 2-letter ISO country' : 'a platform target')
+                }
+                const title = missing.length
+                  ? `Fill ${missing.join(' + ')} to add the alias.`
+                  : undefined
+                return (
+                  <button
+                    type="button"
+                    onClick={() => void submitAdd()}
+                    disabled={!canSubmit || saving}
+                    title={title}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-4 py-2 text-[12px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <FiPlus className="h-3.5 w-3.5" />
+                    {saving ? 'Saving…' : 'Add alias'}
+                  </button>
+                )
+              })()}
             </div>
             {/* Audit R2 #368 — advanced-scope disclosure. Hidden by default
                 so the common case stays a two-field form; expand to add

@@ -90,28 +90,61 @@ public class ClientServiceImpl implements ClientService {
                 .map(this::toDTO)
                 .toList();
 
-        StringBuilder csv = new StringBuilder(64 + clients.size() * 96);
-        csv.append("Code,Name,Email,Phone,Country,Ship-from city,Carrier accounts,Orders,Status,Created,Updated\r\n");
-        for (ClientDTO c : clients) {
+        // BUG-038 — columns parameter honours table.getVisibleLeafColumns()
+        // so hidden columns don't appear in the CSV. Unknown ids are
+        // ignored; null/blank => include every column (prior behaviour).
+        java.util.LinkedHashMap<String, java.util.function.Function<ClientDTO, String>> cols = new java.util.LinkedHashMap<>();
+        cols.put("code",     c -> csvCell(c.getClientCode()));
+        cols.put("name",     c -> csvCell(c.getName()));
+        cols.put("email",    c -> csvCell(c.getEmail()));
+        cols.put("phone",    c -> csvCell(c.getPhone()));
+        cols.put("country",  c -> {
             AddressDTO ship = c.getShipFrom();
-            String country = ship != null && ship.getCountry() != null ? ship.getCountry().toUpperCase(Locale.ROOT) : "";
-            String cityValue = ship != null && ship.getCity() != null ? ship.getCity() : "";
-            String accounts = c.getCarrierAccounts() == null ? "" :
-                    c.getCarrierAccounts().stream()
-                            .map(a -> a.getCarrierCode() + ":" + a.getAccountNumber() + (Boolean.TRUE.equals(a.getClientDefault()) ? "*" : ""))
-                            .reduce((a, b) -> a + "; " + b)
-                            .orElse("");
-            csv.append(csvCell(c.getClientCode())).append(',')
-               .append(csvCell(c.getName())).append(',')
-               .append(csvCell(c.getEmail())).append(',')
-               .append(csvCell(c.getPhone())).append(',')
-               .append(csvCell(country)).append(',')
-               .append(csvCell(cityValue)).append(',')
-               .append(csvCell(accounts)).append(',')
-               .append(c.getOrderCount() == null ? 0L : c.getOrderCount()).append(',')
-               .append(csvCell(c.getStatus())).append(',')
-               .append(csvCell(c.getCreatedAt() == null ? "" : c.getCreatedAt().toString())).append(',')
-               .append(csvCell(c.getUpdatedAt() == null ? "" : c.getUpdatedAt().toString())).append("\r\n");
+            return csvCell(ship != null && ship.getCountry() != null ? ship.getCountry().toUpperCase(Locale.ROOT) : "");
+        });
+        cols.put("city",     c -> {
+            AddressDTO ship = c.getShipFrom();
+            return csvCell(ship != null && ship.getCity() != null ? ship.getCity() : "");
+        });
+        cols.put("accounts", c -> csvCell(c.getCarrierAccounts() == null ? "" :
+                c.getCarrierAccounts().stream()
+                        .map(a -> a.getCarrierCode() + ":" + a.getAccountNumber()
+                                + (Boolean.TRUE.equals(a.getClientDefault()) ? "*" : ""))
+                        .reduce((a, b) -> a + "; " + b)
+                        .orElse("")));
+        cols.put("orders",   c -> String.valueOf(c.getOrderCount() == null ? 0L : c.getOrderCount()));
+        cols.put("status",   c -> csvCell(c.getStatus()));
+        cols.put("created",  c -> csvCell(c.getCreatedAt() == null ? "" : c.getCreatedAt().toString()));
+        cols.put("updated",  c -> csvCell(c.getUpdatedAt() == null ? "" : c.getUpdatedAt().toString()));
+
+        java.util.LinkedHashMap<String, String> headers = new java.util.LinkedHashMap<>();
+        headers.put("code", "Code"); headers.put("name", "Name"); headers.put("email", "Email");
+        headers.put("phone", "Phone"); headers.put("country", "Country");
+        headers.put("city", "Ship-from city"); headers.put("accounts", "Carrier accounts");
+        headers.put("orders", "Orders"); headers.put("status", "Status");
+        headers.put("created", "Created"); headers.put("updated", "Updated");
+
+        java.util.List<String> selected;
+        if (filters.getColumns() != null && !filters.getColumns().isBlank()) {
+            selected = new java.util.ArrayList<>();
+            for (String raw : filters.getColumns().split(",")) {
+                String id = raw.trim().toLowerCase(Locale.ROOT);
+                if (cols.containsKey(id)) selected.add(id);
+            }
+            if (selected.isEmpty()) selected = new java.util.ArrayList<>(cols.keySet());
+        } else {
+            selected = new java.util.ArrayList<>(cols.keySet());
+        }
+
+        StringBuilder csv = new StringBuilder(64 + clients.size() * 96);
+        csv.append(selected.stream().map(headers::get).reduce((a, b) -> a + "," + b).orElse("")).append("\r\n");
+        for (ClientDTO c : clients) {
+            StringBuilder row = new StringBuilder();
+            for (int i = 0; i < selected.size(); i++) {
+                if (i > 0) row.append(',');
+                row.append(cols.get(selected.get(i)).apply(c));
+            }
+            csv.append(row).append("\r\n");
         }
         return csv.toString();
     }
