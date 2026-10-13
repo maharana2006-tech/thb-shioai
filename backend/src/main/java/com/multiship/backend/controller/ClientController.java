@@ -150,11 +150,17 @@ public class ClientController {
             @RequestParam(required = false) String name,
             @RequestParam(required = false) String city,
             @RequestParam(defaultValue = "code") String sortBy,
-            @RequestParam(defaultValue = "ASC") String sortDirection) {
+            @RequestParam(defaultValue = "ASC") String sortDirection,
+            // BUG-038 — comma-joined visible-column ids the FE picks up from
+            // table.getVisibleLeafColumns(). When blank the CSV includes
+            // every column (prior behaviour). Unknown ids are silently
+            // dropped by the service.
+            @RequestParam(required = false) String columns) {
         com.multiship.backend.dto.ClientListFilters filters = com.multiship.backend.dto.ClientListFilters.builder()
                 .search(search).status(status).carrier(carrier).hasOrders(hasOrders)
                 .code(code).name(name).city(city)
                 .sortBy(sortBy).sortDirection(sortDirection)
+                .columns(columns)
                 .page(0).size(1)
                 .build();
         String csv = clientService.exportClientsCsv(filters);

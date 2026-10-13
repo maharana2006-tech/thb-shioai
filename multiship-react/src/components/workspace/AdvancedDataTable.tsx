@@ -136,7 +136,11 @@ export interface AdvancedDataTableProps<T extends RowData> {
    * row from the backend and trigger the download. When set, the Export menu
    * item calls this instead of building CSV from the current table view.
    */
-  onExport?: () => void | Promise<void>
+  /** BUG-038 — callers that fetch a server-side CSV need to know which
+   *  columns are visible so hidden columns don't appear in the file.
+   *  Receives a snake-case list of column ids (table-cell order) when
+   *  invoked. Omit when the server ignores it. */
+  onExport?: (visibleColumnIds?: string[]) => void | Promise<void>
   /** Optional caption above the table body (e.g. "Showing N of M …"). */
   caption?: React.ReactNode
   /** Cap the table body height and give it its own scroll region. `null` opts out. */
@@ -559,7 +563,13 @@ export default function AdvancedDataTable<T extends RowData>({
 
   const runExport = () => {
     // Server-side export: the parent fetches every filtered row and downloads it.
-    if (onExport) { void onExport(); return }
+    if (onExport) {
+      // BUG-038 — snapshot the visible leaf columns so the server-side
+      // export call can filter the CSV to match what's on screen.
+      const visibleIds = table.getVisibleLeafColumns().map((c) => c.id)
+      void onExport(visibleIds)
+      return
+    }
     const stamp = new Date().toISOString().replace(/[:.]/g, '-')
     downloadCsv(`${csvFilename || tableKey}-${stamp}.csv`, exportRowValues(table))
   }
