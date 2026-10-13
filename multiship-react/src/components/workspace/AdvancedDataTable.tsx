@@ -797,14 +797,23 @@ export default function AdvancedDataTable<T extends RowData>({
                         </button>
                       </div>
                       {/* BUG-023 — don't let the operator untick the last
-                          visible column, which would leave blank rows with
-                          only the row menu. Disable the uncheck when this
-                          column is the sole visible one. */}
+                          visible HIDEABLE column, which would leave blank
+                          rows with only the row menu. Previously the count
+                          included the un-hideable actions column, so the
+                          last user column could still be unticked (actions
+                          stayed visible but doesn't carry data). Count
+                          hideable columns only. */}
                       {(() => {
                         const visibleCount = idToCol.size
                           ? orderedIds.reduce((n, cid) => {
                               const c = idToCol.get(cid)
-                              return c && c.getIsVisible() ? n + 1 : n
+                              if (!c || !c.getIsVisible()) return n
+                              const meta = (c.columnDef as { meta?: { hideable?: boolean } }).meta
+                              // Skip non-hideable columns (e.g. row actions) —
+                              // they're always visible and shouldn't gate
+                              // whether the operator can hide a user column.
+                              if (meta?.hideable === false) return n
+                              return n + 1
                             }, 0)
                           : 0
                         const isLastVisible = col.getIsVisible() && visibleCount <= 1
