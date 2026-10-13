@@ -3189,10 +3189,22 @@ public class FedExConnector implements CarrierConnector {
                 pieceResponses.path(0).path("packageDocuments").path(0).path("encodedLabel")
         );
 
-        String labelPdf = firstText(
-                pieceResponses.path(0).path("packageDocuments").path(0).path("encodedLabel"),
-                pieceResponses.path(0).path("packageDocuments").path(0).path("url")
-        );
+        // BUG-007 — FedEx occasionally returns `url` only (a signed doc
+        // URL that needs OAuth to fetch), with no inline `encodedLabel`.
+        // Pre-fix the url leaked into labelPdf, which the resolver then
+        // tried to fetch anonymously and left the FE spinning on
+        // "Loading label document…". Only accept inline bytes here;
+        // when encodedLabel is empty, leave labelPdf null and log so
+        // the operator sees "regenerate required" instead of a stuck
+        // loading state. The backfill endpoint re-pulls from the url.
+        String inlineLabel = pieceResponses.path(0).path("packageDocuments").path(0).path("encodedLabel").asText(null);
+        String labelPdf = StringUtils.hasText(inlineLabel) ? inlineLabel : null;
+        if (labelPdf == null && StringUtils.hasText(labelUrl)) {
+            org.slf4j.LoggerFactory.getLogger(FedExConnector.class).warn(
+                "FedEx createShipment returned a signed label URL with no inline encodedLabel "
+                        + "(tracking {}); persisting null bytes. Operator can regen or run the "
+                        + "admin backfill to pull from the URL. url={}", trackingNumber, labelUrl);
+        }
 
         // Shipment cost — FedEx nests it at completedShipmentDetail.shipmentRating
         // .shipmentRateDetails[]. (The old read of a top-level "shipmentRatingDetails"
@@ -3244,9 +3256,11 @@ public class FedExConnector implements CarrierConnector {
                 String pcLabelUrl = firstText(
                         piece.path("packageDocuments").path(0).path("url"),
                         piece.path("packageDocuments").path(0).path("encodedLabel"));
-                String pcLabelPdf = firstText(
-                        piece.path("packageDocuments").path(0).path("encodedLabel"),
-                        piece.path("packageDocuments").path(0).path("url"));
+                // BUG-007 — same inline-bytes-only guard as the master
+                // row above. URL-only responses leave bytes null for
+                // this piece; the operator sees "regenerate required".
+                String pcInline = piece.path("packageDocuments").path(0).path("encodedLabel").asText(null);
+                String pcLabelPdf = StringUtils.hasText(pcInline) ? pcInline : null;
                 // Per-piece charge: netChargeAmount is the billed figure, but the
                 // sandbox often returns 0 there while baseRateAmount carries the
                 // real rate — take the first positive of net → rate → base, else

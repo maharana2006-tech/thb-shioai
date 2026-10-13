@@ -2105,6 +2105,19 @@ export default function NewShipmentPage() {
       scrollToFirstError()
       return
     }
+    // BUG-053 — the single-piece-too-many-boxes gate used to live AFTER
+    // the formik.validateForm call. In a state where the form is red-
+    // field-free but the box count exceeds the packaging cap, validate
+    // ran to the carrier and returned mid-shaped results (or silently
+    // did nothing when a formik check fired for an unrelated field).
+    // Check it first so the operator always sees the actual reason.
+    if (singlePieceOnlyWarning) {
+      setSubmitAttempted(true)
+      setShipmentValidationResult(null)
+      setChecklistOpen(false)
+      showToast(singlePieceOnlyWarning, 'Too many boxes for this packaging')
+      return
+    }
     // The same form rules Generate label enforces (lengths, phone digits,
     // HS format, insured ≤ declared…) — highlighted in red, as on Generate.
     // Busy from the click on: the form check itself takes a moment, and a click

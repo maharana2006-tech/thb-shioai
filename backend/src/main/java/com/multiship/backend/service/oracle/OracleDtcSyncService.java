@@ -1,9 +1,11 @@
 package com.multiship.backend.service.oracle;
 
+import com.multiship.backend.config.OracleDataSourceConfig;
 import com.multiship.backend.model.DtcOrder;
 import com.multiship.backend.model.oracle.OracleDtcOrder;
 import com.multiship.backend.repository.oracle.OracleDtcOrderRepositoryImpl;
 import com.multiship.backend.repository.DtcOrderRepository;
+import com.multiship.backend.service.externalsystems.ExternalSystemRegistry;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,14 +28,27 @@ import java.util.List;
  *   4. Return summary (fetched, imported, skipped)
  */
 @Service
-@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "multiship.oracle.enabled", havingValue = "true")
 @RequiredArgsConstructor
 public class OracleDtcSyncService {
 
     private static final Logger log = LoggerFactory.getLogger(OracleDtcSyncService.class);
 
+    /** Message returned/shown when the nds-default row is switched off. */
+    public static final String DISABLED_MESSAGE =
+            "Oracle DTC sync is disabled. Enable the '" + OracleDataSourceConfig.NDS_CONNECTION_NAME
+                    + "' connection in Settings → External Systems.";
+
     private final OracleDtcOrderRepositoryImpl oracleDtcOrderRepository;
     private final DtcOrderRepository dtcOrderRepository;
+    private final ExternalSystemRegistry externalSystemRegistry;
+
+    /**
+     * On/off switch for the Oracle DTC sync: the {@code active} flag on the
+     * {@code nds-default} row in Settings → External Systems.
+     */
+    public boolean isEnabled() {
+        return externalSystemRegistry.isActive(OracleDataSourceConfig.NDS_CONNECTION_NAME);
+    }
 
     /**
      * Fetch pending DTC orders from Oracle and sync to PostgreSQL.
@@ -44,6 +59,10 @@ public class OracleDtcSyncService {
      */
     @Transactional(value = "oracleTransactionManager", readOnly = true)
     public OracleSyncResult syncPendingDtcOrders(String tenantId) {
+        if (!isEnabled()) {
+            log.info("Skipping DTC order sync: {}", DISABLED_MESSAGE);
+            return new OracleSyncResult(0, 0, 0, DISABLED_MESSAGE);
+        }
         log.info("Starting DTC order sync from Oracle (tenant={}, view configured in properties)",
                 tenantId == null || tenantId.isEmpty() ? "ALL" : tenantId);
 

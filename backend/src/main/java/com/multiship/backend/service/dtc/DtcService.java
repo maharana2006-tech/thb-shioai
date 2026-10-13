@@ -33,8 +33,7 @@ import java.util.Locale;
  * <p>Wired to the S1 external-systems framework via {@link NdsTemplates}
  * (PRODUCTION login on {@code nds-default}) so the connection details
  * live in the {@code external_system_connection} table + secrets — no
- * separate {@code multiship.oracle.enabled} flag or {@code oracleEntityManagerFactory}
- * needed. If the {@code nds-default} connection row is missing or
+ * separate on/off flag or {@code oracleEntityManagerFactory} needed. If the {@code nds-default} connection row is missing or
  * inactive, {@link #isConfigured()} returns {@code false} and the pull
  * short-circuits with a non-configured result (same shape
  * {@code WmsService} uses when {@code WMS_BASE_URL} is blank).

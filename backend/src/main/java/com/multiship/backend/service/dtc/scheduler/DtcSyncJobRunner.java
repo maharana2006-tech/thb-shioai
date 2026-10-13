@@ -2,15 +2,14 @@ package com.multiship.backend.service.dtc.scheduler;
 
 import com.multiship.backend.service.oracle.OracleDtcSyncService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
 
 /**
  * DTC_SYNC — pulls pending DTC orders from Oracle WMS for every tenant.
- * {@link OracleDtcSyncService} only exists when multiship.oracle.enabled=true,
- * so without it the run is recorded as skipped rather than failing.
+ * When the {@code nds-default} connection is inactive in Settings → External
+ * Systems the run is recorded as skipped rather than failing.
  */
 @Component
 @RequiredArgsConstructor
@@ -18,7 +17,7 @@ public class DtcSyncJobRunner implements DtcSchedulerJobRunner {
 
     public static final String KEY = "DTC_SYNC";
 
-    private final ObjectProvider<OracleDtcSyncService> oracleDtcSyncService;
+    private final OracleDtcSyncService oracleDtcSyncService;
 
     @Override
     public String jobKey() {
@@ -27,11 +26,10 @@ public class DtcSyncJobRunner implements DtcSchedulerJobRunner {
 
     @Override
     public Outcome run(Map<String, Object> params) {
-        OracleDtcSyncService sync = oracleDtcSyncService.getIfAvailable();
-        if (sync == null) {
-            return Outcome.skipped("Oracle is not enabled (multiship.oracle.enabled=false).");
+        if (!oracleDtcSyncService.isEnabled()) {
+            return Outcome.skipped(OracleDtcSyncService.DISABLED_MESSAGE);
         }
-        OracleDtcSyncService.OracleSyncResult result = sync.syncPendingDtcOrders("");  // all tenants
+        OracleDtcSyncService.OracleSyncResult result = oracleDtcSyncService.syncPendingDtcOrders("");  // all tenants
         // TODO: enqueue label generation for the newly synced batch
         //       (DtcLabelGenerationService.enqueue) to complete "sync and labels".
         return Outcome.success(String.format("Fetched %d, imported %d, skipped %d.%s",

@@ -36,4 +36,11 @@ export interface InviteMintResponse {
 export const adminInviteService = {
   mint: (req: InviteMintRequest) =>
     apiClient.post<ApiResponse<InviteMintResponse>>('/admin/user-invites', req),
+  // BUG-050 — pending invites surface + resend/revoke.
+  list: () =>
+    apiClient.get<ApiResponse<InviteMintResponse[]>>('/admin/user-invites'),
+  resend: (id: number) =>
+    apiClient.post<ApiResponse<InviteMintResponse>>(`/admin/user-invites/${id}/resend`, {}),
+  revoke: (id: number) =>
+    apiClient.delete<ApiResponse<void>>(`/admin/user-invites/${id}`),
 }

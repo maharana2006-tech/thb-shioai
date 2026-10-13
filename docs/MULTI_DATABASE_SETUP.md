@@ -86,7 +86,8 @@ export DB_PASSWORD=<secure-password>
 export DB_POOL_SIZE=50
 
 # Oracle (Secondary)
-export ORACLE_ENABLED=true   # the Oracle sync is off (and its beans absent) unless this is true
+# Oracle DTC sync on/off: the 'active' flag on the nds-default row in
+# Settings → External Systems (no env var).
 export ORACLE_DB_URL=jdbc:oracle:thin:@192.168.3.8:1521:tb10g
 export ORACLE_DB_USERNAME=shipx_read
 export ORACLE_DB_PASSWORD=<oracle-password>

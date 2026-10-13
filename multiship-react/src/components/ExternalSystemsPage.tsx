@@ -588,6 +588,11 @@ function MainTab({
         <span className="text-[12.5px] font-semibold text-slate-800">Active</span>
         <span className="text-[11px] text-slate-500">— inactive rows are loaded but never dispatched to.</span>
       </label>
+      {name.trim() === 'nds-default' && (
+        <p className="-mt-1 pl-6 text-[11px] text-slate-500">
+          Controls Oracle DTC sync — turn off to stop the D2C pull and the scheduled DTC_SYNC job. Takes effect immediately, no restart needed.
+        </p>
+      )}
 
       {/* V91 env split — one row per (name, env). Locked after create. */}
       <label className="block">

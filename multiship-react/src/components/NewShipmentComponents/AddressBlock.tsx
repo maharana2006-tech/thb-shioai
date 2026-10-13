@@ -169,9 +169,18 @@ export function AddressBlock({
               // (backend UpsConnector.joinPhone / equivalents already
               // omit the prefix in that case, so the phone field just
               // rides on the wire as-is).
+              // BUG-008 — clear the state field when the new country
+              // has a dropdown that doesn't include the current value,
+              // so switching Canada → Mexico doesn't leave "ON" behind
+              // for the carrier to reject later.
+              const newOptions = STATE_CODE_OPTIONS[code.toUpperCase()]
+              const keepState = !newOptions
+                || !value.state
+                || newOptions.some((s) => s.code === value.state)
               onChange({
                 countryCode: code,
                 phoneCountryCode: dialCodeFor(code) || '',
+                ...(keepState ? {} : { state: '' }),
               })
             }}
           />

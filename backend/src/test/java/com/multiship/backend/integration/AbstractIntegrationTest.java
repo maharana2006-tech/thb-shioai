@@ -52,17 +52,9 @@ import org.testcontainers.containers.PostgreSQLContainer;
         // 5 is comfortable for a single-test suite while still letting the
         // pool exercise its own logic.
         "spring.datasource.hikari.maximum-pool-size=5",
-        // Disable NDS Oracle in integration tests. In prod the default is
-        // true + ops seeds the external_system_connection row named
-        // 'nds-default'; in the Testcontainers harness that row doesn't
-        // exist so OracleDataSourceConfig's factory method threw
-        // BeanCreationException, Spring tripped the context-load failure
-        // threshold, and every subsequent IT failed with "skipping
-        // repeated attempt to load context." Turning oracle off here lets
-        // the gating ConditionalOnProperty skip the config cleanly;
-        // non-Oracle ITs are unblocked. Oracle-specific tests (none today)
-        // would override this via their own @TestPropertySource.
-        "multiship.oracle.enabled=false",
+        // NDS Oracle needs no switch here: the Oracle beans always wire up
+        // and only touch Oracle when the 'nds-default' row is active
+        // (Settings → External Systems), which it isn't in Testcontainers.
 })
 public abstract class AbstractIntegrationTest {
 

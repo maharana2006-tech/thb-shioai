@@ -1105,7 +1105,7 @@ export default function ClientEditorPage() {
     touchStep('shipFrom')
     touchStep('return')
     if (!stepValid('identity') || !stepValid('shipFrom') || !stepValid('return')) {
-      notify.error('Fix the highlighted fields to save.')
+      notify.error({ title: 'Check the form for errors', body: 'Fix the highlighted fields to save.' })
       return
     }
     setSaving(true)

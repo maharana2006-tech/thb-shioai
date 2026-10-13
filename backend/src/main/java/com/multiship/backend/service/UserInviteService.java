@@ -116,6 +116,38 @@ public class UserInviteService {
         return repository.findAll();
     }
 
+    /** BUG-050 — resend an existing invite. Refreshes the expiry so the
+     *  recipient has another {@code tokenTtlDays} window and re-fires
+     *  the AUTH.USER_INVITE email. Token is kept, so any link the
+     *  recipient still has in their mailbox keeps working. Rejects if
+     *  the invite was already consumed. */
+    @Transactional
+    public UserInvite resend(Long id, String acceptLinkBaseUrl) {
+        UserInvite invite = repository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Invite " + id + " not found"));
+        if (invite.getConsumedAt() != null) {
+            throw new IllegalStateException("Invite " + id + " was already consumed; cannot resend.");
+        }
+        invite.setExpiresAt(LocalDateTime.now().plusDays(tokenTtlDays));
+        repository.save(invite);
+        String acceptLink = acceptLinkBaseUrl + "/invite/" + invite.getToken();
+        notifications.send("AUTH.USER_INVITE", invite.getEmail(), java.util.Map.of(
+                "acceptLink", acceptLink,
+                "role", invite.getRole(),
+                "clientCode", invite.getClientCode(),
+                "ttlDays", tokenTtlDays,
+                "invitedBy", invite.getInvitedBy() == null ? "" : invite.getInvitedBy()));
+        return invite;
+    }
+
+    /** BUG-050 — revoke an invite by deleting the row. The token is
+     *  purged so the accept URL stops working immediately. Admin can
+     *  mint a new invite afterwards if they want to retry. */
+    @Transactional
+    public void revoke(Long id) {
+        repository.deleteById(id);
+    }
+
     private static String randomToken() {
         byte[] buf = new byte[24];  // 48-char hex
         RANDOM.nextBytes(buf);
