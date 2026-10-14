@@ -224,31 +224,30 @@ class ManifestServiceImplFleetSplitTest {
 
     // ===== failedToClassify =====
 
+    /** BUG-019 — a number Multiship never issued is refused by name, not dropped or sent to the carrier. */
     @Test
-    void unresolvable_trackings_land_in_failedToClassify_and_are_excluded() {
+    void unknown_trackings_are_refused_by_name() {
         stubTracking("1Z-G1", 100, "P80", "ACME");
         stubClientShipvia("ACME", "P80", 10L);
         stubShippingService(10L, false);
         when(trackingRepo.findFirstByTrackingNumberIgnoreCaseOrderByIdDesc("MYSTERY-1")).thenReturn(Optional.empty());
         when(trackingRepo.findFirstByTrackingNumberIgnoreCaseOrderByIdDesc("MYSTERY-2")).thenReturn(Optional.empty());
 
-        when(connector.closeOutDay(any(CloseOutRequest.class), anyString(), anyString()))
-                .thenReturn(new CloseOutResult("FEDEX", "GROUP-G", null, null, 1, "MANIFESTED", "ok", "{}"));
+        ApiResponse<ManifestResponseDTO> resp = service.closeOut(request("FEDEX", "ACME",
+                List.of("1Z-G1", "MYSTERY-1", "MYSTERY-2")));
 
-        ManifestResponseDTO body = service.closeOut(request("FEDEX", "ACME",
-                List.of("1Z-G1", "MYSTERY-1", "MYSTERY-2"))).getData();
-
-        assertNotNull(body.getFailedToClassify());
-        assertEquals(List.of("MYSTERY-1", "MYSTERY-2"), body.getFailedToClassify());
-        ArgumentCaptor<CloseOutRequest> captor = ArgumentCaptor.forClass(CloseOutRequest.class);
-        verify(connector).closeOutDay(captor.capture(), anyString(), anyString());
-        assertEquals(List.of("1Z-G1"), captor.getValue().trackingNumbers(),
-                "unresolvable trackings must be excluded from the carrier call");
+        assertEquals(422, resp.getCode());
+        assertEquals("These trackings aren't an open FEDEX label in Multiship: MYSTERY-1, MYSTERY-2. "
+                + "Check the number, or remove it and close out again.", resp.getMessage());
+        verify(connector, times(0)).closeOutDay(any(), anyString(), anyString());
     }
 
     @Test
     void all_trackings_unresolvable_returns_error_with_failedToClassify() {
-        when(trackingRepo.findFirstByTrackingNumberIgnoreCaseOrderByIdDesc(anyString())).thenReturn(Optional.empty());
+        // Multiship's own labels whose ship-via maps to no service (and no billed account recorded).
+        stubTracking("X", 201, "ZZZ", "ACME");
+        stubTracking("Y", 202, "ZZZ", "ACME");
+        stubTracking("Z", 203, "ZZZ", "ACME");
 
         ManifestResponseDTO body = service.closeOut(request("FEDEX", "ACME",
                 List.of("X", "Y", "Z"))).getData();
@@ -295,6 +294,36 @@ class ManifestServiceImplFleetSplitTest {
         r.setCustomerNo(customer);
         r.setTrackingNumbers(trackings);
         return r;
+    }
+
+    /** BUG-022 — a manual USPS label (ship-via = catalog code, no client SHIPVIA map) is gathered by its billed account. */
+    @Test
+    void closeWholeDay_findsAManualLabelThroughTheAccountItWasBilledTo() {
+        OrderTracking ot = new OrderTracking();
+        ot.setOrderNo(900060);
+        ot.setTrackingNumber("9434650899563003347255");
+        ot.setAccountNumber("874157");
+        when(trackingRepo.findGeneratedBetween(any(), any())).thenReturn(List.of(ot));
+        when(trackingRepo.findFirstByTrackingNumberIgnoreCaseOrderByIdDesc("9434650899563003347255"))
+                .thenReturn(Optional.of(ot));
+        Order o = new Order();
+        o.setOrderNo(900060);
+        o.setShipviaCd("GROUND_ADVANTAGE");
+        o.setTenantId("ARH173");
+        when(orderRepo.findByOrderNo(900060)).thenReturn(Optional.of(o));
+        CarrierAccountRef usps = new CarrierAccountRef();
+        usps.setAccountNumber("874157");
+        usps.setCarrierCode("USPS");
+        when(accountRepo.findFirstByAccountNumberIgnoreCaseOrderByUpdatedAtDesc("874157")).thenReturn(Optional.of(usps));
+        when(connector.getCarrierCode()).thenReturn("USPS");
+        when(connector.closeOutDay(any(CloseOutRequest.class), anyString(), anyString()))
+                .thenReturn(new CloseOutResult("USPS", "SCAN-1", null, null, 1, "MANIFESTED", "ok", "{}"));
+
+        ApiResponse<ManifestResponseDTO> resp = service.closeOutForDay("USPS", "ARH173",
+                java.time.LocalDate.of(2026, 10, 9), null, "MANUAL");
+
+        assertEquals("MANIFESTED", resp.getData().getStatus(), String.valueOf(resp.getData().getMessage()));
+        assertEquals(1, resp.getData().getTrackingCount());
     }
 
     private void stubTracking(String trackingNumber, int orderNo, String shipviaCd, String tenantCode) {

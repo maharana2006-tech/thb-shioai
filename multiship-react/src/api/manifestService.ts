@@ -87,6 +87,13 @@ export const manifestService = {
   closeOut: (request: ManifestRequest) =>
     apiClient.post<ApiResponse<ManifestResponse>>('/manifests', request),
 
+  /** BUG-011 — every open label a close-out for this carrier + date would manifest (not one grid page). */
+  openTrackings: (q: { carrierCode: string; closeDate: string; customerNo?: string | null }) => {
+    const p = new URLSearchParams({ carrierCode: q.carrierCode, closeDate: q.closeDate })
+    if (q.customerNo) p.set('customerNo', q.customerNo)
+    return apiClient.get<ApiResponse<string[]>>(`/manifests/open?${p}`)
+  },
+
   /** V135 — close a whole day for one carrier (backend gathers the labels). */
   closeOutDay: (request: CloseDayRequest) =>
     apiClient.post<ApiResponse<ManifestResponse>>('/manifests/close-day', request),

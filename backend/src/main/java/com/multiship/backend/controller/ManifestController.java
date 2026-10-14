@@ -66,6 +66,22 @@ public class ManifestController {
         return ResponseEntity.status(response.getCode()).body(response);
     }
 
+    @Operation(summary = "Open labels for a close-out",
+            description = "Tracking numbers a close-out for this carrier and date would manifest — "
+                    + "every open label generated that day, not just one page of orders.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping("/open")
+    public ResponseEntity<ApiResponse<List<String>>> openTrackings(
+            @RequestParam String carrierCode,
+            @RequestParam(required = false) String customerNo,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(
+                    iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate closeDate,
+            @RequestParam(required = false) String warehouseCode) {
+        List<String> data = manifestService.openTrackings(carrierCode, customerNo, closeDate, warehouseCode);
+        return ResponseEntity.ok(ApiResponse.<List<String>>builder()
+                .status("success").code(200).message(data.size() + " open label(s).").data(data).build());
+    }
+
     @Operation(summary = "Recent pickup / end-of-day events",
             description = "V135 — the pickup/close audit log (manual + scheduled), newest first.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")

@@ -15,6 +15,8 @@ import { Link } from 'react-router-dom'
 import { manifestService, type ManifestEntry, type ManifestRequest, type ManifestResponse } from '../../api/manifestService'
 import { notify } from '../../utils/notify'
 import { useModalDismiss } from '../../hooks/useModalDismiss'
+import { requestErrorText } from '../../api/apiClient'
+import { useLiftToasts } from '../../hooks/useLiftToasts'
 import { useConnectedCarriers } from '../../hooks/useConnectedCarriers'
 import { settingsPaths } from '../../routes/workspaceRoutes'
 
@@ -57,6 +59,7 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
   // A11y audit — focus trap + Escape-to-close + focus restoration.
   const dialogRef = useRef<HTMLDivElement>(null)
   useModalDismiss(true, dialogRef, onClose)
+  useLiftToasts() // BUG-005 — keep toasts clear of the footer buttons
   const today = new Date().toISOString().slice(0, 10)
   const [form, setForm] = useState<ManifestRequest>({
     carrierCode: defaults?.carrierCode ?? 'UPS',
@@ -74,6 +77,12 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
   const [trackingText, setTrackingText] = useState(trackingNumbers.join('\n'))
   const [result, setResult] = useState<ManifestResponse | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  /** Transport failure (server unreachable / 5xx) — kept in the dialog, not a passing toast. */
+  const [apiError, setApiError] = useState<string | null>(null)
+  /** BUG-011 — fill the list from the server (every open label for the carrier + date),
+   *  until the operator edits it themselves. */
+  const [edited, setEdited] = useState(false)
+  const [loadingOpen, setLoadingOpen] = useState(false)
 
   const update = (patch: Partial<ManifestRequest>) => setForm((f) => ({ ...f, ...patch }))
 
@@ -89,10 +98,34 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected])
 
-  const parsedTracking = trackingText
-    .split(/\s+/)
-    .map((t) => t.trim())
-    .filter((t) => t.length > 0)
+  useEffect(() => {
+    if (edited || !form.carrierCode || !form.closeDate) return
+    let alive = true
+    setLoadingOpen(true)
+    manifestService.openTrackings({ carrierCode: form.carrierCode, closeDate: form.closeDate, customerNo: form.customerNo })
+      .then((r) => { if (alive) setTrackingText((r.data ?? []).join('\n')) })
+      .catch(() => undefined) // keep whatever is there; the operator can still type numbers
+      .finally(() => { if (alive) setLoadingOpen(false) })
+    return () => { alive = false }
+  }, [form.carrierCode, form.closeDate, form.customerNo, edited])
+
+  // BUG-001/002/024 — one tracking per line (not split on spaces); strip a
+  // line's internal spaces so a USPS label printed "9400 1000 …" stays one
+  // number; drop duplicates; and keep only lines that look like a tracking
+  // number (alphanumeric, 8–40 chars) so free text isn't manifested.
+  const seenTracking = new Set<string>()
+  const parsedTracking: string[] = []
+  const invalidLines: string[] = []
+  for (const raw of trackingText.split('\n')) {
+    const line = raw.trim()
+    if (!line) continue
+    // BUG-024 — tracking numbers are case-insensitive: '1z99…' is the same parcel as '1Z99…'.
+    const candidate = line.replace(/\s+/g, '').toUpperCase()
+    if (seenTracking.has(candidate)) continue
+    seenTracking.add(candidate)
+    if (/^[A-Za-z0-9]{8,40}$/.test(candidate)) parsedTracking.push(candidate)
+    else invalidLines.push(line)
+  }
 
   const canSubmit = Boolean(form.carrierCode && parsedTracking.length > 0)
 
@@ -118,12 +151,13 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
     if (!canSubmit) return
     setSubmitting(true)
     setResult(null)
+    setApiError(null)
     try {
       const response = await manifestService.closeOut({ ...form, trackingNumbers: parsedTracking })
       setResult(response.data ?? null)
       notifyResult(response.data ?? null, false)
     } catch (e) {
-      notify.apiError(e, 'Close-out call failed.')
+      setApiError(requestErrorText(e, 'Close-out call failed.'))
     } finally {
       setSubmitting(false)
     }
@@ -134,8 +168,15 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
   // typed/selected trackings. Same POST /manifests/close-day path.
   const submitWholeDay = async () => {
     if (!form.carrierCode) return
+    // BUG-012 — this closes EVERY open label for the carrier/date across all
+    // clients and can't be undone, so make the operator confirm first.
+    const ok = await notify.confirm(
+      `Close every open ${form.carrierCode} label for ${form.closeDate}? ` +
+      `This manifests all clients' open shipments for that day and can't be undone.`)
+    if (!ok) return
     setSubmitting(true)
     setResult(null)
+    setApiError(null)
     try {
       const response = await manifestService.closeOutDay({
         carrierCode: form.carrierCode,
@@ -145,7 +186,7 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
       setResult(response.data ?? null)
       notifyResult(response.data ?? null, true)
     } catch (e) {
-      notify.apiError(e, 'Close-out call failed.')
+      setApiError(requestErrorText(e, 'Close-out call failed.'))
     } finally {
       setSubmitting(false)
     }
@@ -157,7 +198,6 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
       aria-modal="true"
       aria-label="Close out day"
       className="fixed inset-0 z-50 flex items-center justify-center bg-[#1f150c]/45 p-4 backdrop-blur-sm"
-      onClick={onClose}
     >
       <div
         ref={dialogRef}
@@ -254,20 +294,34 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
           </div>
 
           <Section icon={<FiHash className="h-3.5 w-3.5" />}
-                   title={`Tracking numbers (${parsedTracking.length})`} hint="prefilled">
+                   title={`Tracking numbers (${parsedTracking.length})`}
+                   hint={loadingOpen ? 'loading open labels…' : edited ? 'edited' : `open ${form.carrierCode} labels for this day`}>
             <textarea
               rows={4}
               className={`${inputCls} font-mono text-[11.5px]`}
               value={trackingText}
-              onChange={(e) => setTrackingText(e.target.value)}
+              onChange={(e) => { setEdited(true); setTrackingText(e.target.value) }}
               placeholder="One tracking number per line…"
             />
+            {invalidLines.length > 0 ? (
+              <p className="mt-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5 text-[10.5px] text-amber-800">
+                Ignored {invalidLines.length} line{invalidLines.length === 1 ? '' : 's'} that
+                {invalidLines.length === 1 ? " doesn't" : " don't"} look like a tracking number
+                (e.g. <span className="font-mono">{invalidLines[0]}</span>). Only valid numbers are counted.
+              </p>
+            ) : null}
             <p className="mt-1.5 text-[10.5px] text-[#9a8b70]">
               Edit to exclude any — or use <span className="font-semibold text-[#6b5c42]">Close whole day</span> to let the
               server gather every open {form.carrierCode} label for the date.
             </p>
           </Section>
 
+          {apiError ? (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-800" role="alert">
+              <p className="font-semibold">Close-out not sent</p>
+              <p className="mt-1">{apiError}</p>
+            </div>
+          ) : null}
           {result ? <ResultBanner result={result} /> : null}
         </div>
 

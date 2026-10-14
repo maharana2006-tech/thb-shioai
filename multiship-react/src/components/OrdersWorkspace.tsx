@@ -2798,14 +2798,9 @@ export default function OrdersWorkspace() {
         {closeOutOpen ? (
           <CloseOutModal
             onClose={() => setCloseOutOpen(false)}
-            // Only LIVE labels belong on a manifest — a voided (or errored)
-            // tracking is dead at the carrier, and prefilling it put a
-            // cancelled number straight into the driver's scan list.
-            trackingNumbers={rows
-              .filter((o) => (o.labelDetails.status || '').toUpperCase() === 'GENERATED'
-                && o.labelDetails.isGenerated)
-              .map((o) => o.labelDetails.trackingNumber)
-              .filter((t): t is string => Boolean(t))}
+            // BUG-011 — the dialog loads every open label for the carrier + date
+            // from the server; this page's rows are only one page of any dates.
+            trackingNumbers={[]}
             defaults={{
               // Default the carrier to the one the prefilled trackings ship on
               // (the hardcoded UPS default sat over an all-FedEx list).
