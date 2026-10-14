@@ -169,6 +169,62 @@ public class GlobalExceptionHandler {
                 .build());
     }
 
+    /**
+     * BUG-077 / 083 / 098 / 099 / 113 / 118 — generic input-shape errors
+     * from the data layer or bean-validation layer that services didn't
+     * catch themselves. All six are 'caller gave something the storage /
+     * schema can't accept' (over-long name, duplicate PK, FK violation,
+     * BigDecimal overflow, @Size overflow). Map every one to 400 with
+     * a cleaned-up message instead of leaking the 500 + stack trace to
+     * the operator. Service-level @ControllerAdvice sites that already
+     * map these more specifically still win via @Order(0) elsewhere.
+     */
+    @ExceptionHandler({
+        org.springframework.dao.DataIntegrityViolationException.class,
+        jakarta.validation.ConstraintViolationException.class,
+    })
+    public ResponseEntity<ApiResponse<Void>> handleDataIntegrity(Exception ex) {
+        log.debug("Data-integrity / constraint-violation surfaced to handler: {}", ex.getMessage());
+        String msg = humanizeDataError(ex);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(ApiResponse.<Void>builder()
+                .status("error").code(400)
+                .message(msg)
+                .errorCode(ErrorCode.VALIDATION_ERROR.name())
+                .build());
+    }
+
+    /** Best-effort cleanup of a jakarta.validation / Hibernate / Postgres message
+     *  so the operator sees "Name must be between 0 and 255" not a 300-char
+     *  Postgres backtrace. Falls back to a generic sentence when the message
+     *  carries no useful content (e.g. an opaque unique-constraint name). */
+    private static String humanizeDataError(Exception ex) {
+        String raw = ex.getMessage() == null ? "" : ex.getMessage();
+        // Hibernate: "could not execute statement; SQL [...]; constraint ["foo_bar_unique"]"
+        if (raw.contains("constraint [") || raw.contains("constraint \"")) {
+            if (raw.toLowerCase().contains("unique")) {
+                return "That value is already used elsewhere.";
+            }
+            if (raw.toLowerCase().contains("foreign key")) {
+                return "This references something that doesn't exist.";
+            }
+        }
+        // Postgres: "value too long for type character varying(255)"
+        if (raw.contains("value too long")) {
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                    .compile("character varying\\((\\d+)\\)").matcher(raw);
+            if (m.find()) return "A value is too long for its field (limit " + m.group(1) + " characters).";
+            return "A value is too long for its field.";
+        }
+        if (raw.toLowerCase().contains("numeric field overflow")) {
+            return "A number is too large for its field.";
+        }
+        // jakarta.validation ConstraintViolation: "field: must not be blank"
+        if (raw.contains("ConstraintViolation") || raw.contains("must not")) {
+            return "Please check the form — one or more fields are missing or invalid.";
+        }
+        return "This value can't be saved — check the form and try again.";
+    }
+
     /** A missing body, or one that isn't valid JSON for the endpoint, is the caller's mistake — 400, not 500. */
     @ExceptionHandler(org.springframework.http.converter.HttpMessageNotReadableException.class)
     public ResponseEntity<ApiResponse<Void>> handleUnreadableBody(
