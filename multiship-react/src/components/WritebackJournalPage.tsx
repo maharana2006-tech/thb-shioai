@@ -118,9 +118,13 @@ export default function WritebackJournalPage() {
               onChange={(e) => { setStatus(e.target.value as WritebackJournalStatus | ''); setPageIndex(0) }}
               className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-1.5 text-[13px]"
             >
+              {/* BUG-134 — journal rows store SKIPPED_INACTIVE (the sub-
+                  reason), not plain 'SKIPPED'. The filter was sending
+                  'SKIPPED' which matched zero rows. List the actual
+                  stored statuses so the picker matches reality. */}
               <option value="">Any</option>
               <option value="OK">OK</option>
-              <option value="SKIPPED">SKIPPED</option>
+              <option value="SKIPPED_INACTIVE">Skipped (inactive target)</option>
               <option value="FAILED">FAILED</option>
               <option value="PENDING">PENDING</option>
             </select>
