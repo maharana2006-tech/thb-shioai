@@ -50,7 +50,12 @@ public class PrinterScanAgent {
     @Column(name = "hostname", length = 255)
     private String hostname;
 
-    /** SHA-256 hex of the raw agent key. Raw key returned ONCE at enrollment. */
+    /** SHA-256 hex of the raw agent key. Raw key returned ONCE at enrollment.
+     *  BUG-141 — serialising the hash to the browser is a leak; the FE never
+     *  shows it and an unsalted SHA-256 hash of a short key is brute-forceable
+     *  offline. @JsonIgnore keeps it off every JSON response while the server
+     *  still uses it to authenticate the agent's poll calls. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
     @Column(name = "api_key_hash", length = 64, nullable = false)
     private String apiKeyHash;
 
