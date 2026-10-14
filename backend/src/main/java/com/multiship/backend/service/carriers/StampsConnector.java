@@ -950,6 +950,17 @@ public class StampsConnector implements CarrierConnector {
         return carrierMessage != null && LOW_POSTAGE.matcher(carrierMessage).find();
     }
 
+    /** BUG-135 — order number helper for alert enrichment. referenceNumber
+     *  is a String on ShipmentRequestDTO because manual labels send
+     *  "MAN{orderNo}" and bulk imports can carry non-numeric codes;
+     *  returns null when the reference isn't a bare integer so the alert
+     *  Order filter still works for the common ERP/API path (bare orderNo). */
+    static Long parseLongSafe(String s) {
+        if (s == null) return null;
+        try { return Long.parseLong(s.trim()); }
+        catch (NumberFormatException ignore) { return null; }
+    }
+
     ShipmentResult createShipmentSera(ShipmentRequestDTO request, String accessToken, String environment) {
         // Same fallback-token guard as the SWSIM path — a `-local-*` token
         // is a rejected credential, calling SERA with it just wastes an
@@ -1003,7 +1014,14 @@ public class StampsConnector implements CarrierConnector {
                         .body(String.class);
                 perPackage.add(parseSeraCreateLabelResponse(response, request));
             } catch (com.multiship.backend.service.carriers.exceptions.CarrierException cex) {
-                rollbackSuccessfulPiecesSera(perPackage, accessToken, environment);
+                // BUG-135 — thread tenantCode (Order.custNo via departmentNumber,
+                // populated by CarrierServiceImpl per PR #543) + orderNo
+                // (referenceNumber parsed as Long when numeric) so the
+                // Alerts History row names the shipment that failed instead
+                // of just a label_id in the Reason tooltip.
+                rollbackSuccessfulPiecesSera(perPackage, accessToken, environment,
+                        parseLongSafe(request.getReferenceNumber()),
+                        request.getDepartmentNumber());
                 throw cex;
             } catch (Exception ex) {
                 // PR-T1 — classify by SERA error_code (800xxx) when
@@ -1032,7 +1050,10 @@ public class StampsConnector implements CarrierConnector {
                     log.warn("Stamps SERA /labels failed for package {}/{}: {}",
                             i + 1, packages.size(), errMsg);
                 }
-                rollbackSuccessfulPiecesSera(perPackage, accessToken, environment);
+                // BUG-135 — same thread as the CarrierException branch above.
+                rollbackSuccessfulPiecesSera(perPackage, accessToken, environment,
+                        parseLongSafe(request.getReferenceNumber()),
+                        request.getDepartmentNumber());
                 if (isLowPostage(errMsg)) {
                     throw new com.multiship.backend.exception.CarrierConnectionException(LOW_POSTAGE_MESSAGE);
                 }
@@ -1055,6 +1076,20 @@ public class StampsConnector implements CarrierConnector {
      */
     void rollbackSuccessfulPiecesSera(java.util.List<ShipmentResult> succeeded,
                                        String accessToken, String environment) {
+        rollbackSuccessfulPiecesSera(succeeded, accessToken, environment, null, null);
+    }
+
+    /** BUG-135 — tenantCode + orderNo overload. The per-piece void failure
+     *  alert is a data-loss signal; without tenant+order on the row the
+     *  operator can only see a label_id in the Reason tooltip and has to
+     *  cross-reference label_package manually. Caller
+     *  ({@link #createShipmentSera}) has {@code request} in scope and can
+     *  pull both: tenantCode = {@code request.getDepartmentNumber()}
+     *  (populated with Order.custNo per PR #543), orderNo =
+     *  {@code request.getReferenceNumber()} parsed as Long. */
+    void rollbackSuccessfulPiecesSera(java.util.List<ShipmentResult> succeeded,
+                                       String accessToken, String environment,
+                                       Long orderNo, String tenantCode) {
         if (succeeded == null || succeeded.isEmpty()) return;
         log.warn("Stamps SERA MPS partial failure: rolling back {} successful piece(s) via /labels/{{label_id}}/void.",
                 succeeded.size());
@@ -1065,7 +1100,7 @@ public class StampsConnector implements CarrierConnector {
         // itself fails (that's the data-loss case: label was paid for and
         // we can't void it, so a human has to reconcile).
         if (fallbackAlertService != null) {
-            fallbackAlertService.record(null, null, null,
+            fallbackAlertService.record(orderNo, tenantCode, null,
                     "STAMPS_SERA_MPS_PARTIAL_ROLLBACK",
                     "SERA MPS partial failure — rolling back " + succeeded.size()
                             + " successful piece(s).");
@@ -1077,7 +1112,7 @@ public class StampsConnector implements CarrierConnector {
             log.warn("Stamps SERA rollback: cannot resolve base URL ({}), skipping — "
                     + "operator must void the pieces manually.", ex.getMessage());
             if (fallbackAlertService != null) {
-                fallbackAlertService.record(null, null, null,
+                fallbackAlertService.record(orderNo, tenantCode, null,
                         "STAMPS_SERA_MPS_ROLLBACK_VOID_FAILED",
                         "Rollback aborted — SERA base URL unresolved (" + ex.getMessage()
                                 + "). Operator must void " + succeeded.size()
@@ -1109,7 +1144,7 @@ public class StampsConnector implements CarrierConnector {
                 // Rolled-back shipment left a paid-for label that nobody
                 // will void — ops reconciles manually from this alert.
                 if (fallbackAlertService != null) {
-                    fallbackAlertService.record(null, null, null,
+                    fallbackAlertService.record(orderNo, tenantCode, null,
                             "STAMPS_SERA_MPS_ROLLBACK_VOID_FAILED",
                             "SERA rollback void failed for label_id " + labelId
                                     + ": " + cancelEx.getMessage() + ". Manual void required.");
