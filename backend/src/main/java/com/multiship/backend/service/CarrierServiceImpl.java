@@ -2571,6 +2571,11 @@ public class CarrierServiceImpl implements CarrierService {
                         persistEx.getMessage(), persistEx);
             }
             Integer failedOrderNo = failedOrderNoHolder[0];
+            // BUG-014 — the failed attempt's carrier calls are the ones support
+            // needs to find by order number.
+            if (failedOrderNo != null && carrierApiLogService != null) {
+                carrierApiLogService.tagCurrentRequest(failedOrderNo.longValue(), null);
+            }
             // Persist the commodity lines on the failed order too — in a SEPARATE
             // transaction AFTER the ERROR order committed above, so the just-saved
             // order is visible to upsertCustoms and a customs hiccup can't roll
