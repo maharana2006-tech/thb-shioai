@@ -3,6 +3,7 @@
  * Extracted from ClientEditorPage so the two steps can import it
  * without dragging the whole page in.
  */
+import type React from 'react'
 import type { Address } from '../../api/clientService'
 import type { AddressLike } from '../../utils/clientValidation'
 import type {
@@ -111,9 +112,15 @@ export function AddressGrid({
         />
       </Field>
       <Field label="State" required error={err('state')} hint={capHint('state')}>
+        {/* BUG-079 — carriers expect the state in upper-case ('IL' not
+            'il'). Force uppercase on input so a sloppy keystroke doesn't
+            land on the label. */}
         <input
-          value={a.state ?? ''}
-          onChange={setAddr(addressKey, 'state')}
+          value={(a.state ?? '').toUpperCase()}
+          onChange={(e) => setAddr(addressKey, 'state')({
+            ...e,
+            target: { ...e.target, value: e.target.value.toUpperCase() },
+          } as React.ChangeEvent<HTMLInputElement>)}
           onBlur={() => markTouched(`${addressKey}.state`)}
           className={cls('state')}
           placeholder="IL"
