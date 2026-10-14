@@ -171,6 +171,24 @@ export function TimezoneCombobox({
     inputRef.current?.blur()
   }
 
+  // BUG-146 — if the operator types a valid IANA zone name and tabs away
+  // without clicking a suggestion, commit the typed value. Pre-fix the
+  // query was silently discarded and Save stored null (fallback to
+  // client tz), so the operator's deliberate choice was lost.
+  const commitTypedIfValid = () => {
+    const typed = query.trim()
+    if (!typed) return
+    // Exact match (case-sensitive) against the loaded IANA set, OR a
+    // runtime check via Intl.DateTimeFormat — the latter catches zones
+    // the Intl.supportedValuesOf list doesn't ship.
+    if (options.some((o) => o.id === typed)) { commit(typed); return }
+    try {
+      // Intl constructor throws RangeError for an unknown time zone.
+      new Intl.DateTimeFormat('en-US', { timeZone: typed })
+      commit(typed)
+    } catch { /* leave current value as-is; dropdown closes on next blur handler */ }
+  }
+
   const detectFromBrowser = () => {
     try {
       const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -226,6 +244,7 @@ export function TimezoneCombobox({
           }}
           onFocus={() => setOpen(true)}
           onKeyDown={onKey}
+          onBlur={() => { commitTypedIfValid() }}
           placeholder={placeholder ?? 'Search e.g. New_York'}
           autoComplete="off"
           spellCheck={false}

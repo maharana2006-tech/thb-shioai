@@ -1308,7 +1308,13 @@ export default function NewShipmentPage() {
     // defaults aren't overwritten here.
     setLabelImageFormat((cur) => matchedAccount?.labelImageFormat ?? cur)
     setPickupType(matchedAccount?.pickupType ?? 'USE_SCHEDULED_PICKUP')
-    setReasonForExport(matchedAccount?.shippingPurpose ?? '')
+    // BUG-143 — reason of export used to reset to the saved account
+    // default on every carrier switch, silently discarding the
+    // operator's picked value. 'Sale' flipped to 'Sample' across a
+    // USPS → FedEx switch, so a sale shipment went out on the commercial
+    // invoice declared as a sample. Only auto-fill when the field is
+    // empty — once the operator has picked a reason, keep it.
+    setReasonForExport((cur) => cur || (matchedAccount?.shippingPurpose ?? ''))
     const saved = matchedAccount?.clearanceOption
     const allowed = clearanceOptionsForCarrier(canon(carrier))
     setClearanceOption(saved && allowed.some((o) => o.value === saved) ? saved : '')
