@@ -49,8 +49,11 @@ public class AdminNotificationDeliveryLogController {
 
         int clampedSize = Math.min(Math.max(1, size), MAX_PAGE_SIZE);
         int clampedPage = Math.max(0, page);
+        // BUG-022 — escape LIKE wildcards in the typed value so a literal
+        // '%' / '_' / '\' in the operator's search doesn't match everything.
         String recipientLike = (recipient == null || recipient.isBlank())
-                ? null : "%" + recipient.trim().toLowerCase() + "%";
+                ? null : "%" + recipient.trim().toLowerCase()
+                        .replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%";
 
         Page<NotificationDeliveryLogEntity> pageResult = repo.search(
                 blankToNull(templateKey), blankToNull(status), recipientLike,

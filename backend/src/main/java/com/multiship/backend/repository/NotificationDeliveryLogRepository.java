@@ -22,7 +22,7 @@ public interface NotificationDeliveryLogRepository
     @Query("SELECT l FROM NotificationDeliveryLogEntity l "
             + "WHERE (CAST(:templateKey AS string) IS NULL OR l.templateKey = :templateKey) "
             + "AND (CAST(:status AS string) IS NULL OR l.status = :status) "
-            + "AND (CAST(:recipientLike AS string) IS NULL OR LOWER(l.recipient) LIKE LOWER(CAST(:recipientLike AS string)))")
+            + "AND (CAST(:recipientLike AS string) IS NULL OR LOWER(l.recipient) LIKE LOWER(CAST(:recipientLike AS string)) ESCAPE '\\')")
     Page<NotificationDeliveryLogEntity> search(
             @Param("templateKey") String templateKey,
             @Param("status") String status,

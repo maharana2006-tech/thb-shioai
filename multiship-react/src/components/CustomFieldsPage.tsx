@@ -75,7 +75,7 @@ export default function CustomFieldsPage() {
 
   const tenantOptions = useMemo(
     () => [
-      { value: PLATFORM, label: 'Platform-wide (all tenants)' },
+      { value: PLATFORM, label: 'Platform-wide (all clients)' },
       ...clients.map((c) => ({ value: c.clientCode, label: `${c.clientCode} — ${c.name}` })),
     ],
     [clients],
@@ -86,7 +86,7 @@ export default function CustomFieldsPage() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-[260px]">
           <label className="mb-1 block text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-500">
-            Tenant scope
+            Client scope
           </label>
           <Select value={tenantId} onChange={(e) => setTenantId(e.target.value || PLATFORM)}>
             {tenantOptions.map((o) => (

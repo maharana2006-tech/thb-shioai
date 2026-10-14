@@ -216,20 +216,31 @@ export default function WritebackJournalPage() {
                       </td>
                       <td className="px-3 py-2 tabular-nums text-slate-700">{row.orderNo ?? '—'}</td>
                       <td className="px-3 py-2">
-                        <span className={`rounded px-2 py-0.5 ${badge}`}>{row.status}</span>
+                        {/* BUG-134 — pre-fix the Status cell printed the
+                            raw enum ('SKIPPED_INACTIVE'). Humanize. */}
+                        <span className={`rounded px-2 py-0.5 ${badge}`}>
+                          {row.status === 'SKIPPED_INACTIVE' ? 'Skipped (inactive)' : row.status}
+                        </span>
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums text-slate-500">
                         {row.latencyMs != null ? `${row.latencyMs} ms` : '—'}
                       </td>
                       <td className="px-3 py-2 text-right">
-                        <button
-                          type="button"
-                          onClick={(e) => { e.stopPropagation(); void retry(row) }}
-                          disabled={retrying === row.id}
-                          className="rounded border border-slate-300 px-2 py-1 text-[12px] hover:bg-white disabled:opacity-60"
-                        >
-                          {retrying === row.id ? 'Retrying…' : 'Retry'}
-                        </button>
+                        {/* BUG-134 — Retry on an OK row re-fires a successful
+                            writeback and creates a duplicate dispatch. Hide
+                            Retry on OK; only non-success statuses can retry. */}
+                        {row.status === 'OK' ? (
+                          <span className="text-[12px] text-slate-400">—</span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); void retry(row) }}
+                            disabled={retrying === row.id}
+                            className="rounded border border-slate-300 px-2 py-1 text-[12px] hover:bg-white disabled:opacity-60"
+                          >
+                            {retrying === row.id ? 'Retrying…' : 'Retry'}
+                          </button>
+                        )}
                       </td>
                     </tr>
                     {expanded && (

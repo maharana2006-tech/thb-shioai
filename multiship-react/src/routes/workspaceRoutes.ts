@@ -191,7 +191,7 @@ export const settingsNavItems: Array<{
     description: 'Per-client shipping label, packing slip and commercial invoice templates. Fall back to platform defaults when a client hasn\'t set one.',
     roles: ['ADMIN', 'USER'] },
   { key: 'custom-fields', label: 'Custom Fields', to: settingsPaths.customFields, iconKey: 'mapping',
-    description: 'Per-tenant metadata on orders (PO number, department, marketplace order id) — flows through the form and order detail.',
+    description: 'Per-client metadata on orders (PO number, department, marketplace order id) — flows through the form and order detail.',
     roles: ['ADMIN', 'USER'] },
   { key: 'audit-log', label: 'Logs', to: settingsPaths.auditLog, iconKey: 'dashboard',
     description: 'Error, shipment and user-activity logs in one table — who did what, which labels generated or failed, and why. Filter by category, order number, actor and date.',
