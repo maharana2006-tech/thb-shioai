@@ -166,6 +166,18 @@ export default function LabelTemplateEditorPage() {
       notify.error({ title: 'Not a supported logo', body: 'The file did not match PNG or JPEG format.' })
       return
     }
+    // BUG-107 — a text file renamed with a .png extension can still slip
+    // past the MIME check (the browser trusts the filename). Verify the
+    // decoded bytes start with the PNG magic signature (89 50 4E 47)
+    // or JPEG SOI (FF D8 FF).
+    const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1)
+    const bytes = Uint8Array.from(atob(base64.slice(0, 8)), (c) => c.charCodeAt(0))
+    const isPng = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47
+    const isJpeg = bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF
+    if (!isPng && !isJpeg) {
+      notify.error({ title: 'Not a supported logo', body: 'The file bytes aren\'t a PNG or JPEG. Try a real image.' })
+      return
+    }
     updateField('logoBase64', dataUrl)
   }
 

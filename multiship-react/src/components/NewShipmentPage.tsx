@@ -1380,6 +1380,17 @@ export default function NewShipmentPage() {
         && !ftrExemption && !aesCitation) {
       missing.push(`FTR exemption or AES ITN (required at ≥ $${EEI_THRESHOLD_USD.toLocaleString()})`)
     }
+    // BUG-072 — US → Canada under $2,500 still needs ONE of {FTR
+    // exemption, AES ITN}. Pre-fix the exemption picker defaulted to
+    // 'None (using AES)' but no AES ITN was typed, so Customs passed
+    // locally and FedEx rejected ('FTR Exemption or AES Citation ...
+    // not valid for EEI'). Require a pick when both are empty.
+    if (isInternational
+        && originIsUs
+        && destCcNorm === 'CA'
+        && !ftrExemption && !aesCitation) {
+      missing.push('FTR exemption (pick NOEEI 30.36 for Canada) or AES ITN')
+    }
     // Incoterms same pattern as Reason of export — prefill from
     // ClientCustomsProfile via importerProfile; NULL profile / value
     // blocks with a targeted toast.

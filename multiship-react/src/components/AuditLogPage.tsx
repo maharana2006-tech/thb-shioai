@@ -352,11 +352,15 @@ export default function AuditLogPage() {
                       orderNo: orderNoFilter ? Number(orderNoFilter) : undefined,
                       since, until,
                     })}
-                    title={`Export the current filter set as CSV (ADMIN only; capped at 100k rows)`}
+                    title={`Export EVERY filtered row as CSV (ADMIN only; capped at 100k rows). The 'Export' button beside this one saves only the current page.`}
                     className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 transition hover:bg-slate-50"
                   >
                     <FiDownload className="h-3.5 w-3.5" />
-                    Export CSV
+                    {/* BUG-127 — Export CSV = full filtered set; the
+                        AdvancedDataTable Export button beside it saves
+                        the visible page. Rename so operators can tell
+                        which does which. */}
+                    Export all (CSV)
                   </a>
                 ) : null}
                 <button
@@ -398,8 +402,17 @@ export default function AuditLogPage() {
                     <label className="mb-1 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
                       Entity type
                     </label>
+                    {/* BUG-129 — Entity type + Action lists must match the
+                        actual rows the log stores. Added: AUTH, ORDER (which
+                        dominate the Shipments tab), USER. Action list adds
+                        LOGIN, LOGOUT, LABEL_GENERATED, LABEL_VOIDED. The
+                        6 pre-fix 'offered but never occur' entries stay in
+                        case rare rows do appear. */}
                     <Select value={entityType} onChange={(e) => setEntityType(e.target.value)}>
                       <option value="">All types</option>
+                      <option value="AUTH">Auth</option>
+                      <option value="ORDER">Order</option>
+                      <option value="USER">User</option>
                       <option value="CLIENT">Client</option>
                       <option value="WAREHOUSE">Warehouse</option>
                       <option value="CARRIER_ACCOUNT">Carrier account</option>
@@ -418,6 +431,10 @@ export default function AuditLogPage() {
                       <option value="CREATE">CREATE</option>
                       <option value="UPDATE">UPDATE</option>
                       <option value="DELETE">DELETE</option>
+                      <option value="LOGIN">LOGIN</option>
+                      <option value="LOGOUT">LOGOUT</option>
+                      <option value="LABEL_GENERATED">LABEL_GENERATED</option>
+                      <option value="LABEL_VOIDED">LABEL_VOIDED</option>
                       <option value="TOGGLE_ACTIVE">TOGGLE_ACTIVE</option>
                       <option value="CASCADE_DISABLE">CASCADE_DISABLE</option>
                       <option value="CASCADE_ENABLE">CASCADE_ENABLE</option>
