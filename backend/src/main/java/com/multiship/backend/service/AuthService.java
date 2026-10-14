@@ -45,6 +45,8 @@ public interface AuthService {
 
     ResponseEntity<?> updateProfile(com.multiship.backend.dto.ProfileUpdateRequest request);
 
+    ResponseEntity<?> updateAvatar(com.multiship.backend.dto.AvatarUpdateRequest request);
+
     ResponseEntity<?> deactivateSelf();
 
     /** Sprint 50 Tier 0.5 PR D — invitee posts token + credentials; server creates verified user. */

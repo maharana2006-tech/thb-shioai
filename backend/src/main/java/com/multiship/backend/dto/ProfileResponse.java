@@ -11,5 +11,8 @@ public record ProfileResponse(
         String fullName,
         String role,
         String clientCode,
-        boolean emailVerified) {
+        boolean emailVerified,
+        String avatar,
+        String createdAt,
+        String preferredCarrier) {
 }

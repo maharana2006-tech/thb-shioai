@@ -97,6 +97,12 @@ public class AuthController {
         return authService.updateProfile(request);
     }
 
+    @Operation(summary = "Set or remove the logged-in user's own profile photo")
+    @PutMapping("/profile/avatar")
+    public ResponseEntity<?> updateAvatar(@Valid @RequestBody com.multiship.backend.dto.AvatarUpdateRequest request) {
+        return authService.updateAvatar(request);
+    }
+
     @Operation(summary = "Deactivate the logged-in user's own account")
     @PostMapping("/profile/deactivate")
     public ResponseEntity<?> deactivateProfile() {

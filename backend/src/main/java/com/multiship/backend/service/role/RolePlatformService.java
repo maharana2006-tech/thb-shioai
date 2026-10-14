@@ -10,7 +10,6 @@ import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
 import java.util.Locale;
-import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -36,10 +35,6 @@ public class RolePlatformService {
 
     private volatile Set<String> allCodes = BOOTSTRAP_ALL;
     private volatile Set<String> invitableCodes = BOOTSTRAP_INVITABLE;
-    /** Custom role code (UPPER) → its base role (UPPER). Built-in roles absent. */
-    private volatile Map<String, String> baseRoleByCode = Map.of();
-    /** Role code (UPPER) → the module keys it may see (custom roles only). */
-    private volatile Map<String, Set<String>> modulesByCode = Map.of();
 
     @PostConstruct
     void initIfAvailable() {
@@ -65,21 +60,9 @@ public class RolePlatformService {
                     .filter(r -> Boolean.TRUE.equals(r.getIsInvitable()))
                     .map(r -> r.getCode().trim().toUpperCase(Locale.ROOT))
                     .collect(Collectors.toUnmodifiableSet());
-            Map<String, String> bases = rows.stream()
-                    .filter(r -> r.getBaseRole() != null && !r.getBaseRole().isBlank())
-                    .collect(Collectors.toUnmodifiableMap(
-                            r -> r.getCode().trim().toUpperCase(Locale.ROOT),
-                            r -> r.getBaseRole().trim().toUpperCase(Locale.ROOT)));
-            Map<String, Set<String>> mods = rows.stream()
-                    .filter(r -> r.getModules() != null && !r.getModules().isEmpty())
-                    .collect(Collectors.toUnmodifiableMap(
-                            r -> r.getCode().trim().toUpperCase(Locale.ROOT),
-                            r -> Set.copyOf(r.getModules())));
             allCodes = all;
             invitableCodes = invitable;
-            baseRoleByCode = bases;
-            modulesByCode = mods;
-            log.info("role: loaded {} role(s), {} invitable, {} custom", all.size(), invitable.size(), bases.size());
+            log.info("role: loaded {} role(s), {} invitable", all.size(), invitable.size());
         } catch (Exception ex) {
             log.warn("role: could not load; keeping prior sets: {}", ex.getMessage());
         }
@@ -95,17 +78,6 @@ public class RolePlatformService {
 
     public Set<String> allRoles() { return allCodes; }
     public Set<String> invitableRoles() { return invitableCodes; }
-
-    /** The base role a custom role inherits backend permissions from, or null
-     *  for built-in roles / unknown codes. */
-    public String baseRoleOf(String code) {
-        return code == null ? null : baseRoleByCode.get(code.trim().toUpperCase(Locale.ROOT));
-    }
-
-    /** The module keys a custom role may see; empty for built-in / unknown. */
-    public Set<String> modulesOf(String code) {
-        return code == null ? Set.of() : modulesByCode.getOrDefault(code.trim().toUpperCase(Locale.ROOT), Set.of());
-    }
 
     // Test seams.
     void setAllForTest(Set<String> s) { this.allCodes = s; }

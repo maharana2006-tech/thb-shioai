@@ -14,5 +14,4 @@ package com.multiship.backend.dto;
  * absent, expired, or invalid — SPA treats that as "not logged in"
  * and redirects to /login.
  */
-public record SessionResponse(String username, String role, String clientCode,
-                              String baseRole, java.util.List<String> modules) {}
+public record SessionResponse(String username, String role, String clientCode) {}

@@ -226,6 +226,8 @@ export default function AppRoutes() {
                     authenticated user can silence alert-style templates
                     without touching admin surfaces. */}
                 <Route path="notifications" element={<MyNotificationSubscriptionsPage />} />
+                {/* Legacy alias for the Notifications page. */}
+                <Route path="my-subscriptions" element={<Navigate to="/settings/notifications" replace />} />
                 <Route element={<RequireRole roles={['ADMIN']} />}>
                   <Route path="api-keys" element={<ApiKeysPage />} />
                   <Route path="api-reference" element={<ApiReferencePage />} />
@@ -264,7 +266,7 @@ export default function AppRoutes() {
                     catch-all renders the overview so the operator sees
                     where they are instead of a wrong page claiming
                     otherwise. */}
-                <Route path="*" element={<SettingsOverview />} />
+                <Route path="*" element={<SettingsOverview notFound />} />
               </Route>
             </Route>
 

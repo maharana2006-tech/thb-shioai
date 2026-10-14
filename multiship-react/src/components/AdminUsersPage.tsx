@@ -326,7 +326,7 @@ export default function AdminUsersPage() {
                 </td>
                 <td className="px-3 py-2 font-mono">
                   {u.clientCode ?? (
-                    <span className="text-amber-700">— unassigned —</span>
+                    <span className="whitespace-nowrap text-amber-700">— unassigned —</span>
                   )}
                 </td>
                 <td className="px-3 py-2">

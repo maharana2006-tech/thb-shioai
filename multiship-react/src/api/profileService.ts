@@ -8,6 +8,12 @@ export interface Profile {
   role: string
   clientCode: string | null
   emailVerified: boolean
+  /** Small client-resized profile photo as a data URL, or null for none (show initials). */
+  avatar: string | null
+  /** ISO timestamp the account was created, or null for legacy rows. */
+  createdAt: string | null
+  /** The operator's preferred carrier, or null when none is set. */
+  preferredCarrier: string | null
 }
 
 export const profileService = {
@@ -16,6 +22,10 @@ export const profileService = {
   /** Update the editable part of the profile (display name). */
   update: (fullName: string): Promise<Profile> =>
     apiClient.put<Profile>('/auth/profile', { fullName }),
+
+  /** Set (data URL) or remove (null) the own profile photo. Returns the updated profile. */
+  updateAvatar: (avatar: string | null): Promise<Profile> =>
+    apiClient.put<Profile>('/auth/profile/avatar', { avatar }),
 
   /** Change own password; the backend verifies the old one and revokes existing sessions. */
   changePassword: (oldPassword: string, newPassword: string): Promise<unknown> =>

@@ -4,7 +4,7 @@ import { notify } from '../../utils/notify'
 import { FiChevronsLeft, FiChevronsRight, FiLogOut } from 'react-icons/fi'
 import { authService } from '../../api/authService'
 import { clearAuthSession, useAppSession } from '../../hooks/useAppSession'
-import { getNavItemsForAccess, resolveWorkspaceRouteKey } from '../../routes/workspaceRoutes'
+import { getNavItemsForRole, resolveWorkspaceRouteKey } from '../../routes/workspaceRoutes'
 import { normalizeRole } from '../../utils/roles'
 import { navIcons } from './navIcons'
 import { useAppDispatch } from '../../store/hooks'
@@ -55,7 +55,7 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fires only on route change; mobileOpen + onMobileClose are read but intentionally not deps (route change is the sole trigger).
   }, [activePath])
   const dispatch = useAppDispatch()
-  const { username, role, effectiveRole, modules } = useAppSession()
+  const { username, role } = useAppSession()
   const [loggingOut, setLoggingOut] = useState(false)
 
   // Sprint 52 a11y — mobile drawer becomes a proper modal dialog:
@@ -90,7 +90,7 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
   }, [mobileOpen])
 
   const normalizedRole = normalizeRole(role)
-  const navItems = getNavItemsForAccess(effectiveRole, modules)
+  const navItems = getNavItemsForRole(normalizedRole)
   const activeKey = resolveWorkspaceRouteKey(location.pathname)
 
   const initials = (username ?? 'MS')
@@ -180,7 +180,7 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
       {/* brand — the depot at the top of the route */}
       <button
         type="button"
-        onClick={() => navigate(effectiveRole === 'TENANT' ? '/orders' : '/dashboard')}
+        onClick={() => navigate(normalizedRole === 'TENANT' ? '/orders' : '/dashboard')}
         className="flex h-16 shrink-0 items-center gap-3 pl-3.5 pr-3"
       >
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#e1dcc9] shadow-[0_8px_20px_rgba(0,0,0,0.35)]">
@@ -315,7 +315,7 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
             <span className={`min-w-0 flex-1 ${labelClass}`}>
               <span className="block truncate text-[12.5px] font-semibold text-white">{username || 'Signed in'}</span>
               <span className="block truncate whitespace-nowrap font-mono text-[9px] uppercase tracking-[0.16em] text-slate-400">
-                {role ? role.toUpperCase() : normalizedRole}
+                {normalizedRole}
               </span>
             </span>
           </button>

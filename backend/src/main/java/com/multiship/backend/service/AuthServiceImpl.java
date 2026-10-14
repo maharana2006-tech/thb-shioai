@@ -50,10 +50,6 @@ public class AuthServiceImpl implements AuthService {
     @Autowired
     private AdminUserService adminUserService;
 
-    /** Resolves a custom role's base role for the JWT baseRole claim. */
-    @Autowired
-    private com.multiship.backend.service.role.RolePlatformService rolePlatformService;
-
     /** Logs page: login / failed-login events. Optional for unit tests. */
     @Autowired(required = false)
     private AuditService auditService;
@@ -502,7 +498,7 @@ public class AuthServiceImpl implements AuthService {
             // this JWT on the next request.
             long tv = user.getTokenVersion() == null ? 0L : user.getTokenVersion();
             String token = jwtService.generateToken(user.getUsername(), user.getRole(),
-                    user.getClientCode(), tv, rolePlatformService.baseRoleOf(user.getRole()));
+                    user.getClientCode(), tv);
 
             // Sprint 50 PR Q1 — write the JWT as an httpOnly cookie so the SPA
             // can't be XSS-exfiltrated. PR Q3 dropped the transitional body
@@ -600,9 +596,7 @@ public class AuthServiceImpl implements AuthService {
         if (auth.getDetails() instanceof JwtAuthenticationFilter.AuthDetails d) {
             clientCode = d.clientCode();
         }
-        return ResponseEntity.ok(new SessionResponse(auth.getName(), role, clientCode,
-                rolePlatformService.baseRoleOf(role),
-                new java.util.ArrayList<>(rolePlatformService.modulesOf(role))));
+        return ResponseEntity.ok(new SessionResponse(auth.getName(), role, clientCode));
     }
 
     @Override
@@ -618,6 +612,43 @@ public class AuthServiceImpl implements AuthService {
         User user = currentUserOrNull();
         if (user == null) return notAuthenticated();
         user.setFullName(request.getFullName().trim());
+        userRepository.save(user);
+        return ResponseEntity.ok(toProfile(user));
+    }
+
+    /** data:image/<png|jpeg|jpg|webp|gif>;base64,<data> — the only accepted avatar shape. */
+    private static final java.util.regex.Pattern AVATAR_DATA_URL =
+            java.util.regex.Pattern.compile("^data:image/(png|jpe?g|webp|gif);base64,([A-Za-z0-9+/=]+)$");
+    /** Decoded-image ceiling; the client resizes to a thumbnail so real payloads are far smaller. */
+    private static final int MAX_AVATAR_BYTES = 512 * 1024;
+
+    @Override
+    @org.springframework.transaction.annotation.Transactional
+    public ResponseEntity<?> updateAvatar(com.multiship.backend.dto.AvatarUpdateRequest request) {
+        User user = currentUserOrNull();
+        if (user == null) return notAuthenticated();
+
+        String avatar = request.getAvatar();
+        if (avatar == null || avatar.isBlank()) {
+            user.setAvatar(null); // remove photo
+        } else {
+            java.util.regex.Matcher m = AVATAR_DATA_URL.matcher(avatar.trim());
+            if (!m.matches()) {
+                return ResponseEntity.badRequest().body(new MessageResponse(
+                        "Upload a PNG, JPEG, WebP or GIF image.", ErrorCode.VALIDATION_ERROR));
+            }
+            try {
+                int bytes = java.util.Base64.getDecoder().decode(m.group(2)).length;
+                if (bytes == 0 || bytes > MAX_AVATAR_BYTES) {
+                    return ResponseEntity.badRequest().body(new MessageResponse(
+                            "Image must be between 1 byte and 512 KB.", ErrorCode.VALIDATION_ERROR));
+                }
+            } catch (IllegalArgumentException e) {
+                return ResponseEntity.badRequest().body(new MessageResponse(
+                        "Image data is not valid.", ErrorCode.VALIDATION_ERROR));
+            }
+            user.setAvatar(avatar.trim());
+        }
         userRepository.save(user);
         return ResponseEntity.ok(toProfile(user));
     }
@@ -659,6 +690,8 @@ public class AuthServiceImpl implements AuthService {
     private static com.multiship.backend.dto.ProfileResponse toProfile(User u) {
         return new com.multiship.backend.dto.ProfileResponse(
                 u.getUsername(), u.getEmail(), u.getFullName(), u.getRole(), u.getClientCode(),
-                Boolean.TRUE.equals(u.getEmailVerified()));
+                Boolean.TRUE.equals(u.getEmailVerified()), u.getAvatar(),
+                u.getCreatedAt() == null ? null : u.getCreatedAt().toString(),
+                u.getPreferredCarrier());
     }
 }

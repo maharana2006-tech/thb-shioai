@@ -25,8 +25,6 @@ public interface UserRepository extends JpaRepository<User, Long>, JpaSpecificat
      */
     long countByRoleIgnoreCaseAndDeactivatedAtIsNull(String role);
 
-    long countByRoleIgnoreCase(String role);
-
     /** Sprint 50 Tier 0.5 PR D — click-through email verification lookup. */
     Optional<User> findByEmailVerifyToken(String token);
 

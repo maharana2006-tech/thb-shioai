@@ -228,25 +228,16 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 }
 
                 if (username != null && role != null) {
-                    // Authorities. The user's own ROLE_<role> always comes first
-                    // so currentSession's findFirst reports the real role.
-                    //  · custom role (baseRole claim present): also grant the
-                    //    inherited base role's authority — the backend security
-                    //    floor — so existing @PreAuthorize rules keep working.
-                    //  · SUPERADMIN: grant ROLE_ADMIN + ROLE_USER so every
-                    //    hasRole('ADMIN') / hasAnyRole('ADMIN','USER') passes.
-                    String baseRole = claims.get("baseRole", String.class);
-                    List<SimpleGrantedAuthority> authorities;
-                    if (baseRole != null && !baseRole.isBlank()) {
-                        authorities = List.of(new SimpleGrantedAuthority("ROLE_" + role.toUpperCase()),
-                                new SimpleGrantedAuthority("ROLE_" + baseRole.toUpperCase()));
-                    } else if ("SUPERADMIN".equalsIgnoreCase(role)) {
-                        authorities = List.of(new SimpleGrantedAuthority("ROLE_SUPERADMIN"),
-                                new SimpleGrantedAuthority("ROLE_ADMIN"),
-                                new SimpleGrantedAuthority("ROLE_USER"));
-                    } else {
-                        authorities = List.of(new SimpleGrantedAuthority("ROLE_" + role.toUpperCase()));
-                    }
+                    // SUPERADMIN sits above ADMIN: grant ROLE_SUPERADMIN plus
+                    // ROLE_ADMIN + ROLE_USER so every hasRole('ADMIN') /
+                    // hasAnyRole('ADMIN','USER') passes without touching each
+                    // annotation. SUPERADMIN stays first so currentSession's
+                    // findFirst still reports "SUPERADMIN".
+                    List<SimpleGrantedAuthority> authorities = "SUPERADMIN".equalsIgnoreCase(role)
+                            ? List.of(new SimpleGrantedAuthority("ROLE_SUPERADMIN"),
+                                    new SimpleGrantedAuthority("ROLE_ADMIN"),
+                                    new SimpleGrantedAuthority("ROLE_USER"))
+                            : List.of(new SimpleGrantedAuthority("ROLE_" + role.toUpperCase()));
                     UserDetails principal;
 
                     // Sprint 46 — OAuth-issued tokens carry subject "apikey:<id>"
