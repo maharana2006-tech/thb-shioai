@@ -144,11 +144,28 @@ export default function LabelTemplateEditorPage() {
 
   const handleLogo = async (file: File | null) => {
     if (!file) return
+    // BUG-107 — accept attribute is 'image/png,image/jpeg' but the browser
+    // still lets a file picker return other types + a File-API read bypasses
+    // the accept filter entirely. SVG is script-capable and renders inside
+    // the generated commercial invoice, which is a stored-XSS vector when
+    // the invoice is viewed in a browser context. Validate the MIME type
+    // AND the magic bytes before persisting.
+    if (!['image/png', 'image/jpeg'].includes(file.type)) {
+      notify.error({ title: 'Not a supported logo', body: 'Logo must be a PNG or JPEG. SVG and other formats are not supported.' })
+      return
+    }
     if (file.size > 200 * 1024) {
       notify.error('Logo must be under 200 KB. Try compressing the image.')
       return
     }
     const dataUrl = await readAsDataUrl(file)
+    // Second-line defence: data URL must start with the PNG or JPEG MIME
+    // prefix so a renamed .svg can't slip through.
+    const okPrefix = dataUrl.startsWith('data:image/png;') || dataUrl.startsWith('data:image/jpeg;')
+    if (!okPrefix) {
+      notify.error({ title: 'Not a supported logo', body: 'The file did not match PNG or JPEG format.' })
+      return
+    }
     updateField('logoBase64', dataUrl)
   }
 
@@ -379,12 +396,31 @@ export default function LabelTemplateEditorPage() {
                   className="absolute inset-0 cursor-pointer opacity-0"
                 />
               </label>
+              {/* BUG-108 — box used to accept any text ('zzz' saved as a
+                  white swatch). Validate the typed value as a #RRGGBB or
+                  #RGB hex colour; only commit when it parses. Live-type
+                  up to 7 chars but roll back + flag otherwise. */}
+              {/* BUG-108 — box used to accept any text ('zzz' saved as a
+                  white swatch). Reject anything that isn't #RRGGBB or
+                  #RGB on blur; let paste reach seven chars first. */}
               <div className="w-28">
                 <FieldCell label="Hex">
                   <input
                     type="text"
                     value={template.primaryColor || ''}
-                    onChange={(e) => updateField('primaryColor', e.target.value)}
+                    onChange={(e) => {
+                      const raw = e.target.value.toUpperCase().slice(0, 7)
+                      updateField('primaryColor', raw)
+                    }}
+                    onBlur={(e) => {
+                      const v = e.target.value.trim()
+                      if (v && !/^#([0-9A-F]{3}|[0-9A-F]{6})$/.test(v)) {
+                        notify.error({ title: 'Not a hex colour', body: 'Use #RRGGBB (e.g. #112233) or the colour picker on the left.' })
+                        updateField('primaryColor', DEFAULT_COLOR)
+                      }
+                    }}
+                    pattern="^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$"
+                    maxLength={7}
                     placeholder={DEFAULT_COLOR}
                     className="w-full bg-transparent font-mono text-[12px] font-semibold uppercase text-[#1f150c] outline-none"
                   />

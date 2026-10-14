@@ -8,6 +8,7 @@ import {
   type Holiday,
 } from '../api/cutoffService'
 import { notify } from '../utils/notify'
+import { TimezoneCombobox } from './TimezoneCombobox'
 
 /**
  * G7 — Settings → Cutoffs & Holidays.
@@ -258,8 +259,15 @@ export default function CutoffsPage() {
                        onChange={(e) => setNewRule({ ...newRule, cutoffTime: e.target.value })} />
               </td>
               <td className="px-3 py-2">
-                <input className={inputCls} type="text" placeholder="e.g. America/New_York"
-                       value={newRule.timezone} onChange={(e) => setNewRule({ ...newRule, timezone: e.target.value })} />
+                {/* BUG-100 — a free-text timezone box let 'Mars/Olympus' save
+                    as an active rule. Reuse the shared TimezoneCombobox so
+                    only canonical IANA zones can be picked. */}
+                <TimezoneCombobox
+                  value={newRule.timezone}
+                  onChange={(tz) => setNewRule({ ...newRule, timezone: tz })}
+                  placeholder="e.g. America/New_York"
+                  className={inputCls}
+                />
               </td>
               <td className="px-3 py-2 text-slate-400 text-[11px]">on save</td>
               <td className="px-3 py-2 text-right">
