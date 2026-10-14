@@ -347,7 +347,7 @@ export default function ShippingServicesPage({ active = true }: { active?: boole
       ) : null}
 
       {/* service catalog, grouped by carrier */}
-      <section className="grid gap-4 lg:grid-cols-3">
+      <section className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
         {loading && !services.length ? (
           <p className="col-span-3 py-10 text-center text-sm text-slate-500">Loading catalog…</p>
         ) : (
@@ -379,7 +379,7 @@ export default function ShippingServicesPage({ active = true }: { active?: boole
                     <span className={`flex h-6 w-9 shrink-0 items-center justify-center rounded ${badge.bg} font-mono text-[9px] font-black tracking-wider text-white`}>
                       {badge.mono}
                     </span>
-                    <span className="truncate text-[10px] font-black uppercase tracking-[0.2em] text-[#e1dcc9]">
+                    <span className="truncate text-[10px] font-black uppercase tracking-[0.2em] text-[#e1dcc9]" title={`${carrier} · from ${origin}`}>
                       {carrier} · from {origin}
                     </span>
                   </p>
@@ -482,8 +482,8 @@ export default function ShippingServicesPage({ active = true }: { active?: boole
                           <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${s.enabled ? 'left-[18px]' : 'left-0.5'}`} />
                         </button>
                         <div className="min-w-0 flex-1">
-                          <p className={`truncate text-[12.5px] font-semibold ${s.enabled ? 'text-slate-900' : 'text-slate-400'}`}>{s.name}</p>
-                          <p className="font-mono text-[10.5px] text-slate-400">{s.serviceCode}</p>
+                          <p className={`truncate text-[12.5px] font-semibold ${s.enabled ? 'text-slate-900' : 'text-slate-400'}`} title={s.name}>{s.name}</p>
+                          <p className="truncate font-mono text-[10.5px] text-slate-400" title={s.serviceCode}>{s.serviceCode}</p>
                         </div>
                         <button
                           type="button"
@@ -498,7 +498,7 @@ export default function ShippingServicesPage({ active = true }: { active?: boole
                                   : 'No linked packages (service disabled) — click to link'
                           }
                           data-testid={`pkg-count-${s.id}`}
-                          className={`inline-flex items-center gap-1 rounded-lg border px-1.5 py-1 text-[10px] font-bold transition ${
+                          className={`inline-flex shrink-0 items-center gap-1 rounded-lg border px-1.5 py-1 text-[10px] font-bold transition ${
                             customOnly
                               ? 'border-slate-300 bg-slate-100 text-slate-600 hover:bg-slate-200'
                               : needsPackages
@@ -512,7 +512,7 @@ export default function ShippingServicesPage({ active = true }: { active?: boole
                         </button>
                         <span
                           title={`Assigned to: ${clientTooltip}`}
-                          className={`inline-flex items-center gap-1 rounded-lg border px-1.5 py-1 text-[10px] font-bold transition ${
+                          className={`inline-flex shrink-0 items-center gap-1 rounded-lg border px-1.5 py-1 text-[10px] font-bold transition ${
                             clientCount
                               ? 'border-[#412d15]/20 bg-[#412d15]/[0.06] text-[#412d15]'
                               : 'border-slate-200 bg-white text-slate-400'

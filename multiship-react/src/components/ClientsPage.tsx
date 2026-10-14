@@ -434,6 +434,7 @@ export default function ClientsPage() {
       },
       {
         id: 'actions',
+        size: 56, minSize: 56, maxSize: 56,
         header: '',
         enableSorting: false,
         cell: ({ row }) => (

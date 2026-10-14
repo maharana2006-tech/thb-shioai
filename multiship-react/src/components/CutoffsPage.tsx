@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useOutletContext } from 'react-router-dom'
+import type { SettingsOutletContext } from './layout/SettingsLayout'
 import { FiPlus, FiRefreshCw, FiTrash2, FiZap } from 'react-icons/fi'
 import {
   cutoffService,
@@ -53,6 +55,12 @@ export default function CutoffsPage() {
   }, [])
 
   useEffect(() => { void reload() }, [reload])
+
+  const outlet = useOutletContext<SettingsOutletContext>()
+  useEffect(() => {
+    outlet.registerRefresh(reload)
+    return () => outlet.registerRefresh(null)
+  }, [outlet, reload])
 
   const addRule = async () => {
     setAddingRule(true)

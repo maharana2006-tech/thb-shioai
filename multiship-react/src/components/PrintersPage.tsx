@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useOutletContext, useSearchParams } from 'react-router-dom'
+import type { SettingsOutletContext } from './layout/SettingsLayout'
 import {
   FiAlertTriangle, FiCheckCircle, FiCheckSquare, FiCopy, FiEdit2, FiFileText, FiPlus, FiPower,
   FiPrinter, FiRadio, FiSearch, FiSquare, FiTag, FiTrash2, FiWifi, FiX,
@@ -153,6 +154,12 @@ export default function PrintersPage() {
   useEffect(() => {
     void load()
   }, [load])
+
+  const outlet = useOutletContext<SettingsOutletContext>()
+  useEffect(() => {
+    outlet.registerRefresh(load)
+    return () => outlet.registerRefresh(null)
+  }, [outlet, load])
 
   const runTest = async (p: Printer) => {
     setTestingIds((cur) => new Set(cur).add(p.id))

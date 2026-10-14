@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { formatDateTime } from '../utils/formatDateTime'
 import { useOutletContext } from 'react-router-dom'
 import {
   FiChevronDown,
@@ -183,7 +184,7 @@ export default function AuditLogPage() {
         header: 'When',
         cell: ({ row }) => (
           <span className="text-[11.5px] text-slate-600">
-            {formatTime(row.original.createdAt)}
+            {formatDateTime(row.original.createdAt)}
           </span>
         ),
       },
@@ -383,7 +384,7 @@ export default function AuditLogPage() {
                     id="audit-log-filter-panel"
                     role="region"
                     aria-label="Audit log filters"
-                    className="absolute right-0 z-30 mt-1 w-80 rounded-lg border border-slate-200 bg-white p-3 shadow-lg"
+                    className="absolute right-0 top-full z-30 mt-1 w-80 rounded-lg border border-slate-200 bg-white p-3 shadow-lg"
                   >
                     <label className="mb-1 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
                       Actor (username)
@@ -490,19 +491,6 @@ export default function AuditLogPage() {
       </section>
     </div>
   )
-}
-
-function formatTime(iso: string): string {
-  if (!iso) return '—'
-  try {
-    // Explicit en-US — the bare toLocaleString() rendered 01/09/2026 (DD/MM)
-    // on some machines while the rest of the app prints "Sep 1, 2026".
-    return new Date(iso).toLocaleString('en-US', {
-      month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
-    })
-  } catch {
-    return iso
-  }
 }
 
 function prettyJson(raw: string | null): string {

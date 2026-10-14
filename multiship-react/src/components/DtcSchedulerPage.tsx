@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { formatDateTime } from '../utils/formatDateTime'
+import { useOutletContext } from 'react-router-dom'
+import type { SettingsOutletContext } from './layout/SettingsLayout'
 import { FiClock, FiList, FiPlay, FiPlus, FiRefreshCw, FiRotateCcw, FiTrash2, FiX } from 'react-icons/fi'
 import {
   dtcSchedulerService,
@@ -48,7 +51,7 @@ const describe = (w: SchedulerWindow) =>
 const fmtDateTime = (iso: string | null) => {
   if (!iso) return '—'
   const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString()
+  return Number.isNaN(d.getTime()) ? iso : formatDateTime(iso)
 }
 
 /** Next-run label in the scheduler's own zone ("Mon 14:05"), read straight off the ISO string. */
@@ -175,6 +178,13 @@ export default function DtcSchedulerPage() {
   }, [apply])
 
   useEffect(() => { void reload(false) }, [reload])
+
+  const outlet = useOutletContext<SettingsOutletContext>()
+  const refresh = useCallback(() => { void reload() }, [reload])
+  useEffect(() => {
+    outlet.registerRefresh(refresh)
+    return () => outlet.registerRefresh(null)
+  }, [outlet, refresh])
 
   // Tenant choices for the label job's tenant picker.
   const [tenants, setTenants] = useState<string[]>([])
@@ -453,7 +463,7 @@ export default function DtcSchedulerPage() {
                       <td className="px-3 py-2">
                         {isDaily(w) ? <span className="text-[11.5px] text-slate-400">—</span> : (
                           <div className="flex items-center gap-1 text-[11.5px] text-slate-500">
-                            <input type="number" min={1} max={1440} className={`${inputCls} w-20`}
+                            <input type="number" min={1} max={1440} className={`${inputCls} w-16 shrink-0`}
                                    value={w.intervalMinutes ?? ''}
                                    onChange={(e) => setWindow(job.jobKey, idx, {
                                      intervalMinutes: e.target.value === '' ? null : Number(e.target.value),

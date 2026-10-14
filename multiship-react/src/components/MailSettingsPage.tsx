@@ -318,7 +318,7 @@ export default function MailSettingsPage() {
             <input
               value={testSubject}
               onChange={(e) => setTestSubject(e.target.value)}
-              placeholder="shioai mail test"
+              placeholder="Multiship mail test"
               className="mt-1 block w-full rounded-lg border border-[#e3d9c4] px-3 py-2 text-[13px] text-[#1f150c]"
             />
           </label>

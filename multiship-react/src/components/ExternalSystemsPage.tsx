@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
+import { formatDateTime } from '../utils/formatDateTime'
 import {
   FiActivity,
   FiCheckCircle,
@@ -123,7 +124,7 @@ export default function ExternalSystemsPage() {
           <button
             type="button"
             onClick={() => setEditing('new')}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-slate-800"
+            className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg bg-slate-900 px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-slate-800"
           >
             <FiPlus className="h-3.5 w-3.5" /> Add connection
           </button>
@@ -158,7 +159,7 @@ export default function ExternalSystemsPage() {
                   <tr key={row.id} className="hover:bg-slate-50/60">
                     <td className="px-3 py-2 font-mono text-[12.5px] text-slate-800">
                       <div className="flex items-center gap-1.5">
-                        <span>{row.name}</span>
+                        <span className="whitespace-nowrap">{row.name}</span>
                         <span className={`rounded-full px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide ${
                           row.environment === 'DEV'
                             ? 'bg-amber-100 text-amber-800 ring-1 ring-amber-200'
@@ -208,7 +209,7 @@ export default function ExternalSystemsPage() {
                       />
                     </td>
                     <td className="px-3 py-2 text-[11.5px] text-slate-500">
-                      {row.updatedAt ? new Date(row.updatedAt).toLocaleString() : '—'}
+                      {row.updatedAt ? formatDateTime(row.updatedAt) : '—'}
                       {row.updatedBy ? <div className="text-[10.5px] text-slate-400">by {row.updatedBy}</div> : null}
                     </td>
                     <td className="px-3 py-2">
@@ -236,7 +237,7 @@ export default function ExternalSystemsPage() {
                               }
                             }}
                             title="X1 — flip this row to the default writeback target (atomic swap)"
-                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11.5px] font-semibold text-slate-700 hover:bg-emerald-50 hover:text-emerald-800"
+                            className="inline-flex items-center gap-1 whitespace-nowrap rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11.5px] font-semibold text-slate-700 hover:bg-emerald-50 hover:text-emerald-800"
                           >
                             Make default
                           </button>
@@ -1098,7 +1099,7 @@ function OverridesTab({ id }: { id: number }) {
                 <td className="px-2 py-1 font-mono">{r.clientCode}</td>
                 <td className="px-2 py-1 font-mono">{r.username}</td>
                 <td className="px-2 py-1 text-[11px] text-slate-500">
-                  {r.updatedAt ? new Date(r.updatedAt).toLocaleString() : '—'}
+                  {r.updatedAt ? formatDateTime(r.updatedAt) : '—'}
                 </td>
                 <td className="px-2 py-1 text-right">
                   <button

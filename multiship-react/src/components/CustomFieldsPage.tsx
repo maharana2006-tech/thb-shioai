@@ -9,6 +9,7 @@ import {
   type CustomFieldType,
 } from '../api/customFieldService'
 import Select from './workspace/Select'
+import { useModalDismiss } from '../hooks/useModalDismiss'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 
 const PLATFORM = '__PLATFORM__'
@@ -236,6 +237,9 @@ function CustomFieldEditorModal({
   const [draft, setDraft] = useState<CustomFieldDefinition>(def)
   const [saving, setSaving] = useState(false)
   const firstInputRef = useRef<HTMLInputElement>(null)
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const titleId = useId()
+  useModalDismiss(true, dialogRef, onClose)
   // A11y audit A1 — see idPrefix pattern in ReportsPage / RoutingRulesPage.
   const idPrefix = useId()
   const idFor = useCallback((k: string) => `${idPrefix}-${k}`, [idPrefix])
@@ -269,13 +273,15 @@ function CustomFieldEditorModal({
   }
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40">
-      <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-lg">
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId}
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md rounded-2xl bg-white p-5 shadow-lg">
         <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-base font-semibold text-slate-900">
+          <h3 id={titleId} className="text-base font-semibold text-slate-900">
             {draft.id ? 'Edit custom field' : 'New custom field'}
           </h3>
-          <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-800">
+          <button type="button" onClick={onClose} aria-label="Close" className="text-slate-400 hover:text-slate-800">
             <FiX />
           </button>
         </div>

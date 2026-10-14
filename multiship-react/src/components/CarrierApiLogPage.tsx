@@ -3,6 +3,7 @@
  * carrier API log. Row click expands the full request + response bodies.
  */
 import { Fragment, useCallback, useEffect, useState } from 'react'
+import { formatDateTime } from '../utils/formatDateTime'
 import { useOutletContext } from 'react-router-dom'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import { notify } from '../utils/notify'
@@ -122,7 +123,7 @@ export default function CarrierApiLogPageView() {
                   <Fragment key={row.id}>
                     <tr onClick={() => void expand(row)}
                         className={`cursor-pointer border-t border-slate-100 hover:bg-slate-50 ${expanded ? 'bg-slate-50' : ''}`}>
-                      <td className="px-3 py-2 text-slate-600">{new Date(row.createdAt).toLocaleString()}</td>
+                      <td className="whitespace-nowrap px-3 py-2 text-slate-600">{formatDateTime(row.createdAt)}</td>
                       <td className="px-3 py-2 font-mono text-[12px] text-slate-700">{row.carrier}</td>
                       <td className="px-3 py-2 text-slate-700">{row.method}</td>
                       <td className="px-3 py-2 truncate text-slate-700" title={row.url}>{row.url}</td>
@@ -142,13 +143,13 @@ export default function CarrierApiLogPageView() {
                       <tr className="bg-slate-50">
                         <td colSpan={7} className="px-3 py-3">
                           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                            <div>
+                            <div className="min-w-0">
                               <div className="text-[11px] uppercase tracking-wide text-slate-500">Request body</div>
                               <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all text-[11px] text-slate-800">
                                 {expandedRow.requestBody ?? '—'}
                               </pre>
                             </div>
-                            <div>
+                            <div className="min-w-0">
                               <div className="text-[11px] uppercase tracking-wide text-slate-500">Response body</div>
                               <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all text-[11px] text-slate-800">
                                 {expandedRow.responseBody ?? '—'}

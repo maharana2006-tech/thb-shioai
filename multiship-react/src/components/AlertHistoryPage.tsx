@@ -3,6 +3,7 @@
  * alerts (USPS fallback, Stamps SERA, future). Mirrors WritebackJournalPage.
  */
 import { useCallback, useEffect, useState } from 'react'
+import { formatDateTime } from '../utils/formatDateTime'
 import { useOutletContext } from 'react-router-dom'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import { notify } from '../utils/notify'
@@ -84,7 +85,7 @@ export default function AlertHistoryPageView() {
         {loading ? (
           <div className="px-4 py-6 text-center text-[13px] text-slate-500">Loading…</div>
         ) : items.length === 0 ? (
-          <div className="px-4 py-6 text-center text-[13px] text-slate-500">No alerts match those filters.</div>
+          <div className="px-4 py-6 text-center text-[13px] text-slate-500">{(source || tenantCode || orderNo) ? 'No alerts match those filters.' : 'No alerts recorded yet.'}</div>
         ) : (
           <table className="w-full text-[13px]">
             <thead>
@@ -99,7 +100,7 @@ export default function AlertHistoryPageView() {
             <tbody>
               {items.map((row) => (
                 <tr key={row.id} className="border-t border-slate-100 hover:bg-slate-50">
-                  <td className="px-3 py-2 text-slate-600">{new Date(row.firedAt).toLocaleString()}</td>
+                  <td className="px-3 py-2 text-slate-600">{formatDateTime(row.firedAt)}</td>
                   <td className="px-3 py-2 font-mono text-[12px] text-slate-700">{row.source}</td>
                   <td className="px-3 py-2 text-slate-700">{row.tenantCode ?? '—'}</td>
                   <td className="px-3 py-2 tabular-nums text-slate-700">{row.targetOrderNo ?? '—'}</td>

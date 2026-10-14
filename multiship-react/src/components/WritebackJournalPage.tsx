@@ -8,6 +8,7 @@
  * async attempt completes.
  */
 import { Fragment, useCallback, useEffect, useState } from 'react'
+import { formatDateTime } from '../utils/formatDateTime'
 import { useOutletContext } from 'react-router-dom'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import { notify } from '../utils/notify'
@@ -169,7 +170,7 @@ export default function WritebackJournalPage() {
         {loading ? (
           <div className="px-4 py-6 text-center text-[13px] text-slate-500">Loading…</div>
         ) : items.length === 0 ? (
-          <div className="px-4 py-6 text-center text-[13px] text-slate-500">No journal rows match those filters.</div>
+          <div className="px-4 py-6 text-center text-[13px] text-slate-500">{(connectionName || status || mode || orderNo) ? 'No journal rows match those filters.' : 'No writebacks yet.'}</div>
         ) : (
           <table className="w-full text-[13px]">
             <thead>
@@ -193,7 +194,7 @@ export default function WritebackJournalPage() {
                       onClick={() => setExpandedId(expanded ? null : row.id)}
                       className={`cursor-pointer border-t border-slate-100 hover:bg-slate-50 ${expanded ? 'bg-slate-50' : ''}`}
                     >
-                      <td className="px-3 py-2 text-slate-600">{new Date(row.createdAt).toLocaleString()}</td>
+                      <td className="px-3 py-2 text-slate-600">{formatDateTime(row.createdAt)}</td>
                       <td className="px-3 py-2 font-mono text-[12px] text-slate-700">
                         {row.connectionName}
                         {row.systemType && (

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { Link } from 'react-router-dom'
+import { formatDateTime } from '../utils/formatDateTime'
+import { Link, useOutletContext } from 'react-router-dom'
+import type { SettingsOutletContext } from './layout/SettingsLayout'
 import { FiTruck, FiCheckSquare, FiRefreshCw, FiClock, FiCalendar, FiMapPin, FiPackage } from 'react-icons/fi'
 import { pickupService, type PickupRequest, type PickupServiceType } from '../api/pickupService'
 import { manifestService, type EodEvent, type ManifestResponse } from '../api/manifestService'
@@ -140,6 +142,12 @@ export default function PickupsEodPage() {
   }, [])
 
   useEffect(() => { void loadEvents() }, [loadEvents])
+
+  const outlet = useOutletContext<SettingsOutletContext>()
+  useEffect(() => {
+    outlet.registerRefresh(loadEvents)
+    return () => outlet.registerRefresh(null)
+  }, [outlet, loadEvents])
 
   const runClose = async () => {
     // BUG-059 — bulk carrier close is irreversible from this screen and
@@ -313,7 +321,7 @@ export default function PickupsEodPage() {
                         <span className="ml-auto"><StatusPill status={e.status} /></span>
                       </div>
                       <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[10.5px] text-[#9a8b70]">
-                        <span className="whitespace-nowrap">{new Date(e.createdAt).toLocaleString()}</span>
+                        <span className="whitespace-nowrap">{formatDateTime(e.createdAt)}</span>
                         <span>· {e.trackingCount} {e.kind === 'PICKUP' ? 'pkg' : 'label'}{e.trackingCount === 1 ? '' : 's'}</span>
                         <span>· {e.customerNo || 'all'}</span>
                         {e.reference ? <span className="font-mono">· {e.reference}</span> : null}

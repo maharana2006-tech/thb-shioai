@@ -1,4 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useOutletContext } from 'react-router-dom'
+import { useModalDismiss } from '../hooks/useModalDismiss'
+import type { SettingsOutletContext } from './layout/SettingsLayout'
 import { FiCheck, FiEdit2, FiPlus, FiRadio, FiSlash, FiTrash2, FiUpload, FiX } from 'react-icons/fi'
 import { notify } from '../utils/notify'
 import {
@@ -62,6 +65,12 @@ export default function OutputDestinationsPage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- required initial fetch; there's no external subscription source we can pipe from
     void load()
   }, [load])
+
+  const outlet = useOutletContext<SettingsOutletContext>()
+  useEffect(() => {
+    outlet.registerRefresh(load)
+    return () => outlet.registerRefresh(null)
+  }, [outlet, load])
 
   const grouped = useMemo(() => {
     const map: Record<string, OutputDestination[]> = {}
@@ -130,7 +139,7 @@ export default function OutputDestinationsPage() {
         </div>
         <button
           onClick={() => setCreating(true)}
-          className="rounded-md bg-slate-900 px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-slate-700"
+          className="shrink-0 whitespace-nowrap rounded-md bg-slate-900 px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-slate-700"
         >
           <FiPlus className="mr-1 inline h-3.5 w-3.5" />
           Add destination
@@ -266,6 +275,9 @@ function DestinationEditorDialog({
   onClose: () => void
   onSaved: () => void
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const titleId = useId()
+  useModalDismiss(true, dialogRef, onClose)
   const [clientCode, setClientCode] = useState(existing?.clientCode ?? '')
   const [docType, setDocType] = useState<DocType>(existing?.docType ?? 'LABEL')
   const [destinationType, setDestinationType] = useState<DestinationType>(
@@ -379,10 +391,12 @@ function DestinationEditorDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-      <div className="w-full max-w-2xl rounded-xl border border-slate-200 bg-white p-4 shadow-xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-2xl rounded-xl border border-slate-200 bg-white p-4 shadow-xl">
         <header className="mb-3 flex items-center justify-between">
-          <h3 className="text-[15px] font-semibold text-slate-900">
+          <h3 id={titleId} className="text-[15px] font-semibold text-slate-900">
             {existing ? `Edit destination ${existing.id}` : 'New output destination'}
           </h3>
           <IconButton
