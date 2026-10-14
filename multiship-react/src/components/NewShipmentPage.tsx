@@ -3793,18 +3793,19 @@ export default function NewShipmentPage() {
                               value={labelImageType}
                               onChange={(e) => setLabelImageType(e.target.value)}>
                         <option value="">-- Select --</option>
-                        {/* BUG-057 — label names must match the Carrier
-                            Dropdowns registry so the Settings page and
-                            the order form speak the same vocabulary.
-                            Registry seed (V120) uses "PDF (plain)" + "ZPL
-                            (thermal)" across every carrier; previously
-                            this FEDEX branch said "PDF (vector, sharp)"
-                            + "ZPLII (Zebra)", which diverged. */}
-                        <option value="PDF">PDF (plain)</option>
-                        <option value="PNG">PNG (raster)</option>
-                        <option value="ZPLII">ZPL (thermal)</option>
-                        <option value="EPL2">EPL (Eltron/legacy Zebra)</option>
-                        <option value="DPL">DPL (Datamax)</option>
+                        {/* BUG-057 R6 — the FEDEX branch previously
+                            hardcoded five options with its own wording.
+                            The order form's vocabulary must come from
+                            Settings > Carrier Dropdowns (same DB registry
+                            UPS/DHL/USPS already read), so renaming a
+                            FEDEX row there or adding/removing a code
+                            flows through here without a code change.
+                            Bootstrap fallback (LABEL_FORMAT_BY_CARRIER)
+                            kicks in only when the DB is empty — a
+                            first-boot cushion, not a parallel source. */}
+                        {labelFormatsForCarrier('FEDEX').map((opt) => (
+                          <option key={opt.value} value={opt.value}>{opt.label}</option>
+                        ))}
                       </select>
                     </Field>
                     <Field label="Label Size" required
