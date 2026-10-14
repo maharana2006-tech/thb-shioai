@@ -24,6 +24,12 @@ export interface TaxField {
   >
   label: string
   placeholder?: string
+  /** BUG-104 — pattern + message so each territory can enforce the right
+   *  shape at submit (e.g. Canada BN+RM is 9 digits + 'RM' + 4 digits).
+   *  Null = free text (used today for TRN / ABN / etc. where carriers
+   *  vary enough that we don't want to false-reject). */
+  pattern?: RegExp
+  patternMsg?: string
 }
 
 export interface TaxIdentitySpec {
@@ -61,7 +67,15 @@ const SPECS: Record<string, TaxIdentitySpec> = {
   CA: {
     typeCode: 'BN',
     fields: [
-      { column: 'importerTaxId', label: 'Business Number + RM account', placeholder: '123456789RM0001' },
+      {
+        column: 'importerTaxId',
+        label: 'Business Number + RM account',
+        placeholder: '123456789RM0001',
+        // BUG-104 — pre-fix accepted any text ('ABC' saved). CBSA's
+        // program-account format is 9 digits + 'RM' + 4 digits.
+        pattern: /^[0-9]{9}RM[0-9]{4}$/i,
+        patternMsg: 'Format: 9 digits + RM + 4 digits (e.g. 123456789RM0001).',
+      },
     ],
     note: 'Commercial importers must be registered in CBSA’s CARM portal.',
   },

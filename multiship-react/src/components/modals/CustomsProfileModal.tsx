@@ -672,18 +672,28 @@ export default function CustomsProfileModal({
               {activeTerritory && taxSpec ? (
                 <>
                   <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                    {taxSpec.fields.map((f) => (
-                      <Field key={f.column} label={f.label} error={err(f.column)}>
-                        <input
-                          value={(form[f.column] as string | null | undefined) ?? ''}
-                          onChange={set(f.column)}
-                          onBlur={() => markTouched(f.column)}
-                          placeholder={f.placeholder}
-                          maxLength={40}
-                          className={fieldCls(err(f.column))}
-                        />
-                      </Field>
-                    ))}
+                    {taxSpec.fields.map((f) => {
+                      // BUG-104 — per-territory pattern check so e.g.
+                      // Canadian 'Business Number + RM account' doesn't
+                      // save 'ABC' silently. Inline error shows when the
+                      // typed value is non-empty + doesn't match.
+                      const val = (form[f.column] as string | null | undefined) ?? ''
+                      const patternError = f.pattern && val && !f.pattern.test(val.trim())
+                          ? (f.patternMsg ?? `Doesn't match the expected ${f.label} format.`)
+                          : null
+                      return (
+                        <Field key={f.column} label={f.label} error={err(f.column) ?? patternError}>
+                          <input
+                            value={val}
+                            onChange={set(f.column)}
+                            onBlur={() => markTouched(f.column)}
+                            placeholder={f.placeholder}
+                            maxLength={40}
+                            className={fieldCls(err(f.column) ?? patternError)}
+                          />
+                        </Field>
+                      )
+                    })}
                   </div>
                   {taxSpec.note ? <p className="mt-2 text-[10.5px] text-[#5a4526]">{taxSpec.note}</p> : null}
                 </>
