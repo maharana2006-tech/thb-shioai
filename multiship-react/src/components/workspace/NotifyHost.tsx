@@ -49,11 +49,18 @@ function ToastStack({ toasts }: { toasts: NotifyMessage[] }) {
 
   return (
     <div
-      // --toast-bottom: a page with a bottom action bar lifts the stack above it.
-      style={{ bottom: 'var(--toast-bottom, 1rem)' }}
+      // Position is var-driven: a page with a bottom action bar lifts the stack
+      // (--toast-bottom); an open dialog docks it bottom-left (--toast-left/right/
+      // align) so toasts never cover the dialog's X or footer buttons (BUG-005/025).
+      style={{
+        bottom: 'var(--toast-bottom, 1rem)',
+        right: 'var(--toast-right, 1rem)',
+        left: 'var(--toast-left, auto)',
+        alignItems: 'var(--toast-align, flex-end)',
+      }}
       // Above the confirm modal (z-70): a receipt that fires as a dialog
       // closes was sitting behind its backdrop until the dialog unmounted.
-      className="pointer-events-none fixed right-4 z-[80] flex w-[min(380px,calc(100vw-2rem))] flex-col items-end gap-2 print:hidden"
+      className="pointer-events-none fixed z-[80] flex w-[min(380px,calc(100vw-2rem))] flex-col gap-2 print:hidden"
       aria-live="polite"
     >
       {hidden > 0 ? (
