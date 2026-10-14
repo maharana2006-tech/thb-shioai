@@ -101,6 +101,11 @@ public class PackingSlipServiceImpl implements PackingSlipService {
 
     @Override
     public byte[] render(Integer orderNo) {
+        return renderWithTemplate(orderNo, null);
+    }
+
+    @Override
+    public byte[] renderWithTemplate(Integer orderNo, Long templateId) {
         Order order = orderRepository.findByOrderNo(orderNo)
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Order not found: " + orderNo));
@@ -110,9 +115,21 @@ public class PackingSlipServiceImpl implements PackingSlipService {
         // just-loaded order so a scoped USER can't render a slip for a
         // foreign tenant's order.
         if (tenantScope != null) tenantScope.requireTenantMatch(tenantId);
-        LabelTemplate template = labelTemplateService
-                .resolve(tenantId, "PACKING_SLIP")
-                .orElse(null);
+        // BUG-109 — Settings > Templates > Preview passes a templateId so
+        // the admin sees THAT template rendered, not whatever template
+        // the order's own client happens to resolve to. Falls through to
+        // per-order resolution when templateId is null (regular order
+        // viewer path).
+        LabelTemplate template;
+        if (templateId != null) {
+            template = labelTemplateService.findById(templateId)
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "Template not found: " + templateId));
+        } else {
+            template = labelTemplateService
+                    .resolve(tenantId, "PACKING_SLIP")
+                    .orElse(null);
+        }
 
         List<OrderLine> lines = orderLineRepository.findOrderLinesByOrderNo(orderNo);
         Client client = tenantId == null ? null

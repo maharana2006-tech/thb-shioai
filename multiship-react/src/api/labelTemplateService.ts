@@ -177,9 +177,13 @@ export const labelTemplateService = {
    * against the wrong origin. Caller MUST revoke the returned URL when
    * done to avoid leaking a Blob into memory for the tab's lifetime.
    */
-  fetchPreviewObjectUrl: async (orderNo: number | string): Promise<string> => {
+  fetchPreviewObjectUrl: async (orderNo: number | string, templateId?: number): Promise<string> => {
     // Sprint 50 PR Q3 — cookie-mode auth via authFetch (credentials:'include').
-    const resp = await authFetch(`/orders/${orderNo}/packing-slip`)
+    // BUG-109 — templateId forces the server to render THIS template on
+    // the order's data (Settings > Templates > Preview path), bypassing
+    // per-order resolution. Omit to keep the regular order-viewer behaviour.
+    const qs = templateId != null ? `?templateId=${templateId}` : ''
+    const resp = await authFetch(`/orders/${orderNo}/packing-slip${qs}`)
     const blob = await resp.blob()
     return URL.createObjectURL(blob)
   },
