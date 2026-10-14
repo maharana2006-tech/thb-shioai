@@ -1507,10 +1507,10 @@ export default function ClientEditorPage() {
         {/* Billing markup — optional, edit-mode only. The endpoint is keyed
             by clientCode, so a not-yet-created client has nowhere to save
             this to; create mode shows a placeholder pointing back here. */}
+        {/* BUG-078 — patch client.hasBillingMarkup to true locally so
+            the step-pill warning clears on save. load() refetches the
+            full row on the next visit. */}
         {activeStep === 'markup' && (client ? (
-          {/* BUG-078 — patch client.hasBillingMarkup to true locally so
-              the step-pill warning clears on save. load() refetches the
-              full row on the next visit. */}
           <ClientMarkupTab
             clientCode={client.clientCode}
             onSaved={() => setClient((c) => (c ? { ...c, hasBillingMarkup: true } : c))}
