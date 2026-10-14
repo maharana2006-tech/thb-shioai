@@ -62,11 +62,14 @@ export default function ClientMarkupTab({ clientCode }: { clientCode: string }) 
     if (saving) return
     const parsed = Number(valueStr)
     if (!Number.isFinite(parsed) || parsed < 0) {
-      notify.error('Value must be a non-negative number.')
+      // BUG-036 — pass an explicit title so the toast heading reads
+      // "Check the form for errors" instead of the generic
+      // "Something went wrong" that the server-failure path uses.
+      notify.error({ title: 'Check the form for errors', body: 'Value must be a non-negative number.' })
       return
     }
     if (!/^[A-Za-z]{3}$/.test(currency)) {
-      notify.error('Currency must be a 3-letter ISO code (e.g. USD).')
+      notify.error({ title: 'Check the form for errors', body: 'Currency must be a 3-letter ISO code (e.g. USD).' })
       return
     }
     setSaving(true)
