@@ -1662,6 +1662,14 @@ export default function CarrierConnections({
                         </button>
                       </div>
                     ) : null}
+                    {/* BUG-086 — Chrome ignores autoComplete="off" on
+                        password-type fields in a form that previously saw
+                        a login. The browser was pre-filling admin's own
+                        password into Consumer Secret. autoComplete="new-
+                        password" + a randomised name attribute disables
+                        the heuristic. type="text" on the id field (not
+                        username) keeps the browser from matching "login
+                        username" either. */}
                     <Field label={credentialLabelsFor(drawer.carrierCode).idLong} error={drawerErrors.clientId}>
                       <input
                         value={drawer.clientId}
@@ -1669,7 +1677,10 @@ export default function CarrierConnections({
                         className={`${inputClassName}${drawerErrors.clientId ? ' !border-rose-400' : ''}`}
                         placeholder={credentialLabelsFor(drawer.carrierCode).idPlaceholder
                           ?? credentialLabelsFor(drawer.carrierCode).idLong}
-                        autoComplete="off"
+                        name="carrier-credential-id"
+                        autoComplete="new-password"
+                        data-lpignore="true"
+                        data-1p-ignore="true"
                       />
                     </Field>
                     <Field label={credentialLabelsFor(drawer.carrierCode).secretLong} error={drawerErrors.clientSecret}>
@@ -1679,7 +1690,10 @@ export default function CarrierConnections({
                         onChange={(e) => setDrawer((c) => ({ ...c, clientSecret: e.target.value }))}
                         className={`${inputClassName}${drawerErrors.clientSecret ? ' !border-rose-400' : ''}`}
                         placeholder={credentialLabelsFor(drawer.carrierCode).secretLong}
-                        autoComplete="off"
+                        name="carrier-credential-secret"
+                        autoComplete="new-password"
+                        data-lpignore="true"
+                        data-1p-ignore="true"
                       />
                     </Field>
                     {credentialLabelsFor(drawer.carrierCode).helper ? (
