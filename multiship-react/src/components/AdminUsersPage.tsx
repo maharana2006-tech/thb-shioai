@@ -810,6 +810,10 @@ function actionLabel(a: AdminUserAudit): string {
     // raw enum code "invite_sent".
     case 'INVITE_SENT':
       return 'invited'
+    case 'INVITE_RESENT':
+      return 'resent the invite to'
+    case 'INVITE_REVOKED':
+      return 'revoked the invite for'
     case 'PASSWORD_RESET_SENT':
       return 'sent a password reset to'
     default:

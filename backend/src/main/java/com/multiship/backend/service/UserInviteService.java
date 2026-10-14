@@ -170,6 +170,13 @@ public class UserInviteService {
         repository.deleteById(id);
     }
 
+    /** BUG-085 — read-only lookup so the controller can audit resend /
+     *  revoke with the email + client code before the row is gone. */
+    @Transactional(readOnly = true)
+    public java.util.Optional<UserInvite> findById(Long id) {
+        return repository.findById(id);
+    }
+
     private static String randomToken() {
         byte[] buf = new byte[24];  // 48-char hex
         RANDOM.nextBytes(buf);

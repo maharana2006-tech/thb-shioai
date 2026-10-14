@@ -384,6 +384,38 @@ public class AdminUserService {
                 .build());
     }
 
+    /** BUG-085 — audit resend / revoke so operators can tell what
+     *  happened to an invite after it was first sent. Prior to this,
+     *  Recent admin actions showed only the mint, which made a revoked
+     *  invite look still-live. */
+    @Transactional
+    public void recordInviteResent(String email, String clientCode, String actorUsername) {
+        auditRepository.save(UserAdminAudit.builder()
+                .subjectUserId(null)
+                .subjectUsername(email)
+                .action("INVITE_RESENT")
+                .oldClientCode(null)
+                .newClientCode(clientCode)
+                .actorUsername(actorUsername == null ? "system" : actorUsername)
+                .reason(null)
+                .createdAt(LocalDateTime.now())
+                .build());
+    }
+
+    @Transactional
+    public void recordInviteRevoked(String email, String clientCode, String actorUsername) {
+        auditRepository.save(UserAdminAudit.builder()
+                .subjectUserId(null)
+                .subjectUsername(email)
+                .action("INVITE_REVOKED")
+                .oldClientCode(clientCode)
+                .newClientCode(null)
+                .actorUsername(actorUsername == null ? "system" : actorUsername)
+                .reason(null)
+                .createdAt(LocalDateTime.now())
+                .build());
+    }
+
     private static AdminUserDTO toDTO(User u) {
         return AdminUserDTO.builder()
                 .id(u.getId())
