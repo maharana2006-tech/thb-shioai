@@ -1076,7 +1076,11 @@ function OverridesTab({ id }: { id: number }) {
     <div className="space-y-3">
       <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-[12px] text-slate-700">
         <FiUsers className="mr-1 inline h-3.5 w-3.5" />
-        Per-tenant login overrides. Empty by default — the connector falls back to its own credential-derivation rule (e.g. NDS: <span className="font-mono">username = password = clientCode</span>).
+        {/* BUG-120 — previous copy printed the Oracle WMS default
+            derivation rule in plain English to every admin, giving away
+            the guessable credential for every unlisted tenant. Scrub.
+            Connector keeps the auto-provisioning rule internally. */}
+        Per-tenant login overrides. Empty by default — the connector auto-provisions a per-tenant login. Set an override here when you need a specific username/password for a tenant.
       </div>
 
       {loading ? (
