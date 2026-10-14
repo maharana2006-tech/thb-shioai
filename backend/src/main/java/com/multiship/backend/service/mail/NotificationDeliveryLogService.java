@@ -28,6 +28,24 @@ public class NotificationDeliveryLogService {
 
     private final NotificationDeliveryLogRepository repo;
 
+    /** BUG-133 — persistent delivery-log bodies used to carry the live
+     *  invite token (and the password-reset token). Any admin with the
+     *  Email Delivery Log tab could GET /notification-delivery-log/{id}
+     *  and read the raw accept-link, lifting the invite before the
+     *  recipient saw it. Redact token-bearing segments before persist:
+     *  the operator still sees what template fired, who it went to,
+     *  and the surrounding copy; the token itself is masked. The
+     *  mailer already sent the live token; this only affects the
+     *  stored record. */
+    static String redactSensitiveTokens(String body) {
+        if (body == null) return null;
+        // /invite/<48-char hex>, /verify-email?token=<...>, /reset-password?token=<...>
+        String out = body.replaceAll("(/invite/)[A-Za-z0-9._-]{16,}", "$1[redacted]");
+        out = out.replaceAll("(\\?token=)[A-Za-z0-9._-]{16,}", "$1[redacted]");
+        out = out.replaceAll("(&token=)[A-Za-z0-9._-]{16,}", "$1[redacted]");
+        return out;
+    }
+
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public NotificationDeliveryLogEntity recordSent(String templateKey, String to,
                                                     String subject, String body,
@@ -37,7 +55,7 @@ public class NotificationDeliveryLogService {
                 .templateKey(templateKey)
                 .recipient(to)
                 .subject(subject)
-                .body(body)
+                .body(redactSensitiveTokens(body))
                 .status(STATUS_SENT)
                 .providerKind(providerKind)
                 .providerId(providerId)
@@ -58,7 +76,7 @@ public class NotificationDeliveryLogService {
                 .templateKey(templateKey)
                 .recipient(to)
                 .subject(subject)
-                .body(body)
+                .body(redactSensitiveTokens(body))
                 .status(STATUS_FAILED)
                 .providerKind(providerKind)
                 .providerId(providerId)
