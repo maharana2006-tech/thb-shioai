@@ -240,11 +240,19 @@ function ConfigInput({
           <span className="ml-1 rounded bg-amber-100 px-1 text-[10px] text-amber-800">secret</span>
         )}
       </span>
+      {/* BUG-086 — Chrome ignores autoComplete="off" on password-type
+          fields. autoComplete="new-password" plus a unique name attribute
+          disables the heuristic that was pre-filling the admin's own
+          credentials into the mail-provider fields. */}
       <input
         type={isSecret ? 'password' : 'text'}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={isSecret && value === REDACTED ? 'unchanged — type to replace' : ''}
+        name={`mail-provider-${keyName}`}
+        autoComplete="new-password"
+        data-lpignore="true"
+        data-1p-ignore="true"
         className="rounded-lg border border-[#e3d9c4] px-3 py-1.5 font-mono text-[12px] text-[#1f150c]"
       />
     </label>

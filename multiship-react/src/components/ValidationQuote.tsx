@@ -58,7 +58,13 @@ export default function ValidationQuote({ quote }: { quote: ShipmentRateQuote })
         ) : null}
       </dl>
       {!priced && quote.message ? (
-        <p className={`mt-1 ${quote.status === 'NOT_OFFERED' ? 'text-amber-800' : 'text-slate-500'}`}>{quote.message}</p>
+        // BUG-073 — strip 'No price:' prefix + raw 'HTTP 5xx ...' tail so
+        // the box prints the same humanised reason the checklist row does.
+        <p className={`mt-1 ${quote.status === 'NOT_OFFERED' ? 'text-amber-800' : 'text-slate-500'}`}>
+          {quote.message
+            .replace(/^no price:\s*/i, '')
+            .replace(/\bHTTP\s*5\d\d\b.*$/, 'the carrier returned a server error — try again shortly.')}
+        </p>
       ) : null}
       {priced && quote.otherServices?.length ? (
         <details className="mt-1">
