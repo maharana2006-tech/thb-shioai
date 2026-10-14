@@ -11,6 +11,15 @@ import {
   type RecipientPage,
   type SavedRecipient,
 } from '../api/recipientBookService'
+// BUG-082 — same validators the client wizard, warehouse editor and the
+// order form use, so a Ship-to picked from this list won't be rejected
+// later as 'ILLINOIS' / 'ABCDE' / 'abc' / 'x@'.
+import {
+  validateEmail,
+  validatePhoneForCountry,
+  validateZip,
+} from '../utils/clientValidation'
+import { STATE_CODE_SETS } from '../utils/stateCodes'
 
 const PAGE_SIZE = 25
 
@@ -246,6 +255,28 @@ function AddressEditor({ entry, clients, defaultOwner, onClose, onSaved }: {
     if (!form.city?.trim()) found.city = 'Enter the city.'
     if (!form.postalCode?.trim()) found.postalCode = 'Enter the postal code.'
     if (!form.countryCode) found.countryCode = 'Choose the country.'
+    // BUG-082 — reject phone/email/state/postal shapes the carrier will
+    // reject later. Mirrors the client wizard, warehouse editor and
+    // order form so Ship-to picks from this book don't fail at label
+    // time. Optional fields (phone/email/state) only check when filled.
+    const phoneErr = form.phone?.trim()
+      ? validatePhoneForCountry(form.phone, form.countryCode)
+      : null
+    if (phoneErr) found.phone = phoneErr
+    const emailErr = form.email?.trim() ? validateEmail(form.email) : null
+    if (emailErr) found.email = emailErr
+    if (form.countryCode && form.postalCode?.trim()) {
+      const zipErr = validateZip(form.postalCode, form.countryCode, true)
+      if (zipErr) found.postalCode = zipErr
+    }
+    if (form.state?.trim() && STATE_CODE_SETS[form.countryCode]) {
+      const s = form.state.trim().toUpperCase()
+      if (!STATE_CODE_SETS[form.countryCode].has(s)) {
+        found.state = `Use the 2-letter ${form.countryCode} code (e.g. ${
+          [...STATE_CODE_SETS[form.countryCode]].slice(0, 2).join(', ')
+        }).`
+      }
+    }
     setErrors(found)
     if (Object.keys(found).length > 0) return
     // Empty strings go to the server as null, so a cleared field really clears.
