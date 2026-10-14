@@ -100,7 +100,7 @@ public interface OrderTrackingRepository extends JpaRepository<OrderTracking, Lo
     Optional<OrderTracking> findFirstByTrackingNumberIgnoreCaseOrderByIdDesc(String trackingNumber);
 
     /**
-     * V135 — GENERATED, non-voided, non-errored labels in a time window, for
+     * V135 — GENERATED, non-voided, non-errored, not-yet-closed-out (V157) labels in a time window, for
      * the end-of-day close ("close out today's open labels for carrier X").
      * Carrier is resolved per-tracking by the caller (ManifestServiceImpl) via
      * the ship-via → ShippingService chain, since the carrier isn't stored here.
@@ -108,7 +108,7 @@ public interface OrderTrackingRepository extends JpaRepository<OrderTracking, Lo
     @Query("SELECT t FROM OrderTracking t WHERE t.isLabelGenerated = true "
             + "AND UPPER(t.status) NOT IN ('VOIDED', 'ERROR') "
             + "AND t.labelGeneratedAt >= :start AND t.labelGeneratedAt < :end "
-            + "AND t.trackingNumber IS NOT NULL")
+            + "AND t.trackingNumber IS NOT NULL AND t.manifestedAt IS NULL")
     List<OrderTracking> findGeneratedBetween(@Param("start") java.time.LocalDateTime start,
                                              @Param("end") java.time.LocalDateTime end);
 

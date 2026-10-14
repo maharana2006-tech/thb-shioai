@@ -40,6 +40,14 @@ public class OrderTracking {
     @Column(name = "label_generated_at")
     private LocalDateTime labelGeneratedAt;
 
+    /** V157 — when the label was closed out (manifest / SCAN form); null while it's open. */
+    @Column(name = "manifested_at")
+    private LocalDateTime manifestedAt;
+
+    /** V157 — the carrier's manifest / SCAN-form id that closed it. */
+    @Column(name = "manifest_id", length = 120)
+    private String manifestId;
+
     /** Sprint 52 — TEXT (was default varchar 255). Holds either a signed
      *  carrier URL (up to 2 KB on FedEx) OR the base64-encoded label
      *  bytes (10–200 KB). Sprint 52 PR B (#518) established this column

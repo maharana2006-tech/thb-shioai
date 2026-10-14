@@ -296,6 +296,42 @@ class ManifestServiceImplFleetSplitTest {
         return r;
     }
 
+    /** A closed-out label is stamped, so it isn't offered or filed again. */
+    @Test
+    void a_manifested_label_is_stamped_and_then_refused() {
+        stubTracking("1Z-A", 100, "P80", "ACME");
+        stubClientShipvia("ACME", "P80", 10L);
+        stubShippingService(10L, false);
+        when(connector.closeOutDay(any(CloseOutRequest.class), anyString(), anyString()))
+                .thenReturn(new CloseOutResult("FEDEX", "GROUP-1", null, null, 1, "MANIFESTED", "ok", "{}"));
+
+        service.closeOut(request("FEDEX", "ACME", List.of("1Z-A")));
+
+        OrderTracking stamped = trackingRepo.findFirstByTrackingNumberIgnoreCaseOrderByIdDesc("1Z-A").orElseThrow();
+        assertNotNull(stamped.getManifestedAt());
+        assertEquals("GROUP-1", stamped.getManifestId());
+        verify(trackingRepo).save(stamped);
+
+        ApiResponse<ManifestResponseDTO> again = service.closeOut(request("FEDEX", "ACME", List.of("1Z-A")));
+        assertEquals(422, again.getCode());
+        assertEquals("Already closed out: 1Z-A (GROUP-1). Remove it and close out again.", again.getMessage());
+        verify(connector, times(1)).closeOutDay(any(), anyString(), anyString());
+    }
+
+    /** A refused close-out (not MANIFESTED) leaves the label open. */
+    @Test
+    void a_failed_close_out_leaves_the_label_open() {
+        stubTracking("1Z-B", 101, "P80", "ACME");
+        stubClientShipvia("ACME", "P80", 10L);
+        stubShippingService(10L, false);
+        when(connector.closeOutDay(any(CloseOutRequest.class), anyString(), anyString()))
+                .thenReturn(new CloseOutResult("FEDEX", null, null, null, 0, "ERROR", "carrier said no", "{}"));
+
+        service.closeOut(request("FEDEX", "ACME", List.of("1Z-B")));
+
+        assertNull(trackingRepo.findFirstByTrackingNumberIgnoreCaseOrderByIdDesc("1Z-B").orElseThrow().getManifestedAt());
+    }
+
     /** BUG-022 — a manual USPS label (ship-via = catalog code, no client SHIPVIA map) is gathered by its billed account. */
     @Test
     void closeWholeDay_findsAManualLabelThroughTheAccountItWasBilledTo() {

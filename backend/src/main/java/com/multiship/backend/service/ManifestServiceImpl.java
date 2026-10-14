@@ -108,6 +108,9 @@ public class ManifestServiceImpl implements ManifestService {
         // internal "failedToClassify".
         List<String> unknown = new ArrayList<>();
         List<String> otherCarrier = new ArrayList<>();
+        List<String> alreadyClosed = new ArrayList<>();
+        // Each number is resolved once and reused by the FedEx fleet split below.
+        java.util.Map<String, Optional<TrackingResolution>> resolved = new java.util.HashMap<>();
         for (String t : request.getTrackingNumbers()) {
             if (!StringUtils.hasText(t)) continue;
             OrderTracking tr = orderTrackingRepository.findFirstByTrackingNumberIgnoreCaseOrderByIdDesc(t).orElse(null);
@@ -115,7 +118,10 @@ public class ManifestServiceImpl implements ManifestService {
                 unknown.add(t.trim());
                 continue;
             }
-            resolveForTracking(t).map(TrackingResolution::carrier)
+            if (tr.getManifestedAt() != null) {
+                alreadyClosed.add(t.trim() + (StringUtils.hasText(tr.getManifestId()) ? " (" + tr.getManifestId() + ")" : ""));
+            }
+            resolved.computeIfAbsent(t, this::resolveForTracking).map(TrackingResolution::carrier)
                     .filter(c -> !carrier.equalsIgnoreCase(c))
                     .ifPresent(c -> otherCarrier.add(t.trim() + " (" + c.toUpperCase(Locale.ROOT) + ")"));
             String st = tr.getStatus() == null ? "" : tr.getStatus().trim().toUpperCase(Locale.ROOT);
@@ -135,6 +141,11 @@ public class ManifestServiceImpl implements ManifestService {
                     : "These trackings aren't") + " an open " + carrier + " label in Multiship"
                     + (unknown.size() == 1 ? "" : ": " + String.join(", ", unknown))
                     + ". Check the number, or remove it and close out again.");
+        }
+        if (!alreadyClosed.isEmpty()) {
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, "Already closed out: "
+                    + String.join(", ", alreadyClosed) + ". Remove "
+                    + (alreadyClosed.size() == 1 ? "it" : "them") + " and close out again.");
         }
         if (!otherCarrier.isEmpty()) {
             return failure(HttpStatus.UNPROCESSABLE_CONTENT, "Not " + carrier + " labels: "
@@ -236,7 +247,8 @@ public class ManifestServiceImpl implements ManifestService {
         // still go into failedToClassify (fail-open, operator re-runs).
         ClassificationResult classify;
         if ("FEDEX".equals(carrier)) {
-            classify = classifyTrackings(request.getTrackingNumbers());
+            classify = classifyTrackings(request.getTrackingNumbers(),
+                    t -> resolved.computeIfAbsent(t, this::resolveForTracking));
         } else {
             List<String> all = request.getTrackingNumbers().stream()
                     .filter(StringUtils::hasText)
@@ -249,12 +261,12 @@ public class ManifestServiceImpl implements ManifestService {
         // Preserve group order (GROUND first, EXPRESS second) so multi-fleet
         // responses always render in the same order for the operator.
         if (!classify.groundTrackings.isEmpty()) {
-            results.add(callCloseOut(connector, classify.groundTrackings, closeDate,
-                    address, account, accessToken, false));
+            results.add(markClosed(classify.groundTrackings, callCloseOut(connector, classify.groundTrackings,
+                    closeDate, address, account, accessToken, false)));
         }
         if (!classify.expressTrackings.isEmpty()) {
-            results.add(callCloseOut(connector, classify.expressTrackings, closeDate,
-                    address, account, accessToken, true));
+            results.add(markClosed(classify.expressTrackings, callCloseOut(connector, classify.expressTrackings,
+                    closeDate, address, account, accessToken, true)));
         }
         // Edge case — every tracking failed to classify. Nothing to submit;
         // return a NOT_SUPPORTED-shaped response so the operator sees the
@@ -287,7 +299,29 @@ public class ManifestServiceImpl implements ManifestService {
             List<String> expressTrackings,
             List<String> failed) {}
 
+    /**
+     * V157 — a manifested group's labels are closed: stamp them so they are
+     * no longer offered as open, gathered by Close whole day, or accepted again.
+     */
+    private CloseOutResult markClosed(List<String> trackings, CloseOutResult result) {
+        if (result == null || !"MANIFESTED".equals(result.status())) return result;
+        LocalDateTime now = LocalDateTime.now();
+        for (String t : trackings) {
+            orderTrackingRepository.findFirstByTrackingNumberIgnoreCaseOrderByIdDesc(t).ifPresent(tr -> {
+                tr.setManifestedAt(now);
+                tr.setManifestId(result.manifestId());
+                orderTrackingRepository.save(tr);
+            });
+        }
+        return result;
+    }
+
     ClassificationResult classifyTrackings(List<String> trackings) {
+        return classifyTrackings(trackings, this::resolveForTracking);
+    }
+
+    private ClassificationResult classifyTrackings(List<String> trackings,
+                                                   java.util.function.Function<String, Optional<TrackingResolution>> resolve) {
         List<String> ground = new ArrayList<>();
         List<String> express = new ArrayList<>();
         List<String> failed = new ArrayList<>();
@@ -296,7 +330,7 @@ public class ManifestServiceImpl implements ManifestService {
                 failed.add(t);
                 continue;
             }
-            Optional<Boolean> expressFlag = lookupExpressFlagForTracking(t);
+            Optional<Boolean> expressFlag = resolve.apply(t).map(TrackingResolution::express);
             if (expressFlag.isEmpty()) {
                 failed.add(t);
             } else if (expressFlag.get()) {
@@ -308,25 +342,10 @@ public class ManifestServiceImpl implements ManifestService {
         return new ClassificationResult(ground, express, failed);
     }
 
-    /**
-     * Walk the mapping chain for one tracking:
-     * <ol>
-     *   <li>tracking → {@link OrderTracking#getOrderNo}</li>
-     *   <li>orderNo → {@link Order#getShipviaCd} + tenant code</li>
-     *   <li>tenant + shipviaCd → {@link com.multiship.backend.model.ClientShipviaCodeMap#getServiceId}
-     *       (per-client row wins; null clientCode row = platform-wide
-     *       fallback)</li>
-     *   <li>serviceId → {@link ShippingService#isExpress}</li>
-     * </ol>
-     * Any miss returns empty — caller adds the tracking to failedToClassify.
-     */
-    private Optional<Boolean> lookupExpressFlagForTracking(String trackingNumber) {
-        return resolveForTracking(trackingNumber).map(TrackingResolution::express);
-    }
 
     /** One tracking's resolved carrier, fleet (express?) and owner (tenant /
      *  cust). Empty on any miss in the chain — callers treat that as
-     *  "unclassifiable". V135 generalised {@link #lookupExpressFlagForTracking}. */
+     *  "unclassifiable". V135 generalised the old express-flag lookup. */
     private record TrackingResolution(String carrier, boolean express, String owner) {}
 
     private Optional<TrackingResolution> resolveForTracking(String trackingNumber) {
