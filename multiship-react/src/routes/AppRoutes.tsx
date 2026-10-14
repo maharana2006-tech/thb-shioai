@@ -303,6 +303,14 @@ export default function AppRoutes() {
             <Route path="/labels" element={<Navigate to={workspacePaths.orders} replace />} />
             <Route path="/generate-labels" element={<Navigate to={workspacePaths.orders} replace />} />
             <Route path="/track-orders" element={<Navigate to={workspacePaths.orders} replace />} />
+            {/* BUG-068 — unknown routes INSIDE the authenticated shell
+                used to fall through to the outer path='*' which sent
+                the operator to /login (destroying the auth session).
+                Catch them here instead so the operator lands on the
+                dashboard with the URL preserved as the Attempted-at,
+                not silently rewritten to Carrier Accounts (which was
+                the R4 symptom). */}
+            <Route path="*" element={<Navigate to={workspacePaths.dashboard} replace />} />
           </Route>
         </Route>
 

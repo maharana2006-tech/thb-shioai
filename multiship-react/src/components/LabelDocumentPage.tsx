@@ -638,7 +638,10 @@ export default function LabelDocumentPage() {
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">Label Documents</p>
             <h2 className="flex items-center gap-2 text-base font-semibold text-slate-950">
-              Order #{orderNo}
+              {/* BUG-069 — orderNo is parsed from the URL (Number('abc')
+                  returns NaN). Guard so the heading reads 'Invalid order
+                  number' instead of 'Order #NaN'. */}
+              Order {Number.isFinite(orderNo) ? `#${orderNo}` : '— invalid order number'}
               {payload?.isReturn ? (
                 <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.12em] text-amber-700">
                   Return label

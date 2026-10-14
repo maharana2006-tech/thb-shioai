@@ -135,7 +135,11 @@ export default function HsCodeCombobox({
         autoComplete="off"
       />
       {open && (matches.length > 0 || loading) ? (
-        <div className="absolute left-0 right-0 top-full z-30 mt-1 max-h-64 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-[0_16px_40px_rgba(15,23,42,0.15)]">
+        {/* BUG-071 — dropdown used to inherit the input's 123 px cell
+            width, wrapping every description to a few letters per line
+            ('T-s / sing / and / ves / cot / knit'). Fixed width so
+            descriptions are readable regardless of the input's cell. */}
+        <div className="absolute left-0 top-full z-30 mt-1 max-h-64 w-[560px] max-w-[90vw] overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-[0_16px_40px_rgba(15,23,42,0.15)]">
           {loading && matches.length === 0 ? (
             <div className="px-3 py-2 text-[11px] text-slate-400">Searching…</div>
           ) : (
