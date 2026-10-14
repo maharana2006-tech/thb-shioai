@@ -462,7 +462,8 @@ export default function CustomsProfileModal({
         importerType: 'BUSINESS',
         clientCode,
       })
-      notify.success(`Importer/Broker for ${clientCode} saved (${form.countries.length} destinations).`)
+      // BUG-106 — '1 destinations' is grammatically wrong on singular.
+      notify.success(`Importer/Broker for ${clientCode} saved (${form.countries.length} ${form.countries.length === 1 ? 'destination' : 'destinations'}).`)
       onSaved?.()
       onClose()
     } catch (e) {
