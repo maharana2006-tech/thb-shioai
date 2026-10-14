@@ -76,7 +76,18 @@ export default function SystemChannelSection() {
         // is rare and the operator can type-search on the browser side.
         const res = await clientService.listClients({ page: 0, size: 100, sortBy: 'code' })
         if (cancelled) return
-        setClients(res.data?.content ?? [])
+        const loaded = res.data?.content ?? []
+        setClients(loaded)
+        // BUG-147 — if the remembered tenant was deleted, the picker
+        // showed '- pick a tenant -' but the warning + Save targeted
+        // the deleted code. Clear the sticky value if the client no
+        // longer exists so the page reflects reality.
+        setTenantCode((cur) => {
+          if (!cur) return cur
+          const stillExists = loaded.some((c) => c.clientCode?.toUpperCase() === cur.toUpperCase())
+          if (!stillExists) writeLastTenant('')
+          return stillExists ? cur : ''
+        })
       } catch (e) {
         if (!cancelled) notify.apiError(e, 'Could not load the client list.')
       }

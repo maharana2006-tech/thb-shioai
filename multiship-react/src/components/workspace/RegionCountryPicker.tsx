@@ -197,7 +197,11 @@ export default function RegionCountryPicker({
               </span>
             </button>
           ) : null}
-          <div className="ml-3 grid max-h-[190px] grid-cols-2 gap-x-2 overflow-y-auto border-l border-slate-100 pl-3 sm:grid-cols-3">
+          {/* BUG-148 — at 1400px the modal squeezed each 3-column cell to
+              ~47 px, so labels truncated to just the first letter. Widen
+              so each cell shows at least the ISO code + 1-2 words of the
+              name. */}
+          <div className="ml-3 grid max-h-[190px] grid-cols-1 gap-x-2 overflow-y-auto border-l border-slate-100 pl-3 sm:grid-cols-2 lg:grid-cols-3">
             {countriesInRegion(activeRegion).map((c) => {
               const reason = blockReason(c.code)
               const on = selected.has(c.code)

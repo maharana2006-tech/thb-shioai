@@ -163,7 +163,12 @@ export default function HsCodeCombobox({
           )}
         </div>
       ) : null}
-      {hsWarn ? (
+      {/* BUG-144 — pre-fix the 'letters not allowed' warning showed
+          while the operator was typing a word to search the lookup, so
+          the message and the matching list contradicted each other.
+          Suppress the warning when the operator is actively using the
+          lookup (dropdown open with results or loading). */}
+      {hsWarn && !(open && (loading || matches.length > 0)) ? (
         <p className="mt-1 text-[10.5px] leading-4 text-amber-700">
           <span className="font-semibold">HS code · </span>
           {hsWarn}
