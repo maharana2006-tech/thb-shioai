@@ -14,7 +14,17 @@ const COMMON_CURRENCIES = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'INR', 'JPY', 'SGD
  * onto every shipment at label time so a later change here doesn't move
  * historical bills.
  */
-export default function ClientMarkupTab({ clientCode }: { clientCode: string }) {
+export default function ClientMarkupTab({
+  clientCode,
+  onSaved,
+}: {
+  clientCode: string
+  /** BUG-078 — parent's step-pill reads client.hasBillingMarkup to
+   *  decide whether to show the amber 'No billing markup saved' warning.
+   *  After a successful save the parent's copy is stale until the page
+   *  reloads. Call onSaved so the parent can patch its state. */
+  onSaved?: () => void
+}) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
@@ -81,6 +91,7 @@ export default function ClientMarkupTab({ clientCode }: { clientCode: string }) 
       })
       notify.success(`Markup saved for ${clientCode}.`)
       await load()
+      onSaved?.()
     } catch (error) {
       // MARKUP_INVALID falls through the friendly-message map (no entry) to the
       // raw server message, which is what the inline branch surfaced too.

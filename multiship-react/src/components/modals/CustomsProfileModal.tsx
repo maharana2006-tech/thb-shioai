@@ -885,11 +885,16 @@ function ModalShell({
   onClose: () => void
   children: React.ReactNode
 }) {
-  const confirmClose = () => {
-    // Lightweight guard: a native confirm is clumsy but keeps the fix
-    // boundary tiny. If the operator wants to resume the draft, they
-    // tap Cancel on the confirm and the dialog stays open.
-    if (window.confirm('Discard this draft and close?')) onClose()
+  const confirmClose = async () => {
+    // BUG-075 — the previous window.confirm blocked the whole tab +
+    // looked foreign to the rest of the app. Use notify.confirm so
+    // the dialog matches the Stay / Leave pattern used by the client
+    // editor.
+    const ok = await notify.confirm(
+      'Discard this draft and close?\n\nAny unsaved changes to this importer/broker profile will be lost.',
+      { title: 'Discard draft?', confirmLabel: 'Discard', cancelLabel: 'Keep editing', danger: true },
+    )
+    if (ok) onClose()
   }
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {

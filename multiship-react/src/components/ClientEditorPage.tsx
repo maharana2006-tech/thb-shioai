@@ -1508,7 +1508,13 @@ export default function ClientEditorPage() {
             by clientCode, so a not-yet-created client has nowhere to save
             this to; create mode shows a placeholder pointing back here. */}
         {activeStep === 'markup' && (client ? (
-          <ClientMarkupTab clientCode={client.clientCode} />
+          {/* BUG-078 — patch client.hasBillingMarkup to true locally so
+              the step-pill warning clears on save. load() refetches the
+              full row on the next visit. */}
+          <ClientMarkupTab
+            clientCode={client.clientCode}
+            onSaved={() => setClient((c) => (c ? { ...c, hasBillingMarkup: true } : c))}
+          />
         ) : (
           <div className="flex-1 overflow-y-auto px-5 py-4" role="tabpanel" id="client-editor-panel-markup">
             <h4 className="text-[12.5px] font-semibold text-slate-950">Billing markup</h4>
