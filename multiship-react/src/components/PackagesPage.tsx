@@ -553,19 +553,22 @@ export default function PackagesPage({ active = true }: { active?: boolean } = {
                     ) : null}
                     {(() => {
                       const rows = p.id != null ? assignmentsByPreset.get(p.id) ?? [] : []
+                      // BUG-091 — empty allowlist is not a gate; clients
+                      // ship with every package by default. Reword the
+                      // tooltip + chip to reflect reality.
                       const tooltip = rows.length
-                        ? rows.map((r) => `${r.clientCode}${r.isDefault ? ' ★' : ''}`).join(', ')
-                        : 'No clients allowed yet.'
+                        ? `Allowlisted for: ${rows.map((r) => `${r.clientCode}${r.isDefault ? ' ★' : ''}`).join(', ')}`
+                        : 'All clients (no per-tenant restriction).'
                       return (
                         <span
-                          title={`Assigned to: ${tooltip}`}
+                          title={tooltip}
                           className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wide ring-1 ${
                             rows.length
                               ? 'bg-[#412d15]/[0.06] text-[#412d15] ring-[#412d15]/20'
                               : 'bg-white text-slate-400 ring-slate-200'
                           }`}
                         >
-                          <FiUsers className="h-2.5 w-2.5" /> {rows.length}
+                          <FiUsers className="h-2.5 w-2.5" /> {rows.length ? rows.length : 'all'}
                         </span>
                       )
                     })()}

@@ -461,11 +461,14 @@ export default function ShippingServicesPage({ active = true }: { active?: boole
                     const needsPackages = s.enabled && pkgCount === 0 && !customOnly
                     const clientRows = assignmentsByService.get(s.id) ?? []
                     const clientCount = clientRows.length
+                    // BUG-091 — empty allowlist does NOT mean the service
+                    // is restricted; clients ship with every service by
+                    // default. The old copy ('No clients allowed yet')
+                    // read like a tenant gate. Reword so the empty state
+                    // reflects reality.
                     const clientTooltip = clientRows.length
-                      ? clientRows
-                          .map((r) => `${r.clientCode}${r.isDefault ? ' ★' : ''}`)
-                          .join(', ')
-                      : 'No clients allowed yet.'
+                      ? `Allowlisted for: ${clientRows.map((r) => `${r.clientCode}${r.isDefault ? ' ★' : ''}`).join(', ')}`
+                      : 'All clients (no per-tenant restriction).'
                     return (
                       <li key={s.id} className="flex items-center gap-2.5 px-4 py-2.5">
                         <span className="w-5 shrink-0 font-mono text-[9px] font-bold tracking-widest text-slate-300">
@@ -511,14 +514,14 @@ export default function ShippingServicesPage({ active = true }: { active?: boole
                           <FiBox className="h-3 w-3" /> {customOnly ? 'CUSTOM' : needsPackages ? '⚠ 0' : pkgCount || '+'}
                         </button>
                         <span
-                          title={`Assigned to: ${clientTooltip}`}
+                          title={clientTooltip}
                           className={`inline-flex shrink-0 items-center gap-1 rounded-lg border px-1.5 py-1 text-[10px] font-bold transition ${
                             clientCount
                               ? 'border-[#412d15]/20 bg-[#412d15]/[0.06] text-[#412d15]'
                               : 'border-slate-200 bg-white text-slate-400'
                           }`}
                         >
-                          <FiUsers className="h-3 w-3" /> {clientCount || 0}
+                          <FiUsers className="h-3 w-3" /> {clientCount ? clientCount : 'all'}
                         </span>
                         <span
                           className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wide ring-1 ${
