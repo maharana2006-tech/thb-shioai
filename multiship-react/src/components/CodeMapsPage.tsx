@@ -257,8 +257,16 @@ export default function CodeMapsPage({ initialClientFilter, embedded = false }: 
                 allowedPresetIds,
               } : {}),
             }
+      // BUG-093 — pre-fix a duplicate ERP code silently replaced the
+      // existing mapping and the success toast gave no clue. Check
+      // whether the ERP code already has a row for this client (same
+      // tab) BEFORE firing upsert; adjust the toast wording so the
+      // operator sees 'updated' vs 'added'.
+      const replacing = rows.some((r) => (r.erpCode ?? '').toLowerCase() === erpCode.trim().toLowerCase())
       await clientCodeMapService.upsert(selectedClient, tab, payload)
-      notify.success(`${TAB_META[tab].label} alias saved.`)
+      notify.success(replacing
+        ? `${TAB_META[tab].label} alias for '${erpCode.trim()}' updated — previous target replaced.`
+        : `${TAB_META[tab].label} alias saved.`)
       setErpCode(''); setTargetId(''); setIso2('')
       setDestCountry(''); setDestRegion('')
       setWarehouseId(''); setAllowedPresetIds([])

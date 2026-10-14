@@ -196,6 +196,18 @@ export default function PackagesPage({ active = true }: { active?: boolean } = {
       notify.error("Carrier packaging needs the carrier's package code.")
       return
     }
+    // BUG-092 — tare > max weight is physically impossible (an empty
+    // box can't weigh more than its loaded max). Reject at save so
+    // operators don't ship against a box the service rules will refuse.
+    const maxW = Number(editing.maxWeight ?? 0)
+    const tareW = Number(editing.tareWeight ?? 0)
+    if (maxW > 0 && tareW > 0 && tareW >= maxW) {
+      notify.error({
+        title: 'Check the form for errors',
+        body: `Tare weight (${tareW}) must be less than max weight (${maxW}). The max weight is for the LOADED box.`,
+      })
+      return
+    }
     setSaving(true)
     try {
       await shippingConfigService.savePreset(editing)

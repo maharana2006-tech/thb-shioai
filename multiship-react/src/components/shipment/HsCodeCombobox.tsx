@@ -59,6 +59,9 @@ export default function HsCodeCombobox({
   const [matches, setMatches] = useState<HsCodeEntry[]>([])
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
+  // BUG-123 — keyboard navigation. ArrowUp/Down cycles the highlighted
+  // match; Enter commits.
+  const [activeIndex, setActiveIndex] = useState(-1)
   const wrapperRef = useRef<HTMLDivElement>(null)
 
   // Keep local query in sync when the parent replaces value externally
@@ -84,8 +87,10 @@ export default function HsCodeCombobox({
       try {
         const results = await hsCodeService.search(query)
         setMatches(results)
+        setActiveIndex(results.length ? 0 : -1)
       } catch {
         setMatches([])
+        setActiveIndex(-1)
       } finally {
         setLoading(false)
       }
@@ -130,8 +135,26 @@ export default function HsCodeCombobox({
         }}
         onFocus={() => setOpen(true)}
         onKeyDown={(e) => {
-          if (e.key === 'Escape') setOpen(false)
+          if (e.key === 'Escape') { setOpen(false); return }
+          // BUG-123 — ArrowDown / ArrowUp cycles matches; Enter commits
+          // the highlighted entry so the lookup is keyboard-reachable.
+          if (!open || matches.length === 0) return
+          if (e.key === 'ArrowDown') {
+            e.preventDefault()
+            setActiveIndex((i) => Math.min(matches.length - 1, i + 1))
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault()
+            setActiveIndex((i) => Math.max(0, i - 1))
+          } else if (e.key === 'Enter' && activeIndex >= 0) {
+            e.preventDefault()
+            pick(matches[activeIndex])
+          }
         }}
+        role="combobox"
+        aria-expanded={open}
+        aria-autocomplete="list"
+        aria-controls="hs-code-listbox"
+        aria-activedescendant={activeIndex >= 0 ? `hs-code-opt-${activeIndex}` : undefined}
         autoComplete="off"
       />
       {/* BUG-071 — dropdown used to inherit the input's 123 px cell
@@ -139,17 +162,23 @@ export default function HsCodeCombobox({
           Fixed width (560px, capped at 90vw) so descriptions stay on
           one line regardless of the input's cell. */}
       {open && (matches.length > 0 || loading) ? (
-        <div className="absolute left-0 top-full z-30 mt-1 max-h-64 w-[560px] max-w-[90vw] overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-[0_16px_40px_rgba(15,23,42,0.15)]">
+        <div id="hs-code-listbox" role="listbox" className="absolute left-0 top-full z-30 mt-1 max-h-64 w-[560px] max-w-[90vw] overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-[0_16px_40px_rgba(15,23,42,0.15)]">
           {loading && matches.length === 0 ? (
             <div className="px-3 py-2 text-[11px] text-slate-400">Searching…</div>
           ) : (
-            matches.map((entry) => (
+            matches.map((entry, i) => (
               <button
                 key={entry.code}
+                id={`hs-code-opt-${i}`}
+                role="option"
+                aria-selected={i === activeIndex}
                 type="button"
                 onClick={() => pick(entry)}
+                onMouseEnter={() => setActiveIndex(i)}
                 onMouseDown={(e) => e.preventDefault()} // keep focus on input
-                className="flex w-full items-start gap-2 border-b border-slate-100 px-3 py-2 text-left text-[11.5px] transition last:border-b-0 hover:bg-slate-50"
+                className={`flex w-full items-start gap-2 border-b border-slate-100 px-3 py-2 text-left text-[11.5px] transition last:border-b-0 ${
+                  i === activeIndex ? 'bg-sky-50' : 'hover:bg-slate-50'
+                }`}
               >
                 <span className="min-w-[70px] font-mono font-semibold text-slate-950">{entry.code}</span>
                 <span className="flex-1 text-slate-700">{entry.description}</span>
