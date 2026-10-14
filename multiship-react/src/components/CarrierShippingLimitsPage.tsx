@@ -149,7 +149,12 @@ export default function CarrierShippingLimitsPage() {
         </select>
       </section>
 
-      <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+      {/* BUG-087 — wrap in overflow-x-auto and pin Actions to the right
+          via position: sticky so Edit/Deactivate/Delete stay reachable at
+          narrow viewports (1442px repro). Plain <table>, not
+          AdvancedDataTable — the data model is simple enough that a sticky
+          column is cheaper than the full grid migration. */}
+      <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
         <table className="min-w-full text-[13px]">
           <thead className="bg-slate-50 text-left text-[11.5px] font-semibold uppercase tracking-wide text-slate-500">
             <tr>
@@ -163,7 +168,7 @@ export default function CarrierShippingLimitsPage() {
               <th className="px-3 py-2 text-right">Free declared $</th>
               <th className="px-3 py-2">Status</th>
               <th className="px-3 py-2">Notes</th>
-              <th className="px-3 py-2 text-right">Actions</th>
+              <th className="sticky right-0 bg-slate-50 px-3 py-2 text-right shadow-[-8px_0_8px_-8px_rgba(15,23,42,0.15)]">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -172,7 +177,7 @@ export default function CarrierShippingLimitsPage() {
             ) : filtered.length === 0 ? (
               <tr><td colSpan={11} className="px-3 py-6 text-center text-slate-500">No limit rows.</td></tr>
             ) : filtered.map((r) => (
-              <tr key={r.id} className={r.active ? '' : 'bg-slate-50/50 text-slate-400'}>
+              <tr key={r.id} className={r.active ? 'bg-white' : 'bg-slate-50 text-slate-400'}>
                 <td className="px-3 py-2 font-mono">{r.carrierCode}</td>
                 <td className="px-3 py-2 font-mono">{r.serviceCode ?? <span className="text-slate-400">(default)</span>}</td>
                 <td className="px-3 py-2">
@@ -199,7 +204,7 @@ export default function CarrierShippingLimitsPage() {
                 <td className="max-w-[200px] truncate px-3 py-2 text-slate-600" title={r.notes ?? ''}>
                   {r.notes ?? ''}
                 </td>
-                <td className="px-3 py-2 text-right whitespace-nowrap">
+                <td className="sticky right-0 bg-inherit px-3 py-2 text-right whitespace-nowrap shadow-[-8px_0_8px_-8px_rgba(15,23,42,0.15)]">
                   <button
                     onClick={() => setEditing(r)}
                     className="mr-1 rounded-md border border-slate-300 px-2 py-1 text-[12px] hover:bg-slate-50"

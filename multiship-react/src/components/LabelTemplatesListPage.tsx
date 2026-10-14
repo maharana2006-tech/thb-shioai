@@ -334,7 +334,7 @@ export default function LabelTemplatesListPage() {
             />
           </div>
         ),
-        meta: { headerLabel: 'Actions', hideable: false, exportable: false },
+        meta: { headerLabel: 'Actions', hideable: false, exportable: false, pinnedByDefault: 'end' },
       },
     ],
     // Handlers close over admin + busyId + navigate; those cover all reactive deps
