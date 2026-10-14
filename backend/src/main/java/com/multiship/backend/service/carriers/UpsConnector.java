@@ -1644,7 +1644,7 @@ public class UpsConnector implements CarrierConnector {
     private static java.math.BigDecimal zero() { return java.math.BigDecimal.ZERO; }
 
     /**
-     * UPS Pickup Creation — {@code POST /api/shipments/v1/pickup} with a
+     * UPS Pickup Creation — {@code POST /api/pickupcreation/v1/pickup} with a
      * Bearer token. Body carries the origin address, pickup date + window,
      * per-service piece counts, and the shipper account number for
      * billing. Response includes a PRN (Pickup Request Number) that
@@ -1713,7 +1713,7 @@ public class UpsConnector implements CarrierConnector {
             String response = HttpClients.newBuilder()
                     .baseUrl(baseUrl).build()
                     .post()
-                    .uri("/api/shipments/v1/pickup")
+                    .uri("/api/pickupcreation/v1/pickup")
                     .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.APPLICATION_JSON)
                     .header("Authorization", "Bearer " + accessToken)
@@ -1821,6 +1821,13 @@ public class UpsConnector implements CarrierConnector {
         if (StringUtils.hasText(req.specialInstructions())) {
             pcr.put("SpecialInstruction", req.specialInstructions());
         }
+        // BUG-008 — both are required by PickupCreationRequest: bill the
+        // shipper account above (01), and flag a package over 70 lb.
+        pcr.put("PaymentMethod", "01");
+        java.math.BigDecimal perPackageLb = pickupWeight == null ? java.math.BigDecimal.ZERO
+                : ("KGS".equals(weightUnitCode) ? pickupWeight.multiply(new java.math.BigDecimal("2.20462")) : pickupWeight)
+                        .divide(java.math.BigDecimal.valueOf(Math.max(1, req.packageCount())), 2, java.math.RoundingMode.HALF_UP);
+        pcr.put("OverweightIndicator", perPackageLb.compareTo(new java.math.BigDecimal("70")) > 0 ? "Y" : "N");
 
         body.put("PickupCreationRequest", pcr);
         return body;

@@ -127,6 +127,17 @@ class PickupTest {
         assertEquals("ERROR", r.status());
     }
 
+    /** BUG-008 — PaymentMethod and OverweightIndicator are required by UPS PickupCreationRequest. */
+    @Test
+    @SuppressWarnings("unchecked")
+    void ups_pickup_body_billsTheShipperAccount_andFlagsOverweight() {
+        UpsConnector c = new UpsConnector(new CarrierProperties(), new ObjectMapper());
+        java.util.Map<String, Object> pcr = (java.util.Map<String, Object>)
+                c.buildUpsPickupRequest(baseRequest()).get("PickupCreationRequest");
+        assertEquals("01", pcr.get("PaymentMethod"));
+        assertEquals("N", pcr.get("OverweightIndicator"));
+    }
+
     @Test
     @SuppressWarnings("unchecked")
     void ups_pickup_body_carries_real_account_number_not_contact_name() {
