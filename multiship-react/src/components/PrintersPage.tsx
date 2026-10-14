@@ -968,9 +968,13 @@ function PrinterEditor({
       // Show the server's reason next to the field it is about.
       const message = e instanceof Error && e.message ? e.message : 'Could not save the printer.'
       const lower = message.toLowerCase()
-      if (lower.includes('name')) setErrors({ name: message })
-      else if (lower.includes('hostname') || lower.includes('ip address')) setErrors({ host: message })
+      // BUG-114 — the pre-fix order checked 'name' first, so 'hostname'
+      // / 'IP address or hostname' routed to the name field (which is
+      // what QA saw: the address error turned the Name box red). Check
+      // the specific terms before the generic 'name' substring.
+      if (lower.includes('hostname') || lower.includes('ip address') || lower.includes('host')) setErrors({ host: message })
       else if (lower.includes('port')) setErrors({ port: message })
+      else if (lower.includes('name')) setErrors({ name: message })
       else setErrors({ form: message })
     } finally {
       setSaving(false)

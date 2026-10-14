@@ -314,6 +314,22 @@ function CarrierShippingLimitEditorDialog({ row, onClose, onSaved }: EditorProps
   const validate = (): string | null => {
     if (!carrierCode.trim()) return 'Carrier code is required.'
     if (carrierCode.length > 32) return 'Carrier code must be 32 chars or fewer.'
+    // BUG-095 — carrier code was a free-text box, so 'qa1013r5' saved as
+    // QA1013R5 and sat as an Active row that never applied. Require the
+    // code to match a known carrier.
+    const KNOWN_CARRIERS = ['UPS', 'FEDEX', 'USPS', 'DHL', 'STAMPS_COM', 'USPS_DIRECT']
+    if (!KNOWN_CARRIERS.includes(carrierCode.trim().toUpperCase())) {
+      return `Unknown carrier code '${carrierCode.trim()}'. Known: ${KNOWN_CARRIERS.join(', ')}.`
+    }
+    // BUG-096 — 'Effective until' was accepted as a past date, so the row
+    // was active in the grid yet already expired. Require it to be in the
+    // future. effectiveFrom isn't operator-editable in this form.
+    if (effectiveUntil.trim()) {
+      const until = new Date(effectiveUntil)
+      if (!Number.isNaN(until.getTime()) && until.getTime() < Date.now()) {
+        return 'Effective until must be a future date.'
+      }
+    }
     if (!scope) return 'Scope is required.'
     const pkgs = Number(maxPackages)
     if (!Number.isInteger(pkgs) || pkgs < 1 || pkgs > 9999) {

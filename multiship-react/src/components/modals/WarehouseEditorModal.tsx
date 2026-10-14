@@ -528,7 +528,7 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
                   maxLength={FIELD_LIMITS.addr.city} aria-invalid={err('city') ? true : undefined} className={inputCls('city')} />
               </Field>
               <Field label="State / region" required error={err('state')}>
-                <input value={state} onChange={(e) => setState(e.target.value)} onBlur={() => markTouched('state')}
+                <input value={state} onChange={(e) => setState(e.target.value.toUpperCase())} onBlur={() => markTouched('state')}
                   maxLength={FIELD_LIMITS.addr.state} aria-invalid={err('state') ? true : undefined} className={inputCls('state')} />
               </Field>
               <Field label="Postal code" required error={err('zip')}>

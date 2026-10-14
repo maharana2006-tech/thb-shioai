@@ -113,7 +113,21 @@ public class PrinterService {
     public Printer update(Long id, PrinterInput input) {
         Printer p = get(id);
         String oldFormat = p.getFormat();
+        String oldHost = p.getHost();
+        Integer oldPort = p.getPort();
         apply(p, input);
+        // BUG-115 — if the printer address or port changed, the previous
+        // test result applies to a different endpoint. Clear the stale
+        // test state so the Status column + tooltip don't mislead the
+        // operator ('Test OK' / 'Could not reach <old-ip>'). The next
+        // Test print writes a fresh result.
+        boolean addressChanged = !java.util.Objects.equals(oldHost, p.getHost())
+                || !java.util.Objects.equals(oldPort, p.getPort());
+        if (addressChanged) {
+            p.setLastTestOk(null);
+            p.setLastTestMessage(null);
+            p.setLastTestAt(null);
+        }
         if ("ZPL".equals(p.getFormat()) && !"ZPL".equals(oldFormat)
                 && assignments.findAllByOrderByClientCodeAscDocTypeAsc().stream()
                         .anyMatch(a -> a.getPrinterId().equals(id)

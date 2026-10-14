@@ -451,6 +451,7 @@ export default function CodeMapsPage({ initialClientFilter, embedded = false }: 
                 value={erpCode}
                 onChange={(e) => setErpCode(e.target.value)}
                 placeholder={meta.codePlaceholder}
+                maxLength={40}
                 className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15]"
               />
             </div>

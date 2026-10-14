@@ -294,9 +294,19 @@ function CustomFieldEditorModal({
               ref={firstInputRef}
               type="text"
               value={draft.fieldKey}
-              onChange={(e) => update('fieldKey', e.target.value.trim())}
+              // BUG-112 — the field used to accept any character and only
+              // stripped spaces, so 'QA Field!' saved as 'QAField!' with
+              // the exclamation preserved. Force snake_case on input:
+              // lowercase, letters/digits/underscore only, spaces → '_'.
+              onChange={(e) => update('fieldKey',
+                e.target.value
+                  .toLowerCase()
+                  .replace(/\s+/g, '_')
+                  .replace(/[^a-z0-9_]/g, ''),
+              )}
               placeholder="po_number"
               className={input}
+              maxLength={60}
             />
             <p className="mt-1 text-[11px] text-slate-400">snake_case. Immutable once orders reference it.</p>
           </div>
