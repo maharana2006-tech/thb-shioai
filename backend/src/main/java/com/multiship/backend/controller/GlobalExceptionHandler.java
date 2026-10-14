@@ -182,6 +182,12 @@ public class GlobalExceptionHandler {
     @ExceptionHandler({
         org.springframework.dao.DataIntegrityViolationException.class,
         jakarta.validation.ConstraintViolationException.class,
+        // BUG-098, BUG-118 — many admin controllers throw IllegalArgumentException
+        // for domain validation ('holiday for 2026-12-24 already exists', 'client
+        // code required'). Pre-fix those fell to the catch-all RuntimeException
+        // handler → 500 'Something went wrong on the server'. IAE is a known
+        // signal; map it to 400 with the message passed through verbatim.
+        IllegalArgumentException.class,
     })
     public ResponseEntity<ApiResponse<Void>> handleDataIntegrity(Exception ex) {
         log.debug("Data-integrity / constraint-violation surfaced to handler: {}", ex.getMessage());
@@ -198,6 +204,14 @@ public class GlobalExceptionHandler {
      *  Postgres backtrace. Falls back to a generic sentence when the message
      *  carries no useful content (e.g. an opaque unique-constraint name). */
     private static String humanizeDataError(Exception ex) {
+        // BUG-098/118 — pass IllegalArgumentException's own message through
+        // (service writes operator-facing text). DB / bean-validation
+        // messages still humanize below.
+        if (ex instanceof IllegalArgumentException) {
+            return ex.getMessage() == null || ex.getMessage().isBlank()
+                    ? "Please check the form — one or more values are invalid."
+                    : ex.getMessage();
+        }
         String raw = ex.getMessage() == null ? "" : ex.getMessage();
         // Hibernate: "could not execute statement; SQL [...]; constraint ["foo_bar_unique"]"
         if (raw.contains("constraint [") || raw.contains("constraint \"")) {

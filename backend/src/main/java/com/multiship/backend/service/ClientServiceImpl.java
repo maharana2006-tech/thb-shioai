@@ -129,12 +129,28 @@ public class ClientServiceImpl implements ClientService {
         headers.put("orders", "Orders"); headers.put("status", "Status");
         headers.put("created", "Created"); headers.put("updated", "Updated");
 
+        // BUG-038 (R6) — the FE column IDs don't all match the backend
+        // map keys (FE sends 'contact' + 'orderCount' + 'actions'; backend
+        // has 'email'/'phone' + 'orders'). Alias so the operator's visible
+        // columns actually land in the CSV. 'actions' is a UI-only chip,
+        // never exported.
+        java.util.Map<String, java.util.List<String>> ALIASES = java.util.Map.of(
+                "contact", java.util.List.of("email", "phone"),
+                "ordercount", java.util.List.of("orders"),
+                "actions", java.util.List.of()
+        );
         java.util.List<String> selected;
         if (filters.getColumns() != null && !filters.getColumns().isBlank()) {
             selected = new java.util.ArrayList<>();
             for (String raw : filters.getColumns().split(",")) {
                 String id = raw.trim().toLowerCase(Locale.ROOT);
-                if (cols.containsKey(id)) selected.add(id);
+                if (ALIASES.containsKey(id)) {
+                    for (String real : ALIASES.get(id)) {
+                        if (cols.containsKey(real) && !selected.contains(real)) selected.add(real);
+                    }
+                } else if (cols.containsKey(id) && !selected.contains(id)) {
+                    selected.add(id);
+                }
             }
             if (selected.isEmpty()) selected = new java.util.ArrayList<>(cols.keySet());
         } else {
