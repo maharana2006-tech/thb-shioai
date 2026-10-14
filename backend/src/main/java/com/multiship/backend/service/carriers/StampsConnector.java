@@ -105,6 +105,11 @@ public class StampsConnector implements CarrierConnector {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.repository.LabelPackageRepository labelPackageRepository;
 
+    /** Field injection — where a SERA account's saved refresh token is found
+     *  when the caller didn't push one (see {@link #savedRefreshToken}). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.CarrierAccountRefRepository accountRefRepository;
+
     /** Field injection — SERA 3-legged OAuth token refresh. Absent in unit
      *  tests that drive SWSIM paths; when absent, {@code getAccessTokenSera}
      *  falls back to the legacy {@code client_credentials} attempt (which
@@ -383,7 +388,7 @@ public class StampsConnector implements CarrierConnector {
     @Override
     public String getAccessToken(String clientId, String clientSecret, String accountNumber, String environment) {
         if (isSeraFlavor()) {
-            return getAccessTokenSera(clientId, clientSecret, environment);
+            return getAccessTokenSera(clientId, clientSecret, environment, accountNumber);
         }
         return getAccessTokenSwsim(clientId, clientSecret, accountNumber, environment);
     }
@@ -433,7 +438,30 @@ public class StampsConnector implements CarrierConnector {
      * successful verification; anything else falls back to a -local-* token
      * with the server's error surfaced via LAST_AUTH_DETAIL.
      */
+    /**
+     * The refresh token saved on the USPS account these credentials belong to:
+     * same account number, Client ID and environment (a token only works with
+     * the Client ID and environment it was issued for). Null when not found.
+     */
+    String savedRefreshToken(String clientId, String accountNumber, String environment) {
+        if (accountRefRepository == null || !StringUtils.hasText(accountNumber)) return null;
+        String id = clientId == null ? "" : clientId.trim();
+        return accountRefRepository.findByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase(accountNumber.trim(), "USPS")
+                .stream()
+                .filter(a -> StringUtils.hasText(a.getStampsRefreshToken()))
+                .filter(a -> id.equals(a.getClientId() == null ? "" : a.getClientId().trim()))
+                .filter(a -> environment == null || a.getEnvironment() == null
+                        || environment.trim().equalsIgnoreCase(a.getEnvironment().trim()))
+                .map(com.multiship.backend.model.CarrierAccountRef::getStampsRefreshToken)
+                .findFirst()
+                .orElse(null);
+    }
+
     String getAccessTokenSera(String clientId, String clientSecret, String environment) {
+        return getAccessTokenSera(clientId, clientSecret, environment, null);
+    }
+
+    String getAccessTokenSera(String clientId, String clientSecret, String environment, String accountNumber) {
         if (!StringUtils.hasText(clientId) || !StringUtils.hasText(clientSecret)) {
             LAST_AUTH_DETAIL.set("SERA requires a non-blank Client ID and Client Secret. "
                     + "Copy the values from your Stamps.com / Endicia developer portal.");
@@ -448,6 +476,9 @@ public class StampsConnector implements CarrierConnector {
         // machine-to-machine (rare), but the primary path is refresh.
         String refresh = SERA_REFRESH_TOKEN.get();
         SERA_REFRESH_TOKEN.remove();  // one-shot; caller re-pushes for the next call
+        // Most callers (void, tracking, rates, pickup, close-out, …) never push
+        // one — find the account's own saved token instead of falling back.
+        if (!StringUtils.hasText(refresh)) refresh = savedRefreshToken(clientId, accountNumber, environment);
         if (StringUtils.hasText(refresh) && seraOAuthService != null) {
             StampsSeraOAuthService.TokenExchangeResult r =
                     seraOAuthService.refreshToken(refresh, clientId.trim(), clientSecret, environment);
