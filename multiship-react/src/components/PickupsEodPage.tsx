@@ -197,6 +197,32 @@ export default function PickupsEodPage() {
       notify.error({ title: 'Missing fields', body: 'Contact, phone, address, city and postal code are required.' })
       return
     }
+    // BUG-103 — pre-fix the form sent 'abc' phone, 'ZZZZZ' postal, window
+    // 17:00→09:00, past pickup date, 0 packages to the server unchecked.
+    // Backend returned a vague error AFTER the round-trip. Validate here.
+    const today = new Date().toISOString().slice(0, 10)
+    if (pickup.pickupDate && pickup.pickupDate < today) {
+      notify.error({ title: 'Check the form for errors', body: 'Pickup date cannot be in the past.' })
+      return
+    }
+    if (pickup.pickupWindowStart && pickup.pickupWindowEnd
+        && pickup.pickupWindowEnd <= pickup.pickupWindowStart) {
+      notify.error({ title: 'Check the form for errors', body: 'Window end must be after window start.' })
+      return
+    }
+    if (!/\d{3}/.test(pickup.contactPhone)) {
+      notify.error({ title: 'Check the form for errors', body: 'Contact phone must contain at least 3 digits.' })
+      return
+    }
+    if (!/^[A-Za-z0-9][A-Za-z0-9 \-]{2,19}$/.test(pickup.postalCode.trim())) {
+      notify.error({ title: 'Check the form for errors', body: 'Postal code must be 3-20 alphanumerics.' })
+      return
+    }
+    const pkgs = Number(pickup.packageCount)
+    if (!Number.isFinite(pkgs) || pkgs < 1) {
+      notify.error({ title: 'Check the form for errors', body: 'Packages must be 1 or more.' })
+      return
+    }
     setScheduling(true)
     try {
       const r = await pickupService.schedule({

@@ -7,6 +7,7 @@ import {
   type CutoffRule,
   type Holiday,
 } from '../api/cutoffService'
+import { warehouseService, type Warehouse } from '../api/warehouseService'
 import { notify } from '../utils/notify'
 import { TimezoneCombobox } from './TimezoneCombobox'
 
@@ -26,6 +27,19 @@ const CARRIERS = ['FEDEX', 'UPS', 'USPS', 'DHL', 'STAMPS_COM', 'USPS_DIRECT']
 export default function CutoffsPage() {
   const [rules, setRules] = useState<CutoffRule[]>([])
   const [holidays, setHolidays] = useState<Holiday[]>([])
+  // BUG-101 — fetch warehouses once so the add-rule picker + the grid
+  // row can show the operator-facing code instead of the internal id.
+  const [warehouses, setWarehouses] = useState<Warehouse[]>([])
+  useEffect(() => {
+    void warehouseService.listWarehouses({ page: 0, size: 200 })
+      .then((r) => setWarehouses(r.data?.content ?? []))
+      .catch(() => {})
+  }, [])
+  const warehouseCodeById = useMemo(() => {
+    const m = new Map<number, string>()
+    for (const w of warehouses) if (w.id != null) m.set(w.id, w.code)
+    return m
+  }, [warehouses])
   const [loading, setLoading] = useState(false)
   const [seeding, setSeeding] = useState(false)
   const [addingRule, setAddingRule] = useState(false)
@@ -114,7 +128,7 @@ export default function CutoffsPage() {
     const ok = await notify.confirm(
       `Delete cutoff rule #${r.id}?\n\n`
         + `Source: ${r.source || 'any'} · Carrier: ${r.carrierCode || 'any'} · `
-        + `Warehouse: ${r.warehouseId ?? 'any'}\n\n`
+        + `Warehouse: ${r.warehouseId == null ? 'any' : (warehouseCodeById.get(r.warehouseId) ?? `#${r.warehouseId}`)}\n\n`
         + 'Shipments that match this rule will roll forward using the next-matching rule or the platform default.',
       { title: 'Delete cutoff rule?', confirmLabel: 'Delete', danger: true },
     )
@@ -215,7 +229,12 @@ export default function CutoffsPage() {
                 <td className="px-3 py-2 font-mono text-slate-500">{r.id}</td>
                 <td className="px-3 py-2">{r.source ?? <span className="text-slate-400">any</span>}</td>
                 <td className="px-3 py-2">{r.carrierCode ?? <span className="text-slate-400">any</span>}</td>
-                <td className="px-3 py-2">{r.warehouseId ?? <span className="text-slate-400">any</span>}</td>
+                {/* BUG-101 — show warehouse code if we can resolve the id. */}
+                <td className="px-3 py-2">
+                  {r.warehouseId == null
+                    ? <span className="text-slate-400">any</span>
+                    : (warehouseCodeById.get(r.warehouseId) ?? `#${r.warehouseId}`)}
+                </td>
                 <td className="px-3 py-2 font-mono">{r.cutoffTime}</td>
                 <td className="px-3 py-2 text-[11.5px] text-slate-600">{r.timezone ?? <span className="text-slate-400">client tz</span>}</td>
                 <td className="px-3 py-2">
@@ -251,8 +270,17 @@ export default function CutoffsPage() {
                 </select>
               </td>
               <td className="px-3 py-2">
-                <input className={inputCls} type="number" placeholder="any" value={newRule.warehouseId}
-                       onChange={(e) => setNewRule({ ...newRule, warehouseId: e.target.value })} />
+                {/* BUG-101 — warehouse picker by code; stored as the
+                    internal id the backend expects, but the operator
+                    sees + picks the code they recognise. */}
+                <select className={inputCls}
+                        value={newRule.warehouseId}
+                        onChange={(e) => setNewRule({ ...newRule, warehouseId: e.target.value })}>
+                  <option value="">any</option>
+                  {warehouses.map((w) => (
+                    <option key={w.id} value={w.id ?? ''}>{w.code}</option>
+                  ))}
+                </select>
               </td>
               <td className="px-3 py-2">
                 <input className={inputCls} type="time" value={newRule.cutoffTime}

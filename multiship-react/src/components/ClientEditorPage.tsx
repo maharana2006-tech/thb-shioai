@@ -752,7 +752,15 @@ export default function ClientEditorPage() {
    * one draft carrier account. The staged rows commit through
    * accountRefService on Create client.
    */
+  // BUG-138 — a draft resumed after a page reload has the carrier draft
+  // rows but NOT the client_id / secret (those are deliberately not
+  // persisted). The step was marked complete just by the row count,
+  // so Summary showed READY and Create would ship an account with no
+  // credentials. Require every staged carrier draft to carry a non-blank
+  // clientId AND clientSecret before the step is complete.
   const carriersStepComplete = carrierDrafts.length > 0
+    && carrierDrafts.every((d) => (d.clientId?.trim().length ?? 0) > 0
+                                 && (d.clientSecret?.trim().length ?? 0) > 0)
 
   /** The Mapping step is complete when the operator has staged at least one
    *  draft rule (ship via + carrier service). */
@@ -1238,6 +1246,31 @@ export default function ClientEditorPage() {
             </h3>
           </div>
         </div>
+        {/* BUG-139 — in create mode give the operator an explicit
+            Discard-draft action. Pre-fix, + Add Client always resumed
+            the last unfinished draft with no way to start fresh. */}
+        {!isEdit && draft ? (
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={async () => {
+                const ok = await notify.confirm(
+                  'Discard the current client draft?\n\nAll typed fields across every step will be cleared. This cannot be undone.',
+                  { title: 'Discard draft?', confirmLabel: 'Discard', danger: true },
+                )
+                if (!ok) return
+                try { localStorage.removeItem(draftStorageKey()) } catch { /* non-fatal */ }
+                // Fresh page via navigate so useMemo re-reads the (now
+                // missing) draft and seeds every field blank.
+                navigate('/settings/clients/new', { replace: true })
+                window.location.reload()
+              }}
+              className="rounded-xl border border-rose-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-rose-700 transition hover:bg-rose-50"
+            >
+              Discard draft
+            </button>
+          </div>
+        ) : null}
         {isEdit && (activeStep === 'identity' || activeStep === 'shipFrom' || activeStep === 'return') ? (
           <div className="flex shrink-0 items-center gap-2">
             {/* Audit 2.2 (#282) — "Save changes" only commits identity +
