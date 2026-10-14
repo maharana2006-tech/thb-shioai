@@ -959,10 +959,11 @@ function SecretsTab({ id, secretKeys }: { id: number; secretKeys: string[] }) {
 
   const save = async () => {
     if (!key.trim()) { notify.error('Secret key required.'); return }
+    if (!plaintext.trim()) { notify.error('Type the new secret value, or use Delete secret to clear it.'); return }
     setSaving(true)
     try {
-      const res = await externalSystemsService.putSecret(id, key.trim(), plaintext || null)
-      notify.success(res.isSet ? `Secret "${res.secretKey}" saved.` : `Secret "${res.secretKey}" cleared.`)
+      const res = await externalSystemsService.putSecret(id, key.trim(), plaintext)
+      notify.success(`Secret "${res.secretKey}" saved.`)
       setPlaintext('')
     } catch (e) {
       notify.apiError(e, 'Save secret failed.')
@@ -971,10 +972,33 @@ function SecretsTab({ id, secretKeys }: { id: number; secretKeys: string[] }) {
     }
   }
 
+  // BUG-122 — separate destructive action: empty-save no longer deletes
+  // silently; operator must opt in via Delete + confirm. Matches the
+  // Deactivate warehouse / Delete client pattern.
+  const deleteSecret = async () => {
+    if (!key.trim()) { notify.error('Pick a secret key first.'); return }
+    const ok = await notify.confirm(
+      `Delete the stored secret "${key.trim()}"?\n\n`
+        + 'Any connector using this secret will fall back to the connector default (or fail if no default exists).',
+      { title: 'Delete stored secret?', confirmLabel: 'Delete secret', danger: true },
+    )
+    if (!ok) return
+    setSaving(true)
+    try {
+      const res = await externalSystemsService.putSecret(id, key.trim(), null)
+      notify.success(`Secret "${res.secretKey}" cleared.`)
+      setPlaintext('')
+    } catch (e) {
+      notify.apiError(e, 'Delete secret failed.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <div className="space-y-3">
       <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-[12px] text-amber-900">
-        Values are AES-256-GCM encrypted at rest. Existing secrets aren't shown; leaving the field empty and Saving deletes the secret row.
+        Values are AES-256-GCM encrypted at rest. Existing secrets aren't shown. Use Delete secret to clear the stored value.
       </div>
       <label className="block">
         <span className="mb-1 block text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Secret key</span>
@@ -1001,16 +1025,25 @@ function SecretsTab({ id, secretKeys }: { id: number; secretKeys: string[] }) {
           type="password"
           value={plaintext}
           onChange={(e) => setPlaintext(e.target.value)}
-          placeholder="Type the new secret; empty to delete"
+          placeholder="Type the new secret value"
           autoComplete="new-password"
           className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-[12.5px]"
         />
       </label>
-      <div className="flex items-center justify-end">
+      <div className="flex items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={() => void deleteSecret()}
+          disabled={saving || !key.trim()}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Delete secret
+        </button>
         <button
           type="button"
           onClick={() => void save()}
-          disabled={saving}
+          disabled={saving || !plaintext.trim()}
+          title={!plaintext.trim() ? 'Type the new secret value first' : undefined}
           className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
         >
           <FiKey className="h-3.5 w-3.5" />
