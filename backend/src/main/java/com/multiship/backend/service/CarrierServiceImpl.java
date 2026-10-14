@@ -76,6 +76,10 @@ public class CarrierServiceImpl implements CarrierService {
     private final ShipViaRepository shipViaRepository;
     private final OrderRepository orderRepository;
     private final OrderTrackingRepository orderTrackingRepository;
+
+    /** BUG-014 — ties a manual shipment's carrier calls to the order it creates. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.observability.CarrierApiLogService carrierApiLogService;
     private final CarrierProperties carrierProperties;
     // C1 — resolves tenant_settings.shipper.* overrides on top of the
     // platform carrier.shipper.* defaults. Every call site that used to
@@ -2782,6 +2786,9 @@ public class CarrierServiceImpl implements CarrierService {
         }
         orderRepository.save(order);
         persistOrderLines(order, req);
+        if (carrierApiLogService != null) {
+            carrierApiLogService.tagCurrentRequest((long) orderNo, result.trackingNumber());
+        }
 
         // On regenerate the order row is reused, so the prior attempt's
         // shipment_batch + label_package rows still exist. Clear them before
@@ -3222,6 +3229,10 @@ public class CarrierServiceImpl implements CarrierService {
         AutoCloseable stampsSeraCtx =
                 com.multiship.backend.service.carriers.StampsSeraAuthContext.openFor(
                         carrierAccountRefRepository, res.carrierCode(), res.accountNumber(), res.clientId());
+        // BUG-014 — tag this order's carrier calls in the API log.
+        com.multiship.backend.service.observability.CarrierCallContext callTag =
+                com.multiship.backend.service.observability.CarrierCallContext.forOrder(
+                        order.getOrderNo() == null ? null : order.getOrderNo().longValue());
         try {
         connector.validateCredentials(res.clientId(), res.clientSecret());
         // F-MODE-3 — pass the resolved account's env so FedEx routes the
@@ -3405,6 +3416,7 @@ public class CarrierServiceImpl implements CarrierService {
             // worker thread starts clean. NOOP path from openFor swallows
             // its own close(); this catch is only for the real push path.
             try { stampsSeraCtx.close(); } catch (Exception ignored) {}
+            callTag.close();
         }
     }
 

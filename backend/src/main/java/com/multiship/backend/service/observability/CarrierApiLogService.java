@@ -61,6 +61,22 @@ public class CarrierApiLogService {
         }
     }
 
+    /**
+     * BUG-014 — a manual shipment buys its label before the order row (and its
+     * number) exists, so its carrier calls can't be tagged up front. Once the
+     * order is saved, stamp this request's calls with it.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void tagCurrentRequest(Long orderNo, String tracking) {
+        String requestId = org.slf4j.MDC.get("requestId");
+        if (requestId == null || orderNo == null) return;
+        try {
+            repo.tagRequest(requestId, orderNo, tracking == null || tracking.isBlank() ? null : tracking);
+        } catch (Exception ex) {
+            log.warn("carrier-api-log: tagging request {} with order {} failed: {}", requestId, orderNo, ex.getMessage());
+        }
+    }
+
     private static String clamp(String s, int max) {
         if (s == null) return null;
         return s.length() <= max ? s : s.substring(0, max);

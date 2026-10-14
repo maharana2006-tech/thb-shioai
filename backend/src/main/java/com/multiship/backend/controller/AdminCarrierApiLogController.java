@@ -42,7 +42,7 @@ public class AdminCarrierApiLogController {
         int clampedSize = Math.min(Math.max(1, size), MAX_PAGE_SIZE);
         int clampedPage = Math.max(0, page);
         Page<CarrierApiLogEntity> result = repo.search(
-                blankToNull(carrier), orderNo, blankToNull(tracking),
+                blankToNull(carrier), carrierAlias(carrier), orderNo, blankToNull(tracking),
                 PageRequest.of(clampedPage, clampedSize, Sort.by(Sort.Direction.DESC, "createdAt")));
 
         Map<String, Object> body = new HashMap<>();
@@ -93,6 +93,15 @@ public class AdminCarrierApiLogController {
 
     private static String blankToNull(String s) {
         return (s == null || s.isBlank()) ? null : s;
+    }
+
+    /** BUG-015 — USPS calls are logged under STAMPS_COM; let 'USPS' find them and vice-versa. */
+    private static String carrierAlias(String carrier) {
+        if (carrier == null || carrier.isBlank()) return null;
+        String c = carrier.trim().toUpperCase(java.util.Locale.ROOT);
+        if (c.contains("USPS")) return "STAMPS_COM";
+        if (c.contains("STAMPS")) return "USPS";
+        return null;
     }
 
     private static <T> ResponseEntity<ApiResponse<T>> ok(T body) {
