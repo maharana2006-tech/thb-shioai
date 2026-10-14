@@ -77,8 +77,18 @@ public class AdminUserInviteController {
         }
 
         String baseUrl = resolveBaseUrl(request);
-        UserInvite invite = inviteService.mint(req.getEmail(), clientCode, role,
-                admin != null ? admin.getUsername() : "system", baseUrl);
+        UserInvite invite;
+        try {
+            invite = inviteService.mint(req.getEmail(), clientCode, role,
+                    admin != null ? admin.getUsername() : "system", baseUrl);
+        } catch (IllegalStateException duplicate) {
+            // BUG-084 — a live pending invite already exists for this email.
+            return ResponseEntity.status(409).body(ApiResponse.<UserInviteResponse>builder()
+                    .status("ERROR").code(409).timestamp(LocalDateTime.now())
+                    .errorCode(ErrorCode.VALIDATION_ERROR.name())
+                    .message(duplicate.getMessage())
+                    .build());
+        }
 
         // BUG-050 — record the mint on user_admin_audit so Recent-admin-actions
         // shows the invite. subject_user_id is null (invitee not yet a user row).

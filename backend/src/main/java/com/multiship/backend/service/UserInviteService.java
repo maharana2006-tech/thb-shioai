@@ -64,9 +64,24 @@ public class UserInviteService {
         // Sprint 50 Tier 0.5 PR E - Pattern A clamp: scoped USER can only
         // invite to their own tenant. ADMIN pass-through.
         String scopedClientCode = tenantScope.clampClientCode(clientCode);
+        // BUG-084 — refuse a mint when a live pending invite for this email
+        // already exists. Previously the second POST would issue a fresh
+        // token so the recipient saw two live accept links in two emails,
+        // which is confusing on the admin side (the Pending-invites panel
+        // listed the same address twice) and a token-sprawl risk. Operator
+        // can Revoke the existing invite first, or Resend it (which already
+        // refreshes the expiry) if they want to send again.
+        String normalisedEmail = email.trim().toLowerCase();
+        java.util.List<UserInvite> live = repository.findLivePendingByEmail(normalisedEmail);
+        if (!live.isEmpty()) {
+            throw new IllegalStateException(
+                "An invite for " + normalisedEmail + " is still pending (expires "
+                    + live.get(0).getExpiresAt() + "). Revoke it from Pending invites, "
+                    + "or use Resend to extend its expiry.");
+        }
         UserInvite invite = new UserInvite();
         invite.setToken(randomToken());
-        invite.setEmail(email.trim().toLowerCase());
+        invite.setEmail(normalisedEmail);
         invite.setClientCode(scopedClientCode.trim().toUpperCase());
         invite.setRole(role.trim().toUpperCase());
         invite.setInvitedBy(invitedBy);
