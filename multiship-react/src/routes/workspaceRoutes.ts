@@ -260,7 +260,7 @@ export const settingsNavItems: Array<{
     description: 'Reason-for-export codes used on commercial invoices (Sale / Gift / Sample / …). Read-only.',
     roles: ['ADMIN'] },
   { key: 'currencies', label: 'Currencies', to: settingsPaths.currencies, iconKey: 'apiDocs',
-    description: 'ISO 4217 currency catalog. Read-only; per-tenant allowlist can be set under System settings.',
+    description: 'ISO 4217 currency catalog. Read-only.',
     roles: ['ADMIN'] },
   { key: 'carrier-error-messages', label: 'Carrier Error Messages', to: settingsPaths.carrierErrorMessages, iconKey: 'dashboard',
     description: 'Rules that turn raw carrier error payloads into humanized sentences. Read-only.',

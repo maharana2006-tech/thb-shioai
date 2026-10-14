@@ -194,7 +194,7 @@ export default function LabelTemplatesListPage() {
       {
         id: 'tenantId',
         accessorFn: (t) => t.tenantId ?? '',
-        header: 'Tenant',
+        header: 'Client',
         cell: ({ row }) => {
           const t = row.original
           return t.tenantId ? (
@@ -206,7 +206,7 @@ export default function LabelTemplatesListPage() {
           )
         },
         meta: {
-          headerLabel: 'Tenant',
+          headerLabel: 'Client',
           exportValue: (t: LabelTemplate) => t.tenantId ?? '(platform default)',
         },
       },
@@ -425,7 +425,7 @@ export default function LabelTemplatesListPage() {
             search={{
               value: search,
               onChange: setSearch,
-              placeholder: 'Search tenant id…',
+              placeholder: 'Search client code…',
             }}
             filterToggle={
               <div ref={filtersRef} className="relative">
