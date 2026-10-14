@@ -300,7 +300,7 @@ export default function WarehousesPage() {
             </div>
           )
         },
-        meta: { headerLabel: 'Actions', hideable: false, exportable: false },
+        meta: { headerLabel: 'Actions', hideable: false, exportable: false, pinnedByDefault: 'end' },
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps -- cell handlers (openEditor/handleDelete) close over the latest state through their function bodies; only admin flips row visibility and busyId affects disabled state

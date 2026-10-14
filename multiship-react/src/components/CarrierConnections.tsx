@@ -1179,7 +1179,7 @@ export default function CarrierConnections({
             />
           </div>
         ),
-        meta: { headerLabel: 'Actions', hideable: false, exportable: false },
+        meta: { headerLabel: 'Actions', hideable: false, exportable: false, pinnedByDefault: 'end' },
       },
     ],
     // Handlers (handleVerify / handleToggleActive / handleMakeClientDefault /
