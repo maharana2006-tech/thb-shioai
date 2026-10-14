@@ -579,7 +579,18 @@ export default function AdvancedDataTable<T extends RowData>({
     setColumnOrder(defaultOrder)
     setColumnVisibility(defaultVisibility)
     setColumnSizing({})
-    setColumnPinning({ start: [], end: [] })
+    // BUG-074 — Reset layout used to clear pinning to { start:[], end:[] }
+    // which unpinned the row-actions column (meta.pinnedByDefault='end')
+    // every time, pushing the menu off-screen until the operator reloaded
+    // the page. Rebuild the default pin set from the same source the init
+    // uses so Reset genuinely restores the default layout.
+    const resetEnd: string[] = []
+    for (const col of columns) {
+      const id = (col as { id?: string }).id ?? (col as { accessorKey?: string }).accessorKey
+      const meta = (col as { meta?: { pinnedByDefault?: 'start' | 'end' } }).meta
+      if (meta?.pinnedByDefault === 'end' && id) resetEnd.push(id)
+    }
+    setColumnPinning({ start: [], end: resetEnd })
     setDensity(initialDensity)
     setOpenMenu(null)
   }
