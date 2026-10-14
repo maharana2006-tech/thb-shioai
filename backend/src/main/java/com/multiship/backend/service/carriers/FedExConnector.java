@@ -1920,14 +1920,14 @@ public class FedExConnector implements CarrierConnector {
                 : com.multiship.backend.util.LabelDates.today(null);
         java.time.LocalTime time = req.pickupWindowStart() != null
                 ? req.pickupWindowStart() : java.time.LocalTime.of(9, 0);
-        // BUG-007 — FedEx rejects readyDateTimestamp without seconds + a zone
-        // offset (LocalTime.toString() omits ':00' → 400 INCORRECT.READYTIMESTAMP.FORMAT).
-        // ponytail: the offset is the server zone (UTC in prod); the pickup
-        // location's own timezone isn't threaded through here.
+        // BUG-007 — FedEx rejects a timestamp without seconds (LocalTime.toString()
+        // drops ':00' → 400 INCORRECT.READYTIMESTAMP.FORMAT). It reads pickup times
+        // as local to the pickup location (as it does the cutoff), so send the
+        // operator's wall-clock time as typed, in FedEx's documented shape
+        // (2020-07-03T11:00:00Z) — never converted through the server's zone,
+        // which moved a 09:00 Michigan pickup to 05:00 on a UTC server.
         return java.time.LocalDateTime.of(date, time)
-                .atZone(java.time.ZoneId.systemDefault())
-                .toOffsetDateTime()
-                .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssxxx"));
+                .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")) + "Z";
     }
 
     /**
