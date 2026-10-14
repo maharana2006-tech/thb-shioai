@@ -35,4 +35,10 @@ public interface PrinterScanAgentRepository extends JpaRepository<PrinterScanAge
      *  (R4). Newest-revoked first so accidental-click recovery is
      *  quick. Only inactive rows; revoke row is the sink state. */
     List<PrinterScanAgent> findByTenantCodeAndActiveFalseOrderByRevokedAtDesc(String tenantCode);
+
+    /** BUG-140 — bulk-delete every enrolment for a departing tenant so
+     *  scanner rows don't orphan on client delete. Case-insensitive to
+     *  match the client-code storage convention. */
+    @org.springframework.transaction.annotation.Transactional
+    long deleteAllByTenantCodeIgnoreCase(String tenantCode);
 }

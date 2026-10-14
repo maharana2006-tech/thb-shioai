@@ -49,6 +49,11 @@ public class ClientServiceImpl implements ClientService {
     private final com.multiship.backend.repository.ClientCustomsProfileRepository customsProfileRepository;
     private final WarehouseRepository warehouseRepository;
     private final ClientWarehouseRepository clientWarehouseRepository;
+    /** BUG-140 — @Autowired(required=false) + field injection so existing
+     *  pure-Mockito constructor-arg tests keep compiling. Null-safe at the
+     *  one delete call site below. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.PrinterScanAgentRepository printerScanAgentRepository;
     private final AuditService auditService;
     private final AuditLogRepository auditLogRepository;
     /**
@@ -529,6 +534,26 @@ public class ClientServiceImpl implements ClientService {
                 if (!links.isEmpty()) clientWarehouseRepository.deleteAll(links);
             }
             warehouseRepository.deleteAll(ownedWarehouses);
+        }
+
+        // BUG-080 — client_warehouse links to PLATFORM-owned warehouses
+        // were orphaned on delete (the client-owned branch above only
+        // cleans links for the deleted client's own warehouses). 3PL-EAST
+        // showed Attached 7 but the dialog only had 3 live clients because
+        // 4 of those rows belonged to deleted clients. Delete every
+        // client_warehouse row for the departing client up-front so the
+        // attached-count reflects reality.
+        List<ClientWarehouse> allAttachments = clientWarehouseRepository
+                .findByClientCodeIgnoreCaseOrderByIsDefaultDescCreatedAtAsc(code);
+        if (!allAttachments.isEmpty()) {
+            clientWarehouseRepository.deleteAll(allAttachments);
+        }
+
+        // BUG-140 — scanner enrolments live under tenant_code; left behind
+        // on client delete they become unreachable in Settings > Printers
+        // because the Tenant picker drops the code. Clean them up.
+        if (printerScanAgentRepository != null) {
+            printerScanAgentRepository.deleteAllByTenantCodeIgnoreCase(code);
         }
 
         clientRepository.delete(client);
