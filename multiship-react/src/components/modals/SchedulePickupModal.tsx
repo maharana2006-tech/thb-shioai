@@ -15,6 +15,7 @@ import {
   validateZip,
 } from '../../utils/clientValidation'
 import { useModalDismiss } from '../../hooks/useModalDismiss'
+import { localDateIso } from '../../utils/formatDateTime'
 import { useLiftToasts } from '../../hooks/useLiftToasts'
 import { useConnectedCarriers } from '../../hooks/useConnectedCarriers'
 
@@ -68,7 +69,7 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
   const dialogRef = useRef<HTMLDivElement>(null)
   useModalDismiss(true, dialogRef, onClose)
   useLiftToasts() // BUG-005 — keep toasts clear of the footer buttons
-  const today = new Date().toISOString().slice(0, 10)
+  const today = localDateIso()
   const [form, setForm] = useState<PickupRequest>({
     carrierCode: defaults?.carrierCode ?? 'UPS',
     customerNo: defaults?.customerNo ?? null,
@@ -146,7 +147,7 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
     } else {
       const horizon = new Date()
       horizon.setDate(horizon.getDate() + MAX_PICKUP_DAYS_AHEAD)
-      if (d > horizon.toISOString().slice(0, 10)) {
+      if (d > localDateIso(horizon)) {
         e.pickupDate = `Pickup date must be within ${MAX_PICKUP_DAYS_AHEAD} days.`
       }
     }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { formatDateTime } from '../utils/formatDateTime'
+import { formatDateTime, localDateIso } from '../utils/formatDateTime'
 import { Link, useOutletContext } from 'react-router-dom'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import { FiTruck, FiCheckSquare, FiRefreshCw, FiClock, FiCalendar, FiMapPin, FiPackage } from 'react-icons/fi'
@@ -35,7 +35,7 @@ const input =
 const primaryBtn =
   'inline-flex items-center justify-center gap-1.5 rounded-xl bg-[#1f150c] px-4 py-2.5 text-[13px] font-semibold text-white shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#cdbf9f]'
 
-const today = () => new Date().toISOString().slice(0, 10)
+const today = () => localDateIso()
 /** "Oct 20, 2026" from a plain YYYY-MM-DD event date (parsed as local, no TZ shift). */
 const fmtEventDate = (d: string) => {
   try {

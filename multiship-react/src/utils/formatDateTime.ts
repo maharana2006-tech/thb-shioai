@@ -18,3 +18,13 @@ export function formatDateTime(iso: string | null | undefined): string {
     return iso
   }
 }
+
+/**
+ * The operator's local calendar date as YYYY-MM-DD (what an <input type="date">
+ * holds). toISOString().slice(0, 10) is the UTC date: tomorrow for a US
+ * evening, yesterday before 05:30 in India.
+ */
+export function localDateIso(d: Date = new Date()): string {
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}

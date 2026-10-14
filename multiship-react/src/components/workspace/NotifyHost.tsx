@@ -50,9 +50,10 @@ function ToastStack({ toasts }: { toasts: NotifyMessage[] }) {
   return (
     <div
       // Position is var-driven: a page with a bottom action bar lifts the stack
-      // (--toast-bottom); an open dialog docks it bottom-left (--toast-left/right/
-      // align) so toasts never cover the dialog's X or footer buttons (BUG-005/025).
+      // (--toast-bottom); an open dialog docks it top-left (useLiftToasts) so
+      // toasts never cover the dialog's X or footer buttons (BUG-005/025).
       style={{
+        top: 'var(--toast-top, auto)',
         bottom: 'var(--toast-bottom, 1rem)',
         right: 'var(--toast-right, 1rem)',
         left: 'var(--toast-left, auto)',

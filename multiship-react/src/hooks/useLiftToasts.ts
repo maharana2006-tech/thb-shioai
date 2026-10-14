@@ -2,11 +2,13 @@ import { useEffect } from 'react'
 
 /**
  * BUG-005 / BUG-025 — the toast stack sits bottom-right (z-80, above modals).
- * The dialogs' action buttons are at the top-right (X) and bottom-right (footer),
- * so while a dialog is open we dock toasts to the BOTTOM-LEFT via the shared vars
- * NotifyHost reads, clear of every button, then restore on close.
+ * A dialog's controls are its X (top-right) and its footer buttons (bottom
+ * edge, left and right), so while one is open the stack docks TOP-LEFT —
+ * bottom-left still covered a footer button once two toasts stacked.
  */
 const VARS: Record<string, string> = {
+  '--toast-top': '1rem',
+  '--toast-bottom': 'auto',
   '--toast-left': '1rem',
   '--toast-right': 'auto',
   '--toast-align': 'flex-start',

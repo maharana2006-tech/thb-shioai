@@ -15,6 +15,7 @@ import { Link } from 'react-router-dom'
 import { manifestService, type ManifestEntry, type ManifestRequest, type ManifestResponse } from '../../api/manifestService'
 import { notify } from '../../utils/notify'
 import { useModalDismiss } from '../../hooks/useModalDismiss'
+import { localDateIso } from '../../utils/formatDateTime'
 import { requestErrorText } from '../../api/apiClient'
 import { useLiftToasts } from '../../hooks/useLiftToasts'
 import { useConnectedCarriers } from '../../hooks/useConnectedCarriers'
@@ -60,7 +61,7 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
   const dialogRef = useRef<HTMLDivElement>(null)
   useModalDismiss(true, dialogRef, onClose)
   useLiftToasts() // BUG-005 — keep toasts clear of the footer buttons
-  const today = new Date().toISOString().slice(0, 10)
+  const today = localDateIso()
   const [form, setForm] = useState<ManifestRequest>({
     carrierCode: defaults?.carrierCode ?? 'UPS',
     customerNo: defaults?.customerNo ?? null,
@@ -83,6 +84,7 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
    *  until the operator edits it themselves. */
   const [edited, setEdited] = useState(false)
   const [loadingOpen, setLoadingOpen] = useState(false)
+  const [openLoadFailed, setOpenLoadFailed] = useState(false)
 
   const update = (patch: Partial<ManifestRequest>) => setForm((f) => ({ ...f, ...patch }))
 
@@ -103,8 +105,9 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
     let alive = true
     setLoadingOpen(true)
     manifestService.openTrackings({ carrierCode: form.carrierCode, closeDate: form.closeDate, customerNo: form.customerNo })
-      .then((r) => { if (alive) setTrackingText((r.data ?? []).join('\n')) })
-      .catch(() => undefined) // keep whatever is there; the operator can still type numbers
+      .then((r) => { if (alive) { setTrackingText((r.data ?? []).join('\n')); setOpenLoadFailed(false) } })
+      // Don't leave the previous carrier's numbers under this carrier's heading.
+      .catch(() => { if (alive) { setTrackingText(''); setOpenLoadFailed(true) } })
       .finally(() => { if (alive) setLoadingOpen(false) })
     return () => { alive = false }
   }, [form.carrierCode, form.closeDate, form.customerNo, edited])
@@ -295,7 +298,9 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
 
           <Section icon={<FiHash className="h-3.5 w-3.5" />}
                    title={`Tracking numbers (${parsedTracking.length})`}
-                   hint={loadingOpen ? 'loading open labels…' : edited ? 'edited' : `open ${form.carrierCode} labels for this day`}>
+                   hint={loadingOpen ? 'loading open labels…' : edited ? 'edited'
+                     : openLoadFailed ? "couldn't load open labels — type the numbers"
+                     : `open ${form.carrierCode} labels for this day`}>
             <textarea
               rows={4}
               className={`${inputCls} font-mono text-[11.5px]`}
