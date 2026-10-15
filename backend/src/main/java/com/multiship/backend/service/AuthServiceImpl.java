@@ -105,6 +105,12 @@ public class AuthServiceImpl implements AuthService {
     @Value("${signup.email-verify-ttl-hours:24}")
     private int emailVerifyTtlHours;
 
+    /** Dev-only shortcut — when true, public signup lands the user with
+     *  emailVerified=true so login works without a mail provider wired
+     *  up. Default false (prod safe); set to true only in dev. */
+    @Value("${signup.auto-verify:false}")
+    private boolean signupAutoVerify;
+
     /**
      * Sprint 51 User↔Client linkage re-audit item #2 — SPA base URL for
      * the verify-email link the mailer sends. Empty default keeps the
@@ -197,9 +203,12 @@ public class AuthServiceImpl implements AuthService {
                 .fullName(signupRequest.getFullName())
                 .role("USER")
                 .clientCode(normalizedClient.toUpperCase())
-                .emailVerified(false)
-                .emailVerifyToken(verifyToken)
-                .emailVerifyExpiresAt(expires)
+                // Dev-only auto-verify short-circuit so a local operator
+                // without a mail provider can still log in. Prod stays
+                // emailVerified=false → verification link required.
+                .emailVerified(signupAutoVerify)
+                .emailVerifyToken(signupAutoVerify ? null : verifyToken)
+                .emailVerifyExpiresAt(signupAutoVerify ? null : expires)
                 .build();
         userRepository.save(user);
         rateLimiter.record(email, ip, true);

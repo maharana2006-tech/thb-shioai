@@ -300,6 +300,27 @@ public class GlobalExceptionHandler {
                         .build());
     }
 
+    /**
+     * Spring Security's @PreAuthorize-based method security throws
+     * AuthorizationDeniedException (a RuntimeException) which, pre-fix,
+     * fell to {@link #handleUnexpectedRuntime} and returned 500 with a
+     * correlation id — opaque to the operator and misleading in logs
+     * (the request wasn't a server bug, the caller lacked a role). Map
+     * to a clean 403 FORBIDDEN with a user-facing message. Spotted
+     * running a USER-role smoke test against /api/v1/orders.
+     */
+    @ExceptionHandler(org.springframework.security.authorization.AuthorizationDeniedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleAuthorizationDenied(
+            org.springframework.security.authorization.AuthorizationDeniedException ex) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ApiResponse.<Void>builder()
+                        .status("error")
+                        .code(HttpStatus.FORBIDDEN.value())
+                        .errorCode("FORBIDDEN")
+                        .message("You do not have permission to perform this action.")
+                        .build());
+    }
+
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<ApiResponse<Void>> handleUnexpectedRuntime(RuntimeException ex) {
         // Client-disconnect detection: HttpMessageNotWritableException
