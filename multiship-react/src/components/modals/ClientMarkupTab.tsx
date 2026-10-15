@@ -4,9 +4,10 @@ import {
   clientBillingMarkupService,
   type MarkupKind,
 } from '../../api/clientPolicyService'
-import { addMoney, applyMarkupPercent, fromCents, toCents } from '../../utils/money'
+import { addMoney, applyMarkupPercent, CURRENCY_ALLOWLIST, fromCents, toCents } from '../../utils/money'
 
-const COMMON_CURRENCIES = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'INR', 'JPY', 'SGD', 'AED']
+// BUG-125 — shared allowlist across every currency picker.
+const COMMON_CURRENCIES = CURRENCY_ALLOWLIST
 
 /**
  * Markup tab — kind (PERCENT | FLAT) + non-negative value + ISO-4217

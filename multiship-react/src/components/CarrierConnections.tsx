@@ -1832,9 +1832,9 @@ export default function CarrierConnections({
                       </Select>
                     </Field>
                     <p className="-mt-1 mb-2 text-[10.5px] leading-4 text-slate-400">
-                      Which lanes this carrier account supports return labels on. Domestic
-                      only matches the pre-V95 default. Set to Domestic and international
-                      only when the carrier account actually supports intl returns.
+                      Which lanes this carrier account supports return labels on. Set to
+                      Domestic and international only when the carrier account actually
+                      supports international returns.
                     </p>
                   </div>
 

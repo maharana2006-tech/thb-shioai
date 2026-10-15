@@ -85,3 +85,17 @@ export function applyMarkupPercent(baseCents: number, percent: number): number {
   // baseCents * (100 + percent) / 100 kept as one integer expression.
   return Math.round((baseCents * (100 + percent)) / 100)
 }
+
+/**
+ * BUG-125 — shared ISO 4217 allowlist for every currency picker (Orders
+ * form, Importer/Broker, Client wizard). Union of the previous hardcoded
+ * lists on each page; keeps the Currencies catalog (178 entries) out of
+ * dropdowns while covering every currency any of the three screens
+ * previously offered — so MXN as a client default is also valid on the
+ * order form, AED on the order form is also valid on an Importer profile.
+ */
+export const CURRENCY_ALLOWLIST = [
+  'USD', 'EUR', 'GBP', 'CAD', 'AUD', 'NZD',
+  'INR', 'SGD', 'HKD', 'JPY', 'CNY', 'AED',
+  'MXN', 'BRL', 'CHF',
+] as const

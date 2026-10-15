@@ -315,8 +315,8 @@ export default function CutoffsPage() {
           <h2 className="text-[14px] font-semibold text-slate-900">Global holiday list</h2>
           <p className="mt-0.5 text-[11.5px] text-slate-500">
             Dates the cutoff logic treats as non-working when advancing to the next
-            working day. Seeded with Dec 24 + Jan 1 for the current + next year on
-            migration; add / remove as needed.
+            working day. Add or remove as needed; the list ships with the common
+            US holidays preloaded for the current and next year.
           </p>
         </header>
         <table className="w-full text-[12.5px]">

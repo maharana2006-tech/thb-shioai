@@ -118,7 +118,12 @@ const canon = (c?: string | null) => {
 // hardcode (SALE|GIFT|SAMPLE|RETURN|REPAIR|PERSONAL) sent invalid
 // enum values (REPAIR / PERSONAL not accepted; DOCUMENTS /
 // MERCHANDISE / REPAIR_AND_RETURN / PERSONAL_USE missing).
-const CURRENCIES = ['USD', 'EUR', 'GBP', 'CAD', 'INR', 'AUD', 'SGD', 'JPY', 'CNY', 'AED']
+// BUG-125 — shared with CustomsProfileModal + ClientMarkup/IdentityStep so
+// the three pickers offer the same 15 currencies. Previous page-local
+// 10-currency list left MXN/NZD/HKD/BRL/CHF choosable on the client
+// profile but not on the order form.
+import { CURRENCY_ALLOWLIST } from '../utils/money'
+const CURRENCIES = CURRENCY_ALLOWLIST
 
 /** Persist the last-used value for a field so it prefills next time (sticky default). */
 const readSticky = (key: string, fallback: string) => {

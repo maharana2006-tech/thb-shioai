@@ -232,7 +232,7 @@ export default function LabelTemplateEditorPage() {
 
   const clientOptions = useMemo(
     () => [
-      { value: PLATFORM_DEFAULT_VALUE, label: 'Platform default (all tenants without their own)' },
+      { value: PLATFORM_DEFAULT_VALUE, label: 'Platform default (all clients without their own)' },
       ...clients.map((c) => ({
         value: c.clientCode,
         label: `${c.clientCode} — ${c.name}`,
@@ -340,8 +340,8 @@ export default function LabelTemplateEditorPage() {
 
             <p className={fieldHint}>
               {isEdit
-                ? 'Tenant + type are locked after creation (unique per pair).'
-                : "A tenant's row overrides the platform default for the same type."}
+                ? 'Client + type are locked after creation (unique per pair).'
+                : "A client's row overrides the platform default for the same type."}
             </p>
           </Panel>
 
@@ -562,7 +562,7 @@ export default function LabelTemplateEditorPage() {
               </li>
               <li className="flex items-start gap-1.5">
                 <FiCheck className="mt-0.5 h-3 w-3 shrink-0 text-emerald-600" />
-                Tenant-scoped — each client can override the platform default.
+                Client-scoped — each client can override the platform default.
               </li>
               <li className="flex items-start gap-1.5 text-[#6b5c42]">
                 <FiInfo className="mt-0.5 h-3 w-3 shrink-0" />

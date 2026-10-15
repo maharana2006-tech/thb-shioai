@@ -5,7 +5,10 @@
 import { apiClient } from './apiClient'
 import type { ApiResponse } from './orderService'
 
-export type WritebackJournalStatus = 'PENDING' | 'OK' | 'SKIPPED' | 'FAILED'
+// BUG-134: the backend journal stores SKIPPED_INACTIVE as a distinct value
+// alongside SKIPPED; expose it in the union so filter + badge code can
+// discriminate without hard casts.
+export type WritebackJournalStatus = 'PENDING' | 'OK' | 'SKIPPED' | 'SKIPPED_INACTIVE' | 'FAILED'
 export type WritebackJournalMode = 'GENERATE' | 'CLEAR'
 
 export interface WritebackJournalRow {

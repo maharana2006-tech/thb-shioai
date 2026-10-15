@@ -114,10 +114,8 @@ export default function CarrierShippingLimitsPage() {
           </h2>
           <p className="mt-1 text-[12.5px] text-slate-500">
             Per-carrier / per-service caps on packages, commodities, weight and free declared
-            value. Direction-aware (FORWARD / RETURN); the shipment-create resolver
-            picks the most specific match and falls back to a high default when unset. Every
-            edit takes effect on the next shipment call (short in-memory cache invalidates
-            automatically).
+            value. Direction-aware (forward / return). The most specific rule applies to each
+            shipment, with a high default when no rule is set. Changes take effect right away.
           </p>
         </div>
         <button
@@ -149,13 +147,13 @@ export default function CarrierShippingLimitsPage() {
         </select>
       </section>
 
-      {/* BUG-087 — wrap in overflow-x-auto and pin Actions to the right
-          via position: sticky so Edit/Deactivate/Delete stay reachable at
-          narrow viewports (1442px repro). Plain <table>, not
-          AdvancedDataTable — the data model is simple enough that a sticky
-          column is cheaper than the full grid migration. */}
+      {/* BUG-087 R6 — Chrome's position:sticky on <td>/<th> only sticks when
+          the table uses border-collapse: separate (Tailwind's border-separate
+          utility). Without it the sticky cells inherit the collapsed-table
+          layout and ignore `right: 0`. Pair with the sticky right-0 cells on
+          both <th> and <td> below. */}
       <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-        <table className="min-w-full text-[13px]">
+        <table className="min-w-full border-separate border-spacing-0 text-[13px]">
           <thead className="bg-slate-50 text-left text-[11.5px] font-semibold uppercase tracking-wide text-slate-500">
             <tr>
               <th className="px-3 py-2">Carrier</th>

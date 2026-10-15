@@ -26,7 +26,7 @@ const TAB_META: Record<
 > = {
   SHIPVIA: {
     label: 'Shipvia',
-    blurb: 'ERP ship-method → carrier service. Direct alias — skips ShipViaMapping rules.',
+    blurb: 'ERP ship-method → carrier service. Direct alias that is used as-is without any further rule lookup.',
     codeLabel: 'ERP shipvia code',
     codePlaceholder: 'P80',
     targetLabel: 'Platform service',

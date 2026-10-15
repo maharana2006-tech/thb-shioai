@@ -505,7 +505,7 @@ export default function LabelTemplatesListPage() {
               <div className="py-10 text-center text-[12.5px] text-slate-500">
                 {debouncedSearch || filtersActive
                   ? 'No templates match your filters.'
-                  : 'No templates yet — add the platform default or a tenant override.'}
+                  : 'No templates yet — add the platform default or a client override.'}
               </div>
             }
             caption={

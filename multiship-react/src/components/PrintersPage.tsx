@@ -444,8 +444,8 @@ export default function PrintersPage() {
                 >
                   <option value="">
                     {tenantChoices.length === 0
-                      ? (loading ? 'Loading tenants…' : 'No tenants available')
-                      : 'Choose a tenant…'}
+                      ? (loading ? 'Loading clients…' : 'No clients available')
+                      : 'Choose a client…'}
                   </option>
                   {tenantChoices.map((code) => (
                     <option key={code} value={code}>{code}</option>
@@ -453,7 +453,7 @@ export default function PrintersPage() {
                 </select>
               </label>
               <span className="text-[11px] text-slate-400">
-                Pick the tenant to enroll a LAN scanner for.
+                Pick the client to enroll a LAN scanner for.
               </span>
             </div>
           </section>
@@ -758,7 +758,7 @@ export default function PrintersPage() {
               <h3 className="text-[14px] font-semibold text-slate-900">How many copies per (client, carrier)</h3>
               <p className="mt-0.5 text-[12px] text-slate-500">
                 Enter a number 1..20 to override, leave empty to inherit the Default row (or 1 if the
-                Default is also empty). Carriers come from the tenant’s connected accounts.
+                Default is also empty). Carriers come from the client’s connected accounts.
               </p>
             </div>
             <AddClientDropdown

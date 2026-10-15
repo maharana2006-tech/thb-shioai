@@ -25,6 +25,7 @@ const PAGE_SIZE = 50
 const STATUS_BADGE: Record<WritebackJournalStatus, string> = {
   OK: 'bg-emerald-100 text-emerald-800',
   SKIPPED: 'bg-slate-100 text-slate-700',
+  SKIPPED_INACTIVE: 'bg-slate-100 text-slate-700',
   FAILED: 'bg-rose-100 text-rose-800',
   PENDING: 'bg-amber-100 text-amber-800',
 }

@@ -67,7 +67,14 @@ export default function CustomFieldsPage() {
 
   const del = async (def: CustomFieldDefinition) => {
     if (!def.id) return
-    if (!window.confirm(`Delete definition "${def.label}"? Historic values remain on orders but no new values can be captured.`)) return
+    // BUG-075 R6 — swap the browser's native confirm box for the in-app
+    // dialog used by the rest of Settings (same shape as the Importer /
+    // Broker discard dialog).
+    const ok = await notify.confirm(
+      `Delete definition "${def.label}"? Historic values remain on orders but no new values can be captured.`,
+      { title: 'Delete custom field', confirmLabel: 'Delete', danger: true },
+    )
+    if (!ok) return
     await customFieldService.remove(def.id)
     notify.success('Definition deleted.')
     refresh()

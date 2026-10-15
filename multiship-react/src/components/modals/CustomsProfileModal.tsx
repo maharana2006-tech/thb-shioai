@@ -37,7 +37,10 @@ import RegionCountryPicker from '../workspace/RegionCountryPicker'
  * addition here that isn't reachable from a country default is fine; the
  * reverse (a country code that maps to a currency missing here) is not.
  */
-const CUSTOMS_CURRENCIES = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'NZD', 'JPY', 'CNY', 'HKD', 'INR', 'MXN', 'BRL', 'SGD', 'CHF'] as const
+// BUG-125 — shared with NewShipmentPage so every currency the client profile
+// can declare is also pickable on the order form.
+import { CURRENCY_ALLOWLIST } from '../../utils/money'
+const CUSTOMS_CURRENCIES = CURRENCY_ALLOWLIST
 
 /**
  * ISO-2 country → default currency mapping used to preselect the

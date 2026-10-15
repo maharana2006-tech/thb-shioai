@@ -3,7 +3,7 @@ import { FiBookmark, FiEdit2, FiPlus, FiSearch, FiTrash2, FiX } from 'react-icon
 import { notify } from '../utils/notify'
 import { useAppSession } from '../hooks/useAppSession'
 import { normalizeRole } from '../utils/roles'
-import { COUNTRIES } from '../utils/countries'
+import { CountrySelect } from './NewShipmentComponents/CountrySelect'
 import { clientService, type Client } from '../api/clientService'
 import {
   isDuplicateSave,
@@ -352,10 +352,12 @@ function AddressEditor({ entry, clients, defaultOwner, onClose, onSaved }: {
           {text('postalCode', 'Postal code *')}
           <label className="col-span-2 sm:col-span-1">
             <span className={labelCls}>Country *</span>
-            <select className={input(errors.countryCode)} value={form.countryCode}
-              onChange={(e) => set('countryCode', e.target.value)}>
-              {COUNTRIES.map((c) => <option key={c.code} value={c.code}>{c.name} ({c.code})</option>)}
-            </select>
+            {/* BUG-046 R6 — shared searchable CountrySelect so Settings
+                pickers (warehouse, client wizard, address book) agree. */}
+            <CountrySelect
+              value={form.countryCode}
+              onChange={(v) => set('countryCode', v)}
+            />
             {err('countryCode')}
           </label>
           {text('tag', 'Tag', 'col-span-2 sm:col-span-1', 'e.g. wholesale, EU')}
