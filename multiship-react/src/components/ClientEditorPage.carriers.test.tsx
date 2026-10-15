@@ -482,9 +482,10 @@ describe('CarrierDraftStep — positive cases', () => {
 
     await user.click(screen.getByRole('button', { name: /Add carrier account/i }))
 
-    // UPS rule: maxLength 6, placeholder mentions "6-digit UPS".
+    // BUG-029 widened UPS to 6-10 chars (shipper numbers are 6-10
+    // alphanumerics, not strictly 6). maxLength is now 10.
     const acctInput = screen.getAllByRole('textbox')[0] as HTMLInputElement
-    expect(acctInput.maxLength).toBe(6)
+    expect(acctInput.maxLength).toBe(10)
     expect(acctInput.placeholder).toMatch(/UPS/i)
 
     // Flip carrier to FEDEX → maxLength should become 12.
@@ -896,7 +897,9 @@ describe('CarrierDraftStep — cross-cutting', () => {
     await user.selectOptions(carrierSelect, 'DHL')
 
     const acctInput = screen.getAllByRole('textbox')[0] as HTMLInputElement
-    expect(acctInput.maxLength).toBe(9)
+    // BUG-029 widened DHL to 9-12 digits (DHL account numbers vary 9-12).
+    // maxLength is now 12.
+    expect(acctInput.maxLength).toBe(12)
     expect(acctInput.placeholder).toMatch(/DHL/i)
   })
 
