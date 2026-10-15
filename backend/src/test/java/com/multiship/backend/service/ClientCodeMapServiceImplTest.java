@@ -144,7 +144,7 @@ class ClientCodeMapServiceImplTest {
         // Audit B2 (#371) — upsert now uses the targeted finder, so the
         // stub swap goes here. Empty = no existing row, insert path runs.
         when(shipviaRepo.findForUpsert(any(), any(), any(), any())).thenReturn(Optional.empty());
-        when(shipviaRepo.save(any())).thenAnswer(inv -> {
+        when(shipviaRepo.saveAndFlush(any())).thenAnswer(inv -> {
             ClientShipviaCodeMap r = inv.getArgument(0);
             r.setId(1L);
             return r;
@@ -167,7 +167,7 @@ class ClientCodeMapServiceImplTest {
         service.upsert("ACME", ClientCodeMapDTO.Kind.SHIPVIA, req);
 
         var captor = org.mockito.ArgumentCaptor.forClass(ClientShipviaCodeMap.class);
-        verify(shipviaRepo).save(captor.capture());
+        verify(shipviaRepo).saveAndFlush(captor.capture());
         assertEquals("P80", captor.getValue().getErpCode(),
                 "erpCode must be trimmed + uppercased before save");
         // Audit B2 (#371) — upsert must NOT pull the whole client list.
@@ -191,7 +191,7 @@ class ClientCodeMapServiceImplTest {
         existing.setId(55L);
         ClientShipviaCodeMapRepository shipviaRepo = mock(ClientShipviaCodeMapRepository.class);
         when(shipviaRepo.findForUpsert("ACME", "P80", null, null)).thenReturn(Optional.of(existing));
-        when(shipviaRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(shipviaRepo.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
 
         ClientCodeMapServiceImpl service = new ClientCodeMapServiceImpl(
                 clientRepo, shipviaRepo,
@@ -210,7 +210,7 @@ class ClientCodeMapServiceImplTest {
         service.upsert("ACME", ClientCodeMapDTO.Kind.SHIPVIA, req);
 
         var captor = org.mockito.ArgumentCaptor.forClass(ClientShipviaCodeMap.class);
-        verify(shipviaRepo).save(captor.capture());
+        verify(shipviaRepo).saveAndFlush(captor.capture());
         // Same row id = update, not insert.
         assertEquals(55L, captor.getValue().getId());
         assertEquals(99L, captor.getValue().getServiceId(),

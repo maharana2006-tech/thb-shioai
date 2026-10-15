@@ -1,5 +1,6 @@
 package com.multiship.backend.service.mail;
 
+import com.multiship.backend.model.MailProviderEntity;
 import com.multiship.backend.model.NotificationTemplateEntity;
 import com.multiship.backend.model.User;
 import com.multiship.backend.repository.NotificationTemplateRepository;
@@ -14,6 +15,8 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
@@ -41,7 +44,14 @@ class NotificationServiceTest {
         deliveryLog = mock(NotificationDeliveryLogService.class);
         subscriptions = mock(NotificationSubscriptionService.class);
         userRepository = mock(UserRepository.class);
-        when(mailConfig.activeProvider()).thenReturn(Optional.empty());
+        // BUG-132 (post-fix): dispatch() now short-circuits to recordFailed
+        // when no provider is active, so these tests must stub a happy
+        // provider or they'll never reach mailSender.send(). The dedicated
+        // no-provider assertion lives on NotificationServiceNoProviderTest.
+        MailProviderEntity provider = new MailProviderEntity();
+        provider.setId(1L);
+        provider.setKind("SMTP");
+        when(mailConfig.activeProvider()).thenReturn(Optional.of(provider));
         service = new NotificationService(repo, new TemplateRenderer(), mailSender, mailConfig,
                 deliveryLog, subscriptions, userRepository);
     }
@@ -75,7 +85,7 @@ class NotificationServiceTest {
         service.send("AUTH.VERIFY_EMAIL", "x@ex", Map.of());
 
         verify(deliveryLog).recordSent(eq("AUTH.VERIFY_EMAIL"), eq("x@ex"),
-                eq("s"), eq("b"), isNull(), isNull(), any(), isNull());
+                eq("s"), eq("b"), anyString(), anyLong(), any(), isNull());
         verify(deliveryLog, never()).recordFailed(any(), any(), any(), any(),
                 any(), any(), any(), any(), any());
     }
@@ -93,7 +103,7 @@ class NotificationServiceTest {
                 () -> service.send("AUTH.VERIFY_EMAIL", "x@ex", Map.of()));
 
         verify(deliveryLog).recordFailed(eq("AUTH.VERIFY_EMAIL"), eq("x@ex"),
-                eq("s"), eq("b"), isNull(), isNull(), any(), eq("boom"), isNull());
+                eq("s"), eq("b"), anyString(), anyLong(), any(), eq("boom"), isNull());
         verify(deliveryLog, never()).recordSent(any(), any(), any(), any(),
                 any(), any(), any(), any());
     }
@@ -105,7 +115,7 @@ class NotificationServiceTest {
         verify(mailSender).send("x@ex", "already-rendered subject", "already-rendered body");
         verify(deliveryLog).recordSent(eq("AUTH.VERIFY_EMAIL"), eq("x@ex"),
                 eq("already-rendered subject"), eq("already-rendered body"),
-                isNull(), isNull(), any(), eq(42L));
+                anyString(), anyLong(), any(), eq(42L));
         verify(repo, never()).findById(any());
     }
 

@@ -117,13 +117,13 @@ public final class IdempotencyKeys {
         }
         // S-track D5 originally returned the raw string "stamps-topup-{id}-{bucket}"
         // but SERA rejects non-UUID-shaped Idempotency-Keys with carrier error
-        // 800001 "Idempotency-Key provided was invalid." Coerce to UUID v3 so the
-        // key stays deterministic for the same (accountId, bucket) but passes SERA's
-        // shape check. Matches the forStampsLabel / forStampsManifest pattern
-        // shipped in T2.
+        // 800001 "Idempotency-Key provided was invalid." Route through
+        // stampsKey() so the key is deterministic AND the version bits are
+        // stamped v4 — SERA rejects any version other than 4. Earlier
+        // revision returned a v3 directly which SERA would also reject;
+        // caught by IdempotencyKeysStampsSeraTest.everyStampsKeyIsAStableV4Uuid.
         String payload = "stamps-topup|" + carrierAccountRefId + "|" + dayHourBucket;
-        return java.util.UUID.nameUUIDFromBytes(
-                payload.getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+        return stampsKey(payload);
     }
 
     /**
