@@ -44,6 +44,10 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
     @Autowired(required = false)
     private TenantScopeEnforcer tenantScope;
 
+    // BUG-128: audit every CUSTOMS_PROFILE write.
+    @Autowired(required = false)
+    private AuditService audit;
+
     @Override
     @Transactional(readOnly = true)
     public ApiResponse<List<ClientCustomsProfileDTO>> listAll() {
@@ -436,6 +440,7 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
         p.setAccountCarrier(upper(r.getAccountCarrier()));
         p.setAccountNo(trim(r.getAccountNo()));
 
+        boolean isCreate = r.getId() == null;
         try {
             // Flush now so the unique(client_code, country) constraint fires inside
             // this method — the service pre-check above gives the friendly message;
@@ -445,6 +450,13 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
             return failure(HttpStatus.CONFLICT, ErrorCode.VALIDATION_ERROR,
                     "One of those countries was just claimed by another " + code
                             + " profile. Refresh and try again.");
+        }
+        if (audit != null) {
+            audit.record(isCreate ? AuditService.CREATE : AuditService.UPDATE,
+                    AuditService.CUSTOMS_PROFILE, p.getId(),
+                    code + "/" + (p.getImporterName() == null ? "" : p.getImporterName()), p,
+                    "Importer/Broker profile saved (" + countries.size() + " destination"
+                            + (countries.size() == 1 ? "" : "s") + ").");
         }
         return success("Importer/Broker profile for " + code + " saved (" + countries.size()
                 + " destination" + (countries.size() == 1 ? "" : "s") + ").", toDTO(p));
@@ -458,9 +470,14 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
         ApiResponse<Void> guard = requireClient(code);
         if (guard != null) return guard;
 
+        boolean[] deleted = {false};
         repository.findById(id)
                 .filter(p -> p.getClientCode().equalsIgnoreCase(code))
-                .ifPresent(repository::delete);
+                .ifPresent(p -> { repository.delete(p); deleted[0] = true; });
+        if (deleted[0] && audit != null) {
+            audit.record(AuditService.DELETE, AuditService.CUSTOMS_PROFILE, id,
+                    code + "/" + id, null, "Customs profile removed.");
+        }
         return success("Customs profile removed.", null);
     }
 

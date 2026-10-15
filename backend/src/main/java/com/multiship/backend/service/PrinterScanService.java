@@ -43,6 +43,13 @@ public class PrinterScanService {
     private final PrinterDiscoveryEventPublisher discoveryPublisher;
     private final SecureRandom secureRandom = new SecureRandom();
 
+    // BUG-128: audit scanner enroll / revoke / reactivate under
+    // AuditService.CLIENT_POLICY (scanner enrolments are per-tenant policy
+    // state). AuditService doesn't have a dedicated PRINTER_SCAN_AGENT
+    // constant yet; CLIENT_POLICY is the closest matching bucket.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private AuditService audit;
+
     // ================================================================
     // Enrollment (admin)
     // ================================================================
@@ -102,6 +109,11 @@ public class PrinterScanService {
         PrinterScanAgent saved = agentRepository.save(agent);
         log.info("Printer scan agent enrolled: tenant={} agentId={} enrolledBy={}",
                 tenantCode, agentId, enrolledBy);
+        if (audit != null) {
+            audit.record(AuditService.CREATE, AuditService.CLIENT_POLICY, saved.getId(),
+                    tenantCode + "/scan-agent/" + agentId, null,
+                    "Scanner enrolled (hostname=" + (hostname == null ? "" : hostname) + ").");
+        }
         return new EnrollResult(saved.getId(), rawKey);
     }
 
@@ -139,6 +151,11 @@ public class PrinterScanService {
         agentRepository.save(a);
         log.info("Printer scan agent unrevoked: tenant={} agentId={} id={}",
                 a.getTenantCode(), a.getAgentId(), a.getId());
+        if (audit != null) {
+            audit.record(AuditService.UPDATE, AuditService.CLIENT_POLICY, a.getId(),
+                    a.getTenantCode() + "/scan-agent/" + a.getAgentId(), null,
+                    "Scanner reactivated.");
+        }
         return true;
     }
 
@@ -168,6 +185,11 @@ public class PrinterScanService {
         agentRepository.save(a);
         log.info("Printer scan agent revoked: tenant={} agentId={} id={}",
                 a.getTenantCode(), a.getAgentId(), a.getId());
+        if (audit != null) {
+            audit.record(AuditService.DELETE, AuditService.CLIENT_POLICY, a.getId(),
+                    a.getTenantCode() + "/scan-agent/" + a.getAgentId(), null,
+                    "Scanner revoked.");
+        }
         return true;
     }
 

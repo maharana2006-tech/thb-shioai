@@ -46,6 +46,11 @@ public class CustomFieldServiceImpl implements CustomFieldService {
     @Autowired(required = false)
     private OrderRepository orderRepository;
 
+    // BUG-128: audit custom-field definition writes under entityType=
+    // CLIENT_POLICY (closest matching bucket in AuditService constants).
+    @Autowired(required = false)
+    private AuditService audit;
+
     @Autowired
     public CustomFieldServiceImpl(CustomFieldDefinitionRepository defRepo,
                                   OrderCustomFieldValueRepository valueRepo) {
@@ -102,7 +107,17 @@ public class CustomFieldServiceImpl implements CustomFieldService {
             d.setCreatedAt(now);
         }
         d.setUpdatedAt(now);
-        return defRepo.save(d);
+        boolean isCreate = d.getId() == null;
+        CustomFieldDefinition saved = defRepo.save(d);
+        if (audit != null) {
+            audit.record(isCreate ? AuditService.CREATE : AuditService.UPDATE,
+                    AuditService.CLIENT_POLICY, saved.getId(),
+                    (saved.getTenantId() == null ? "PLATFORM" : saved.getTenantId())
+                            + "/custom-field/" + saved.getFieldKey(),
+                    saved,
+                    isCreate ? "Custom field definition created." : "Custom field definition updated.");
+        }
+        return saved;
     }
 
     @Override
@@ -117,6 +132,12 @@ public class CustomFieldServiceImpl implements CustomFieldService {
                 tenantScope.requireTenantMatch(def.getTenantId());
             }
             defRepo.delete(def);
+            if (audit != null) {
+                audit.record(AuditService.DELETE, AuditService.CLIENT_POLICY, def.getId(),
+                        (def.getTenantId() == null ? "PLATFORM" : def.getTenantId())
+                                + "/custom-field/" + def.getFieldKey(),
+                        null, "Custom field definition deleted.");
+            }
         });
     }
 

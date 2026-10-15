@@ -32,6 +32,10 @@ public class ClientBillingMarkupServiceImpl implements ClientBillingMarkupServic
     @Autowired(required = false)
     private TenantScopeEnforcer tenantScope;
 
+    // BUG-128: audit markup upserts as CLIENT_MARKUP writes.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private AuditService audit;
+
     @Override
     @Transactional(readOnly = true)
     public ApiResponse<ClientBillingMarkupDTO> get(String clientCode) {
@@ -77,13 +81,18 @@ public class ClientBillingMarkupServiceImpl implements ClientBillingMarkupServic
                     "currency must be 3 letters (ISO-4217).");
         }
 
+        boolean isCreate = repo.findByClientCodeIgnoreCase(code).isEmpty();
         ClientBillingMarkup markup = repo.findByClientCodeIgnoreCase(code)
                 .orElseGet(() -> ClientBillingMarkup.builder().clientCode(code).build());
         markup.setKind(kind);
         markup.setValue(request.getValue());
         markup.setCurrency(currency);
         repo.save(markup);
-
+        if (audit != null) {
+            audit.record(isCreate ? AuditService.CREATE : AuditService.UPDATE,
+                    AuditService.CLIENT_MARKUP, code, code, markup,
+                    "Billing markup saved: " + kind + " " + request.getValue() + " " + currency + ".");
+        }
         return success("Billing markup updated for client " + code + ".", toDTO(markup));
     }
 

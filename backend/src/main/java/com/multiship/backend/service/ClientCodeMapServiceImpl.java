@@ -52,6 +52,12 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
      */
     private final TenantScopeEnforcer tenantScope;
 
+    // BUG-128: audit every CODE_MAP write so the Logs > Entity type
+    // CODE_MAP filter actually matches rows. @Autowired(required=false)
+    // so pure-Mockito tests that build the service by hand still compile.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private AuditService audit;
+
     @Override
     @Transactional(readOnly = true)
     public ApiResponse<List<ClientCodeMapDTO>> list(String clientCode, ClientCodeMapDTO.Kind kind) {
@@ -139,6 +145,10 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
             case PACKAGE -> tryDelete(packageRepo.findById(id).orElse(null), code,
                     r -> r.getClientCode(), packageRepo::delete);
         };
+        if (outcome == Outcome.DELETED && audit != null) {
+            audit.record(AuditService.DELETE, AuditService.CODE_MAP, id,
+                    code + "/" + kind + "/" + id, null, "Code alias removed.");
+        }
         return switch (outcome) {
             case DELETED -> success("Code alias removed.", null);
             case NOT_FOUND -> failure(HttpStatus.NOT_FOUND, ErrorCode.VALIDATION_ERROR,
@@ -214,6 +224,11 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
                 shipviaPackageRepository.save(link);
             }
         }
+        if (audit != null) {
+            audit.record(wasUpdate ? AuditService.UPDATE : AuditService.CREATE,
+                    AuditService.CODE_MAP, row.getId(), code + "/SHIPVIA/" + erp, row,
+                    wasUpdate ? "Shipvia alias updated." : "Shipvia alias created.");
+        }
         return success(wasUpdate
                         ? "Shipvia alias '" + erp + "' already existed — the existing mapping was updated."
                         : "Shipvia alias saved.",
@@ -233,7 +248,13 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
         row.setServiceId(targetId);
         row.setDestCountry(destCountry);
         row.setDestRegion(destRegion);
+        boolean wasUpdate = row.getId() != null;
         serviceRepo.saveAndFlush(row);  // flush so @UpdateTimestamp lands before we build the response DTO
+        if (audit != null) {
+            audit.record(wasUpdate ? AuditService.UPDATE : AuditService.CREATE,
+                    AuditService.CODE_MAP, row.getId(), code + "/SERVICE/" + erp, row,
+                    "Service-code alias saved.");
+        }
         return success("Service-code alias saved.", toServiceDto(row));
     }
 
@@ -247,7 +268,13 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
                 .findByClientCodeIgnoreCaseAndErpCodeIgnoreCase(code, erp)
                 .orElseGet(() -> ClientDestCountryMap.builder().clientCode(code).erpCode(erp).build());
         row.setIso2(canonical);
+        boolean wasUpdate = row.getId() != null;
         destRepo.saveAndFlush(row);  // flush so @UpdateTimestamp lands before we build the response DTO
+        if (audit != null) {
+            audit.record(wasUpdate ? AuditService.UPDATE : AuditService.CREATE,
+                    AuditService.CODE_MAP, row.getId(), code + "/DEST/" + erp, row,
+                    "Destination-country alias saved.");
+        }
         return success("Destination-country alias saved.", toDestDto(row));
     }
 
@@ -264,7 +291,13 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
         row.setPresetId(targetId);
         row.setDestCountry(destCountry);
         row.setDestRegion(destRegion);
+        boolean wasUpdate = row.getId() != null;
         packageRepo.saveAndFlush(row);  // flush so @UpdateTimestamp lands before we build the response DTO
+        if (audit != null) {
+            audit.record(wasUpdate ? AuditService.UPDATE : AuditService.CREATE,
+                    AuditService.CODE_MAP, row.getId(), code + "/PACKAGE/" + erp, row,
+                    "Package alias saved.");
+        }
         return success("Package alias saved.", toPackageDto(row));
     }
 

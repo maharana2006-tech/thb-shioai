@@ -26,6 +26,13 @@ public class LabelTemplateServiceImpl implements LabelTemplateService {
     @Autowired(required = false)
     private TenantScopeEnforcer tenantScope;
 
+    // BUG-128: audit every create/update/delete so Logs > Entity type
+    // LABEL_TEMPLATE actually turns up. @Autowired(required=false) so
+    // pure-Mockito tests that construct the service by hand still
+    // compile without wiring a mock.
+    @Autowired(required = false)
+    private AuditService audit;
+
     @Autowired
     public LabelTemplateServiceImpl(LabelTemplateRepository repo) {
         this.repo = repo;
@@ -84,11 +91,20 @@ public class LabelTemplateServiceImpl implements LabelTemplateService {
             template.setTenantId(null);
         }
         LocalDateTime now = LocalDateTime.now();
-        if (template.getId() == null) {
+        boolean isCreate = template.getId() == null;
+        if (isCreate) {
             template.setCreatedAt(now);
         }
         template.setUpdatedAt(now);
-        return repo.save(template);
+        LabelTemplate saved = repo.save(template);
+        if (audit != null) {
+            String key = (saved.getTenantId() == null ? "PLATFORM" : saved.getTenantId())
+                    + "/" + saved.getTemplateType();
+            audit.record(isCreate ? AuditService.CREATE : AuditService.UPDATE,
+                    AuditService.LABEL_TEMPLATE, saved.getId(), key, saved,
+                    isCreate ? "Template created." : "Template updated.");
+        }
+        return saved;
     }
 
     @Override
@@ -97,13 +113,19 @@ public class LabelTemplateServiceImpl implements LabelTemplateService {
         // the row's tenantId matches the caller's scope, then delete. Mirrors
         // the findById belt from PR F. Platform-owned templates (tenantId ==
         // null) stay operator-only via the existing controller SpEL.
+        Optional<LabelTemplate> existing = repo.findById(id);
         if (tenantScope != null) {
-            repo.findById(id)
-                    .map(LabelTemplate::getTenantId)
+            existing.map(LabelTemplate::getTenantId)
                     .filter(t -> t != null && !t.isBlank())
                     .ifPresent(tenantScope::requireTenantMatch);
         }
         repo.deleteById(id);
+        if (audit != null && existing.isPresent()) {
+            LabelTemplate row = existing.get();
+            String key = (row.getTenantId() == null ? "PLATFORM" : row.getTenantId())
+                    + "/" + row.getTemplateType();
+            audit.record(AuditService.DELETE, AuditService.LABEL_TEMPLATE, id, key, null, "Template deleted.");
+        }
     }
 
     @Override

@@ -36,6 +36,10 @@ public class RoutingRuleServiceImpl implements RoutingRuleService {
     @Autowired(required = false)
     private TenantScopeEnforcer tenantScope;
 
+    // BUG-128: audit routing-rule writes.
+    @Autowired(required = false)
+    private AuditService audit;
+
     /**
      * Audit B4 (#352) — target-row existence check on save. Field +
      * {@code @Autowired(required=false)} + null-guard pattern so pure-
@@ -112,9 +116,17 @@ public class RoutingRuleServiceImpl implements RoutingRuleService {
             rule.setTargetServiceId(null);
         }
         LocalDateTime now = LocalDateTime.now();
-        if (rule.getId() == null) rule.setCreatedAt(now);
+        boolean isCreate = rule.getId() == null;
+        if (isCreate) rule.setCreatedAt(now);
         rule.setUpdatedAt(now);
-        return ruleRepo.save(rule);
+        RoutingRule saved = ruleRepo.save(rule);
+        if (audit != null) {
+            audit.record(isCreate ? AuditService.CREATE : AuditService.UPDATE,
+                    AuditService.ROUTING_RULE, saved.getId(),
+                    saved.getClientCode() + "/" + saved.getName(), saved,
+                    isCreate ? "Routing rule created." : "Routing rule updated.");
+        }
+        return saved;
     }
 
     @Override
@@ -136,6 +148,10 @@ public class RoutingRuleServiceImpl implements RoutingRuleService {
                     "rule " + ruleId + " does not belong to client " + clientCode);
         }
         ruleRepo.delete(rule);
+        if (audit != null) {
+            audit.record(AuditService.DELETE, AuditService.ROUTING_RULE, rule.getId(),
+                    rule.getClientCode() + "/" + rule.getName(), null, "Routing rule deleted.");
+        }
     }
 
     // ===== Evaluation =====
