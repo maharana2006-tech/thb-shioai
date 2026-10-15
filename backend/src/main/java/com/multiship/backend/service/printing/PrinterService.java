@@ -82,6 +82,15 @@ public class PrinterService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.repository.PrinterTestHistoryRepository testHistory;
 
+    // BUG-128 sprint 2: audit printer + assignment writes. Printer is a
+    // platform-wide piece of infrastructure (not scoped to a client), so
+    // we fall back to CLIENT_POLICY as the closest entity-type bucket;
+    // Logs filter can target entityKey prefix "printer/" to find them.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.AuditService audit;
+    private static final String PRINTER_ENTITY_TYPE =
+            com.multiship.backend.service.AuditService.CLIENT_POLICY;
+
     public PrinterService(PrinterRepository printers, PrinterAssignmentRepository assignments,
                           ClientRepository clients, OrderRepository orders) {
         this.printers = printers;
@@ -106,7 +115,14 @@ public class PrinterService {
         apply(p, input);
         p.setCreatedAt(LocalDateTime.now());
         p.setUpdatedAt(p.getCreatedAt());
-        return printers.save(p);
+        Printer saved = printers.save(p);
+        if (audit != null) {
+            audit.record(com.multiship.backend.service.AuditService.CREATE,
+                    PRINTER_ENTITY_TYPE, saved.getId(),
+                    "printer/" + saved.getName(), null,
+                    "Printer created (" + saved.getHost() + ":" + saved.getPort() + ").");
+        }
+        return saved;
     }
 
     @Transactional
@@ -137,12 +153,25 @@ public class PrinterService {
                     + "Move those assignments to a PDF printer before switching it to ZPL.");
         }
         p.setUpdatedAt(LocalDateTime.now());
-        return printers.save(p);
+        Printer saved = printers.save(p);
+        if (audit != null) {
+            audit.record(com.multiship.backend.service.AuditService.UPDATE,
+                    PRINTER_ENTITY_TYPE, saved.getId(),
+                    "printer/" + saved.getName(), null,
+                    "Printer updated (" + saved.getHost() + ":" + saved.getPort() + ").");
+        }
+        return saved;
     }
 
     @Transactional
     public void delete(Long id) {
-        printers.delete(get(id));   // assignments go with it (ON DELETE CASCADE)
+        Printer existing = get(id);
+        printers.delete(existing);   // assignments go with it (ON DELETE CASCADE)
+        if (audit != null) {
+            audit.record(com.multiship.backend.service.AuditService.DELETE,
+                    PRINTER_ENTITY_TYPE, id,
+                    "printer/" + existing.getName(), null, "Printer deleted.");
+        }
     }
 
     private void apply(Printer p, PrinterInput in) {

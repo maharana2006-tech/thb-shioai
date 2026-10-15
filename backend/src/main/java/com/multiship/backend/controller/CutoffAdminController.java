@@ -40,6 +40,12 @@ public class CutoffAdminController {
     private final WarehouseRepository warehouseRepo;
     private final CarrierAccountRefRepository carrierAccountRepo;
 
+    // BUG-128 sprint 2: audit cutoff rule + holiday writes. Platform-wide
+    // scope, CLIENT_POLICY bucket + "cutoff/" or "holiday/" entityKey prefix.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.AuditService audit;
+    private static final String CUTOFF_ENTITY = com.multiship.backend.service.AuditService.CLIENT_POLICY;
+
     // ── Rules ────────────────────────────────────────────────────────
 
     @GetMapping("/rules")
@@ -62,7 +68,14 @@ public class CutoffAdminController {
             throw new IllegalArgumentException(
                     "warehouseId " + req.getWarehouseId() + " doesn't match any warehouse.");
         }
-        return ok(ruleRepo.save(req));
+        CutoffRule saved = ruleRepo.save(req);
+        if (audit != null) {
+            audit.record(com.multiship.backend.service.AuditService.CREATE,
+                    CUTOFF_ENTITY, saved.getId(),
+                    "cutoff/" + saved.getSource() + "/" + saved.getCarrierCode() + "/" + saved.getWarehouseId(),
+                    saved, "Cutoff rule created.");
+        }
+        return ok(saved);
     }
 
     @PutMapping("/rules/{id}")
@@ -78,12 +91,23 @@ public class CutoffAdminController {
         if (req.getTimezone() != null) existing.setTimezone(req.getTimezone());
         if (req.getActive() != null) existing.setActive(req.getActive());
         existing.setUpdatedBy(actor(auth));
-        return ok(ruleRepo.save(existing));
+        CutoffRule saved = ruleRepo.save(existing);
+        if (audit != null) {
+            audit.record(com.multiship.backend.service.AuditService.UPDATE,
+                    CUTOFF_ENTITY, saved.getId(),
+                    "cutoff/" + saved.getSource() + "/" + saved.getCarrierCode() + "/" + saved.getWarehouseId(),
+                    saved, "Cutoff rule updated.");
+        }
+        return ok(saved);
     }
 
     @DeleteMapping("/rules/{id}")
     public ResponseEntity<ApiResponse<Void>> deleteRule(@PathVariable Long id) {
         ruleRepo.deleteById(id);
+        if (audit != null) {
+            audit.record(com.multiship.backend.service.AuditService.DELETE,
+                    CUTOFF_ENTITY, id, "cutoff/" + id, null, "Cutoff rule deleted.");
+        }
         return ok(null);
     }
 
@@ -150,7 +174,14 @@ public class CutoffAdminController {
         });
         req.setId(null);
         req.setUpdatedBy(actor(auth));
-        return ok(holidayRepo.save(req));
+        Holiday saved = holidayRepo.save(req);
+        if (audit != null) {
+            audit.record(com.multiship.backend.service.AuditService.CREATE,
+                    CUTOFF_ENTITY, saved.getId(),
+                    "holiday/" + saved.getHolidayDate(), saved,
+                    "Holiday created: " + saved.getName() + ".");
+        }
+        return ok(saved);
     }
 
     @PutMapping("/holidays/{id}")
@@ -163,12 +194,23 @@ public class CutoffAdminController {
         if (req.getHolidayDate() != null) existing.setHolidayDate(req.getHolidayDate());
         if (req.getActive() != null) existing.setActive(req.getActive());
         existing.setUpdatedBy(actor(auth));
-        return ok(holidayRepo.save(existing));
+        Holiday saved = holidayRepo.save(existing);
+        if (audit != null) {
+            audit.record(com.multiship.backend.service.AuditService.UPDATE,
+                    CUTOFF_ENTITY, saved.getId(),
+                    "holiday/" + saved.getHolidayDate(), saved,
+                    "Holiday updated: " + saved.getName() + ".");
+        }
+        return ok(saved);
     }
 
     @DeleteMapping("/holidays/{id}")
     public ResponseEntity<ApiResponse<Void>> deleteHoliday(@PathVariable Long id) {
         holidayRepo.deleteById(id);
+        if (audit != null) {
+            audit.record(com.multiship.backend.service.AuditService.DELETE,
+                    CUTOFF_ENTITY, id, "holiday/" + id, null, "Holiday deleted.");
+        }
         return ok(null);
     }
 

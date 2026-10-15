@@ -55,6 +55,10 @@ public class OutputDestinationAdminService {
      *  destinations at internal infra + AWS/GCP/Azure metadata endpoints. */
     private final com.multiship.backend.service.external.WebhookUrlValidator webhookUrlValidator;
 
+    // BUG-128 sprint 2: audit output-destination writes.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.AuditService audit;
+
     /** Sentinel prefix on system_settings.setting_key for SFTP secrets. */
     static final String SFTP_SECRET_PREFIX = "sftp.secret.";
 
@@ -89,6 +93,13 @@ public class OutputDestinationAdminService {
         log.info("OutputDestination created id={} client={} docType={} destType={} by={}",
                 entity.getId(), entity.getClientCode(), entity.getDocType(),
                 entity.getDestinationType(), actor);
+        if (audit != null) {
+            audit.record(com.multiship.backend.service.AuditService.CREATE,
+                    com.multiship.backend.service.AuditService.CLIENT_POLICY, entity.getId(),
+                    "output-destination/" + entity.getClientCode() + "/" + entity.getDocType()
+                            + "/" + entity.getDestinationType(),
+                    null, "Output destination created.");
+        }
         return toDto(entity);
     }
 
@@ -107,6 +118,13 @@ public class OutputDestinationAdminService {
             entity.setUpdatedAt(LocalDateTime.now(ZoneOffset.UTC));
             validateAuthPointersForSftp(entity);
             log.info("OutputDestination updated id={} by={}", entity.getId(), actor);
+            if (audit != null) {
+                audit.record(com.multiship.backend.service.AuditService.UPDATE,
+                        com.multiship.backend.service.AuditService.CLIENT_POLICY, entity.getId(),
+                        "output-destination/" + entity.getClientCode() + "/" + entity.getDocType()
+                                + "/" + entity.getDestinationType(),
+                        null, "Output destination updated.");
+            }
             return toDto(entity);
         });
     }
@@ -166,6 +184,13 @@ public class OutputDestinationAdminService {
             cleanupSecrets(row);
             destinationRepository.delete(row);
             log.info("OutputDestination deleted id={}", id);
+            if (audit != null) {
+                audit.record(com.multiship.backend.service.AuditService.DELETE,
+                        com.multiship.backend.service.AuditService.CLIENT_POLICY, id,
+                        "output-destination/" + row.getClientCode() + "/" + row.getDocType()
+                                + "/" + row.getDestinationType(),
+                        null, "Output destination deleted.");
+            }
             return true;
         }).orElse(false);
     }
