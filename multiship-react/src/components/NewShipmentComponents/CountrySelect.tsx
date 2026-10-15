@@ -20,6 +20,9 @@ export function CountrySelect({
 }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
+  // BUG-123: keyboard navigation — ArrowDown/Up moves the highlight,
+  // Enter commits, Escape closes. Same shape as HsCodeCombobox.
+  const [activeIndex, setActiveIndex] = useState(-1)
   const selectedName = countryNameFor(value)
   const q = query.trim().toLowerCase()
   const matches = q
@@ -41,9 +44,30 @@ export function CountrySelect({
           onChange={(e) => {
             setOpen(true)
             setQuery(e.target.value)
+            setActiveIndex(-1)
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') { setOpen(false); return }
+            if (!open && (e.key === 'ArrowDown' || e.key === 'Enter')) {
+              e.preventDefault(); setOpen(true); return
+            }
+            if (e.key === 'ArrowDown') {
+              e.preventDefault()
+              setActiveIndex((i) => (matches.length === 0 ? -1 : (i + 1) % matches.length))
+            } else if (e.key === 'ArrowUp') {
+              e.preventDefault()
+              setActiveIndex((i) => (matches.length === 0 ? -1 : (i <= 0 ? matches.length - 1 : i - 1)))
+            } else if (e.key === 'Enter' && activeIndex >= 0 && activeIndex < matches.length) {
+              e.preventDefault()
+              const [code] = matches[activeIndex]
+              onChange(code); setOpen(false); setQuery(''); setActiveIndex(-1)
+            }
           }}
           onBlur={() => setTimeout(() => setOpen(false), 120)}
           autoComplete="off"
+          role="combobox"
+          aria-expanded={open}
+          aria-activedescendant={activeIndex >= 0 ? `country-opt-${activeIndex}` : undefined}
         />
       </div>
       {open ? (
@@ -51,8 +75,8 @@ export function CountrySelect({
           {matches.length === 0 ? (
             <li className="px-3 py-2 text-[12px] text-[#b6a684]">No match</li>
           ) : (
-            matches.map(([code, name]) => (
-              <li key={code}>
+            matches.map(([code, name], i) => (
+              <li key={code} id={`country-opt-${i}`} role="option" aria-selected={i === activeIndex}>
                 <button
                   type="button"
                   onMouseDown={(e) => {
@@ -70,8 +94,8 @@ export function CountrySelect({
                     setQuery('')
                   }}
                   className={`flex w-full items-center justify-between px-3 py-1.5 text-left text-[12.5px] hover:bg-[#faf7f0] ${
-                    code === value ? 'font-semibold text-[#1f150c]' : 'text-[#5a4526]'
-                  }`}
+                    i === activeIndex ? 'bg-[#faf7f0]' : ''
+                  } ${code === value ? 'font-semibold text-[#1f150c]' : 'text-[#5a4526]'}`}
                 >
                   <span>{name}</span>
                   <span className="font-mono text-[10px] text-[#b6a684]">{code}</span>
