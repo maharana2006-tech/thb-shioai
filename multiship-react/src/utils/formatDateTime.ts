@@ -11,7 +11,14 @@
 export function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return '—'
   try {
-    return new Date(iso).toLocaleString('en-US', {
+    // BUG-119 — backend serialises LocalDateTime as 'YYYY-MM-DDTHH:mm:ss.…'
+    // with NO zone designator. JS parses that as LOCAL time, which showed
+    // every row 5.5h behind on IST browsers. Treat a Z-less timestamp as
+    // UTC (append 'Z') so it localises correctly. Values already carrying
+    // a zone ('Z' / '±HH:MM') pass through unchanged.
+    const s = String(iso).trim()
+    const hasZone = /[Zz]$|[+-]\d{2}:?\d{2}$/.test(s)
+    return new Date(hasZone ? s : `${s}Z`).toLocaleString('en-US', {
       month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
     })
   } catch {

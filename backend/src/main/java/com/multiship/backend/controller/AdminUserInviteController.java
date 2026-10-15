@@ -122,10 +122,16 @@ public class AdminUserInviteController {
     @Operation(summary = "Resend an existing invite (admin)")
     @PostMapping("/{id}/resend")
     public ResponseEntity<ApiResponse<UserInviteResponse>> resend(
-            @PathVariable Long id, HttpServletRequest request) {
+            @PathVariable Long id, @AuthenticationPrincipal UserDetails admin,
+            HttpServletRequest request) {
         String baseUrl = resolveBaseUrl(request);
         try {
             UserInvite invite = inviteService.resend(id, baseUrl);
+            // BUG-085 — audit the resend so Recent admin actions shows it.
+            if (adminUserService != null) {
+                adminUserService.recordInviteResent(invite.getEmail(), invite.getClientCode(),
+                        admin != null ? admin.getUsername() : "system");
+            }
             UserInviteResponse body = UserInviteResponse.of(invite,
                     baseUrl + "/invite/" + invite.getToken());
             return ResponseEntity.ok(ApiResponse.<UserInviteResponse>builder()
@@ -143,8 +149,17 @@ public class AdminUserInviteController {
 
     @Operation(summary = "Revoke an invite (admin)")
     @DeleteMapping("/{id}")
-    public ResponseEntity<ApiResponse<Void>> revoke(@PathVariable Long id) {
-        inviteService.revoke(id);
+    public ResponseEntity<ApiResponse<Void>> revoke(@PathVariable Long id,
+            @AuthenticationPrincipal UserDetails admin) {
+        // BUG-085 — look up the invite BEFORE deleting so we can audit who
+        // was revoked. If it was already gone (concurrent revoke), just no-op.
+        inviteService.findById(id).ifPresent(invite -> {
+            inviteService.revoke(id);
+            if (adminUserService != null) {
+                adminUserService.recordInviteRevoked(invite.getEmail(), invite.getClientCode(),
+                        admin != null ? admin.getUsername() : "system");
+            }
+        });
         return ResponseEntity.ok(ApiResponse.<Void>builder()
                 .status("SUCCESS").code(200).timestamp(LocalDateTime.now())
                 .message("Invite revoked. The accept link is no longer valid.")

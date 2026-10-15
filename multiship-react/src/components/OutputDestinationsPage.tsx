@@ -426,8 +426,10 @@ function DestinationEditorDialog({
                 onChange={(e) => setDocType(e.target.value as DocType)}
                 className="mt-1 block w-full rounded-md border border-slate-300 px-2 py-1.5 text-[13px]"
               >
-                <option value="LABEL">LABEL</option>
-                <option value="COMMERCIAL_INVOICE">COMMERCIAL_INVOICE</option>
+                {/* BUG-110 R6 — show the humanised doc-type names;
+                    the wire codes are kept as the <option> values. */}
+                <option value="LABEL">Label</option>
+                <option value="COMMERCIAL_INVOICE">Commercial invoice</option>
               </select>
             </label>
             <label className="block text-[12.5px] font-semibold text-slate-700">
@@ -437,7 +439,8 @@ function DestinationEditorDialog({
                 onChange={(e) => setDestinationType(e.target.value as DestinationType)}
                 className="mt-1 block w-full rounded-md border border-slate-300 px-2 py-1.5 text-[13px]"
               >
-                <option value="LOCAL_FS">LOCAL_FS</option>
+                {/* BUG-110 R6 — humanised destination-type names. */}
+                <option value="LOCAL_FS">Local folder</option>
                 <option value="SFTP">SFTP</option>
                 {/* Only an existing printer row keeps the option, so it can be
                     switched off; new printers go to Settings → Printers. */}

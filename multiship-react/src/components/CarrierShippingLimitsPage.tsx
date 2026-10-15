@@ -114,10 +114,8 @@ export default function CarrierShippingLimitsPage() {
           </h2>
           <p className="mt-1 text-[12.5px] text-slate-500">
             Per-carrier / per-service caps on packages, commodities, weight and free declared
-            value. Direction-aware (FORWARD / RETURN); the shipment-create resolver
-            picks the most specific match and falls back to a high default when unset. Every
-            edit takes effect on the next shipment call (short in-memory cache invalidates
-            automatically).
+            value. Direction-aware (forward / return). The most specific rule applies to each
+            shipment, with a high default when no rule is set. Changes take effect right away.
           </p>
         </div>
         <button
@@ -149,8 +147,13 @@ export default function CarrierShippingLimitsPage() {
         </select>
       </section>
 
-      <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-        <table className="min-w-full text-[13px]">
+      {/* BUG-087 R6 — Chrome's position:sticky on <td>/<th> only sticks when
+          the table uses border-collapse: separate (Tailwind's border-separate
+          utility). Without it the sticky cells inherit the collapsed-table
+          layout and ignore `right: 0`. Pair with the sticky right-0 cells on
+          both <th> and <td> below. */}
+      <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+        <table className="min-w-full border-separate border-spacing-0 text-[13px]">
           <thead className="bg-slate-50 text-left text-[11.5px] font-semibold uppercase tracking-wide text-slate-500">
             <tr>
               <th className="px-3 py-2">Carrier</th>
@@ -163,7 +166,7 @@ export default function CarrierShippingLimitsPage() {
               <th className="px-3 py-2 text-right">Free declared $</th>
               <th className="px-3 py-2">Status</th>
               <th className="px-3 py-2">Notes</th>
-              <th className="px-3 py-2 text-right">Actions</th>
+              <th className="sticky right-0 bg-slate-50 px-3 py-2 text-right shadow-[-8px_0_8px_-8px_rgba(15,23,42,0.15)]">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -172,7 +175,7 @@ export default function CarrierShippingLimitsPage() {
             ) : filtered.length === 0 ? (
               <tr><td colSpan={11} className="px-3 py-6 text-center text-slate-500">No limit rows.</td></tr>
             ) : filtered.map((r) => (
-              <tr key={r.id} className={r.active ? '' : 'bg-slate-50/50 text-slate-400'}>
+              <tr key={r.id} className={r.active ? 'bg-white' : 'bg-slate-50 text-slate-400'}>
                 <td className="px-3 py-2 font-mono">{r.carrierCode}</td>
                 <td className="px-3 py-2 font-mono">{r.serviceCode ?? <span className="text-slate-400">(default)</span>}</td>
                 <td className="px-3 py-2">
@@ -199,7 +202,7 @@ export default function CarrierShippingLimitsPage() {
                 <td className="max-w-[200px] truncate px-3 py-2 text-slate-600" title={r.notes ?? ''}>
                   {r.notes ?? ''}
                 </td>
-                <td className="px-3 py-2 text-right whitespace-nowrap">
+                <td className="sticky right-0 bg-inherit px-3 py-2 text-right whitespace-nowrap shadow-[-8px_0_8px_-8px_rgba(15,23,42,0.15)]">
                   <button
                     onClick={() => setEditing(r)}
                     className="mr-1 rounded-md border border-slate-300 px-2 py-1 text-[12px] hover:bg-slate-50"
@@ -314,6 +317,22 @@ function CarrierShippingLimitEditorDialog({ row, onClose, onSaved }: EditorProps
   const validate = (): string | null => {
     if (!carrierCode.trim()) return 'Carrier code is required.'
     if (carrierCode.length > 32) return 'Carrier code must be 32 chars or fewer.'
+    // BUG-095 — carrier code was a free-text box, so 'qa1013r5' saved as
+    // QA1013R5 and sat as an Active row that never applied. Require the
+    // code to match a known carrier.
+    const KNOWN_CARRIERS = ['UPS', 'FEDEX', 'USPS', 'DHL', 'STAMPS_COM', 'USPS_DIRECT']
+    if (!KNOWN_CARRIERS.includes(carrierCode.trim().toUpperCase())) {
+      return `Unknown carrier code '${carrierCode.trim()}'. Known: ${KNOWN_CARRIERS.join(', ')}.`
+    }
+    // BUG-096 — 'Effective until' was accepted as a past date, so the row
+    // was active in the grid yet already expired. Require it to be in the
+    // future. effectiveFrom isn't operator-editable in this form.
+    if (effectiveUntil.trim()) {
+      const until = new Date(effectiveUntil)
+      if (!Number.isNaN(until.getTime()) && until.getTime() < Date.now()) {
+        return 'Effective until must be a future date.'
+      }
+    }
     if (!scope) return 'Scope is required.'
     const pkgs = Number(maxPackages)
     if (!Number.isInteger(pkgs) || pkgs < 1 || pkgs > 9999) {

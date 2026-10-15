@@ -199,7 +199,10 @@ describe('ClientEditorPage · Identity · positive', () => {
     expect(screen.getByRole('option', { name: 'USD' })).toBeTruthy()
     expect(screen.getByRole('option', { name: 'LB (pounds)' })).toBeTruthy()
     expect(screen.getByRole('option', { name: 'IN (inches)' })).toBeTruthy()
-    expect(screen.getByRole('option', { name: 'US — United States' })).toBeTruthy()
+    // BUG-046 R6: Origin country is now the shared CountrySelect
+    // (searchable combobox, not a native <select>). The field is
+    // present as a text input with the shared placeholder.
+    expect(screen.getByPlaceholderText(/Search country…/i)).toBeTruthy()
   }, 30000)
 
   it('uppercases clientCode as the operator types (abc-123 → ACME-123)', async () => {
@@ -237,27 +240,26 @@ describe('ClientEditorPage · Identity · positive', () => {
     })
   })
 
-  it('Currency / weight / dim / origin-country selects update on choose', async () => {
+  it('Currency / weight / dim selects update on choose', async () => {
     const Page = await loadPage()
     renderCreate(Page)
     const user = userEvent.setup()
 
-    // The four Defaults selects share role=combobox. Pluck them by the option
-    // set each one carries — every value list is disjoint.
+    // The three native Defaults selects share role=combobox. Pluck them
+    // by the option set each one carries — every value list is disjoint.
+    // BUG-046 R6: Origin country is now CountrySelect (searchable combobox);
+    // its own test slice covers the pick flow.
     const currency = screen.getByRole('option', { name: 'USD' }).closest('select') as HTMLSelectElement
     const weight = screen.getByRole('option', { name: 'LB (pounds)' }).closest('select') as HTMLSelectElement
     const dim = screen.getByRole('option', { name: 'IN (inches)' }).closest('select') as HTMLSelectElement
-    const origin = screen.getByRole('option', { name: 'US — United States' }).closest('select') as HTMLSelectElement
 
     await user.selectOptions(currency, 'USD')
     await user.selectOptions(weight, 'KG')
     await user.selectOptions(dim, 'CM')
-    await user.selectOptions(origin, 'CA')
 
     expect(currency.value).toBe('USD')
     expect(weight.value).toBe('KG')
     expect(dim.value).toBe('CM')
-    expect(origin.value).toBe('CA')
   })
 
   it('timezone combobox opens on focus, filters on type, commits a pick', async () => {
@@ -344,16 +346,18 @@ describe('ClientEditorPage · Identity · edit mode', () => {
     await waitFor(() => expect(screen.getByPlaceholderText('MA1885')).toBeTruthy())
 
     // Pluck each select by an option unique to that dropdown, then check
-    // its current selected value.
+    // its current selected value. BUG-046 R6: Origin country is now
+    // CountrySelect (searchable combobox); the selected country name
+    // appears as the input value.
     const currency = screen.getByRole('option', { name: 'USD' }).closest('select') as HTMLSelectElement
     const weight = screen.getByRole('option', { name: 'LB (pounds)' }).closest('select') as HTMLSelectElement
     const dim = screen.getByRole('option', { name: 'IN (inches)' }).closest('select') as HTMLSelectElement
-    const origin = screen.getByRole('option', { name: 'US — United States' }).closest('select') as HTMLSelectElement
+    const originInput = screen.getByPlaceholderText(/Search country…/i) as HTMLInputElement
 
     expect(currency.value).toBe('EUR')
     expect(weight.value).toBe('KG')
     expect(dim.value).toBe('CM')
-    expect(origin.value).toBe('GB')
+    expect(originInput.value).toContain('GB')
 
     // Timezone combobox displays the committed value when closed.
     const tzInput = screen.getByPlaceholderText(/Search e.g\. New_York/i) as HTMLInputElement

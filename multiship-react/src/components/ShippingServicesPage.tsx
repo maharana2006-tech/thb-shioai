@@ -576,25 +576,36 @@ export default function ShippingServicesPage({ active = true }: { active?: boole
             {/* Sprint 52 PR X — Allow branded packaging toggle. OFF hides
                 every kind=CARRIER preset from the list AND persists
                 branded_packaging_allowed=false so the manual-shipment
-                dropdown + guard treat this service as CUSTOM-only. */}
-            <label
-              className="mt-3 flex items-start gap-2.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[12px]"
-              title="Ground-family services (FEDEX_GROUND, UPS 03, USPS Ground Advantage) typically don't accept carrier-branded packaging. Turning this OFF hides FEDEX_ENVELOPE / UPS boxes / etc from the list and prevents operators from picking them on a shipment."
-            >
-              <input
-                type="checkbox"
-                checked={pkgBrandedAllowed}
-                onChange={(e) => setPkgBrandedAllowed(e.target.checked)}
-                data-testid="branded-packaging-toggle"
-                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-slate-950 focus:ring-slate-300"
-              />
-              <div className="min-w-0 flex-1">
-                <p className="font-semibold text-slate-900">Allow branded packaging</p>
-                <p className="text-[10.5px] text-slate-500">
-                  When off, only custom boxes are shown below — matches the FedEx / UPS / USPS rule that ground-family services don't accept branded packaging. Manual shipment will filter branded options out for this service too.
-                </p>
-              </div>
-            </label>
+                dropdown + guard treat this service as CUSTOM-only.
+                BUG-089 — hide the toggle entirely for ground-family
+                services; branded packaging is never allowed on Ground
+                per the carriers' own rule, so showing a toggle that
+                looks switchable misleads admins. The screen's rule
+                text is enforced instead of merely suggested. */}
+            {!/\bground\b/i.test(pkgService?.name ?? '') ? (
+              <label
+                className="mt-3 flex items-start gap-2.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[12px]"
+                title="Ground-family services (FEDEX_GROUND, UPS 03, USPS Ground Advantage) typically don't accept carrier-branded packaging. Turning this OFF hides FEDEX_ENVELOPE / UPS boxes / etc from the list and prevents operators from picking them on a shipment."
+              >
+                <input
+                  type="checkbox"
+                  checked={pkgBrandedAllowed}
+                  onChange={(e) => setPkgBrandedAllowed(e.target.checked)}
+                  data-testid="branded-packaging-toggle"
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-slate-950 focus:ring-slate-300"
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold text-slate-900">Allow branded packaging</p>
+                  <p className="text-[10.5px] text-slate-500">
+                    When off, only custom boxes are shown below — matches the FedEx / UPS / USPS rule that ground-family services don't accept branded packaging. Manual shipment will filter branded options out for this service too.
+                  </p>
+                </div>
+              </label>
+            ) : (
+              <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11.5px] text-amber-800">
+                Ground-family services don't accept branded packaging — only custom boxes are allowed.
+              </p>
+            )}
             {(() => {
               const lim = limitsOf(pkgService)
               return (

@@ -67,7 +67,14 @@ export default function CustomFieldsPage() {
 
   const del = async (def: CustomFieldDefinition) => {
     if (!def.id) return
-    if (!window.confirm(`Delete definition "${def.label}"? Historic values remain on orders but no new values can be captured.`)) return
+    // BUG-075 R6 — swap the browser's native confirm box for the in-app
+    // dialog used by the rest of Settings (same shape as the Importer /
+    // Broker discard dialog).
+    const ok = await notify.confirm(
+      `Delete definition "${def.label}"? Historic values remain on orders but no new values can be captured.`,
+      { title: 'Delete custom field', confirmLabel: 'Delete', danger: true },
+    )
+    if (!ok) return
     await customFieldService.remove(def.id)
     notify.success('Definition deleted.')
     refresh()
@@ -75,7 +82,7 @@ export default function CustomFieldsPage() {
 
   const tenantOptions = useMemo(
     () => [
-      { value: PLATFORM, label: 'Platform-wide (all tenants)' },
+      { value: PLATFORM, label: 'Platform-wide (all clients)' },
       ...clients.map((c) => ({ value: c.clientCode, label: `${c.clientCode} — ${c.name}` })),
     ],
     [clients],
@@ -86,7 +93,7 @@ export default function CustomFieldsPage() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-[260px]">
           <label className="mb-1 block text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-500">
-            Tenant scope
+            Client scope
           </label>
           <Select value={tenantId} onChange={(e) => setTenantId(e.target.value || PLATFORM)}>
             {tenantOptions.map((o) => (
@@ -294,9 +301,19 @@ function CustomFieldEditorModal({
               ref={firstInputRef}
               type="text"
               value={draft.fieldKey}
-              onChange={(e) => update('fieldKey', e.target.value.trim())}
+              // BUG-112 — the field used to accept any character and only
+              // stripped spaces, so 'QA Field!' saved as 'QAField!' with
+              // the exclamation preserved. Force snake_case on input:
+              // lowercase, letters/digits/underscore only, spaces → '_'.
+              onChange={(e) => update('fieldKey',
+                e.target.value
+                  .toLowerCase()
+                  .replace(/\s+/g, '_')
+                  .replace(/[^a-z0-9_]/g, ''),
+              )}
               placeholder="po_number"
               className={input}
+              maxLength={60}
             />
             <p className="mt-1 text-[11px] text-slate-400">snake_case. Immutable once orders reference it.</p>
           </div>

@@ -203,9 +203,13 @@ function seedDraftOnImporterStep(overrides: Record<string, unknown> = {}) {
     selectedShipFromWarehouseId: 1,
     visitedSteps: ['identity', 'shipFrom', 'return', 'carriers', 'mapping', 'importerBroker', 'summary'],
     activeStep: 'importerBroker',
+    // BUG-138 — carriersStepComplete now requires every staged draft to
+    // carry non-blank clientId AND clientSecret or Submit stays disabled;
+    // seed stub values so the importer-broker tests reach Submit.
     carrierDrafts: [{
       id: 1, carrierCode: 'UPS', accountNumber: 'A1', accountName: 'Main',
-      clientId: '', clientSecret: '', environment: 'PROD', clientDefault: true,
+      clientId: 'test-client-id', clientSecret: 'test-client-secret',
+      environment: 'PROD', clientDefault: true,
       shippingPurpose: '', clearanceOption: '',
       thirdPartyAccount: '', thirdPartyName: '', thirdPartyAddress1: '',
       thirdPartyCity: '', thirdPartyState: '', thirdPartyPostcode: '', thirdPartyCountry: '',

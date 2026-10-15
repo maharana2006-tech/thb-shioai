@@ -52,6 +52,16 @@ public class CutoffAdminController {
         req.setId(null);
         req.setUpdatedBy(actor(auth));
         if (req.getCutoffTime() == null) req.setCutoffTime(DEFAULT_CUTOFF);
+        // BUG-099 R6: pre-validate FK so the operator sees the actual
+        // offending field name instead of the GlobalExceptionHandler's
+        // generic "references something that doesn't exist". The FE dropdown
+        // already blocks unknown ids via BUG-101, but a direct API call
+        // can still send one.
+        if (req.getWarehouseId() != null
+                && !warehouseRepo.existsById(req.getWarehouseId())) {
+            throw new IllegalArgumentException(
+                    "warehouseId " + req.getWarehouseId() + " doesn't match any warehouse.");
+        }
         return ok(ruleRepo.save(req));
     }
 

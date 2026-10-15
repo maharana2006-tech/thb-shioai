@@ -26,7 +26,7 @@ const TAB_META: Record<
 > = {
   SHIPVIA: {
     label: 'Shipvia',
-    blurb: 'ERP ship-method → carrier service. Direct alias — skips ShipViaMapping rules.',
+    blurb: 'ERP ship-method → carrier service. Direct alias that is used as-is without any further rule lookup.',
     codeLabel: 'ERP shipvia code',
     codePlaceholder: 'P80',
     targetLabel: 'Platform service',
@@ -257,8 +257,16 @@ export default function CodeMapsPage({ initialClientFilter, embedded = false }: 
                 allowedPresetIds,
               } : {}),
             }
+      // BUG-093 — pre-fix a duplicate ERP code silently replaced the
+      // existing mapping and the success toast gave no clue. Check
+      // whether the ERP code already has a row for this client (same
+      // tab) BEFORE firing upsert; adjust the toast wording so the
+      // operator sees 'updated' vs 'added'.
+      const replacing = rows.some((r) => (r.erpCode ?? '').toLowerCase() === erpCode.trim().toLowerCase())
       await clientCodeMapService.upsert(selectedClient, tab, payload)
-      notify.success(`${TAB_META[tab].label} alias saved.`)
+      notify.success(replacing
+        ? `${TAB_META[tab].label} alias for '${erpCode.trim()}' updated — previous target replaced.`
+        : `${TAB_META[tab].label} alias saved.`)
       setErpCode(''); setTargetId(''); setIso2('')
       setDestCountry(''); setDestRegion('')
       setWarehouseId(''); setAllowedPresetIds([])
@@ -451,6 +459,7 @@ export default function CodeMapsPage({ initialClientFilter, embedded = false }: 
                 value={erpCode}
                 onChange={(e) => setErpCode(e.target.value)}
                 placeholder={meta.codePlaceholder}
+                maxLength={40}
                 className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15]"
               />
             </div>

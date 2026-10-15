@@ -100,7 +100,8 @@ export default function ReturnsAnalyticsPage() {
           <div className="text-right text-[11px] text-slate-500">
             {sinceDate ? <>Since {sinceDate}</> : null}
             <div className="font-mono text-[14px] font-bold text-slate-800">
-              {grandTotal.toLocaleString()} returns
+              {/* BUG-106 — '1 returns' is grammatically wrong on singular */}
+              {grandTotal.toLocaleString()} {grandTotal === 1 ? 'return' : 'returns'}
             </div>
           </div>
         </div>

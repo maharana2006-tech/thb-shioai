@@ -218,9 +218,11 @@ describe('CarrierConnections · list', () => {
     expect(screen.getByText(/Platform accounts/i)).toBeInTheDocument()
     expect(screen.getByText(/Client accounts/i)).toBeInTheDocument()
 
-    // Ready = active && complete → 3 of 4 (DHL row is inactive).
-    // The value renders as "3/4" inside the Ready tile.
-    expect(screen.getByText('3/4')).toBeInTheDocument()
+    // BUG-054: Ready = active && complete && verified === true (strict).
+    // Fixture 1 is the only row that meets all three (UPS verified=true,
+    // active=true, complete=true). Fixture 2 is verified=false, fixture 3
+    // verified=null, fixture 4 active=false — none counted. 1/4.
+    expect(screen.getByText('1/4')).toBeInTheDocument()
   }, 20000)
 
   it('empty account book → shows the empty-state message', async () => {

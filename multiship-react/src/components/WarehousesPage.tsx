@@ -199,7 +199,11 @@ export default function WarehousesPage() {
               {w.address?.city ? (
                 <p className="text-[11.5px] text-slate-500">
                   {w.address.city}
-                  {w.address.state ? `, ${w.address.state}` : ''}
+                  {/* BUG-079 R6: input forces uppercase on edit (6754690c)
+                      but legacy rows persisted with 'il' still display
+                      lowercase in the grid. Upper-case at render too so
+                      the grid matches what carriers expect. */}
+                  {w.address.state ? `, ${w.address.state.toUpperCase()}` : ''}
                 </p>
               ) : null}
             </div>

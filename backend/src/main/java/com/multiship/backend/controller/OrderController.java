@@ -1452,9 +1452,15 @@ public class OrderController {
     @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
     @GetMapping(value = "/{orderNo}/packing-slip",
             produces = org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
-    public ResponseEntity<byte[]> getPackingSlip(@PathVariable Integer orderNo) {
+    public ResponseEntity<byte[]> getPackingSlip(
+            @PathVariable Integer orderNo,
+            // BUG-109 — Settings > Templates > Preview passes templateId so
+            // an admin previews THIS template on the order's data, not
+            // whatever the order's own client resolves to. Blank/absent =
+            // per-order resolution (regular order-view path).
+            @RequestParam(value = "templateId", required = false) Long templateId) {
         try {
-            byte[] pdf = packingSlipService.render(orderNo);
+            byte[] pdf = packingSlipService.renderWithTemplate(orderNo, templateId);
             return ResponseEntity.ok()
                     .header("Content-Disposition",
                             "inline; filename=packing-slip-" + orderNo + ".pdf")

@@ -173,7 +173,7 @@ describe('CustomFieldsPage — error path', () => {
     // Tenant scope picker still renders (Platform-wide default) even
     // when the client list fetch fails.
     await waitFor(() =>
-      expect(screen.getByText(/Tenant scope/i)).toBeInTheDocument(),
+      expect(screen.getByText(/Client scope/i)).toBeInTheDocument(),
     )
     // apiError was NOT called for the client-fetch failure.
     expect(notifyApiErrorMock).not.toHaveBeenCalledWith(
@@ -196,8 +196,8 @@ describe('CustomFieldsPage — empty state', () => {
       expect(screen.queryByText(/Loading definitions…/i)).not.toBeInTheDocument(),
     )
     // Tenant scope selector is visible (mount survived).
-    expect(screen.getByText(/Tenant scope/i)).toBeInTheDocument()
-    // The default tenant scope option is 'Platform-wide (all tenants)'.
+    expect(screen.getByText(/Client scope/i)).toBeInTheDocument()
+    // The default scope option is 'Platform-wide (all clients)'.
     expect(screen.getByRole('option', { name: /Platform-wide/i })).toBeInTheDocument()
   })
 })
@@ -215,7 +215,7 @@ describe('CustomFieldsPage — role parity (no useAppSession import)', () => {
       renderPage(Page)
 
       await waitFor(() => expect(listMock).toHaveBeenCalledTimes(1))
-      expect(screen.getByText(/Tenant scope/i)).toBeInTheDocument()
+      expect(screen.getByText(/Client scope/i)).toBeInTheDocument()
     },
   )
 })

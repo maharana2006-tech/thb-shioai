@@ -528,7 +528,7 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
                   maxLength={FIELD_LIMITS.addr.city} aria-invalid={err('city') ? true : undefined} className={inputCls('city')} />
               </Field>
               <Field label="State / region" required error={err('state')}>
-                <input value={state} onChange={(e) => setState(e.target.value)} onBlur={() => markTouched('state')}
+                <input value={state} onChange={(e) => setState(e.target.value.toUpperCase())} onBlur={() => markTouched('state')}
                   maxLength={FIELD_LIMITS.addr.state} aria-invalid={err('state') ? true : undefined} className={inputCls('state')} />
               </Field>
               <Field label="Postal code" required error={err('zip')}>
@@ -633,8 +633,15 @@ function VerifyResultPanel({
       : level === 'CORRECTED' || level === 'AMBIGUOUS'
         ? FiAlertTriangle
         : FiXCircle
+  // BUG-081 — pre-fix every NOT_SUPPORTED headline read 'Verification
+  // not supported for this country' even when the real reason was
+  // missing carrier credentials (which the sub-text already names).
+  // Branch on the message: if it mentions 'credential', say so; else
+  // keep the country wording.
+  const credsMissing = typeof result.message === 'string'
+      && /no live credentials|credential/i.test(result.message)
   const prettyStatus = level === 'NOT_SUPPORTED'
-    ? 'Verification not supported for this country'
+    ? (credsMissing ? 'Carrier credentials not configured' : 'Verification not supported for this country')
     : level
 
   return (

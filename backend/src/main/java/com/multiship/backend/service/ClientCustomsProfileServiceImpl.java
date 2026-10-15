@@ -230,10 +230,42 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
         if (p.getBrokerName() != null) hay.append(p.getBrokerName()).append(' ');
         if (p.getBrokerCompany() != null) hay.append(p.getBrokerCompany()).append(' ');
         for (com.multiship.backend.model.CustomsProfileCountry link : p.getCountryLinks()) {
-            if (link.getCountry() != null) hay.append(link.getCountry()).append(' ');
+            if (link.getCountry() != null) {
+                hay.append(link.getCountry()).append(' ');
+                // BUG-105 — search by country NAME ('canada', 'mexico'),
+                // not just the ISO code already appended above. The box
+                // label promises 'Search client, country, importer, broker';
+                // without the full name 'canada' matched 0 profiles.
+                String fullName = COUNTRY_NAMES.get(link.getCountry().toUpperCase(Locale.ROOT));
+                if (fullName != null) hay.append(fullName).append(' ');
+            }
         }
         return hay.toString().toLowerCase(Locale.ROOT).contains(needle);
     }
+
+    /** BUG-105 — common country name map so the search finds profiles by
+     *  'canada' / 'mexico' etc. Not exhaustive — covers the lanes
+     *  Multiship actually ships to today. Expand as new lanes land. */
+    private static final Map<String, String> COUNTRY_NAMES = Map.ofEntries(
+            Map.entry("US", "United States"),
+            Map.entry("CA", "Canada"),
+            Map.entry("MX", "Mexico"),
+            Map.entry("GB", "United Kingdom"),
+            Map.entry("DE", "Germany"),
+            Map.entry("FR", "France"),
+            Map.entry("IT", "Italy"),
+            Map.entry("ES", "Spain"),
+            Map.entry("NL", "Netherlands"),
+            Map.entry("AU", "Australia"),
+            Map.entry("NZ", "New Zealand"),
+            Map.entry("JP", "Japan"),
+            Map.entry("CN", "China"),
+            Map.entry("HK", "Hong Kong"),
+            Map.entry("SG", "Singapore"),
+            Map.entry("IN", "India"),
+            Map.entry("AE", "United Arab Emirates"),
+            Map.entry("BR", "Brazil")
+    );
 
     private Comparator<ClientCustomsProfileDTO> profileComparator(String sortBy, String sortDirection) {
         Comparator<ClientCustomsProfileDTO> cmp;

@@ -185,7 +185,7 @@ describe('LabelTemplatesListPage — empty state', () => {
     // #327 — findByText polls, so the empty-state render settles after
     // the loading-off waitFor without racing the state commit.
     expect(
-      await screen.findByText(/No templates yet — add the platform default or a tenant override/i),
+      await screen.findByText(/No templates yet — add the platform default or a client override/i),
     ).toBeInTheDocument()
   })
 })
@@ -209,7 +209,7 @@ describe('LabelTemplatesListPage — role parity for shell + list load', () => {
       // queue drained; subsequent runs on the same commit passed, so the
       // issue was timing not logic. Role parity still fully covered.
       expect(
-        await screen.findByText(/No templates yet — add the platform default or a tenant override/i),
+        await screen.findByText(/No templates yet — add the platform default or a client override/i),
       ).toBeInTheDocument()
     },
   )

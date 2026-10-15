@@ -86,7 +86,21 @@ public class CustomFieldServiceImpl implements CustomFieldService {
             throw new IllegalArgumentException("SELECT fields require selectOptions");
         }
         LocalDateTime now = LocalDateTime.now();
-        if (d.getId() == null) d.setCreatedAt(now);
+        // BUG-111 — on edit the FE doesn't send createdAt back, so d.createdAt
+        // is null. defRepo.save() does a merge-write which stamps NULL into
+        // the NOT NULL created_at column and the whole request bombs with a
+        // DataIntegrityViolation ('null value in column "created_at" violates
+        // not-null constraint'). Load the existing row and preserve its
+        // created_at + original tenant_id (the tenantId-clamp above may
+        // have narrowed it) so UPDATE goes through cleanly.
+        if (d.getId() != null) {
+            defRepo.findById(d.getId()).ifPresent(existing -> {
+                if (d.getCreatedAt() == null) d.setCreatedAt(existing.getCreatedAt());
+            });
+            if (d.getCreatedAt() == null) d.setCreatedAt(now);
+        } else {
+            d.setCreatedAt(now);
+        }
         d.setUpdatedAt(now);
         return defRepo.save(d);
     }

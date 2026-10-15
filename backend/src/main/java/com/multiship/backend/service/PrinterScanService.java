@@ -57,10 +57,28 @@ public class PrinterScanService {
      * warehouses can enroll N agents. A duplicate throws
      * {@link IllegalStateException} so the caller returns 409.
      */
+    /** BUG-117 — agent id + hostname patterns. The pre-fix enroll accepted
+     *  'QA 1013 R5 <b>sc</b>' and 'not a host!' which, while not injected
+     *  (the FE output-encodes everything), ended up on screen as the
+     *  tenant's visible agent id. Lock to alphanumerics + hyphen + '.' and
+     *  '_' so operators can't paste HTML or spaces into either field. */
+    private static final java.util.regex.Pattern AGENT_ID_PATTERN =
+            java.util.regex.Pattern.compile("^[A-Za-z0-9._-]{1,100}$");
+    private static final java.util.regex.Pattern HOSTNAME_PATTERN =
+            java.util.regex.Pattern.compile("^[A-Za-z0-9._:-]{0,255}$");
+
     @Transactional
     public EnrollResult enrollAgent(String tenantCode, String agentId, String hostname, String enrolledBy) {
         if (!StringUtils.hasText(tenantCode) || !StringUtils.hasText(agentId)) {
             throw new IllegalArgumentException("tenantCode + agentId are required.");
+        }
+        if (!AGENT_ID_PATTERN.matcher(agentId).matches()) {
+            throw new IllegalArgumentException(
+                    "Agent id must be 1-100 letters, digits, '.', '-' or '_'. No spaces or symbols.");
+        }
+        if (StringUtils.hasText(hostname) && !HOSTNAME_PATTERN.matcher(hostname).matches()) {
+            throw new IllegalArgumentException(
+                    "Hostname must be a plain host or IP (letters, digits, '.', '-', '_', ':').");
         }
         Optional<PrinterScanAgent> existing = agentRepository.findByTenantCodeAndAgentId(tenantCode, agentId);
         if (existing.isPresent() && Boolean.TRUE.equals(existing.get().getActive())) {

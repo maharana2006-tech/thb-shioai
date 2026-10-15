@@ -106,11 +106,12 @@ export default function ExternalSystemsPage() {
             External systems
           </h2>
           <p className="mt-1 text-[12.5px] text-slate-500">
-            DB-driven connections to systems outside multiship: Oracle WMS (NDS today),
-            REST integrations, SFTP, etc. Registered connectors:{' '}
-            <span className="font-mono text-[11px]">
-              {connectors.length ? connectors.map((c) => c.systemType).join(', ') : '—'}
-            </span>
+            Connections to systems outside Multiship — Oracle WMS, REST, SFTP.
+            Supported types: {connectors.length
+              ? connectors
+                  .map((c) => c.systemType.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (ch) => ch.toUpperCase()))
+                  .join(', ')
+              : '—'}.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -169,7 +170,7 @@ export default function ExternalSystemsPage() {
                         </span>
                         {row.environment === 'PROD' && row.useDev ? (
                           <span
-                            title="use_dev=true — resolver hands the DEV row back to consumers"
+                            title="This production row is routed to its matching DEV row."
                             className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[9.5px] font-semibold text-amber-800 ring-1 ring-amber-200"
                           >
                             → DEV
@@ -572,9 +573,11 @@ function MainTab({
           onChange={(e) => setSystemType(e.target.value)}
           className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-[13px] focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
         >
+          {/* BUG-061 R6 — hide the Java config class name; keep only the
+              operator-facing system type. */}
           {connectors.map((c) => (
             <option key={c.systemType} value={c.systemType}>
-              {c.systemType} — {c.configType}
+              {c.systemType.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (ch) => ch.toUpperCase())}
             </option>
           ))}
         </select>
@@ -623,7 +626,7 @@ function MainTab({
             className="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-300"
           />
           <span className="text-[12.5px] font-semibold text-slate-800">Use DEV environment</span>
-          <span className="text-[11px] text-slate-500">— resolver hands the DEV row back to consumers. Requires a DEV row with the same name.</span>
+          <span className="text-[11px] text-slate-500">— when on, this production row is routed to its matching DEV row. Requires a DEV row with the same name.</span>
         </label>
       ) : null}
 

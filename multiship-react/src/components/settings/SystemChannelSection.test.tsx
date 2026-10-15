@@ -106,12 +106,12 @@ describe('SystemChannelSection', () => {
     )
     expect(notifySuccessMock).toHaveBeenCalled()
 
-    // Post-save: the banner ("hasn't picked its order channels yet")
-    // is gone; the header still mentions the errorCode as reference.
+    // Post-save: the "hasn't picked its order channels yet" banner is
+    // gone. BUG-061 scrubbed the raw TENANT_CHANNEL_NOT_ENABLED error
+    // code from the UI, so we no longer assert that it's rendered.
     await waitFor(() =>
       expect(screen.queryByText(/hasn't picked its order channels yet/i)).not.toBeInTheDocument()
     )
-    expect(screen.getAllByText(/TENANT_CHANNEL_NOT_ENABLED/)).toHaveLength(1)
   })
 
   it('marks the stored option with SAVED and disables Save until the picker changes', async () => {

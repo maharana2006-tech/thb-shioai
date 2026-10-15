@@ -12,6 +12,7 @@ import {
   type SchedulerWindow,
 } from '../api/dtcSchedulerService'
 import { dtcService } from '../api/dtcService'
+import { clientService } from '../api/clientService'
 import { notify } from '../utils/notify'
 
 /**
@@ -187,10 +188,19 @@ export default function DtcSchedulerPage() {
   }, [outlet, refresh])
 
   // Tenant choices for the label job's tenant picker.
+  // BUG-124 — pre-fix this called dtcService.orderTenants() which polls
+  // the DTC source system (Oracle NDS) and returned only 'ARHDEV', a
+  // code that doesn't exist in Multiship. Use the Multiship clients
+  // list so the picker offers only real tenants the scheduler can
+  // actually generate labels for.
   const [tenants, setTenants] = useState<string[]>([])
   useEffect(() => {
-    dtcService.orderTenants()
-      .then((r) => setTenants((r.data ?? []).filter((t): t is string => !!t)))
+    clientService.listClients({ page: 0, size: 100, sortBy: 'code' })
+      .then((r) => setTenants(
+        (r.data?.content ?? [])
+          .map((c) => c.clientCode)
+          .filter((t): t is string => !!t),
+      ))
       .catch(() => {})
   }, [])
 
@@ -548,8 +558,14 @@ export default function DtcSchedulerPage() {
                 ) : null}
               </div>
               <div className="flex items-center gap-2">
+                {/* BUG-061 R6 — rows seeded by platform migrations store the
+                    migration id (V132, V134, …) as updatedBy. Operators don't
+                    need to see internal version tags, so show a plain hint. */}
                 {job.updatedBy ? (
-                  <span className="text-[11px] text-slate-400">Last changed by {job.updatedBy} · {fmtDateTime(job.updatedAt)}</span>
+                  <span className="text-[11px] text-slate-400">
+                    Last changed by {/^V\d+$/i.test(job.updatedBy) ? 'platform (default)' : job.updatedBy}
+                    {' · '}{fmtDateTime(job.updatedAt)}
+                  </span>
                 ) : null}
                 <button type="button" className={btnCls} disabled={!dirty} onClick={() => discardJob(job.jobKey)}>
                   Discard

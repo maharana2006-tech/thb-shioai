@@ -76,7 +76,18 @@ export default function SystemChannelSection() {
         // is rare and the operator can type-search on the browser side.
         const res = await clientService.listClients({ page: 0, size: 100, sortBy: 'code' })
         if (cancelled) return
-        setClients(res.data?.content ?? [])
+        const loaded = res.data?.content ?? []
+        setClients(loaded)
+        // BUG-147 — if the remembered tenant was deleted, the picker
+        // showed '- pick a tenant -' but the warning + Save targeted
+        // the deleted code. Clear the sticky value if the client no
+        // longer exists so the page reflects reality.
+        setTenantCode((cur) => {
+          if (!cur) return cur
+          const stillExists = loaded.some((c) => c.clientCode?.toUpperCase() === cur.toUpperCase())
+          if (!stillExists) writeLastTenant('')
+          return stillExists ? cur : ''
+        })
       } catch (e) {
         if (!cancelled) notify.apiError(e, 'Could not load the client list.')
       }
@@ -141,13 +152,13 @@ export default function SystemChannelSection() {
     <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <header className="mb-3">
         <h3 className="text-[15px] font-semibold text-slate-950">Order channels</h3>
+        {/* BUG-061 — scrub the raw TENANT_CHANNEL_NOT_ENABLED error code
+            from the description. Operators don't need to know the wire
+            code; the key message is 'pick B2B / D2C / both before this
+            client can accept orders'. */}
         <p className="mt-0.5 text-[12.5px] text-slate-500">
-          Which order types the tenant accepts on the external API + WMS pull.
-          Unconfigured tenants reject all intake with 403
-          <span className="ml-1 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-slate-700">
-            TENANT_CHANNEL_NOT_ENABLED
-          </span>
-          .
+          Pick which order types each client accepts on the external API + WMS pull. Clients
+          with no choice saved can't accept intake until an admin configures them here.
         </p>
       </header>
 
@@ -176,12 +187,12 @@ export default function SystemChannelSection() {
           <FiAlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" aria-hidden />
           <div className="text-[12.5px] text-amber-900">
             <p className="font-semibold">
-              This tenant hasn't picked its order channels yet.
+              This client hasn't picked its order channels yet.
             </p>
             <p className="mt-0.5">
               Until you Save a choice below, every external API POST + WMS pull for{' '}
               <span className="font-mono font-semibold">{tenantCode.toUpperCase()}</span>{' '}
-              returns 403 TENANT_CHANNEL_NOT_ENABLED.
+              is refused.
             </p>
           </div>
         </div>

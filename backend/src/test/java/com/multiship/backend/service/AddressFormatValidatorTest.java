@@ -60,7 +60,10 @@ class AddressFormatValidatorTest {
         assertEquals(1, issues.size());
         assertEquals("recipient.state", issues.get(0).getField());
         assertTrue(issues.get(0).getMessage().contains("Delaware"));
-        assertTrue(issues.get(0).getMessage().contains("2-letter code"));
+        // BUG-009: the "2-letter code" phrasing was dropped (MX/AU/BR use
+        // 3-letter codes). The message now points at the official code
+        // via an example.
+        assertTrue(issues.get(0).getMessage().contains("not the full name"));
     }
 
     @Test

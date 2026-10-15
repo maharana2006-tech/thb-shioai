@@ -44,6 +44,7 @@ public class ExternalSystemsAdminController {
     private final ObjectMapper objectMapper;
     private final com.multiship.backend.service.TenantSettingsService tenantSettings;
     private final com.multiship.backend.service.externalsystems.writeback.ExternalSystemWritebackDispatcher writebackDispatcher;
+    private final com.multiship.backend.repository.ClientRepository clientRepository;
 
     // ─── connectors ─────────────────────────────────────────────────
 
@@ -208,11 +209,18 @@ public class ExternalSystemsAdminController {
             @PathVariable Long id, @PathVariable String tenantCode, Authentication auth) {
         ExternalSystemConnection c = config.findById(id).orElseThrow(() ->
                 new IllegalArgumentException("Connection " + id + " not found."));
-        tenantSettings.putSetting(tenantCode.trim(),
+        // BUG-121 R6: V158 only cleans orphans retroactively. Stop new ones
+        // from being created — refuse a routing for a client that doesn't
+        // exist (prevents a typo at the FE from seeding a ghost row).
+        String tc = tenantCode.trim();
+        if (clientRepository.findByClientCodeIgnoreCase(tc).isEmpty()) {
+            throw new IllegalArgumentException("Client " + tc + " was not found.");
+        }
+        tenantSettings.putSetting(tc,
                 com.multiship.backend.service.externalsystems.writeback.ExternalSystemWritebackDispatcher.SETTING_WRITEBACK_CONNECTION,
                 c.getName(), actor(auth));
         return ok(Map.of("connectionId", id, "connectionName", c.getName(),
-                "tenantCode", tenantCode, "isSet", true));
+                "tenantCode", tc, "isSet", true));
     }
 
     @Operation(summary = "Remove this client's writeback routing. "

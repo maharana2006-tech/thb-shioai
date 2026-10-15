@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { FiCheck, FiPrinter, FiX } from 'react-icons/fi'
 import {
   printerService,
@@ -54,7 +55,10 @@ export default function AssignmentMatrix({
    *  to render the mixed L+I cell (R6 behaviour). */
   docType?: PrintDocType
 }) {
-  const [popover, setPopover] = useState<{ client: string | null; printerId: number } | null>(null)
+  // BUG-116 — anchor is the clicked <button> so CellPopover can
+  // portal to document.body and position via its bounding rect, so
+  // the overflow-x-auto grid wrapper no longer clips it.
+  const [popover, setPopover] = useState<{ client: string | null; printerId: number; anchor: HTMLElement } | null>(null)
   const [saving, setSaving] = useState(false)
 
   // Alphabetical printer order for stable column layout.
@@ -175,7 +179,7 @@ export default function AssignmentMatrix({
                   <td key={p.id} className="relative px-3 py-2.5">
                     <button
                       type="button"
-                      onClick={() => setPopover(isPopoverOpen ? null : { client, printerId: p.id })}
+                      onClick={(e) => setPopover(isPopoverOpen ? null : { client, printerId: p.id, anchor: e.currentTarget })}
                       aria-label={`Routing for ${client ?? 'Default'} → ${p.name}`}
                       aria-expanded={isPopoverOpen}
                       className={
@@ -194,8 +198,9 @@ export default function AssignmentMatrix({
                       {!active ? <span className="text-[10px] font-normal">—</span> : null}
                     </button>
 
-                    {isPopoverOpen ? (
+                    {isPopoverOpen && popover ? (
                       <CellPopover
+                        anchor={popover.anchor}
                         clientCode={client}
                         printer={p}
                         hasLabel={rawHasLabel}
@@ -217,8 +222,12 @@ export default function AssignmentMatrix({
   )
 }
 
-/** Popover anchored under the cell button. Click-outside closes it. */
+/** Popover anchored under the cell button. Click-outside closes it.
+ *  BUG-116 — rendered via createPortal to document.body with
+ *  position:fixed, computed from the anchor's bounding rect, so the
+ *  overflow-x-auto grid wrapper no longer clips the popover. */
 function CellPopover({
+  anchor,
   clientCode,
   printer,
   hasLabel,
@@ -228,6 +237,7 @@ function CellPopover({
   onClose,
   onSave,
 }: {
+  anchor: HTMLElement
   clientCode: string | null
   printer: Printer
   hasLabel: boolean
@@ -244,23 +254,54 @@ function CellPopover({
   const invoiceAllowed = printer.format !== 'ZPL'
   const dirty = labels !== hasLabel || invoice !== hasInvoice
 
+  // Position the portal-mounted dialog under the anchor <button>.
+  // Re-measure on scroll/resize so horizontal scroll in the grid
+  // doesn't leave the dialog floating over the wrong cell. Flip
+  // upward if the dialog would clip the viewport bottom.
+  const [pos, setPos] = useState<{ top: number; left: number }>(() => {
+    const r = anchor.getBoundingClientRect()
+    return { top: r.bottom + 4, left: r.left }
+  })
+  useEffect(() => {
+    const place = () => {
+      const r = anchor.getBoundingClientRect()
+      const dh = ref.current?.offsetHeight ?? 240
+      const dw = ref.current?.offsetWidth ?? 256
+      const spaceBelow = window.innerHeight - r.bottom
+      const top = spaceBelow < dh + 8 && r.top > dh + 8 ? r.top - dh - 4 : r.bottom + 4
+      const left = Math.min(Math.max(8, r.left), window.innerWidth - dw - 8)
+      setPos({ top, left })
+    }
+    place()
+    window.addEventListener('scroll', place, true)
+    window.addEventListener('resize', place)
+    return () => {
+      window.removeEventListener('scroll', place, true)
+      window.removeEventListener('resize', place)
+    }
+  }, [anchor])
+
   // Click-outside close. mousedown fires before button click so the
   // outer table's other cell-buttons work as toggle-open on the next
-  // popover without a phantom close-and-reopen.
+  // popover without a phantom close-and-reopen. Also treats clicks
+  // on the anchor itself as "handled by the button" so toggle-close
+  // keeps working.
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
+      const t = e.target as Node
+      if (ref.current && !ref.current.contains(t) && !anchor.contains(t)) onClose()
     }
     document.addEventListener('mousedown', onClick)
     return () => document.removeEventListener('mousedown', onClick)
-  }, [onClose])
+  }, [onClose, anchor])
 
-  return (
+  return createPortal(
     <div
       ref={ref}
       role="dialog"
       aria-label={`Routing for ${clientCode ?? 'Default'} → ${printer.name}`}
-      className="absolute left-0 top-full z-20 mt-1 w-64 rounded-lg border border-slate-200 bg-white p-3 shadow-lg"
+      className="fixed z-50 w-64 rounded-lg border border-slate-200 bg-white p-3 shadow-lg"
+      style={{ top: pos.top, left: pos.left }}
     >
       <p className="text-[11.5px] font-semibold text-slate-500">
         Route which docs from <span className="text-slate-800">{clientCode ?? 'Default'}</span> to <span className="text-slate-800">{printer.name}</span>?
@@ -318,6 +359,7 @@ function CellPopover({
           Save
         </button>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

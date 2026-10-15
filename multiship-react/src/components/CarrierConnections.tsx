@@ -44,6 +44,7 @@ import {
 import {
   SHIPPING_PURPOSES,
   clearanceOptionsForCarrier,
+  labelFormatsForCarrier,
   purposeLabel,
   clearanceLabel,
 } from '../utils/customsOptions'
@@ -1831,9 +1832,9 @@ export default function CarrierConnections({
                       </Select>
                     </Field>
                     <p className="-mt-1 mb-2 text-[10.5px] leading-4 text-slate-400">
-                      Which lanes this carrier account supports return labels on. Domestic
-                      only matches the pre-V95 default. Set to Domestic and international
-                      only when the carrier account actually supports intl returns.
+                      Which lanes this carrier account supports return labels on. Set to
+                      Domestic and international only when the carrier account actually
+                      supports international returns.
                     </p>
                   </div>
 
@@ -1915,12 +1916,14 @@ export default function CarrierConnections({
                           onChange={(e) => setDrawer((c) => ({ ...c, labelImageType: e.target.value || null }))}
                           className={inputClassName}
                         >
+                          {/* BUG-057 R6 — vocab comes from the DB registry
+                              (Settings > Carrier Dropdowns > Label formats),
+                              with LABEL_FORMAT_BY_CARRIER.FEDEX as first-boot
+                              bootstrap. Blank keeps the FedEx carrier default. */}
                           <option value="">PDF (default)</option>
-                          <option value="PDF">PDF (vector, sharp)</option>
-                          <option value="PNG">PNG (raster)</option>
-                          <option value="ZPLII">ZPLII (Zebra)</option>
-                          <option value="EPL2">EPL2 (Eltron/legacy Zebra)</option>
-                          <option value="DPL">DPL (Datamax)</option>
+                          {labelFormatsForCarrier('FEDEX').map((o) => (
+                            <option key={o.value} value={o.value}>{o.label}</option>
+                          ))}
                         </select>
                       </Field>
                       <Field label="Label stock type (FedEx only)">
@@ -1965,12 +1968,11 @@ export default function CarrierConnections({
                           onChange={(e) => setDrawer((c) => ({ ...c, labelImageFormat: e.target.value || null }))}
                           className={inputClassName}
                         >
+                          {/* BUG-057 R6 — vocab from DB registry. */}
                           <option value="">GIF (default)</option>
-                          <option value="GIF">GIF (explicit)</option>
-                          <option value="PDF">PDF (vector, sharp)</option>
-                          <option value="PNG">PNG (raster)</option>
-                          <option value="ZPL">ZPL (Zebra)</option>
-                          <option value="EPL">EPL (Eltron/legacy Zebra)</option>
+                          {labelFormatsForCarrier('UPS').map((o) => (
+                            <option key={o.value} value={o.value}>{o.label}</option>
+                          ))}
                         </select>
                       </Field>
                       <p className="-mt-1 mb-2 text-[10.5px] leading-4 text-slate-400">
@@ -1990,9 +1992,11 @@ export default function CarrierConnections({
                           onChange={(e) => setDrawer((c) => ({ ...c, labelImageFormat: e.target.value || null }))}
                           className={inputClassName}
                         >
+                          {/* BUG-057 R6 — vocab from DB registry. */}
                           <option value="">PDF (default)</option>
-                          <option value="PDF">PDF (label + A4 doc)</option>
-                          <option value="ZPL">ZPL (thermal label only)</option>
+                          {labelFormatsForCarrier('DHL').map((o) => (
+                            <option key={o.value} value={o.value}>{o.label}</option>
+                          ))}
                         </select>
                       </Field>
                       <p className="-mt-1 mb-2 text-[10.5px] leading-4 text-slate-400">
@@ -2010,11 +2014,11 @@ export default function CarrierConnections({
                           onChange={(e) => setDrawer((c) => ({ ...c, labelImageFormat: e.target.value || null }))}
                           className={inputClassName}
                         >
+                          {/* BUG-057 R6 — vocab from DB registry. */}
                           <option value="">Carrier default</option>
-                          <option value="PNG">PNG (raster)</option>
-                          <option value="PDF">PDF (vector, sharp)</option>
-                          <option value="GIF">GIF (raster)</option>
-                          <option value="JPG">JPG (raster)</option>
+                          {labelFormatsForCarrier('USPS').map((o) => (
+                            <option key={o.value} value={o.value}>{o.label}</option>
+                          ))}
                         </select>
                       </Field>
                       <p className="-mt-1 mb-2 text-[10.5px] leading-4 text-slate-400">

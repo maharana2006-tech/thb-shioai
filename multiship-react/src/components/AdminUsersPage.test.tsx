@@ -48,6 +48,18 @@ vi.mock('../api/clientService', () => ({
   },
 }))
 
+// BUG-050 — AdminUsersPage.load() also fetches pending invites. Keep the
+// response empty so a stray un-mocked fetch doesn't throw inside the
+// page's Promise.all and tilt the under-test state.
+vi.mock('../api/adminInviteService', () => ({
+  adminInviteService: {
+    list: vi.fn().mockResolvedValue({ data: [] }),
+    create: vi.fn(),
+    revoke: vi.fn(),
+    resend: vi.fn(),
+  },
+}))
+
 const notifySuccess = vi.fn()
 const notifyError = vi.fn()
 const notifyApiError = vi.fn()
@@ -210,51 +222,24 @@ describe('AdminUsersPage — self-edit guard (audit 3.1)', () => {
     confirmSpy.mockRestore()
   })
 
-  it('deactivating SELF fires the extra self-edit confirm before the reason prompt', async () => {
-    // Two admins so the last-admin guard doesn't take priority.
+  // BUG-051 superseded the old window.confirm-based self-edit guard with a
+  // disabled Deactivate button on the self row — a user physically can't
+  // deactivate themselves. One assertion covers both the "fires confirm"
+  // and "reject-skip" cases that targeted the old prompt flow.
+  it('self row Deactivate button is disabled with a hint tooltip', async () => {
     list.mockResolvedValue({ data: twoAdmins })
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
-    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('leaving')
 
     const Page = await loadPage()
     renderPage(Page)
     await waitFor(() => expect(screen.getByText('admin@acme')).toBeInTheDocument())
 
     const selfRow = screen.getByText('admin@acme').closest('tr')!
-    await userEvent.click(within(selfRow).getByRole('button', { name: /^Deactivate$/i }))
-
-    await waitFor(() => expect(confirmSpy).toHaveBeenCalled())
-    const msg = String(confirmSpy.mock.calls[0]?.[0] ?? '')
-    // Warning includes ownership language + logout consequence.
-    expect(msg).toMatch(/YOUR OWN/i)
-    expect(msg).toMatch(/logged out/i)
-    // After confirm accepts, the reason prompt fires and the deactivate call happens.
-    await waitFor(() => expect(promptSpy).toHaveBeenCalled())
-    await waitFor(() => expect(deactivate).toHaveBeenCalledWith(100, 'leaving'))
-
-    confirmSpy.mockRestore()
-    promptSpy.mockRestore()
-  })
-
-  it('rejecting the self-edit confirm skips the API call', async () => {
-    list.mockResolvedValue({ data: twoAdmins })
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
-    const promptSpy = vi.spyOn(window, 'prompt')
-
-    const Page = await loadPage()
-    renderPage(Page)
-    await waitFor(() => expect(screen.getByText('admin@acme')).toBeInTheDocument())
-
-    const selfRow = screen.getByText('admin@acme').closest('tr')!
-    await userEvent.click(within(selfRow).getByRole('button', { name: /^Deactivate$/i }))
-
-    await waitFor(() => expect(confirmSpy).toHaveBeenCalled())
-    // Reason prompt NOT fired (short-circuited).
-    expect(promptSpy).not.toHaveBeenCalled()
+    const btn = within(selfRow).getByRole('button', { name: /^Deactivate$/i }) as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+    expect(btn.title).toMatch(/can't deactivate your own account/i)
+    // Clicking a disabled button must not fire the deactivate call.
+    await userEvent.click(btn)
     expect(deactivate).not.toHaveBeenCalled()
-
-    confirmSpy.mockRestore()
-    promptSpy.mockRestore()
   })
 })
 
@@ -265,6 +250,10 @@ describe('AdminUsersPage — self-edit guard (audit 3.1)', () => {
 describe('AdminUsersPage — last-admin protection (audit 1.3)', () => {
   it('deactivating the ONLY active admin is BLOCKED with notify.error', async () => {
     // oneAdmin fixture — only 1 admin active.
+    // BUG-051 added a self-guard that disables the self row's Deactivate
+    // button; use a non-self currentUsername so the last-admin guard is
+    // the one being exercised here.
+    mockUsername = 'someone-else@acme'
     const promptSpy = vi.spyOn(window, 'prompt')
     const confirmSpy = vi.spyOn(window, 'confirm')
 
@@ -310,6 +299,9 @@ describe('AdminUsersPage — last-admin protection (audit 1.3)', () => {
   it('a DEACTIVATED admin does not count toward the active-admin quorum', async () => {
     // 2 admins in the list, but one is already deactivated → only 1 active.
     // Deactivating the remaining active admin must still be blocked.
+    // BUG-051 added a self-guard that disables the self row; use a non-self
+    // currentUsername so the last-admin guard is the one being exercised.
+    mockUsername = 'someone-else@acme'
     list.mockResolvedValue({
       data: [
         user({ id: 100, username: 'admin@acme', role: 'ADMIN', clientCode: null }),

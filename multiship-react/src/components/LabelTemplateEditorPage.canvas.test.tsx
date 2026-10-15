@@ -168,7 +168,11 @@ describe('LabelTemplateEditorPage — Logo controls', () => {
     // ref-attached <input type="file"> — grab all inputs and filter.
     const fileInputs = Array.from(document.querySelectorAll('input[type="file"]'))
     expect(fileInputs.length).toBe(1)
-    const smallFile = new File(['hello'], 'logo.png', { type: 'image/png' })
+    // BUG-107 — the upload path now validates the file's magic bytes.
+    // 'hello' bytes don't match PNG (0x89 50 4E 47) so the save short-
+    // circuits. Build a tiny file that starts with the real PNG header.
+    const pngHeader = new Uint8Array([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+    const smallFile = new File([pngHeader], 'logo.png', { type: 'image/png' })
 
     await act(async () => {
       await userEvent.upload(fileInputs[0] as HTMLElement, smallFile)

@@ -149,7 +149,7 @@ export default function InvoiceCopiesMatrix({
                 {client === null ? (
                   <span>
                     <span className="block font-semibold text-slate-900">Default</span>
-                    <span className="block text-[11.5px] text-slate-500">Tenant-wide fallback per carrier</span>
+                    <span className="block text-[11.5px] text-slate-500">Platform-wide fallback per carrier</span>
                   </span>
                 ) : (
                   <span className="font-semibold text-slate-900">{client}</span>

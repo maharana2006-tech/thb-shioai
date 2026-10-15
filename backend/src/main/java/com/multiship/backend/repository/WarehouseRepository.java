@@ -39,12 +39,15 @@ public interface WarehouseRepository extends JpaRepository<Warehouse, Long> {
      * (dozens of warehouses even at scale) so index-only ordering isn't worth
      * dedicated indexes yet.
      */
+    // BUG-022 R6: ESCAPE '\' so the service's escapeLike() takes effect; without
+    // it, '%' and '_' typed in Settings > Warehouses search still worked as
+    // wildcards (fix lifted from ClientRepository.search).
     @Query(value = """
         SELECT w FROM Warehouse w
         WHERE (:keyword = ''
-               OR UPPER(w.code) LIKE CONCAT('%', UPPER(:keyword), '%')
-               OR UPPER(w.name) LIKE CONCAT('%', UPPER(:keyword), '%')
-               OR UPPER(COALESCE(w.address.city, '')) LIKE CONCAT('%', UPPER(:keyword), '%'))
+               OR UPPER(w.code) LIKE CONCAT('%', UPPER(:keyword), '%') ESCAPE '\\'
+               OR UPPER(w.name) LIKE CONCAT('%', UPPER(:keyword), '%') ESCAPE '\\'
+               OR UPPER(COALESCE(w.address.city, '')) LIKE CONCAT('%', UPPER(:keyword), '%') ESCAPE '\\')
           AND (:ownerType = '' OR UPPER(w.ownerType) = :ownerType)
           AND (:ownerClientCode = ''
                OR UPPER(COALESCE(w.ownerClientCode, '')) = UPPER(:ownerClientCode))

@@ -118,7 +118,12 @@ const canon = (c?: string | null) => {
 // hardcode (SALE|GIFT|SAMPLE|RETURN|REPAIR|PERSONAL) sent invalid
 // enum values (REPAIR / PERSONAL not accepted; DOCUMENTS /
 // MERCHANDISE / REPAIR_AND_RETURN / PERSONAL_USE missing).
-const CURRENCIES = ['USD', 'EUR', 'GBP', 'CAD', 'INR', 'AUD', 'SGD', 'JPY', 'CNY', 'AED']
+// BUG-125 — shared with CustomsProfileModal + ClientMarkup/IdentityStep so
+// the three pickers offer the same 15 currencies. Previous page-local
+// 10-currency list left MXN/NZD/HKD/BRL/CHF choosable on the client
+// profile but not on the order form.
+import { CURRENCY_ALLOWLIST } from '../utils/money'
+const CURRENCIES = CURRENCY_ALLOWLIST
 
 /** Persist the last-used value for a field so it prefills next time (sticky default). */
 const readSticky = (key: string, fallback: string) => {
@@ -1308,7 +1313,13 @@ export default function NewShipmentPage() {
     // defaults aren't overwritten here.
     setLabelImageFormat((cur) => matchedAccount?.labelImageFormat ?? cur)
     setPickupType(matchedAccount?.pickupType ?? 'USE_SCHEDULED_PICKUP')
-    setReasonForExport(matchedAccount?.shippingPurpose ?? '')
+    // BUG-143 — reason of export used to reset to the saved account
+    // default on every carrier switch, silently discarding the
+    // operator's picked value. 'Sale' flipped to 'Sample' across a
+    // USPS → FedEx switch, so a sale shipment went out on the commercial
+    // invoice declared as a sample. Only auto-fill when the field is
+    // empty — once the operator has picked a reason, keep it.
+    setReasonForExport((cur) => cur || (matchedAccount?.shippingPurpose ?? ''))
     const saved = matchedAccount?.clearanceOption
     const allowed = clearanceOptionsForCarrier(canon(carrier))
     setClearanceOption(saved && allowed.some((o) => o.value === saved) ? saved : '')
@@ -1373,6 +1384,17 @@ export default function NewShipmentPage() {
         && Number(declaredValue || 0) >= EEI_THRESHOLD_USD
         && !ftrExemption && !aesCitation) {
       missing.push(`FTR exemption or AES ITN (required at ≥ $${EEI_THRESHOLD_USD.toLocaleString()})`)
+    }
+    // BUG-072 — US → Canada under $2,500 still needs ONE of {FTR
+    // exemption, AES ITN}. Pre-fix the exemption picker defaulted to
+    // 'None (using AES)' but no AES ITN was typed, so Customs passed
+    // locally and FedEx rejected ('FTR Exemption or AES Citation ...
+    // not valid for EEI'). Require a pick when both are empty.
+    if (isInternational
+        && originIsUs
+        && destCcNorm === 'CA'
+        && !ftrExemption && !aesCitation) {
+      missing.push('FTR exemption (pick NOEEI 30.36 for Canada) or AES ITN')
     }
     // Incoterms same pattern as Reason of export — prefill from
     // ClientCustomsProfile via importerProfile; NULL profile / value
@@ -3776,18 +3798,19 @@ export default function NewShipmentPage() {
                               value={labelImageType}
                               onChange={(e) => setLabelImageType(e.target.value)}>
                         <option value="">-- Select --</option>
-                        {/* BUG-057 — label names must match the Carrier
-                            Dropdowns registry so the Settings page and
-                            the order form speak the same vocabulary.
-                            Registry seed (V120) uses "PDF (plain)" + "ZPL
-                            (thermal)" across every carrier; previously
-                            this FEDEX branch said "PDF (vector, sharp)"
-                            + "ZPLII (Zebra)", which diverged. */}
-                        <option value="PDF">PDF (plain)</option>
-                        <option value="PNG">PNG (raster)</option>
-                        <option value="ZPLII">ZPL (thermal)</option>
-                        <option value="EPL2">EPL (Eltron/legacy Zebra)</option>
-                        <option value="DPL">DPL (Datamax)</option>
+                        {/* BUG-057 R6 — the FEDEX branch previously
+                            hardcoded five options with its own wording.
+                            The order form's vocabulary must come from
+                            Settings > Carrier Dropdowns (same DB registry
+                            UPS/DHL/USPS already read), so renaming a
+                            FEDEX row there or adding/removing a code
+                            flows through here without a code change.
+                            Bootstrap fallback (LABEL_FORMAT_BY_CARRIER)
+                            kicks in only when the DB is empty — a
+                            first-boot cushion, not a parallel source. */}
+                        {labelFormatsForCarrier('FEDEX').map((opt) => (
+                          <option key={opt.value} value={opt.value}>{opt.label}</option>
+                        ))}
                       </select>
                     </Field>
                     <Field label="Label Size" required

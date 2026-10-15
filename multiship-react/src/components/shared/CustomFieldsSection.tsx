@@ -70,7 +70,7 @@ export default function CustomFieldsSection({
           <h3 className="text-[13px] font-semibold text-[#1f150c]">Custom fields</h3>
         </div>
         <span className="inline-flex items-center gap-1 text-[11px] text-[#6b5c42]">
-          <FiInfo /> Tenant-defined metadata
+          <FiInfo /> Client-defined metadata
         </span>
       </div>
 

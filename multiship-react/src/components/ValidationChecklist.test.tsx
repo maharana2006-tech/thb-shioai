@@ -26,14 +26,16 @@ const result = (over: Partial<ShipmentValidationResult> = {}): ShipmentValidatio
 })
 
 describe('a missing price', () => {
-  it('is a thing to review in Account, service & price, not a pass', () => {
+  it('is a thing to fix in Account, service & price (UNAVAILABLE = hard reject)', () => {
     const groups = buildCheckGroups(result({
       overall: 'PASS', localErrors: [], localWarnings: [], carrier: null,
       quote: { status: 'UNAVAILABLE', message: 'UPS answered HTTP 400: Package Type unavailable' },
     } as Partial<ShipmentValidationResult>))
     const service = groups.find((g) => g.key === 'service')!
-    expect(service.status).toBe('warn')
-    expect(service.warnings).toEqual(['No price from the carrier: UPS answered HTTP 400: Package Type unavailable'])
+    // UNAVAILABLE / NOT_OFFERED are hard rejections per BUG-073 —
+    // the carrier refused to price, so the row reports as a fail.
+    expect(service.status).toBe('fail')
+    expect(service.errors).toEqual(['No price from the carrier: UPS answered HTTP 400: Package Type unavailable'])
   })
 })
 

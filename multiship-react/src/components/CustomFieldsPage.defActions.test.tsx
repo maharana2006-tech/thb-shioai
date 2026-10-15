@@ -50,13 +50,14 @@ vi.mock('../api/clientService', () => ({
 const notifySuccessMock = vi.fn()
 const notifyErrorMock = vi.fn()
 const notifyApiErrorMock = vi.fn()
+const notifyConfirmMock = vi.fn()
 vi.mock('../utils/notify', () => ({
   notify: {
     success: (...args: unknown[]) => notifySuccessMock(...args),
     error: (...args: unknown[]) => notifyErrorMock(...args),
     apiError: (...args: unknown[]) => notifyApiErrorMock(...args),
     info: vi.fn(),
-    confirm: vi.fn().mockResolvedValue(true),
+    confirm: (...args: unknown[]) => notifyConfirmMock(...args),
   },
 }))
 
@@ -96,24 +97,23 @@ const def = (id: number | undefined, overrides: Partial<{
 // ---------- Fail-loud fetch spy + window.confirm stub ----------
 
 let confirmResult = true
-const originalConfirm = globalThis.confirm
 
 beforeEach(() => {
   vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
     throw new Error('un-mocked fetch forbidden in unit tests')
   })
   ;[listMock, saveMock, removeMock, listClientsMock,
-    notifySuccessMock, notifyErrorMock, notifyApiErrorMock].forEach((m) => m.mockReset())
+    notifySuccessMock, notifyErrorMock, notifyApiErrorMock, notifyConfirmMock].forEach((m) => m.mockReset())
   listClientsMock.mockResolvedValue({ data: { content: [] } })
   confirmResult = true
-  // The Delete path uses window.confirm — stub for happy + cancel paths.
-  globalThis.confirm = vi.fn(() => confirmResult)
+  // BUG-075 — Delete path now uses notify.confirm (in-app dialog) instead
+  // of window.confirm. Stub the mock to resolve to confirmResult.
+  notifyConfirmMock.mockImplementation(() => Promise.resolve(confirmResult))
 })
 
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
-  globalThis.confirm = originalConfirm
 })
 
 async function loadPage(): Promise<ComponentType> {

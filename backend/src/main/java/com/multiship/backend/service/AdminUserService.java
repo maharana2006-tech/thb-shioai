@@ -118,11 +118,14 @@ public class AdminUserService {
         Specification<User> spec = (root, query, cb) -> {
             List<Predicate> preds = new ArrayList<>(4);
             if (q != null) {
-                String like = "%" + q + "%";
+                // BUG-022 R6: escape '%' and '_' so a user-typed wildcard
+                // doesn't match everything. Criteria API's like() takes an
+                // explicit escape char.
+                String like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%";
                 preds.add(cb.or(
-                        cb.like(cb.lower(root.get("username")), like),
-                        cb.like(cb.lower(root.get("email")), like),
-                        cb.like(cb.lower(root.get("fullName")), like)));
+                        cb.like(cb.lower(root.get("username")), like, '\\'),
+                        cb.like(cb.lower(root.get("email")), like, '\\'),
+                        cb.like(cb.lower(root.get("fullName")), like, '\\')));
             }
             if (r != null) {
                 preds.add(cb.equal(cb.upper(root.get("role")), r));
@@ -378,6 +381,38 @@ public class AdminUserService {
                 .action("INVITE_SENT")
                 .oldClientCode(null)
                 .newClientCode(clientCode)
+                .actorUsername(actorUsername == null ? "system" : actorUsername)
+                .reason(null)
+                .createdAt(LocalDateTime.now())
+                .build());
+    }
+
+    /** BUG-085 — audit resend / revoke so operators can tell what
+     *  happened to an invite after it was first sent. Prior to this,
+     *  Recent admin actions showed only the mint, which made a revoked
+     *  invite look still-live. */
+    @Transactional
+    public void recordInviteResent(String email, String clientCode, String actorUsername) {
+        auditRepository.save(UserAdminAudit.builder()
+                .subjectUserId(null)
+                .subjectUsername(email)
+                .action("INVITE_RESENT")
+                .oldClientCode(null)
+                .newClientCode(clientCode)
+                .actorUsername(actorUsername == null ? "system" : actorUsername)
+                .reason(null)
+                .createdAt(LocalDateTime.now())
+                .build());
+    }
+
+    @Transactional
+    public void recordInviteRevoked(String email, String clientCode, String actorUsername) {
+        auditRepository.save(UserAdminAudit.builder()
+                .subjectUserId(null)
+                .subjectUsername(email)
+                .action("INVITE_REVOKED")
+                .oldClientCode(clientCode)
+                .newClientCode(null)
                 .actorUsername(actorUsername == null ? "system" : actorUsername)
                 .reason(null)
                 .createdAt(LocalDateTime.now())

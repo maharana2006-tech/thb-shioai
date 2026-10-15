@@ -69,11 +69,14 @@ public class AuditLogRepositoryCustomImpl implements AuditLogRepositoryCustom {
         // that dodges Postgres bytea-null-typing on nullable String params.
         // Category: legacy rows predate the column, so NULL reads as ACTIVITY.
         // orderNo uses a -1 sentinel for the same null-typing reason.
+        // BUG-022 R6: ESCAPE '\' so typed '%' and '_' do not act as
+        // wildcards in actor / entityKey filters; `actor` and `entityKey`
+        // params are escaped at the call site below.
         String where = ""
-                + "WHERE (:actor = '' OR LOWER(COALESCE(a.actor, '')) LIKE CONCAT('%', LOWER(:actor), '%')) "
+                + "WHERE (:actor = '' OR LOWER(COALESCE(a.actor, '')) LIKE CONCAT('%', LOWER(:actor), '%') ESCAPE '\\') "
                 + "  AND (:entityType = '' OR a.entityType = :entityType) "
                 + "  AND (:action = '' OR a.action = :action) "
-                + "  AND (:entityKey = '' OR LOWER(COALESCE(a.entityKey, '')) LIKE CONCAT('%', LOWER(:entityKey), '%')) "
+                + "  AND (:entityKey = '' OR LOWER(COALESCE(a.entityKey, '')) LIKE CONCAT('%', LOWER(:entityKey), '%') ESCAPE '\\') "
                 + "  AND (:category = '' OR COALESCE(a.category, 'ACTIVITY') = :category) "
                 + "  AND (:orderNo = -1 OR a.orderNo = :orderNo) "
                 + "  AND a.createdAt >= :since "
@@ -105,10 +108,10 @@ public class AuditLogRepositoryCustomImpl implements AuditLogRepositoryCustom {
                                    String entityKey, String category, Integer orderNo,
                                    LocalDateTime since, LocalDateTime until,
                                    Optional<String> scope) {
-        q.setParameter("actor", actor);
+        q.setParameter("actor", escapeLike(actor));
         q.setParameter("entityType", entityType);
         q.setParameter("action", action);
-        q.setParameter("entityKey", entityKey);
+        q.setParameter("entityKey", escapeLike(entityKey));
         q.setParameter("category", category == null ? "" : category);
         q.setParameter("orderNo", orderNo == null ? -1 : orderNo);
         q.setParameter("since", since);
@@ -124,6 +127,15 @@ public class AuditLogRepositoryCustomImpl implements AuditLogRepositoryCustom {
      * for a hand-built JPQL string we do the same manually. Falls back to
      * {@code createdAt DESC} when the caller didn't specify a sort.
      */
+    // BUG-022: escape '%' and '_' so a typed wildcard doesn't match everything.
+    // Pairs with ESCAPE '\' in the JPQL above.
+    private static String escapeLike(String value) {
+        if (value == null || value.isEmpty()) return "";
+        return value.replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_");
+    }
+
     private static String buildOrderBy(Sort sort) {
         if (sort == null || sort.isUnsorted()) {
             return " ORDER BY a.createdAt DESC";

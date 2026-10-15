@@ -74,9 +74,16 @@ public class UserInviteService {
         String normalisedEmail = email.trim().toLowerCase();
         java.util.List<UserInvite> live = repository.findLivePendingByEmail(normalisedEmail);
         if (!live.isEmpty()) {
+            // BUG-145 — pre-fix we printed LocalDateTime.toString ('2026-10-21T14:06:40.879515')
+            // which looks like a timestamp from a stacktrace, not an expiry date
+            // an operator can read. Format as 'Oct 21, 2026, 2:06 PM UTC' instead.
+            java.time.LocalDateTime exp = live.get(0).getExpiresAt();
+            String expiryText = exp.format(
+                java.time.format.DateTimeFormatter.ofPattern("MMM d, yyyy, h:mm a"))
+                + " UTC";
             throw new IllegalStateException(
                 "An invite for " + normalisedEmail + " is still pending (expires "
-                    + live.get(0).getExpiresAt() + "). Revoke it from Pending invites, "
+                    + expiryText + "). Revoke it from Pending invites, "
                     + "or use Resend to extend its expiry.");
         }
         UserInvite invite = new UserInvite();
@@ -161,6 +168,13 @@ public class UserInviteService {
     @Transactional
     public void revoke(Long id) {
         repository.deleteById(id);
+    }
+
+    /** BUG-085 — read-only lookup so the controller can audit resend /
+     *  revoke with the email + client code before the row is gone. */
+    @Transactional(readOnly = true)
+    public java.util.Optional<UserInvite> findById(Long id) {
+        return repository.findById(id);
     }
 
     private static String randomToken() {

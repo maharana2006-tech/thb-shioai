@@ -334,7 +334,7 @@ export default function LabelTemplatesListPage() {
             />
           </div>
         ),
-        meta: { headerLabel: 'Actions', hideable: false, exportable: false },
+        meta: { headerLabel: 'Actions', hideable: false, exportable: false, pinnedByDefault: 'end' },
       },
     ],
     // Handlers close over admin + busyId + navigate; those cover all reactive deps
@@ -376,9 +376,15 @@ export default function LabelTemplatesListPage() {
       return
     }
     if (previewing) return
+    // BUG-109 — pass the previewContext.id so the server renders THIS
+    // template on the order's data. Without it the endpoint re-resolves
+    // via the order's own client, so a template that doesn't yet have
+    // orders could never be previewed and any client's template could
+    // get accidentally rendered under any other client's banner.
+    const tid = previewContext?.id
     setPreviewing(true)
     try {
-      const objectUrl = await labelTemplateService.fetchPreviewObjectUrl(orderNo)
+      const objectUrl = await labelTemplateService.fetchPreviewObjectUrl(orderNo, tid)
       setPreviewUrl((prev) => {
         if (prev) URL.revokeObjectURL(prev)
         return objectUrl
@@ -499,7 +505,7 @@ export default function LabelTemplatesListPage() {
               <div className="py-10 text-center text-[12.5px] text-slate-500">
                 {debouncedSearch || filtersActive
                   ? 'No templates match your filters.'
-                  : 'No templates yet — add the platform default or a tenant override.'}
+                  : 'No templates yet — add the platform default or a client override.'}
               </div>
             }
             caption={
