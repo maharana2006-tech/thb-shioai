@@ -738,6 +738,15 @@ public class ShippingConfigService {
             return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
                     "A custom box needs length, width and height.");
         }
+        // BUG-092: tare > max weight means the empty box already exceeds its
+        // rated capacity, so no payload could ever fit. Refuse on save
+        // instead of letting a nonsensical row land in the catalog.
+        if (request.getMaxWeight() != null && request.getTareWeight() != null
+                && request.getTareWeight().compareTo(request.getMaxWeight()) > 0) {
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
+                    "Tare weight (" + request.getTareWeight() + ") can't exceed max weight ("
+                            + request.getMaxWeight() + ") — the empty box would already be over its rated capacity.");
+        }
         Optional<PackagePreset> clash = presetRepository.findByNameIgnoreCase(request.getName().trim());
         if (clash.isPresent() && (id == null || !clash.get().getId().equals(id))) {
             return failure(HttpStatus.CONFLICT, ErrorCode.VALIDATION_ERROR,

@@ -187,9 +187,16 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
         // Audit B2 (#371) — targeted finder replaces the prior full-list
         // fetch + stream().filter. O(1) index-eq lookup on a 500-row
         // catalog instead of pulling + materialising every alias.
-        ClientShipviaCodeMap row = shipviaRepo
+        // BUG-093: tell the caller whether this was a brand-new row or an
+        // in-place update of an existing (clientCode, erpCode, destCountry,
+        // destRegion) tuple so the FE toast reads "updated" vs "created"
+        // instead of a silent "saved" that hides the replace.
+        ClientShipviaCodeMap existing = shipviaRepo
                 .findForUpsert(code, erp, destCountry, destRegion)
-                .orElseGet(() -> ClientShipviaCodeMap.builder().clientCode(code).erpCode(erp).build());
+                .orElse(null);
+        boolean wasUpdate = existing != null;
+        ClientShipviaCodeMap row = existing != null ? existing
+                : ClientShipviaCodeMap.builder().clientCode(code).erpCode(erp).build();
         row.setServiceId(targetId);
         row.setDestCountry(destCountry);
         row.setDestRegion(destRegion);
@@ -207,7 +214,10 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
                 shipviaPackageRepository.save(link);
             }
         }
-        return success("Shipvia alias saved.", toShipviaDto(row));
+        return success(wasUpdate
+                        ? "Shipvia alias '" + erp + "' already existed — the existing mapping was updated."
+                        : "Shipvia alias saved.",
+                toShipviaDto(row));
     }
 
     private ApiResponse<ClientCodeMapDTO> upsertService(
