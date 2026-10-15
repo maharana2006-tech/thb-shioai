@@ -120,7 +120,14 @@ function CartonMarks() {
  * Both ShippingCatalogPage tabs stay mounted (preserves modal drafts);
  * only the active one registers its refresh handler. Defaults to true.
  */
-export default function PackagesPage({ active = true }: { active?: boolean } = {}) {
+export default function PackagesPage({ active = true, origin: originProp, onOriginChange }: {
+  active?: boolean
+  // BUG-090: ShippingCatalogPage lifts origin so both tabs share it. When
+  // the component is rendered standalone (route-direct), these are
+  // undefined and we fall back to local state.
+  origin?: string
+  onOriginChange?: (v: string) => void
+} = {}) {
   const { role } = useAppSession()
   // Sync pulls the carrier's live packaging catalog — requires the admin-only
   // carrier credentials on the backend, so gate the button to admins.
@@ -133,8 +140,11 @@ export default function PackagesPage({ active = true }: { active?: boolean } = {
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState<PackagePreset | null>(null)
   const [saving, setSaving] = useState(false)
-  /** Ship-from origin for carrier packaging (USPS Flat Rate is US-only, etc.). */
-  const [origin, setOrigin] = useState('US')
+  /** Ship-from origin for carrier packaging (USPS Flat Rate is US-only, etc.).
+   *  BUG-090: prefer parent-lifted origin when provided. */
+  const [localOrigin, setLocalOrigin] = useState('US')
+  const origin = originProp ?? localOrigin
+  const setOrigin = onOriginChange ?? setLocalOrigin
   /** Carrier filter: 'ALL' | 'CUSTOM' | a carrier code (UPS/FEDEX/USPS…). */
   const [carrierFilter, setCarrierFilter] = useState('ALL')
   const [syncing, setSyncing] = useState(false)

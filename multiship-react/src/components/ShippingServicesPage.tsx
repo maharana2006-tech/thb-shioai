@@ -80,7 +80,13 @@ const packageFitsService = (p: PackagePreset, s: ShippingServiceItem): boolean =
  * Only the active tab registers its refresh handler. Defaults to true
  * for standalone mounts.
  */
-export default function ShippingServicesPage({ active = true }: { active?: boolean } = {}) {
+export default function ShippingServicesPage({ active = true, origin: originProp, onOriginChange }: {
+  active?: boolean
+  // BUG-090: see PackagesPage — parent (ShippingCatalogPage) lifts origin
+  // so the two tabs share one filter.
+  origin?: string
+  onOriginChange?: (v: string) => void
+} = {}) {
   const [services, setServices] = useState<ShippingServiceItem[]>([])
   const [links, setLinks] = useState<ServicePackageLink[]>([])
   const [presets, setPresets] = useState<PackagePreset[]>([])
@@ -93,8 +99,11 @@ export default function ShippingServicesPage({ active = true }: { active?: boole
   // Allowed. Flipping OFF filters the preset list to CUSTOM-only + the save
   // handler PATCHes the flag before saving links.
   const [pkgBrandedAllowed, setPkgBrandedAllowed] = useState<boolean>(true)
-  /** The origin country whose services are shown — carrier availability is lane-specific. */
-  const [origin, setOrigin] = useState('US')
+  /** The origin country whose services are shown — carrier availability is lane-specific.
+   *  BUG-090: parent-lifted when under ShippingCatalogPage; local fallback otherwise. */
+  const [localOrigin, setLocalOrigin] = useState('US')
+  const origin = originProp ?? localOrigin
+  const setOrigin = onOriginChange ?? setLocalOrigin
   const [originCountries, setOriginCountries] = useState<string[]>([])
   /** Carrier currently syncing (its Sync button spins). */
   const [syncing, setSyncing] = useState<string | null>(null)

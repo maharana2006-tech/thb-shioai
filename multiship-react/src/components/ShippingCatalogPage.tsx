@@ -34,6 +34,10 @@ export default function ShippingCatalogPage() {
   const initialTab: CatalogTab = (searchParams.get('tab') as CatalogTab | null) === 'packages'
     ? 'packages' : 'services'
   const [tab, setTab] = useState<CatalogTab>(initialTab)
+  // BUG-090: lift the origin filter so both tabs share it. The page
+  // description promises the sub-tabs share the filter; pre-fix each
+  // tab held its own useState('US') so switching tabs reset to US.
+  const [origin, setOrigin] = useState('US')
 
   // Keep URL in sync with the active tab — bookmarks + browser back button
   // both flip tabs the way you'd expect.
@@ -85,14 +89,14 @@ export default function ShippingCatalogPage() {
         role="tabpanel"
         hidden={tab !== 'services'}
       >
-        <ShippingServicesPage active={tab === 'services'} />
+        <ShippingServicesPage active={tab === 'services'} origin={origin} onOriginChange={setOrigin} />
       </div>
       <div
         id="shipping-catalog-panel-packages"
         role="tabpanel"
         hidden={tab !== 'packages'}
       >
-        <PackagesPage active={tab === 'packages'} />
+        <PackagesPage active={tab === 'packages'} origin={origin} onOriginChange={setOrigin} />
       </div>
     </div>
   )
