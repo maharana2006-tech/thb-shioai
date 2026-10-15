@@ -422,6 +422,10 @@ export default function AuditLogPage() {
                       <option value="CUSTOMS_PROFILE">Customs profile</option>
                       <option value="CLIENT_POLICY">Client policy</option>
                       <option value="CLIENT_MARKUP">Client markup</option>
+                      {/* BUG-129 R6+1: AuditService also writes under
+                          IMPORT_BATCH — add it so the filter matches
+                          every entity type the backend produces. */}
+                      <option value="IMPORT_BATCH">Import batch</option>
                     </Select>
                     <label className="mb-1 mt-3 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
                       Action
@@ -435,6 +439,12 @@ export default function AuditLogPage() {
                       <option value="LOGOUT">LOGOUT</option>
                       <option value="LABEL_GENERATED">LABEL_GENERATED</option>
                       <option value="LABEL_VOIDED">LABEL_VOIDED</option>
+                      <option value="LABEL_REGENERATED">LABEL_REGENERATED</option>
+                      <option value="LABEL_VOID_REFUSED">LABEL_VOID_REFUSED</option>
+                      <option value="CARRIER_REJECTED">CARRIER_REJECTED</option>
+                      <option value="IMPORT_SAVED">IMPORT_SAVED</option>
+                      <option value="IMPORT_GENERATED">IMPORT_GENERATED</option>
+                      <option value="LOGIN_FAILED">LOGIN_FAILED</option>
                       <option value="TOGGLE_ACTIVE">TOGGLE_ACTIVE</option>
                       <option value="CASCADE_DISABLE">CASCADE_DISABLE</option>
                       <option value="CASCADE_ENABLE">CASCADE_ENABLE</option>

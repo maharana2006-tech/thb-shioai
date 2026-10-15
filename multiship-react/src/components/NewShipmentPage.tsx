@@ -409,6 +409,19 @@ export default function NewShipmentPage() {
       !a.name && !a.addressLine1 && !a.city && !a.postalCode
     if (isReturn) {
       setRecipient((cur) => (untouched(cur) ? filled : cur))
+      // BUG-136 R6: Return mode's "Return from · customer" sender block
+      // used to inherit the warehouse address from an earlier SHIPMENT
+      // paint — operator saw the client's own warehouse as the return
+      // origin, which is never right (the customer is the shipper on a
+      // return). Clear the sender when it still holds the exact warehouse
+      // address so the operator fills in the customer's address instead;
+      // leave anything the operator has already typed alone.
+      setSender((cur) =>
+        cur.name === filled.name
+          && cur.addressLine1 === filled.addressLine1
+          && cur.postalCode === filled.postalCode
+          ? blankAddress() : cur,
+      )
     } else {
       setSender((cur) => (untouched(cur) ? filled : cur))
     }
