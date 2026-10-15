@@ -666,27 +666,14 @@ describe('WarehouseEditorModal · internals · negative', () => {
     expect(verifyBtn).toBeDisabled()
   })
 
-  it('Invalid country (single letter) surfaces a country error after blur', async () => {
-    const Page = await loadPage()
-    const user = userEvent.setup()
-    renderList(Page)
-
-    await screen.findByText('PLAT1')
-    await user.click(screen.getByRole('button', { name: /add warehouse/i }))
-    const dialog = await screen.findByRole('dialog', { name: /add warehouse/i })
-
-    // Country default is 'US' (valid). Clear it and set to 'X' — 1 letter fails validateCountry.
-    const countryInput = dialog.querySelector('input[maxlength="2"]') as HTMLInputElement
-    await user.clear(countryInput)
-    await user.type(countryInput, 'X')
-    await user.tab() // blur → touched
-
-    // validateCountry emits a required-length message on ISO-2 mismatch.
-    await waitFor(() => {
-      const errs = dialog.querySelectorAll('p.text-rose-600')
-      const hasCountryErr = Array.from(errs).some((el) => /country/i.test(el.textContent ?? ''))
-      expect(hasCountryErr).toBe(true)
-    })
+  // BUG-046 R6: Country is now the shared CountrySelect (searchable
+  // combobox, no `maxlength="2"` free-text input). A single-letter query
+  // shows "No match" rather than committing an invalid code, so the
+  // ISO-2-length validation path is no longer reachable from this form.
+  // The equivalent coverage lives in the CountrySelect own-tests.
+  it.skip('Invalid country (single letter) surfaces a country error after blur', async () => {
+    // kept as a placeholder for the behaviour the previous free-text
+    // input exercised; delete when CountrySelect has its own slice.
   })
 
   it('Invalid US zip (letters) surfaces a zip error after blur', async () => {
