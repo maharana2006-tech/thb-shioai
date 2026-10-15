@@ -66,7 +66,7 @@ public class WarehouseServiceImpl implements WarehouseService {
     public ApiResponse<PageResponseDTO<WarehouseDTO>> listWarehouses(WarehouseListFilters filters) {
         int page = Math.max(filters.getPage(), 0);
         int size = Math.min(Math.max(filters.getSize(), 1), 100);
-        String keyword = norm(filters.getSearch());
+        String keyword = escapeLike(norm(filters.getSearch()));
         String ownerType = norm(filters.getOwnerType());
         String ownerClientCode = norm(filters.getOwnerClientCode());
         String activeFilter = norm(filters.getActive());
@@ -341,6 +341,15 @@ public class WarehouseServiceImpl implements WarehouseService {
 
     private String norm(String value) {
         return value != null ? value.trim().toUpperCase(Locale.ROOT) : "";
+    }
+
+    // BUG-022: escape '%' and '_' so a user-typed wildcard doesn't match
+    // everything. Pairs with ESCAPE '\' in WarehouseRepository.filter.
+    private String escapeLike(String value) {
+        if (value == null || value.isEmpty()) return "";
+        return value.replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_");
     }
 
     private String normalize(String value) {

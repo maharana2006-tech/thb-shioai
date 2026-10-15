@@ -17,6 +17,8 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -73,11 +75,14 @@ public class ClientOutputDestination {
 
     /**
      * Type-specific configuration as a JSON string. Persisted as
-     * Postgres {@code jsonb} — the JPA layer marshals through String and
-     * lets Postgres validate the JSON at write time. Hibernate 6 auto-
-     * detects the {@code jsonb} column type for a String field with
-     * {@code columnDefinition = "jsonb"}.
+     * Postgres {@code jsonb}. BUG-118 R6: Hibernate 6 does NOT auto-detect
+     * jsonb from {@code columnDefinition = "jsonb"} on a {@code String}
+     * field — INSERT sends it as VARCHAR and Postgres rejects with
+     * "column is of type jsonb but expression is of type character varying".
+     * {@code @JdbcTypeCode(SqlTypes.JSON)} tells Hibernate to bind as JSON
+     * (via the json driver type) so no cast is needed.
      */
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "config", nullable = false, columnDefinition = "jsonb")
     private String config;
 

@@ -47,10 +47,10 @@ public class SystemSettingsController {
      * validation rules on the {@code /put} path.
      */
     private static final List<SettingSpec> KNOWN_SETTINGS = List.of(
+            // BUG-061 R6 — operator-facing copy. Env-var/API internals removed.
             new SettingSpec(
                     OpenAiClient.SETTING_KEY,
-                    "OpenAI API key used by AI-assist features (paste-to-fill, HS suggest). "
-                            + "Overrides the OPENAI_API_KEY env var.",
+                    "OpenAI API key used by AI-assist features (paste-to-fill, HS suggest).",
                     SystemSettingDTO.Kind.SECRET,
                     null, null),
             // Site-wide Stamps.com API-flavor toggle. Overrides the property
@@ -60,10 +60,8 @@ public class SystemSettingsController {
             new SettingSpec(
                     com.multiship.backend.service.carriers.StampsConnector.FLAVOR_SETTING_KEY,
                     "Stamps.com API flavor for every USPS account on the platform. "
-                            + "SWSIM = legacy SOAP (Client ID must be a GUID); "
-                            + "SERA = newer OAuth 2.0 REST (3-legged authorize flow, "
-                            + "Client ID is an opaque string). Overrides "
-                            + "carrier.stamps.api-flavor. Defaults to SWSIM.",
+                            + "SWSIM is the legacy option; SERA is the current one. "
+                            + "Defaults to SWSIM.",
                     SystemSettingDTO.Kind.CHOICE,
                     List.of("SWSIM", "SERA"),
                     "SWSIM"),
@@ -76,14 +74,13 @@ public class SystemSettingsController {
             // guard on the PUT path.
             new SettingSpec(
                     UspsProviderReadinessService.USPS_PROVIDER_KEY,
-                    "USPS integration provider (3-value state machine). "
-                            + "STAMPS_COM = legacy Stamps.com path (every USPS account uses Stamps). "
-                            + "PROVISIONING_USPS_DIRECT = onboarding transitional state — "
-                            + "seed USPS_PLATFORM_CLIENT_ID + USPS_PLATFORM_CLIENT_SECRET, "
-                            + "fill every USPS account's EPS/CRID/MID identifiers. "
-                            + "USPS_DIRECT = direct developers.usps.com OAuth 2.0 integration. "
-                            + "Direct STAMPS_COM ↔ USPS_DIRECT transitions are blocked; go via "
-                            + "PROVISIONING_USPS_DIRECT so readiness is verified first.",
+                    "Which USPS integration path every USPS account uses. "
+                            + "Stamps.com is the legacy path; USPS Direct is the newer one. "
+                            + "'Provisioning USPS Direct' is the onboarding step in between — "
+                            + "add the platform's USPS consumer key and secret below, then fill "
+                            + "each USPS account's EPS, CRID and MID. "
+                            + "Direct jumps between Stamps.com and USPS Direct are not allowed; "
+                            + "go via 'Provisioning USPS Direct' first.",
                     SystemSettingDTO.Kind.CHOICE,
                     List.of("STAMPS_COM", "PROVISIONING_USPS_DIRECT", "USPS_DIRECT"),
                     "STAMPS_COM"),
