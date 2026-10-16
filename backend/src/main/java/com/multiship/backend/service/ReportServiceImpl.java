@@ -283,6 +283,10 @@ public class ReportServiceImpl implements ReportService {
      * open. Prefix such values with a single quote so the sheet renders
      * them as literal text.
      */
+    // Not consolidated into CsvUtil.csvCell: this variant intentionally differs
+    // (BigDecimal/LocalDate(Time) coercion before escaping) and is already
+    // formula-injection-safe via escapeFormulaInjection below. Routing it
+    // through CsvUtil would change report number/date output.
     static String csv(Object v) {
         if (v == null) return "";
         String s;

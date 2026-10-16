@@ -30,6 +30,8 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 
+import com.multiship.backend.util.CsvUtil;
+
 /**
  * Read-only endpoint powering the settings > Audit Log page.
  * Writes happen implicitly via {@link com.multiship.backend.service.AuditService}
@@ -218,16 +220,12 @@ public class AuditLogController {
         out.flush();
     }
 
-    /** RFC 4180 quoting — wrap in double quotes when the value contains a
-     *  delimiter / newline / embedded quote; double-up embedded quotes.
-     *  Null renders as empty. */
+    /** RFC-4180 quoting + BUG-076 formula-injection guard, via the shared
+     *  {@link CsvUtil#csvCell}. This /export emits tenant-authored notes /
+     *  entityKey / changes across all tenants to an admin, so an un-neutralized
+     *  leading =/+/-/@ cell would execute on the admin's spreadsheet. */
     static String csv(Object value) {
-        if (value == null) return "";
-        String s = value.toString();
-        if (s.indexOf(',') < 0 && s.indexOf('"') < 0 && s.indexOf('\n') < 0 && s.indexOf('\r') < 0) {
-            return s;
-        }
-        return "\"" + s.replace("\"", "\"\"") + "\"";
+        return CsvUtil.csvCell(value == null ? "" : String.valueOf(value));
     }
 
     private static Sort parseSort(String raw) {

@@ -498,4 +498,30 @@ class OrderImportControllerTest {
         assertTrue(body.contains("\"Smith, Jr. \"\"the\"\"\""),
                 "comma + embedded quote must RFC-4180-escape");
     }
+
+    @Test
+    void historyRowsExport_neutralizesFormulaInjection() throws Exception {
+        // BUG-076 — a tenant-authored recipient name starting with = must be
+        // formula-neutralized (leading ') so it doesn't execute when the admin
+        // opens the exported CSV. Same threat model as AuditLogController.csv.
+        String slug = slugFor(42L);
+        OrderImportRowDTO evil = new OrderImportRowDTO();
+        evil.setRowNumber(1);
+        evil.setClientCode("ACME");
+        evil.setRecipientName("=cmd|'/c calc'!A1");
+        com.multiship.backend.dto.ImportBatchRowsPageDTO page =
+                com.multiship.backend.dto.ImportBatchRowsPageDTO.builder()
+                        .rows(List.of(evil))
+                        .total(1L).all(1L).attention(0L).pending(0L).clientCodes(List.of("ACME"))
+                        .build();
+        when(orderImportService.historyRows(anyLong(), anyString(), any(), any(), eq(0), anyInt()))
+                .thenReturn(page);
+
+        var response = new org.springframework.mock.web.MockHttpServletResponse();
+        controller.historyRowsExport(slug, "all", null, response);
+
+        String body = response.getContentAsString();
+        assertTrue(body.contains("'=cmd|"),
+                "recipientName starting with = must be neutralized with a leading quote. Got: " + body);
+    }
 }

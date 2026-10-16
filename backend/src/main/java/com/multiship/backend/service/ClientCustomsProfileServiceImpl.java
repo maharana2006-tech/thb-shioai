@@ -28,6 +28,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static com.multiship.backend.util.CsvUtil.csvCell;
+
 @Service
 @RequiredArgsConstructor
 public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileService {
@@ -297,15 +299,6 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
         if (a != null && !a.isBlank()) return a;
         if (b != null && !b.isBlank()) return b;
         return "";
-    }
-
-    /** RFC-4180 CSV field: quote when the value contains ", newline, or a comma. */
-    private static String csvCell(String value) {
-        if (value == null) return "";
-        boolean needsQuote = value.indexOf(',') >= 0 || value.indexOf('"') >= 0
-                || value.indexOf('\n') >= 0 || value.indexOf('\r') >= 0;
-        if (!needsQuote) return value;
-        return '"' + value.replace("\"", "\"\"") + '"';
     }
 
     @Override

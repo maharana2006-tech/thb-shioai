@@ -5390,7 +5390,10 @@ public class OrderImportServiceImpl implements OrderImportService {
                 shipViaCodesByClient(d.clients(), d.services()));
     }
 
-    /** A CSV cell, quoted when it holds a comma, quote or line break. */
+    /** A CSV cell, quoted when it holds a comma, quote or line break.
+     *  No BUG-076 guard here: this is the import-TEMPLATE generator (a
+     *  re-importable round-trip of our own sample data, not an export of
+     *  tenant content) — a leading-quote would corrupt re-import. */
     private static String csvCell(String v) {
         if (v == null) return "";
         return v.contains(",") || v.contains("\"") || v.contains("\n") ? "\"" + v.replace("\"", "\"\"") + "\"" : v;
