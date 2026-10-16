@@ -299,13 +299,23 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
         return "";
     }
 
-    /** RFC-4180 CSV field: quote when the value contains ", newline, or a comma. */
+    /** RFC-4180 CSV field: quote when the value contains ", newline, or a comma.
+     *  BUG-076 R7 — prepend a `'` on cells starting with =, +, -, @, or TAB so
+     *  Excel/Numbers/Sheets don't interpret them as a formula (which can be
+     *  used to exfiltrate data via DDE / HYPERLINK). Mirrors ClientServiceImpl. */
     private static String csvCell(String value) {
         if (value == null) return "";
-        boolean needsQuote = value.indexOf(',') >= 0 || value.indexOf('"') >= 0
-                || value.indexOf('\n') >= 0 || value.indexOf('\r') >= 0;
-        if (!needsQuote) return value;
-        return '"' + value.replace("\"", "\"\"") + '"';
+        String v = value;
+        if (!v.isEmpty()) {
+            char c = v.charAt(0);
+            if (c == '=' || c == '+' || c == '-' || c == '@' || c == '\t') {
+                v = "'" + v;
+            }
+        }
+        boolean needsQuote = v.indexOf(',') >= 0 || v.indexOf('"') >= 0
+                || v.indexOf('\n') >= 0 || v.indexOf('\r') >= 0;
+        if (!needsQuote) return v;
+        return '"' + v.replace("\"", "\"\"") + '"';
     }
 
     @Override

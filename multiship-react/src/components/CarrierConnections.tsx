@@ -47,7 +47,9 @@ import {
   labelFormatsForCarrier,
   purposeLabel,
   clearanceLabel,
+  setDbLabelFormatByCarrier,
 } from '../utils/customsOptions'
+import { carrierDropdownsService } from '../api/carrierDropdownsService'
 import {
   validateCarrierAccount,
   type CarrierAccountErrors,
@@ -406,6 +408,34 @@ export default function CarrierConnections({
     registerRefresh(loadAccounts)
     return () => registerRefresh(null)
   }, [registerRefresh, loadAccounts])
+
+  // BUG-153 R7 — label-format dropdown was reading only the hardcoded
+  // LABEL_FORMAT_BY_CARRIER map; /orders/new has long sourced it from
+  // the admin registry via setDbLabelFormatByCarrier. Prime the same
+  // override here so an admin editing a carrier account sees the exact
+  // formats their org registered. Non-admin viewers 403 — leave the
+  // static fallback in place for them.
+  useEffect(() => {
+    if (!admin) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const rows = await carrierDropdownsService.labelFormats()
+        if (cancelled) return
+        const byCarrier: Record<string, Array<{ value: string; label: string }>> = {}
+        for (const r of rows) {
+          const key = (r.carrier || '').toUpperCase()
+          if (!key) continue
+          byCarrier[key] = byCarrier[key] ?? []
+          byCarrier[key].push({ value: r.code, label: r.label })
+        }
+        setDbLabelFormatByCarrier(byCarrier)
+      } catch {
+        /* 401/403 for non-admin — fallback stays authoritative */
+      }
+    })()
+    return () => { cancelled = true }
+  }, [admin])
 
   // Pre-fill Client ID / Secret from the platform account of the chosen
   // carrier when adding a NEW account. The shipper can override them.
@@ -919,9 +949,11 @@ export default function CarrierConnections({
   }
 
   const handleDisconnectStamps = async (account: CarrierAccountRef) => {
-    if (!window.confirm(
+    const ok = await notify.confirm(
       `Disconnect ${account.accountNumber} from Stamps.com? USPS labels on this account stop until an admin authorizes it again.`,
-    )) return
+      { title: 'Disconnect from Stamps.com', confirmLabel: 'Disconnect', cancelLabel: 'Keep connected', danger: true },
+    )
+    if (!ok) return
     setBusyId(account.id)
     try {
       await accountRefService.disconnectStampsSera(account.id)
@@ -935,13 +967,11 @@ export default function CarrierConnections({
   }
 
   const handleDelete = async (account: CarrierAccountRef) => {
-    if (
-      !window.confirm(
-        `Delete account ${account.accountNumber} (${formatCarrierName(account.carrierCode)})? This can't be undone.`,
-      )
-    ) {
-      return
-    }
+    const ok = await notify.confirm(
+      `Delete account ${account.accountNumber} (${formatCarrierName(account.carrierCode)})? This can't be undone.`,
+      { title: 'Delete carrier account', confirmLabel: 'Delete', cancelLabel: 'Keep', danger: true },
+    )
+    if (!ok) return
     setBusyId(account.id)
     try {
       await accountRefService.deleteAccount(account.id)

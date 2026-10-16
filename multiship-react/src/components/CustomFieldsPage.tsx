@@ -60,8 +60,22 @@ export default function CustomFieldsPage() {
   }, [registerRefresh, refresh])
 
   const move = async (def: CustomFieldDefinition, delta: -1 | 1) => {
-    const nextPos = Math.max(0, (def.position ?? 100) + delta * 10)
-    await customFieldService.save({ ...def, position: nextPos })
+    // BUG-111 R7 — the previous nudge-by-10 approach tied with the
+    // neighbour's position (seed migrations use multiples of 10), and
+    // ASC + id-tiebreak made the row visually stay put — looked like
+    // the Up/Down buttons swapped roles. Swap the two neighbours'
+    // positions directly so the move is guaranteed to persist.
+    const i = defs.findIndex((d) => d.id === def.id)
+    if (i < 0) return
+    const j = i + delta
+    if (j < 0 || j >= defs.length) return
+    const neighbour = defs[j]
+    const myPos = def.position ?? 100
+    const theirPos = neighbour.position ?? 100
+    await Promise.all([
+      customFieldService.save({ ...def, position: theirPos }),
+      customFieldService.save({ ...neighbour, position: myPos }),
+    ])
     refresh()
   }
 

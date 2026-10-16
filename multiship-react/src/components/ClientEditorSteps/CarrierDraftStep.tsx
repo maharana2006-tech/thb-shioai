@@ -472,6 +472,18 @@ export function CarrierDraftStep({
                         <FiStar className="h-2.5 w-2.5" /> default
                       </span>
                     ) : null}
+                    {/* BUG-151 R7 — Add dialog allowed submitting a draft with
+                        no clientId/secret; the row then showed up as a happy
+                        card. Flag the gap so the operator knows the row is
+                        half-finished before clicking Create client. */}
+                    {(!d.clientId?.trim() || !d.clientSecret?.trim()) ? (
+                      <span
+                        className="ml-1.5 inline-flex items-center gap-1 rounded-full bg-rose-100 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-rose-700"
+                        title="Draft is missing credentials — complete before Create client."
+                      >
+                        missing creds
+                      </span>
+                    ) : null}
                   </p>
                   <p className="text-[10.5px] text-slate-500">
                     {d.environment} · client ID {d.clientId.slice(0, 10)}{d.clientId.length > 10 ? '…' : ''} · secret hidden

@@ -82,6 +82,51 @@ public class LabelTemplateServiceImpl implements LabelTemplateService {
         return tenantScope == null ? tenantId : tenantScope.clampClientCode(tenantId);
     }
 
+    /**
+     * BUG-107 R7 — belt on the client-side magic-byte check in
+     * LabelTemplateEditorPage.handleLogo. A direct POST (curl, bulk
+     * import, future endpoint) bypasses the browser filter, so re-check
+     * the first bytes here. Logo renders into generated commercial
+     * invoices — an SVG with embedded JS = stored-XSS in any browser
+     * that opens the invoice PDF via a viewer that executes SVG.
+     *
+     * Accepts: data:image/png;base64,… + PNG magic (89 50 4E 47)
+     *          data:image/jpeg;base64,… + JPEG SOI (FF D8 FF)
+     * Blank / null is OK — logo is optional.
+     */
+    private static void validateLogoBytes(String dataUrl) {
+        if (dataUrl == null || dataUrl.isBlank()) return;
+        boolean png = dataUrl.startsWith("data:image/png;base64,");
+        boolean jpg = dataUrl.startsWith("data:image/jpeg;base64,");
+        if (!png && !jpg) {
+            throw new IllegalArgumentException(
+                "logo must be PNG or JPEG (received a different data URL)");
+        }
+        String b64 = dataUrl.substring(dataUrl.indexOf(',') + 1);
+        if (b64.length() < 8) {
+            throw new IllegalArgumentException("logo payload too short to classify");
+        }
+        byte[] head;
+        try {
+            head = java.util.Base64.getDecoder().decode(b64.substring(0, 8));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("logo base64 is not valid");
+        }
+        if (png) {
+            boolean okPng = head.length >= 4
+                    && (head[0] & 0xFF) == 0x89 && (head[1] & 0xFF) == 0x50
+                    && (head[2] & 0xFF) == 0x4E && (head[3] & 0xFF) == 0x47;
+            if (!okPng) throw new IllegalArgumentException(
+                    "logo claims PNG MIME but bytes aren't PNG — refusing to save");
+        } else {
+            boolean okJpg = head.length >= 3
+                    && (head[0] & 0xFF) == 0xFF && (head[1] & 0xFF) == 0xD8
+                    && (head[2] & 0xFF) == 0xFF;
+            if (!okJpg) throw new IllegalArgumentException(
+                    "logo claims JPEG MIME but bytes aren't JPEG — refusing to save");
+        }
+    }
+
     @Override
     public LabelTemplate save(LabelTemplate template) {
         if (template.getTemplateType() == null || template.getTemplateType().isBlank()) {
@@ -90,6 +135,7 @@ public class LabelTemplateServiceImpl implements LabelTemplateService {
         if (template.getTenantId() != null && template.getTenantId().isBlank()) {
             template.setTenantId(null);
         }
+        validateLogoBytes(template.getLogoBase64());
         LocalDateTime now = LocalDateTime.now();
         boolean isCreate = template.getId() == null;
         if (isCreate) {
