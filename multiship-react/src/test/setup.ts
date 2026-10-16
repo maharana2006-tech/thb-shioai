@@ -41,7 +41,7 @@ if (typeof window !== 'undefined') {
     setItem(k: string, v: string) { (this as unknown as Record<string, string>)[k] = String(v) }
   }
   for (const name of ['localStorage', 'sessionStorage'] as const) {
-    let ok = false
+    let ok: boolean
     try { ok = !!(window as unknown as Record<string, unknown>)[name] } catch { ok = false }
     if (!ok) {
       const store = new MemoryStorage()

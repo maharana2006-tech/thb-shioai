@@ -39,6 +39,10 @@ export default function AdminUsersPage() {
   }, [search])
   const [roleFilter, setRoleFilter] = useState('')
   const [activeOnly, setActiveOnly] = useState(false)
+  // Captured once at mount (lazy init keeps Date.now() out of render, which the
+  // react-hooks/purity rule forbids). Used for the invite "expired" badge — the
+  // list re-renders on data changes, so a stale sub-second drift is immaterial.
+  const [nowMs] = useState(() => Date.now())
   const [assignFor, setAssignFor] = useState<AdminUser | null>(null)
   const [auditFor, setAuditFor] = useState<AdminUser | null>(null)
   /** Fix #294 — invite modal state. */
@@ -478,7 +482,7 @@ export default function AdminUsersPage() {
           </header>
           <ul className="max-h-56 divide-y divide-slate-100 overflow-y-auto text-[12.5px]">
             {invites.map((inv) => {
-              const expired = new Date(inv.expiresAt).getTime() < Date.now()
+              const expired = new Date(inv.expiresAt).getTime() < nowMs
               return (
                 <li key={inv.id} className="flex items-center justify-between gap-3 px-3 py-2">
                   <div className="min-w-0 flex-1">
