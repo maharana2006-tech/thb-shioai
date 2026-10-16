@@ -328,7 +328,17 @@ export default function CustomsProfileModal({
     const spec = territory ? taxIdentityFor(territory) : null
     if (spec) {
       for (const f of spec.fields) {
-        out[f.column] = opt((form as unknown as Record<string, unknown>)[f.column], 40, f.label)
+        const raw = (form as unknown as Record<string, unknown>)[f.column]
+        out[f.column] = opt(raw, 40, f.label)
+        // BUG-104 R7: pattern mismatch blocks Create — pre-fix the inline
+        // 'Format: 9 digits + RM + 4 digits' message was advice-only and
+        // the malformed BN was still POSTed. Fold the pattern error into
+        // fieldErrors so hasFieldErrors catches it.
+        if (!out[f.column] && f.pattern && typeof raw === 'string' && raw.trim()) {
+          if (!f.pattern.test(raw.trim())) {
+            out[f.column] = f.patternMsg ?? `Doesn't match the expected ${f.label} format.`
+          }
+        }
       }
     }
     return out

@@ -448,6 +448,11 @@ export default function AuditLogPage() {
                       <option value="TOGGLE_ACTIVE">TOGGLE_ACTIVE</option>
                       <option value="CASCADE_DISABLE">CASCADE_DISABLE</option>
                       <option value="CASCADE_ENABLE">CASCADE_ENABLE</option>
+                      {/* BUG-129 R7: ClientWarehouseServiceImpl writes
+                          ATTACH_WAREHOUSE / DETACH_WAREHOUSE rows that
+                          the picker didn't surface. */}
+                      <option value="ATTACH_WAREHOUSE">ATTACH_WAREHOUSE</option>
+                      <option value="DETACH_WAREHOUSE">DETACH_WAREHOUSE</option>
                     </Select>
                     {/* Audit A2 — date-range filters mirror the backend's
                         since/until params (already supported, no UI pre-fix).
