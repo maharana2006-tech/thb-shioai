@@ -5,6 +5,7 @@ import com.multiship.backend.repository.CountryRepository;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -29,7 +30,10 @@ public class AdminCountriesController {
     @Operation(summary = "List every seeded country row.")
     @GetMapping
     public ResponseEntity<ApiResponse<List<Map<String, Object>>>> list() {
-        List<Map<String, Object>> body = repo.findAll().stream().map(r -> {
+        // Order by code so the list is stable: a bare findAll() returns rows in
+        // physical tuple order, so any row edit (e.g. the V164 diacritic fix)
+        // would relocate those rows to the end of the list.
+        List<Map<String, Object>> body = repo.findAll(Sort.by("countryCode")).stream().map(r -> {
             Map<String, Object> m = new HashMap<>();
             m.put("countryCode", r.getCountryCode());
             m.put("name", r.getName());
