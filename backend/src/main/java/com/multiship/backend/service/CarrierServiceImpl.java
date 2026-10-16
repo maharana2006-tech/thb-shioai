@@ -1781,12 +1781,32 @@ public class CarrierServiceImpl implements CarrierService {
         // client has a default attached), override the `from` block with the
         // warehouse address. Any override throws WAREHOUSE_ATTACH_FORBIDDEN
         // when the caller borrowed a warehouse from another tenant.
+        //
+        // BUG-149: on RETURN mode the sender is the CUSTOMER (physical
+        // origin of the return), not the warehouse. The FE sends the
+        // typed customer address in req.getSender(); overriding it from
+        // req.getWarehouseCode() (which the FE still sends for other
+        // resolver code paths) made every return label print warehouse →
+        // warehouse, which can't be used.
         String resolvedWarehouseCode = null;
         Long resolvedWarehouseId = null;
-        if (hasClient && StringUtils.hasText(req.getWarehouseCode())) {
+        if (hasClient && StringUtils.hasText(req.getWarehouseCode())
+                && !Boolean.TRUE.equals(req.getIsReturn())) {
             try {
                 Warehouse w = resolutionService.assertWarehouse(resolvedClient, req.getWarehouseCode());
                 from = mergeFromWarehouse(from, w);
+                resolvedWarehouseCode = w.getCode();
+                resolvedWarehouseId = w.getId();
+            } catch (ShipmentResolutionException e) {
+                return toResolutionFailure(e);
+            }
+        } else if (hasClient && StringUtils.hasText(req.getWarehouseCode())) {
+            // On return, still VERIFY the warehouse code (tenant check +
+            // existence) but don't override the sender. Carry the id/code
+            // through so downstream persistence tags the order with its
+            // owning warehouse without rewriting the customer address.
+            try {
+                Warehouse w = resolutionService.assertWarehouse(resolvedClient, req.getWarehouseCode());
                 resolvedWarehouseCode = w.getCode();
                 resolvedWarehouseId = w.getId();
             } catch (ShipmentResolutionException e) {

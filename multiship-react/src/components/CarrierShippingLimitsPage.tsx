@@ -321,7 +321,14 @@ function CarrierShippingLimitEditorDialog({ row, onClose, onSaved }: EditorProps
     // QA1013R5 and sat as an Active row that never applied. Require the
     // code to match a known carrier.
     const KNOWN_CARRIERS = ['UPS', 'FEDEX', 'USPS', 'DHL', 'STAMPS_COM', 'USPS_DIRECT']
-    if (!KNOWN_CARRIERS.includes(carrierCode.trim().toUpperCase())) {
+    // BUG-155: seed carrier limits were saved with carrier='STAMPS', which
+    // no longer matches any platform-registered code. Accept it as an
+    // alias so the seeded row can be opened + resaved without being
+    // deleted and re-created.
+    const CARRIER_ALIASES: Record<string, string> = { STAMPS: 'STAMPS_COM' }
+    const typed = carrierCode.trim().toUpperCase()
+    const canonical = CARRIER_ALIASES[typed] ?? typed
+    if (!KNOWN_CARRIERS.includes(canonical)) {
       return `Unknown carrier code '${carrierCode.trim()}'. Known: ${KNOWN_CARRIERS.join(', ')}.`
     }
     // BUG-096 — 'Effective until' was accepted as a past date, so the row
@@ -364,8 +371,13 @@ function CarrierShippingLimitEditorDialog({ row, onClose, onSaved }: EditorProps
     }
     setError(null)
     setSaving(true)
+    // BUG-155: canonicalize legacy aliases (STAMPS → STAMPS_COM) before
+    // POST so the saved row matches the platform registry — otherwise a
+    // seeded 'STAMPS' row stays dead when resaved as-is.
+    const CARRIER_ALIASES: Record<string, string> = { STAMPS: 'STAMPS_COM' }
+    const typedCode = carrierCode.trim().toUpperCase()
     const payload: CarrierShippingLimitPayload = {
-      carrierCode: carrierCode.trim().toUpperCase(),
+      carrierCode: CARRIER_ALIASES[typedCode] ?? typedCode,
       serviceCode: serviceCode.trim() || null,
       scope,
       direction: direction || null,

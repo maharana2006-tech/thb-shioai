@@ -333,8 +333,13 @@ function NotFoundPage() {
           Check the link, or jump back to the dashboard.
         </p>
         <div className="mt-4 flex items-center gap-2">
+          {/* BUG-152: App.css sets `a { color: inherit }`, so plain
+              `text-white` on an anchor resolves to the inherited brown
+              on this card and the label becomes invisible on the dark
+              navy button. Pin the color with the Tailwind !important
+              prefix so the anchor overrides inherit. */}
           <a href={workspacePaths.dashboard}
-             className="rounded-lg bg-slate-900 px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-slate-800">
+             className="rounded-lg bg-slate-900 px-3 py-1.5 text-[12.5px] font-semibold !text-white hover:bg-slate-800">
             Go to Dashboard
           </a>
           <button type="button" onClick={() => history.back()}

@@ -6,14 +6,15 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Index;
+import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import org.hibernate.annotations.CreationTimestamp;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 
 /**
  * Append-only audit trail across the settings write endpoints. Records
@@ -129,7 +130,18 @@ public class AuditLog {
     @Column(name = "order_no")
     private Integer orderNo;
 
-    @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
+
+    /**
+     * BUG-160 R7: forcing UTC on persist so the Logs FE (which treats
+     * zone-less timestamps as UTC per BUG-119) renders the right wall-
+     * clock. The old @CreationTimestamp used LocalDateTime.now() in the
+     * JVM-default zone — on an IST box that put every Logs row 5½ hours
+     * ahead of reality once formatDateTime appended 'Z'.
+     */
+    @PrePersist
+    void stampCreatedUtc() {
+        if (createdAt == null) createdAt = LocalDateTime.now(ZoneOffset.UTC);
+    }
 }
