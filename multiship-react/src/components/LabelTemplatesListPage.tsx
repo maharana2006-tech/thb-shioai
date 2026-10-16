@@ -381,7 +381,7 @@ export default function LabelTemplatesListPage() {
     // via the order's own client, so a template that doesn't yet have
     // orders could never be previewed and any client's template could
     // get accidentally rendered under any other client's banner.
-    const tid = previewContext?.id
+    const tid = previewContext?.id ?? undefined
     setPreviewing(true)
     try {
       const objectUrl = await labelTemplateService.fetchPreviewObjectUrl(orderNo, tid)

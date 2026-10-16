@@ -11,7 +11,6 @@ import {
   type SchedulerRun,
   type SchedulerWindow,
 } from '../api/dtcSchedulerService'
-import { dtcService } from '../api/dtcService'
 import { clientService } from '../api/clientService'
 import { notify } from '../utils/notify'
 
