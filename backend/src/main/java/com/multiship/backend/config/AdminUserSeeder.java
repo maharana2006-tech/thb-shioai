@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.core.annotation.Order;
+import org.springframework.core.env.Environment;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 
@@ -19,6 +20,11 @@ import org.springframework.stereotype.Component;
  * Credentials are overridable via ADMIN_SEED_USERNAME / ADMIN_SEED_EMAIL /
  * ADMIN_SEED_PASSWORD; the defaults are for local dev only and are logged at
  * WARN on creation so they're never a silent surprise.
+ *
+ * Prod safety (Vuln 1 — hardcoded-default-admin): when the 'prod' profile is
+ * active, ADMIN_SEED_PASSWORD is mandatory. Boot fails fast if it's unset —
+ * mirrors the JWT_SECRET / SECRETS_ENCRYPTION_KEY contract in
+ * application-prod.properties. Dev/CI keep the Admin@123 convenience.
  */
 @Component
 @RequiredArgsConstructor
@@ -29,6 +35,7 @@ public class AdminUserSeeder implements CommandLineRunner {
 
     private final UserRepository users;
     private final PasswordEncoder passwordEncoder;
+    private final Environment environment;
 
     @Override
     public void run(String... args) {
@@ -38,7 +45,17 @@ public class AdminUserSeeder implements CommandLineRunner {
 
         String username = System.getenv().getOrDefault("ADMIN_SEED_USERNAME", "admin");
         String email = System.getenv().getOrDefault("ADMIN_SEED_EMAIL", "admin@multiship.local");
-        String password = System.getenv().getOrDefault("ADMIN_SEED_PASSWORD", "Admin@123");
+        String password = System.getenv().get("ADMIN_SEED_PASSWORD");
+        if (password == null || password.isBlank()) {
+            for (String p : environment.getActiveProfiles()) {
+                if ("prod".equalsIgnoreCase(p)) {
+                    throw new IllegalStateException(
+                            "ADMIN_SEED_PASSWORD must be set on first boot in the 'prod' profile. "
+                                    + "Refusing to seed the initial admin with a well-known default.");
+                }
+            }
+            password = "Admin@123";  // dev / CI only — never reached in prod
+        }
 
         User admin = User.builder()
                 .username(username)
