@@ -10,6 +10,7 @@ import { settingsPaths } from '../routes/workspaceRoutes'
 import { isAbortError } from '../api/apiClient'
 import { useConnectedCarriers } from '../hooks/useConnectedCarriers'
 import { validatePhoneForCountry, validateZip } from '../utils/clientValidation'
+import { STATE_CODE_SETS } from '../utils/stateCodes'
 import { notify } from '../utils/notify'
 
 /**
@@ -80,6 +81,22 @@ function StatusPill({ status }: { status: string }) {
       : s === 'EMPTY' || s === 'NOT_SUPPORTED' ? 'bg-slate-100 text-slate-500'
         : 'bg-rose-50 text-rose-700'
   return <span className={`inline-block rounded-full px-2 py-0.5 text-[10.5px] font-bold ${tone}`}>{s || '—'}</span>
+}
+
+// BUG-157: mirror /orders/new's shipmentSchema state rule — US / CA /
+// AU / IN / BR / MX require a state; US / CA / AU / MX also validate
+// against a known-code set.
+const STATE_REQUIRED_COUNTRIES = new Set(['US', 'CA', 'AU', 'IN', 'BR', 'MX'])
+function validatePickupState(state: string | undefined | null, country: string | undefined | null): string | null {
+  const cc = (country || '').trim().toUpperCase()
+  if (!STATE_REQUIRED_COUNTRIES.has(cc)) return null
+  const s = (state || '').trim().toUpperCase()
+  if (!s) return `State / province is required for ${cc} pickups.`
+  const set = STATE_CODE_SETS[cc]
+  if (set && !set.has(s)) {
+    return `Use the ${cc} state code (e.g. ${[...set].slice(0, 2).join(', ')}), not the full name.`
+  }
+  return null
 }
 
 export default function PickupsEodPage() {
@@ -212,6 +229,10 @@ export default function PickupsEodPage() {
       validatePhoneForCountry(pickup.contactPhone, pickup.countryCode, true),
       !pickup.addressLine1?.trim() ? 'Street address is required.' : null,
       !pickup.city?.trim() ? 'City is required.' : null,
+      // BUG-157 R7: mirror /orders/new's shipmentSchema state rule —
+      // US / CA / AU / IN / BR / MX require a state; US / CA / AU / MX
+      // validate against a known-code set.
+      validatePickupState(pickup.state, pickup.countryCode),
       validateZip(pickup.postalCode, pickup.countryCode, true),
       !pickup.pickupDate ? 'Pickup date is required.'
         : pickup.pickupDate < today() ? 'Pickup date cannot be in the past.' : null,

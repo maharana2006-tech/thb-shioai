@@ -78,9 +78,12 @@ public class UserInviteService {
             // which looks like a timestamp from a stacktrace, not an expiry date
             // an operator can read. Format as 'Oct 21, 2026, 2:06 PM UTC' instead.
             java.time.LocalDateTime exp = live.get(0).getExpiresAt();
+            // BUG-145 R7: dropped the ' UTC' suffix — the stored
+            // LocalDateTime is server-local (whatever the JVM runs on),
+            // not UTC. Pending invites prints the same value as a local
+            // time; the suffix was 5½ hours off on an IST deploy.
             String expiryText = exp.format(
-                java.time.format.DateTimeFormatter.ofPattern("MMM d, yyyy, h:mm a"))
-                + " UTC";
+                java.time.format.DateTimeFormatter.ofPattern("MMM d, yyyy, h:mm a"));
             throw new IllegalStateException(
                 "An invite for " + normalisedEmail + " is still pending (expires "
                     + expiryText + "). Revoke it from Pending invites, "

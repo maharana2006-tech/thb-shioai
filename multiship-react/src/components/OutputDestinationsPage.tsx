@@ -82,7 +82,13 @@ export default function OutputDestinationsPage() {
   }, [rows])
 
   const onDelete = async (row: OutputDestination) => {
-    if (!window.confirm(`Delete ${row.destinationType} destination for ${row.clientCode}?`)) return
+    // BUG-158: swap window.confirm for notify.confirm so Delete uses
+    // the same in-app dialog as Custom Fields / Code Maps / Clients.
+    const ok = await notify.confirm(
+      `Delete ${row.destinationType} destination for ${row.clientCode}? This can't be undone.`,
+      { title: 'Delete output destination', confirmLabel: 'Delete', danger: true },
+    )
+    if (!ok) return
     try {
       await outputDestinationService.delete(row.id)
       notify.success(`Destination ${row.id} deleted.`)
