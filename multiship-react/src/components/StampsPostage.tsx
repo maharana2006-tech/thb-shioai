@@ -24,7 +24,14 @@ const MIN_TOPUP = 10
 const LOW_BALANCE = 25
 
 const usd = (v: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(v)
-const errorText = (e: unknown) => (e instanceof Error && e.message ? e.message : 'Something went wrong. Try again.')
+// BUG-036 R7 — surface the carrier/API message when we have one; fall
+// back to a Stamps-specific hint (not the generic "Something went
+// wrong") so the operator knows which carrier flow broke.
+const errorText = (e: unknown) => (
+  e instanceof Error && e.message
+    ? e.message
+    : "Couldn't reach Stamps.com. Check the account's credentials in Carriers > Accounts and retry."
+)
 
 /** Opens a one-use Stamps.com link. The tab opens on the click itself so pop-up blockers allow it. */
 async function openStampsPage(accountId: number, page: StampsPage) {

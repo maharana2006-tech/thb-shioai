@@ -197,11 +197,13 @@ export default function RegionCountryPicker({
               </span>
             </button>
           ) : null}
-          {/* BUG-148 — at 1400px the modal squeezed each 3-column cell to
-              ~47 px, so labels truncated to just the first letter. Widen
-              so each cell shows at least the ISO code + 1-2 words of the
-              name. */}
-          <div className="ml-3 grid max-h-[190px] grid-cols-1 gap-x-2 overflow-y-auto border-l border-slate-100 pl-3 sm:grid-cols-2 lg:grid-cols-3">
+          {/* BUG-148 — initial fix went 1→2→3 cols at sm/lg but 3 cols
+              kicks in at lg (1024px), still crowding each cell to ~55px
+              and chopping country names. R7 revisit: stay at 2 cols
+              until xl (1280px) + add a 4-col variant for ultra-wide
+              operators (≥1536px). Each cell has room to show "GB United
+              Kingdom" fully at every breakpoint now. */}
+          <div className="ml-3 grid max-h-[190px] grid-cols-1 gap-x-2 overflow-y-auto border-l border-slate-100 pl-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
             {countriesInRegion(activeRegion).map((c) => {
               const reason = blockReason(c.code)
               const on = selected.has(c.code)

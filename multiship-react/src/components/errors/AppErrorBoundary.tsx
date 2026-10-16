@@ -47,10 +47,16 @@ export default class AppErrorBoundary extends Component<AppErrorBoundaryProps, A
           className="flex min-h-screen flex-col items-center justify-center bg-slate-50 px-6 py-12"
         >
           <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h1 className="text-lg font-semibold text-slate-950">Something went wrong.</h1>
+            <h1 className="text-lg font-semibold text-slate-950">
+              This page couldn't finish loading.
+            </h1>
             <p className="mt-1 text-[13px] text-slate-500">
-              The app hit an unexpected error. Reload to recover; if it keeps happening,
-              share the stack from your browser console with support.
+              {/* BUG-036 R7 — swap the generic "Something went wrong" title
+                  for a more specific hint. The error detail stays available
+                  below for support, so operators see WHAT broke instead of
+                  the context-free fallback. */}
+              Something unexpected tripped the page. Reload usually fixes it; if the
+              same error returns, open the Error detail below and share it with support.
             </p>
             <details className="mt-3 rounded-lg bg-slate-50 p-3 text-[11.5px] text-slate-600">
               <summary className="cursor-pointer font-medium">Error detail</summary>
