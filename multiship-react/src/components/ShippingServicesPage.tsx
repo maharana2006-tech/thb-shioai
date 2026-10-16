@@ -24,6 +24,8 @@ import { allowlistUsageService, type ClientAllowedService } from '../api/clientC
 import { countryName } from '../utils/countries'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import CarrierSyncMenuModal from './modals/CarrierSyncMenuModal'
+import { useAppSession } from '../hooks/useAppSession'
+import { canManageCarriers, normalizeRole } from '../utils/roles'
 
 const CARRIER_BADGE: Record<string, { bg: string; mono: string }> = {
   UPS: { bg: 'bg-[#351c15]', mono: 'UPS' },
@@ -111,6 +113,12 @@ export default function ShippingServicesPage({ active = true, origin: originProp
   const [syncMenuFor, setSyncMenuFor] = useState<string | null>(null)
 
   const [rules, setRules] = useState<ShipMethodRule[]>([])
+
+  // Catalog writes (enable/disable, branded-packaging flag, package links) are
+  // ADMIN-only at the backend; hide the controls so operators don't click into
+  // a 403. Reads/list stay visible to USER.
+  const { role } = useAppSession()
+  const canManage = canManageCarriers(normalizeRole(role))
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -487,9 +495,10 @@ export default function ShippingServicesPage({ active = true, origin: originProp
                           type="button"
                           role="switch"
                           aria-checked={s.enabled}
-                          onClick={() => void toggle(s)}
-                          className={`relative h-5 w-9 shrink-0 rounded-full transition ${s.enabled ? 'bg-[#1f150c]' : 'bg-slate-200'}`}
-                          title={s.enabled ? 'Disable' : 'Enable'}
+                          disabled={!canManage}
+                          onClick={() => canManage && void toggle(s)}
+                          className={`relative h-5 w-9 shrink-0 rounded-full transition disabled:cursor-not-allowed ${s.enabled ? 'bg-[#1f150c]' : 'bg-slate-200'}`}
+                          title={canManage ? (s.enabled ? 'Disable' : 'Enable') : (s.enabled ? 'Enabled (admin only)' : 'Disabled (admin only)')}
                         >
                           <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${s.enabled ? 'left-[18px]' : 'left-0.5'}`} />
                         </button>
@@ -499,9 +508,12 @@ export default function ShippingServicesPage({ active = true, origin: originProp
                         </div>
                         <button
                           type="button"
-                          onClick={() => openPackages(s)}
+                          disabled={!canManage}
+                          onClick={() => canManage && openPackages(s)}
                           title={
-                            customOnly
+                            !canManage
+                              ? `${pkgCount} linked package${pkgCount === 1 ? '' : 's'} (editing is admin only)`
+                              : customOnly
                               ? `${s.serviceCode} is marked CUSTOM-packaging-only — no branded packaging by design (Ground-family default). Click to edit / flip the flag.`
                               : needsPackages
                                 ? `${s.serviceCode} is enabled but has zero linked packages — manual-label will fail with SERVICE_HAS_NO_LINKED_PACKAGES. Click to link at least one preset.`
@@ -510,7 +522,7 @@ export default function ShippingServicesPage({ active = true, origin: originProp
                                   : 'No linked packages (service disabled) — click to link'
                           }
                           data-testid={`pkg-count-${s.id}`}
-                          className={`inline-flex shrink-0 items-center gap-1 rounded-lg border px-1.5 py-1 text-[10px] font-bold transition ${
+                          className={`inline-flex shrink-0 items-center gap-1 rounded-lg border px-1.5 py-1 text-[10px] font-bold transition disabled:cursor-not-allowed ${
                             customOnly
                               ? 'border-slate-300 bg-slate-100 text-slate-600 hover:bg-slate-200'
                               : needsPackages

@@ -10,4 +10,7 @@ public interface CarrierEodLogRepository extends JpaRepository<CarrierEodLog, Lo
 
     /** Most recent events first — feeds the Settings page's activity table. */
     List<CarrierEodLog> findAllByOrderByCreatedAtDesc(Pageable pageable);
+
+    /** Tenant-scoped variant: a scoped USER sees only their own client's events. */
+    List<CarrierEodLog> findByCustomerNoIgnoreCaseOrderByCreatedAtDesc(String customerNo, Pageable pageable);
 }

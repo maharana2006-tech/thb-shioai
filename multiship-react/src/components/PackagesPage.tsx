@@ -506,13 +506,15 @@ export default function PackagesPage({ active = true, origin: originProp, onOrig
             {syncing ? 'Syncing…' : 'Sync carrier packaging'}
           </button>
         ) : null}
-        <button
-          type="button"
-          onClick={() => setEditing(blankPreset())}
-          className="ml-auto inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[12.5px] font-semibold text-white transition hover:bg-[#412d15]"
-        >
-          <FiPlus className="h-3.5 w-3.5" /> Add Package
-        </button>
+        {canSync ? (
+          <button
+            type="button"
+            onClick={() => setEditing(blankPreset())}
+            className="ml-auto inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[12.5px] font-semibold text-white transition hover:bg-[#412d15]"
+          >
+            <FiPlus className="h-3.5 w-3.5" /> Add Package
+          </button>
+        ) : null}
       </div>
 
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -655,32 +657,34 @@ export default function PackagesPage({ active = true, origin: originProp, onOrig
               {/* stencil footer: carton markings + actions */}
               <div className="mt-3 flex items-center justify-between gap-2 border-t border-dashed border-slate-200 px-4 py-2.5">
                 <CartonMarks />
-                <div className="flex items-center gap-1.5">
-                  {!p.default ? (
+                {canSync ? (
+                  <div className="flex items-center gap-1.5">
+                    {!p.default ? (
+                      <button
+                        type="button"
+                        onClick={() => void makeDefault(p)}
+                        className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-600 transition hover:border-amber-300 hover:text-amber-700"
+                      >
+                        <FiStar className="h-3 w-3" /> Make default
+                      </button>
+                    ) : null}
                     <button
                       type="button"
-                      onClick={() => void makeDefault(p)}
-                      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-600 transition hover:border-amber-300 hover:text-amber-700"
+                      onClick={() => setEditing({ ...p })}
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
                     >
-                      <FiStar className="h-3 w-3" /> Make default
+                      <FiEdit3 className="h-3 w-3" /> Edit
                     </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    onClick={() => setEditing({ ...p })}
-                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
-                  >
-                    <FiEdit3 className="h-3 w-3" /> Edit
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void remove(p)}
-                    aria-label={`Delete ${p.name}`}
-                    className="rounded-lg border border-rose-200 bg-white p-1.5 text-rose-600 transition hover:bg-rose-50"
-                  >
-                    <FiTrash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
+                    <button
+                      type="button"
+                      onClick={() => void remove(p)}
+                      aria-label={`Delete ${p.name}`}
+                      className="rounded-lg border border-rose-200 bg-white p-1.5 text-rose-600 transition hover:bg-rose-50"
+                    >
+                      <FiTrash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ) : null}
               </div>
             </div>
           ))

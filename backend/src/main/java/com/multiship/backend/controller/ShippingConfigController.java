@@ -57,7 +57,7 @@ public class ShippingConfigController {
     }
 
     @Operation(summary = "Enable/disable one service")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasRole('ADMIN')")
     @PatchMapping("/shipping-services/{id}")
     public ResponseEntity<ApiResponse<ShippingService>> setEnabled(
             @PathVariable Long id, @RequestBody Map<String, Boolean> body) {
@@ -74,7 +74,7 @@ public class ShippingConfigController {
      * PackagingAllowed javadoc for the full contract.
      */
     @Operation(summary = "Toggle whether a service accepts carrier-branded packaging (Sprint 52 PR X)")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasRole('ADMIN')")
     @PatchMapping("/shipping-services/{id}/branded-packaging")
     public ResponseEntity<ApiResponse<ShippingService>> setBrandedPackagingAllowed(
             @PathVariable Long id, @RequestBody Map<String, Boolean> body) {
@@ -105,7 +105,7 @@ public class ShippingConfigController {
     // (ClientCodeMapController upsert for SHIPVIA kind).
 
     @Operation(summary = "Replace a service's allowed packages (+ discount %)")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasRole('ADMIN')")
     @PutMapping("/shipping-services/{id}/packages")
     public ResponseEntity<ApiResponse<java.util.List<com.multiship.backend.model.ServicePackage>>> setServicePackages(
             @PathVariable Long id, @RequestBody java.util.List<com.multiship.backend.model.ServicePackage> links) {
@@ -136,8 +136,13 @@ public class ShippingConfigController {
         return ResponseEntity.status(r.getCode()).body(r);
     }
 
+    // Preset writes are ADMIN-only. When the client self-service packages panel
+    // (ClientOwnedPackagesPanel / ClientEditorPage, currently disabled) is
+    // revived, do NOT relax this role — add owner-scoping in the service so a
+    // caller can only touch their own client's presets (savePreset/deletePreset/
+    // setDefault today trust the request body's ownerType/ownerClientCode).
     @Operation(summary = "Create a package preset")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasRole('ADMIN')")
     @PostMapping("/package-presets")
     public ResponseEntity<ApiResponse<PackagePreset>> createPreset(@RequestBody PackagePreset request) {
         ApiResponse<PackagePreset> r = service.savePreset(null, request);
@@ -145,7 +150,7 @@ public class ShippingConfigController {
     }
 
     @Operation(summary = "Update a package preset")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasRole('ADMIN')")
     @PutMapping("/package-presets/{id}")
     public ResponseEntity<ApiResponse<PackagePreset>> updatePreset(
             @PathVariable Long id, @RequestBody PackagePreset request) {
@@ -154,7 +159,7 @@ public class ShippingConfigController {
     }
 
     @Operation(summary = "Make a preset the default package")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasRole('ADMIN')")
     @PutMapping("/package-presets/{id}/default")
     public ResponseEntity<ApiResponse<PackagePreset>> setDefault(@PathVariable Long id) {
         ApiResponse<PackagePreset> r = service.setDefaultPreset(id);
@@ -162,7 +167,7 @@ public class ShippingConfigController {
     }
 
     @Operation(summary = "Delete a package preset")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasRole('ADMIN')")
     @DeleteMapping("/package-presets/{id}")
     public ResponseEntity<ApiResponse<Void>> deletePreset(@PathVariable Long id) {
         ApiResponse<Void> r = service.deletePreset(id);

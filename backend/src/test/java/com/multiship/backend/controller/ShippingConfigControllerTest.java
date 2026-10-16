@@ -467,13 +467,21 @@ class ShippingConfigControllerTest {
     }
 
     @Test
-    void preAuthorize_setEnabled_requiresAdminOrUser() throws NoSuchMethodException {
-        assertEquals("hasAnyRole('ADMIN', 'USER')", preAuth("setEnabled", Long.class, Map.class).value());
+    void preAuthorize_setEnabled_requiresAdminOnly() throws NoSuchMethodException {
+        // Catalog writes are ADMIN-only — a plain USER could otherwise disable a
+        // service platform-wide for every tenant.
+        assertEquals("hasRole('ADMIN')", preAuth("setEnabled", Long.class, Map.class).value());
     }
 
     @Test
-    void preAuthorize_setServicePackages_requiresAdminOrUser() throws NoSuchMethodException {
-        assertEquals("hasAnyRole('ADMIN', 'USER')",
+    void preAuthorize_setBrandedPackagingAllowed_requiresAdminOnly() throws NoSuchMethodException {
+        assertEquals("hasRole('ADMIN')",
+                preAuth("setBrandedPackagingAllowed", Long.class, Map.class).value());
+    }
+
+    @Test
+    void preAuthorize_setServicePackages_requiresAdminOnly() throws NoSuchMethodException {
+        assertEquals("hasRole('ADMIN')",
                 preAuth("setServicePackages", Long.class, List.class).value());
     }
 
@@ -490,25 +498,31 @@ class ShippingConfigControllerTest {
     }
 
     @Test
-    void preAuthorize_createPreset_requiresAdminOrUser() throws NoSuchMethodException {
-        assertEquals("hasAnyRole('ADMIN', 'USER')",
+    void preAuthorize_createPreset_requiresAdminOnly() throws NoSuchMethodException {
+        assertEquals("hasRole('ADMIN')",
                 preAuth("createPreset", PackagePreset.class).value());
     }
 
     @Test
-    void preAuthorize_updatePreset_requiresAdminOrUser() throws NoSuchMethodException {
-        assertEquals("hasAnyRole('ADMIN', 'USER')",
+    void preAuthorize_updatePreset_requiresAdminOnly() throws NoSuchMethodException {
+        assertEquals("hasRole('ADMIN')",
                 preAuth("updatePreset", Long.class, PackagePreset.class).value());
     }
 
     @Test
-    void preAuthorize_setDefault_requiresAdminOrUser() throws NoSuchMethodException {
-        assertEquals("hasAnyRole('ADMIN', 'USER')", preAuth("setDefault", Long.class).value());
+    void preAuthorize_setDefault_requiresAdminOnly() throws NoSuchMethodException {
+        assertEquals("hasRole('ADMIN')", preAuth("setDefault", Long.class).value());
     }
 
     @Test
-    void preAuthorize_deletePreset_requiresAdminOrUser() throws NoSuchMethodException {
-        assertEquals("hasAnyRole('ADMIN', 'USER')", preAuth("deletePreset", Long.class).value());
+    void preAuthorize_deletePreset_requiresAdminOnly() throws NoSuchMethodException {
+        assertEquals("hasRole('ADMIN')", preAuth("deletePreset", Long.class).value());
+    }
+
+    @Test
+    void preAuthorize_shipViaCodes_staysAdminOrUser() throws NoSuchMethodException {
+        // Read endpoint — the importer UI needs operator (USER) reads.
+        assertEquals("hasAnyRole('ADMIN', 'USER')", preAuth("shipViaCodes", String.class).value());
     }
 
     @Test

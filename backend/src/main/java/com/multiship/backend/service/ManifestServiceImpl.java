@@ -436,9 +436,15 @@ public class ManifestServiceImpl implements ManifestService {
     @Override
     public List<EodEventDTO> recentEvents(int limit) {
         int n = limit <= 0 || limit > 200 ? 50 : limit;
-        return carrierEodLogRepository
-                .findAllByOrderByCreatedAtDesc(org.springframework.data.domain.PageRequest.of(0, n))
-                .stream().map(EodEventDTO::from).toList();
+        var page = org.springframework.data.domain.PageRequest.of(0, n);
+        // Tenant gate — a scoped USER sees only their own client's events;
+        // platform operators (empty scope) still see all. Without this the
+        // activity log leaked every tenant's close-out rows (account numbers,
+        // customerNo, createdBy). Mirrors closeOut/closeDay's clamp.
+        var rows = tenantScope.resolveScope()
+                .map(scope -> carrierEodLogRepository.findByCustomerNoIgnoreCaseOrderByCreatedAtDesc(scope, page))
+                .orElseGet(() -> carrierEodLogRepository.findAllByOrderByCreatedAtDesc(page));
+        return rows.stream().map(EodEventDTO::from).toList();
     }
 
     /**
