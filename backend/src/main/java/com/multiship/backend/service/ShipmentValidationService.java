@@ -1334,6 +1334,44 @@ public class ShipmentValidationService {
             errors.add(issue(ErrorCode.VALIDATION_ERROR, "Return labels need the customer's email (in \"Return from · "
                     + "customer\"), so the carrier can send or announce the return label.", "sender.email"));
         }
+        // BUG-136 R7 — reject a return whose "Return from · customer" address
+        // is the same as "Return to · your address". This is almost always the
+        // FE pre-fill leaking the warehouse address into the customer block,
+        // and the resulting label has FROM == TO (useless as a return).
+        if (Boolean.TRUE.equals(req.getIsReturn()) && from != null && to != null
+                && addressesMatch(from, to)) {
+            errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                    "Return label \"from\" and \"to\" are the same address. "
+                            + "\"Return from · customer\" should be the customer's address, "
+                            + "not your warehouse — the warehouse is the \"Return to\" block.",
+                    "sender.addressLine1"));
+        }
+    }
+
+    /** BUG-136 R7 — address-equality for the return origin/destination guard.
+     *  Case-insensitive + trim-tolerant on the comparable fields. ZIP compared
+     *  on the 5-digit base (ZIP+4 vs 5-digit still counts as same place). */
+    private static boolean addressesMatch(ManualShipmentRequest.Address a, ManualShipmentRequest.Address b) {
+        return eqCI(a.getAddressLine1(), b.getAddressLine1())
+                && eqCI(a.getCity(), b.getCity())
+                && eqCI(a.getState(), b.getState())
+                && eqZip5(a.getPostalCode(), b.getPostalCode())
+                && eqCI(a.getCountryCode(), b.getCountryCode());
+    }
+
+    private static boolean eqCI(String a, String b) {
+        return (a == null ? "" : a.trim()).equalsIgnoreCase(b == null ? "" : b.trim());
+    }
+
+    private static boolean eqZip5(String a, String b) {
+        return zip5(a).equals(zip5(b));
+    }
+
+    private static String zip5(String s) {
+        if (s == null) return "";
+        String t = s.trim();
+        int dash = t.indexOf('-');
+        return dash > 0 ? t.substring(0, dash) : t;
     }
 
     /** The client's customs profile for the destination, or null. */

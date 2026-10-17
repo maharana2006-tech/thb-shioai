@@ -3259,20 +3259,28 @@ public class StampsConnector implements CarrierConnector {
     }
 
     /** Read a SERA address object into our {@link AddressToValidate} record.
-     *  Missing fields fall back to the input (so a partial echo doesn't
-     *  erase the operator's entry). Returns null when the node is empty. */
+     *  Missing OR blank fields fall back to the input (so a partial echo
+     *  doesn't erase the operator's entry — BUG-018 R7: SERA for non-US
+     *  addresses echoes empty string on street-level fields, pre-fix that
+     *  tripped the "normalised" warning + emptied the suggestion panel).
+     *  Returns null when the node is empty. */
     private static AddressToValidate readSeraAddress(JsonNode node, AddressToValidate input) {
         if (node == null || node.isMissingNode() || node.isNull() || !node.isObject()) return null;
         return new AddressToValidate(
-                node.path("name").asText(input == null ? null : input.name()),
-                node.path("company_name").asText(input == null ? null : input.company()),
-                node.path("address_line1").asText(input == null ? null : input.addressLine1()),
-                node.path("address_line2").asText(input == null ? null : input.addressLine2()),
-                node.path("address_line3").asText(input == null ? null : input.addressLine3()),
-                node.path("city").asText(input == null ? null : input.city()),
-                node.path("state_province").asText(input == null ? null : input.state()),
-                node.path("postal_code").asText(input == null ? null : input.postalCode()),
-                node.path("country_code").asText(input == null ? null : input.countryCode()));
+                orInput(node, "name",         input == null ? null : input.name()),
+                orInput(node, "company_name", input == null ? null : input.company()),
+                orInput(node, "address_line1", input == null ? null : input.addressLine1()),
+                orInput(node, "address_line2", input == null ? null : input.addressLine2()),
+                orInput(node, "address_line3", input == null ? null : input.addressLine3()),
+                orInput(node, "city",         input == null ? null : input.city()),
+                orInput(node, "state_province", input == null ? null : input.state()),
+                orInput(node, "postal_code",  input == null ? null : input.postalCode()),
+                orInput(node, "country_code", input == null ? null : input.countryCode()));
+    }
+
+    private static String orInput(JsonNode node, String field, String fallback) {
+        String v = node.path(field).asText(null);
+        return (v == null || v.isBlank()) ? fallback : v;
     }
 
     /** Field-level equality for the SERA matched_address echo. Case-

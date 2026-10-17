@@ -621,8 +621,30 @@ public class OrderController {
         } else if (client != null && client.getShipFrom() != null && client.getShipFrom().hasValue()) {
             shipper = addressMap(client.getShipFrom(), client.getName());
             returnTo = addressMap(client.effectiveReturnAddress(), client.getName());
+        } else if (labelDetails != null) {
+            // BUG-137 R7 — the preview card for an EXISTING label used to fall
+            // back to the platform shipper default (Multiship Warehouse,
+            // Bengaluru) when the order's ship_from_* was blank + the client
+            // had no ship-from configured. The real label is already in the
+            // carrier's hands with a different shipper, so the preview was a
+            // lie. Return the order's shipFrom block as-is (likely half-empty)
+            // + let the FE render dashes for missing fields — never swap in
+            // the Bengaluru default for a label that's already been bought.
+            shipper = new LinkedHashMap<>();
+            shipper.put("name", org.springframework.util.StringUtils.hasText(order.getShipFromName())
+                    ? order.getShipFromName() : order.getShipFromCompany());
+            shipper.put("company", order.getShipFromCompany());
+            shipper.put("phone", order.getShipFromPhone());
+            shipper.put("addressLine1", order.getShipFromAddr1());
+            shipper.put("addressLine2", order.getShipFromAddr2());
+            shipper.put("city", order.getShipFromCity());
+            shipper.put("state", order.getShipFromState());
+            shipper.put("postalCode", order.getShipFromZip());
+            shipper.put("countryCode", order.getShipFromCountryCd());
+            returnTo = shipper;
         } else {
             // C1 — tenant-scoped shipper defaults keyed on the order's tenant.
+            // Only reached for pre-generation previews (no label document yet).
             String orderTenant = order.getTenantId() != null ? order.getTenantId() : order.getCustNo();
             CarrierProperties.ShipperDefaults d = shipperDefaultsService.resolveFor(orderTenant);
             shipper = new LinkedHashMap<>();
