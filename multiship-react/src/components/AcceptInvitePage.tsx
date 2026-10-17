@@ -1,7 +1,5 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { useFormik } from 'formik'
-import * as Yup from 'yup'
 import { FiArrowRight, FiMail, FiShield } from 'react-icons/fi'
 import { ApiError } from '../api/apiClient'
 import { inviteService, type InvitePreview } from '../api/inviteService'
@@ -27,32 +25,34 @@ import AuthLayout from './auth/AuthLayout'
  * mirrors what the server actually enforces).
  */
 
-interface AcceptInviteFormValues {
-  username: string
-  password: string
-  fullName: string
+interface AcceptInviteErrors {
+  username?: string
+  password?: string
+  fullName?: string
 }
 
-const acceptValidationSchema = Yup.object({
-  username: Yup.string()
-    .required('Username is required')
-    .min(3, 'Username must be at least 3 characters')
-    .max(20, 'Username must not exceed 20 characters')
-    .matches(
-      /^[a-zA-Z0-9_-]+$/,
-      'Username can only contain letters, numbers, underscores, and hyphens',
-    ),
-  password: Yup.string()
-    .required('Password is required')
-    // Matches AcceptInviteRequest @Size(min = 6). Backend rejects <6 with
-    // a 400 VALIDATION_ERROR; matching it client-side avoids the round-trip.
-    .min(6, 'Password must be at least 6 characters')
-    .max(100, 'Password must not exceed 100 characters'),
-  fullName: Yup.string()
-    .required('Full name is required')
-    .min(2, 'Full name must be at least 2 characters')
-    .max(80, 'Full name must not exceed 80 characters'),
-})
+const USERNAME_RE = /^[a-zA-Z0-9_-]+$/
+
+function validateAccept(v: { username: string; password: string; fullName: string }): AcceptInviteErrors {
+  const e: AcceptInviteErrors = {}
+  if (!v.username) e.username = 'Username is required'
+  else if (v.username.length < 3) e.username = 'Username must be at least 3 characters'
+  else if (v.username.length > 20) e.username = 'Username must not exceed 20 characters'
+  else if (!USERNAME_RE.test(v.username))
+    e.username = 'Username can only contain letters, numbers, underscores, and hyphens'
+
+  if (!v.password) e.password = 'Password is required'
+  // Matches AcceptInviteRequest @Size(min = 6). Backend rejects <6 with
+  // a 400 VALIDATION_ERROR; matching it client-side avoids the round-trip.
+  else if (v.password.length < 6) e.password = 'Password must be at least 6 characters'
+  else if (v.password.length > 100) e.password = 'Password must not exceed 100 characters'
+
+  if (!v.fullName) e.fullName = 'Full name is required'
+  else if (v.fullName.length < 2) e.fullName = 'Full name must be at least 2 characters'
+  else if (v.fullName.length > 80) e.fullName = 'Full name must not exceed 80 characters'
+
+  return e
+}
 
 type LoadState =
   | { status: 'loading' }
@@ -127,30 +127,40 @@ export default function AcceptInvitePage() {
     }
   }, [token])
 
-  const formik = useFormik<AcceptInviteFormValues>({
-    initialValues: { username: '', password: '', fullName: '' },
-    validationSchema: acceptValidationSchema,
-    validateOnChange: true,
-    validateOnBlur: true,
-    onSubmit: async (values) => {
-      if (!token) return
-      setSubmitting(true)
-      try {
-        await inviteService.acceptInvite({
-          token,
-          username: values.username,
-          password: values.password,
-          fullName: values.fullName,
-        })
-        await notify.success('Account created — please log in.')
-        navigate('/login')
-      } catch (err) {
-        await notify.apiError(err, 'Could not accept the invite. Please try again.')
-      } finally {
-        setSubmitting(false)
-      }
-    },
+  const [values, setValues] = useState({ username: '', password: '', fullName: '' })
+  const [touched, setTouched] = useState<{ username: boolean; password: boolean; fullName: boolean }>({
+    username: false, password: false, fullName: false,
   })
+  type FieldName = keyof typeof values
+  const errors = validateAccept(values)
+  const isValid = Object.keys(errors).length === 0
+  const dirty = Object.values(values).some((v) => v !== '')
+
+  const set = (k: FieldName) => (e: React.ChangeEvent<HTMLInputElement>) =>
+    setValues((prev) => ({ ...prev, [k]: e.target.value }))
+  const blur = (k: FieldName) => () => setTouched((prev) => ({ ...prev, [k]: true }))
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!token) return
+    setTouched({ username: true, password: true, fullName: true })
+    if (!isValid) return
+    setSubmitting(true)
+    try {
+      await inviteService.acceptInvite({
+        token,
+        username: values.username,
+        password: values.password,
+        fullName: values.fullName,
+      })
+      await notify.success('Account created — please log in.')
+      navigate('/login')
+    } catch (err) {
+      await notify.apiError(err, 'Could not accept the invite. Please try again.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
 
   return (
     <AuthLayout
@@ -193,7 +203,7 @@ export default function AcceptInvitePage() {
       ) : null}
 
       {load.status === 'ready' ? (
-        <form className="space-y-4" onSubmit={formik.handleSubmit}>
+        <form className="space-y-4" onSubmit={handleSubmit}>
           <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-medium text-slate-600">
             <p className="flex items-center gap-2 text-slate-500">
               <FiMail className="h-3.5 w-3.5 text-sky-700" />
@@ -220,33 +230,42 @@ export default function AcceptInvitePage() {
 
           <AuthField
             label="Full Name"
+            name="fullName"
             type="text"
             placeholder="Alex Rivera"
             autoComplete="name"
             disabled={submitting}
-            error={formik.touched.fullName ? formik.errors.fullName : undefined}
-            {...formik.getFieldProps('fullName')}
+            value={values.fullName}
+            onChange={set('fullName')}
+            onBlur={blur('fullName')}
+            error={touched.fullName ? errors.fullName : undefined}
           />
 
           <AuthField
             label="Username"
+            name="username"
             type="text"
             placeholder="Choose a username"
             autoComplete="username"
             disabled={submitting}
-            error={formik.touched.username ? formik.errors.username : undefined}
-            {...formik.getFieldProps('username')}
+            value={values.username}
+            onChange={set('username')}
+            onBlur={blur('username')}
+            error={touched.username ? errors.username : undefined}
           />
 
           <AuthField
             label="Password"
+            name="password"
             type="password"
             placeholder="Create a password"
             autoComplete="new-password"
             hint="6+ chars"
             disabled={submitting}
-            error={formik.touched.password ? formik.errors.password : undefined}
-            {...formik.getFieldProps('password')}
+            value={values.password}
+            onChange={set('password')}
+            onBlur={blur('password')}
+            error={touched.password ? errors.password : undefined}
           />
 
           <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] font-medium text-slate-500">
@@ -256,7 +275,7 @@ export default function AcceptInvitePage() {
 
           <button
             type="submit"
-            disabled={submitting || !formik.isValid || !formik.dirty}
+            disabled={submitting || !isValid || !dirty}
             className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[#1f150c] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-slate-300"
           >
             {submitting ? 'Creating Account…' : 'Accept Invite'}
