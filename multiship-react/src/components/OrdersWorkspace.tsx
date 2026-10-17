@@ -953,9 +953,11 @@ export default function OrdersWorkspace() {
       })
       return
     }
-    if (!window.confirm(`Void ${targets.length} label(s)? This calls the carrier's void API for each; already-voided rows are skipped silently.`)) {
-      return
-    }
+    const ok0 = await notify.confirm(
+      `Void ${targets.length} label(s)? This calls the carrier's void API for each; already-voided rows are skipped silently.`,
+      { title: 'Void labels', confirmLabel: 'Void', cancelLabel: 'Keep', danger: true },
+    )
+    if (!ok0) return
     setBulkProgressLabel('Voiding')
     setBulkProgress({ done: 0, total: targets.length })
     let ok = 0

@@ -149,10 +149,9 @@ export default function AdminUsersPage() {
         // — the operator will be logged out immediately after this call.
         const isSelf = currentUsername && user.username === currentUsername
         if (isSelf) {
-          const ok = window.confirm(
-            `⚠️ You are deactivating YOUR OWN account (${user.username}).\n\n` +
-              `You will be logged out immediately and won't be able to reactivate ` +
-              `yourself. Another admin will have to do it.\n\nContinue?`,
+          const ok = await notify.confirm(
+            `You are deactivating YOUR OWN account (${user.username}). You will be logged out immediately and won't be able to reactivate yourself. Another admin will have to do it.`,
+            { title: 'Deactivate your own account?', confirmLabel: 'Deactivate', cancelLabel: 'Keep active', danger: true },
           )
           if (!ok) return
         }
@@ -175,9 +174,9 @@ export default function AdminUsersPage() {
       notify.error(`${user.username} has no email on file — assign one first.`)
       return
     }
-    const ok = window.confirm(
-      `Email a password-reset link to ${user.email}?\n\n` +
-        `The link expires in 30 minutes and can only be used once.`,
+    const ok = await notify.confirm(
+      `Email a password-reset link to ${user.email}? The link expires in 30 minutes and can only be used once.`,
+      { title: 'Send password-reset link', confirmLabel: 'Send link' },
     )
     if (!ok) return
     try {

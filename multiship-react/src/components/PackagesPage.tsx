@@ -318,8 +318,14 @@ export default function PackagesPage({ active = true, origin: originProp, onOrig
   const currentEditingSnapshot = editing ? JSON.stringify(editing) : null
   const editorIsDirty = editorSnapshot !== null && currentEditingSnapshot !== editorSnapshot
 
-  const closeEditor = () => {
-    if (editorIsDirty && !window.confirm('Discard unsaved changes to this package?')) return
+  const closeEditor = async () => {
+    if (editorIsDirty) {
+      const ok = await notify.confirm(
+        'Discard unsaved changes to this package?',
+        { title: 'Discard changes', confirmLabel: 'Discard', cancelLabel: 'Keep editing', danger: true },
+      )
+      if (!ok) return
+    }
     setEditing(null)
   }
 

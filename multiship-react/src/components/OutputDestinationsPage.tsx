@@ -104,8 +104,9 @@ export default function OutputDestinationsPage() {
     // Confirm first so an admin exploring the ledger doesn't wake up a
     // Zebra at 2am.
     if (row.destinationType === 'PRINTER') {
-      const ok = window.confirm(
-        `Send a real test page to the printer at ${summariseConfig(row.destinationType, row.configSafe)}?\n\nThis will physically print a page on the device.`,
+      const ok = await notify.confirm(
+        `Send a real test page to the printer at ${summariseConfig(row.destinationType, row.configSafe)}? This will physically print a page on the device.`,
+        { title: 'Send real test page?', confirmLabel: 'Print test page', cancelLabel: 'Cancel' },
       )
       if (!ok) return
     }

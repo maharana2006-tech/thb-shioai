@@ -534,7 +534,8 @@ describe('PackagesPage — F1 kind switch clears the other-branch fields', () =>
 
 describe('PackagesPage — F3 editor unsaved-changes prompt', () => {
   it('clean editor: Cancel closes with NO confirm', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    // BUG — closeEditor now uses notify.confirm instead of window.confirm.
+    notifyConfirmMock.mockReset().mockResolvedValue(true)
     listPresetsMock.mockResolvedValue([customPreset(1, 'Small')])
     const Page = await loadPage()
     renderPage(Page)
@@ -548,12 +549,11 @@ describe('PackagesPage — F3 editor unsaved-changes prompt', () => {
       await userEvent.click(screen.getByRole('button', { name: /^Cancel$/i }))
     })
 
-    expect(confirmSpy).not.toHaveBeenCalled()
-    confirmSpy.mockRestore()
+    expect(notifyConfirmMock).not.toHaveBeenCalled()
   })
 
   it('dirty editor: Cancel prompts confirm; rejecting keeps modal open', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    notifyConfirmMock.mockReset().mockResolvedValue(false)
     listPresetsMock.mockResolvedValue([customPreset(1, 'Small')])
     const Page = await loadPage()
     renderPage(Page)
@@ -572,14 +572,13 @@ describe('PackagesPage — F3 editor unsaved-changes prompt', () => {
       await userEvent.click(screen.getByRole('button', { name: /^Cancel$/i }))
     })
 
-    expect(confirmSpy).toHaveBeenCalled()
+    expect(notifyConfirmMock).toHaveBeenCalled()
     // Modal still open — Register package / Save changes button visible.
     expect(screen.getByRole('button', { name: /Save changes/i })).toBeInTheDocument()
-    confirmSpy.mockRestore()
   })
 
   it('dirty editor: Cancel + accept confirm closes the modal', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    notifyConfirmMock.mockReset().mockResolvedValue(true)
     listPresetsMock.mockResolvedValue([customPreset(1, 'Small')])
     const Page = await loadPage()
     renderPage(Page)
@@ -597,9 +596,8 @@ describe('PackagesPage — F3 editor unsaved-changes prompt', () => {
       await userEvent.click(screen.getByRole('button', { name: /^Cancel$/i }))
     })
 
-    expect(confirmSpy).toHaveBeenCalled()
+    expect(notifyConfirmMock).toHaveBeenCalled()
     // Modal closed — no Save changes button visible.
     await waitFor(() => expect(screen.queryByRole('button', { name: /Save changes/i })).toBeNull())
-    confirmSpy.mockRestore()
   })
 })

@@ -69,7 +69,11 @@ export default function WebhookSubscriptionsPage() {
 
   const del = async (s: WebhookSubscription) => {
     if (!s.id) return
-    if (!window.confirm(`Delete subscription for ${s.event} → ${s.url}?`)) return
+    const ok = await notify.confirm(
+      `Delete subscription for ${s.event} → ${s.url}?`,
+      { title: 'Delete webhook subscription', confirmLabel: 'Delete', cancelLabel: 'Keep', danger: true },
+    )
+    if (!ok) return
     try {
       await webhookSubscriptionService.remove(s.id)
       notify.success('Subscription deleted.')

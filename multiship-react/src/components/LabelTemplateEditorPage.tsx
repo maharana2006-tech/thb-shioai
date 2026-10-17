@@ -519,8 +519,12 @@ export default function LabelTemplateEditorPage() {
             {template.layoutJson ? (
               <button
                 type="button"
-                onClick={() => {
-                  if (!window.confirm('Clear the whole layout? The branding header / footer / logo will be used at render time until you rebuild.')) return
+                onClick={async () => {
+                  const ok = await notify.confirm(
+                    'Clear the whole layout? The branding header / footer / logo will be used at render time until you rebuild.',
+                    { title: 'Clear layout', confirmLabel: 'Clear', cancelLabel: 'Keep', danger: true },
+                  )
+                  if (!ok) return
                   setTemplate((prev) => ({ ...prev, layoutJson: null }))
                 }}
                 className="mb-2 inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[10.5px] font-semibold text-[#6b5c42] transition hover:bg-[#faf7f0]"

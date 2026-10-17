@@ -777,20 +777,19 @@ describe('WarehouseEditorModal · audit fixes', () => {
     await user.clear(nameInput)
     await user.type(nameInput, 'Changed')
 
-    // Stub confirm to reject; Cancel should NOT close.
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    // Dirty-edit guard now uses notify.confirm; stub reject first, then accept.
+    notifyConfirm.mockReset().mockResolvedValueOnce(false)
     await user.click(within(dialog).getByRole('button', { name: /^cancel$/i }))
-    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(notifyConfirm).toHaveBeenCalledTimes(1))
     // Dialog still visible → onClose wasn't called.
     expect(await screen.findByRole('dialog', { name: /edit warehouse plat1/i })).toBeInTheDocument()
 
     // Accept the confirm → dialog closes.
-    confirmSpy.mockReturnValue(true)
+    notifyConfirm.mockResolvedValueOnce(true)
     await user.click(within(dialog).getByRole('button', { name: /^cancel$/i }))
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: /edit warehouse plat1/i })).toBeNull()
     })
-    confirmSpy.mockRestore()
   })
 
   it('4.2: closing WITHOUT dirty edits skips the confirm', async () => {
@@ -803,9 +802,8 @@ describe('WarehouseEditorModal · audit fixes', () => {
     const dialog = await screen.findByRole('dialog', { name: /edit warehouse plat1/i })
 
     // No edits — Cancel closes immediately with no confirm prompt.
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    notifyConfirm.mockReset()
     await user.click(within(dialog).getByRole('button', { name: /^cancel$/i }))
-    expect(confirmSpy).not.toHaveBeenCalled()
-    confirmSpy.mockRestore()
+    expect(notifyConfirm).not.toHaveBeenCalled()
   })
 })

@@ -315,8 +315,13 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
    * (created != null) the semantics differ: no dirty check — the operator
    * already successfully created a warehouse.
    */
-  const closeWithGuard = () => {
-    if (isDirty && !window.confirm('Discard unsaved changes to this warehouse?')) return
+  const closeWithGuard = async () => {
+    if (!isDirty) { onClose(); return }
+    const ok = await notify.confirm(
+      'Discard unsaved changes to this warehouse?',
+      { title: 'Discard changes', confirmLabel: 'Discard', cancelLabel: 'Keep editing', danger: true },
+    )
+    if (!ok) return
     onClose()
   }
   const closeAction = created ? () => onSaved(created) : closeWithGuard
