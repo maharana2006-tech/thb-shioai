@@ -78,10 +78,20 @@ public class LocalFsDriver implements OutputDriver {
      * follow-up.
      */
     static String buildFileName(DocType docType, DispatchContext ctx) {
-        String base;
+        String base = null;
         if (ctx.fileNameHint() != null && !ctx.fileNameHint().isBlank()) {
-            base = ctx.fileNameHint();
-        } else {
+            // Path-traversal harden: use ONLY the hint's bare filename, never any
+            // directory part, so a hint like "../../etc/cron.d/x" or "/abs/evil.pdf"
+            // can't escape the destination dir (this name feeds dir.resolve() in
+            // LocalFsDriver and remoteDir + "/" + name in SftpDriver). Fall through
+            // to the generated key when sanitising leaves nothing usable ("" or "..").
+            java.nio.file.Path hintName = java.nio.file.Paths.get(ctx.fileNameHint()).getFileName();
+            String sanitized = hintName == null ? "" : hintName.toString();
+            if (!sanitized.isBlank() && !sanitized.equals("..")) {
+                base = sanitized;
+            }
+        }
+        if (base == null) {
             Long ship = ctx.shipmentId();
             Integer ord = ctx.orderNo();
             String key = ship != null && ship > 0 ? "s" + ship
