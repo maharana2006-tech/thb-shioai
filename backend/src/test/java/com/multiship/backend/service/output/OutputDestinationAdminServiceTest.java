@@ -125,7 +125,7 @@ class OutputDestinationAdminServiceTest {
         ClientOutputDestination existing = ClientOutputDestination.builder()
                 .id(7L).clientCode("ACME").docType(DocType.LABEL)
                 .destinationType(DestinationType.SFTP)
-                .config("{\"host\":\"sftp.example.com\",\"authType\":\"PASSWORD\","
+                .config("{\"host\":\"sftp.example.com\",\"username\":\"acme\",\"authType\":\"PASSWORD\","
                         + "\"passwordSecretId\":\"sftp.secret.ACME.password.abc\"}")
                 .active(true).build();
         when(destinationRepo.findById(7L)).thenReturn(Optional.of(existing));
@@ -133,7 +133,10 @@ class OutputDestinationAdminServiceTest {
         OutputDestinationUpsertRequest req = OutputDestinationUpsertRequest.builder()
                 .clientCode("ACME").docType(DocType.LABEL)
                 .destinationType(DestinationType.SFTP)
-                .config("{\"host\":\"sftp.example.com\",\"authType\":\"KEY\"}")
+                // BUG-159 R7: config-shape guard now requires `username` up
+                // front; test's focus is the auth-pointer flow, so populate
+                // the field so processConfig runs through to the auth check.
+                .config("{\"host\":\"sftp.example.com\",\"username\":\"acme\",\"authType\":\"KEY\"}")
                 // No sftpPrivateKeyPlain → processConfig drops the password
                 // pointer (authType changed) and the key pointer stays null.
                 .active(true).build();

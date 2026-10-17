@@ -488,14 +488,15 @@ describe('CarrierDraftStep — positive cases', () => {
     expect(acctInput.maxLength).toBe(10)
     expect(acctInput.placeholder).toMatch(/UPS/i)
 
-    // Flip carrier to FEDEX → maxLength should become 12.
+    // Flip carrier to FEDEX → BUG-029 R7: maxLength is now 9 (FedEx
+    // account numbers are 9 digits).
     const carrierSelect = screen.getAllByRole('combobox').find(
       (s) => Array.from((s as HTMLSelectElement).options).some((o) => o.value === 'FEDEX'),
     ) as HTMLSelectElement
     await user.selectOptions(carrierSelect, 'FEDEX')
 
     const acctAfter = screen.getAllByRole('textbox')[0] as HTMLInputElement
-    expect(acctAfter.maxLength).toBe(12)
+    expect(acctAfter.maxLength).toBe(9)
     expect(acctAfter.placeholder).toMatch(/FedEx/i)
   })
 
