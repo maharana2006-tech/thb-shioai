@@ -164,6 +164,7 @@ public class PrinterController {
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @GetMapping("/{id}/tags")
     public ResponseEntity<ApiResponse<List<PrinterTag>>> listTags(@PathVariable Long id) {
+        printers.assertPrinterVisible(id);
         return ok("tags", tags.listForPrinter(id));
     }
 
@@ -198,6 +199,7 @@ public class PrinterController {
     public ResponseEntity<ApiResponse<List<PrinterTestHistory>>> testHistory(
             @PathVariable Long id,
             @RequestParam(defaultValue = "10") int limit) {
+        printers.assertPrinterVisible(id);
         int capped = Math.max(1, Math.min(limit, MAX_TEST_HISTORY_LIMIT));
         Pageable page = PageRequest.of(0, capped);
         List<PrinterTestHistory> rows = testHistory.findByPrinterIdOrderByTestedAtDesc(id, page);

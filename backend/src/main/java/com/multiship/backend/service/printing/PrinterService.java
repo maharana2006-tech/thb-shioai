@@ -91,6 +91,13 @@ public class PrinterService {
     private static final String PRINTER_ENTITY_TYPE =
             com.multiship.backend.service.AuditService.CLIENT_POLICY;
 
+    /** IDOR guard on the read endpoints — optional (null in pure-unit tests =
+     *  unfiltered). A scoped USER sees only their own client's assignments plus
+     *  the defaults (clientCode null, used by clients without their own); a
+     *  platform operator (empty scope) sees everything, unchanged. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.TenantScopeEnforcer tenantScope;
+
     public PrinterService(PrinterRepository printers, PrinterAssignmentRepository assignments,
                           ClientRepository clients, OrderRepository orders) {
         this.printers = printers;
@@ -102,7 +109,43 @@ public class PrinterService {
     /* ------------------------------ printers ------------------------------ */
 
     public List<Printer> list() {
-        return printers.findAllByOrderByNameAscIdAsc();
+        List<Printer> all = printers.findAllByOrderByNameAscIdAsc();
+        Optional<String> tenant = scope();
+        if (tenant.isEmpty()) return all;
+        Set<Long> visible = visiblePrinterIds(tenant.get());
+        return all.stream().filter(p -> visible.contains(p.getId())).toList();
+    }
+
+    /** Empty = platform operator / unscoped (sees all); present = the caller's
+     *  client code. Null tenantScope (pure-unit tests) = unfiltered. */
+    private Optional<String> scope() {
+        return tenantScope == null ? Optional.empty() : tenantScope.resolveScope();
+    }
+
+    /** Printer ids a scoped client may see: those assigned to it or to the
+     *  default (clientCode null). */
+    private Set<Long> visiblePrinterIds(String tenant) {
+        return assignments.findAllByOrderByClientCodeAscDocTypeAsc().stream()
+                .filter(a -> a.getClientCode() == null || tenant.equalsIgnoreCase(a.getClientCode().trim()))
+                .map(PrinterAssignment::getPrinterId)
+                .filter(java.util.Objects::nonNull)
+                .collect(java.util.stream.Collectors.toSet());
+    }
+
+    /**
+     * Guard the by-id read endpoints (queue-depth, tags, test-history): a scoped
+     * caller may only read a printer in its visible set (own-client or default).
+     * Silent for platform operators. Throws {@link org.springframework.security.access.AccessDeniedException}
+     * (mapped to 403) for a scoped caller asking for a foreign printer id.
+     */
+    public void assertPrinterVisible(Long id) {
+        Optional<String> tenant = scope();
+        if (tenant.isEmpty()) return;
+        if (id == null || !visiblePrinterIds(tenant.get()).contains(id)) {
+            throw new org.springframework.security.access.AccessDeniedException(
+                    com.multiship.backend.dto.ErrorCode.CROSS_TENANT_ACCESS_DENIED.name()
+                            + ": that printer is not visible to your client.");
+        }
     }
 
     public Printer get(Long id) {
@@ -232,7 +275,13 @@ public class PrinterService {
     /* ------------------------------ assignments ------------------------------ */
 
     public List<PrinterAssignment> listAssignments() {
-        return assignments.findAllByOrderByClientCodeAscDocTypeAsc();
+        List<PrinterAssignment> all = assignments.findAllByOrderByClientCodeAscDocTypeAsc();
+        Optional<String> tenant = scope();
+        if (tenant.isEmpty()) return all;
+        String t = tenant.get();
+        return all.stream()
+                .filter(a -> a.getClientCode() == null || t.equalsIgnoreCase(a.getClientCode().trim()))
+                .toList();
     }
 
     /** Create or replace the printer for (client, document type). Blank client = the default. */
@@ -329,6 +378,7 @@ public class PrinterService {
      *  surfaced in the QueueDepth.ippQueueError field.
      */
     public QueueDepth queueDepth(Long id) {
+        assertPrinterVisible(id);
         Printer p = get(id);
         int inFlight = inFlightByPrinter.getOrDefault(id, new AtomicInteger()).get();
         Integer ippQueue = null;
