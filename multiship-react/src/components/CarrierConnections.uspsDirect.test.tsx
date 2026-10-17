@@ -2,11 +2,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, Outlet } from 'react-router-dom'
-import { Provider } from 'react-redux'
-import { combineReducers, configureStore } from '@reduxjs/toolkit'
 import type { ComponentType } from 'react'
-import carrierReducer from '../store/carrierSlice'
-import orderReducer from '../store/orderSlice'
 
 /**
  * PR-A · Agent D · USPS Direct integration.
@@ -104,12 +100,7 @@ function Outletish() {
 }
 
 function renderPage(Page: ComponentType) {
-  const store = configureStore({
-    reducer: combineReducers({ carriers: carrierReducer, orders: orderReducer }),
-    middleware: (getDefault) => getDefault({ serializableCheck: false }),
-  })
   return render(
-    <Provider store={store}>
       <MemoryRouter initialEntries={['/settings/carriers']}>
         <Routes>
           <Route element={<Outletish />}>
@@ -117,7 +108,6 @@ function renderPage(Page: ComponentType) {
           </Route>
         </Routes>
       </MemoryRouter>
-    </Provider>,
   )
 }
 

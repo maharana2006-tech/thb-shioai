@@ -301,6 +301,9 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
         return "";
     }
 
+    // CSV formula-injection (BUG-076) is handled by the shared CsvUtil.csvCell,
+    // imported statically and used by the export above. dev's R7 branch added an
+    // equivalent inline guard here; dropped in favour of the shared helper.
     @Override
     @Transactional(readOnly = true)
     public ApiResponse<List<ClientCustomsProfileDTO>> list(String clientCode) {

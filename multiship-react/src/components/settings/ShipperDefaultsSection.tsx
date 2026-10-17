@@ -49,9 +49,15 @@ export default function ShipperDefaultsSection() {
     let cancelled = false
     void (async () => {
       try {
-        const res = await clientService.listClients({ page: 0, size: 100, sortBy: 'code' })
+        // BUG-147 R7 — the tenant picker was showing deleted/inactive
+        // tenants, so an operator could pick a defunct one and write
+        // shipper defaults into a dead row (never resolved by any
+        // active shipment). Hard-filter to ACTIVE here; the status
+        // param narrows server-side so the page=100 bucket isn't
+        // wasted on tombstones either.
+        const res = await clientService.listClients({ page: 0, size: 100, sortBy: 'code', status: 'ACTIVE' })
         if (cancelled) return
-        setClients(res.data?.content ?? [])
+        setClients((res.data?.content ?? []).filter((c) => c.status === 'ACTIVE'))
       } catch (e) {
         if (!cancelled) notify.apiError(e, 'Failed to load clients for the tenant picker.')
       }

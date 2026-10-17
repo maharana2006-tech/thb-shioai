@@ -1120,15 +1120,20 @@ export default function NewShipmentPage() {
     })
     setPackageChoice((cur) => {
       if (cur === CUSTOM_PKG || packagesForCarrier.some((p) => String(p.id) === cur)) return cur
-      if (
-        defaultPackagePresetId != null
-        && packagesForCarrier.some((p) => p.id === defaultPackagePresetId)
-      ) {
-        return String(defaultPackagePresetId)
+      // BUG-150 R7 — carrier switch was silently clearing a packaging
+      // preset the operator had picked (e.g. UPS Letter → FedEx 2Day,
+      // where UPS Letter has no FedEx equivalent). Surface the swap in
+      // a toast so they know their choice changed under them.
+      const prior = packages.find((p) => String(p.id) === cur)
+      const next = (defaultPackagePresetId != null
+        && packagesForCarrier.some((p) => p.id === defaultPackagePresetId))
+        ? packagesForCarrier.find((p) => p.id === defaultPackagePresetId)
+        : packagesForCarrier[0]
+      if (prior && cur && cur !== CUSTOM_PKG) {
+        const nextLabel = next?.name ?? 'Your own box'
+        notify.info(`Packaging "${prior.name}" isn't available on ${carrier}; switched to "${nextLabel}".`)
       }
-      return packagesForCarrier[0]?.id != null
-        ? String(packagesForCarrier[0]?.id)
-        : CUSTOM_PKG
+      return next?.id != null ? String(next.id) : CUSTOM_PKG
     })
     // Re-validate account/service/package whenever the carrier, client, or route changes.
   }, [carrier, clientCode, accountsForCarrier, servicesForCarrier, packagesForCarrier, defaultServiceId, defaultPackagePresetId])

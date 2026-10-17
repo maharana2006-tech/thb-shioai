@@ -90,6 +90,19 @@ public class CustomFieldServiceImpl implements CustomFieldService {
                 && (d.getSelectOptions() == null || d.getSelectOptions().isBlank())) {
             throw new IllegalArgumentException("SELECT fields require selectOptions");
         }
+        // BUG-112 R7 — trim + dedup selectOptions server-side so an
+        // operator pasting "Red, Red , Green,  blue, Blue" doesn't end
+        // up with a dropdown that renders duplicates / phantom blanks.
+        // Case-insensitive compare, preserve first-seen casing + order.
+        if (d.getSelectOptions() != null && !d.getSelectOptions().isBlank()) {
+            java.util.LinkedHashMap<String, String> seen = new java.util.LinkedHashMap<>();
+            for (String raw : d.getSelectOptions().split(",")) {
+                String t = raw.trim();
+                if (t.isEmpty()) continue;
+                seen.putIfAbsent(t.toLowerCase(java.util.Locale.ROOT), t);
+            }
+            d.setSelectOptions(String.join(",", seen.values()));
+        }
         LocalDateTime now = LocalDateTime.now();
         // BUG-111 — on edit the FE doesn't send createdAt back, so d.createdAt
         // is null. defRepo.save() does a merge-write which stamps NULL into

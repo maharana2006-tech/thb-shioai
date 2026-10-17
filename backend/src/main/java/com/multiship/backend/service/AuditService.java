@@ -121,7 +121,15 @@ public class AuditService {
                 .notes(truncate(notes, 500))
                 .clientCode(currentClientCode())
                 .build();
-        return repo.save(row);
+        AuditLog saved = repo.save(row);
+        // BUG-128 R7 — tester reports settings-write audit rows aren't
+        // surfacing in /audit-log. Log at INFO so operators can confirm
+        // whether record() even fires for the write they tested; the row
+        // id makes it trivial to go find the ambient-tx rollback (if any)
+        // in the DB. Volume is bounded by write-throughput; INFO is cheap.
+        log.info("audit.record id={} action={} entity={} actor={} client={}",
+                saved.getId(), action, entityType, saved.getActor(), saved.getClientCode());
+        return saved;
     }
 
     /** Same as {@link #record(String, String, Object, String, Object, String)}

@@ -54,10 +54,11 @@ class IdempotencyServiceTest {
         when(redis.opsForValue()).thenReturn(valueOps);
 
         // Sprint 50 PR K — service owns its own JavaTimeModule-registered
-        // mapper. The test-local `objectMapper` below still matches
-        // sufficiently for the round-trip tests since we use plain String
-        // bodies here — no LocalDateTime in the CachedResponse fixtures.
-        objectMapper = new ObjectMapper();
+        // mapper. BUG-070 R7: ApiResponse.timestamp now @Builder.Default's
+        // to LocalDateTime.now(), so round-trip serialisation of a built
+        // ApiResponse needs the module here too.
+        objectMapper = new ObjectMapper()
+                .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
         service = new IdempotencyService(redisProvider);
     }
 

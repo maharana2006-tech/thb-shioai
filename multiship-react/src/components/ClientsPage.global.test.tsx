@@ -2,11 +2,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, cleanup, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, Outlet } from 'react-router-dom'
-import { Provider } from 'react-redux'
-import { combineReducers, configureStore } from '@reduxjs/toolkit'
 import type { ComponentType } from 'react'
-import carrierReducer from '../store/carrierSlice'
-import orderReducer from '../store/orderSlice'
 
 /**
  * Sprint 53 page-tests — ClientsPage · Global actions + role gating.
@@ -103,14 +99,6 @@ async function loadPage(): Promise<ComponentType> {
 }
 
 function renderPage(Page: ComponentType) {
-  const rootReducer = combineReducers({
-    carriers: carrierReducer,
-    orders: orderReducer,
-  })
-  const store = configureStore({
-    reducer: rootReducer,
-    middleware: (getDefault) => getDefault({ serializableCheck: false }),
-  })
 
   // The page uses useOutletContext<SettingsOutletContext> for registerRefresh.
   // Wrap the route in a parent Outlet-providing route that supplies the context.
@@ -119,7 +107,6 @@ function renderPage(Page: ComponentType) {
   return {
     registerRefresh,
     ...render(
-      <Provider store={store}>
         <MemoryRouter initialEntries={['/settings/clients']}>
           <Routes>
             <Route element={<Outlet context={{ registerRefresh }} />}>
@@ -128,7 +115,6 @@ function renderPage(Page: ComponentType) {
             <Route path="/settings/clients/new" element={<div>NEW_CLIENT_PAGE</div>} />
           </Routes>
         </MemoryRouter>
-      </Provider>,
     ),
   }
 }

@@ -48,10 +48,15 @@ export const CARRIER_ACCOUNT_RULES: Record<CarrierCode, CarrierAccountRule> = {
     helper: 'UPS shipper numbers are 6–10 letters or digits.',
   },
   FEDEX: {
-    maxLength: 12,
-    placeholder: 'Up to 12 digits (FedEx account #)',
-    pattern: '[0-9A-Za-z]{1,12}',
-    helper: 'FedEx account numbers are up to 12 digits.',
+    // BUG-029 R7: FedEx shipper account numbers are 9 digits — the
+    // permissive '[0-9A-Za-z]{1,12}' pattern + 'Up to 12 digits' hint
+    // let QA type letters that got rejected only on save. Pattern now
+    // enforces 9 digits so the CarrierDraftStep strip-non-digits path
+    // (keyed on pattern.startsWith('[0-9]')) applies to FedEx too.
+    maxLength: 9,
+    placeholder: '9 digits (FedEx account #)',
+    pattern: '[0-9]{9}',
+    helper: 'FedEx account numbers are 9 digits.',
   },
   DHL: {
     maxLength: 12,

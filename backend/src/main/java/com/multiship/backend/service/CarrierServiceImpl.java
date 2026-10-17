@@ -1732,6 +1732,18 @@ public class CarrierServiceImpl implements CarrierService {
                                     clientCodeForReturn);
                         });
             }
+            // BUG-136 R7 sibling hard-block — after the recipient clamp,
+            // reject the write (not just the FE preflight) when the sender
+            // address matches the clamped recipient. A direct POST
+            // /orders/{n}/label with isReturn + sender == client's return
+            // address used to produce a label whose FROM == TO (useless as
+            // a return — the carrier would deliver it to the sender).
+            if (from != null && addressesSameForReturn(from, to)) {
+                return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
+                        "Return label \"from\" and \"to\" are the same address. "
+                                + "\"Return from · customer\" should be the customer's address, "
+                                + "not your warehouse — the warehouse is the \"Return to\" block.");
+            }
         }
         if (!StringUtils.hasText(to.getName()) || !StringUtils.hasText(to.getAddressLine1())
                 || !StringUtils.hasText(to.getCity()) || !StringUtils.hasText(to.getPostalCode())
@@ -3570,6 +3582,29 @@ public class CarrierServiceImpl implements CarrierService {
         String x = a.trim().toUpperCase(Locale.ROOT);
         String y = b.trim().toUpperCase(Locale.ROOT);
         return ("US".equals(x) && "PR".equals(y)) || ("PR".equals(x) && "US".equals(y));
+    }
+
+    /** BUG-136 R7 sibling guard — same address on both sides of a return
+     *  label. Case-insensitive on text; ZIP compared on the 5-digit base. */
+    private static boolean addressesSameForReturn(
+            com.multiship.backend.dto.ManualShipmentRequest.Address a,
+            com.multiship.backend.dto.ManualShipmentRequest.Address b) {
+        return eqAddr(a.getAddressLine1(), b.getAddressLine1())
+                && eqAddr(a.getCity(), b.getCity())
+                && eqAddr(a.getState(), b.getState())
+                && zip5(a.getPostalCode()).equals(zip5(b.getPostalCode()))
+                && eqAddr(a.getCountryCode(), b.getCountryCode());
+    }
+
+    private static boolean eqAddr(String a, String b) {
+        return (a == null ? "" : a.trim()).equalsIgnoreCase(b == null ? "" : b.trim());
+    }
+
+    private static String zip5(String s) {
+        if (s == null) return "";
+        String t = s.trim();
+        int dash = t.indexOf('-');
+        return dash > 0 ? t.substring(0, dash) : t;
     }
 
     /**

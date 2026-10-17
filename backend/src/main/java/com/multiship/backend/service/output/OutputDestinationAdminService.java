@@ -80,6 +80,7 @@ public class OutputDestinationAdminService {
         refuseNewPrinterDestination(req, null);
         validateHostForSsrf(req);
         validateClientExists(req);
+        validateConfigShape(req);
         ClientOutputDestination entity = ClientOutputDestination.builder()
                 .clientCode(req.getClientCode().trim())
                 .docType(req.getDocType())
@@ -108,6 +109,7 @@ public class OutputDestinationAdminService {
         refuseNewPrinterDestination(req, destinationRepository.findById(id).orElse(null));
         validateHostForSsrf(req);
         validateClientExists(req);
+        validateConfigShape(req);
         return destinationRepository.findById(id).map(entity -> {
             entity.setClientCode(req.getClientCode().trim());
             entity.setDocType(req.getDocType());
@@ -127,6 +129,56 @@ public class OutputDestinationAdminService {
             }
             return toDto(entity);
         });
+    }
+
+    /**
+     * BUG-159 R7 — kind-specific config shape guard. The admin UI applies
+     * these client-side; this is the backstop so a direct POST (curl,
+     * Postman, a future automation) can't persist a destination with a
+     * missing host, out-of-range port, or path-traversal LOCAL_FS target.
+     * Running after validateHostForSsrf so SSRF rejects claim precedence
+     * on bad hosts.
+     */
+    private void validateConfigShape(OutputDestinationUpsertRequest req) {
+        DestinationType type = req.getDestinationType();
+        if (type == null) return;
+        JsonNode cfg;
+        try {
+            cfg = objectMapper.readTree(req.getConfig());
+        } catch (Exception parseErr) {
+            // processConfig will produce the richer parse error — bail here.
+            return;
+        }
+        if (type == DestinationType.SFTP) {
+            String host = str(cfg, "host");
+            if (host == null || host.isBlank()) {
+                throw new IllegalArgumentException("SFTP destinations require a host.");
+            }
+            String username = str(cfg, "username");
+            if (username == null || username.isBlank()) {
+                throw new IllegalArgumentException("SFTP destinations require a username.");
+            }
+            JsonNode portNode = cfg.get("port");
+            if (portNode != null && !portNode.isNull()) {
+                int port = portNode.isInt() ? portNode.asInt() : -1;
+                if (port < 1 || port > 65535) {
+                    throw new IllegalArgumentException(
+                            "SFTP port must be between 1 and 65535 (got " + portNode.asText() + ").");
+                }
+            }
+        } else if (type == DestinationType.LOCAL_FS) {
+            String path = str(cfg, "path");
+            if (path == null || path.isBlank()) {
+                throw new IllegalArgumentException("Local folder destinations require a path.");
+            }
+            // Reject .. segments so a destination can't be set to climb
+            // out of the configured drop root. Dispatch resolves paths
+            // against a jail already; this is a save-time belt.
+            if (path.contains("..")) {
+                throw new IllegalArgumentException(
+                        "Local folder path can't contain '..' segments: " + path);
+            }
+        }
     }
 
     /**

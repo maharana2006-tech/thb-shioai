@@ -7,8 +7,6 @@ import { clearAuthSession, useAppSession } from '../../hooks/useAppSession'
 import { getNavItemsForRole, resolveWorkspaceRouteKey } from '../../routes/workspaceRoutes'
 import { normalizeRole } from '../../utils/roles'
 import { navIcons } from './navIcons'
-import { useAppDispatch } from '../../store/hooks'
-import { logout as logoutAction } from '../../store/store'
 import { useFocusTrap } from '../../hooks/useFocusTrap'
 
 // Sprint 52 a11y — stable id for the drawer's labelling heading so
@@ -54,7 +52,6 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
     if (mobileOpen) onMobileClose?.()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fires only on route change; mobileOpen + onMobileClose are read but intentionally not deps (route change is the sole trigger).
   }, [activePath])
-  const dispatch = useAppDispatch()
   const { username, role } = useAppSession()
   const [loggingOut, setLoggingOut] = useState(false)
 
@@ -107,13 +104,9 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
       await authService.logout()
     } catch {
       // Logout UI flow continues regardless of the backend's response —
-      // the Redux reset + cookie clear + redirect below is authoritative.
+      // cookie clear + redirect below is authoritative.
     }
 
-    // Sprint 49 Tier 4 Fix 2 — reset ALL Redux user-data slices BEFORE
-    // navigating so the next signed-in user never briefly sees the
-    // previous operator's orders / carrier status / stats.
-    dispatch(logoutAction())
     clearAuthSession()
     notify.success('Logged out')
     navigate('/login')

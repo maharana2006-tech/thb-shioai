@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext, useSearchParams } from 'react-router-dom'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import {
@@ -6,6 +6,7 @@ import {
   FiPrinter, FiRadio, FiSearch, FiSquare, FiTag, FiTrash2, FiWifi, FiX,
 } from 'react-icons/fi'
 import { notify } from '../utils/notify'
+import { useModalDismiss } from '../hooks/useModalDismiss'
 import { clientService, type Client } from '../api/clientService'
 import AssignmentMatrix from './AssignmentMatrix'
 import InvoiceCopiesMatrix from './InvoiceCopiesMatrix'
@@ -869,6 +870,10 @@ function PrinterEditor({
   onClose: () => void
   onSaved: () => Promise<void>
 }) {
+  // BUG-123 R7 — add Escape-to-close + focus trap + focus restoration.
+  // Pre-fix the Add printer dialog left focus on the Add button behind.
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useModalDismiss(true, dialogRef, onClose)
   const [form, setForm] = useState<PrinterInput>(() => printer
     ? {
         name: printer.name, location: printer.location, connection: printer.connection, host: printer.host,
@@ -993,7 +998,8 @@ function PrinterEditor({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>
-      <div className="w-full max-w-[560px] rounded-xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}
+      <div ref={dialogRef}
+        className="w-full max-w-[560px] rounded-xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}
         role="dialog" aria-modal="true" aria-label={printer ? `Edit ${printer.name}` : 'Add printer'}>
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
           <h3 className="text-[15px] font-semibold text-slate-900">{printer ? `Edit ${printer.name}` : 'Add printer'}</h3>

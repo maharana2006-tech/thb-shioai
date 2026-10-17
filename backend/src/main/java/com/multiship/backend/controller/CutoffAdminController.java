@@ -13,9 +13,11 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.DateTimeException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -68,6 +70,11 @@ public class CutoffAdminController {
             throw new IllegalArgumentException(
                     "warehouseId " + req.getWarehouseId() + " doesn't match any warehouse.");
         }
+        // BUG-146 R7: operator can type a free-form timezone in the combobox
+        // (preserves unrecognised values on purpose). If it's not a valid
+        // java.time.ZoneId, Cutoff dispatch later NPEs — reject at save time
+        // with a specific message instead of letting the rule go live broken.
+        validateTimezone(req.getTimezone());
         CutoffRule saved = ruleRepo.save(req);
         if (audit != null) {
             audit.record(com.multiship.backend.service.AuditService.CREATE,
@@ -88,7 +95,10 @@ public class CutoffAdminController {
         if (req.getCarrierCode() != null) existing.setCarrierCode(req.getCarrierCode());
         if (req.getWarehouseId() != null) existing.setWarehouseId(req.getWarehouseId());
         if (req.getCutoffTime() != null) existing.setCutoffTime(req.getCutoffTime());
-        if (req.getTimezone() != null) existing.setTimezone(req.getTimezone());
+        if (req.getTimezone() != null) {
+            validateTimezone(req.getTimezone());
+            existing.setTimezone(req.getTimezone());
+        }
         if (req.getActive() != null) existing.setActive(req.getActive());
         existing.setUpdatedBy(actor(auth));
         CutoffRule saved = ruleRepo.save(existing);
@@ -224,6 +234,21 @@ public class CutoffAdminController {
 
     private String actor(Authentication a) {
         return a == null ? "unknown" : a.getName();
+    }
+
+    /** BUG-146 R7 — refuse unknown IANA zones so the rule never silently
+     *  saves a value that CutoffShiftService can't resolve. Blank/null is OK:
+     *  cutoff dispatch falls back to the client timezone when the column is
+     *  null. ZoneId.of throws ZoneRulesException (subclass of DateTimeException)
+     *  on an unknown id — the message names the rejected string already. */
+    private static void validateTimezone(String tz) {
+        if (tz == null || tz.isBlank()) return;
+        try {
+            ZoneId.of(tz.trim());
+        } catch (DateTimeException e) {
+            throw new IllegalArgumentException(
+                "timezone '" + tz + "' is not a valid IANA zone (e.g. America/New_York).");
+        }
     }
 
     private <T> ResponseEntity<ApiResponse<T>> ok(T body) {

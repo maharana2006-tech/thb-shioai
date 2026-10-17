@@ -191,8 +191,8 @@ export default function SystemSettingsPage() {
             System settings
           </h2>
           <p className="mt-1 text-[12.5px] text-slate-500">
-            Admin-managed secrets stored encrypted at rest (AES-GCM). Values overlay the
-            corresponding environment variables so you can rotate a key without a redeploy.
+            Admin-managed secrets stored encrypted at rest. Change a value here
+            and the new one is live immediately — no restart needed.
           </p>
         </div>
       </header>

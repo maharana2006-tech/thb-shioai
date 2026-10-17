@@ -69,9 +69,6 @@ public class OrderServiceImpl implements OrderService {
     @Autowired
     private com.multiship.backend.repository.ClientRepository clientRepository;
 
-    @Autowired
-    private com.multiship.backend.config.CarrierProperties carrierProperties;
-
     /**
      * Sprint 50 Tier 0.5 PR E — clamps caller-supplied tenant filters to the
      * authenticated caller's own tenant when the caller is tenant-scoped
@@ -967,9 +964,13 @@ public class OrderServiceImpl implements OrderService {
 
     /**
      * The order's ship-FROM. Manual shipments persist their own sender; bulk/ERP
-     * orders don't, so fall back to the client's configured warehouse and then
-     * the platform default — the same cascade the label document uses — so the
-     * details view always shows where a shipment left from.
+     * orders don't, so fall back to the client's configured warehouse.
+     *
+     * <p>BUG-137 R7 sibling — removed the final platform-default fallback. It
+     * printed "Multiship Warehouse, Bengaluru" on the details view for any
+     * order whose client had no shipFrom configured, which is a lie about
+     * where the shipment actually left from. Return nulls instead; the UI
+     * renders dashes and the operator knows the data is missing.
      */
     private ShipFrom resolveShipFrom(Order e) {
         if (StringUtils.hasText(e.getShipFromCountryCd())) {
@@ -986,9 +987,7 @@ public class OrderServiceImpl implements OrderService {
             return new ShipFrom(name, client.getName(), a.getLine1(), a.getLine2(),
                     a.getCity(), a.getState(), a.getZip(), a.getCountry(), a.getPhone(), true);
         }
-        com.multiship.backend.config.CarrierProperties.ShipperDefaults d = carrierProperties.getShipper();
-        return new ShipFrom(d.getName(), null, d.getAddressLine1(), d.getAddressLine2(),
-                d.getCity(), d.getState(), d.getPostalCode(), d.getCountryCode(), d.getPhone(), true);
+        return new ShipFrom(null, null, null, null, null, null, null, null, null, true);
     }
 
     private String resolveTenantKey(Object[] row) {

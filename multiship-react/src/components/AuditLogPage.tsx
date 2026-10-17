@@ -22,6 +22,52 @@ import Select from './workspace/Select'
 import { notify } from '../utils/notify'
 
 /**
+ * BUG-110 R7 — the Type / Action columns rendered raw server enums
+ * ('CARRIER_ACCOUNT', 'LABEL_GENERATED'). Operators were asking what
+ * "LABEL_VOID_REFUSED" was supposed to mean. Humanize the common ones
+ * (same codes already listed in the filter dropdowns); unknown codes
+ * fall back to the server string so a new category can't disappear
+ * from the UI if we forget to update the map.
+ */
+const ENTITY_TYPE_LABELS: Record<string, string> = {
+  CARRIER_ACCOUNT: 'Carrier account',
+  LABEL_TEMPLATE: 'Label template',
+  ROUTING_RULE: 'Routing rule',
+  CODE_MAP: 'Code map',
+  CUSTOMS_PROFILE: 'Customs profile',
+  CLIENT_POLICY: 'Client policy',
+  CLIENT_MARKUP: 'Client markup',
+  IMPORT_BATCH: 'Import batch',
+  LABEL: 'Label',
+  USER: 'User',
+}
+const ACTION_LABELS: Record<string, string> = {
+  LABEL_GENERATED: 'Label generated',
+  LABEL_VOIDED: 'Label voided',
+  LABEL_REGENERATED: 'Label regenerated',
+  LABEL_VOID_REFUSED: 'Void refused',
+  CARRIER_REJECTED: 'Carrier rejected',
+  IMPORT_SAVED: 'Import saved',
+  IMPORT_GENERATED: 'Import generated',
+  LOGIN: 'Login',
+  LOGOUT: 'Logout',
+  LOGIN_FAILED: 'Login failed',
+  CREATE: 'Create',
+  UPDATE: 'Update',
+  DELETE: 'Delete',
+  ATTACH_WAREHOUSE: 'Attach warehouse',
+  DETACH_WAREHOUSE: 'Detach warehouse',
+}
+function humaniseEntityType(v: string | null | undefined): string {
+  if (!v) return ''
+  return ENTITY_TYPE_LABELS[v] ?? v.replace(/_/g, ' ').toLowerCase().replace(/^\w/, (c) => c.toUpperCase())
+}
+function humaniseAction(v: string | null | undefined): string {
+  if (!v) return ''
+  return ACTION_LABELS[v] ?? v.replace(/_/g, ' ').toLowerCase().replace(/^\w/, (c) => c.toUpperCase())
+}
+
+/**
  * Read-only feed of settings writes. Filter by actor / entity type /
  * action / entity key / date range. Row-level expand shows the
  * changes JSON pretty-printed.
@@ -237,8 +283,11 @@ export default function AuditLogPage() {
         accessorFn: (r) => r.entityType,
         header: 'Type',
         cell: ({ row }) => (
-          <span className="inline-flex items-center rounded bg-slate-100 px-1.5 py-0.5 text-[10.5px] font-semibold text-slate-700">
-            {row.original.entityType}
+          <span
+            className="inline-flex items-center rounded bg-slate-100 px-1.5 py-0.5 text-[10.5px] font-semibold text-slate-700"
+            title={row.original.entityType}
+          >
+            {humaniseEntityType(row.original.entityType)}
           </span>
         ),
       },
@@ -448,6 +497,11 @@ export default function AuditLogPage() {
                       <option value="TOGGLE_ACTIVE">TOGGLE_ACTIVE</option>
                       <option value="CASCADE_DISABLE">CASCADE_DISABLE</option>
                       <option value="CASCADE_ENABLE">CASCADE_ENABLE</option>
+                      {/* BUG-129 R7: ClientWarehouseServiceImpl writes
+                          ATTACH_WAREHOUSE / DETACH_WAREHOUSE rows that
+                          the picker didn't surface. */}
+                      <option value="ATTACH_WAREHOUSE">ATTACH_WAREHOUSE</option>
+                      <option value="DETACH_WAREHOUSE">DETACH_WAREHOUSE</option>
                     </Select>
                     {/* Audit A2 — date-range filters mirror the backend's
                         since/until params (already supported, no UI pre-fix).
@@ -540,8 +594,11 @@ function ActionBadge({ action }: { action: string }) {
   }
   const cls = tone[action] ?? 'bg-slate-100 text-slate-700'
   return (
-    <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10.5px] font-semibold ${cls}`}>
-      {action}
+    <span
+      className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10.5px] font-semibold ${cls}`}
+      title={action}
+    >
+      {humaniseAction(action)}
     </span>
   )
 }
