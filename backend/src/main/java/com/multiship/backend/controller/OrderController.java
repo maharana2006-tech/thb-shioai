@@ -1,6 +1,5 @@
 package com.multiship.backend.controller;
 
-import com.multiship.backend.config.CarrierProperties;
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.OrderAccountResolutionDTO;
 import com.multiship.backend.dto.OrderListFilters;
@@ -77,13 +76,6 @@ public class OrderController {
 
     @org.springframework.beans.factory.annotation.Value("${label.render-carrier-zpl:false}")
     private boolean renderCarrierZplEnabled;
-
-    @Autowired
-    private CarrierProperties carrierProperties;
-
-    // C1 — resolves tenant_settings.shipper.* on top of the platform default.
-    @Autowired
-    private com.multiship.backend.service.carrier.ShipperDefaultsService shipperDefaultsService;
 
     @Autowired
     private com.multiship.backend.repository.OrderTrackingRepository orderTrackingRepository;
@@ -621,15 +613,14 @@ public class OrderController {
         } else if (client != null && client.getShipFrom() != null && client.getShipFrom().hasValue()) {
             shipper = addressMap(client.getShipFrom(), client.getName());
             returnTo = addressMap(client.effectiveReturnAddress(), client.getName());
-        } else if (labelDetails != null) {
-            // BUG-137 R7 — the preview card for an EXISTING label used to fall
-            // back to the platform shipper default (Multiship Warehouse,
-            // Bengaluru) when the order's ship_from_* was blank + the client
-            // had no ship-from configured. The real label is already in the
-            // carrier's hands with a different shipper, so the preview was a
-            // lie. Return the order's shipFrom block as-is (likely half-empty)
-            // + let the FE render dashes for missing fields — never swap in
-            // the Bengaluru default for a label that's already been bought.
+        } else {
+            // BUG-137 R7 — removed the platform-default fallback. It printed
+            // "Multiship Warehouse, Bengaluru" on the preview whenever the
+            // order's ship_from_* was blank + the client had no ship-from
+            // configured, which lied about what's on the label the carrier
+            // already has. Return the order's columns as-is (likely blank);
+            // the FE renders dashes and the operator knows the data is
+            // missing instead of trusting a fake address.
             shipper = new LinkedHashMap<>();
             shipper.put("name", org.springframework.util.StringUtils.hasText(order.getShipFromName())
                     ? order.getShipFromName() : order.getShipFromCompany());
@@ -641,21 +632,6 @@ public class OrderController {
             shipper.put("state", order.getShipFromState());
             shipper.put("postalCode", order.getShipFromZip());
             shipper.put("countryCode", order.getShipFromCountryCd());
-            returnTo = shipper;
-        } else {
-            // C1 — tenant-scoped shipper defaults keyed on the order's tenant.
-            // Only reached for pre-generation previews (no label document yet).
-            String orderTenant = order.getTenantId() != null ? order.getTenantId() : order.getCustNo();
-            CarrierProperties.ShipperDefaults d = shipperDefaultsService.resolveFor(orderTenant);
-            shipper = new LinkedHashMap<>();
-            shipper.put("name", d.getName());
-            shipper.put("phone", d.getPhone());
-            shipper.put("addressLine1", d.getAddressLine1());
-            shipper.put("addressLine2", d.getAddressLine2());
-            shipper.put("city", d.getCity());
-            shipper.put("state", d.getState());
-            shipper.put("postalCode", d.getPostalCode());
-            shipper.put("countryCode", d.getCountryCode());
             returnTo = shipper;
         }
 
