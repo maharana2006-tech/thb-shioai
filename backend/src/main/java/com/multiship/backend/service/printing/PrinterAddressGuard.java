@@ -72,6 +72,17 @@ public final class PrinterAddressGuard {
         if (ownServerPort > 0 && port == ownServerPort) {
             return Optional.of("Port " + port + " is this server's own port, not a printer.");
         }
+        return refusalForAddress(host);
+    }
+
+    /**
+     * Why this host's resolved address(es) may not be reached, or empty when they may.
+     * The address-only half of {@link #refusal(String, int)} — no port check — so
+     * non-printer dispatch paths (e.g. SFTP, whose legitimate port 22 is in the
+     * printer port blocklist) can re-validate the host against DNS rebinding right
+     * before they connect. A hostname that doesn't resolve yet is allowed.
+     */
+    public static Optional<String> refusalForAddress(String host) {
         InetAddress[] addresses;
         try {
             addresses = InetAddress.getAllByName(host);

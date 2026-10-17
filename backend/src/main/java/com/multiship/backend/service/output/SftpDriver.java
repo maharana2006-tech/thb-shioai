@@ -8,6 +8,7 @@ import com.multiship.backend.config.CryptoService;
 import com.multiship.backend.model.ClientOutputDestination;
 import com.multiship.backend.model.SystemSetting;
 import com.multiship.backend.repository.SystemSettingRepository;
+import com.multiship.backend.service.printing.PrinterAddressGuard;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -173,6 +174,15 @@ public class SftpDriver implements OutputDriver {
                                 String password,
                                 String privateKeyPem,
                                 String knownHostsBody) {
+        // SSRF re-validation at dispatch time: the host is checked at admin save,
+        // but DNS can be re-pointed to an internal address later. Re-run the
+        // address-only guard (NOT refusal(host,port) — SFTP's port 22 is in the
+        // printer service-port blocklist) right before connecting.
+        // ponytail: residual DNS-rebind window between this resolve and JSch's own
+        // resolve — same as the printer path; pin-IP fix is its own ticket.
+        PrinterAddressGuard.refusalForAddress(cfg.getHost()).ifPresent(msg -> {
+            throw new OutputDeliveryException(destinationId, DestinationType.SFTP, "SFTP blocked: " + msg);
+        });
         try {
             JSch jsch = jschFactory.get();
             if (privateKeyPem != null) {
