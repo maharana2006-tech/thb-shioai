@@ -94,6 +94,10 @@ public enum ErrorCode {
     VALIDATION_ERROR,
     /** The request body is missing or isn't valid JSON for the endpoint — HTTP 400. */
     MALFORMED_REQUEST,
+    /** BUG-070 R7 — generic 404 for an unknown API route; pre-fix the
+     *  response fell through to Spring's default {timestamp, status, error}
+     *  envelope which doesn't match our shape. */
+    ROUTE_NOT_FOUND,
     /** Restoring an import would put orders live twice — HTTP 409; retry with allowDuplicate=true to confirm. */
     IMPORT_DUPLICATE_ORDERS,
     /** Import-history action the import's current state doesn't allow (in Trash, generating, nothing to do, …). */

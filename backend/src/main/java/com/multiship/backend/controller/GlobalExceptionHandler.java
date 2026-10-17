@@ -44,7 +44,7 @@ public class GlobalExceptionHandler {
 
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(ApiResponse.<Void>builder()
-                        .status("error")
+                        .status("ERROR")
                         .code(HttpStatus.BAD_REQUEST.value())
                         .errorCode(ErrorCode.VALIDATION_ERROR.name())
                         .message(buildFriendlyValidationSummary(fieldErrors))
@@ -131,7 +131,7 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResponse<Void>> handleCryptoUnavailable(com.multiship.backend.config.CryptoUnavailableException ex) {
         log.warn("Secrets encryption unavailable: {}", ex.getMessage());
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(ApiResponse.<Void>builder()
-                .status("error").code(503)
+                .status("ERROR").code(503)
                 .message("This feature stores a secret and the server has no SECRETS_ENCRYPTION_KEY configured. "
                         + "Set the environment variable (base64 32-byte AES-256 key) and restart the backend.")
                 .errorCode(ErrorCode.INTERNAL_ERROR.name())
@@ -143,7 +143,7 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResponse<Void>> handleImportBatchState(
             com.multiship.backend.service.OrderImportServiceImpl.ImportBatchStateException ex) {
         return ResponseEntity.status(ex.getStatus()).body(ApiResponse.<Void>builder()
-                .status("error").code(ex.getStatus())
+                .status("ERROR").code(ex.getStatus())
                 .message(ex.getMessage())
                 .errorCode(ex.getErrorCode() != null ? ex.getErrorCode() : ErrorCode.IMPORT_BATCH_STATE.name())
                 .build());
@@ -162,10 +162,42 @@ public class GlobalExceptionHandler {
             org.springframework.web.method.annotation.MethodArgumentTypeMismatchException ex) {
         log.debug("Type mismatch on {}: {}", ex.getName(), ex.getMessage());
         String expected = ex.getRequiredType() != null ? ex.getRequiredType().getSimpleName() : "the expected type";
+        // BUG-070 R7 — populate errors.field so the body matches the normal
+        // 404/validation shape; pre-fix this handler returned `errors: null`
+        // while the sibling 404 for the same route named the parameter.
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(ApiResponse.<Void>builder()
-                .status("error").code(400)
+                .status("ERROR").code(400)
                 .message("Parameter '" + ex.getName() + "' must be " + expected + ".")
                 .errorCode(ErrorCode.MALFORMED_REQUEST.name())
+                .errors(ApiResponse.ErrorDetails.builder()
+                        .field(ex.getName())
+                        .code(ErrorCode.MALFORMED_REQUEST.name())
+                        .message("Must be " + expected + ".")
+                        .build())
+                .build());
+    }
+
+    /**
+     * BUG-070 R7 — unknown API routes previously fell through to Spring's
+     * {@code /error} dispatch, which returns the default
+     * {@code {timestamp, status, error, message, path}} shape — totally
+     * different from this app's {@code {status, code, errorCode, message,
+     * errors, timestamp}} envelope. Catch the Spring-internal
+     * {@code NoResourceFoundException} and shape it like every other 404.
+     */
+    @ExceptionHandler(org.springframework.web.servlet.resource.NoResourceFoundException.class)
+    public ResponseEntity<ApiResponse<Void>> handleNoResource(
+            org.springframework.web.servlet.resource.NoResourceFoundException ex) {
+        log.debug("No such route: {}", ex.getResourcePath());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.<Void>builder()
+                .status("ERROR").code(404)
+                .message("No such API route.")
+                .errorCode(ErrorCode.ROUTE_NOT_FOUND.name())
+                .errors(ApiResponse.ErrorDetails.builder()
+                        .field("path")
+                        .code(ErrorCode.ROUTE_NOT_FOUND.name())
+                        .message("/" + ex.getResourcePath())
+                        .build())
                 .build());
     }
 
@@ -193,7 +225,7 @@ public class GlobalExceptionHandler {
         log.debug("Data-integrity / constraint-violation surfaced to handler: {}", ex.getMessage());
         String msg = humanizeDataError(ex);
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(ApiResponse.<Void>builder()
-                .status("error").code(400)
+                .status("ERROR").code(400)
                 .message(msg)
                 .errorCode(ErrorCode.VALIDATION_ERROR.name())
                 .build());
@@ -246,7 +278,7 @@ public class GlobalExceptionHandler {
         log.debug("Unreadable request body: {}", ex.getMessage());
         boolean missing = ex.getMessage() != null && ex.getMessage().startsWith("Required request body is missing");
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(ApiResponse.<Void>builder()
-                .status("error").code(400)
+                .status("ERROR").code(400)
                 .message(missing
                         ? "This request needs a JSON body."
                         : "The request body isn't valid for this endpoint — check the field names and value types.")
@@ -271,7 +303,7 @@ public class GlobalExceptionHandler {
                 && coded.getErrorCode() != null
                 ? coded.getErrorCode().name() : HttpStatus.valueOf(code).name();
         return ResponseEntity.status(code).body(ApiResponse.<Void>builder()
-                .status("error").code(code)
+                .status("ERROR").code(code)
                 .message(ex.getReason() != null ? ex.getReason() : "Request refused.")
                 .errorCode(errorCode)
                 .build());
@@ -293,7 +325,7 @@ public class GlobalExceptionHandler {
             com.multiship.backend.exception.CarrierConnectionException ex) {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(ApiResponse.<Void>builder()
-                        .status("error")
+                        .status("ERROR")
                         .code(HttpStatus.BAD_REQUEST.value())
                         .errorCode(com.multiship.backend.dto.ErrorCode.CARRIER_CONNECTION_FAILED.name())
                         .message(ex.getMessage())
@@ -314,7 +346,7 @@ public class GlobalExceptionHandler {
             org.springframework.security.authorization.AuthorizationDeniedException ex) {
         return ResponseEntity.status(HttpStatus.FORBIDDEN)
                 .body(ApiResponse.<Void>builder()
-                        .status("error")
+                        .status("ERROR")
                         .code(HttpStatus.FORBIDDEN.value())
                         .errorCode("FORBIDDEN")
                         .message("You do not have permission to perform this action.")
@@ -403,7 +435,7 @@ public class GlobalExceptionHandler {
     private static ResponseEntity<ApiResponse<Void>> respondFriendly(String correlationId, HttpStatus status) {
         return ResponseEntity.status(status)
                 .body(ApiResponse.<Void>builder()
-                        .status("error")
+                        .status("ERROR")
                         .code(status.value())
                         .errorCode(ErrorCode.INTERNAL_ERROR.name())
                         .message("Something went wrong on the server. Please try again in a moment. "

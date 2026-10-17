@@ -15,9 +15,16 @@ import java.util.Optional;
 @Repository
 public interface OrderTrackingRepository extends JpaRepository<OrderTracking, Long> {
 
-    /** Per-account usage: [account_number, labels_generated, last_used_at]. */
+    /** Per-account usage: [account_number, labels_generated, last_used_at].
+     *  BUG-088 R7 — historical rows wrote account_number + is_label_generated
+     *  but left label_generated_at NULL, so MAX returned NULL on every
+     *  account despite real label counts (tester saw "never used" under a
+     *  25,353-label FedEx row). Coalesce with updated_at / created_at so
+     *  pre-fix rows surface *something* instead of leaving the admin blind. */
     @Query(value = """
-        SELECT account_number, COUNT(*) AS labels, MAX(label_generated_at) AS last_used
+        SELECT account_number,
+               COUNT(*) AS labels,
+               MAX(COALESCE(label_generated_at, updated_at, created_at)) AS last_used
         FROM order_label_tracking
         WHERE account_number IS NOT NULL AND is_label_generated = true
         GROUP BY account_number

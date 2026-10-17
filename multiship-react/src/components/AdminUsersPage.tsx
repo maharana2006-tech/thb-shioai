@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { notify } from '../utils/notify'
 import { FiActivity, FiCheck, FiClock, FiSlash, FiUsers, FiX } from 'react-icons/fi'
@@ -10,6 +10,7 @@ import {
 import { clientService } from '../api/clientService'
 import { adminInviteService, type InviteMintResponse } from '../api/adminInviteService'
 import { useAppSession } from '../hooks/useAppSession'
+import { useModalDismiss } from '../hooks/useModalDismiss'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import IconButton from './ui/IconButton'
 
@@ -600,6 +601,11 @@ function InviteUserDialog({
   const [role, setRole] = useState<'USER' | 'TENANT'>('USER')
   const [minting, setMinting] = useState(false)
   const [issued, setIssued] = useState<InviteMintResponse | null>(null)
+  // BUG-123 R7 — add focus trap + Escape-to-close + focus restoration.
+  // Pre-fix the dialog opened but focus stayed on the Invite button
+  // behind, Tab walked into the page behind, Escape did nothing.
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useModalDismiss(true, dialogRef, onClose)
 
   const submit = async () => {
     if (!email.trim() || !clientCode.trim()) {
@@ -629,7 +635,8 @@ function InviteUserDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4"
+    <div ref={dialogRef}
+         className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4"
          role="dialog" aria-modal="true" aria-label="Invite user dialog">
       <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-4 shadow-xl space-y-3">
         <header className="flex items-center justify-between">

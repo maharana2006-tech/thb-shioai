@@ -1,7 +1,8 @@
 import { relativeTime } from '../utils/relativeTime'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { notify } from '../utils/notify'
+import { useModalDismiss } from '../hooks/useModalDismiss'
 import {
   FiBox,
   FiDownloadCloud,
@@ -94,6 +95,9 @@ export default function ShippingServicesPage({ active = true, origin: originProp
   const [loading, setLoading] = useState(true)
   /** Service whose allowed-packages modal is open. */
   const [pkgService, setPkgService] = useState<ShippingServiceItem | null>(null)
+  // BUG-123 R7 — add Escape/focus-trap to the Allowed packages modal.
+  const pkgDialogRef = useRef<HTMLDivElement>(null)
+  useModalDismiss(pkgService !== null, pkgDialogRef, () => setPkgService(null))
   const [pkgDraft, setPkgDraft] = useState<Set<number>>(new Set())
   // Sprint 52 PR X — modal-local editable copy of pkgService.brandedPackaging
   // Allowed. Flipping OFF filters the preset list to CUSTOM-only + the save
@@ -559,6 +563,7 @@ export default function ShippingServicesPage({ active = true, origin: originProp
           onClick={() => setPkgService(null)}
         >
           <div
+            ref={pkgDialogRef}
             className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_30px_80px_rgba(15,23,42,0.35)]"
             onClick={(e) => e.stopPropagation()}
           >
