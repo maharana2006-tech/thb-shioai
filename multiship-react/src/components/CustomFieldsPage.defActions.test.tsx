@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, act, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, Outlet } from 'react-router-dom'
 import type { ComponentType } from 'react'
@@ -313,8 +313,11 @@ describe('CustomFieldsPage — editor save flow', () => {
     const baseCalls = listMock.mock.calls.length
     await act(async () => { await userEvent.click(screen.getByRole('button', { name: /New field/i })) })
 
-    await userEvent.type(await screen.findByPlaceholderText(/po_number/i), 'notes')
-    await userEvent.type(screen.getByPlaceholderText(/PO Number/i), 'Notes')
+    // fireEvent.change (one event with the full value) rather than userEvent.type:
+    // the key field's BUG-112 sanitizer onChange desyncs char-by-char typing on
+    // the controlled input, leaving fieldKey empty so save never validates.
+    fireEvent.change(await screen.findByPlaceholderText(/po_number/i), { target: { value: 'notes' } })
+    fireEvent.change(screen.getByPlaceholderText(/PO Number/i), { target: { value: 'Notes' } })
 
     await act(async () => {
       await userEvent.click(screen.getByRole('button', { name: /Save/i }))
@@ -338,8 +341,11 @@ describe('CustomFieldsPage — editor save flow', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /New field/i })).toBeInTheDocument())
     await act(async () => { await userEvent.click(screen.getByRole('button', { name: /New field/i })) })
 
-    await userEvent.type(await screen.findByPlaceholderText(/po_number/i), 'notes')
-    await userEvent.type(screen.getByPlaceholderText(/PO Number/i), 'Notes')
+    // fireEvent.change (one event with the full value) rather than userEvent.type:
+    // the key field's BUG-112 sanitizer onChange desyncs char-by-char typing on
+    // the controlled input, leaving fieldKey empty so save never validates.
+    fireEvent.change(await screen.findByPlaceholderText(/po_number/i), { target: { value: 'notes' } })
+    fireEvent.change(screen.getByPlaceholderText(/PO Number/i), { target: { value: 'Notes' } })
 
     await act(async () => {
       await userEvent.click(screen.getByRole('button', { name: /Save/i }))

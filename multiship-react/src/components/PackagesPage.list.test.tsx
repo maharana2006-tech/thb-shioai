@@ -164,7 +164,8 @@ describe('PackagesPage — mount + service calls', () => {
     expect(packagesUsageMock).toHaveBeenCalledTimes(1)
   })
 
-  it('renders "Add Package" button always (no role gate on Add)', async () => {
+  it('renders "Add Package" button for ADMIN (preset writes are admin-only)', async () => {
+    mockRole = 'ADMIN'
     listPresetsMock.mockResolvedValue([])
     const Page = await loadPage()
     renderPage(Page)
@@ -384,8 +385,8 @@ describe('PackagesPage — role gating', () => {
     // Wait for load to complete.
     await waitFor(() => expect(listPresetsMock).toHaveBeenCalled())
     expect(screen.queryByRole('button', { name: /Sync carrier packaging/i })).not.toBeInTheDocument()
-    // Add Package still visible (no gate on Add).
-    expect(screen.getByRole('button', { name: /Add Package/i })).toBeInTheDocument()
+    // Preset writes are admin-only — Add Package is gated too (security fix).
+    expect(screen.queryByRole('button', { name: /Add Package/i })).not.toBeInTheDocument()
   })
 
   it('TENANT does NOT see the Sync button either', async () => {
