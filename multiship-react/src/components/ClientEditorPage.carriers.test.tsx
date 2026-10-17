@@ -2,11 +2,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { Provider } from 'react-redux'
-import { combineReducers, configureStore } from '@reduxjs/toolkit'
 import type { ComponentType } from 'react'
-import carrierReducer from '../store/carrierSlice'
-import orderReducer from '../store/orderSlice'
 
 /**
  * Sprint 52 wizard-tests — Carriers step (create + edit mode).
@@ -157,17 +153,7 @@ async function loadPage(): Promise<ComponentType> {
 
 /** Render the page under a MemoryRouter that resolves /settings/clients/:clientCode. */
 function renderPage(Page: ComponentType, path: string) {
-  const rootReducer = combineReducers({
-    carriers: carrierReducer,
-    orders: orderReducer,
-  })
-  const store = configureStore({
-    reducer: rootReducer,
-    middleware: (getDefaultMiddleware) =>
-      getDefaultMiddleware({ serializableCheck: false }),
-  })
   return render(
-    <Provider store={store}>
       <MemoryRouter initialEntries={[path]}>
         <Routes>
           <Route path="/settings/clients/new" element={<Page />} />
@@ -175,7 +161,6 @@ function renderPage(Page: ComponentType, path: string) {
           <Route path="/settings/clients" element={<div>CLIENTS_LIST</div>} />
         </Routes>
       </MemoryRouter>
-    </Provider>,
   )
 }
 

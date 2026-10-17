@@ -1,10 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { Provider } from 'react-redux'
-import { combineReducers, configureStore } from '@reduxjs/toolkit'
-import carrierReducer from '../../store/carrierSlice'
-import orderReducer from '../../store/orderSlice'
 import Sidebar from './Sidebar'
 
 /**
@@ -48,19 +44,9 @@ vi.mock('../../utils/notify', () => ({
 }))
 
 function renderSidebar(overrides: Partial<Parameters<typeof Sidebar>[0]> = {}) {
-  const rootReducer = combineReducers({
-    carriers: carrierReducer,
-    orders: orderReducer,
-  })
-  const store = configureStore({
-    reducer: rootReducer,
-    middleware: (getDefaultMiddleware) =>
-      getDefaultMiddleware({ serializableCheck: false }),
-  })
   const onTogglePin = vi.fn()
   const onMobileClose = vi.fn()
   const utils = render(
-    <Provider store={store}>
       <MemoryRouter initialEntries={['/orders']}>
         <Sidebar
           pinned={false}
@@ -70,7 +56,6 @@ function renderSidebar(overrides: Partial<Parameters<typeof Sidebar>[0]> = {}) {
           {...overrides}
         />
       </MemoryRouter>
-    </Provider>,
   )
   return { ...utils, onTogglePin, onMobileClose }
 }
@@ -114,21 +99,14 @@ describe('Sidebar — FE-M5 mobile drawer', () => {
       .toBeNull()
 
     rerender(
-      <Provider store={configureStore({
-        reducer: combineReducers({
-          carriers: carrierReducer,
-          orders: orderReducer,
-        }),
-      })}>
-        <MemoryRouter initialEntries={['/orders']}>
-          <Sidebar
-            pinned={false}
-            onTogglePin={vi.fn()}
-            mobileOpen
-            onMobileClose={onMobileClose}
-          />
-        </MemoryRouter>
-      </Provider>,
+      <MemoryRouter initialEntries={['/orders']}>
+        <Sidebar
+          pinned={false}
+          onTogglePin={vi.fn()}
+          mobileOpen
+          onMobileClose={onMobileClose}
+        />
+      </MemoryRouter>,
     )
 
     const backdrop = document.querySelector('div[aria-hidden="true"].fixed.inset-0') as HTMLElement
@@ -234,21 +212,14 @@ describe('Sidebar — FE-M5 mobile drawer a11y (Sprint 52 follow-up)', () => {
     // Close the drawer via rerender; cleanup should restore the prior
     // inline overflow value the app had set.
     rerender(
-      <Provider store={configureStore({
-        reducer: combineReducers({
-          carriers: carrierReducer,
-          orders: orderReducer,
-        }),
-      })}>
-        <MemoryRouter initialEntries={['/orders']}>
-          <Sidebar
-            pinned={false}
-            onTogglePin={vi.fn()}
-            mobileOpen={false}
-            onMobileClose={onMobileClose}
-          />
-        </MemoryRouter>
-      </Provider>,
+      <MemoryRouter initialEntries={['/orders']}>
+        <Sidebar
+          pinned={false}
+          onTogglePin={vi.fn()}
+          mobileOpen={false}
+          onMobileClose={onMobileClose}
+        />
+      </MemoryRouter>,
     )
     expect(document.body.style.overflow).toBe('auto')
   })
