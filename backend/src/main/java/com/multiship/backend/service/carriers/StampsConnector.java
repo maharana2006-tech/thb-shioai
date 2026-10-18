@@ -2468,13 +2468,37 @@ public class StampsConnector implements CarrierConnector {
 
     /** Resolve the SERA {@code label_id} for a tracking number by reading
      *  {@code label_package.carrier_label_ref} (V44). Returns null when the
-     *  repository isn't wired (unit tests) or no row matches. */
+     *  repository isn't wired (unit tests) or no row matches.
+     *
+     *  <p>BUG-010 — tracking numbers aren't unique across orders (Stamps
+     *  sandbox emits the same placeholder for every label; in prod, two
+     *  labels ever sharing a tracking crash the void path with
+     *  {@code IncorrectResultSizeDataAccessException}). When the void path
+     *  tags the MDC with {@code carrierCallOrderNo} (it always does — see
+     *  {@link com.multiship.backend.service.VoidServiceImpl}), scope the
+     *  lookup by (orderNo, trackingNumber) so it's a point-lookup. */
     String resolveSeraLabelId(String trackingNumber) {
         if (!StringUtils.hasText(trackingNumber) || labelPackageRepository == null) return null;
-        return labelPackageRepository.findByTrackingNumber(trackingNumber)
-                .map(com.multiship.backend.model.LabelPackage::getCarrierLabelRef)
+        Integer orderNo = parseOrderNoFromMdc();
+        java.util.Optional<com.multiship.backend.model.LabelPackage> row = (orderNo != null)
+                ? labelPackageRepository.findByOrderNoAndTrackingNumber(orderNo, trackingNumber)
+                : labelPackageRepository.findByTrackingNumber(trackingNumber);
+        return row.map(com.multiship.backend.model.LabelPackage::getCarrierLabelRef)
                 .filter(StringUtils::hasText)
                 .orElse(null);
+    }
+
+    /** BUG-010 — read the current carrier-call order number from MDC. Returns
+     *  null when the context isn't tagged (legacy call sites). */
+    private static Integer parseOrderNoFromMdc() {
+        String v = org.slf4j.MDC.get(
+                com.multiship.backend.service.observability.CarrierCallContext.MDC_CARRIER_ORDER_NO);
+        if (v == null || v.isBlank()) return null;
+        try {
+            return Integer.valueOf(v.trim());
+        } catch (NumberFormatException ignore) {
+            return null;
+        }
     }
 
     /**

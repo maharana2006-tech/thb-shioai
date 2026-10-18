@@ -27,6 +27,16 @@ public interface LabelPackageRepository extends JpaRepository<LabelPackage, Long
     Optional<LabelPackage> findByTrackingNumber(String trackingNumber);
 
     /**
+     * BUG-010 — tracking-number uniqueness isn't guaranteed across
+     * orders (Stamps sandbox emits the same placeholder for every
+     * label; in prod, rare but real cross-order collisions happen).
+     * Scope by {@code orderNo} so lookups from the void path (which
+     * knows the order) remain a point-lookup instead of blowing up
+     * with {@code IncorrectResultSizeDataAccessException}.
+     */
+    Optional<LabelPackage> findByOrderNoAndTrackingNumber(Integer orderNo, String trackingNumber);
+
+    /**
      * PR-T9-X1 (audit T-MPS3) — the single "lead" piece for a shipment,
      * i.e. the row that represents the whole MPS for customer-facing
      * display. Backed by the V135 partial index
