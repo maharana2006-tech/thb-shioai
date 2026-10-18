@@ -3319,6 +3319,22 @@ public class StampsConnector implements CarrierConnector {
         return name.trim().matches("[A-Za-z]{2,}\\s+[A-Za-z]{2,}.*");
     }
 
+    /** R2-BUG-002 — expand a short / non-pattern contact name to meet
+     *  SERA's fullname rule ({@link #isSeraValidFullname}) for the pickup
+     *  wire. Used only on {@code /pickups} where the field is required
+     *  (not on label writes, which fall back to {@code company_name}).
+     *  Returns the input unchanged when already valid; otherwise appends
+     *  " Pickup" so a 3-letter shipper name like "MKL" becomes
+     *  "MKL Pickup" which clears the pattern without inventing a real
+     *  person's name. */
+    static String padToSeraFullname(String name) {
+        if (name == null) return "";
+        String trimmed = name.trim();
+        if (trimmed.isEmpty()) return "";
+        if (isSeraValidFullname(trimmed)) return trimmed;
+        return trimmed + " Pickup";
+    }
+
     private static boolean seraAddressesEqual(AddressToValidate a, AddressToValidate b) {
         if (a == null || b == null) return false;
         return eqAddressLine(a.addressLine1(), b.addressLine1())
@@ -3570,11 +3586,23 @@ public class StampsConnector implements CarrierConnector {
         body.put("carrier", "usps");
         CarrierConnector.AddressToValidate a = req.address();
         if (a != null) {
-            body.put("pickup_address", buildSeraAddress(
+            Map<String, Object> pickupAddress = buildSeraAddress(
                     req.contactName(), null,
                     a.addressLine1(), a.addressLine2(), null,
                     a.city(), a.state(), a.postalCode(), a.countryCode(),
-                    req.contactPhone(), null, null));
+                    req.contactPhone(), null, null);
+            // R2-BUG-002 — SERA's /pickups endpoint REQUIRES contact "name"
+            // (error 4522242). buildSeraAddress drops the field when the
+            // supplied value fails SERA's fullname pattern ("Foo Bar", 2+ /
+            // 2+ alpha chars) — fine for shipments (SERA falls back to
+            // company_name) but a hard reject for pickups. Force-include it,
+            // padding short values so the pattern passes. ponytail: the real
+            // fix is a Pickup-form field for the driver-facing contact
+            // (first + last) separate from the shipper's company name.
+            if (!pickupAddress.containsKey("name") && StringUtils.hasText(req.contactName())) {
+                pickupAddress.put("name", padToSeraFullname(req.contactName()));
+            }
+            body.put("pickup_address", pickupAddress);
         }
         // pickup_window — ISO-8601 timestamps per SERA spec. When the caller
         // didn't pin a window, default to 09:00-17:00 UTC on pickupDate so

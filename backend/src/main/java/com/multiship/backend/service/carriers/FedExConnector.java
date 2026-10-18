@@ -1879,6 +1879,12 @@ public class FedExConnector implements CarrierConnector {
         // SAME_DAY was hardcoded — FedEx rejects future-dated SAME_DAY
         // pickups outright.
         originDetail.put("pickupDateType", isSameDayPickup(req) ? "SAME_DAY" : "FUTURE_DAY");
+        // R2-BUG-002 — FedEx requires packageLocation on every pickup request;
+        // omitting it fails with PACKAGELOCATION.INVALID. Valid values per the
+        // FedEx Create Pickup spec are NONE | FRONT | REAR | SIDE. ponytail:
+        // hardcoded FRONT until the pickup form adds a dropdown; the operator
+        // can still override via specialInstructions in the meantime.
+        body.put("packageLocation", "FRONT");
         body.put("originDetail", originDetail);
 
         // FDX-F — carrierCode selects the driver fleet. FDXE = FedEx

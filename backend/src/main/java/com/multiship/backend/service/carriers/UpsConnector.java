@@ -1710,6 +1710,13 @@ public class UpsConnector implements CarrierConnector {
             String baseUrl = isSandbox(environment)
                     ? carrierProperties.getUps().getSandboxUrl()
                     : carrierProperties.getUps().getApiBaseUrl();
+            // R2-BUG-002 — some UPS tenants scope pickup authorization to a
+            // specific merchant id. Pre-fix the pickup call lacked the
+            // x-merchant-id header that /ship + /rate carry (the OAuth
+            // token-request already supplies it); UPS then rejected the
+            // call with 401 code 250002 ("locked out"). Mirror the shape
+            // of other UPS endpoints so pickup picks up the same merchant
+            // scope as the token.
             String response = HttpClients.newBuilder()
                     .baseUrl(baseUrl).build()
                     .post()
@@ -1719,6 +1726,7 @@ public class UpsConnector implements CarrierConnector {
                     .header("Authorization", "Bearer " + accessToken)
                     .header("transId", java.util.UUID.randomUUID().toString())
                     .header("transactionSrc", "multiship")
+                    .header("x-merchant-id", request.accountNumber().trim())
                     .body(body)
                     .retrieve()
                     .body(String.class);
