@@ -426,30 +426,26 @@ export default function LabelDocumentPage() {
   const label = payload?.label
   const shipper = payload?.shipper
   const resolution = payload?.resolution
-  /* BUG-001 — the facsimile fallback must reflect the shipment's own
-     sender (what the operator typed on New Shipment / what persisted on
-     the order), not the client-warehouse / platform default the backend
-     resolves into `payload.shipper` when `order.shipFrom*` is blank.
-     When any ship-from field is set on the order, prefer the per-order
-     capture; otherwise fall through to the resolved shipper. */
-  const facsimileShipper = useMemo(() => {
-    const hasPerOrderShipFrom = Boolean(
-      order?.shipFromName || order?.shipFromAddr1 || order?.shipFromCity
-        || order?.shipFromState || order?.shipFromZip || order?.shipFromCountryCd,
-    )
-    if (!hasPerOrderShipFrom) return shipper
-    return {
-      name: order?.shipFromName ?? null,
-      company: order?.shipFromCompany ?? null,
-      phone: order?.shipFromPhone ?? null,
-      addressLine1: order?.shipFromAddr1 ?? null,
-      addressLine2: order?.shipFromAddr2 ?? null,
-      city: order?.shipFromCity ?? null,
-      state: order?.shipFromState ?? null,
-      postalCode: order?.shipFromZip ?? null,
-      countryCode: order?.shipFromCountryCd ?? null,
-    }
-  }, [order, shipper])
+  /* R2-BUG-014 — the facsimile MUST render the ORDER's own sender and
+     never fall back to `payload.shipper`. The backend resolves `shipper`
+     by cascading per-order -> client warehouse -> tenant_settings ->
+     platform default; the last two leak "Multiship Warehouse, Bengaluru"
+     into the preview whenever the order itself has no sender captured
+     AND the client has no warehouse configured. The on-screen facsimile
+     must not claim an address the carrier label does not carry
+     (BUG-137 R7 doctrine: render blanks, let the operator see data is
+     missing). Morning BUG-001 kept a payload.shipper fallback - remove it. */
+  const facsimileShipper = useMemo(() => ({
+    name: order?.shipFromName ?? null,
+    company: order?.shipFromCompany ?? null,
+    phone: order?.shipFromPhone ?? null,
+    addressLine1: order?.shipFromAddr1 ?? null,
+    addressLine2: order?.shipFromAddr2 ?? null,
+    city: order?.shipFromCity ?? null,
+    state: order?.shipFromState ?? null,
+    postalCode: order?.shipFromZip ?? null,
+    countryCode: order?.shipFromCountryCd ?? null,
+  }), [order])
   const legacyAccount = payload?.carrierAccount
   /* PR ρ — carrierResponseDetails is still on the wire (backend keeps
      emitting it so /orders/{n}/carrier-payload-preview and any future

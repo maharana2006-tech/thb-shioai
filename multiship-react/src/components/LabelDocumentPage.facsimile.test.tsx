@@ -192,10 +192,12 @@ describe('LabelDocumentPage facsimile (BUG-001)', () => {
     expect(refEl.textContent).not.toContain('934201')
   })
 
-  it('falls back to the resolved payload.shipper when no per-order ship-from is captured', async () => {
-    // Bulk/ERP path: order has no shipFrom* at all. The facsimile should
-    // then render payload.shipper (even if that's the platform default) —
-    // the fix is "prefer per-order", not "always ignore shipper".
+  it('R2-BUG-014: NEVER renders payload.shipper when order has no ship-from (no Bengaluru fallback)', async () => {
+    // Bulk/ERP path with a stale platform default on payload.shipper
+    // (observed: /me/shipper-default returning Bengaluru for a tenantless
+    // user). The facsimile must render dashes/blanks for the missing
+    // sender, NOT the backend's fallback — otherwise the on-screen preview
+    // claims an address the carrier label itself does not carry.
     getLabelDocument.mockResolvedValueOnce({
       data: {
         order: {
@@ -213,9 +215,23 @@ describe('LabelDocumentPage facsimile (BUG-001)', () => {
       },
     })
     renderWithProviders(<LabelDocumentPage />)
-    // "Multiship Warehouse" appears both in the ORIGIN block and the SIGN: line;
-    // use getAllByText to allow both matches.
-    await waitFor(() => expect(screen.getAllByText(/Multiship Warehouse/).length).toBeGreaterThanOrEqual(1))
-    expect(screen.getByText(/Bengaluru, KA 560001 IN/)).toBeInTheDocument()
+    // Wait for the facsimile to be present (SIGN: line always renders).
+    await waitFor(() => expect(screen.getByText(/^SIGN:/i)).toBeInTheDocument())
+    // Platform default must NEVER appear.
+    expect(screen.queryByText(/Bengaluru/)).toBeNull()
+    expect(screen.queryByText(/Warehouse Way/)).toBeNull()
+    expect(screen.queryByText(/Multiship Warehouse/)).toBeNull()
+  })
+
+  it('R2-BUG-014: order has real sender; a leaked Bengaluru payload.shipper is suppressed', async () => {
+    // The reported shape: order carries MKL/Zeeland (as modal shows), yet
+    // payload.shipper is the Bengaluru platform default (observed in the
+    // report at the /me/shipper-default endpoint). Facsimile must render
+    // MKL and ignore the platform default entirely.
+    renderWithProviders(<LabelDocumentPage />)
+    await waitFor(() => expect(screen.getByText(/SIGN:\s*MKL/i)).toBeInTheDocument())
+    expect(screen.getByText(/8191 Logistics Dr/)).toBeInTheDocument()
+    expect(screen.queryByText(/Bengaluru/)).toBeNull()
+    expect(screen.queryByText(/Multiship Warehouse/)).toBeNull()
   })
 })
