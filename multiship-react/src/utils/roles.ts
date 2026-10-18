@@ -64,9 +64,21 @@ export const getHomePathForRole = (role: UserRole, hasConnectedCarrier: boolean)
 }
 
 /**
- * TENANT users are mapped to their tenant by username (e.g. user "arhdev"
- * sees tenant "ARHDEV"). This mirrors the backend convention of
- * COALESCE(tenant_id, cust_no) using uppercase customer codes.
+ * R4-BUG-003 — this used to return the UPPER-CASED username for TENANT
+ * users on the assumption that username == customer_code. For an
+ * invite-time TENANT where user.client_code is set independently of
+ * the username, the fabricated value didn't match the real tenant and
+ * every call that used it as a filter 403'd (the TENANT 'Your orders'
+ * page showed empty, LabelDocumentPage over-blocked valid labels).
+ * The backend's TenantScopeEnforcer.clampClientCode already resolves
+ * the caller's tenant from the JWT, so the FE must never derive it
+ * from the username. Signature preserved for existing callers; they
+ * all degrade to safe behaviour (route-by-role on OrdersPage, allow
+ * on LabelDocumentPage — backend still 403s cross-tenant attempts).
+ *
+ * @deprecated Always returns null. Route by role instead
+ *   (`normalizeRole(role) === 'TENANT'`) and let the backend scope the
+ *   list / view calls. Delete once no caller references it.
  */
-export const getTenantIdForUser = (role: UserRole, username?: string | null) =>
-  role === 'TENANT' && username?.trim() ? username.trim().toUpperCase() : null
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export const getTenantIdForUser = (_role: UserRole, _username?: string | null): string | null => null
