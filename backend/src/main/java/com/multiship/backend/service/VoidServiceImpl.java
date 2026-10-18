@@ -331,6 +331,21 @@ public class VoidServiceImpl implements VoidService {
                 .status(result.status())
                 .message(result.message())
                 .build();
+        // R2-BUG-015 — a carrier refusal (voided=false) must come back as a
+        // non-2xx so FE operators + API callers see the error, not a green
+        // "success" with a VOIDED badge. Pre-fix UPS "No shipment found
+        // within the allowed void period" returned HTTP 200 with
+        // carrierVoided:false — the Orders grid still read it as success.
+        if (!result.voided()) {
+            return ApiResponse.<VoidLabelResponseDTO>builder()
+                    .status("error")
+                    .code(HttpStatus.BAD_GATEWAY.value())
+                    .errorCode(ErrorCode.CARRIER_FAILURE.name())
+                    .message(result.message() != null ? result.message()
+                            : canonicalCarrier + " refused the void.")
+                    .data(body)
+                    .build();
+        }
         return success(body);
     }
 
@@ -609,6 +624,18 @@ public class VoidServiceImpl implements VoidService {
                 .status(result.status())
                 .message(result.message())
                 .build();
+        // R2-BUG-015 — same as the legacy path: a carrier refusal must
+        // surface as a non-2xx so the FE doesn't paint it as success.
+        if (!result.voided()) {
+            return ApiResponse.<VoidLabelResponseDTO>builder()
+                    .status("error")
+                    .code(HttpStatus.BAD_GATEWAY.value())
+                    .errorCode(ErrorCode.CARRIER_FAILURE.name())
+                    .message(result.message() != null ? result.message()
+                            : r.canonicalCarrier() + " refused the void.")
+                    .data(body)
+                    .build();
+        }
         return success(body);
     }
 
