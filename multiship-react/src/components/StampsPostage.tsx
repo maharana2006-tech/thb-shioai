@@ -121,14 +121,20 @@ export function AddFundsForm({ account, onDone }: {
 
   const available = balance?.available ?? null
   const room = balance?.maxBalance != null && available !== null ? balance.maxBalance - available : null
-  const amount = custom.trim() ? Number(custom) : preset
-  const problem = amount === null || Number.isNaN(amount) || amount <= 0
+  const custVal = custom.trim()
+  const amount = custVal ? Number(custVal) : preset
+  // BUG-019 — compare and validate in integer cents; Number(x) * 100 trips on
+  // floats (9841.47 → 984146.9999…) and used to reject the advertised max exactly.
+  const amountCents = amount !== null && !Number.isNaN(amount) ? Math.round(amount * 100) : null
+  const roomCents = room !== null ? Math.round(room * 100) : null
+  const minCents = Math.round(MIN_TOPUP * 100)
+  const problem = amountCents === null || amountCents <= 0
     ? 'Pick or enter an amount.'
-    : amount < MIN_TOPUP
+    : amountCents < minCents
       ? `Add at least ${usd(MIN_TOPUP)}.`
-      : Math.round(amount * 100) !== amount * 100
+      : custVal && !/^\d+(\.\d{0,2})?$/.test(custVal)
         ? 'Enter dollars and cents, like 25.50.'
-        : room !== null && amount > room
+        : roomCents !== null && amountCents > roomCents
           ? `That would go over Stamps.com's ${usd(balance?.maxBalance ?? 0)} balance limit. You can add up to ${usd(room)}.`
           : null
 
