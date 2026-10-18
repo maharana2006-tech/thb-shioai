@@ -137,6 +137,10 @@ export function AddFundsForm({ account, onDone }: {
         : roomCents !== null && amountCents > roomCents
           ? `That would go over Stamps.com's ${usd(balance?.maxBalance ?? 0)} balance limit. You can add up to ${usd(room)}.`
           : null
+  // BUG-018 — balance fetch failed (unauthorized / Stamps rejected the lookup).
+  // Disable the amount controls so the amber warning isn't paired with a live
+  // "Add $N" button that would just error.
+  const unauth = balanceError !== null
 
   const pickPreset = (v: number) => { setPreset(v); setCustom(''); setError(null); requestKey.current = null }
   const typeCustom = (v: string) => { setCustom(v); setPreset(null); setError(null); requestKey.current = null }
@@ -199,7 +203,8 @@ export function AddFundsForm({ account, onDone }: {
             return (
               <button key={v} type="button" role="radio" aria-checked={on} onClick={() => pickPreset(v)}
                 autoFocus={v === 50}
-                className={`rounded-lg border py-2 text-[13px] transition ${on
+                disabled={unauth}
+                className={`rounded-lg border py-2 text-[13px] transition disabled:cursor-not-allowed disabled:opacity-60 ${on
                   ? 'border-[#1f150c] bg-[#1f150c] font-semibold text-white'
                   : 'border-slate-200 text-slate-700 hover:bg-slate-50'}`}>
                 {usd(v).replace('.00', '')}
@@ -212,7 +217,8 @@ export function AddFundsForm({ account, onDone }: {
           onChange={(e) => typeCustom(e.target.value)}
           placeholder={`Other amount (${usd(MIN_TOPUP)} minimum)`}
           aria-label="Other amount"
-          className="mb-1 h-9 w-full rounded-lg border border-slate-200 px-3 text-[13px] outline-none focus:border-[#412d15]"
+          disabled={unauth}
+          className="mb-1 h-9 w-full rounded-lg border border-slate-200 px-3 text-[13px] outline-none focus:border-[#412d15] disabled:cursor-not-allowed disabled:bg-slate-50"
         />
         <p className="mb-3 min-h-[18px] text-[12px] text-rose-700" aria-live="polite">{error ?? (custom.trim() ? problem : null)}</p>
 
@@ -232,7 +238,7 @@ export function AddFundsForm({ account, onDone }: {
             className="rounded-lg border border-slate-200 px-3 py-1.5 text-[13px] text-slate-700 hover:bg-slate-50">Cancel</button>
           <button type="button" onClick={() => void submit()} aria-busy={busy}
             className="rounded-lg bg-[#1f150c] px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-[#412d15] disabled:opacity-60"
-            disabled={busy}>
+            disabled={busy || unauth}>
             {busy ? 'Adding…' : amount && !problem ? `Add ${usd(amount)}` : 'Add funds'}
           </button>
         </div>
