@@ -1717,6 +1717,14 @@ public class UpsConnector implements CarrierConnector {
             // call with 401 code 250002 ("locked out"). Mirror the shape
             // of other UPS endpoints so pickup picks up the same merchant
             // scope as the token.
+            // run-4 — this header fix did NOT resolve the 401 on the dev
+            // sandbox. QA confirmed with UPS portal check that the sandbox
+            // developer app is not entitled to the Pickup product (the
+            // Pickup API is a separately-provisioned entitlement). No
+            // further code change gets past this; the fix is to add the
+            // Pickup product to the sandbox app via the UPS developer
+            // portal. ponytail: once the entitlement lands this header
+            // becomes load-bearing again.
             String response = HttpClients.newBuilder()
                     .baseUrl(baseUrl).build()
                     .post()

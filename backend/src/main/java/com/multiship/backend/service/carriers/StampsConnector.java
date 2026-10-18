@@ -3617,9 +3617,17 @@ public class StampsConnector implements CarrierConnector {
         window.put("end_at", OffsetDateTime.of(req.pickupDate(), end, ZoneOffset.UTC)
                 .format(java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME));
         body.put("pickup_window", window);
-        if (StringUtils.hasText(req.specialInstructions())) {
-            body.put("pickup_instructions", req.specialInstructions());
-        }
+        // R2-BUG-002 (run-4) — SERA REQUIRES pickup_instructions on every
+        // pickup (error 800000 'The PickupInstructions field is required').
+        // UI treats "Notes for driver" as optional. Default to a neutral
+        // string so a blank note still ships a well-formed body; the
+        // operator's text wins when present. ponytail: the FE pickup form
+        // should probably mark the field required for USPS to keep this
+        // honest instead of hiding behind a default.
+        body.put("pickup_instructions",
+                StringUtils.hasText(req.specialInstructions())
+                        ? req.specialInstructions()
+                        : "Standard pickup — no special instructions.");
         try {
             return objectMapper.writeValueAsString(body);
         } catch (Exception ex) {
