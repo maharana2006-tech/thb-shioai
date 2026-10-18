@@ -1337,7 +1337,11 @@ export default function NewShipmentPage() {
     // USPS → FedEx switch, so a sale shipment went out on the commercial
     // invoice declared as a sample. Only auto-fill when the field is
     // empty — once the operator has picked a reason, keep it.
-    setReasonForExport((cur) => cur || (matchedAccount?.shippingPurpose ?? ''))
+    // BUG-002 — dropped the `matchedAccount?.shippingPurpose` fallback.
+    // Account defaults to 'Sample' silently classified commercial sales
+    // as samples on customs. Keep user-set value (sticky across carrier
+    // swaps per BUG-143); otherwise blank → force-pick guard fires.
+    setReasonForExport((cur) => cur || '')
     const saved = matchedAccount?.clearanceOption
     const allowed = clearanceOptionsForCarrier(canon(carrier))
     setClearanceOption(saved && allowed.some((o) => o.value === saved) ? saved : '')
