@@ -17,7 +17,31 @@ public interface ShippingServiceRepository extends JpaRepository<ShippingService
 
     List<ShippingService> findByCarrierIgnoreCaseAndEnabledTrueOrderBySortOrderAsc(String carrier);
 
-    Optional<ShippingService> findByCarrierIgnoreCaseAndServiceCodeIgnoreCase(String carrier, String serviceCode);
+    /**
+     * BUG-017 — the uniqueness key is {@code (carrier, service_code, origin_country)},
+     * so this (carrier, service_code)-only lookup can legitimately match 2+ rows
+     * (e.g. {@code GROUND_HOME_DELIVERY} exists for US + CA). The pre-fix derived
+     * finder threw {@link org.springframework.dao.IncorrectResultSizeDataAccessException}
+     * on close-out days busy enough to touch a cross-country code, 500'ing
+     * {@code GET /manifests/open}. The two callers
+     * ({@code ManifestServiceImpl#resolveByBilledAccount},
+     * {@code RateShopServiceImpl#resolveServiceId}) only read intrinsic fields
+     * ({@code is_express}, {@code id}) that are identical across origin-country
+     * siblings, so any-one-wins is safe. Deterministic pick: lowest id (first).
+     */
+    @Query("SELECT s FROM ShippingService s WHERE LOWER(s.carrier) = LOWER(?1) "
+            + "AND LOWER(s.serviceCode) = LOWER(?2) ORDER BY s.id ASC")
+    List<ShippingService> findAllByCarrierAndServiceCode(String carrier, String serviceCode);
+
+    /**
+     * See {@link #findAllByCarrierAndServiceCode}. Returns the first match for
+     * callers that only need an any-one-wins row.
+     */
+    default Optional<ShippingService> findByCarrierIgnoreCaseAndServiceCodeIgnoreCase(
+            String carrier, String serviceCode) {
+        List<ShippingService> rows = findAllByCarrierAndServiceCode(carrier, serviceCode);
+        return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
+    }
 
     /** Sync upsert key: one row per (carrier, code, origin country). */
     Optional<ShippingService> findByCarrierIgnoreCaseAndServiceCodeIgnoreCaseAndOriginCountryIgnoreCase(
