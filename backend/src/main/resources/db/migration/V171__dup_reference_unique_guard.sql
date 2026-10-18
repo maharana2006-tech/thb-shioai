@@ -34,12 +34,44 @@
 -- per the project's Flyway convention
 -- (docs/flyway-fresh-db-guard-pattern.md).
 
+-- Attempt UNIQUE first. If pre-existing dups block the create (dev DB
+-- contained `(THB000, po-203984)` with two GENERATED rows on 2026-10-18
+-- boot), fall back to a non-unique index with the same shape so lookups
+-- are still fast and a follow-up migration can promote to UNIQUE after
+-- ops resolves the dup. Correctness floor is the Redis SETNX in
+-- `CarrierServiceImpl` — this index primarily accelerates
+-- `OrderRepository.findShippedByClientAndReference`.
+
 DO $$
 BEGIN
-    IF to_regclass('public.label_batch') IS NOT NULL
-       AND to_regclass('public.uniq_label_batch_client_ref_active') IS NULL THEN
+    IF to_regclass('public.label_batch') IS NULL THEN
+        RETURN;
+    END IF;
+    IF to_regclass('public.uniq_label_batch_client_ref_active') IS NOT NULL
+       OR to_regclass('public.ix_label_batch_client_ref_active') IS NOT NULL THEN
+        RETURN;
+    END IF;
+    BEGIN
         CREATE UNIQUE INDEX uniq_label_batch_client_ref_active
             ON label_batch (upper(cust_no), lower(customer_ref))
             WHERE customer_ref IS NOT NULL AND order_status = 'GENERATED';
-    END IF;
+    EXCEPTION WHEN unique_violation THEN
+        -- Pre-existing duplicate rows exist. Create a non-unique index
+        -- so lookups still hit it, and surface a loud NOTICE so ops can
+        -- find the offending rows and schedule a cleanup + a follow-up
+        -- migration that converts this to UNIQUE. The Redis SETNX in
+        -- CarrierServiceImpl still blocks NEW concurrent duplicates;
+        -- what's missing is the DB-level backstop for the Redis-outage
+        -- window.
+        RAISE NOTICE 'V171: pre-existing (cust_no, customer_ref) duplicates in label_batch '
+                     'block the UNIQUE index. Creating a non-unique fallback so lookups still '
+                     'use the index. Resolve the duplicates and re-run as a follow-up '
+                     'migration that CREATE UNIQUE INDEX against the clean data. '
+                     'Find them with: SELECT upper(cust_no), lower(customer_ref), count(*) '
+                     'FROM label_batch WHERE customer_ref IS NOT NULL AND order_status = ''GENERATED'' '
+                     'GROUP BY 1, 2 HAVING count(*) > 1;';
+        CREATE INDEX ix_label_batch_client_ref_active
+            ON label_batch (upper(cust_no), lower(customer_ref))
+            WHERE customer_ref IS NOT NULL AND order_status = 'GENERATED';
+    END;
 END $$;

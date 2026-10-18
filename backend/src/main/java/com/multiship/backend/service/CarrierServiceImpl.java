@@ -143,9 +143,16 @@ public class CarrierServiceImpl implements CarrierService {
      * the UI called it before Generate; direct {@code /orders/manual-label}
      * and External API callers slipped past. Running the validator here
      * closes that gap for every entry point in one place.
-     * {@code required=false} to keep ~30 pure-Mockito unit tests compiling.
+     *
+     * <p>{@code required=false} keeps ~30 pure-Mockito unit tests compiling.
+     * {@code @Lazy} breaks the circular ref: ShipmentValidationService
+     * already depends on CarrierService (this class's interface), so a
+     * direct inject would form a cycle Spring refuses by default. Lazy
+     * resolves to a proxy at wire time; the real bean is fetched on first
+     * call — well after the ApplicationContext has settled.
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
     private ShipmentValidationService shipmentValidationService;
 
     /**
