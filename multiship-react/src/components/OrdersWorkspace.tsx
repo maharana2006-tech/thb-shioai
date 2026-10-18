@@ -39,6 +39,7 @@ import {
   FiRotateCcw,
 } from 'react-icons/fi'
 import { ApiError, isAbortError } from '../api/apiClient'
+import { downloadCsv } from '../utils/csv'
 import { normalizeCarrierCode } from '../utils/carrierUtils'
 import { orderService, type Order, type QueueStats } from '../api/orderService'
 import { summarizeCarrierError } from '../utils/carrierErrorMap'
@@ -1937,6 +1938,126 @@ export default function OrdersWorkspace() {
     generatingOrderNos,
   ])
 
+  // R2-BUG-013 — Export CSV must cover every row that matches the current
+  // filter set, not just the page the operator happens to be looking at.
+  // The AdvancedDataTable `onExport` hook (BUG-038) hands us the visible
+  // column ids; we page the same filtered query in chunks of 1000 and
+  // build the CSV client-side, honouring the per-column exportValue /
+  // headerLabel / exportAlways meta exactly like the in-table export does.
+  //
+  // ponytail: hard 100k row cap; client-side loop blocks the UI on massive
+  // sets. Upgrade path = dedicated streaming /orders/export endpoint.
+  const EXPORT_PAGE_SIZE = 1000
+  const EXPORT_ROW_CAP = 100_000
+  const handleExport = useCallback(async (visibleColumnIds?: string[]) => {
+    const spec = VIEW_QUERY[view]
+    const batchOnly = debouncedFilters.batch.trim()
+    const baseParams = batchOnly ? {
+      batch: batchOnly,
+      sortBy,
+      sortDirection,
+      includeResolution: view !== 'generated',
+    } : {
+      status: spec.status ?? (debouncedFilters.status || undefined),
+      resolution: spec.resolution,
+      search: debouncedQuery || undefined,
+      tenantId: clientFilter || undefined,
+      customer: debouncedFilters.customer || undefined,
+      city: debouncedFilters.city || undefined,
+      orderNo: debouncedFilters.orderNo || undefined,
+      tracking: debouncedFilters.tracking || undefined,
+      createdFrom: dateFrom || undefined,
+      createdTo: dateTo || undefined,
+      source: sourceFilter || undefined,
+      channel: channelFilter || undefined,
+      carrier: carrierFilter || undefined,
+      isReturn: isReturnFilter || undefined,
+      sortBy,
+      sortDirection,
+      includeResolution: view !== 'generated',
+    }
+
+    notify.info('Preparing CSV export…')
+    const collected: Order[] = []
+    let capped = false
+    try {
+      let pageIdx = 0
+      while (true) {
+        const response = await orderService.listOrders({
+          ...baseParams,
+          page: pageIdx,
+          size: EXPORT_PAGE_SIZE,
+        })
+        const batch = response.data?.content ?? []
+        collected.push(...batch)
+        const last = response.data?.last ?? true
+        if (collected.length >= EXPORT_ROW_CAP) {
+          capped = true
+          break
+        }
+        if (last || batch.length === 0) break
+        pageIdx += 1
+      }
+    } catch (e) {
+      notify.apiError(e, 'Failed to export orders.')
+      return
+    }
+
+    if (capped) {
+      notify.info({
+        title: `CSV capped at ${EXPORT_ROW_CAP.toLocaleString()} rows`,
+        body: 'Narrow the filter and export again to capture the rest.',
+      })
+    }
+
+    const rowsOut = capped ? collected.slice(0, EXPORT_ROW_CAP) : collected
+
+    // Column selection mirrors AdvancedDataTable.exportRowValues:
+    //  - skip columns with meta.exportable === false
+    //  - include every visibleColumnId
+    //  - plus any hidden column with meta.exportAlways === true
+    const visibleSet = new Set(visibleColumnIds ?? [])
+    type ColMeta = { exportable?: boolean; exportAlways?: boolean; exportValue?: (o: Order) => unknown; headerLabel?: string }
+    const chosen = columns.filter((col) => {
+      const meta = col.meta as ColMeta | undefined
+      if (meta?.exportable === false) return false
+      const id = col.id as string | undefined
+      if (!id) return false
+      if (visibleSet.size === 0) return true
+      return visibleSet.has(id) || meta?.exportAlways === true
+    })
+    const header = chosen.map((col) => {
+      const meta = col.meta as ColMeta | undefined
+      if (meta?.headerLabel) return meta.headerLabel
+      return typeof col.header === 'string' ? col.header : (col.id as string)
+    })
+    const matrix: string[][] = [header]
+    for (const o of rowsOut) {
+      matrix.push(chosen.map((col) => {
+        const meta = col.meta as ColMeta | undefined
+        if (meta?.exportValue) return String(meta.exportValue(o) ?? '')
+        return ''
+      }))
+    }
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    downloadCsv(`orders-${stamp}.csv`, matrix)
+    notify.success(`Exported ${rowsOut.length.toLocaleString()} row(s).`)
+  }, [
+    view,
+    debouncedQuery,
+    clientFilter,
+    dateFrom,
+    dateTo,
+    sourceFilter,
+    channelFilter,
+    carrierFilter,
+    isReturnFilter,
+    sortBy,
+    sortDirection,
+    debouncedFilters,
+    columns,
+  ])
+
   return (
     <div className="pb-24">
       {/* Wraps instead of scrolling: a nowrap row with justify-end pushed the
@@ -2536,6 +2657,7 @@ export default function OrdersWorkspace() {
               </div>
             }
             csvFilename="orders"
+            onExport={handleExport}
             caption={
               <div className="flex items-center justify-between border-b border-dashed border-[#e3d9c4] pb-1.5">
                 <span className="font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-[#b6a684]">
