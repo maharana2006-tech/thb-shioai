@@ -293,7 +293,7 @@ export default function OrdersWorkspace() {
     })()
     return () => { cancelled = true }
   }, [showFilters, view, debouncedQuery, clientFilter,
-      dateFrom, dateTo, debouncedFilters, sourceFilter, channelFilter, carrierFilter])
+      dateFrom, dateTo, debouncedFilters, sourceFilter, channelFilter, carrierFilter, isReturnFilter])
 
   /**
    * Signature of the current filter set — used both to invalidate the
@@ -453,7 +453,7 @@ export default function OrdersWorkspace() {
     return () => {
       cancelled = true
     }
-  }, [view, page, pageSize, debouncedQuery, clientFilter, dateFrom, dateTo, sourceFilter, channelFilter, carrierFilter, sortBy, sortDirection, debouncedFilters, reloadToken])
+  }, [view, page, pageSize, debouncedQuery, clientFilter, dateFrom, dateTo, sourceFilter, channelFilter, carrierFilter, isReturnFilter, sortBy, sortDirection, debouncedFilters, reloadToken])
 
   const refreshQueues = () => setReloadToken((token) => token + 1)
 
@@ -691,7 +691,7 @@ export default function OrdersWorkspace() {
       carrier: carrierFilter || undefined,
       isReturn: isReturnFilter || undefined,
     }
-  }, [view, clientFilter, debouncedQuery, debouncedFilters, dateFrom, dateTo, sourceFilter, channelFilter, carrierFilter])
+  }, [view, clientFilter, debouncedQuery, debouncedFilters, dateFrom, dateTo, sourceFilter, channelFilter, carrierFilter, isReturnFilter])
 
   const selectAllFiltered = useCallback(async () => {
     try {
@@ -1315,6 +1315,7 @@ export default function OrdersWorkspace() {
   const activeFilterCount =
     Object.values(columnFilters).filter(Boolean).length + (dateFrom ? 1 : 0) + (dateTo ? 1 : 0)
     + (sourceFilter ? 1 : 0) + (channelFilter ? 1 : 0) + (carrierFilter ? 1 : 0)
+    + (isReturnFilter ? 1 : 0)
   // 2026-09-15 operator indicator — Batch is an OVERRIDE: when set, the
   // /orders request drops every other filter server-side (see the
   // `batchOnly` branch in the fetch effect). Toolbar chip + panel banner
@@ -1331,6 +1332,7 @@ export default function OrdersWorkspace() {
     setSourceFilter('')
     setChannelFilter('')
     setCarrierFilter('')
+    setIsReturnFilter('')
   }
 
   const busy = generatingOrderNos.length > 0
