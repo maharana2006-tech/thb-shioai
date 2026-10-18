@@ -835,6 +835,26 @@ public class ShipmentValidationService {
                             + "Re-activate it in Settings → Carrier Accounts or pick another account.",
                     "accountNumber"));
         }
+        // BUG-005 — mirror the generateManualLabel guard: a typed
+        // carrierCode that disagrees with the picked account's carrier is
+        // a FAIL, not a WARN. Pre-fix the mismatch slipped through
+        // /validate and surfaced as a 502 NOT.AUTHORIZED at /manual-label.
+        if (StringUtils.hasText(req.getCarrierCode()) && StringUtils.hasText(account.getCarrierCode())) {
+            String requested = canonicalOrRaw(req.getCarrierCode());
+            String accountCanonical = canonicalOrRaw(account.getCarrierCode());
+            if (!requested.equalsIgnoreCase(accountCanonical)) {
+                errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                        "carrierCode '" + req.getCarrierCode().trim()
+                                + "' does not match carrier account's carrier '"
+                                + account.getCarrierCode().trim() + "'.",
+                        "carrierCode"));
+            }
+        }
+    }
+
+    private static String canonicalOrRaw(String code) {
+        String c = ShippingConfigService.canonicalCarrierFor(code);
+        return StringUtils.hasText(c) ? c : code.trim().toUpperCase(Locale.ROOT);
     }
 
     // ─── Field checks (comprehensive — every missing field errors) ──────────
@@ -994,6 +1014,17 @@ public class ShipmentValidationService {
         if (req.getWeight() == null || req.getWeight().signum() <= 0) {
             errors.add(issue(ErrorCode.VALIDATION_ERROR,
                     "A shipment weight greater than zero is required.", "weight"));
+        }
+        // BUG-009 — insured value must not exceed declared value. UPS,
+        // FedEx, DHL, and USPS all expose ONE "declared value" field that
+        // doubles as the insured amount above the free tier; two
+        // conflicting numbers in the form means the operator is paying
+        // for more insurance than they declared. Mirrors the client-side
+        // Yup rule so bulk / external callers can't slip past.
+        if (req.getInsuredValue() != null && req.getDeclaredValue() != null
+                && req.getInsuredValue().compareTo(req.getDeclaredValue()) > 0) {
+            errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                    "Insured value can't exceed declared value.", "insuredValue"));
         }
     }
 

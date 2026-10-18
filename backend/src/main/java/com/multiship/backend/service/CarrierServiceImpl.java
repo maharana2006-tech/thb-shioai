@@ -1881,6 +1881,22 @@ public class CarrierServiceImpl implements CarrierService {
                     "accountNumber " + account.getAccountNumber() + " is deactivated. "
                             + "Re-activate it in Settings → Carriers or pick another account.");
         }
+        // BUG-005 — the typed carrierCode must match the picked account's
+        // carrier. Pre-fix, carrierCode=FEDEX + accountId=<UPS#2> actually
+        // called FedEx with UPS credentials — a 502 NOT.AUTHORIZED that
+        // persisted the order as ERROR for no reason. The validator mirrors
+        // this (same message) so operators see FAIL at /validate instead of
+        // a 502 at /manual-label.
+        if (StringUtils.hasText(req.getCarrierCode()) && StringUtils.hasText(account.getCarrierCode())) {
+            String requestedCanonical = resolveCanonicalCarrierCode(req.getCarrierCode().trim());
+            String accountCanonical = resolveCanonicalCarrierCode(account.getCarrierCode().trim());
+            if (!requestedCanonical.equalsIgnoreCase(accountCanonical)) {
+                return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
+                        "carrierCode '" + req.getCarrierCode().trim()
+                                + "' does not match carrier account's carrier '"
+                                + account.getCarrierCode().trim() + "'.");
+            }
+        }
         // Bill-to account number that prints on the label: the typed number wins.
         // Pre-fix had a "ACCOUNT" literal string as the ultimate fallback which
         // would silently print on labels if both typedNumber and the resolved
