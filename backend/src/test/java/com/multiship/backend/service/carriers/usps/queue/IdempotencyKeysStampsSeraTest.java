@@ -137,4 +137,28 @@ class IdempotencyKeysStampsSeraTest {
         String manifestKey = IdempotencyKeys.forStampsManifest("ACC-99", DAY);
         assertNotEquals(labelKey, manifestKey);
     }
+
+    /** SERA answers 800001 to any Idempotency-Key that isn't a v4 UUID. */
+    @org.junit.jupiter.api.Test
+    void everyStampsKeyIsAStableV4Uuid() {
+        java.time.LocalDate day = java.time.LocalDate.of(2026, 10, 9);
+        java.util.List<String> keys = java.util.List.of(
+                IdempotencyKeys.forStampsTopup(9L, "2026-10-09-15"),
+                IdempotencyKeys.forStampsLabel("ORD-1", 1, day),
+                IdempotencyKeys.forStampsManifest("874157", day),
+                IdempotencyKeys.forStampsRateQuote("ORD-1", day),
+                IdempotencyKeys.forStampsPickup("874157", day),
+                IdempotencyKeys.stampsKey("anything"));
+        for (String k : keys) {
+            java.util.UUID u = java.util.UUID.fromString(k);
+            // Stamps SERA rejects any Idempotency-Key whose version bits
+            // aren't v4 (error 800001). stampsKey() restamps the name-UUID
+            // bits to version 4 while keeping the payload-derived bytes,
+            // so retries carry the same key AND pass SERA's shape check.
+            org.junit.jupiter.api.Assertions.assertEquals(4, u.version(), k);
+            org.junit.jupiter.api.Assertions.assertEquals(2, u.variant(), k);
+        }
+        org.junit.jupiter.api.Assertions.assertEquals(IdempotencyKeys.forStampsTopup(9L, "2026-10-09-15"),
+                IdempotencyKeys.forStampsTopup(9L, "2026-10-09-15"), "a retry must send the same key");
+    }
 }

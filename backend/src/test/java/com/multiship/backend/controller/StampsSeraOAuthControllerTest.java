@@ -43,6 +43,27 @@ class StampsSeraOAuthControllerTest {
         controller = new StampsSeraOAuthController(repository, oauthService, stampsConnector);
     }
 
+    /** The screen that started the authorization gets the result — only if it's one of the app's own origins. */
+    @Test
+    void callback_returnsToTheScreenThatStartedIt_butNeverToAForeignSite() {
+        org.springframework.web.cors.CorsConfiguration cors = new org.springframework.web.cors.CorsConfiguration();
+        cors.setAllowedOriginPatterns(java.util.List.of("http://localhost:*"));
+        org.springframework.test.util.ReflectionTestUtils.setField(controller, "corsConfigurationSource",
+                (org.springframework.web.cors.CorsConfigurationSource) r -> cors);
+        org.springframework.test.util.ReflectionTestUtils.setField(controller, "feReturnUrl", "http://localhost:5173");
+        var request = new org.springframework.mock.web.MockHttpServletRequest();
+
+        ResponseEntity<Void> own = controller.callback(null, null, "access_denied", null, "http://localhost:5175", request);
+        assertEquals("http://localhost:5175/settings/carriers?seraCallback=error&detail=carrier+returned+access_denied",
+                own.getHeaders().getLocation().toString());
+        org.junit.jupiter.api.Assertions.assertTrue(own.getHeaders().getFirst("Set-Cookie").contains("Max-Age=0"),
+                "the return cookie is cleared");
+
+        ResponseEntity<Void> foreign = controller.callback(null, null, "access_denied", null, "https://evil.example", request);
+        org.junit.jupiter.api.Assertions.assertTrue(foreign.getHeaders().getLocation().toString()
+                .startsWith("http://localhost:5173/settings/carriers"));
+    }
+
     @Test
     void disconnect_happyPath_clearsTokenAndFlipsVerifiedAndReturns204() {
         CarrierAccountRef account = new CarrierAccountRef();
@@ -50,8 +71,16 @@ class StampsSeraOAuthControllerTest {
         account.setStampsRefreshToken("rt-live");
         account.setVerified(true);
         when(repository.findById(42L)).thenReturn(Optional.of(account));
+        var audit = mock(com.multiship.backend.service.AuditService.class);
+        var events = mock(org.springframework.context.ApplicationEventPublisher.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(controller, "auditService", audit);
+        org.springframework.test.util.ReflectionTestUtils.setField(controller, "eventPublisher", events);
 
         ResponseEntity<Void> resp = controller.disconnect(42L);
+
+        verify(audit).record(eq("UPDATE"), eq("CARRIER_ACCOUNT"), eq(42L), anyString(), any(),
+                org.mockito.ArgumentMatchers.startsWith("Disconnected from Stamps.com"));
+        verify(events).publishEvent(any(com.multiship.backend.service.events.CarrierConfigChangedEvent.class));
 
         assertEquals(HttpStatus.NO_CONTENT, resp.getStatusCode(),
                 "Disconnect must return 204 on success");
@@ -76,20 +105,21 @@ class StampsSeraOAuthControllerTest {
     }
 
     @Test
-    void disconnect_alreadyDisconnected_stillReturns204AndSkipsCacheEvict() {
-        // Already-disconnected account (no stored refresh_token) must still
-        // 204 — idempotent delete. Cache evict is skipped because there's
-        // nothing to evict; keeps the admin page safe to double-click.
+    void disconnect_withoutAStampsToken_returns204AndLeavesTheAccountAlone() {
+        // Never authorized, already disconnected, or a USPS Direct account
+        // (verified, but nothing from Stamps.com to forget): idempotent 204,
+        // and the account is not touched — safe to double-click.
         CarrierAccountRef account = new CarrierAccountRef();
         account.setId(7L);
         account.setStampsRefreshToken(null);
-        account.setVerified(false);
+        account.setVerified(true);
         when(repository.findById(7L)).thenReturn(Optional.of(account));
 
         ResponseEntity<Void> resp = controller.disconnect(7L);
 
         assertEquals(HttpStatus.NO_CONTENT, resp.getStatusCode());
-        verify(repository).save(account);
+        assertEquals(Boolean.TRUE, account.getVerified());
+        verify(repository, never()).save(any());
         verify(oauthService, never()).clearTokenCache();
     }
 }

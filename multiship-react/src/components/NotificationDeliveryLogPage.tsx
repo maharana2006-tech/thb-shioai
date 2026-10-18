@@ -7,6 +7,7 @@
  * to the original via retryOfId.
  */
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
+import { formatDateTime } from '../utils/formatDateTime'
 import { useOutletContext } from 'react-router-dom'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import { notify } from '../utils/notify'
@@ -27,6 +28,8 @@ export default function NotificationDeliveryLogPage() {
   const [templateKey, setTemplateKey] = useState('')
   const [status, setStatus] = useState<DeliveryStatus | ''>('')
   const [recipient, setRecipient] = useState('')
+  // 300ms debounce so typing in the recipient filter doesn't fetch per keystroke.
+  const [debouncedRecipient, setDebouncedRecipient] = useState('')
   const [pageIndex, setPageIndex] = useState(0)
   const [expandedId, setExpandedId] = useState<number | null>(null)
   const [retrying, setRetrying] = useState<number | null>(null)
@@ -37,7 +40,7 @@ export default function NotificationDeliveryLogPage() {
       const p = await notificationDeliveryLogService.list({
         templateKey: templateKey.trim() || undefined,
         status: status || undefined,
-        recipient: recipient.trim() || undefined,
+        recipient: debouncedRecipient || undefined,
         page: pageIndex,
         size: PAGE_SIZE,
       })
@@ -47,7 +50,12 @@ export default function NotificationDeliveryLogPage() {
     } finally {
       setLoading(false)
     }
-  }, [templateKey, status, recipient, pageIndex])
+  }, [templateKey, status, debouncedRecipient, pageIndex])
+
+  useEffect(() => {
+    const t = window.setTimeout(() => { setDebouncedRecipient(recipient.trim()); setPageIndex(0) }, 300)
+    return () => window.clearTimeout(t)
+  }, [recipient])
 
   useEffect(() => {
     void load()
@@ -123,7 +131,7 @@ export default function NotificationDeliveryLogPage() {
             Recipient contains
             <input
               value={recipient}
-              onChange={(e) => { setRecipient(e.target.value); setPageIndex(0) }}
+              onChange={(e) => setRecipient(e.target.value)}
               placeholder="alice@"
               className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-1.5 text-[13px]"
             />
@@ -152,7 +160,7 @@ export default function NotificationDeliveryLogPage() {
         {loading ? (
           <div className="px-4 py-6 text-center text-[13px] text-slate-500">Loading…</div>
         ) : items.length === 0 ? (
-          <div className="px-4 py-6 text-center text-[13px] text-slate-500">No delivery rows match those filters.</div>
+          <div className="px-4 py-6 text-center text-[13px] text-slate-500">{(templateKey || status || recipient) ? 'No delivery rows match those filters.' : 'No emails sent yet.'}</div>
         ) : (
           <table className="w-full text-[13px]">
             <thead>
@@ -178,7 +186,7 @@ export default function NotificationDeliveryLogPage() {
                       }`}
                     >
                       <td className="px-3 py-2 text-slate-600">
-                        {new Date(row.sentAt).toLocaleString()}
+                        {formatDateTime(row.sentAt)}
                       </td>
                       <td className="px-3 py-2 font-mono text-[12px] text-slate-700">
                         {row.templateKey ?? '—'}

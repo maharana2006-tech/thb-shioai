@@ -1879,6 +1879,12 @@ public class FedExConnector implements CarrierConnector {
         // SAME_DAY was hardcoded — FedEx rejects future-dated SAME_DAY
         // pickups outright.
         originDetail.put("pickupDateType", isSameDayPickup(req) ? "SAME_DAY" : "FUTURE_DAY");
+        // R2-BUG-002 — FedEx requires packageLocation on every pickup request;
+        // omitting it fails with PACKAGELOCATION.INVALID. Valid values per the
+        // FedEx Create Pickup spec are NONE | FRONT | REAR | SIDE. ponytail:
+        // hardcoded FRONT until the pickup form adds a dropdown; the operator
+        // can still override via specialInstructions in the meantime.
+        body.put("packageLocation", "FRONT");
         body.put("originDetail", originDetail);
 
         // FDX-F — carrierCode selects the driver fleet. FDXE = FedEx
@@ -1920,7 +1926,14 @@ public class FedExConnector implements CarrierConnector {
                 : com.multiship.backend.util.LabelDates.today(null);
         java.time.LocalTime time = req.pickupWindowStart() != null
                 ? req.pickupWindowStart() : java.time.LocalTime.of(9, 0);
-        return date.toString() + "T" + time.toString();
+        // BUG-007 — FedEx rejects a timestamp without seconds (LocalTime.toString()
+        // drops ':00' → 400 INCORRECT.READYTIMESTAMP.FORMAT). It reads pickup times
+        // as local to the pickup location (as it does the cutoff), so send the
+        // operator's wall-clock time as typed, in FedEx's documented shape
+        // (2020-07-03T11:00:00Z) — never converted through the server's zone,
+        // which moved a 09:00 Michigan pickup to 05:00 on a UTC server.
+        return java.time.LocalDateTime.of(date, time)
+                .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")) + "Z";
     }
 
     /**
@@ -2411,8 +2424,13 @@ public class FedExConnector implements CarrierConnector {
             // package-level CARRIAGEVALUE.EXCEEDS.CUSTOMVALUE when it is higher
             // than the customs value, so it must be skipped for intl too.
             if (declared == null && !fedexIntl && p.getDeclaredValue() != null) declared = p.getDeclaredValue();
-            if (declared == null && !fedexIntl && request.getInsuredValue() != null
-                    && request.getInsuredValue().signum() > 0) {
+            // BUG-009 — FedEx's declaredValue is ONE wire field that doubles
+            // as carriage liability AND the insured amount above the free
+            // tier. Take max(declared, insuredValue) on domestic so the
+            // shipment is actually covered for the higher of the two.
+            if (!fedexIntl && request.getInsuredValue() != null
+                    && request.getInsuredValue().signum() > 0
+                    && (declared == null || request.getInsuredValue().compareTo(declared) > 0)) {
                 declared = request.getInsuredValue();
             }
             if (declared != null) {
@@ -3189,10 +3207,22 @@ public class FedExConnector implements CarrierConnector {
                 pieceResponses.path(0).path("packageDocuments").path(0).path("encodedLabel")
         );
 
-        String labelPdf = firstText(
-                pieceResponses.path(0).path("packageDocuments").path(0).path("encodedLabel"),
-                pieceResponses.path(0).path("packageDocuments").path(0).path("url")
-        );
+        // BUG-007 — FedEx occasionally returns `url` only (a signed doc
+        // URL that needs OAuth to fetch), with no inline `encodedLabel`.
+        // Pre-fix the url leaked into labelPdf, which the resolver then
+        // tried to fetch anonymously and left the FE spinning on
+        // "Loading label document…". Only accept inline bytes here;
+        // when encodedLabel is empty, leave labelPdf null and log so
+        // the operator sees "regenerate required" instead of a stuck
+        // loading state. The backfill endpoint re-pulls from the url.
+        String inlineLabel = pieceResponses.path(0).path("packageDocuments").path(0).path("encodedLabel").asText(null);
+        String labelPdf = StringUtils.hasText(inlineLabel) ? inlineLabel : null;
+        if (labelPdf == null && StringUtils.hasText(labelUrl)) {
+            org.slf4j.LoggerFactory.getLogger(FedExConnector.class).warn(
+                "FedEx createShipment returned a signed label URL with no inline encodedLabel "
+                        + "(tracking {}); persisting null bytes. Operator can regen or run the "
+                        + "admin backfill to pull from the URL. url={}", trackingNumber, labelUrl);
+        }
 
         // Shipment cost — FedEx nests it at completedShipmentDetail.shipmentRating
         // .shipmentRateDetails[]. (The old read of a top-level "shipmentRatingDetails"
@@ -3244,9 +3274,11 @@ public class FedExConnector implements CarrierConnector {
                 String pcLabelUrl = firstText(
                         piece.path("packageDocuments").path(0).path("url"),
                         piece.path("packageDocuments").path(0).path("encodedLabel"));
-                String pcLabelPdf = firstText(
-                        piece.path("packageDocuments").path(0).path("encodedLabel"),
-                        piece.path("packageDocuments").path(0).path("url"));
+                // BUG-007 — same inline-bytes-only guard as the master
+                // row above. URL-only responses leave bytes null for
+                // this piece; the operator sees "regenerate required".
+                String pcInline = piece.path("packageDocuments").path(0).path("encodedLabel").asText(null);
+                String pcLabelPdf = StringUtils.hasText(pcInline) ? pcInline : null;
                 // Per-piece charge: netChargeAmount is the billed figure, but the
                 // sandbox often returns 0 there while baseRateAmount carries the
                 // real rate — take the first positive of net → rate → base, else

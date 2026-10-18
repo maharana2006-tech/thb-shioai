@@ -33,6 +33,27 @@ class CarrierApiLoggingInterceptorTest {
     }
 
     @Test
+    void secretsAreBlankedBeforeTheyReachTheLog() {
+        // BUG-065 — client_id is the public half of an OAuth client
+        // credential, but it's long-lived and non-rotatable on several
+        // carriers (SERA / UPS 3.0). Admin-visible logs persist for
+        // weeks, so mask it alongside client_secret / refresh_token /
+        // access_token.
+        String sera = "{\"grant_type\":\"refresh_token\",\"client_id\":\"cid\",\"client_secret\":\"S3cr3t\",\"refresh_token\" : \"RT-1\"}";
+        assertEquals("{\"grant_type\":\"refresh_token\",\"client_id\":\"***\",\"client_secret\":\"***\",\"refresh_token\" : \"***\"}",
+                CarrierApiLoggingInterceptor.redact(sera));
+        assertEquals("{\"access_token\":\"***\",\"expires_in\":3600}",
+                CarrierApiLoggingInterceptor.redact("{\"access_token\":\"eyJabc\",\"expires_in\":3600}"));
+        assertEquals("grant_type=client_credentials&client_id=***&client_secret=***",
+                CarrierApiLoggingInterceptor.redact("grant_type=client_credentials&client_id=cid&client_secret=S3cr3t"));
+        assertEquals("<Username>u</Username><Password>***</Password>",
+                CarrierApiLoggingInterceptor.redact("<Username>u</Username><Password>pw</Password>"));
+        assertEquals("{\"code\":\"E100\",\"message\":\"Bad ZIP\"}",
+                CarrierApiLoggingInterceptor.redact("{\"code\":\"E100\",\"message\":\"Bad ZIP\"}"), "carrier error codes stay readable");
+        assertEquals("STAMPS_COM", CarrierApiLoggingInterceptor.carrierFromHost(URI.create("https://signin.testing.stampsendicia.com/oauth/token")));
+    }
+
+    @Test
     void successRecordsRowWithStatusAndBodies() throws IOException {
         CarrierApiLogService svc = mock(CarrierApiLogService.class);
         CarrierApiLoggingInterceptor interceptor = new CarrierApiLoggingInterceptor(svc, true);

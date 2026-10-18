@@ -207,8 +207,11 @@ public final class AddressFormatValidator {
             if (!stateEnum.contains(normalized)) {
                 issues.add(ValidationIssue.builder()
                         .code(ErrorCode.VALIDATION_ERROR.name())
+                        // BUG-009: the "2-letter" phrasing was a US-centric default;
+                        // MX / AU / BR all use 3-letter codes. Keep the hint generic
+                        // so the examples carry the length info.
                         .message("State/province \"" + state.trim() + "\" isn't a valid "
-                                + country + " code. Use the 2-letter code (e.g. "
+                                + country + " code. Use the official code (e.g. "
                                 + exampleState(country) + "), not the full name.")
                         .field(fieldPrefix + ".state")
                         .build());

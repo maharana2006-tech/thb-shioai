@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { FiCheck, FiCheckCircle, FiHome, FiSearch, FiX } from 'react-icons/fi'
+import { FiAlertTriangle, FiCheck, FiCheckCircle, FiHome, FiInfo, FiSearch, FiX, FiXCircle } from 'react-icons/fi'
 import { notify } from '../../utils/notify'
 import { ApiError } from '../../api/apiClient'
 import { clientService, type Client } from '../../api/clientService'
@@ -25,6 +25,14 @@ import {
   validatePhone,
   validateZip,
 } from '../../utils/clientValidation'
+import { intersectionAddressCaps } from '../../utils/carrierFieldLimits'
+import { CountrySelect } from '../NewShipmentComponents/CountrySelect'
+
+// BUG-040 — warehouse address is ship-from for EVERY carrier on the account.
+// Use the strictest intersection (USPS state=2, min(10) zip, min(30) city,
+// min(35) name/line) so operators can't save a state='ILLINOIS' + 10-char
+// postal that the carrier would reject at label time.
+const WAREHOUSE_CAPS = intersectionAddressCaps(['UPS', 'FEDEX', 'USPS', 'DHL'])
 
 interface Props {
   /** null = create; otherwise edit. */
@@ -195,12 +203,12 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
     ownerClientCode: ownerType === 'CLIENT' && !ownerClientCode.trim()
       ? 'Owner client is required.'
       : null,
-    line1: validateLength(line1, FIELD_LIMITS.addr.line1, 'Street address', true, 2),
-    line2: line2 ? validateLength(line2, FIELD_LIMITS.addr.line2, 'Suite / unit', false) : null,
-    city: validateLength(city, FIELD_LIMITS.addr.city, 'City', true, 2),
-    state: validateLength(state, FIELD_LIMITS.addr.state, 'State / region', true),
+    line1: validateLength(line1, WAREHOUSE_CAPS.line, 'Street address', true, 2),
+    line2: line2 ? validateLength(line2, WAREHOUSE_CAPS.line, 'Suite / unit', false) : null,
+    city: validateLength(city, WAREHOUSE_CAPS.city, 'City', true, 2),
+    state: validateLength(state, WAREHOUSE_CAPS.state, 'State / region', true),
     country: validateCountry(country, true),
-    zip: validateZip(zip, country, true),
+    zip: validateZip(zip, country, true, WAREHOUSE_CAPS.zip),
     phone: validatePhone(phone, true),
   }), [code, name, ownerType, ownerClientCode, line1, line2, city, state, zip, country, phone])
 
@@ -307,8 +315,13 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
    * (created != null) the semantics differ: no dirty check — the operator
    * already successfully created a warehouse.
    */
-  const closeWithGuard = () => {
-    if (isDirty && !window.confirm('Discard unsaved changes to this warehouse?')) return
+  const closeWithGuard = async () => {
+    if (!isDirty) { onClose(); return }
+    const ok = await notify.confirm(
+      'Discard unsaved changes to this warehouse?',
+      { title: 'Discard changes', confirmLabel: 'Discard', cancelLabel: 'Keep editing', danger: true },
+    )
+    if (!ok) return
     onClose()
   }
   const closeAction = created ? () => onSaved(created) : closeWithGuard
@@ -520,16 +533,24 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
                   maxLength={FIELD_LIMITS.addr.city} aria-invalid={err('city') ? true : undefined} className={inputCls('city')} />
               </Field>
               <Field label="State / region" required error={err('state')}>
-                <input value={state} onChange={(e) => setState(e.target.value)} onBlur={() => markTouched('state')}
+                <input value={state} onChange={(e) => setState(e.target.value.toUpperCase())} onBlur={() => markTouched('state')}
                   maxLength={FIELD_LIMITS.addr.state} aria-invalid={err('state') ? true : undefined} className={inputCls('state')} />
               </Field>
               <Field label="Postal code" required error={err('zip')}>
                 <input value={zip} onChange={(e) => setZip(e.target.value)} onBlur={() => markTouched('zip')}
                   maxLength={FIELD_LIMITS.addr.zip} aria-invalid={err('zip') ? true : undefined} className={inputCls('zip')} />
               </Field>
-              <Field label="Country (ISO-2)" required error={err('country')}>
-                <input value={country} onChange={(e) => setCountry(e.target.value.toUpperCase())} onBlur={() => markTouched('country')}
-                  maxLength={2} aria-invalid={err('country') ? true : undefined} className={inputCls('country', 'font-semibold uppercase')} />
+              {/* BUG-046 — Country was a free-text ISO-2 box with no list,
+                  diverging from the client wizard (searchable combobox)
+                  and the address book (250-entry select). Use the shared
+                  CountrySelect so the three Settings surfaces speak the
+                  same vocabulary, and a mistyped code can't reach the
+                  carrier (the box used to accept "ZZ" without complaint). */}
+              <Field label="Country" required error={err('country')}>
+                <CountrySelect
+                  value={country}
+                  onChange={(code) => { setCountry(code); markTouched('country') }}
+                />
               </Field>
               <Field label="Phone" required span={2} error={err('phone')} hint="Required by UPS, FedEx and DHL on both domestic and international labels.">
                 <input value={phone} onChange={(e) => setPhone(e.target.value)} onBlur={() => markTouched('phone')}
@@ -607,14 +628,34 @@ function VerifyResultPanel({
         : level === 'NOT_SUPPORTED'
           ? { bar: 'border-slate-200 bg-slate-50/70', pill: 'bg-slate-100 text-slate-700', icon: 'text-slate-600' }
           : { bar: 'border-rose-200 bg-rose-50/70', pill: 'bg-rose-100 text-rose-800', icon: 'text-rose-700' }
+  // BUG-042 — the green check-circle icon fired for every status
+  // including NOT_SUPPORTED, making a carrier refusal look like a pass.
+  // Pick a semantically-correct icon per status.
+  const Icon = level === 'EXACT'
+    ? FiCheckCircle
+    : level === 'NOT_SUPPORTED'
+      ? FiInfo
+      : level === 'CORRECTED' || level === 'AMBIGUOUS'
+        ? FiAlertTriangle
+        : FiXCircle
+  // BUG-081 — pre-fix every NOT_SUPPORTED headline read 'Verification
+  // not supported for this country' even when the real reason was
+  // missing carrier credentials (which the sub-text already names).
+  // Branch on the message: if it mentions 'credential', say so; else
+  // keep the country wording.
+  const credsMissing = typeof result.message === 'string'
+      && /no live credentials|credential/i.test(result.message)
+  const prettyStatus = level === 'NOT_SUPPORTED'
+    ? (credsMissing ? 'Carrier credentials not configured' : 'Verification not supported for this country')
+    : level
 
   return (
     <div className={`mt-3 rounded-xl border ${tone.bar} px-3 py-2.5`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="flex items-center gap-1.5 text-[11.5px] font-semibold text-slate-800">
-            <FiCheckCircle className={`h-3.5 w-3.5 ${tone.icon}`} />
-            {result.carrierCode} · <span className={`rounded-full ${tone.pill} px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide`}>{level}</span>
+            <Icon className={`h-3.5 w-3.5 ${tone.icon}`} />
+            {result.carrierCode} · <span className={`rounded-full ${tone.pill} px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide`}>{prettyStatus}</span>
             {result.classification && result.classification !== 'UNKNOWN' ? (
               <span className="text-[10.5px] font-normal text-slate-500">· {result.classification.toLowerCase()}</span>
             ) : null}

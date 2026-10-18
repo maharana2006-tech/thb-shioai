@@ -1,7 +1,8 @@
 import { relativeTime } from '../utils/relativeTime'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { notify } from '../utils/notify'
+import { useModalDismiss } from '../hooks/useModalDismiss'
 import {
   FiBox,
   FiDownloadCloud,
@@ -24,6 +25,8 @@ import { allowlistUsageService, type ClientAllowedService } from '../api/clientC
 import { countryName } from '../utils/countries'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import CarrierSyncMenuModal from './modals/CarrierSyncMenuModal'
+import { useAppSession } from '../hooks/useAppSession'
+import { canManageCarriers, normalizeRole } from '../utils/roles'
 
 const CARRIER_BADGE: Record<string, { bg: string; mono: string }> = {
   UPS: { bg: 'bg-[#351c15]', mono: 'UPS' },
@@ -80,7 +83,13 @@ const packageFitsService = (p: PackagePreset, s: ShippingServiceItem): boolean =
  * Only the active tab registers its refresh handler. Defaults to true
  * for standalone mounts.
  */
-export default function ShippingServicesPage({ active = true }: { active?: boolean } = {}) {
+export default function ShippingServicesPage({ active = true, origin: originProp, onOriginChange }: {
+  active?: boolean
+  // BUG-090: see PackagesPage — parent (ShippingCatalogPage) lifts origin
+  // so the two tabs share one filter.
+  origin?: string
+  onOriginChange?: (v: string) => void
+} = {}) {
   const [services, setServices] = useState<ShippingServiceItem[]>([])
   const [links, setLinks] = useState<ServicePackageLink[]>([])
   const [presets, setPresets] = useState<PackagePreset[]>([])
@@ -88,13 +97,19 @@ export default function ShippingServicesPage({ active = true }: { active?: boole
   const [loading, setLoading] = useState(true)
   /** Service whose allowed-packages modal is open. */
   const [pkgService, setPkgService] = useState<ShippingServiceItem | null>(null)
+  // BUG-123 R7 — add Escape/focus-trap to the Allowed packages modal.
+  const pkgDialogRef = useRef<HTMLDivElement>(null)
+  useModalDismiss(pkgService !== null, pkgDialogRef, () => setPkgService(null))
   const [pkgDraft, setPkgDraft] = useState<Set<number>>(new Set())
   // Sprint 52 PR X — modal-local editable copy of pkgService.brandedPackaging
   // Allowed. Flipping OFF filters the preset list to CUSTOM-only + the save
   // handler PATCHes the flag before saving links.
   const [pkgBrandedAllowed, setPkgBrandedAllowed] = useState<boolean>(true)
-  /** The origin country whose services are shown — carrier availability is lane-specific. */
-  const [origin, setOrigin] = useState('US')
+  /** The origin country whose services are shown — carrier availability is lane-specific.
+   *  BUG-090: parent-lifted when under ShippingCatalogPage; local fallback otherwise. */
+  const [localOrigin, setLocalOrigin] = useState('US')
+  const origin = originProp ?? localOrigin
+  const setOrigin = onOriginChange ?? setLocalOrigin
   const [originCountries, setOriginCountries] = useState<string[]>([])
   /** Carrier currently syncing (its Sync button spins). */
   const [syncing, setSyncing] = useState<string | null>(null)
@@ -102,6 +117,12 @@ export default function ShippingServicesPage({ active = true }: { active?: boole
   const [syncMenuFor, setSyncMenuFor] = useState<string | null>(null)
 
   const [rules, setRules] = useState<ShipMethodRule[]>([])
+
+  // Catalog writes (enable/disable, branded-packaging flag, package links) are
+  // ADMIN-only at the backend; hide the controls so operators don't click into
+  // a 403. Reads/list stay visible to USER.
+  const { role } = useAppSession()
+  const canManage = canManageCarriers(normalizeRole(role))
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -347,7 +368,7 @@ export default function ShippingServicesPage({ active = true }: { active?: boole
       ) : null}
 
       {/* service catalog, grouped by carrier */}
-      <section className="grid gap-4 lg:grid-cols-3">
+      <section className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
         {loading && !services.length ? (
           <p className="col-span-3 py-10 text-center text-sm text-slate-500">Loading catalog…</p>
         ) : (
@@ -379,7 +400,7 @@ export default function ShippingServicesPage({ active = true }: { active?: boole
                     <span className={`flex h-6 w-9 shrink-0 items-center justify-center rounded ${badge.bg} font-mono text-[9px] font-black tracking-wider text-white`}>
                       {badge.mono}
                     </span>
-                    <span className="truncate text-[10px] font-black uppercase tracking-[0.2em] text-[#e1dcc9]">
+                    <span className="truncate text-[10px] font-black uppercase tracking-[0.2em] text-[#e1dcc9]" title={`${carrier} · from ${origin}`}>
                       {carrier} · from {origin}
                     </span>
                   </p>
@@ -461,11 +482,14 @@ export default function ShippingServicesPage({ active = true }: { active?: boole
                     const needsPackages = s.enabled && pkgCount === 0 && !customOnly
                     const clientRows = assignmentsByService.get(s.id) ?? []
                     const clientCount = clientRows.length
+                    // BUG-091 — empty allowlist does NOT mean the service
+                    // is restricted; clients ship with every service by
+                    // default. The old copy ('No clients allowed yet')
+                    // read like a tenant gate. Reword so the empty state
+                    // reflects reality.
                     const clientTooltip = clientRows.length
-                      ? clientRows
-                          .map((r) => `${r.clientCode}${r.isDefault ? ' ★' : ''}`)
-                          .join(', ')
-                      : 'No clients allowed yet.'
+                      ? `Allowlisted for: ${clientRows.map((r) => `${r.clientCode}${r.isDefault ? ' ★' : ''}`).join(', ')}`
+                      : 'All clients (no per-tenant restriction).'
                     return (
                       <li key={s.id} className="flex items-center gap-2.5 px-4 py-2.5">
                         <span className="w-5 shrink-0 font-mono text-[9px] font-bold tracking-widest text-slate-300">
@@ -475,21 +499,25 @@ export default function ShippingServicesPage({ active = true }: { active?: boole
                           type="button"
                           role="switch"
                           aria-checked={s.enabled}
-                          onClick={() => void toggle(s)}
-                          className={`relative h-5 w-9 shrink-0 rounded-full transition ${s.enabled ? 'bg-[#1f150c]' : 'bg-slate-200'}`}
-                          title={s.enabled ? 'Disable' : 'Enable'}
+                          disabled={!canManage}
+                          onClick={() => canManage && void toggle(s)}
+                          className={`relative h-5 w-9 shrink-0 rounded-full transition disabled:cursor-not-allowed ${s.enabled ? 'bg-[#1f150c]' : 'bg-slate-200'}`}
+                          title={canManage ? (s.enabled ? 'Disable' : 'Enable') : (s.enabled ? 'Enabled (admin only)' : 'Disabled (admin only)')}
                         >
                           <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${s.enabled ? 'left-[18px]' : 'left-0.5'}`} />
                         </button>
                         <div className="min-w-0 flex-1">
-                          <p className={`truncate text-[12.5px] font-semibold ${s.enabled ? 'text-slate-900' : 'text-slate-400'}`}>{s.name}</p>
-                          <p className="font-mono text-[10.5px] text-slate-400">{s.serviceCode}</p>
+                          <p className={`truncate text-[12.5px] font-semibold ${s.enabled ? 'text-slate-900' : 'text-slate-400'}`} title={s.name}>{s.name}</p>
+                          <p className="truncate font-mono text-[10.5px] text-slate-400" title={s.serviceCode}>{s.serviceCode}</p>
                         </div>
                         <button
                           type="button"
-                          onClick={() => openPackages(s)}
+                          disabled={!canManage}
+                          onClick={() => canManage && openPackages(s)}
                           title={
-                            customOnly
+                            !canManage
+                              ? `${pkgCount} linked package${pkgCount === 1 ? '' : 's'} (editing is admin only)`
+                              : customOnly
                               ? `${s.serviceCode} is marked CUSTOM-packaging-only — no branded packaging by design (Ground-family default). Click to edit / flip the flag.`
                               : needsPackages
                                 ? `${s.serviceCode} is enabled but has zero linked packages — manual-label will fail with SERVICE_HAS_NO_LINKED_PACKAGES. Click to link at least one preset.`
@@ -498,7 +526,7 @@ export default function ShippingServicesPage({ active = true }: { active?: boole
                                   : 'No linked packages (service disabled) — click to link'
                           }
                           data-testid={`pkg-count-${s.id}`}
-                          className={`inline-flex items-center gap-1 rounded-lg border px-1.5 py-1 text-[10px] font-bold transition ${
+                          className={`inline-flex shrink-0 items-center gap-1 rounded-lg border px-1.5 py-1 text-[10px] font-bold transition disabled:cursor-not-allowed ${
                             customOnly
                               ? 'border-slate-300 bg-slate-100 text-slate-600 hover:bg-slate-200'
                               : needsPackages
@@ -511,14 +539,14 @@ export default function ShippingServicesPage({ active = true }: { active?: boole
                           <FiBox className="h-3 w-3" /> {customOnly ? 'CUSTOM' : needsPackages ? '⚠ 0' : pkgCount || '+'}
                         </button>
                         <span
-                          title={`Assigned to: ${clientTooltip}`}
-                          className={`inline-flex items-center gap-1 rounded-lg border px-1.5 py-1 text-[10px] font-bold transition ${
+                          title={clientTooltip}
+                          className={`inline-flex shrink-0 items-center gap-1 rounded-lg border px-1.5 py-1 text-[10px] font-bold transition ${
                             clientCount
                               ? 'border-[#412d15]/20 bg-[#412d15]/[0.06] text-[#412d15]'
                               : 'border-slate-200 bg-white text-slate-400'
                           }`}
                         >
-                          <FiUsers className="h-3 w-3" /> {clientCount || 0}
+                          <FiUsers className="h-3 w-3" /> {clientCount ? clientCount : 'all'}
                         </span>
                         <span
                           className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wide ring-1 ${
@@ -547,6 +575,7 @@ export default function ShippingServicesPage({ active = true }: { active?: boole
           onClick={() => setPkgService(null)}
         >
           <div
+            ref={pkgDialogRef}
             className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_30px_80px_rgba(15,23,42,0.35)]"
             onClick={(e) => e.stopPropagation()}
           >
@@ -573,25 +602,36 @@ export default function ShippingServicesPage({ active = true }: { active?: boole
             {/* Sprint 52 PR X — Allow branded packaging toggle. OFF hides
                 every kind=CARRIER preset from the list AND persists
                 branded_packaging_allowed=false so the manual-shipment
-                dropdown + guard treat this service as CUSTOM-only. */}
-            <label
-              className="mt-3 flex items-start gap-2.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[12px]"
-              title="Ground-family services (FEDEX_GROUND, UPS 03, USPS Ground Advantage) typically don't accept carrier-branded packaging. Turning this OFF hides FEDEX_ENVELOPE / UPS boxes / etc from the list and prevents operators from picking them on a shipment."
-            >
-              <input
-                type="checkbox"
-                checked={pkgBrandedAllowed}
-                onChange={(e) => setPkgBrandedAllowed(e.target.checked)}
-                data-testid="branded-packaging-toggle"
-                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-slate-950 focus:ring-slate-300"
-              />
-              <div className="min-w-0 flex-1">
-                <p className="font-semibold text-slate-900">Allow branded packaging</p>
-                <p className="text-[10.5px] text-slate-500">
-                  When off, only custom boxes are shown below — matches the FedEx / UPS / USPS rule that ground-family services don't accept branded packaging. Manual shipment will filter branded options out for this service too.
-                </p>
-              </div>
-            </label>
+                dropdown + guard treat this service as CUSTOM-only.
+                BUG-089 — hide the toggle entirely for ground-family
+                services; branded packaging is never allowed on Ground
+                per the carriers' own rule, so showing a toggle that
+                looks switchable misleads admins. The screen's rule
+                text is enforced instead of merely suggested. */}
+            {!/\bground\b/i.test(pkgService?.name ?? '') ? (
+              <label
+                className="mt-3 flex items-start gap-2.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[12px]"
+                title="Ground-family services (FEDEX_GROUND, UPS 03, USPS Ground Advantage) typically don't accept carrier-branded packaging. Turning this OFF hides FEDEX_ENVELOPE / UPS boxes / etc from the list and prevents operators from picking them on a shipment."
+              >
+                <input
+                  type="checkbox"
+                  checked={pkgBrandedAllowed}
+                  onChange={(e) => setPkgBrandedAllowed(e.target.checked)}
+                  data-testid="branded-packaging-toggle"
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-slate-950 focus:ring-slate-300"
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold text-slate-900">Allow branded packaging</p>
+                  <p className="text-[10.5px] text-slate-500">
+                    When off, only custom boxes are shown below — matches the FedEx / UPS / USPS rule that ground-family services don't accept branded packaging. Manual shipment will filter branded options out for this service too.
+                  </p>
+                </div>
+              </label>
+            ) : (
+              <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11.5px] text-amber-800">
+                Ground-family services don't accept branded packaging — only custom boxes are allowed.
+              </p>
+            )}
             {(() => {
               const lim = limitsOf(pkgService)
               return (

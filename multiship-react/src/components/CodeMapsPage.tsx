@@ -26,7 +26,7 @@ const TAB_META: Record<
 > = {
   SHIPVIA: {
     label: 'Shipvia',
-    blurb: 'ERP ship-method → carrier service. Direct alias — skips ShipViaMapping rules.',
+    blurb: 'ERP ship-method → carrier service. Direct alias that is used as-is without any further rule lookup.',
     codeLabel: 'ERP shipvia code',
     codePlaceholder: 'P80',
     targetLabel: 'Platform service',
@@ -257,8 +257,16 @@ export default function CodeMapsPage({ initialClientFilter, embedded = false }: 
                 allowedPresetIds,
               } : {}),
             }
+      // BUG-093 — pre-fix a duplicate ERP code silently replaced the
+      // existing mapping and the success toast gave no clue. Check
+      // whether the ERP code already has a row for this client (same
+      // tab) BEFORE firing upsert; adjust the toast wording so the
+      // operator sees 'updated' vs 'added'.
+      const replacing = rows.some((r) => (r.erpCode ?? '').toLowerCase() === erpCode.trim().toLowerCase())
       await clientCodeMapService.upsert(selectedClient, tab, payload)
-      notify.success(`${TAB_META[tab].label} alias saved.`)
+      notify.success(replacing
+        ? `${TAB_META[tab].label} alias for '${erpCode.trim()}' updated — previous target replaced.`
+        : `${TAB_META[tab].label} alias saved.`)
       setErpCode(''); setTargetId(''); setIso2('')
       setDestCountry(''); setDestRegion('')
       setWarehouseId(''); setAllowedPresetIds([])
@@ -451,6 +459,7 @@ export default function CodeMapsPage({ initialClientFilter, embedded = false }: 
                 value={erpCode}
                 onChange={(e) => setErpCode(e.target.value)}
                 placeholder={meta.codePlaceholder}
+                maxLength={40}
                 className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15]"
               />
             </div>
@@ -469,15 +478,35 @@ export default function CodeMapsPage({ initialClientFilter, embedded = false }: 
               />
             </div>
             <div className="sm:self-end">
-              <button
-                type="button"
-                onClick={() => void submitAdd()}
-                disabled={!canSubmit || saving}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-4 py-2 text-[12px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <FiPlus className="h-3.5 w-3.5" />
-                {saving ? 'Saving…' : 'Add alias'}
-              </button>
+              {/* BUG-056 — context-aware tooltip so the operator sees
+                  WHY the button is disabled (same pattern as the client
+                  wizard's "Add to list" button). Previously disabled with
+                  no title + no field marked. */}
+              {(() => {
+                const missing: string[] = []
+                if (!selectedClient) missing.push('a client')
+                if (erpCode.trim().length === 0) missing.push('an ERP code')
+                if (tab === 'DEST_COUNTRY'
+                    ? iso2.trim().length !== 2
+                    : !targetId) {
+                  missing.push(tab === 'DEST_COUNTRY' ? 'a 2-letter ISO country' : 'a platform target')
+                }
+                const title = missing.length
+                  ? `Fill ${missing.join(' + ')} to add the alias.`
+                  : undefined
+                return (
+                  <button
+                    type="button"
+                    onClick={() => void submitAdd()}
+                    disabled={!canSubmit || saving}
+                    title={title}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-4 py-2 text-[12px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <FiPlus className="h-3.5 w-3.5" />
+                    {saving ? 'Saving…' : 'Add alias'}
+                  </button>
+                )
+              })()}
             </div>
             {/* Audit R2 #368 — advanced-scope disclosure. Hidden by default
                 so the common case stays a two-field form; expand to add

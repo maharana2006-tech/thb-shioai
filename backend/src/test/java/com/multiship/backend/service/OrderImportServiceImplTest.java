@@ -40,19 +40,34 @@ class OrderImportServiceImplTest {
     /* -------------------------- CSV template -------------------------- */
 
     @Test
-    void csvTemplateStartsWithCanonicalHeaders() {
-        // Sprint 49 Tier 5 Fix 5 — Sprint 48 reordered HEADERS to lead with
-        // orderRef,clientCode,billTo,warehouseCode,... but this test still
-        // asserted the pre-Sprint-48 order and had been failing for weeks.
-        // Assert against the ACTUAL current HEADERS ordering; if HEADERS
-        // changes intentionally, update the expected prefix below.
+    void csvTemplateHeaderRowStillCanonical() {
+        // BUG-014 - template now leads with a '#' comment line explaining
+        // what goes in serviceType, so the header row is line 2.
         String template = new String(service.csvTemplate(), StandardCharsets.UTF_8);
-        assertTrue(template.startsWith("orderRef,clientCode,billTo,warehouseCode,recipientName,"),
-                "Template must start with the canonical header — see OrderImportServiceImpl.HEADERS");
+        String[] lines = template.split("\n");
+        assertTrue(lines.length >= 3, "template needs comment + header + >=1 sample row");
+        assertTrue(lines[0].startsWith("# serviceType"),
+                "line 1 hints the client ship-via vocabulary");
+        assertTrue(lines[1].startsWith("orderRef,clientCode,billTo,warehouseCode,recipientName,"),
+                "header row is unchanged - see OrderImportServiceImpl.HEADERS");
         assertTrue(template.contains("weight"));
         assertTrue(template.contains("countryCode"));
-        // At least one sample row after the header line.
-        assertTrue(template.split("\n").length >= 2);
+    }
+
+    @Test
+    void csvTemplateSampleRowsDoNotUseInternalCarrierCodes() {
+        // BUG-014 - the pre-fix template put FEDEX_GROUND / INTERNATIONAL_PRIORITY
+        // in the serviceType column; the importer rejects those because it only
+        // accepts the client's own ship-via codes (ClientShipviaCodeMap).
+        String template = new String(service.csvTemplate(), StandardCharsets.UTF_8);
+        assertFalse(template.contains("FEDEX_GROUND"),
+                "template must not name an internal carrier service code");
+        assertFalse(template.contains("INTERNATIONAL_PRIORITY"),
+                "template must not name an internal carrier service code");
+        // With no ship-via rules wired (unit test constructor), the sample
+        // falls back to the placeholder that signals operators to fill it in.
+        assertTrue(template.contains("<client ship-via code>"),
+                "placeholder tells the operator what the column needs");
     }
 
     /* -------------------------- Format detection -------------------------- */

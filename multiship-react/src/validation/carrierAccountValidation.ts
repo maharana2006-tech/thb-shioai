@@ -23,7 +23,7 @@ const ACCOUNT_RULES: Record<string, { re: RegExp; msg: string }> = {
   UPS: { re: /^[A-Za-z0-9]{6,10}$/, msg: 'UPS shipper number is 6–10 letters or digits' },
   FEDEX: { re: /^\d{9}$/, msg: 'FedEx account number is exactly 9 digits' },
   DHL: { re: /^\d{9,12}$/, msg: 'DHL Express account number is 9–12 digits' },
-  USPS: { re: /^[A-Za-z0-9._@-]{3,50}$/, msg: 'Enter a valid Stamps.com username' },
+  USPS: { re: /^[A-Za-z0-9._@-]{3,50}$/, msg: 'USPS account number is 3–50 letters, digits, or . _ @ -' },
 }
 const GENERIC_ACCOUNT = { re: /^[A-Za-z0-9._@-]{3,25}$/, msg: 'Use 3–25 letters, digits, or . _ @ -' }
 

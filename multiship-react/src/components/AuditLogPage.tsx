@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { formatDateTime } from '../utils/formatDateTime'
 import { useOutletContext } from 'react-router-dom'
 import {
   FiChevronDown,
@@ -19,6 +20,52 @@ import AdvancedDataTable, { type ColumnDef } from './workspace/AdvancedDataTable
 import { summarizeCarrierError } from '../utils/carrierErrorMap'
 import Select from './workspace/Select'
 import { notify } from '../utils/notify'
+
+/**
+ * BUG-110 R7 — the Type / Action columns rendered raw server enums
+ * ('CARRIER_ACCOUNT', 'LABEL_GENERATED'). Operators were asking what
+ * "LABEL_VOID_REFUSED" was supposed to mean. Humanize the common ones
+ * (same codes already listed in the filter dropdowns); unknown codes
+ * fall back to the server string so a new category can't disappear
+ * from the UI if we forget to update the map.
+ */
+const ENTITY_TYPE_LABELS: Record<string, string> = {
+  CARRIER_ACCOUNT: 'Carrier account',
+  LABEL_TEMPLATE: 'Label template',
+  ROUTING_RULE: 'Routing rule',
+  CODE_MAP: 'Code map',
+  CUSTOMS_PROFILE: 'Customs profile',
+  CLIENT_POLICY: 'Client policy',
+  CLIENT_MARKUP: 'Client markup',
+  IMPORT_BATCH: 'Import batch',
+  LABEL: 'Label',
+  USER: 'User',
+}
+const ACTION_LABELS: Record<string, string> = {
+  LABEL_GENERATED: 'Label generated',
+  LABEL_VOIDED: 'Label voided',
+  LABEL_REGENERATED: 'Label regenerated',
+  LABEL_VOID_REFUSED: 'Void refused',
+  CARRIER_REJECTED: 'Carrier rejected',
+  IMPORT_SAVED: 'Import saved',
+  IMPORT_GENERATED: 'Import generated',
+  LOGIN: 'Login',
+  LOGOUT: 'Logout',
+  LOGIN_FAILED: 'Login failed',
+  CREATE: 'Create',
+  UPDATE: 'Update',
+  DELETE: 'Delete',
+  ATTACH_WAREHOUSE: 'Attach warehouse',
+  DETACH_WAREHOUSE: 'Detach warehouse',
+}
+function humaniseEntityType(v: string | null | undefined): string {
+  if (!v) return ''
+  return ENTITY_TYPE_LABELS[v] ?? v.replace(/_/g, ' ').toLowerCase().replace(/^\w/, (c) => c.toUpperCase())
+}
+function humaniseAction(v: string | null | undefined): string {
+  if (!v) return ''
+  return ACTION_LABELS[v] ?? v.replace(/_/g, ' ').toLowerCase().replace(/^\w/, (c) => c.toUpperCase())
+}
 
 /**
  * Read-only feed of settings writes. Filter by actor / entity type /
@@ -183,7 +230,7 @@ export default function AuditLogPage() {
         header: 'When',
         cell: ({ row }) => (
           <span className="text-[11.5px] text-slate-600">
-            {formatTime(row.original.createdAt)}
+            {formatDateTime(row.original.createdAt)}
           </span>
         ),
       },
@@ -236,8 +283,11 @@ export default function AuditLogPage() {
         accessorFn: (r) => r.entityType,
         header: 'Type',
         cell: ({ row }) => (
-          <span className="inline-flex items-center rounded bg-slate-100 px-1.5 py-0.5 text-[10.5px] font-semibold text-slate-700">
-            {row.original.entityType}
+          <span
+            className="inline-flex items-center rounded bg-slate-100 px-1.5 py-0.5 text-[10.5px] font-semibold text-slate-700"
+            title={row.original.entityType}
+          >
+            {humaniseEntityType(row.original.entityType)}
           </span>
         ),
       },
@@ -351,11 +401,15 @@ export default function AuditLogPage() {
                       orderNo: orderNoFilter ? Number(orderNoFilter) : undefined,
                       since, until,
                     })}
-                    title={`Export the current filter set as CSV (ADMIN only; capped at 100k rows)`}
+                    title={`Export EVERY filtered row as CSV (ADMIN only; capped at 100k rows). The 'Export' button beside this one saves only the current page.`}
                     className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 transition hover:bg-slate-50"
                   >
                     <FiDownload className="h-3.5 w-3.5" />
-                    Export CSV
+                    {/* BUG-127 — Export CSV = full filtered set; the
+                        AdvancedDataTable Export button beside it saves
+                        the visible page. Rename so operators can tell
+                        which does which. */}
+                    Export all (CSV)
                   </a>
                 ) : null}
                 <button
@@ -383,7 +437,7 @@ export default function AuditLogPage() {
                     id="audit-log-filter-panel"
                     role="region"
                     aria-label="Audit log filters"
-                    className="absolute right-0 z-30 mt-1 w-80 rounded-lg border border-slate-200 bg-white p-3 shadow-lg"
+                    className="absolute right-0 top-full z-30 mt-1 w-80 rounded-lg border border-slate-200 bg-white p-3 shadow-lg"
                   >
                     <label className="mb-1 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
                       Actor (username)
@@ -397,8 +451,17 @@ export default function AuditLogPage() {
                     <label className="mb-1 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
                       Entity type
                     </label>
+                    {/* BUG-129 — Entity type + Action lists must match the
+                        actual rows the log stores. Added: AUTH, ORDER (which
+                        dominate the Shipments tab), USER. Action list adds
+                        LOGIN, LOGOUT, LABEL_GENERATED, LABEL_VOIDED. The
+                        6 pre-fix 'offered but never occur' entries stay in
+                        case rare rows do appear. */}
                     <Select value={entityType} onChange={(e) => setEntityType(e.target.value)}>
                       <option value="">All types</option>
+                      <option value="AUTH">Auth</option>
+                      <option value="ORDER">Order</option>
+                      <option value="USER">User</option>
                       <option value="CLIENT">Client</option>
                       <option value="WAREHOUSE">Warehouse</option>
                       <option value="CARRIER_ACCOUNT">Carrier account</option>
@@ -408,6 +471,10 @@ export default function AuditLogPage() {
                       <option value="CUSTOMS_PROFILE">Customs profile</option>
                       <option value="CLIENT_POLICY">Client policy</option>
                       <option value="CLIENT_MARKUP">Client markup</option>
+                      {/* BUG-129 R6+1: AuditService also writes under
+                          IMPORT_BATCH — add it so the filter matches
+                          every entity type the backend produces. */}
+                      <option value="IMPORT_BATCH">Import batch</option>
                     </Select>
                     <label className="mb-1 mt-3 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
                       Action
@@ -417,9 +484,24 @@ export default function AuditLogPage() {
                       <option value="CREATE">CREATE</option>
                       <option value="UPDATE">UPDATE</option>
                       <option value="DELETE">DELETE</option>
+                      <option value="LOGIN">LOGIN</option>
+                      <option value="LOGOUT">LOGOUT</option>
+                      <option value="LABEL_GENERATED">LABEL_GENERATED</option>
+                      <option value="LABEL_VOIDED">LABEL_VOIDED</option>
+                      <option value="LABEL_REGENERATED">LABEL_REGENERATED</option>
+                      <option value="LABEL_VOID_REFUSED">LABEL_VOID_REFUSED</option>
+                      <option value="CARRIER_REJECTED">CARRIER_REJECTED</option>
+                      <option value="IMPORT_SAVED">IMPORT_SAVED</option>
+                      <option value="IMPORT_GENERATED">IMPORT_GENERATED</option>
+                      <option value="LOGIN_FAILED">LOGIN_FAILED</option>
                       <option value="TOGGLE_ACTIVE">TOGGLE_ACTIVE</option>
                       <option value="CASCADE_DISABLE">CASCADE_DISABLE</option>
                       <option value="CASCADE_ENABLE">CASCADE_ENABLE</option>
+                      {/* BUG-129 R7: ClientWarehouseServiceImpl writes
+                          ATTACH_WAREHOUSE / DETACH_WAREHOUSE rows that
+                          the picker didn't surface. */}
+                      <option value="ATTACH_WAREHOUSE">ATTACH_WAREHOUSE</option>
+                      <option value="DETACH_WAREHOUSE">DETACH_WAREHOUSE</option>
                     </Select>
                     {/* Audit A2 — date-range filters mirror the backend's
                         since/until params (already supported, no UI pre-fix).
@@ -492,19 +574,6 @@ export default function AuditLogPage() {
   )
 }
 
-function formatTime(iso: string): string {
-  if (!iso) return '—'
-  try {
-    // Explicit en-US — the bare toLocaleString() rendered 01/09/2026 (DD/MM)
-    // on some machines while the rest of the app prints "Sep 1, 2026".
-    return new Date(iso).toLocaleString('en-US', {
-      month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
-    })
-  } catch {
-    return iso
-  }
-}
-
 function prettyJson(raw: string | null): string {
   if (!raw) return '(no payload)'
   try {
@@ -525,8 +594,11 @@ function ActionBadge({ action }: { action: string }) {
   }
   const cls = tone[action] ?? 'bg-slate-100 text-slate-700'
   return (
-    <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10.5px] font-semibold ${cls}`}>
-      {action}
+    <span
+      className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10.5px] font-semibold ${cls}`}
+      title={action}
+    >
+      {humaniseAction(action)}
     </span>
   )
 }

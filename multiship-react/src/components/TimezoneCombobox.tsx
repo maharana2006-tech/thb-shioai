@@ -32,15 +32,42 @@ interface TimezoneOption {
 // API supported in every evergreen browser since ~2022; the try/catch
 // fallback keeps the component safe on older engines (input still
 // works as a plain text field with the Detect button as the only picker).
+// BUG-027: pairs of lower-case tzdata city segments (modern <-> legacy).
+// Query containing one is also searched against the other. Expand as new
+// renames surface; the IANA tzdata changelog is the source of truth.
+const TZ_ALIASES: ReadonlyArray<readonly [string, string]> = [
+  ['kolkata', 'calcutta'],
+  ['kyiv', 'kiev'],
+  ['yangon', 'rangoon'],
+  ['thimphu', 'thimbu'],
+  ['ho_chi_minh', 'saigon'],
+  ['uzhhorod', 'uzhgorod'],
+]
+
+// BUG-027 — modern IANA names some browser ICUs still omit (ships
+// `Asia/Calcutta` only, missing `Asia/Kolkata`, etc.). Merged into
+// RAW_ZONES so the alias search finds either spelling regardless of
+// which the runtime ships. Dedup is handled by the Set below.
+const MODERN_NAMES: readonly string[] = [
+  'Asia/Kolkata', 'Asia/Calcutta',
+  'Europe/Kyiv', 'Europe/Kiev',
+  'Asia/Yangon', 'Asia/Rangoon',
+  'Asia/Thimphu', 'Asia/Thimbu',
+  'Asia/Ho_Chi_Minh', 'Asia/Saigon',
+  'Europe/Uzhhorod', 'Europe/Uzhgorod',
+]
+
 const RAW_ZONES: string[] = (() => {
+  const set = new Set<string>()
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Intl.supportedValuesOf isn't in older TS lib defs.
     const anyIntl = Intl as any
     if (typeof anyIntl.supportedValuesOf === 'function') {
-      return anyIntl.supportedValuesOf('timeZone') as string[]
+      for (const z of anyIntl.supportedValuesOf('timeZone') as string[]) set.add(z)
     }
   } catch { /* fall through */ }
-  return []
+  for (const z of MODERN_NAMES) set.add(z)
+  return [...set]
 })()
 
 /** Normalise `Intl.DateTimeFormat`'s "GMT+5:30" / "GMT-5" / "GMT" style
@@ -99,7 +126,20 @@ export function TimezoneCombobox({
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     if (!q) return options
-    return options.filter((o) => o.id.toLowerCase().includes(q))
+    // BUG-027 — some browser tz tables ship the legacy spelling while
+    // operators type the modern one (or vice versa). Expand the query
+    // to any known alias so 'Kolkata'/'Calcutta', 'Kyiv'/'Kiev',
+    // 'Yangon'/'Rangoon', 'Thimphu'/'Thimbu' all find the same zone.
+    const expanded = new Set<string>([q])
+    for (const [a, b] of TZ_ALIASES) {
+      if (q.includes(a)) expanded.add(q.replace(a, b))
+      if (q.includes(b)) expanded.add(q.replace(b, a))
+    }
+    return options.filter((o) => {
+      const lower = o.id.toLowerCase()
+      for (const term of expanded) if (lower.includes(term)) return true
+      return false
+    })
   }, [options, query])
 
   useEffect(() => {
@@ -129,6 +169,24 @@ export function TimezoneCombobox({
     setQuery('')
     setOpen(false)
     inputRef.current?.blur()
+  }
+
+  // BUG-146 — if the operator types a valid IANA zone name and tabs away
+  // without clicking a suggestion, commit the typed value. Pre-fix the
+  // query was silently discarded and Save stored null (fallback to
+  // client tz), so the operator's deliberate choice was lost.
+  const commitTypedIfValid = () => {
+    const typed = query.trim()
+    if (!typed) return
+    // Exact match (case-sensitive) against the loaded IANA set, OR a
+    // runtime check via Intl.DateTimeFormat — the latter catches zones
+    // the Intl.supportedValuesOf list doesn't ship.
+    if (options.some((o) => o.id === typed)) { commit(typed); return }
+    try {
+      // Intl constructor throws RangeError for an unknown time zone.
+      new Intl.DateTimeFormat('en-US', { timeZone: typed })
+      commit(typed)
+    } catch { /* leave current value as-is; dropdown closes on next blur handler */ }
   }
 
   const detectFromBrowser = () => {
@@ -186,6 +244,7 @@ export function TimezoneCombobox({
           }}
           onFocus={() => setOpen(true)}
           onKeyDown={onKey}
+          onBlur={() => { commitTypedIfValid() }}
           placeholder={placeholder ?? 'Search e.g. New_York'}
           autoComplete="off"
           spellCheck={false}

@@ -685,6 +685,24 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
     })
   }
 
+  /**
+   * BUG-016 - the import-detail Generate labels button used to kick off
+   * dispatch with no confirmation step - a 1,200-row import became 1,200
+   * real paid labels on a single click. Mirror the Orders-grid pattern
+   * at generatePicked() by asking first; retry runs read as "Retry labels"
+   * since they only re-send failures.
+   */
+  const confirmThenGenerate = async (b: ImportBatchSummary, isRetry: boolean) => {
+    const n = b.savedRows ?? 0
+    const verb = isRetry ? 'Retry labels' : 'Generate labels'
+    const ok = await notify.confirm(
+      `${verb} for ${n} row${n === 1 ? '' : 's'}? This buys real labels from the carrier and can't be undone.`,
+      { title: verb, confirmLabel: verb, cancelLabel: 'Not now', danger: !isRetry },
+    )
+    if (!ok) return
+    await generate(b.id, isRetry)
+  }
+
   const generate = async (id: number, isRetry: boolean, allowDuplicate = false) => {
     const target = batches.find((b) => b.id === id)
     const slug = target?.slug
@@ -1364,7 +1382,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
                       ) : (
                         <button
                           type="button"
-                          onClick={() => (platform ? setConfirmGenId(b.id) : void generate(b.id, isRetry))}
+                          onClick={() => (platform ? setConfirmGenId(b.id) : void confirmThenGenerate(b, isRetry))}
                           disabled={justRestoredId === b.id}
                           title={st === 'DRAFT'
                             ? 'Generate labels for the valid rows — rows with errors are skipped until you fix them'

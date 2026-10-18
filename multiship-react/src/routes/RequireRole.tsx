@@ -1,6 +1,6 @@
 import { Navigate, Outlet, useOutletContext } from 'react-router-dom'
 import { useAppSession } from '../hooks/useAppSession'
-import { getHomePathForRole, normalizeRole, type UserRole } from '../utils/roles'
+import { getHomePathForRole, normalizeRole, roleSatisfies, type UserRole } from '../utils/roles'
 
 interface RequireRoleProps {
   roles: UserRole[]
@@ -16,7 +16,7 @@ export default function RequireRole({ roles }: RequireRoleProps) {
   const normalizedRole = normalizeRole(role)
   const parentContext = useOutletContext()
 
-  if (!roles.includes(normalizedRole)) {
+  if (!roles.some((r) => roleSatisfies(normalizedRole, r))) {
     return <Navigate to={getHomePathForRole(normalizedRole, hasConnectedCarrier)} replace />
   }
 

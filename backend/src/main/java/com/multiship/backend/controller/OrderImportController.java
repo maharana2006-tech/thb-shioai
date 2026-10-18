@@ -23,6 +23,8 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 
+import com.multiship.backend.util.CsvUtil;
+
 /**
  * Sprint 40 — CSV / XLSX order import endpoints.
  * <ul>
@@ -462,14 +464,12 @@ public class OrderImportController {
      *  stay consistent. 5000 rows at ~500 bytes each = ~2.5 MB CSV. */
     private static final int EXPORT_ROW_CAP = 5000;
 
-    /** RFC 4180 — same pattern as AuditLogController.csv (#357). */
+    /** RFC-4180 + BUG-076 formula-injection guard, via the shared
+     *  {@link CsvUtil#csvCell} — same pattern as AuditLogController.csv (#357).
+     *  This /history/{slug}/export emits tenant-authored recipient/company/
+     *  address rows to a human-opened CSV. */
     private static String csv(Object v) {
-        if (v == null) return "";
-        String s = v.toString();
-        if (s.indexOf(',') < 0 && s.indexOf('"') < 0 && s.indexOf('\n') < 0 && s.indexOf('\r') < 0) {
-            return s;
-        }
-        return "\"" + s.replace("\"", "\"\"") + "\"";
+        return CsvUtil.csvCell(v == null ? "" : String.valueOf(v));
     }
 
     @Operation(summary = "Generate carrier labels for a saved import batch",

@@ -330,6 +330,18 @@ export default function ClientEditorPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fetch-on-mount + on-clientCode-change; loadPickWarehouses is defined inline and only reads editingCode via closure
   }, [editingCode])
 
+  // BUG-039 — the browser tab stayed on "multiship-react" (Vite default)
+  // regardless of which client the wizard was editing. Give it a clear
+  // title that includes the client code when known. Restored on unmount
+  // so other pages aren't stuck with a client-scoped title.
+  useEffect(() => {
+    const prev = document.title
+    document.title = editingCode
+      ? `${editingCode} — Client · Settings`
+      : 'New client · Settings'
+    return () => { document.title = prev }
+  }, [editingCode])
+
   // Pre-select the client's default attached warehouse in edit mode so the
   // Ship From picker isn't empty when reopening an existing client, AND
   // record the full attached-id set so the picker can filter them out (only
@@ -579,9 +591,14 @@ export default function ClientEditorPage() {
    * DB-column defaults (empty carrier set) rather than intersecting
    * enabled-carrier caps.
    */
+  // BUG-033 — return address was validated against the loose DB defaults
+  // (empty-carriers intersection) while ship-from used the real carrier
+  // intersection, so a client without a USPS account on create saw "max
+  // 5 chars" where edit saw "max 2 chars". Return address is sent to the
+  // same carriers as ship-from on returns, so share the same cap.
   const returnAddressCaps = useMemo<AddressCaps>(
-    () => intersectionAddressCaps([]),
-    [],
+    () => intersectionAddressCaps(enabledCarrierCodes),
+    [enabledCarrierCodes],
   )
 
   const returnErrors = useMemo(() => {
@@ -735,7 +752,15 @@ export default function ClientEditorPage() {
    * one draft carrier account. The staged rows commit through
    * accountRefService on Create client.
    */
+  // BUG-138 — a draft resumed after a page reload has the carrier draft
+  // rows but NOT the client_id / secret (those are deliberately not
+  // persisted). The step was marked complete just by the row count,
+  // so Summary showed READY and Create would ship an account with no
+  // credentials. Require every staged carrier draft to carry a non-blank
+  // clientId AND clientSecret before the step is complete.
   const carriersStepComplete = carrierDrafts.length > 0
+    && carrierDrafts.every((d) => (d.clientId?.trim().length ?? 0) > 0
+                                 && (d.clientSecret?.trim().length ?? 0) > 0)
 
   /** The Mapping step is complete when the operator has staged at least one
    *  draft rule (ship via + carrier service). */
@@ -932,8 +957,11 @@ export default function ClientEditorPage() {
       // doesn't seed markup) but we guard on hasBillingMarkup=false so a
       // future default-seeder wouldn't false-fire this toast.
       if (response.data.hasBillingMarkup === false) {
+        // BUG-032 — pre-fix the raw code "MARKUP_REQUIRED_FOR_CLIENT"
+        // leaked into the operator-visible toast. Keep the operator-
+        // facing wording free of internal error codes.
         notify.info(
-          `Set a billing markup for ${response.data.clientCode} on the Markup tab before generating labels — MARKUP_REQUIRED_FOR_CLIENT will otherwise reject every label call for this client.`,
+          `Set a billing markup for ${response.data.clientCode} on the Markup tab before generating labels — otherwise every label call for this client will be rejected until one is configured.`,
         )
       }
 
@@ -1085,7 +1113,7 @@ export default function ClientEditorPage() {
     touchStep('shipFrom')
     touchStep('return')
     if (!stepValid('identity') || !stepValid('shipFrom') || !stepValid('return')) {
-      notify.error('Fix the highlighted fields to save.')
+      notify.error({ title: 'Check the form for errors', body: 'Fix the highlighted fields to save.' })
       return
     }
     setSaving(true)
@@ -1218,6 +1246,31 @@ export default function ClientEditorPage() {
             </h3>
           </div>
         </div>
+        {/* BUG-139 — in create mode give the operator an explicit
+            Discard-draft action. Pre-fix, + Add Client always resumed
+            the last unfinished draft with no way to start fresh. */}
+        {!isEdit && draft ? (
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={async () => {
+                const ok = await notify.confirm(
+                  'Discard the current client draft?\n\nAll typed fields across every step will be cleared. This cannot be undone.',
+                  { title: 'Discard draft?', confirmLabel: 'Discard', danger: true },
+                )
+                if (!ok) return
+                try { localStorage.removeItem(draftStorageKey()) } catch { /* non-fatal */ }
+                // Fresh page via navigate so useMemo re-reads the (now
+                // missing) draft and seeds every field blank.
+                navigate('/settings/clients/new', { replace: true })
+                window.location.reload()
+              }}
+              className="rounded-xl border border-rose-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-rose-700 transition hover:bg-rose-50"
+            >
+              Discard draft
+            </button>
+          </div>
+        ) : null}
         {isEdit && (activeStep === 'identity' || activeStep === 'shipFrom' || activeStep === 'return') ? (
           <div className="flex shrink-0 items-center gap-2">
             {/* Audit 2.2 (#282) — "Save changes" only commits identity +
@@ -1487,8 +1540,14 @@ export default function ClientEditorPage() {
         {/* Billing markup — optional, edit-mode only. The endpoint is keyed
             by clientCode, so a not-yet-created client has nowhere to save
             this to; create mode shows a placeholder pointing back here. */}
+        {/* BUG-078 — patch client.hasBillingMarkup to true locally so the
+            step-pill warning clears on save. load() refetches the full row
+            on the next visit. */}
         {activeStep === 'markup' && (client ? (
-          <ClientMarkupTab clientCode={client.clientCode} />
+          <ClientMarkupTab
+            clientCode={client.clientCode}
+            onSaved={() => setClient((c) => (c ? { ...c, hasBillingMarkup: true } : c))}
+          />
         ) : (
           <div className="flex-1 overflow-y-auto px-5 py-4" role="tabpanel" id="client-editor-panel-markup">
             <h4 className="text-[12.5px] font-semibold text-slate-950">Billing markup</h4>

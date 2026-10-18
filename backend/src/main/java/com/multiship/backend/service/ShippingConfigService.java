@@ -61,6 +61,8 @@ public class ShippingConfigService {
     private final CarrierAccountRefRepository carrierAccountRefRepository;
     /** Sprint 49 Tier 3 Fix 1 — invalidate the rate cache when the catalog changes. */
     private final ApplicationEventPublisher eventPublisher;
+    /** Clamp caller-supplied clientCode filters to the caller's own tenant. */
+    private final TenantScopeEnforcer tenantScope;
 
     /** A package chosen for a service. */
     public record PickedPackage(PackagePreset preset) {}
@@ -111,7 +113,12 @@ public class ShippingConfigService {
      */
     @Transactional(readOnly = true)
     public java.util.List<java.util.Map<String, Object>> shipViaCodesFor(String clientCode) {
-        String client = StringUtils.hasText(clientCode) ? clientCode.trim().toUpperCase(Locale.ROOT) : null;
+        // Clamp to the caller's tenant: a scoped USER passing ?clientCode=OTHER
+        // is rejected (403), and one omitting it is forced to their own code
+        // instead of seeing every client's ERP→service maps. Platform operators
+        // pass through unchanged (null => all clients).
+        String clamped = tenantScope.clampClientCode(clientCode);
+        String client = StringUtils.hasText(clamped) ? clamped.trim().toUpperCase(Locale.ROOT) : null;
         java.util.Map<String, java.util.Map<String, Object>> byCode = new java.util.TreeMap<>();
         for (com.multiship.backend.model.ClientShipviaCodeMap rule
                 : clientShipviaAliasRepository.findAllByOrderByErpCodeAsc()) {
@@ -737,6 +744,15 @@ public class ShippingConfigService {
         if (!carrierKind && (request.getLength() == null || request.getWidth() == null || request.getHeight() == null)) {
             return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
                     "A custom box needs length, width and height.");
+        }
+        // BUG-092: tare > max weight means the empty box already exceeds its
+        // rated capacity, so no payload could ever fit. Refuse on save
+        // instead of letting a nonsensical row land in the catalog.
+        if (request.getMaxWeight() != null && request.getTareWeight() != null
+                && request.getTareWeight().compareTo(request.getMaxWeight()) > 0) {
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
+                    "Tare weight (" + request.getTareWeight() + ") can't exceed max weight ("
+                            + request.getMaxWeight() + ") — the empty box would already be over its rated capacity.");
         }
         Optional<PackagePreset> clash = presetRepository.findByNameIgnoreCase(request.getName().trim());
         if (clash.isPresent() && (id == null || !clash.get().getId().equals(id))) {

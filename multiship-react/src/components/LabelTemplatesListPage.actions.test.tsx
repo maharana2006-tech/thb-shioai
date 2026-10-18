@@ -327,6 +327,9 @@ describe('LabelTemplatesListPage — Preview', () => {
     const runBtn = screen.getByRole('button', { name: /^Preview$/i })
     await act(async () => { await userEvent.click(runBtn) })
 
-    await waitFor(() => expect(fetchPreviewMock).toHaveBeenCalledWith('12345'))
+    // BUG-109 — the FE now passes previewContext.id (the template id)
+    // so Preview renders THIS template rather than the order's own.
+    // Fixture template has id=42; it lands as the second arg.
+    await waitFor(() => expect(fetchPreviewMock).toHaveBeenCalledWith('12345', 42))
   })
 })

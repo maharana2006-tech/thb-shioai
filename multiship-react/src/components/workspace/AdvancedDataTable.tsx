@@ -136,7 +136,11 @@ export interface AdvancedDataTableProps<T extends RowData> {
    * row from the backend and trigger the download. When set, the Export menu
    * item calls this instead of building CSV from the current table view.
    */
-  onExport?: () => void | Promise<void>
+  /** BUG-038 — callers that fetch a server-side CSV need to know which
+   *  columns are visible so hidden columns don't appear in the file.
+   *  Receives a snake-case list of column ids (table-cell order) when
+   *  invoked. Omit when the server ignores it. */
+  onExport?: (visibleColumnIds?: string[]) => void | Promise<void>
   /** Optional caption above the table body (e.g. "Showing N of M …"). */
   caption?: React.ReactNode
   /** Cap the table body height and give it its own scroll region. `null` opts out. */
@@ -385,7 +389,28 @@ export default function AdvancedDataTable<T extends RowData>({
     () => persisted?.columnSizing ?? {},
   )
   const [columnPinning, setColumnPinning] = useState<ColumnPinningState>(
-    () => persisted?.columnPinning ?? { start: [], end: [] },
+    () => {
+      // BUG-025: auto-pin columns marked meta.pinnedByDefault='end' so the
+      // row-actions column stays visible when the table scrolls horizontally
+      // on narrow viewports. R4 retest confirmed the default was being
+      // overridden by a persisted {start:[], end:[]} from an older session —
+      // treat an all-empty persisted state as "no explicit pinning" and
+      // fall through to the default. Operator can still unpin by explicitly
+      // cycling the pin button; once they pin or unpin anything the
+      // persisted state is non-empty and will be respected on reload.
+      const persistedHasPins =
+        !!persisted?.columnPinning
+        && ((persisted.columnPinning.start?.length ?? 0) > 0
+            || (persisted.columnPinning.end?.length ?? 0) > 0)
+      if (persistedHasPins) return persisted!.columnPinning!
+      const end: string[] = []
+      for (const col of columns) {
+        const id = (col as { id?: string }).id ?? (col as { accessorKey?: string }).accessorKey
+        const meta = (col as { meta?: { pinnedByDefault?: 'start' | 'end' } }).meta
+        if (meta?.pinnedByDefault === 'end' && id) end.push(id)
+      }
+      return { start: [], end }
+    },
   )
   const [density, setDensity] = useState<Density>(persisted?.density ?? initialDensity)
   const [openMenu, setOpenMenu] = useState<null | 'columns' | 'density'>(null)
@@ -481,6 +506,11 @@ export default function AdvancedDataTable<T extends RowData>({
       pagination: { pageIndex: currentPageIndex, pageSize: currentPageSize },
     },
     manualSorting,
+    // BUG-026 — TanStack's default sort cycle (asc → desc → unsorted)
+    // let the operator click past the two visible arrow states into a
+    // 'no arrow' third state, while the data layer kept the previous
+    // sort. Disable removal so the cycle is just asc ↔ desc.
+    enableSortingRemoval: false,
     manualPagination,
     pageCount: manualPagination ? pageCountProp ?? -1 : undefined,
     onSortingChange: (updater) => {
@@ -533,7 +563,13 @@ export default function AdvancedDataTable<T extends RowData>({
 
   const runExport = () => {
     // Server-side export: the parent fetches every filtered row and downloads it.
-    if (onExport) { void onExport(); return }
+    if (onExport) {
+      // BUG-038 — snapshot the visible leaf columns so the server-side
+      // export call can filter the CSV to match what's on screen.
+      const visibleIds = table.getVisibleLeafColumns().map((c) => c.id)
+      void onExport(visibleIds)
+      return
+    }
     const stamp = new Date().toISOString().replace(/[:.]/g, '-')
     downloadCsv(`${csvFilename || tableKey}-${stamp}.csv`, exportRowValues(table))
   }
@@ -543,7 +579,18 @@ export default function AdvancedDataTable<T extends RowData>({
     setColumnOrder(defaultOrder)
     setColumnVisibility(defaultVisibility)
     setColumnSizing({})
-    setColumnPinning({ start: [], end: [] })
+    // BUG-074 — Reset layout used to clear pinning to { start:[], end:[] }
+    // which unpinned the row-actions column (meta.pinnedByDefault='end')
+    // every time, pushing the menu off-screen until the operator reloaded
+    // the page. Rebuild the default pin set from the same source the init
+    // uses so Reset genuinely restores the default layout.
+    const resetEnd: string[] = []
+    for (const col of columns) {
+      const id = (col as { id?: string }).id ?? (col as { accessorKey?: string }).accessorKey
+      const meta = (col as { meta?: { pinnedByDefault?: 'start' | 'end' } }).meta
+      if (meta?.pinnedByDefault === 'end' && id) resetEnd.push(id)
+    }
+    setColumnPinning({ start: [], end: resetEnd })
     setDensity(initialDensity)
     setOpenMenu(null)
   }
@@ -770,15 +817,41 @@ export default function AdvancedDataTable<T extends RowData>({
                           <FiChevronDown className="h-2.5 w-2.5" />
                         </button>
                       </div>
-                      <label className="flex flex-1 cursor-pointer items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={col.getIsVisible()}
-                          onChange={col.getToggleVisibilityHandler()}
-                          className="h-3.5 w-3.5 accent-[#412d15]"
-                        />
-                        {label}
-                      </label>
+                      {/* BUG-023 — don't let the operator untick the last
+                          visible HIDEABLE column, which would leave blank
+                          rows with only the row menu. Previously the count
+                          included the un-hideable actions column, so the
+                          last user column could still be unticked (actions
+                          stayed visible but doesn't carry data). Count
+                          hideable columns only. */}
+                      {(() => {
+                        const visibleCount = idToCol.size
+                          ? orderedIds.reduce((n, cid) => {
+                              const c = idToCol.get(cid)
+                              if (!c || !c.getIsVisible()) return n
+                              const meta = (c.columnDef as { meta?: { hideable?: boolean } }).meta
+                              // Skip non-hideable columns (e.g. row actions) —
+                              // they're always visible and shouldn't gate
+                              // whether the operator can hide a user column.
+                              if (meta?.hideable === false) return n
+                              return n + 1
+                            }, 0)
+                          : 0
+                        const isLastVisible = col.getIsVisible() && visibleCount <= 1
+                        return (
+                          <label className="flex flex-1 cursor-pointer items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={col.getIsVisible()}
+                              onChange={col.getToggleVisibilityHandler()}
+                              disabled={isLastVisible}
+                              title={isLastVisible ? 'At least one column must stay visible' : undefined}
+                              className="h-3.5 w-3.5 accent-[#412d15] disabled:cursor-not-allowed disabled:opacity-50"
+                            />
+                            {label}
+                          </label>
+                        )
+                      })()}
                       <button
                         type="button"
                         onClick={() => cyclePin(col)}

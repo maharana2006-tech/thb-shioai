@@ -426,6 +426,26 @@ export default function LabelDocumentPage() {
   const label = payload?.label
   const shipper = payload?.shipper
   const resolution = payload?.resolution
+  /* R2-BUG-014 — the facsimile MUST render the ORDER's own sender and
+     never fall back to `payload.shipper`. The backend resolves `shipper`
+     by cascading per-order -> client warehouse -> tenant_settings ->
+     platform default; the last two leak "Multiship Warehouse, Bengaluru"
+     into the preview whenever the order itself has no sender captured
+     AND the client has no warehouse configured. The on-screen facsimile
+     must not claim an address the carrier label does not carry
+     (BUG-137 R7 doctrine: render blanks, let the operator see data is
+     missing). Morning BUG-001 kept a payload.shipper fallback - remove it. */
+  const facsimileShipper = useMemo(() => ({
+    name: order?.shipFromName ?? null,
+    company: order?.shipFromCompany ?? null,
+    phone: order?.shipFromPhone ?? null,
+    addressLine1: order?.shipFromAddr1 ?? null,
+    addressLine2: order?.shipFromAddr2 ?? null,
+    city: order?.shipFromCity ?? null,
+    state: order?.shipFromState ?? null,
+    postalCode: order?.shipFromZip ?? null,
+    countryCode: order?.shipFromCountryCd ?? null,
+  }), [order])
   const legacyAccount = payload?.carrierAccount
   /* PR ρ — carrierResponseDetails is still on the wire (backend keeps
      emitting it so /orders/{n}/carrier-payload-preview and any future
@@ -638,7 +658,10 @@ export default function LabelDocumentPage() {
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">Label Documents</p>
             <h2 className="flex items-center gap-2 text-base font-semibold text-slate-950">
-              Order #{orderNo}
+              {/* BUG-069 — orderNo is parsed from the URL (Number('abc')
+                  returns NaN). Guard so the heading reads 'Invalid order
+                  number' instead of 'Order #NaN'. */}
+              Order {Number.isFinite(orderNo) ? `#${orderNo}` : '— invalid order number'}
               {payload?.isReturn ? (
                 <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.12em] text-amber-700">
                   Return label
@@ -1121,20 +1144,20 @@ export default function LabelDocumentPage() {
                 ) : null}
                 <div className="mt-1 grid grid-cols-[1.08fr_1fr] font-mono text-[10px] leading-[13px]">
                   <div className="pr-2 uppercase">
-                    <p>ORIGIN ID:{(shipper?.state || 'XX').toUpperCase()}{(shipper?.postalCode || '').slice(0, 2)}A&nbsp;&nbsp;{(shipper?.phone || '').replace(/\s+/g, '')}</p>
-                    <p>{shipper?.name}</p>
+                    <p>ORIGIN ID:{(facsimileShipper?.state || 'XX').toUpperCase()}{(facsimileShipper?.postalCode || '').slice(0, 2)}A&nbsp;&nbsp;{(facsimileShipper?.phone || '').replace(/\s+/g, '')}</p>
+                    <p>{facsimileShipper?.name}</p>
                     {/* PR #535 — shipper COMPANY line, only when it says
                         something the name line doesn't. The backend can emit
                         company === name (ship_from_company mirrors the sender
                         name on manual orders), which printed the shipper
                         twice on the PDF while the ZPL printed it once. */}
-                    {shipper?.company && shipper.company.trim().toLowerCase() !== (shipper?.name || '').trim().toLowerCase()
-                      ? <p>{shipper.company}</p>
+                    {facsimileShipper?.company && facsimileShipper.company.trim().toLowerCase() !== (facsimileShipper?.name || '').trim().toLowerCase()
+                      ? <p>{facsimileShipper.company}</p>
                       : null}
-                    <p>{shipper?.addressLine1}</p>
+                    <p>{facsimileShipper?.addressLine1}</p>
                     <p>&nbsp;</p>
-                    <p>{shipper?.city}, {shipper?.state} {shipper?.postalCode} {shipper?.countryCode}</p>
-                    <p>SIGN: {shipper?.name}</p>
+                    <p>{facsimileShipper?.city}, {facsimileShipper?.state} {facsimileShipper?.postalCode} {facsimileShipper?.countryCode}</p>
+                    <p>SIGN: {facsimileShipper?.name}</p>
                   </div>
                   <div className="border-l border-black pl-2">
                     <p>SHIP DATE: {labelDate(shipDate)}</p>
@@ -1229,7 +1252,8 @@ export default function LabelDocumentPage() {
                 ) : null}
                 <div className="grid grid-cols-2 pr-8 text-[9px] font-bold leading-[12px]">
                   <span>INV:</span>
-                  <span>REF: {orderDisplay}</span>
+                  {/* BUG-001 — REF reflects the user-entered reference; when blank, em-dash. Never the order number (that lives in PO/CAD below). */}
+                  <span>REF: {order?.customerRef?.trim() || '—'}</span>
                   {/* PR #543 — PO / DEPT rows re-added. PO derives from the
                       order source: manual/bulk → "MAN{orderNo}"; WMS →
                       wmsExternalId when present else orderNo; other sources

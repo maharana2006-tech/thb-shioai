@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { Link } from 'react-router-dom'
+import { formatDateTime, localDateIso } from '../utils/formatDateTime'
+import { Link, useOutletContext } from 'react-router-dom'
+import type { SettingsOutletContext } from './layout/SettingsLayout'
 import { FiTruck, FiCheckSquare, FiRefreshCw, FiClock, FiCalendar, FiMapPin, FiPackage } from 'react-icons/fi'
 import { pickupService, type PickupRequest, type PickupServiceType } from '../api/pickupService'
 import { manifestService, type EodEvent, type ManifestResponse } from '../api/manifestService'
@@ -7,6 +9,8 @@ import { clientService, type Client } from '../api/clientService'
 import { settingsPaths } from '../routes/workspaceRoutes'
 import { isAbortError } from '../api/apiClient'
 import { useConnectedCarriers } from '../hooks/useConnectedCarriers'
+import { validatePhoneForCountry, validateZip } from '../utils/clientValidation'
+import { STATE_CODE_SETS } from '../utils/stateCodes'
 import { notify } from '../utils/notify'
 
 /**
@@ -32,7 +36,13 @@ const input =
 const primaryBtn =
   'inline-flex items-center justify-center gap-1.5 rounded-xl bg-[#1f150c] px-4 py-2.5 text-[13px] font-semibold text-white shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#cdbf9f]'
 
-const today = () => new Date().toISOString().slice(0, 10)
+const today = () => localDateIso()
+/** "Oct 20, 2026" from a plain YYYY-MM-DD event date (parsed as local, no TZ shift). */
+const fmtEventDate = (d: string) => {
+  try {
+    return new Date(`${d}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  } catch { return d }
+}
 
 /** Section card with an icon-badge header bar — the look used across the
  *  pickup/close modals, for a consistent feature design. */
@@ -73,6 +83,22 @@ function StatusPill({ status }: { status: string }) {
   return <span className={`inline-block rounded-full px-2 py-0.5 text-[10.5px] font-bold ${tone}`}>{s || '—'}</span>
 }
 
+// BUG-157: mirror /orders/new's shipmentSchema state rule — US / CA /
+// AU / IN / BR / MX require a state; US / CA / AU / MX also validate
+// against a known-code set.
+const STATE_REQUIRED_COUNTRIES = new Set(['US', 'CA', 'AU', 'IN', 'BR', 'MX'])
+function validatePickupState(state: string | undefined | null, country: string | undefined | null): string | null {
+  const cc = (country || '').trim().toUpperCase()
+  if (!STATE_REQUIRED_COUNTRIES.has(cc)) return null
+  const s = (state || '').trim().toUpperCase()
+  if (!s) return `State / province is required for ${cc} pickups.`
+  const set = STATE_CODE_SETS[cc]
+  if (set && !set.has(s)) {
+    return `Use the ${cc} state code (e.g. ${[...set].slice(0, 2).join(', ')}), not the full name.`
+  }
+  return null
+}
+
 export default function PickupsEodPage() {
   const [clients, setClients] = useState<Client[]>([])
   const [events, setEvents] = useState<EodEvent[]>([])
@@ -105,6 +131,8 @@ export default function PickupsEodPage() {
     packageCount: 1, totalWeight: 1, weightUnit: 'LB', specialInstructions: '',
   })
   const [scheduling, setScheduling] = useState(false)
+  // BUG-027 — show validation problems inline by the button, not as stacking toasts.
+  const [pickupError, setPickupError] = useState<string[] | null>(null)
 
   const setP = (k: keyof PickupRequest) => (v: string | number) =>
     setPickup((cur) => ({ ...cur, [k]: v }))
@@ -141,7 +169,31 @@ export default function PickupsEodPage() {
 
   useEffect(() => { void loadEvents() }, [loadEvents])
 
+  const outlet = useOutletContext<SettingsOutletContext>()
+  useEffect(() => {
+    outlet.registerRefresh(loadEvents)
+    return () => outlet.registerRefresh(null)
+  }, [outlet, loadEvents])
+
   const runClose = async () => {
+    // BUG-059 — bulk carrier close is irreversible from this screen and
+    // defaults to "All clients", so a mis-click closes every open label
+    // for the carrier + date. Confirm with the carrier + date + scope
+    // named before firing.
+    const scope = closeClient
+      ? `client ${closeClient}${closeWarehouse ? ` · warehouse ${closeWarehouse}` : ''}`
+      : (closeWarehouse ? `every client · warehouse ${closeWarehouse}` : 'EVERY client')
+    const ok = await notify.confirm(
+      `Close out ${closeCarrier} for ${closeDate || 'today'}?\n\n`
+        + `Scope: ${scope}\n\n`
+        + 'This files the end-of-day manifest with the carrier and closes every open (generated, non-voided) label in scope. It cannot be undone from this screen.',
+      {
+        title: `Close out ${closeCarrier} ${closeDate || 'today'}?`,
+        confirmLabel: 'Close out',
+        danger: true,
+      },
+    )
+    if (!ok) return
     setClosing(true)
     setCloseResult(null)
     try {
@@ -166,18 +218,41 @@ export default function PickupsEodPage() {
   }
 
   const runPickup = async () => {
-    if (!pickup.contactName || !pickup.contactPhone || !pickup.addressLine1
-        || !pickup.city || !pickup.postalCode) {
-      notify.error({ title: 'Missing fields', body: 'Contact, phone, address, city and postal code are required.' })
+    // BUG-010 — validate before sending (same rules as the Orders pickup
+    // dialog) instead of forwarding a past date / inverted window / bad
+    // phone or ZIP / 0 packages straight to the carrier.
+    const pkg = Number(pickup.packageCount)
+    const wt = Number(pickup.totalWeight)
+    // BUG-027 — every problem at once, not one per click.
+    const problems = [
+      !pickup.contactName?.trim() ? 'Contact name is required.' : null,
+      validatePhoneForCountry(pickup.contactPhone, pickup.countryCode, true),
+      !pickup.addressLine1?.trim() ? 'Street address is required.' : null,
+      !pickup.city?.trim() ? 'City is required.' : null,
+      // BUG-157 R7: mirror /orders/new's shipmentSchema state rule —
+      // US / CA / AU / IN / BR / MX require a state; US / CA / AU / MX
+      // validate against a known-code set.
+      validatePickupState(pickup.state, pickup.countryCode),
+      validateZip(pickup.postalCode, pickup.countryCode, true),
+      !pickup.pickupDate ? 'Pickup date is required.'
+        : pickup.pickupDate < today() ? 'Pickup date cannot be in the past.' : null,
+      pickup.pickupWindowStart && pickup.pickupWindowEnd && pickup.pickupWindowEnd <= pickup.pickupWindowStart
+        ? 'Window end must be after window start.' : null,
+      !Number.isInteger(pkg) || pkg < 1 ? 'Package count must be a whole number of 1 or more.' : null,
+      !Number.isFinite(wt) || wt <= 0 ? 'Total weight must be greater than 0.' : null,
+    ].filter((p): p is string => Boolean(p))
+    if (problems.length) {
+      setPickupError(problems)
       return
     }
+    setPickupError(null)
     setScheduling(true)
     try {
       const r = await pickupService.schedule({
         ...pickup,
         customerNo: pickup.customerNo || null,
-        packageCount: Number(pickup.packageCount) || 1,
-        totalWeight: Number(pickup.totalWeight) || 1,
+        packageCount: pkg,
+        totalWeight: wt,
       })
       const data = r.data
       if (data?.status === 'SCHEDULED') {
@@ -295,12 +370,22 @@ export default function PickupsEodPage() {
                         <span className="ml-auto"><StatusPill status={e.status} /></span>
                       </div>
                       <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[10.5px] text-[#9a8b70]">
-                        <span className="whitespace-nowrap">{new Date(e.createdAt).toLocaleString()}</span>
+                        {/* BUG-018 — show the date the event applies to (close / pickup date),
+                            not just when the row was recorded. */}
+                        <span className="whitespace-nowrap font-medium text-[#6b5c42]">
+                          {e.kind === 'PICKUP' ? 'Pickup' : 'Close'} {e.eventDate ? fmtEventDate(e.eventDate) : '—'}
+                        </span>
                         <span>· {e.trackingCount} {e.kind === 'PICKUP' ? 'pkg' : 'label'}{e.trackingCount === 1 ? '' : 's'}</span>
-                        <span>· {e.customerNo || 'all'}</span>
+                        <span>· {e.customerNo || 'all clients'}</span>
+                        {e.warehouseCode ? <span>· {e.warehouseCode}</span> : null}
                         {e.reference ? <span className="font-mono">· {e.reference}</span> : null}
                         <span>· {e.source === 'SCHEDULED' ? 'Auto' : 'Manual'}</span>
+                        <span className="whitespace-nowrap">· recorded {formatDateTime(e.createdAt)}</span>
                       </div>
+                      {e.message && (e.status === 'ERROR' || e.status === 'NOT_SUPPORTED'
+                        || e.status === 'PARTIAL' || e.status === 'EMPTY') ? (
+                        <p className="mt-0.5 text-[10.5px] leading-snug text-[#8a6d2f]">{e.message}</p>
+                      ) : null}
                     </div>
                   </li>
                 ))}
@@ -395,11 +480,15 @@ export default function PickupsEodPage() {
           <div className="grid grid-cols-2 gap-3">
             <div>
               <span className={label}>Packages</span>
-              <input type="number" min={1} className={input} value={pickup.packageCount} onChange={(e) => setP('packageCount')(Number(e.target.value))} />
+              <input type="number" min={1} className={input}
+                     value={Number.isNaN(pickup.packageCount) ? '' : pickup.packageCount}
+                     onChange={(e) => setP('packageCount')(e.target.value === '' ? NaN : Number(e.target.value))} />
             </div>
             <div>
               <span className={label}>Total wt ({pickup.weightUnit})</span>
-              <input type="number" min={0.1} step={0.1} className={input} value={pickup.totalWeight} onChange={(e) => setP('totalWeight')(Number(e.target.value))} />
+              <input type="number" min={0.1} step={0.1} className={input}
+                     value={Number.isNaN(pickup.totalWeight) ? '' : pickup.totalWeight}
+                     onChange={(e) => setP('totalWeight')(e.target.value === '' ? NaN : Number(e.target.value))} />
             </div>
             <div className="col-span-2">
               <span className={label}>Driver instructions (optional)</span>
@@ -408,6 +497,11 @@ export default function PickupsEodPage() {
           </div>
 
           <div className="mt-auto pt-4">
+            {pickupError ? (
+              <ul className="mb-2 list-disc space-y-0.5 rounded-lg border border-rose-200 bg-rose-50 py-2 pl-7 pr-3 text-[11.5px] text-rose-700" aria-live="polite">
+                {pickupError.map((p) => <li key={p}>{p}</li>)}
+              </ul>
+            ) : null}
             <button type="button" onClick={() => void runPickup()} disabled={scheduling} className={`${primaryBtn} w-full`}>
               {scheduling ? <FiRefreshCw className="h-3.5 w-3.5 animate-spin" /> : <FiTruck className="h-3.5 w-3.5" />}
               {scheduling ? 'Scheduling…' : 'Schedule pickup'}

@@ -3,6 +3,7 @@
  * carrier API log. Row click expands the full request + response bodies.
  */
 import { Fragment, useCallback, useEffect, useState } from 'react'
+import { parseServerTs } from '../utils/relativeTime'
 import { useOutletContext } from 'react-router-dom'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import { notify } from '../utils/notify'
@@ -15,6 +16,15 @@ import {
 
 const PAGE_SIZE = 50
 
+/** BUG-009 — carrier_api_log.created_at is stored in UTC; render it in local time. */
+function fmtCreatedAt(iso: string | null | undefined): string {
+  const d = parseServerTs(iso)
+  if (!d) return '—'
+  return d.toLocaleString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+  })
+}
+
 export default function CarrierApiLogPageView() {
   const outlet = useOutletContext<SettingsOutletContext>()
 
@@ -23,18 +33,29 @@ export default function CarrierApiLogPageView() {
   const [carrier, setCarrier] = useState('')
   const [orderNo, setOrderNo] = useState('')
   const [tracking, setTracking] = useState('')
+  // BUG-016 — debounce the free-text filters so we don't fire one request per keystroke.
+  const [dCarrier, setDCarrier] = useState('')
+  const [dOrderNo, setDOrderNo] = useState('')
+  const [dTracking, setDTracking] = useState('')
   const [pageIndex, setPageIndex] = useState(0)
   const [expandedId, setExpandedId] = useState<number | null>(null)
   const [expandedRow, setExpandedRow] = useState<CarrierApiLogRow | null>(null)
 
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      setDCarrier(carrier.trim()); setDOrderNo(orderNo.trim()); setDTracking(tracking.trim()); setPageIndex(0)
+    }, 300)
+    return () => window.clearTimeout(t)
+  }, [carrier, orderNo, tracking])
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const parsedOrderNo = orderNo.trim() ? Number(orderNo.trim()) : ''
+      const parsedOrderNo = dOrderNo ? Number(dOrderNo) : ''
       setPage(await carrierApiLogService.list({
-        carrier: carrier.trim() || undefined,
+        carrier: dCarrier || undefined,
         orderNo: Number.isFinite(parsedOrderNo) ? parsedOrderNo : undefined,
-        tracking: tracking.trim() || undefined,
+        tracking: dTracking || undefined,
         page: pageIndex,
         size: PAGE_SIZE,
       }))
@@ -43,7 +64,7 @@ export default function CarrierApiLogPageView() {
     } finally {
       setLoading(false)
     }
-  }, [carrier, orderNo, tracking, pageIndex])
+  }, [dCarrier, dOrderNo, dTracking, pageIndex])
 
   useEffect(() => { void load() }, [load])
   useEffect(() => {
@@ -73,19 +94,19 @@ export default function CarrierApiLogPageView() {
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <label className="text-[12px] font-semibold text-slate-700">
             Carrier
-            <input value={carrier} onChange={(e) => { setCarrier(e.target.value); setPageIndex(0) }}
-                   placeholder="FEDEX"
+            <input value={carrier} onChange={(e) => setCarrier(e.target.value)}
+                   placeholder="FEDEX / UPS / USPS"
                    className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-1.5 font-mono text-[12px]" />
           </label>
           <label className="text-[12px] font-semibold text-slate-700">
             Order no.
-            <input value={orderNo} onChange={(e) => { setOrderNo(e.target.value); setPageIndex(0) }}
+            <input value={orderNo} onChange={(e) => setOrderNo(e.target.value)}
                    placeholder="12345" inputMode="numeric"
                    className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-1.5 text-[13px]" />
           </label>
           <label className="text-[12px] font-semibold text-slate-700">
             Tracking
-            <input value={tracking} onChange={(e) => { setTracking(e.target.value); setPageIndex(0) }}
+            <input value={tracking} onChange={(e) => setTracking(e.target.value)}
                    placeholder="1Z999…"
                    className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-1.5 font-mono text-[12px]" />
           </label>
@@ -103,7 +124,8 @@ export default function CarrierApiLogPageView() {
             No API-log rows match those filters.
           </div>
         ) : (
-          <table className="w-full text-[13px]">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[920px] text-[13px]">
             <thead>
               <tr className="text-left text-slate-500">
                 <th className="px-3 py-2 font-semibold">When</th>
@@ -112,7 +134,7 @@ export default function CarrierApiLogPageView() {
                 <th className="px-3 py-2 font-semibold">URL</th>
                 <th className="px-3 py-2 font-semibold">Status</th>
                 <th className="px-3 py-2 font-semibold">Order</th>
-                <th className="px-3 py-2 font-semibold">Latency</th>
+                <th className="whitespace-nowrap px-3 py-2 font-semibold">Latency</th>
               </tr>
             </thead>
             <tbody>
@@ -122,7 +144,7 @@ export default function CarrierApiLogPageView() {
                   <Fragment key={row.id}>
                     <tr onClick={() => void expand(row)}
                         className={`cursor-pointer border-t border-slate-100 hover:bg-slate-50 ${expanded ? 'bg-slate-50' : ''}`}>
-                      <td className="px-3 py-2 text-slate-600">{new Date(row.createdAt).toLocaleString()}</td>
+                      <td className="whitespace-nowrap px-3 py-2 text-slate-600">{fmtCreatedAt(row.createdAt)}</td>
                       <td className="px-3 py-2 font-mono text-[12px] text-slate-700">{row.carrier}</td>
                       <td className="px-3 py-2 text-slate-700">{row.method}</td>
                       <td className="px-3 py-2 truncate text-slate-700" title={row.url}>{row.url}</td>
@@ -142,13 +164,13 @@ export default function CarrierApiLogPageView() {
                       <tr className="bg-slate-50">
                         <td colSpan={7} className="px-3 py-3">
                           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                            <div>
+                            <div className="min-w-0">
                               <div className="text-[11px] uppercase tracking-wide text-slate-500">Request body</div>
                               <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all text-[11px] text-slate-800">
                                 {expandedRow.requestBody ?? '—'}
                               </pre>
                             </div>
-                            <div>
+                            <div className="min-w-0">
                               <div className="text-[11px] uppercase tracking-wide text-slate-500">Response body</div>
                               <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all text-[11px] text-slate-800">
                                 {expandedRow.responseBody ?? '—'}
@@ -169,6 +191,7 @@ export default function CarrierApiLogPageView() {
               })}
             </tbody>
           </table>
+          </div>
         )}
       </section>
 

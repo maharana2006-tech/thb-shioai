@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useOutletContext } from 'react-router-dom'
+import type { SettingsOutletContext } from './layout/SettingsLayout'
 import { FiPlus, FiRefreshCw, FiTrash2, FiZap } from 'react-icons/fi'
 import {
   cutoffService,
   type CutoffRule,
   type Holiday,
 } from '../api/cutoffService'
+import { warehouseService, type Warehouse } from '../api/warehouseService'
 import { notify } from '../utils/notify'
+import { TimezoneCombobox } from './TimezoneCombobox'
 
 /**
  * G7 — Settings → Cutoffs & Holidays.
@@ -23,6 +27,19 @@ const CARRIERS = ['FEDEX', 'UPS', 'USPS', 'DHL', 'STAMPS_COM', 'USPS_DIRECT']
 export default function CutoffsPage() {
   const [rules, setRules] = useState<CutoffRule[]>([])
   const [holidays, setHolidays] = useState<Holiday[]>([])
+  // BUG-101 — fetch warehouses once so the add-rule picker + the grid
+  // row can show the operator-facing code instead of the internal id.
+  const [warehouses, setWarehouses] = useState<Warehouse[]>([])
+  useEffect(() => {
+    void warehouseService.listWarehouses({ page: 0, size: 200 })
+      .then((r) => setWarehouses(r.data?.content ?? []))
+      .catch(() => {})
+  }, [])
+  const warehouseCodeById = useMemo(() => {
+    const m = new Map<number, string>()
+    for (const w of warehouses) if (w.id != null) m.set(w.id, w.code)
+    return m
+  }, [warehouses])
   const [loading, setLoading] = useState(false)
   const [seeding, setSeeding] = useState(false)
   const [addingRule, setAddingRule] = useState(false)
@@ -53,6 +70,12 @@ export default function CutoffsPage() {
   }, [])
 
   useEffect(() => { void reload() }, [reload])
+
+  const outlet = useOutletContext<SettingsOutletContext>()
+  useEffect(() => {
+    outlet.registerRefresh(reload)
+    return () => outlet.registerRefresh(null)
+  }, [outlet, reload])
 
   const addRule = async () => {
     setAddingRule(true)
@@ -98,7 +121,18 @@ export default function CutoffsPage() {
   }
 
   const deleteRule = async (r: CutoffRule) => {
-    if (!confirm(`Delete rule #${r.id}?`)) return
+    // BUG-058 — native confirm() can be blocked by the browser and
+    // doesn't carry rule context. Use the app's own confirm so the
+    // operator sees source/carrier/warehouse before the irreversible
+    // change to a dated SHIP_DATE rule.
+    const ok = await notify.confirm(
+      `Delete cutoff rule #${r.id}?\n\n`
+        + `Source: ${r.source || 'any'} · Carrier: ${r.carrierCode || 'any'} · `
+        + `Warehouse: ${r.warehouseId == null ? 'any' : (warehouseCodeById.get(r.warehouseId) ?? `#${r.warehouseId}`)}\n\n`
+        + 'Shipments that match this rule will roll forward using the next-matching rule or the platform default.',
+      { title: 'Delete cutoff rule?', confirmLabel: 'Delete', danger: true },
+    )
+    if (!ok) return
     try {
       await cutoffService.deleteRule(r.id)
       await reload()
@@ -126,7 +160,13 @@ export default function CutoffsPage() {
   }
 
   const deleteHoliday = async (h: Holiday) => {
-    if (!confirm(`Delete "${h.name}" (${h.holidayDate})?`)) return
+    const ok = await notify.confirm(
+      `Delete holiday "${h.name}" (${h.holidayDate})?\n\n`
+        + 'Removing a holiday changes which day the cutoff rules treat as the next working day. '
+        + 'Shipments due that day will no longer roll forward.',
+      { title: 'Delete holiday?', confirmLabel: 'Delete', danger: true },
+    )
+    if (!ok) return
     try {
       await cutoffService.deleteHoliday(h.id)
       await reload()
@@ -189,7 +229,12 @@ export default function CutoffsPage() {
                 <td className="px-3 py-2 font-mono text-slate-500">{r.id}</td>
                 <td className="px-3 py-2">{r.source ?? <span className="text-slate-400">any</span>}</td>
                 <td className="px-3 py-2">{r.carrierCode ?? <span className="text-slate-400">any</span>}</td>
-                <td className="px-3 py-2">{r.warehouseId ?? <span className="text-slate-400">any</span>}</td>
+                {/* BUG-101 — show warehouse code if we can resolve the id. */}
+                <td className="px-3 py-2">
+                  {r.warehouseId == null
+                    ? <span className="text-slate-400">any</span>
+                    : (warehouseCodeById.get(r.warehouseId) ?? `#${r.warehouseId}`)}
+                </td>
                 <td className="px-3 py-2 font-mono">{r.cutoffTime}</td>
                 <td className="px-3 py-2 text-[11.5px] text-slate-600">{r.timezone ?? <span className="text-slate-400">client tz</span>}</td>
                 <td className="px-3 py-2">
@@ -225,16 +270,32 @@ export default function CutoffsPage() {
                 </select>
               </td>
               <td className="px-3 py-2">
-                <input className={inputCls} type="number" placeholder="any" value={newRule.warehouseId}
-                       onChange={(e) => setNewRule({ ...newRule, warehouseId: e.target.value })} />
+                {/* BUG-101 — warehouse picker by code; stored as the
+                    internal id the backend expects, but the operator
+                    sees + picks the code they recognise. */}
+                <select className={inputCls}
+                        value={newRule.warehouseId}
+                        onChange={(e) => setNewRule({ ...newRule, warehouseId: e.target.value })}>
+                  <option value="">any</option>
+                  {warehouses.map((w) => (
+                    <option key={w.id} value={w.id ?? ''}>{w.code}</option>
+                  ))}
+                </select>
               </td>
               <td className="px-3 py-2">
                 <input className={inputCls} type="time" value={newRule.cutoffTime}
                        onChange={(e) => setNewRule({ ...newRule, cutoffTime: e.target.value })} />
               </td>
               <td className="px-3 py-2">
-                <input className={inputCls} type="text" placeholder="e.g. America/New_York"
-                       value={newRule.timezone} onChange={(e) => setNewRule({ ...newRule, timezone: e.target.value })} />
+                {/* BUG-100 — a free-text timezone box let 'Mars/Olympus' save
+                    as an active rule. Reuse the shared TimezoneCombobox so
+                    only canonical IANA zones can be picked. */}
+                <TimezoneCombobox
+                  value={newRule.timezone}
+                  onChange={(tz) => setNewRule({ ...newRule, timezone: tz })}
+                  placeholder="e.g. America/New_York"
+                  className={inputCls}
+                />
               </td>
               <td className="px-3 py-2 text-slate-400 text-[11px]">on save</td>
               <td className="px-3 py-2 text-right">
@@ -254,8 +315,8 @@ export default function CutoffsPage() {
           <h2 className="text-[14px] font-semibold text-slate-900">Global holiday list</h2>
           <p className="mt-0.5 text-[11.5px] text-slate-500">
             Dates the cutoff logic treats as non-working when advancing to the next
-            working day. Seeded with Dec 24 + Jan 1 for the current + next year on
-            migration; add / remove as needed.
+            working day. Add or remove as needed; the list ships with the common
+            US holidays preloaded for the current and next year.
           </p>
         </header>
         <table className="w-full text-[12.5px]">

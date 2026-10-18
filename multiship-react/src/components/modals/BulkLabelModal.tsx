@@ -218,9 +218,9 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
    */
   const cancelJob = async () => {
     if (!job || cancelling) return
-    const ok = window.confirm(
-      `Cancel bulk-label job ${job.id}? Workers stop after the current in-flight orders finish. ` +
-        `Labels already generated stay downloadable.`,
+    const ok = await notify.confirm(
+      `Cancel bulk-label job ${job.id}? Workers stop after the current in-flight orders finish. Labels already generated stay downloadable.`,
+      { title: 'Cancel bulk-label job', confirmLabel: 'Cancel job', cancelLabel: 'Keep running', danger: true },
     )
     if (!ok) return
     setCancelling(true)

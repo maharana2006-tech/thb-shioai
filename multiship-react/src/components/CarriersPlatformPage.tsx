@@ -56,6 +56,22 @@ export default function CarriersPlatformPage() {
 
   const setMode = async (row: CarrierPlatformRow, mode: CarrierMode) => {
     if (mode === row.mode) return
+    // BUG-055 — flipping a carrier to LIVE on a wired account produces
+    // real labels + real carrier charges. Previously a bare dropdown
+    // made this a single mis-click; now confirm with the carrier name
+    // and the direction of the change named.
+    const toLive = mode === 'LIVE'
+    const ok = await notify.confirm(
+      toLive
+        ? `Switch ${row.displayName ?? row.carrierCode} to LIVE?\n\nLIVE mode produces real labels and real carrier charges from this carrier's production account. Make sure every connected tenant is ready before switching.`
+        : `Switch ${row.displayName ?? row.carrierCode} back to TEST?\n\nNew shipments will hit the sandbox from now on. In-flight production shipments are not affected.`,
+      {
+        title: toLive ? `Enable LIVE for ${row.carrierCode}?` : `Return ${row.carrierCode} to TEST?`,
+        confirmLabel: toLive ? 'Enable LIVE' : 'Switch to TEST',
+        danger: toLive,
+      },
+    )
+    if (!ok) return
     setBusyCode(row.carrierCode)
     try {
       await carriersPlatformService.update(row.carrierCode, undefined, mode)

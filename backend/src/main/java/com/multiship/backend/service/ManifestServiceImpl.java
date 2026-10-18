@@ -103,10 +103,27 @@ public class ManifestServiceImpl implements ManifestService {
         // Dead-label gate — a VOIDED (or errored, never-generated) tracking is
         // cancelled at the carrier and must never reach a driver's manifest.
         // The frontend prefilter can drift; this is the hard guard.
+        // BUG-019 — say plainly which numbers aren't this carrier's open labels,
+        // instead of letting them fail later as "no live credentials" or an
+        // internal "failedToClassify".
+        List<String> unknown = new ArrayList<>();
+        List<String> otherCarrier = new ArrayList<>();
+        List<String> alreadyClosed = new ArrayList<>();
+        // Each number is resolved once and reused by the FedEx fleet split below.
+        java.util.Map<String, Optional<TrackingResolution>> resolved = new java.util.HashMap<>();
         for (String t : request.getTrackingNumbers()) {
             if (!StringUtils.hasText(t)) continue;
             OrderTracking tr = orderTrackingRepository.findFirstByTrackingNumberIgnoreCaseOrderByIdDesc(t).orElse(null);
-            if (tr == null) continue; // unknown numbers fall to failedToClassify below
+            if (tr == null) {
+                unknown.add(t.trim());
+                continue;
+            }
+            if (tr.getManifestedAt() != null) {
+                alreadyClosed.add(t.trim() + (StringUtils.hasText(tr.getManifestId()) ? " (" + tr.getManifestId() + ")" : ""));
+            }
+            resolved.computeIfAbsent(t, this::resolveForTracking).map(TrackingResolution::carrier)
+                    .filter(c -> !carrier.equalsIgnoreCase(c))
+                    .ifPresent(c -> otherCarrier.add(t.trim() + " (" + c.toUpperCase(Locale.ROOT) + ")"));
             String st = tr.getStatus() == null ? "" : tr.getStatus().trim().toUpperCase(Locale.ROOT);
             // Explicitly-dead labels only, keyed on STATUS — the generated
             // flag defaults to false on the entity, so it can't distinguish
@@ -117,6 +134,22 @@ public class ManifestServiceImpl implements ManifestService {
                         "Tracking " + t + " is " + ("VOIDED".equals(st) ? "voided" : "an errored label")
                                 + " and cannot be manifested. Remove it and close out again.");
             }
+        }
+        if (!unknown.isEmpty()) {
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, (unknown.size() == 1
+                    ? "Tracking " + unknown.get(0) + " isn't"
+                    : "These trackings aren't") + " an open " + carrier + " label in Multiship"
+                    + (unknown.size() == 1 ? "" : ": " + String.join(", ", unknown))
+                    + ". Check the number, or remove it and close out again.");
+        }
+        if (!alreadyClosed.isEmpty()) {
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, "Already closed out: "
+                    + String.join(", ", alreadyClosed) + ". Remove "
+                    + (alreadyClosed.size() == 1 ? "it" : "them") + " and close out again.");
+        }
+        if (!otherCarrier.isEmpty()) {
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, "Not " + carrier + " labels: "
+                    + String.join(", ", otherCarrier) + ". Close those out under their own carrier.");
         }
 
         // Tenant gate on the SUBMITTED TRACKINGS — the customerNo clamp above
@@ -205,22 +238,35 @@ public class ManifestServiceImpl implements ManifestService {
         }
         LocalDate closeDate = request.getCloseDate() == null ? LocalDate.now() : request.getCloseDate();
 
-        // FDX-G2 — classify each tracking by fleet + partition. Unresolvable
-        // trackings go into failedToClassify (excluded from the manifest so
-        // the carrier doesn't reject the whole batch; operator re-runs after
-        // fixing the mapping). Same fail-open pattern as FDX-B guards.
-        ClassificationResult classify = classifyTrackings(request.getTrackingNumbers());
+        // FDX-G2 — the Ground/Express fleet split only applies to FedEx. Other
+        // carriers (USPS SCAN form, UPS end-of-day, DHL) have no fleet selector,
+        // and the classification chain can't resolve an express flag for them —
+        // which previously dumped every tracking into failedToClassify and
+        // manifested nothing (BUG-021). Classify only FedEx; manifest the other
+        // carriers' trackings as a single group. Unresolvable FedEx trackings
+        // still go into failedToClassify (fail-open, operator re-runs).
+        ClassificationResult classify;
+        if ("FEDEX".equals(carrier)) {
+            classify = classifyTrackings(request.getTrackingNumbers(),
+                    t -> resolved.computeIfAbsent(t, this::resolveForTracking));
+        } else {
+            List<String> all = request.getTrackingNumbers().stream()
+                    .filter(StringUtils::hasText)
+                    .map(String::trim)
+                    .toList();
+            classify = new ClassificationResult(all, List.of(), List.of());
+        }
 
         List<CloseOutResult> results = new ArrayList<>();
         // Preserve group order (GROUND first, EXPRESS second) so multi-fleet
         // responses always render in the same order for the operator.
         if (!classify.groundTrackings.isEmpty()) {
-            results.add(callCloseOut(connector, classify.groundTrackings, closeDate,
-                    address, account, accessToken, false));
+            results.add(markClosed(classify.groundTrackings, callCloseOut(connector, classify.groundTrackings,
+                    closeDate, address, account, accessToken, false)));
         }
         if (!classify.expressTrackings.isEmpty()) {
-            results.add(callCloseOut(connector, classify.expressTrackings, closeDate,
-                    address, account, accessToken, true));
+            results.add(markClosed(classify.expressTrackings, callCloseOut(connector, classify.expressTrackings,
+                    closeDate, address, account, accessToken, true)));
         }
         // Edge case — every tracking failed to classify. Nothing to submit;
         // return a NOT_SUPPORTED-shaped response so the operator sees the
@@ -253,7 +299,29 @@ public class ManifestServiceImpl implements ManifestService {
             List<String> expressTrackings,
             List<String> failed) {}
 
+    /**
+     * V157 — a manifested group's labels are closed: stamp them so they are
+     * no longer offered as open, gathered by Close whole day, or accepted again.
+     */
+    private CloseOutResult markClosed(List<String> trackings, CloseOutResult result) {
+        if (result == null || !"MANIFESTED".equals(result.status())) return result;
+        LocalDateTime now = LocalDateTime.now();
+        for (String t : trackings) {
+            orderTrackingRepository.findFirstByTrackingNumberIgnoreCaseOrderByIdDesc(t).ifPresent(tr -> {
+                tr.setManifestedAt(now);
+                tr.setManifestId(result.manifestId());
+                orderTrackingRepository.save(tr);
+            });
+        }
+        return result;
+    }
+
     ClassificationResult classifyTrackings(List<String> trackings) {
+        return classifyTrackings(trackings, this::resolveForTracking);
+    }
+
+    private ClassificationResult classifyTrackings(List<String> trackings,
+                                                   java.util.function.Function<String, Optional<TrackingResolution>> resolve) {
         List<String> ground = new ArrayList<>();
         List<String> express = new ArrayList<>();
         List<String> failed = new ArrayList<>();
@@ -262,7 +330,7 @@ public class ManifestServiceImpl implements ManifestService {
                 failed.add(t);
                 continue;
             }
-            Optional<Boolean> expressFlag = lookupExpressFlagForTracking(t);
+            Optional<Boolean> expressFlag = resolve.apply(t).map(TrackingResolution::express);
             if (expressFlag.isEmpty()) {
                 failed.add(t);
             } else if (expressFlag.get()) {
@@ -274,25 +342,10 @@ public class ManifestServiceImpl implements ManifestService {
         return new ClassificationResult(ground, express, failed);
     }
 
-    /**
-     * Walk the mapping chain for one tracking:
-     * <ol>
-     *   <li>tracking → {@link OrderTracking#getOrderNo}</li>
-     *   <li>orderNo → {@link Order#getShipviaCd} + tenant code</li>
-     *   <li>tenant + shipviaCd → {@link com.multiship.backend.model.ClientShipviaCodeMap#getServiceId}
-     *       (per-client row wins; null clientCode row = platform-wide
-     *       fallback)</li>
-     *   <li>serviceId → {@link ShippingService#isExpress}</li>
-     * </ol>
-     * Any miss returns empty — caller adds the tracking to failedToClassify.
-     */
-    private Optional<Boolean> lookupExpressFlagForTracking(String trackingNumber) {
-        return resolveForTracking(trackingNumber).map(TrackingResolution::express);
-    }
 
     /** One tracking's resolved carrier, fleet (express?) and owner (tenant /
      *  cust). Empty on any miss in the chain — callers treat that as
-     *  "unclassifiable". V135 generalised {@link #lookupExpressFlagForTracking}. */
+     *  "unclassifiable". V135 generalised the old express-flag lookup. */
     private record TrackingResolution(String carrier, boolean express, String owner) {}
 
     private Optional<TrackingResolution> resolveForTracking(String trackingNumber) {
@@ -303,9 +356,35 @@ public class ManifestServiceImpl implements ManifestService {
         Optional<Order> order = orderRepository.findByOrderNo(tracking.get().getOrderNo());
         if (order.isEmpty()) return Optional.empty();
         String shipviaCd = order.get().getShipviaCd();
-        if (!StringUtils.hasText(shipviaCd)) return Optional.empty();
         String tenantCode = StringUtils.hasText(order.get().getTenantId())
                 ? order.get().getTenantId() : order.get().getCustNo();
+        Optional<TrackingResolution> mapped = resolveByShipviaMap(shipviaCd, tenantCode);
+        return mapped.isPresent() ? mapped : resolveByBilledAccount(tracking.get(), shipviaCd, tenantCode);
+    }
+
+    /**
+     * BUG-022 — a manual shipment stores the catalog service code
+     * (GROUND_ADVANTAGE) as its ship-via, which no client SHIPVIA map knows, so
+     * its label was never gathered. The tracking row records the account the
+     * label was billed to: its carrier is the label's carrier, and the service
+     * (when it's a catalog code) says whether it's Express.
+     */
+    private Optional<TrackingResolution> resolveByBilledAccount(OrderTracking tracking, String shipviaCd,
+                                                                String tenantCode) {
+        if (!StringUtils.hasText(tracking.getAccountNumber())) return Optional.empty();
+        return carrierAccountRefRepository.findFirstByAccountNumberIgnoreCaseOrderByUpdatedAtDesc(
+                        tracking.getAccountNumber().trim())
+                .map(account -> {
+                    String carrier = account.getCarrierCode().trim().toUpperCase(Locale.ROOT);
+                    boolean express = StringUtils.hasText(shipviaCd)
+                            && shippingServiceRepository.findByCarrierIgnoreCaseAndServiceCodeIgnoreCase(
+                                    carrier, shipviaCd.trim()).map(svc -> svc.isExpress()).orElse(false);
+                    return new TrackingResolution(carrier, express, tenantCode == null ? null : tenantCode.trim());
+                });
+    }
+
+    private Optional<TrackingResolution> resolveByShipviaMap(String shipviaCd, String tenantCode) {
+        if (!StringUtils.hasText(shipviaCd)) return Optional.empty();
 
         // V126 merge — single specificity-ordered lookup. Per-client rows
         // beat platform-wide (null clientCode) in the finder's ORDER BY.
@@ -357,9 +436,15 @@ public class ManifestServiceImpl implements ManifestService {
     @Override
     public List<EodEventDTO> recentEvents(int limit) {
         int n = limit <= 0 || limit > 200 ? 50 : limit;
-        return carrierEodLogRepository
-                .findAllByOrderByCreatedAtDesc(org.springframework.data.domain.PageRequest.of(0, n))
-                .stream().map(EodEventDTO::from).toList();
+        var page = org.springframework.data.domain.PageRequest.of(0, n);
+        // Tenant gate — a scoped USER sees only their own client's events;
+        // platform operators (empty scope) still see all. Without this the
+        // activity log leaked every tenant's close-out rows (account numbers,
+        // customerNo, createdBy). Mirrors closeOut/closeDay's clamp.
+        var rows = tenantScope.resolveScope()
+                .map(scope -> carrierEodLogRepository.findByCustomerNoIgnoreCaseOrderByCreatedAtDesc(scope, page))
+                .orElseGet(() -> carrierEodLogRepository.findAllByOrderByCreatedAtDesc(page));
+        return rows.stream().map(EodEventDTO::from).toList();
     }
 
     /**
@@ -370,6 +455,14 @@ public class ManifestServiceImpl implements ManifestService {
      * ponytail: O(n) resolution (3 lookups/tracking) — fine for a daily batch;
      * add a joined query if volume ever makes it slow.
      */
+    @Override
+    public List<String> openTrackings(String carrierCode, String customerNo, LocalDate closeDate, String warehouseCode) {
+        if (!StringUtils.hasText(carrierCode)) return List.of();
+        return gatherTrackings(carrierCode.trim().toUpperCase(Locale.ROOT), tenantScope.clampClientCode(customerNo),
+                closeDate == null ? LocalDate.now() : closeDate,
+                StringUtils.hasText(warehouseCode) ? warehouseCode.trim() : null);
+    }
+
     private List<String> gatherTrackings(String carrier, String customerNo,
                                          LocalDate date, String warehouseCode) {
         LocalDateTime start = date.atStartOfDay();

@@ -88,6 +88,21 @@ public class NotificationService {
         String providerKind = active.map(MailProviderEntity::getKind).orElse(null);
         Long providerId = active.map(MailProviderEntity::getId).orElse(null);
 
+        // BUG-132 — pre-fix the delivery log recorded SENT whenever
+        // mailSender.send() didn't throw, which was always true when
+        // the sender was the fallback LoggingMailSender (no provider
+        // active, nothing actually left the system). An admin checking
+        // 'why didn't my invite arrive?' saw a green SENT and gave up.
+        // Record FAILED with a specific reason when no active provider.
+        if (active.isEmpty()) {
+            deliveryLog.recordFailed(templateKey, to, subject, body,
+                    null, null, 0,
+                    "No active mail provider — email was not sent. "
+                        + "Enable a provider under Settings -> Mail.",
+                    retryOfId);
+            return;
+        }
+
         long start = System.currentTimeMillis();
         try {
             mailSender.send(to, subject, body);

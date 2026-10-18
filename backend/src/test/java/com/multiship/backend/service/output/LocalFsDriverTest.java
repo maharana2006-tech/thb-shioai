@@ -106,4 +106,35 @@ class LocalFsDriverTest {
                 .toList();
         assertTrue(partFiles.isEmpty(), "no .part temp file should remain");
     }
+
+    // ===== path-traversal harden on fileNameHint =====
+
+    @Test
+    void buildFileNameStripsTraversalFromHint() {
+        DispatchContext ctx = new DispatchContext(1L, 1, "ACME", null, "../../etc/cron.d/x");
+        String name = LocalFsDriver.buildFileName(DocType.LABEL, ctx);
+        assertFalse(name.contains("/"), "no directory separator may survive: " + name);
+        assertFalse(name.contains(".."), "no parent ref may survive: " + name);
+        assertEquals("x", name.substring(0, name.indexOf('.')), "only the bare filename is kept");
+    }
+
+    @Test
+    void buildFileNameStripsAbsolutePathFromHint() {
+        DispatchContext ctx = new DispatchContext(1L, 1, "ACME", null, "/abs/evil.pdf");
+        assertEquals("evil.pdf", LocalFsDriver.buildFileName(DocType.LABEL, ctx));
+    }
+
+    @Test
+    void buildFileNameKeepsNormalHint() {
+        DispatchContext ctx = new DispatchContext(1L, 1, "ACME", null, "report_label.txt");
+        assertEquals("report_label.txt", LocalFsDriver.buildFileName(DocType.LABEL, ctx));
+    }
+
+    @Test
+    void buildFileNameFallsBackWhenHintIsTraversalOnly() {
+        DispatchContext ctx = new DispatchContext(7L, 1, "ACME", null, "../..");
+        String name = LocalFsDriver.buildFileName(DocType.LABEL, ctx);
+        assertFalse(name.contains(".."), "a '..'-only hint must not survive: " + name);
+        assertTrue(name.startsWith("s7_LABEL"), "falls back to the generated key: " + name);
+    }
 }

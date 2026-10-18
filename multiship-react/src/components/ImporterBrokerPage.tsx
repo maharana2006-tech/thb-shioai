@@ -244,7 +244,8 @@ export default function ImporterBrokerPage() {
     if (!p.clientCode || !p.id) return
     if (
       !(await notify.confirm(
-        `Delete this ${p.clientCode} importer/broker profile (${(p.countries ?? []).length} destinations)?`,
+        // BUG-106 — pluralise destinations
+        `Delete this ${p.clientCode} importer/broker profile (${(p.countries ?? []).length} ${(p.countries ?? []).length === 1 ? 'destination' : 'destinations'})?`,
         { title: 'Delete profile', confirmLabel: 'Delete', danger: true },
       ))
     ) {
@@ -379,6 +380,7 @@ export default function ImporterBrokerPage() {
       },
       {
         id: 'actions',
+        size: 56, minSize: 56, maxSize: 56,
         header: '',
         enableSorting: false,
         cell: ({ row }) => (

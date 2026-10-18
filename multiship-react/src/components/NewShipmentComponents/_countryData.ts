@@ -2,21 +2,18 @@
  * F5-C — country curated list + display-name helper. Split from
  * CountrySelect.tsx so the component file only exports React
  * components (react-refresh/only-export-components).
+ *
+ * BUG-046 R6: the previous ~50-country curated list hid countries the
+ * Address book's native 250-country select accepted (Iceland, Peru,
+ * etc.). Source from the shared `utils/countries.ts` catalog so every
+ * Settings picker — Warehouse > Country, Client wizard > Origin, Address
+ * book, Importer / Broker — offers the same superset.
  */
+import { COUNTRIES as ALL_COUNTRIES } from '../../utils/countries'
 
-export const COUNTRIES: [string, string][] = [
-  ['US', 'United States'], ['CA', 'Canada'], ['MX', 'Mexico'], ['GB', 'United Kingdom'],
-  ['IE', 'Ireland'], ['FR', 'France'], ['DE', 'Germany'], ['NL', 'Netherlands'], ['BE', 'Belgium'],
-  ['LU', 'Luxembourg'], ['IT', 'Italy'], ['ES', 'Spain'], ['PT', 'Portugal'], ['CH', 'Switzerland'],
-  ['AT', 'Austria'], ['DK', 'Denmark'], ['SE', 'Sweden'], ['NO', 'Norway'], ['FI', 'Finland'],
-  ['PL', 'Poland'], ['CZ', 'Czechia'], ['HU', 'Hungary'], ['RO', 'Romania'], ['GR', 'Greece'],
-  ['IN', 'India'], ['CN', 'China'], ['HK', 'Hong Kong'], ['JP', 'Japan'], ['KR', 'South Korea'],
-  ['SG', 'Singapore'], ['MY', 'Malaysia'], ['TH', 'Thailand'], ['VN', 'Vietnam'], ['ID', 'Indonesia'],
-  ['PH', 'Philippines'], ['AE', 'United Arab Emirates'], ['SA', 'Saudi Arabia'], ['IL', 'Israel'],
-  ['TR', 'Turkey'], ['ZA', 'South Africa'], ['NG', 'Nigeria'], ['EG', 'Egypt'], ['KE', 'Kenya'],
-  ['AU', 'Australia'], ['NZ', 'New Zealand'], ['BR', 'Brazil'], ['AR', 'Argentina'], ['CL', 'Chile'],
-  ['CO', 'Colombia'], ['PE', 'Peru'],
-]
+export const COUNTRIES: [string, string][] = ALL_COUNTRIES.map(
+  (c) => [c.code, c.name] as [string, string]
+)
 const COUNTRY_NAME: Record<string, string> = Object.fromEntries(COUNTRIES)
 
 /** Name for ANY ISO code — curated list first, Intl.DisplayNames fallback so

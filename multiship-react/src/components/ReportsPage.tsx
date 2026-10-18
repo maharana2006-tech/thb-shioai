@@ -265,7 +265,11 @@ function Schedules({ clients }: { clients: Client[] }) {
 
   const del = async (s: ScheduledReport) => {
     if (!s.id) return
-    if (!window.confirm(`Delete schedule "${s.name}"?`)) return
+    const ok = await notify.confirm(
+      `Delete schedule "${s.name}"?`,
+      { title: 'Delete schedule', confirmLabel: 'Delete', cancelLabel: 'Keep', danger: true },
+    )
+    if (!ok) return
     try {
       await reportService.deleteSchedule(s.id)
       notify.success('Schedule deleted.')

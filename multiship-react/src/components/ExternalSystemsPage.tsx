@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
+import { formatDateTime } from '../utils/formatDateTime'
 import {
   FiActivity,
   FiCheckCircle,
@@ -105,11 +106,12 @@ export default function ExternalSystemsPage() {
             External systems
           </h2>
           <p className="mt-1 text-[12.5px] text-slate-500">
-            DB-driven connections to systems outside multiship: Oracle WMS (NDS today),
-            REST integrations, SFTP, etc. Registered connectors:{' '}
-            <span className="font-mono text-[11px]">
-              {connectors.length ? connectors.map((c) => c.systemType).join(', ') : '—'}
-            </span>
+            Connections to systems outside Multiship — Oracle WMS, REST, SFTP.
+            Supported types: {connectors.length
+              ? connectors
+                  .map((c) => c.systemType.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (ch) => ch.toUpperCase()))
+                  .join(', ')
+              : '—'}.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -123,7 +125,7 @@ export default function ExternalSystemsPage() {
           <button
             type="button"
             onClick={() => setEditing('new')}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-slate-800"
+            className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg bg-slate-900 px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-slate-800"
           >
             <FiPlus className="h-3.5 w-3.5" /> Add connection
           </button>
@@ -158,7 +160,7 @@ export default function ExternalSystemsPage() {
                   <tr key={row.id} className="hover:bg-slate-50/60">
                     <td className="px-3 py-2 font-mono text-[12.5px] text-slate-800">
                       <div className="flex items-center gap-1.5">
-                        <span>{row.name}</span>
+                        <span className="whitespace-nowrap">{row.name}</span>
                         <span className={`rounded-full px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide ${
                           row.environment === 'DEV'
                             ? 'bg-amber-100 text-amber-800 ring-1 ring-amber-200'
@@ -168,7 +170,7 @@ export default function ExternalSystemsPage() {
                         </span>
                         {row.environment === 'PROD' && row.useDev ? (
                           <span
-                            title="use_dev=true — resolver hands the DEV row back to consumers"
+                            title="This production row is routed to its matching DEV row."
                             className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[9.5px] font-semibold text-amber-800 ring-1 ring-amber-200"
                           >
                             → DEV
@@ -208,7 +210,7 @@ export default function ExternalSystemsPage() {
                       />
                     </td>
                     <td className="px-3 py-2 text-[11.5px] text-slate-500">
-                      {row.updatedAt ? new Date(row.updatedAt).toLocaleString() : '—'}
+                      {row.updatedAt ? formatDateTime(row.updatedAt) : '—'}
                       {row.updatedBy ? <div className="text-[10.5px] text-slate-400">by {row.updatedBy}</div> : null}
                     </td>
                     <td className="px-3 py-2">
@@ -236,7 +238,7 @@ export default function ExternalSystemsPage() {
                               }
                             }}
                             title="X1 — flip this row to the default writeback target (atomic swap)"
-                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11.5px] font-semibold text-slate-700 hover:bg-emerald-50 hover:text-emerald-800"
+                            className="inline-flex items-center gap-1 whitespace-nowrap rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11.5px] font-semibold text-slate-700 hover:bg-emerald-50 hover:text-emerald-800"
                           >
                             Make default
                           </button>
@@ -571,9 +573,11 @@ function MainTab({
           onChange={(e) => setSystemType(e.target.value)}
           className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-[13px] focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
         >
+          {/* BUG-061 R6 — hide the Java config class name; keep only the
+              operator-facing system type. */}
           {connectors.map((c) => (
             <option key={c.systemType} value={c.systemType}>
-              {c.systemType} — {c.configType}
+              {c.systemType.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (ch) => ch.toUpperCase())}
             </option>
           ))}
         </select>
@@ -588,6 +592,11 @@ function MainTab({
         <span className="text-[12.5px] font-semibold text-slate-800">Active</span>
         <span className="text-[11px] text-slate-500">— inactive rows are loaded but never dispatched to.</span>
       </label>
+      {name.trim() === 'nds-default' && (
+        <p className="-mt-1 pl-6 text-[11px] text-slate-500">
+          Controls Oracle DTC sync — turn off to stop the D2C pull and the scheduled DTC_SYNC job. Takes effect immediately, no restart needed.
+        </p>
+      )}
 
       {/* V91 env split — one row per (name, env). Locked after create. */}
       <label className="block">
@@ -617,7 +626,7 @@ function MainTab({
             className="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-300"
           />
           <span className="text-[12.5px] font-semibold text-slate-800">Use DEV environment</span>
-          <span className="text-[11px] text-slate-500">— resolver hands the DEV row back to consumers. Requires a DEV row with the same name.</span>
+          <span className="text-[11px] text-slate-500">— when on, this production row is routed to its matching DEV row. Requires a DEV row with the same name.</span>
         </label>
       ) : null}
 
@@ -953,10 +962,11 @@ function SecretsTab({ id, secretKeys }: { id: number; secretKeys: string[] }) {
 
   const save = async () => {
     if (!key.trim()) { notify.error('Secret key required.'); return }
+    if (!plaintext.trim()) { notify.error('Type the new secret value, or use Delete secret to clear it.'); return }
     setSaving(true)
     try {
-      const res = await externalSystemsService.putSecret(id, key.trim(), plaintext || null)
-      notify.success(res.isSet ? `Secret "${res.secretKey}" saved.` : `Secret "${res.secretKey}" cleared.`)
+      const res = await externalSystemsService.putSecret(id, key.trim(), plaintext)
+      notify.success(`Secret "${res.secretKey}" saved.`)
       setPlaintext('')
     } catch (e) {
       notify.apiError(e, 'Save secret failed.')
@@ -965,10 +975,33 @@ function SecretsTab({ id, secretKeys }: { id: number; secretKeys: string[] }) {
     }
   }
 
+  // BUG-122 — separate destructive action: empty-save no longer deletes
+  // silently; operator must opt in via Delete + confirm. Matches the
+  // Deactivate warehouse / Delete client pattern.
+  const deleteSecret = async () => {
+    if (!key.trim()) { notify.error('Pick a secret key first.'); return }
+    const ok = await notify.confirm(
+      `Delete the stored secret "${key.trim()}"?\n\n`
+        + 'Any connector using this secret will fall back to the connector default (or fail if no default exists).',
+      { title: 'Delete stored secret?', confirmLabel: 'Delete secret', danger: true },
+    )
+    if (!ok) return
+    setSaving(true)
+    try {
+      const res = await externalSystemsService.putSecret(id, key.trim(), null)
+      notify.success(`Secret "${res.secretKey}" cleared.`)
+      setPlaintext('')
+    } catch (e) {
+      notify.apiError(e, 'Delete secret failed.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <div className="space-y-3">
       <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-[12px] text-amber-900">
-        Values are AES-256-GCM encrypted at rest. Existing secrets aren't shown; leaving the field empty and Saving deletes the secret row.
+        Values are AES-256-GCM encrypted at rest. Existing secrets aren't shown. Use Delete secret to clear the stored value.
       </div>
       <label className="block">
         <span className="mb-1 block text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Secret key</span>
@@ -995,16 +1028,25 @@ function SecretsTab({ id, secretKeys }: { id: number; secretKeys: string[] }) {
           type="password"
           value={plaintext}
           onChange={(e) => setPlaintext(e.target.value)}
-          placeholder="Type the new secret; empty to delete"
+          placeholder="Type the new secret value"
           autoComplete="new-password"
           className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-[12.5px]"
         />
       </label>
-      <div className="flex items-center justify-end">
+      <div className="flex items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={() => void deleteSecret()}
+          disabled={saving || !key.trim()}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Delete secret
+        </button>
         <button
           type="button"
           onClick={() => void save()}
-          disabled={saving}
+          disabled={saving || !plaintext.trim()}
+          title={!plaintext.trim() ? 'Type the new secret value first' : undefined}
           className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
         >
           <FiKey className="h-3.5 w-3.5" />
@@ -1070,7 +1112,11 @@ function OverridesTab({ id }: { id: number }) {
     <div className="space-y-3">
       <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-[12px] text-slate-700">
         <FiUsers className="mr-1 inline h-3.5 w-3.5" />
-        Per-tenant login overrides. Empty by default — the connector falls back to its own credential-derivation rule (e.g. NDS: <span className="font-mono">username = password = clientCode</span>).
+        {/* BUG-120 — previous copy printed the Oracle WMS default
+            derivation rule in plain English to every admin, giving away
+            the guessable credential for every unlisted tenant. Scrub.
+            Connector keeps the auto-provisioning rule internally. */}
+        Per-tenant login overrides. Empty by default — the connector auto-provisions a per-tenant login. Set an override here when you need a specific username/password for a tenant.
       </div>
 
       {loading ? (
@@ -1093,7 +1139,7 @@ function OverridesTab({ id }: { id: number }) {
                 <td className="px-2 py-1 font-mono">{r.clientCode}</td>
                 <td className="px-2 py-1 font-mono">{r.username}</td>
                 <td className="px-2 py-1 text-[11px] text-slate-500">
-                  {r.updatedAt ? new Date(r.updatedAt).toLocaleString() : '—'}
+                  {r.updatedAt ? formatDateTime(r.updatedAt) : '—'}
                 </td>
                 <td className="px-2 py-1 text-right">
                   <button

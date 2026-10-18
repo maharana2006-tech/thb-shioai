@@ -75,6 +75,20 @@ public class StampsSeraOAuthController {
     @org.springframework.beans.factory.annotation.Value("${carrier.stamps.sera-fe-return-url:}")
     private String feReturnUrl;
 
+    /** The app's own origins (the CORS list) — a returnTo must be one of them. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.beans.factory.annotation.Qualifier("corsConfigurationSource")
+    private org.springframework.web.cors.CorsConfigurationSource corsConfigurationSource;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.AuditService auditService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.context.ApplicationEventPublisher eventPublisher;
+
+    /** Holds the screen's origin from authorize to callback (Stamps.com only sends code + state back). */
+    static final String RETURN_COOKIE = "sera_return";
+
     private final CarrierAccountRefRepository repository;
     private final StampsSeraOAuthService oauthService;
     private final com.multiship.backend.service.carriers.StampsConnector stampsConnector;
@@ -90,7 +104,9 @@ public class StampsSeraOAuthController {
                     + "SERA server 302s back to /callback which persists the refresh token.")
     @PreAuthorize("hasRole('ADMIN')")
     @GetMapping("/authorize/{accountId}")
-    public ResponseEntity<Void> authorize(@PathVariable Long accountId) {
+    public ResponseEntity<Void> authorize(@PathVariable Long accountId,
+                                          @RequestParam(value = "returnTo", required = false) String returnTo,
+                                          jakarta.servlet.http.HttpServletRequest request) {
         CarrierAccountRef account = repository.findById(accountId).orElse(null);
         if (account == null) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
@@ -109,9 +125,14 @@ public class StampsSeraOAuthController {
         // not registered on the client_id in the developer portal.
         // client_id is masked in production logs elsewhere but exposed
         // here at INFO so ops can compare against the developer portal.
+        // Host + path only: the query carries the signed state (with the PKCE verifier).
         log.info("SERA authorize: redirecting operator for account #{} (env={}) → {}",
-                accountId, account.getEnvironment(), url);
-        return ResponseEntity.status(HttpStatus.FOUND).location(URI.create(url)).build();
+                accountId, account.getEnvironment(), url.replaceFirst("\\?.*", ""));
+        var redirect = ResponseEntity.status(HttpStatus.FOUND).location(URI.create(url));
+        if (isOwnOrigin(returnTo, request)) {
+            redirect.header(org.springframework.http.HttpHeaders.SET_COOKIE, returnCookie(returnTo, 600).toString());
+        }
+        return redirect.build();
     }
 
     /**
@@ -144,26 +165,29 @@ public class StampsSeraOAuthController {
             @RequestParam(value = "code", required = false) String code,
             @RequestParam(value = "state", required = false) String state,
             @RequestParam(value = "error", required = false) String error,
-            @RequestParam(value = "error_description", required = false) String errorDescription) {
+            @RequestParam(value = "error_description", required = false) String errorDescription,
+            @org.springframework.web.bind.annotation.CookieValue(value = RETURN_COOKIE, required = false) String returnTo,
+            jakarta.servlet.http.HttpServletRequest request) {
+        String back = isOwnOrigin(returnTo, request) ? returnTo : null;
 
         if (StringUtils.hasText(error)) {
             log.warn("SERA OAuth callback: server returned error={}, description={}", error, errorDescription);
-            return redirect(false, "carrier returned " + error
+            return redirect(back, false, "carrier returned " + error
                     + (StringUtils.hasText(errorDescription) ? ": " + errorDescription : ""));
         }
         Optional<VerifiedState> verifiedOpt = oauthService.verifyStateWithVerifier(state);
         if (verifiedOpt.isEmpty()) {
-            return redirect(false, "state signature invalid or expired");
+            return redirect(back, false, "state signature invalid or expired");
         }
         if (!StringUtils.hasText(code)) {
-            return redirect(false, "no authorization code returned");
+            return redirect(back, false, "no authorization code returned");
         }
         VerifiedState verified = verifiedOpt.get();
         Long accountId = verified.accountId();
         CarrierAccountRef account = repository.findById(accountId).orElse(null);
         if (account == null) {
             log.warn("SERA OAuth callback: state valid but account #{} no longer exists.", accountId);
-            return redirect(false, "carrier account no longer exists");
+            return redirect(back, false, "carrier account no longer exists");
         }
 
         TokenExchangeResult result = oauthService.exchangeCode(code, account.getClientId(),
@@ -171,12 +195,12 @@ public class StampsSeraOAuthController {
         if (!result.success()) {
             log.warn("SERA OAuth callback: code exchange failed for account #{}: {}",
                     accountId, result.errorMessage());
-            return redirect(false, result.errorMessage());
+            return redirect(back, false, result.errorMessage());
         }
         if (!StringUtils.hasText(result.refreshToken())) {
             log.warn("SERA OAuth callback: exchange succeeded but no refresh_token returned. "
                     + "Check that scope=offline_access is registered on the client_id.");
-            return redirect(false, "SERA returned no refresh_token — scope offline_access missing");
+            return redirect(back, false, "SERA returned no refresh_token — scope offline_access missing");
         }
 
         account.setStampsRefreshToken(result.refreshToken());
@@ -184,7 +208,8 @@ public class StampsSeraOAuthController {
         account.setLastVerifiedAt(LocalDateTime.now());
         repository.save(account);
         log.info("SERA OAuth callback: refresh_token stored and account #{} marked verified.", accountId);
-        return redirect(true, null);
+        recordChange(account, "Authorized with Stamps.com", "stamps-authorized");
+        return redirect(back, true, null);
     }
 
     /**
@@ -226,6 +251,8 @@ public class StampsSeraOAuthController {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
         }
         String oldRefresh = account.getStampsRefreshToken();
+        // Nothing to disconnect (never authorized, or a USPS Direct account): leave it as it is.
+        if (!StringUtils.hasText(oldRefresh)) return ResponseEntity.noContent().build();
         account.setStampsRefreshToken(null);
         account.setVerified(false);
         repository.save(account);
@@ -233,102 +260,56 @@ public class StampsSeraOAuthController {
         // are per-account so blast radius is tiny (every subsequent call just mints
         // a fresh access_token). Swap to clearCachedTokenFor(oldRefresh) if the cache
         // ever grows cross-account.
-        if (StringUtils.hasText(oldRefresh)) {
-            oauthService.clearTokenCache();
-        }
+        oauthService.clearTokenCache();
         log.info("SERA OAuth: disconnected account #{} (refresh_token cleared, verified=false).", accountId);
+        recordChange(account, "Disconnected from Stamps.com", "stamps-disconnected");
         return ResponseEntity.noContent().build();
     }
 
-    /**
-     * One-off manual top-up of a SERA account's postage balance. Posts
-     * {@code POST /sera/v1/balance/add-funds} with the authenticated
-     * account's refresh_token → access_token round-trip. ADMIN-only.
-     *
-     * <p>Sandbox play-money accounts run out fast under test load (one
-     * US→AU heavy intl label is $200+); the scheduled
-     * {@link com.multiship.backend.service.carriers.StampsTopupService}
-     * polls at 30 min and only fires when a {@code stamps_topup_policy}
-     * row exists. This endpoint is the human-driven alternative — one
-     * click adds the requested amount now.
-     *
-     * <p>Idempotency key: {@code (accountId, yyyy-MM-dd-HH-mm)} so a
-     * fast double-click doesn't double-charge; a second POST in the
-     * same minute returns the cached top-up (SERA dedups on key for
-     * 24h). Different minute = fresh top-up allowed.
-     */
-    @Operation(summary = "Manual top-up of a SERA account's postage balance",
-            description = "Requires ADMIN. Dials POST /sera/v1/balance/add-funds "
-                    + "with the given amount. Idempotent within the same minute. "
-                    + "Returns the post-topup balance.")
-    @PreAuthorize("hasRole('ADMIN')")
-    @org.springframework.web.bind.annotation.PostMapping("/add-funds/{accountId}")
-    public ResponseEntity<ApiResponse<com.multiship.backend.service.carriers.CarrierConnector.BalanceResult>>
-            addFunds(@PathVariable Long accountId,
-                     @org.springframework.web.bind.annotation.RequestBody AddFundsRequest req) {
-        CarrierAccountRef account = repository.findById(accountId).orElse(null);
-        if (account == null) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
-        }
-        if (!"USPS".equalsIgnoreCase(account.getCarrierCode())
-                && !"STAMPS".equalsIgnoreCase(account.getCarrierCode())) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).build();
-        }
-        if (req == null || req.amount == null || req.amount.signum() <= 0) {
-            return ResponseEntity.badRequest().build();
-        }
-        String refresh = account.getStampsRefreshToken();
-        if (!StringUtils.hasText(refresh)) {
-            return ResponseEntity.status(HttpStatus.CONFLICT)
-                    .body(ApiResponse.<com.multiship.backend.service.carriers.CarrierConnector.BalanceResult>builder()
-                            .status("error").code(409)
-                            .message("Account not authorized with SERA — complete /authorize/{id} first.")
-                            .build());
-        }
-        StampsSeraOAuthService.TokenExchangeResult tok = oauthService.refreshToken(
-                refresh, account.getClientId(), account.getClientSecret(), account.getEnvironment());
-        if (!tok.success()) {
-            return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
-                    .body(ApiResponse.<com.multiship.backend.service.carriers.CarrierConnector.BalanceResult>builder()
-                            .status("error").code(502)
-                            .message("SERA auth failed: " + tok.errorMessage())
-                            .build());
-        }
-        String currency = StringUtils.hasText(req.currency) ? req.currency.trim().toLowerCase() : "usd";
-        String idemKey = com.multiship.backend.service.carriers.usps.queue.IdempotencyKeys
-                .forStampsTopup(accountId,
-                        java.time.LocalDateTime.now(java.time.ZoneOffset.UTC)
-                                .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd-HH-mm")));
-        com.multiship.backend.service.carriers.CarrierConnector.BalanceResult result =
-                stampsConnector.addFundsSera(tok.accessToken(), req.amount, currency, idemKey,
-                        account.getEnvironment());
-        log.info("SERA add-funds: account #{} env={} +{} {} → status={}", accountId,
-                account.getEnvironment(), req.amount, currency, result.status());
-        HttpStatus status = "OK".equals(result.status()) || "SUCCESS".equals(result.status())
-                ? HttpStatus.OK : HttpStatus.BAD_GATEWAY;
-        return ResponseEntity.status(status)
-                .body(ApiResponse.<com.multiship.backend.service.carriers.CarrierConnector.BalanceResult>builder()
-                        .code(status.value())
-                        .status("OK".equals(result.status()) ? "ok" : "error")
-                        .message(result.message())
-                        .data(result)
-                        .build());
-    }
 
-    /** Admin add-funds request body. */
-    public record AddFundsRequest(java.math.BigDecimal amount, String currency) {}
-
-    private ResponseEntity<Void> redirect(boolean ok, String detail) {
-        // Prefer the configured absolute FE host (split-port dev); fall back
-        // to the relative path (shared-origin prod).
-        String base = StringUtils.hasText(feReturnUrl)
-                ? feReturnUrl.replaceFirst("/+$", "") + FE_RETURN_PATH
+    private ResponseEntity<Void> redirect(String returnTo, boolean ok, String detail) {
+        // Back to the screen that started it; else the configured FE host
+        // (split-port dev); else the relative path (shared-origin prod).
+        String host = StringUtils.hasText(returnTo) ? returnTo : feReturnUrl;
+        String base = StringUtils.hasText(host)
+                ? host.replaceFirst("/+$", "") + FE_RETURN_PATH
                 : FE_RETURN_PATH;
         String url = base + (ok ? "ok" : "error");
         if (!ok && StringUtils.hasText(detail)) {
             url += "&detail=" + URLEncoder.encode(detail, StandardCharsets.UTF_8);
         }
-        return ResponseEntity.status(HttpStatus.FOUND).location(URI.create(url)).build();
+        return ResponseEntity.status(HttpStatus.FOUND).location(URI.create(url))
+                .header(org.springframework.http.HttpHeaders.SET_COOKIE, returnCookie("", 0).toString())
+                .build();
+    }
+
+    /** Audit row + rate-cache refresh — the same trail an account edit leaves. */
+    private void recordChange(CarrierAccountRef account, String what, String reason) {
+        if (auditService != null) {
+            auditService.record(com.multiship.backend.service.AuditService.UPDATE,
+                    com.multiship.backend.service.AuditService.CARRIER_ACCOUNT, account.getId(),
+                    account.getCarrierCode() + " · " + account.getAccountNumber(),
+                    java.util.Map.of("verified", String.valueOf(account.getVerified())),
+                    what + ": " + account.getCarrierCode() + "/" + account.getAccountNumber());
+        }
+        if (eventPublisher != null) {
+            eventPublisher.publishEvent(new com.multiship.backend.service.events.CarrierConfigChangedEvent(
+                    account.getCarrierCode(), reason));
+        }
+    }
+
+    /** A bare http(s) origin that the app's CORS list allows — never an arbitrary redirect target. */
+    private boolean isOwnOrigin(String origin, jakarta.servlet.http.HttpServletRequest request) {
+        if (!StringUtils.hasText(origin) || !origin.matches("https?://[^/?#\\s]+")
+                || corsConfigurationSource == null || request == null) return false;
+        var cors = corsConfigurationSource.getCorsConfiguration(request);
+        return cors != null && cors.checkOrigin(origin) != null;
+    }
+
+    private static org.springframework.http.ResponseCookie returnCookie(String value, long maxAgeSeconds) {
+        return org.springframework.http.ResponseCookie.from(RETURN_COOKIE, value)
+                .httpOnly(true).sameSite("Lax").path("/api/v1/carrier-accounts/stamps-sera")
+                .maxAge(maxAgeSeconds).build();
     }
 
     /** Small DTO for the status endpoint. */

@@ -1,7 +1,18 @@
 /** CSV for a spreadsheet: quoted where needed, BOM so Excel reads UTF-8. */
 export const csvCell = (value: unknown): string => {
   if (value === null || value === undefined) return ''
-  const str = String(value)
+  let str = String(value)
+  // BUG-076: formula injection guard. Excel / Numbers / LibreOffice
+  // evaluate a cell that starts with =, +, -, @ (or TAB) as a formula —
+  // a name like '=HYPERLINK(...)' is the classic exfiltration vector.
+  // Prefix a single quote (which the spreadsheets strip on display).
+  // Mirrors the backend-side guard in ClientServiceImpl.csvCell.
+  if (str.length > 0) {
+    const c = str.charAt(0)
+    if (c === '=' || c === '+' || c === '-' || c === '@' || c === '\t') {
+      str = "'" + str
+    }
+  }
   if (/[",\r\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`
   return str
 }

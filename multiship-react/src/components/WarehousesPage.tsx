@@ -3,6 +3,7 @@ import { useOutletContext } from 'react-router-dom'
 import type { SortingState } from '@tanstack/react-table'
 import {
   FiActivity,
+  FiAlertTriangle,
   FiEdit3,
   FiFilter,
   FiHome,
@@ -24,6 +25,7 @@ import PortalMenu from './workspace/PortalMenu'
 import Select from './workspace/Select'
 import { useAppSession } from '../hooks/useAppSession'
 import { normalizeRole } from '../utils/roles'
+import { useFocusTrap } from '../hooks/useFocusTrap'
 
 const filterLabelClass =
   'mb-1 flex items-center gap-1 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400'
@@ -53,6 +55,10 @@ export default function WarehousesPage() {
   const [reloadToken, setReloadToken] = useState(0)
   const [editor, setEditor] = useState<{ warehouse: Warehouse | null } | null>(null)
   const [attachTarget, setAttachTarget] = useState<Warehouse | null>(null)
+  // R2-BUG-010 — type-to-confirm delete replaces the single notify.confirm so
+  // operators can't nuke an in-use warehouse on one slip. Target is the row
+  // whose kebab fired Delete; null = modal closed.
+  const [deleteTarget, setDeleteTarget] = useState<Warehouse | null>(null)
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search.trim()), 350)
@@ -128,6 +134,24 @@ export default function WarehousesPage() {
   }
 
   const handleToggleActive = async (warehouse: Warehouse) => {
+    // BUG-043 — deactivating a warehouse that clients ship from used to
+    // happen on one click. The client-delete path (handleDelete below)
+    // already prompts + lists the cascade; mirror the pattern here.
+    // Only ask for Deactivate — Activate stays single-click (no risk).
+    if (warehouse.active) {
+      const attached = warehouse.attachedClientCount ?? 0
+      const body = attached > 0
+        ? `Deactivate warehouse ${warehouse.code}? It is currently attached to ${attached} `
+          + `client${attached === 1 ? '' : 's'} — any shipment that resolves ship-from to this `
+          + `warehouse will error until it is reactivated.`
+        : `Deactivate warehouse ${warehouse.code}? Clients can be re-pointed to another `
+          + `warehouse at any time; the warehouse itself is not deleted.`
+      if (!(await notify.confirm(body, {
+        title: 'Deactivate warehouse',
+        confirmLabel: 'Deactivate',
+        danger: true,
+      }))) return
+    }
     setBusyId(warehouse.id)
     try {
       const r = await warehouseService.toggleActive(warehouse.code)
@@ -140,19 +164,13 @@ export default function WarehousesPage() {
     }
   }
 
-  const handleDelete = async (warehouse: Warehouse) => {
-    const attached = warehouse.attachedClientCount ?? 0
-    const body = attached > 0
-      ? `Delete warehouse ${warehouse.code}? It is currently attached to ${attached} client${attached === 1 ? '' : 's'} — they will be unlinked.`
-      : `Delete warehouse ${warehouse.code}?`
-    if (!(await notify.confirm(body, {
-      title: 'Delete warehouse',
-      confirmLabel: 'Delete',
-      danger: true,
-    }))) return
+  // R2-BUG-010 — kebab Delete just opens the type-to-confirm modal; the
+  // modal owns the DELETE call so a stray click can't fire deleteWarehouse.
+  const handleDeleteConfirmed = async (warehouse: Warehouse) => {
     try {
       await warehouseService.deleteWarehouse(warehouse.code)
       notify.success(`Warehouse ${warehouse.code} deleted.`)
+      setDeleteTarget(null)
       refresh()
     } catch (error) {
       notify.apiError(error, 'Failed to delete the warehouse.')
@@ -181,7 +199,11 @@ export default function WarehousesPage() {
               {w.address?.city ? (
                 <p className="text-[11.5px] text-slate-500">
                   {w.address.city}
-                  {w.address.state ? `, ${w.address.state}` : ''}
+                  {/* BUG-079 R6: input forces uppercase on edit (6754690c)
+                      but legacy rows persisted with 'il' still display
+                      lowercase in the grid. Upper-case at render too so
+                      the grid matches what carriers expect. */}
+                  {w.address.state ? `, ${w.address.state.toUpperCase()}` : ''}
                 </p>
               ) : null}
             </div>
@@ -266,6 +288,7 @@ export default function WarehousesPage() {
       },
       {
         id: 'actions',
+        size: 56, minSize: 56, maxSize: 56,
         header: '',
         enableSorting: false,
         cell: ({ row }) => {
@@ -276,12 +299,12 @@ export default function WarehousesPage() {
                 admin={admin}
                 onAttach={canAttach ? () => setAttachTarget(row.original) : null}
                 onEdit={() => setEditor({ warehouse: row.original })}
-                onDelete={() => void handleDelete(row.original)}
+                onDelete={() => setDeleteTarget(row.original)}
               />
             </div>
           )
         },
-        meta: { headerLabel: 'Actions', hideable: false, exportable: false },
+        meta: { headerLabel: 'Actions', hideable: false, exportable: false, pinnedByDefault: 'end' },
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps -- cell handlers (openEditor/handleDelete) close over the latest state through their function bodies; only admin flips row visibility and busyId affects disabled state
@@ -429,6 +452,14 @@ export default function WarehousesPage() {
           }}
         />
       ) : null}
+
+      {deleteTarget ? (
+        <DeleteWarehouseModal
+          warehouse={deleteTarget}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={() => void handleDeleteConfirmed(deleteTarget)}
+        />
+      ) : null}
     </div>
   )
 }
@@ -536,5 +567,137 @@ function RowActionsMenu({
         ) : null}
       </PortalMenu>
     </>
+  )
+}
+
+/**
+ * R2-BUG-010 — type-to-confirm delete modal. The row kebab opens this instead
+ * of a one-click notify.confirm because deleting a warehouse unlinks every
+ * attached client AND leaves historical orders pointing to a dead code; a
+ * stray click should never fire a DELETE on a shared ship-from location.
+ *
+ * Delete button is disabled until the operator types the exact warehouse
+ * code (case-sensitive). ponytail: the UI shows attached-client count only;
+ * surfacing the historical-order-reference count would require a new
+ * /warehouses/{code}/usage backend endpoint — out of scope for a FE-only
+ * commit, add when the extra guardrail is actually needed.
+ */
+function DeleteWarehouseModal({
+  warehouse,
+  onCancel,
+  onConfirm,
+}: {
+  warehouse: Warehouse
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useFocusTrap(true, dialogRef)
+  const [typed, setTyped] = useState('')
+  const [busy, setBusy] = useState(false)
+  const attached = warehouse.attachedClientCount ?? 0
+  const canDelete = typed === warehouse.code && !busy
+
+  // ESC closes.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !busy) onCancel()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onCancel, busy])
+
+  const submit = async () => {
+    if (!canDelete) return
+    setBusy(true)
+    try {
+      await Promise.resolve(onConfirm())
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="delete-warehouse-title"
+    >
+      <div
+        ref={dialogRef}
+        className="w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]"
+      >
+        <header className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+          <div className="flex items-center gap-2.5">
+            <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-rose-100 text-rose-600">
+              <FiAlertTriangle className="h-4 w-4" />
+            </span>
+            <h2 id="delete-warehouse-title" className="text-[15px] font-semibold text-slate-950">
+              Delete warehouse {warehouse.code}
+            </h2>
+          </div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onCancel}
+            disabled={busy}
+            className="rounded-lg border border-transparent p-1.5 text-slate-400 transition hover:border-slate-200 hover:text-slate-600 disabled:opacity-50"
+          >
+            <FiX className="h-4 w-4" />
+          </button>
+        </header>
+        <div className="space-y-3 px-5 py-4 text-[13px] text-slate-700">
+          <p>
+            This deletes <span className="font-semibold">{warehouse.code}</span> permanently.
+            {attached > 0 ? (
+              <>
+                {' '}It is currently attached to{' '}
+                <span className="font-semibold">{attached} client{attached === 1 ? '' : 's'}</span>
+                {' '}— they will be unlinked.
+              </>
+            ) : null}
+          </p>
+          <p className="text-[12px] text-slate-500">
+            Historical orders that reference this warehouse keep the stored code; they will no
+            longer resolve to a live ship-from location.
+          </p>
+          <label className="block">
+            <span className="mb-1 block text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">
+              Type <span className="font-mono text-rose-600">{warehouse.code}</span> to confirm
+            </span>
+            <input
+              type="text"
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              autoFocus
+              aria-label="Type warehouse code to confirm deletion"
+              placeholder={warehouse.code}
+              disabled={busy}
+              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 font-mono text-[13px] text-slate-900 shadow-sm transition focus:border-rose-400 focus:outline-none focus:ring-2 focus:ring-rose-100 disabled:bg-slate-50"
+            />
+          </label>
+        </div>
+        <footer className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50 px-5 py-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-600 transition hover:bg-slate-100 disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => void submit()}
+            disabled={!canDelete}
+            className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <FiTrash2 className="h-3.5 w-3.5" />
+            {busy ? 'Deleting…' : 'Delete warehouse'}
+          </button>
+        </footer>
+      </div>
+    </div>
   )
 }

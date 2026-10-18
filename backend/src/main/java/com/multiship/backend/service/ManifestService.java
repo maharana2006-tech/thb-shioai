@@ -31,4 +31,7 @@ public interface ManifestService {
 
     /** V135 — recent pickup/close events for the Settings activity table. */
     List<EodEventDTO> recentEvents(int limit);
+
+    /** Open labels a close-out for this carrier + date would manifest (BUG-011 — the dialog's prefill). */
+    List<String> openTrackings(String carrierCode, String customerNo, java.time.LocalDate closeDate, String warehouseCode);
 }

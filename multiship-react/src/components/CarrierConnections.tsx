@@ -1,6 +1,7 @@
 import { relativeTime } from '../utils/relativeTime'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { useOutletContext } from 'react-router-dom'
+import { useNavigate, useOutletContext, useSearchParams } from 'react-router-dom'
+import { settingsPaths } from '../routes/workspaceRoutes'
 import { notify } from '../utils/notify'
 import {
   FiActivity,
@@ -43,9 +44,12 @@ import {
 import {
   SHIPPING_PURPOSES,
   clearanceOptionsForCarrier,
+  labelFormatsForCarrier,
   purposeLabel,
   clearanceLabel,
+  setDbLabelFormatByCarrier,
 } from '../utils/customsOptions'
+import { carrierDropdownsService } from '../api/carrierDropdownsService'
 import {
   validateCarrierAccount,
   type CarrierAccountErrors,
@@ -53,6 +57,7 @@ import {
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import AdvancedDataTable, { type ColumnDef } from './workspace/AdvancedDataTable'
 import CarrierLogo from './workspace/CarrierLogo'
+import { StampsBalancePill } from './StampsPostage'
 import PortalMenu from './workspace/PortalMenu'
 import Select from './workspace/Select'
 import { useAppSession } from '../hooks/useAppSession'
@@ -275,6 +280,10 @@ export default function CarrierConnections({
   const filtersRef = useRef<HTMLDivElement>(null)
   const [query, setQuery] = useState('')
   const [busyId, setBusyId] = useState<number | null>(null)
+  const navigate = useNavigate()
+  /** Open the full-page add-funds screen; the balance pills re-read on return (this page remounts). */
+  const openAddFunds = useCallback((account: CarrierAccountRef) =>
+    navigate(settingsPaths.carrierAddFunds(account.id)), [navigate])
 
   // Close the Filters popover on outside click / Escape.
   useEffect(() => {
@@ -368,11 +377,65 @@ export default function CarrierConnections({
       })
   }, [loadAccounts])
 
+  // Back from Stamps.com (?seraCallback=ok|error&detail=…): say how it went, then tidy the address.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const seraShown = useRef(false)
+  useEffect(() => {
+    const sera = searchParams.get('seraCallback')
+    if (!sera || seraShown.current) return
+    seraShown.current = true
+    if (sera === 'ok') notify.success('Stamps.com authorized — USPS is connected.')
+    else notify.error({
+      title: 'Stamps.com authorization failed',
+      body: searchParams.get('detail') || 'Try "Authorize with Stamps.com" again.',
+    })
+    setSearchParams((p) => { p.delete('seraCallback'); p.delete('detail'); return p }, { replace: true })
+  }, [searchParams, setSearchParams])
+
+  // The tab that opened Stamps.com: pick up the new status when the operator comes back to it.
+  const awaitingStamps = accounts.some(
+    (a) => normalizeCarrierCode(a.carrierCode) === 'usps' && a.verified !== true,
+  )
+  useEffect(() => {
+    if (!awaitingStamps) return
+    const onVisible = () => { if (document.visibilityState === 'visible') void loadAccounts() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [awaitingStamps, loadAccounts])
+
   const { registerRefresh } = useOutletContext<SettingsOutletContext>()
   useEffect(() => {
     registerRefresh(loadAccounts)
     return () => registerRefresh(null)
   }, [registerRefresh, loadAccounts])
+
+  // BUG-153 R7 — label-format dropdown was reading only the hardcoded
+  // LABEL_FORMAT_BY_CARRIER map; /orders/new has long sourced it from
+  // the admin registry via setDbLabelFormatByCarrier. Prime the same
+  // override here so an admin editing a carrier account sees the exact
+  // formats their org registered. Non-admin viewers 403 — leave the
+  // static fallback in place for them.
+  useEffect(() => {
+    if (!admin) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const rows = await carrierDropdownsService.labelFormats()
+        if (cancelled) return
+        const byCarrier: Record<string, Array<{ value: string; label: string }>> = {}
+        for (const r of rows) {
+          const key = (r.carrier || '').toUpperCase()
+          if (!key) continue
+          byCarrier[key] = byCarrier[key] ?? []
+          byCarrier[key].push({ value: r.code, label: r.label })
+        }
+        setDbLabelFormatByCarrier(byCarrier)
+      } catch {
+        /* 401/403 for non-admin — fallback stays authoritative */
+      }
+    })()
+    return () => { cancelled = true }
+  }, [admin])
 
   // Pre-fill Client ID / Secret from the platform account of the chosen
   // carrier when adding a NEW account. The shipper can override them.
@@ -412,7 +475,12 @@ export default function CarrierConnections({
     }
   }, [drawerOpen, drawer.carrierCode, drawer.editingId, admin])
 
-  const readyCount = accounts.filter((a) => a.complete && a.active).length
+  // BUG-054 — "Ready to ship" previously counted complete + active, which
+  // overlapped with the "Unverified 2" tile beside it (both tiles bumped on
+  // the same row). An operator who sees 5/5 reasonably believes every
+  // account can produce a label; a Check-failed row broke that. Require
+  // verified === true so Ready + Unverified are mutually exclusive.
+  const readyCount = accounts.filter((a) => a.complete && a.active && a.verified === true).length
   const unverifiedCount = accounts.filter((a) => a.active && a.complete && a.verified !== true).length
   const platformCount = accounts.filter(isPlatform).length
   const clientCount = accounts.length - platformCount
@@ -880,14 +948,30 @@ export default function CarrierConnections({
     }
   }
 
-  const handleDelete = async (account: CarrierAccountRef) => {
-    if (
-      !window.confirm(
-        `Delete account ${account.accountNumber} (${formatCarrierName(account.carrierCode)})? This can't be undone.`,
-      )
-    ) {
-      return
+  const handleDisconnectStamps = async (account: CarrierAccountRef) => {
+    const ok = await notify.confirm(
+      `Disconnect ${account.accountNumber} from Stamps.com? USPS labels on this account stop until an admin authorizes it again.`,
+      { title: 'Disconnect from Stamps.com', confirmLabel: 'Disconnect', cancelLabel: 'Keep connected', danger: true },
+    )
+    if (!ok) return
+    setBusyId(account.id)
+    try {
+      await accountRefService.disconnectStampsSera(account.id)
+      notify.success(`${account.accountNumber} disconnected from Stamps.com.`)
+      await loadAccounts()
+    } catch (error) {
+      notify.apiError(error, 'Failed to disconnect from Stamps.com.')
+    } finally {
+      setBusyId(null)
     }
+  }
+
+  const handleDelete = async (account: CarrierAccountRef) => {
+    const ok = await notify.confirm(
+      `Delete account ${account.accountNumber} (${formatCarrierName(account.carrierCode)})? This can't be undone.`,
+      { title: 'Delete carrier account', confirmLabel: 'Delete', cancelLabel: 'Keep', danger: true },
+    )
+    if (!ok) return
     setBusyId(account.id)
     try {
       await accountRefService.deleteAccount(account.id)
@@ -1054,7 +1138,7 @@ export default function CarrierConnections({
         cell: ({ row }) => {
           const account = row.original
           return (
-            <div className="flex items-center gap-2.5">
+            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
               <ActiveToggle
                 active={account.active}
                 busy={busyId !== null}
@@ -1067,6 +1151,10 @@ export default function CarrierConnections({
               ) : (
                 <VerifiedChip account={account} />
               )}
+              {admin && account.active && account.verified === true
+                && normalizeCarrierCode(account.carrierCode) === 'usps' ? (
+                <StampsBalancePill accountId={account.id} version={0} onOpen={() => openAddFunds(account)} />
+              ) : null}
             </div>
           )
         },
@@ -1117,10 +1205,12 @@ export default function CarrierConnections({
               onVerify={() => void handleVerify(row.original)}
               onEdit={() => openDrawer(row.original)}
               onDelete={() => void handleDelete(row.original)}
+              onDisconnectStamps={() => void handleDisconnectStamps(row.original)}
+              onAddFunds={() => openAddFunds(row.original)}
             />
           </div>
         ),
-        meta: { headerLabel: 'Actions', hideable: false, exportable: false },
+        meta: { headerLabel: 'Actions', hideable: false, exportable: false, pinnedByDefault: 'end' },
       },
     ],
     // Handlers (handleVerify / handleToggleActive / handleMakeClientDefault /
@@ -1603,6 +1693,14 @@ export default function CarrierConnections({
                         </button>
                       </div>
                     ) : null}
+                    {/* BUG-086 — Chrome ignores autoComplete="off" on
+                        password-type fields in a form that previously saw
+                        a login. The browser was pre-filling admin's own
+                        password into Consumer Secret. autoComplete="new-
+                        password" + a randomised name attribute disables
+                        the heuristic. type="text" on the id field (not
+                        username) keeps the browser from matching "login
+                        username" either. */}
                     <Field label={credentialLabelsFor(drawer.carrierCode).idLong} error={drawerErrors.clientId}>
                       <input
                         value={drawer.clientId}
@@ -1610,7 +1708,10 @@ export default function CarrierConnections({
                         className={`${inputClassName}${drawerErrors.clientId ? ' !border-rose-400' : ''}`}
                         placeholder={credentialLabelsFor(drawer.carrierCode).idPlaceholder
                           ?? credentialLabelsFor(drawer.carrierCode).idLong}
-                        autoComplete="off"
+                        name="carrier-credential-id"
+                        autoComplete="new-password"
+                        data-lpignore="true"
+                        data-1p-ignore="true"
                       />
                     </Field>
                     <Field label={credentialLabelsFor(drawer.carrierCode).secretLong} error={drawerErrors.clientSecret}>
@@ -1620,7 +1721,10 @@ export default function CarrierConnections({
                         onChange={(e) => setDrawer((c) => ({ ...c, clientSecret: e.target.value }))}
                         className={`${inputClassName}${drawerErrors.clientSecret ? ' !border-rose-400' : ''}`}
                         placeholder={credentialLabelsFor(drawer.carrierCode).secretLong}
-                        autoComplete="off"
+                        name="carrier-credential-secret"
+                        autoComplete="new-password"
+                        data-lpignore="true"
+                        data-1p-ignore="true"
                       />
                     </Field>
                     {credentialLabelsFor(drawer.carrierCode).helper ? (
@@ -1758,9 +1862,9 @@ export default function CarrierConnections({
                       </Select>
                     </Field>
                     <p className="-mt-1 mb-2 text-[10.5px] leading-4 text-slate-400">
-                      Which lanes this carrier account supports return labels on. Domestic
-                      only matches the pre-V95 default. Set to Domestic and international
-                      only when the carrier account actually supports intl returns.
+                      Which lanes this carrier account supports return labels on. Set to
+                      Domestic and international only when the carrier account actually
+                      supports international returns.
                     </p>
                   </div>
 
@@ -1842,12 +1946,14 @@ export default function CarrierConnections({
                           onChange={(e) => setDrawer((c) => ({ ...c, labelImageType: e.target.value || null }))}
                           className={inputClassName}
                         >
+                          {/* BUG-057 R6 — vocab comes from the DB registry
+                              (Settings > Carrier Dropdowns > Label formats),
+                              with LABEL_FORMAT_BY_CARRIER.FEDEX as first-boot
+                              bootstrap. Blank keeps the FedEx carrier default. */}
                           <option value="">PDF (default)</option>
-                          <option value="PDF">PDF (vector, sharp)</option>
-                          <option value="PNG">PNG (raster)</option>
-                          <option value="ZPLII">ZPLII (Zebra)</option>
-                          <option value="EPL2">EPL2 (Eltron/legacy Zebra)</option>
-                          <option value="DPL">DPL (Datamax)</option>
+                          {labelFormatsForCarrier('FEDEX').map((o) => (
+                            <option key={o.value} value={o.value}>{o.label}</option>
+                          ))}
                         </select>
                       </Field>
                       <Field label="Label stock type (FedEx only)">
@@ -1892,12 +1998,11 @@ export default function CarrierConnections({
                           onChange={(e) => setDrawer((c) => ({ ...c, labelImageFormat: e.target.value || null }))}
                           className={inputClassName}
                         >
+                          {/* BUG-057 R6 — vocab from DB registry. */}
                           <option value="">GIF (default)</option>
-                          <option value="GIF">GIF (explicit)</option>
-                          <option value="PDF">PDF (vector, sharp)</option>
-                          <option value="PNG">PNG (raster)</option>
-                          <option value="ZPL">ZPL (Zebra)</option>
-                          <option value="EPL">EPL (Eltron/legacy Zebra)</option>
+                          {labelFormatsForCarrier('UPS').map((o) => (
+                            <option key={o.value} value={o.value}>{o.label}</option>
+                          ))}
                         </select>
                       </Field>
                       <p className="-mt-1 mb-2 text-[10.5px] leading-4 text-slate-400">
@@ -1917,9 +2022,11 @@ export default function CarrierConnections({
                           onChange={(e) => setDrawer((c) => ({ ...c, labelImageFormat: e.target.value || null }))}
                           className={inputClassName}
                         >
+                          {/* BUG-057 R6 — vocab from DB registry. */}
                           <option value="">PDF (default)</option>
-                          <option value="PDF">PDF (label + A4 doc)</option>
-                          <option value="ZPL">ZPL (thermal label only)</option>
+                          {labelFormatsForCarrier('DHL').map((o) => (
+                            <option key={o.value} value={o.value}>{o.label}</option>
+                          ))}
                         </select>
                       </Field>
                       <p className="-mt-1 mb-2 text-[10.5px] leading-4 text-slate-400">
@@ -1937,11 +2044,11 @@ export default function CarrierConnections({
                           onChange={(e) => setDrawer((c) => ({ ...c, labelImageFormat: e.target.value || null }))}
                           className={inputClassName}
                         >
+                          {/* BUG-057 R6 — vocab from DB registry. */}
                           <option value="">Carrier default</option>
-                          <option value="PNG">PNG (raster)</option>
-                          <option value="PDF">PDF (vector, sharp)</option>
-                          <option value="GIF">GIF (raster)</option>
-                          <option value="JPG">JPG (raster)</option>
+                          {labelFormatsForCarrier('USPS').map((o) => (
+                            <option key={o.value} value={o.value}>{o.label}</option>
+                          ))}
                         </select>
                       </Field>
                       <p className="-mt-1 mb-2 text-[10.5px] leading-4 text-slate-400">
@@ -2295,6 +2402,8 @@ function RowActionsMenu({
   onVerify,
   onEdit,
   onDelete,
+  onDisconnectStamps,
+  onAddFunds,
 }: {
   account: CarrierAccountRef
   busy: boolean
@@ -2302,6 +2411,8 @@ function RowActionsMenu({
   onVerify: () => void
   onEdit: () => void
   onDelete: () => void
+  onDisconnectStamps: () => void
+  onAddFunds: () => void
 }) {
   const [open, setOpen] = useState(false)
   const buttonRef = useRef<HTMLButtonElement>(null)
@@ -2356,6 +2467,31 @@ function RowActionsMenu({
             <FiShield className="h-3.5 w-3.5" />
             Authorize with Stamps.com
           </a>
+        ) : null}
+        {admin && normalizeCarrierCode(account.carrierCode) === 'usps'
+            && account.verified === true ? (
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => { setOpen(false); onDisconnectStamps() }}
+            disabled={busy}
+            className="flex w-full items-center gap-2 px-3 py-2 text-[12px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+          >
+            <FiShield className="h-3.5 w-3.5 text-slate-500" />
+            Disconnect from Stamps.com
+          </button>
+        ) : null}
+        {admin && normalizeCarrierCode(account.carrierCode) === 'usps'
+            && account.verified === true ? (
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => { setOpen(false); onAddFunds() }}
+            className="flex w-full items-center gap-2 px-3 py-2 text-[12px] font-semibold text-slate-700 transition hover:bg-slate-50"
+          >
+            <FiPlus className="h-3.5 w-3.5 text-[#412d15]" />
+            Add funds
+          </button>
         ) : null}
         <button
           type="button"

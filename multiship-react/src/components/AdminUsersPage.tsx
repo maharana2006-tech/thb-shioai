@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { notify } from '../utils/notify'
 import { FiActivity, FiCheck, FiClock, FiSlash, FiUsers, FiX } from 'react-icons/fi'
@@ -10,6 +10,7 @@ import {
 import { clientService } from '../api/clientService'
 import { adminInviteService, type InviteMintResponse } from '../api/adminInviteService'
 import { useAppSession } from '../hooks/useAppSession'
+import { useModalDismiss } from '../hooks/useModalDismiss'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import IconButton from './ui/IconButton'
 
@@ -22,11 +23,27 @@ import IconButton from './ui/IconButton'
 export default function AdminUsersPage() {
   const [users, setUsers] = useState<AdminUser[]>([])
   const [audit, setAudit] = useState<AdminUserAudit[]>([])
+  // BUG-050 — pending (not yet consumed) invites so the operator can
+  // see what's outstanding + resend / revoke each row. The audit row
+  // records the mint; this is the live list.
+  const [invites, setInvites] = useState<InviteMintResponse[]>([])
   const [clientOptions, setClientOptions] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  // BUG-047 — debounce the search input so every keystroke doesn't fire
+  // two network requests (users list + audit reload). 350 ms matches
+  // WarehousesPage.
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 350)
+    return () => clearTimeout(t)
+  }, [search])
   const [roleFilter, setRoleFilter] = useState('')
   const [activeOnly, setActiveOnly] = useState(false)
+  // Captured once at mount (lazy init keeps Date.now() out of render, which the
+  // react-hooks/purity rule forbids). Used for the invite "expired" badge — the
+  // list re-renders on data changes, so a stale sub-second drift is immaterial.
+  const [nowMs] = useState(() => Date.now())
   const [assignFor, setAssignFor] = useState<AdminUser | null>(null)
   const [auditFor, setAuditFor] = useState<AdminUser | null>(null)
   /** Fix #294 — invite modal state. */
@@ -40,31 +57,35 @@ export default function AdminUsersPage() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [userRes, auditRes] = await Promise.all([
+      const [userRes, auditRes, inviteRes] = await Promise.all([
         adminUserService.list({
-          search: search || undefined,
+          search: debouncedSearch || undefined,
           role: roleFilter || undefined,
           activeOnly: activeOnly || undefined,
           page,
           size,
         }),
         adminUserService.recentAudit(50),
+        // BUG-050 — pending-invites surface. Best-effort: never fail the
+        // page on a transient 500; just surface an empty list.
+        adminInviteService.list().catch(() => ({ data: [] as InviteMintResponse[] })),
       ])
       setUsers(userRes.data ?? [])
       setAudit(auditRes.data ?? [])
+      setInvites((inviteRes.data ?? []).filter((i) => !i.consumedAt))
     } catch (e) {
       notify.apiError(e, 'Failed to load users.')
     } finally {
       setLoading(false)
     }
-  }, [search, roleFilter, activeOnly, page, size])
+  }, [debouncedSearch, roleFilter, activeOnly, page, size])
 
   // Snap back to page 0 whenever a filter or page-size changes so the
   // operator doesn't land on an empty page after narrowing the result set.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- reset paging on filter change; user-input-driven, not derivable at render
     setPage(0)
-  }, [search, roleFilter, activeOnly, size])
+  }, [debouncedSearch, roleFilter, activeOnly, size])
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount / filter change; load() sets loading + result state
   useEffect(() => { void load() }, [load])
@@ -128,10 +149,9 @@ export default function AdminUsersPage() {
         // — the operator will be logged out immediately after this call.
         const isSelf = currentUsername && user.username === currentUsername
         if (isSelf) {
-          const ok = window.confirm(
-            `⚠️ You are deactivating YOUR OWN account (${user.username}).\n\n` +
-              `You will be logged out immediately and won't be able to reactivate ` +
-              `yourself. Another admin will have to do it.\n\nContinue?`,
+          const ok = await notify.confirm(
+            `You are deactivating YOUR OWN account (${user.username}). You will be logged out immediately and won't be able to reactivate yourself. Another admin will have to do it.`,
+            { title: 'Deactivate your own account?', confirmLabel: 'Deactivate', cancelLabel: 'Keep active', danger: true },
           )
           if (!ok) return
         }
@@ -154,9 +174,9 @@ export default function AdminUsersPage() {
       notify.error(`${user.username} has no email on file — assign one first.`)
       return
     }
-    const ok = window.confirm(
-      `Email a password-reset link to ${user.email}?\n\n` +
-        `The link expires in 30 minutes and can only be used once.`,
+    const ok = await notify.confirm(
+      `Email a password-reset link to ${user.email}? The link expires in 30 minutes and can only be used once.`,
+      { title: 'Send password-reset link', confirmLabel: 'Send link' },
     )
     if (!ok) return
     try {
@@ -219,9 +239,7 @@ export default function AdminUsersPage() {
             Users
           </h2>
           <p className="mt-1 text-[12.5px] text-slate-500">
-            Manage user accounts, assign each USER to a client, and revoke access. Sprint 50
-            rollout: every legacy USER should be assigned a client before the tenant-scope
-            flag is flipped.
+            Manage user accounts, assign each USER to a client, and revoke access.
           </p>
         </div>
         {/* Fix #294 — invite modal launcher. Wires the existing
@@ -312,7 +330,7 @@ export default function AdminUsersPage() {
                 </td>
                 <td className="px-3 py-2 font-mono">
                   {u.clientCode ?? (
-                    <span className="text-amber-700">— unassigned —</span>
+                    <span className="whitespace-nowrap text-amber-700">— unassigned —</span>
                   )}
                 </td>
                 <td className="px-3 py-2">
@@ -341,7 +359,7 @@ export default function AdminUsersPage() {
                   <button
                     onClick={() => setAssignFor(u)}
                     disabled={u.role === 'ADMIN'}
-                    title={u.role === 'ADMIN' ? 'ADMIN is always org-wide' : 'Assign clientCode'}
+                    title={u.role === 'ADMIN' ? 'ADMIN is always org-wide' : 'Assign to a client'}
                     className="mr-2 rounded-md border border-slate-300 px-2 py-1 text-[12px] hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Assign client
@@ -384,13 +402,24 @@ export default function AdminUsersPage() {
                       Reset password
                     </button>
                   ) : null}
+                  {/* BUG-051: don't let an admin deactivate their own row —
+                      self-fire is already guarded by the self-confirm prompt
+                      + the backend's last-admin check, but when the current
+                      user IS the sole admin they can still open the prompt
+                      and see a confusing error. Disable the button for self.
+                      Reactivate stays available if someone else deactivated
+                      the row and the admin is self-reactivating (edge case). */}
                   <button
                     onClick={() => toggleActive(u)}
+                    disabled={Boolean(isSelf) && !u.deactivatedAt}
+                    title={isSelf && !u.deactivatedAt
+                      ? "You can't deactivate your own account — ask another admin."
+                      : undefined}
                     className={`rounded-md px-2 py-1 text-[12px] ${
                       u.deactivatedAt
                         ? 'border border-emerald-300 text-emerald-700 hover:bg-emerald-50'
                         : 'border border-red-300 text-red-700 hover:bg-red-50'
-                    }`}
+                    } disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent`}
                   >
                     {u.deactivatedAt ? 'Reactivate' : 'Deactivate'}
                   </button>
@@ -443,6 +472,68 @@ export default function AdminUsersPage() {
           </div>
         </div>
       </section>
+
+      {/* BUG-050 — pending invites list. Hidden when none outstanding. */}
+      {invites.length > 0 && (
+        <section className="rounded-xl border border-slate-200 bg-white">
+          <header className="flex items-center justify-between border-b border-slate-100 px-3 py-2 text-[12.5px] font-semibold text-slate-700">
+            <span>Pending invites ({invites.length})</span>
+            <span className="text-[11px] font-normal text-slate-500">Not yet accepted. Resend extends the expiry; Revoke invalidates the link.</span>
+          </header>
+          <ul className="max-h-56 divide-y divide-slate-100 overflow-y-auto text-[12.5px]">
+            {invites.map((inv) => {
+              const expired = new Date(inv.expiresAt).getTime() < nowMs
+              return (
+                <li key={inv.id} className="flex items-center justify-between gap-3 px-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-medium text-slate-900">{inv.email}</div>
+                    <div className="truncate text-[11.5px] text-slate-500">
+                      {inv.clientCode} · {inv.role} · invited by {inv.invitedBy} ·
+                      {expired ? ' expired ' : ' expires '}
+                      {new Date(inv.expiresAt).toLocaleString()}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(inv.acceptLink)
+                      void notify.success('Accept link copied.')
+                    }}
+                    className="rounded-md border border-slate-300 px-2 py-1 text-[11.5px] hover:bg-slate-50"
+                  >Copy link</button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await adminInviteService.resend(inv.id)
+                        void notify.success('Invite resent and expiry extended.')
+                        void load()
+                      } catch (e) { notify.apiError(e, 'Failed to resend invite.') }
+                    }}
+                    className="rounded-md border border-slate-300 px-2 py-1 text-[11.5px] hover:bg-slate-50"
+                  >Resend</button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const ok = await notify.confirm(
+                        `Revoke the invite for ${inv.email}? The accept link stops working immediately.`,
+                        { danger: true, confirmLabel: 'Revoke' },
+                      )
+                      if (!ok) return
+                      try {
+                        await adminInviteService.revoke(inv.id)
+                        void notify.success('Invite revoked.')
+                        void load()
+                      } catch (e) { notify.apiError(e, 'Failed to revoke invite.') }
+                    }}
+                    className="rounded-md border border-red-300 px-2 py-1 text-[11.5px] text-red-700 hover:bg-red-50"
+                  >Revoke</button>
+                </li>
+              )
+            })}
+          </ul>
+        </section>
+      )}
 
       <section className="rounded-xl border border-slate-200 bg-white">
         <header className="border-b border-slate-100 px-3 py-2 text-[12.5px] font-semibold text-slate-700">
@@ -513,6 +604,11 @@ function InviteUserDialog({
   const [role, setRole] = useState<'USER' | 'TENANT'>('USER')
   const [minting, setMinting] = useState(false)
   const [issued, setIssued] = useState<InviteMintResponse | null>(null)
+  // BUG-123 R7 — add focus trap + Escape-to-close + focus restoration.
+  // Pre-fix the dialog opened but focus stayed on the Invite button
+  // behind, Tab walked into the page behind, Escape did nothing.
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useModalDismiss(true, dialogRef, onClose)
 
   const submit = async () => {
     if (!email.trim() || !clientCode.trim()) {
@@ -542,7 +638,8 @@ function InviteUserDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4"
+    <div ref={dialogRef}
+         className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4"
          role="dialog" aria-modal="true" aria-label="Invite user dialog">
       <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-4 shadow-xl space-y-3">
         <header className="flex items-center justify-between">
@@ -719,8 +816,18 @@ function actionLabel(a: AdminUserAudit): string {
       return 'deactivated'
     case 'REACTIVATE':
       return 'reactivated'
+    // BUG-050 — humanize the invite audit so the row doesn't print the
+    // raw enum code "invite_sent".
+    case 'INVITE_SENT':
+      return 'invited'
+    case 'INVITE_RESENT':
+      return 'resent the invite to'
+    case 'INVITE_REVOKED':
+      return 'revoked the invite for'
+    case 'PASSWORD_RESET_SENT':
+      return 'sent a password reset to'
     default:
-      return a.action.toLowerCase()
+      return a.action.toLowerCase().replace(/_/g, ' ')
   }
 }
 

@@ -125,6 +125,14 @@ public class ManualShipmentRequest {
     /** Free-text operator reference (defaults to the generated order number). */
     private String reference;
 
+    /**
+     * R2-BUG-008 — per-client custom-field values keyed on
+     * {@link com.multiship.backend.model.CustomFieldDefinition#fieldKey}.
+     * Required definitions FAIL validation when their key is missing or
+     * blank here. Null when the submitter has no custom-field data.
+     */
+    private java.util.Map<String, String> customFields;
+
     // ── International only: commercial-invoice line items + header ──
     /** Commercial-invoice line items (required for cross-border shipments). */
     // Sprint 52 — DTO-level worst-case cap (see IntlShipmentBlockDTO for

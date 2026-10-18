@@ -66,7 +66,11 @@ export function CarrierDraftStep({
   removeDraft,
 }: CarrierDraftStepProps) {
   const [adding, setAdding] = useState(false)
-  const [f, setF] = useState<Omit<CarrierAccountDraft, 'id'>>({
+  // BUG-030: factored out so Cancel can reset to a clean draft instead of
+  // keeping the typed clientSecret in memory for the next Add. drafts.length
+  // snapshot is still ok — the only drift is whether this new entry defaults
+  // to clientDefault=true (first-account flag).
+  const blankDraft = (): Omit<CarrierAccountDraft, 'id'> => ({
     carrierCode: 'UPS',
     accountNumber: '',
     accountName: '',
@@ -84,6 +88,7 @@ export function CarrierDraftStep({
     thirdPartyPostcode: '',
     thirdPartyCountry: '',
   })
+  const [f, setF] = useState<Omit<CarrierAccountDraft, 'id'>>(blankDraft)
 
   const [touched, setTouched] = useState<Record<string, boolean>>({})
   const markTouched = (k: string) => setTouched((cur) => ({ ...cur, [k]: true }))
@@ -202,14 +207,25 @@ export function CarrierDraftStep({
               <span className="mb-0.5 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Account number *</span>
               {(() => {
                 const rule = accountRuleFor(f.carrierCode)
+                // BUG-029 — on a digits-only carrier (DHL, FEDEX), strip
+                // non-digits on input so the field physically can't hold
+                // letters. The HTML pattern + Yup regex only fire on
+                // submit, which left QA typing "QA1013QA1013" and reading
+                // the "9-12 digits" error as a length problem.
+                const digitsOnly = rule?.pattern?.startsWith('[0-9]')
                 return (
                   <>
                     <input
                       value={f.accountNumber}
-                      onChange={(e) => setF((c) => ({ ...c, accountNumber: e.target.value }))}
+                      onChange={(e) => {
+                        const raw = e.target.value
+                        const next = digitsOnly ? raw.replace(/\D/g, '') : raw
+                        setF((c) => ({ ...c, accountNumber: next }))
+                      }}
                       onBlur={() => markTouched('accountNumber')}
                       maxLength={rule?.maxLength ?? 100}
                       pattern={rule?.pattern}
+                      inputMode={digitsOnly ? 'numeric' : undefined}
                       placeholder={rule?.placeholder}
                       autoComplete="off"
                       aria-invalid={err('accountNumber') ? true : undefined}
@@ -403,7 +419,9 @@ export function CarrierDraftStep({
           <div className="mt-3 flex items-center justify-end gap-2 border-t border-slate-100 pt-3">
             <button
               type="button"
-              onClick={() => { setTouched({}); setAdding(false) }}
+              // BUG-030 — reset the draft so clientSecret / clientId don't
+              // persist after Cancel. Reopening + Add starts clean.
+              onClick={() => { setTouched({}); setF(blankDraft()); setAdding(false) }}
               className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-600 transition hover:bg-slate-100"
             >
               Cancel
@@ -412,7 +430,15 @@ export function CarrierDraftStep({
               type="button"
               onClick={save}
               aria-disabled={!canSave}
-              title={!canSave ? 'Fix the highlighted fields to continue' : undefined}
+              // BUG-031: tooltip said "Fix the highlighted fields" before
+              // any field had been blurred (nothing highlighted). Pick a
+              // message that matches the current visibility state —
+              // highlights only exist after the operator has interacted.
+              title={!canSave
+                ? (Object.values(touched).some(Boolean)
+                    ? 'Fix the highlighted fields to continue'
+                    : 'Fill in the required fields to continue')
+                : undefined}
               className={`rounded-xl px-4 py-1.5 text-[12px] font-semibold text-white transition ${
                 canSave ? 'bg-[#1f150c] hover:bg-[#412d15]' : 'bg-slate-300'
               }`}
@@ -444,6 +470,18 @@ export function CarrierDraftStep({
                     {d.clientDefault ? (
                       <span className="ml-1.5 inline-flex items-center gap-1 rounded-full bg-[#412d15]/10 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-[#412d15]">
                         <FiStar className="h-2.5 w-2.5" /> default
+                      </span>
+                    ) : null}
+                    {/* BUG-151 R7 — Add dialog allowed submitting a draft with
+                        no clientId/secret; the row then showed up as a happy
+                        card. Flag the gap so the operator knows the row is
+                        half-finished before clicking Create client. */}
+                    {(!d.clientId?.trim() || !d.clientSecret?.trim()) ? (
+                      <span
+                        className="ml-1.5 inline-flex items-center gap-1 rounded-full bg-rose-100 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-rose-700"
+                        title="Draft is missing credentials — complete before Create client."
+                      >
+                        missing creds
                       </span>
                     ) : null}
                   </p>

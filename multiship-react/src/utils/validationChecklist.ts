@@ -93,9 +93,20 @@ export function buildCheckGroups(result: ShipmentValidationResult): CheckGroup[]
   // call deliberately, stays a warning.
   const q = result.quote
   if (q && q.status !== 'QUOTED') {
+    // BUG-073 — q.message sometimes already starts with 'No price'
+    // (backend-side service builds the phrase too), so the prefix was
+    // doubled: 'No price from the carrier: No price: FEDEX rate call
+    // failed - HTTP 503 …'. Also strip the raw 'HTTP 500 GENERIC.ERROR'
+    // / 'HTTP 503 The service is currently unavailable' prefix the
+    // connector leaked through; replace with a plain-English carrier-
+    // outage line.
+    const rawMsg = q.message ? q.message.trim() : ''
+    const cleanedMsg = rawMsg
+      .replace(/^no price:\s*/i, '')
+      .replace(/\bHTTP\s*5\d\d\b.*$/, 'the carrier returned a server error — try again shortly.')
     const msg = q.status === 'NOT_OFFERED'
-      ? (q.message || 'The carrier does not offer this service on this route')
-      : `No price from the carrier${q.message ? `: ${q.message}` : ''}`
+      ? (cleanedMsg || 'The carrier does not offer this service on this route')
+      : `No price from the carrier${cleanedMsg ? `: ${cleanedMsg}` : ''}`
     if (q.status === 'UNAVAILABLE' || q.status === 'NOT_OFFERED') {
       groups.get('service')!.errors.push(msg)
     } else {

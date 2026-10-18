@@ -68,6 +68,15 @@ public class WarehouseController {
         return ResponseEntity.status(response.getCode()).body(response);
     }
 
+    @Operation(summary = "Clients attached to this warehouse (BUG-041)",
+            description = "Returns the client codes with an active client_warehouse row to this warehouse. Powers the Attach-Clients dialog's 'already attached' badge + Detach button.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping("/{code}/clients")
+    public ResponseEntity<ApiResponse<java.util.List<String>>> attachedClients(@PathVariable String code) {
+        ApiResponse<java.util.List<String>> response = warehouseService.listAttachedClientCodes(code);
+        return ResponseEntity.status(response.getCode()).body(response);
+    }
+
     @Operation(summary = "Create a warehouse",
             description = "Ops-level action — accepts ADMIN or USER. 409 WAREHOUSE_CODE_TAKEN if the code exists; 400 WAREHOUSE_OWNER_INVALID if PLATFORM/CLIENT owner fields are inconsistent.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")

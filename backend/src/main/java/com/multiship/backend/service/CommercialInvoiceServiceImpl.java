@@ -441,8 +441,19 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
             String packaging = hasText(r.getPackageType())
                     ? titleCase(r.getPackageType().replace('_', ' ')) : "-";
             List<Integer> ls = linesByBox.get(seq);
-            String contents = ls == null || ls.isEmpty() ? "-"
-                    : "Lines " + compactRanges(ls) + " (" + unitsByBox.getOrDefault(seq, 0) + " units)";
+            // BUG-142 — pluralise 'Line'/'Lines' + 'unit'/'units' for the
+            // single-line / single-unit case. This cell prints on the
+            // physical commercial invoice; the plural was visible to
+            // carriers + customs officers.
+            int units = unitsByBox.getOrDefault(seq, 0);
+            String contents;
+            if (ls == null || ls.isEmpty()) {
+                contents = "-";
+            } else {
+                String lineWord = ls.size() == 1 ? "Line " : "Lines ";
+                String unitWord = units == 1 ? " unit)" : " units)";
+                contents = lineWord + compactRanges(ls) + " (" + units + unitWord;
+            }
             String value = valueByBox.containsKey(seq) ? money(valueByBox.get(seq)) : "-";
             List<String> trackings = trackingsForBox(allRows == null ? rows : allRows, packageCount, seq);
             String tracking = trackings.isEmpty() ? "-" : String.join(", ", trackings);

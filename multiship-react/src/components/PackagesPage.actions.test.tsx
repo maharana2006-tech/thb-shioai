@@ -463,6 +463,41 @@ describe('PackagesPage — sync carrier packaging', () => {
   })
 })
 
+// ===================== Role gating (preset writes are ADMIN-only) =====================
+
+describe('PackagesPage — write controls gated to ADMIN', () => {
+  it('ADMIN sees Add Package + per-card Make default / Edit / Delete', async () => {
+    mockRole = 'ADMIN'
+    listPresetsMock.mockResolvedValue([customPreset(3, 'Box A', { isDefault: false })])
+    const Page = await loadPage()
+    renderPage(Page)
+
+    await waitFor(() => expect(screen.getByText('Box A')).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: /Add Package/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Make default/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Edit$/ })).toBeInTheDocument()
+    expect(screen.getByLabelText('Delete Box A')).toBeInTheDocument()
+  })
+
+  it.each(['USER', 'TENANT'] as const)(
+    '%s: list stays visible (read) but no write controls',
+    async (role) => {
+      mockRole = role
+      listPresetsMock.mockResolvedValue([customPreset(3, 'Box A', { isDefault: false })])
+      const Page = await loadPage()
+      renderPage(Page)
+
+      // The package list itself stays readable.
+      await waitFor(() => expect(screen.getByText('Box A')).toBeInTheDocument())
+      // …but every mutating control is gone (backend 403s these for non-admins).
+      expect(screen.queryByRole('button', { name: /Add Package/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /Make default/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /^Edit$/ })).not.toBeInTheDocument()
+      expect(screen.queryByLabelText('Delete Box A')).not.toBeInTheDocument()
+    },
+  )
+})
+
 // ===================== Fix F1 — kind switch clears fields =====================
 
 describe('PackagesPage — F1 kind switch clears the other-branch fields', () => {
@@ -499,7 +534,8 @@ describe('PackagesPage — F1 kind switch clears the other-branch fields', () =>
 
 describe('PackagesPage — F3 editor unsaved-changes prompt', () => {
   it('clean editor: Cancel closes with NO confirm', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    // BUG — closeEditor now uses notify.confirm instead of window.confirm.
+    notifyConfirmMock.mockReset().mockResolvedValue(true)
     listPresetsMock.mockResolvedValue([customPreset(1, 'Small')])
     const Page = await loadPage()
     renderPage(Page)
@@ -513,12 +549,11 @@ describe('PackagesPage — F3 editor unsaved-changes prompt', () => {
       await userEvent.click(screen.getByRole('button', { name: /^Cancel$/i }))
     })
 
-    expect(confirmSpy).not.toHaveBeenCalled()
-    confirmSpy.mockRestore()
+    expect(notifyConfirmMock).not.toHaveBeenCalled()
   })
 
   it('dirty editor: Cancel prompts confirm; rejecting keeps modal open', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    notifyConfirmMock.mockReset().mockResolvedValue(false)
     listPresetsMock.mockResolvedValue([customPreset(1, 'Small')])
     const Page = await loadPage()
     renderPage(Page)
@@ -537,14 +572,13 @@ describe('PackagesPage — F3 editor unsaved-changes prompt', () => {
       await userEvent.click(screen.getByRole('button', { name: /^Cancel$/i }))
     })
 
-    expect(confirmSpy).toHaveBeenCalled()
+    expect(notifyConfirmMock).toHaveBeenCalled()
     // Modal still open — Register package / Save changes button visible.
     expect(screen.getByRole('button', { name: /Save changes/i })).toBeInTheDocument()
-    confirmSpy.mockRestore()
   })
 
   it('dirty editor: Cancel + accept confirm closes the modal', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    notifyConfirmMock.mockReset().mockResolvedValue(true)
     listPresetsMock.mockResolvedValue([customPreset(1, 'Small')])
     const Page = await loadPage()
     renderPage(Page)
@@ -562,9 +596,8 @@ describe('PackagesPage — F3 editor unsaved-changes prompt', () => {
       await userEvent.click(screen.getByRole('button', { name: /^Cancel$/i }))
     })
 
-    expect(confirmSpy).toHaveBeenCalled()
+    expect(notifyConfirmMock).toHaveBeenCalled()
     // Modal closed — no Save changes button visible.
     await waitFor(() => expect(screen.queryByRole('button', { name: /Save changes/i })).toBeNull())
-    confirmSpy.mockRestore()
   })
 })

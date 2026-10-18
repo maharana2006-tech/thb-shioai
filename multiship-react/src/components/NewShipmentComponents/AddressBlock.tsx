@@ -169,9 +169,18 @@ export function AddressBlock({
               // (backend UpsConnector.joinPhone / equivalents already
               // omit the prefix in that case, so the phone field just
               // rides on the wire as-is).
+              // BUG-008 — clear the state field when the new country
+              // has a dropdown that doesn't include the current value,
+              // so switching Canada → Mexico doesn't leave "ON" behind
+              // for the carrier to reject later.
+              const newOptions = STATE_CODE_OPTIONS[code.toUpperCase()]
+              const keepState = !newOptions
+                || !value.state
+                || newOptions.some((s) => s.code === value.state)
               onChange({
                 countryCode: code,
                 phoneCountryCode: dialCodeFor(code) || '',
+                ...(keepState ? {} : { state: '' }),
               })
             }}
           />
@@ -181,37 +190,47 @@ export function AddressBlock({
         </Field>
       </div>
       <div className="col-span-2 grid grid-cols-3 gap-3">
-        <Field label="State / region" error={errors?.state}>
-          {/* Sprint 51 — for countries where carriers demand a real code
-              (US / CA / AU), render a dropdown so operators can't type
-              'Delaware' and get downstream rate/label rejection. Free-text
-              input stays for every other country. The list keys off the
-              country picked above, so pick the country first. */}
-          {(() => {
-            const options = STATE_CODE_OPTIONS[(value.countryCode || '').toUpperCase()]
-            return options ? (
-              <select
-                className={inputCls}
-                value={value.state}
-                onChange={(e) => onChange({ state: e.target.value })}
-              >
-                <option value="">Select…</option>
-                {options.map((s) => (
-                  <option key={s.code} value={s.code}>
-                    {s.code} — {s.label}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <input
-                className={inputCls}
-                value={value.state}
-                onChange={(e) => onChange({ state: e.target.value })}
-                placeholder="NY"
-              />
-            )
-          })()}
-        </Field>
+        {(() => {
+          // BUG-008: State was unmarked * on countries where it IS required
+          // (MX / BR / IN / etc) and the free-text input showed a US placeholder
+          // 'NY' regardless of country. Mark the field required when the
+          // country has state codes in our data set OR is a known state-required
+          // carrier destination; set a country-specific placeholder.
+          const country = (value.countryCode || '').toUpperCase()
+          const options = STATE_CODE_OPTIONS[country]
+          const stateRequiredCountries = new Set(['US', 'CA', 'AU', 'MX', 'BR', 'IN'])
+          const required = stateRequiredCountries.has(country)
+          const placeholders: Record<string, string> = {
+            US: 'NY', CA: 'ON', AU: 'NSW',
+            MX: 'CMX', BR: 'SP', IN: 'MH', GB: 'LDN', DE: 'BE',
+          }
+          const placeholder = placeholders[country] ?? ''
+          return (
+            <Field label="State / region" required={required} error={errors?.state}>
+              {options ? (
+                <select
+                  className={inputCls}
+                  value={value.state}
+                  onChange={(e) => onChange({ state: e.target.value })}
+                >
+                  <option value="">Select…</option>
+                  {options.map((s) => (
+                    <option key={s.code} value={s.code}>
+                      {s.code} — {s.label}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  className={inputCls}
+                  value={value.state}
+                  onChange={(e) => onChange({ state: e.target.value })}
+                  placeholder={placeholder}
+                />
+              )}
+            </Field>
+          )
+        })()}
         <Field label="City" required error={errors?.city}>
           <input className={inputCls} value={value.city} onChange={(e) => onChange({ city: e.target.value })} placeholder="Buffalo" />
         </Field>

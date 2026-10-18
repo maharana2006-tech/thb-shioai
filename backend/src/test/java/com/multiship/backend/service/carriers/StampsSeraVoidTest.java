@@ -170,6 +170,65 @@ class StampsSeraVoidTest {
         assertTrue(r.voided());
     }
 
+    // ===== BUG-010 — tracking-number is NOT unique across orders =====
+    //
+    // Stamps sandbox hands back the same placeholder tracking for every
+    // label; prod sees rare cross-order collisions. The old path called
+    // findByTrackingNumber (returns Optional<>) and blew up with
+    // IncorrectResultSizeDataAccessException. The fix: when the void path
+    // tags MDC with carrierCallOrderNo (it always does), scope the lookup
+    // by (orderNo, trackingNumber) so it stays a point-lookup.
+
+    @Test
+    void resolveSeraLabelId_withOrderNoInMdc_scopesLookupByOrderAndTracking() {
+        LabelPackage pkg = LabelPackage.builder()
+                .orderNo(42)
+                .trackingNumber(TRACKING)
+                .carrierLabelRef(LABEL_ID)
+                .build();
+        when(labelPackageRepository.findByOrderNoAndTrackingNumber(42, TRACKING))
+                .thenReturn(Optional.of(pkg));
+        // Unscoped finder would have thrown IncorrectResultSizeDataAccessException
+        // in prod — simulate that so the test fails if the fix regresses.
+        when(labelPackageRepository.findByTrackingNumber(TRACKING))
+                .thenThrow(new org.springframework.dao.IncorrectResultSizeDataAccessException(1, 158));
+
+        org.slf4j.MDC.put(
+                com.multiship.backend.service.observability.CarrierCallContext.MDC_CARRIER_ORDER_NO,
+                "42");
+        try {
+            assertEquals(LABEL_ID, connector.resolveSeraLabelId(TRACKING));
+        } finally {
+            org.slf4j.MDC.remove(
+                    com.multiship.backend.service.observability.CarrierCallContext.MDC_CARRIER_ORDER_NO);
+        }
+    }
+
+    @Test
+    void resolveSeraLabelId_crossOrderCollision_returnsOwnLabelId() {
+        // Two orders (42 and 99) share the same tracking number but each
+        // has its own label_id. Order 42's void must return 42's label_id,
+        // not 99's.
+        LabelPackage pkg42 = LabelPackage.builder()
+                .orderNo(42).trackingNumber(TRACKING).carrierLabelRef("label-42").build();
+        LabelPackage pkg99 = LabelPackage.builder()
+                .orderNo(99).trackingNumber(TRACKING).carrierLabelRef("label-99").build();
+        when(labelPackageRepository.findByOrderNoAndTrackingNumber(42, TRACKING))
+                .thenReturn(Optional.of(pkg42));
+        when(labelPackageRepository.findByOrderNoAndTrackingNumber(99, TRACKING))
+                .thenReturn(Optional.of(pkg99));
+
+        org.slf4j.MDC.put(
+                com.multiship.backend.service.observability.CarrierCallContext.MDC_CARRIER_ORDER_NO,
+                "42");
+        try {
+            assertEquals("label-42", connector.resolveSeraLabelId(TRACKING));
+        } finally {
+            org.slf4j.MDC.remove(
+                    com.multiship.backend.service.observability.CarrierCallContext.MDC_CARRIER_ORDER_NO);
+        }
+    }
+
     // ===== SWSIM path unaffected =====
 
     @Test

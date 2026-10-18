@@ -84,6 +84,15 @@ const PICKUP_BY_CARRIER: Record<string, ReadonlyArray<CarrierOption>> = {
  *  hardcoded options at NewShipmentPage.tsx line ~3443 onward. V121 adds
  *  UPS EPL + USPS JPG to the DB so swap-seam parity holds. */
 const LABEL_FORMAT_BY_CARRIER: Record<string, ReadonlyArray<CarrierOption>> = {
+  // BUG-057 R6 — bootstrap FEDEX so first-boot (no V120 seed) picks
+  // the same five codes the registry seeds. DB wins when present.
+  FEDEX: [
+    { value: 'PDF', label: 'PDF (plain)' },
+    { value: 'PNG', label: 'PNG (plain)' },
+    { value: 'ZPLII', label: 'ZPL (thermal)' },
+    { value: 'COMMON2D', label: 'Common 2D (stock)' },
+    { value: 'LABEL_DATA_ONLY', label: 'Label data only' },
+  ],
   UPS: [
     { value: 'GIF', label: 'GIF (raster)' },
     { value: 'PDF', label: 'PDF (vector, sharp)' },

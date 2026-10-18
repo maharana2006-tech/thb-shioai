@@ -73,7 +73,7 @@ class StampsSeraAddressValidateTest {
                     "country_code": "US"
                   },
                   "matched_address": {
-                    "address_line1": "1 WAREHOUSE WAY",
+                    "address_line1": "2 WAREHOUSE WAY",
                     "city": "LOUISVILLE",
                     "state_province": "KY",
                     "postal_code": "40209-1234",
@@ -90,8 +90,9 @@ class StampsSeraAddressValidateTest {
                 """;
         AddressValidationResult r = connector.parseSeraValidateAddressResponse(sampleInput(), json);
 
-        // matched_address differs on the postal (zip+4) so this is CORRECTED,
-        // not EXACT.
+        // BUG-018 R6: casing + ZIP+4 drift no longer counts as CORRECTED
+        // (seraAddressesEqual normalises both). Bump the street number so
+        // the compare detects a real structural change → CORRECTED.
         assertTrue(r.valid());
         assertEquals("CORRECTED", r.matchLevel());
         assertNotNull(r.suggested(), "suggested address must be populated on CORRECTED");

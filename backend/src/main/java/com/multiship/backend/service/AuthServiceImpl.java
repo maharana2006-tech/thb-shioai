@@ -46,6 +46,10 @@ public class AuthServiceImpl implements AuthService {
     @Autowired
     private UserRepository userRepository;
 
+    /** Reused for self-deactivation so the last-admin guard + audit apply. */
+    @Autowired
+    private AdminUserService adminUserService;
+
     /** Logs page: login / failed-login events. Optional for unit tests. */
     @Autowired(required = false)
     private AuditService auditService;
@@ -100,6 +104,12 @@ public class AuthServiceImpl implements AuthService {
 
     @Value("${signup.email-verify-ttl-hours:24}")
     private int emailVerifyTtlHours;
+
+    /** Dev-only shortcut — when true, public signup lands the user with
+     *  emailVerified=true so login works without a mail provider wired
+     *  up. Default false (prod safe); set to true only in dev. */
+    @Value("${signup.auto-verify:false}")
+    private boolean signupAutoVerify;
 
     /**
      * Sprint 51 User↔Client linkage re-audit item #2 — SPA base URL for
@@ -193,9 +203,12 @@ public class AuthServiceImpl implements AuthService {
                 .fullName(signupRequest.getFullName())
                 .role("USER")
                 .clientCode(normalizedClient.toUpperCase())
-                .emailVerified(false)
-                .emailVerifyToken(verifyToken)
-                .emailVerifyExpiresAt(expires)
+                // Dev-only auto-verify short-circuit so a local operator
+                // without a mail provider can still log in. Prod stays
+                // emailVerified=false → verification link required.
+                .emailVerified(signupAutoVerify)
+                .emailVerifyToken(signupAutoVerify ? null : verifyToken)
+                .emailVerifyExpiresAt(signupAutoVerify ? null : expires)
                 .build();
         userRepository.save(user);
         rateLimiter.record(email, ip, true);
@@ -593,5 +606,101 @@ public class AuthServiceImpl implements AuthService {
             clientCode = d.clientCode();
         }
         return ResponseEntity.ok(new SessionResponse(auth.getName(), role, clientCode));
+    }
+
+    @Override
+    public ResponseEntity<?> currentProfile() {
+        User user = currentUserOrNull();
+        if (user == null) return notAuthenticated();
+        return ResponseEntity.ok(toProfile(user));
+    }
+
+    @Override
+    @org.springframework.transaction.annotation.Transactional
+    public ResponseEntity<?> updateProfile(com.multiship.backend.dto.ProfileUpdateRequest request) {
+        User user = currentUserOrNull();
+        if (user == null) return notAuthenticated();
+        user.setFullName(request.getFullName().trim());
+        userRepository.save(user);
+        return ResponseEntity.ok(toProfile(user));
+    }
+
+    /** data:image/<png|jpeg|jpg|webp|gif>;base64,<data> — the only accepted avatar shape. */
+    private static final java.util.regex.Pattern AVATAR_DATA_URL =
+            java.util.regex.Pattern.compile("^data:image/(png|jpe?g|webp|gif);base64,([A-Za-z0-9+/=]+)$");
+    /** Decoded-image ceiling; the client resizes to a thumbnail so real payloads are far smaller. */
+    private static final int MAX_AVATAR_BYTES = 512 * 1024;
+
+    @Override
+    @org.springframework.transaction.annotation.Transactional
+    public ResponseEntity<?> updateAvatar(com.multiship.backend.dto.AvatarUpdateRequest request) {
+        User user = currentUserOrNull();
+        if (user == null) return notAuthenticated();
+
+        String avatar = request.getAvatar();
+        if (avatar == null || avatar.isBlank()) {
+            user.setAvatar(null); // remove photo
+        } else {
+            java.util.regex.Matcher m = AVATAR_DATA_URL.matcher(avatar.trim());
+            if (!m.matches()) {
+                return ResponseEntity.badRequest().body(new MessageResponse(
+                        "Upload a PNG, JPEG, WebP or GIF image.", ErrorCode.VALIDATION_ERROR));
+            }
+            try {
+                int bytes = java.util.Base64.getDecoder().decode(m.group(2)).length;
+                if (bytes == 0 || bytes > MAX_AVATAR_BYTES) {
+                    return ResponseEntity.badRequest().body(new MessageResponse(
+                            "Image must be between 1 byte and 512 KB.", ErrorCode.VALIDATION_ERROR));
+                }
+            } catch (IllegalArgumentException e) {
+                return ResponseEntity.badRequest().body(new MessageResponse(
+                        "Image data is not valid.", ErrorCode.VALIDATION_ERROR));
+            }
+            user.setAvatar(avatar.trim());
+        }
+        userRepository.save(user);
+        return ResponseEntity.ok(toProfile(user));
+    }
+
+    /** The authenticated user as a full entity, or null when the context has no real user. */
+    private User currentUserOrNull() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null || !auth.isAuthenticated()
+                || "anonymousUser".equals(String.valueOf(auth.getPrincipal()))) {
+            return null;
+        }
+        return userRepository.findByUsername(auth.getName()).orElse(null);
+    }
+
+    private static ResponseEntity<MessageResponse> notAuthenticated() {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(new MessageResponse("Not authenticated.", ErrorCode.UNAUTHORIZED));
+    }
+
+    @Override
+    public ResponseEntity<?> deactivateSelf() {
+        User user = currentUserOrNull();
+        if (user == null) return notAuthenticated();
+        // Reuse the admin path so the last-admin guard, token-version bump and
+        // audit row all apply — actor and subject are the same user.
+        AdminUserService.MutationOutcome outcome = adminUserService.deactivate(
+                user.getId(), "Self-service account deactivation", user.getUsername());
+        return switch (outcome.result()) {
+            case OK, ALREADY_IN_TARGET_STATE ->
+                    ResponseEntity.ok(new MessageResponse("Account deactivated."));
+            case LAST_ADMIN_CANNOT_DEACTIVATE ->
+                    ResponseEntity.status(HttpStatus.CONFLICT).body(new MessageResponse(
+                            "You’re the last active admin. Make another user an admin before deactivating your account."));
+            default ->
+                    ResponseEntity.status(HttpStatus.BAD_REQUEST).body(new MessageResponse("Could not deactivate the account."));
+        };
+    }
+
+    private static com.multiship.backend.dto.ProfileResponse toProfile(User u) {
+        return new com.multiship.backend.dto.ProfileResponse(
+                u.getUsername(), u.getEmail(), u.getFullName(), u.getRole(), u.getClientCode(),
+                Boolean.TRUE.equals(u.getEmailVerified()), u.getAvatar(),
+                u.getCreatedAt() == null ? null : u.getCreatedAt().toString(),
+                u.getPreferredCarrier());
     }
 }

@@ -270,7 +270,7 @@ class ClientControllerTest {
         when(clientService.exportClientsCsv(any())).thenReturn(csv);
 
         ResponseEntity<byte[]> resp = controller.exportClientsCsv(
-                null, null, null, null, null, null, null, "code", "ASC");
+                null, null, null, null, null, null, null, "code", "ASC", null);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         assertEquals("text", resp.getHeaders().getContentType().getType());
@@ -299,7 +299,7 @@ class ClientControllerTest {
         // still be valid.
         when(clientService.exportClientsCsv(any())).thenReturn("code\n");
 
-        controller.exportClientsCsv("acme", "ACTIVE", null, null, null, null, null, "code", "ASC");
+        controller.exportClientsCsv("acme", "ACTIVE", null, null, null, null, null, "code", "ASC", null);
 
         ArgumentCaptor<ClientListFilters> filter = ArgumentCaptor.forClass(ClientListFilters.class);
         verify(clientService).exportClientsCsv(filter.capture());
@@ -315,7 +315,7 @@ class ClientControllerTest {
         when(clientService.exportClientsCsv(any())).thenReturn("");
 
         ResponseEntity<byte[]> resp = controller.exportClientsCsv(
-                null, null, null, null, null, null, null, "code", "ASC");
+                null, null, null, null, null, null, null, "code", "ASC", null);
 
         MediaType ct = resp.getHeaders().getContentType();
         assertTrue(ct != null && "text".equals(ct.getType()) && "csv".equals(ct.getSubtype()),

@@ -44,7 +44,7 @@ public class GlobalExceptionHandler {
 
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(ApiResponse.<Void>builder()
-                        .status("error")
+                        .status("ERROR")
                         .code(HttpStatus.BAD_REQUEST.value())
                         .errorCode(ErrorCode.VALIDATION_ERROR.name())
                         .message(buildFriendlyValidationSummary(fieldErrors))
@@ -131,7 +131,7 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResponse<Void>> handleCryptoUnavailable(com.multiship.backend.config.CryptoUnavailableException ex) {
         log.warn("Secrets encryption unavailable: {}", ex.getMessage());
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(ApiResponse.<Void>builder()
-                .status("error").code(503)
+                .status("ERROR").code(503)
                 .message("This feature stores a secret and the server has no SECRETS_ENCRYPTION_KEY configured. "
                         + "Set the environment variable (base64 32-byte AES-256 key) and restart the backend.")
                 .errorCode(ErrorCode.INTERNAL_ERROR.name())
@@ -143,10 +143,132 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResponse<Void>> handleImportBatchState(
             com.multiship.backend.service.OrderImportServiceImpl.ImportBatchStateException ex) {
         return ResponseEntity.status(ex.getStatus()).body(ApiResponse.<Void>builder()
-                .status("error").code(ex.getStatus())
+                .status("ERROR").code(ex.getStatus())
                 .message(ex.getMessage())
                 .errorCode(ex.getErrorCode() != null ? ex.getErrorCode() : ErrorCode.IMPORT_BATCH_STATE.name())
                 .build());
+    }
+
+    /**
+     * BUG-063 — a path variable or query parameter that doesn't convert
+     * to its declared type (e.g. {@code GET /api/v1/orders/abc} when
+     * {@code orderNo} is Integer) is the caller's mistake, not a server
+     * fault. Pre-fix the catch-all RuntimeException handler mapped
+     * {@link org.springframework.web.method.annotation.MethodArgumentTypeMismatchException}
+     * to 500 INTERNAL_ERROR; map it to 400 with the parameter name named.
+     */
+    @ExceptionHandler(org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiResponse<Void>> handleTypeMismatch(
+            org.springframework.web.method.annotation.MethodArgumentTypeMismatchException ex) {
+        log.debug("Type mismatch on {}: {}", ex.getName(), ex.getMessage());
+        String expected = ex.getRequiredType() != null ? ex.getRequiredType().getSimpleName() : "the expected type";
+        // BUG-070 R7 — populate errors.field so the body matches the normal
+        // 404/validation shape; pre-fix this handler returned `errors: null`
+        // while the sibling 404 for the same route named the parameter.
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(ApiResponse.<Void>builder()
+                .status("ERROR").code(400)
+                .message("Parameter '" + ex.getName() + "' must be " + expected + ".")
+                .errorCode(ErrorCode.MALFORMED_REQUEST.name())
+                .errors(ApiResponse.ErrorDetails.builder()
+                        .field(ex.getName())
+                        .code(ErrorCode.MALFORMED_REQUEST.name())
+                        .message("Must be " + expected + ".")
+                        .build())
+                .build());
+    }
+
+    /**
+     * BUG-070 R7 — unknown API routes previously fell through to Spring's
+     * {@code /error} dispatch, which returns the default
+     * {@code {timestamp, status, error, message, path}} shape — totally
+     * different from this app's {@code {status, code, errorCode, message,
+     * errors, timestamp}} envelope. Catch the Spring-internal
+     * {@code NoResourceFoundException} and shape it like every other 404.
+     */
+    @ExceptionHandler(org.springframework.web.servlet.resource.NoResourceFoundException.class)
+    public ResponseEntity<ApiResponse<Void>> handleNoResource(
+            org.springframework.web.servlet.resource.NoResourceFoundException ex) {
+        log.debug("No such route: {}", ex.getResourcePath());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.<Void>builder()
+                .status("ERROR").code(404)
+                .message("No such API route.")
+                .errorCode(ErrorCode.ROUTE_NOT_FOUND.name())
+                .errors(ApiResponse.ErrorDetails.builder()
+                        .field("path")
+                        .code(ErrorCode.ROUTE_NOT_FOUND.name())
+                        .message("/" + ex.getResourcePath())
+                        .build())
+                .build());
+    }
+
+    /**
+     * BUG-077 / 083 / 098 / 099 / 113 / 118 — generic input-shape errors
+     * from the data layer or bean-validation layer that services didn't
+     * catch themselves. All six are 'caller gave something the storage /
+     * schema can't accept' (over-long name, duplicate PK, FK violation,
+     * BigDecimal overflow, @Size overflow). Map every one to 400 with
+     * a cleaned-up message instead of leaking the 500 + stack trace to
+     * the operator. Service-level @ControllerAdvice sites that already
+     * map these more specifically still win via @Order(0) elsewhere.
+     */
+    @ExceptionHandler({
+        org.springframework.dao.DataIntegrityViolationException.class,
+        jakarta.validation.ConstraintViolationException.class,
+        // BUG-098, BUG-118 — many admin controllers throw IllegalArgumentException
+        // for domain validation ('holiday for 2026-12-24 already exists', 'client
+        // code required'). Pre-fix those fell to the catch-all RuntimeException
+        // handler → 500 'Something went wrong on the server'. IAE is a known
+        // signal; map it to 400 with the message passed through verbatim.
+        IllegalArgumentException.class,
+    })
+    public ResponseEntity<ApiResponse<Void>> handleDataIntegrity(Exception ex) {
+        log.debug("Data-integrity / constraint-violation surfaced to handler: {}", ex.getMessage());
+        String msg = humanizeDataError(ex);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(ApiResponse.<Void>builder()
+                .status("ERROR").code(400)
+                .message(msg)
+                .errorCode(ErrorCode.VALIDATION_ERROR.name())
+                .build());
+    }
+
+    /** Best-effort cleanup of a jakarta.validation / Hibernate / Postgres message
+     *  so the operator sees "Name must be between 0 and 255" not a 300-char
+     *  Postgres backtrace. Falls back to a generic sentence when the message
+     *  carries no useful content (e.g. an opaque unique-constraint name). */
+    private static String humanizeDataError(Exception ex) {
+        // BUG-098/118 — pass IllegalArgumentException's own message through
+        // (service writes operator-facing text). DB / bean-validation
+        // messages still humanize below.
+        if (ex instanceof IllegalArgumentException) {
+            return ex.getMessage() == null || ex.getMessage().isBlank()
+                    ? "Please check the form — one or more values are invalid."
+                    : ex.getMessage();
+        }
+        String raw = ex.getMessage() == null ? "" : ex.getMessage();
+        // Hibernate: "could not execute statement; SQL [...]; constraint ["foo_bar_unique"]"
+        if (raw.contains("constraint [") || raw.contains("constraint \"")) {
+            if (raw.toLowerCase().contains("unique")) {
+                return "That value is already used elsewhere.";
+            }
+            if (raw.toLowerCase().contains("foreign key")) {
+                return "This references something that doesn't exist.";
+            }
+        }
+        // Postgres: "value too long for type character varying(255)"
+        if (raw.contains("value too long")) {
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                    .compile("character varying\\((\\d+)\\)").matcher(raw);
+            if (m.find()) return "A value is too long for its field (limit " + m.group(1) + " characters).";
+            return "A value is too long for its field.";
+        }
+        if (raw.toLowerCase().contains("numeric field overflow")) {
+            return "A number is too large for its field.";
+        }
+        // jakarta.validation ConstraintViolation: "field: must not be blank"
+        if (raw.contains("ConstraintViolation") || raw.contains("must not")) {
+            return "Please check the form — one or more fields are missing or invalid.";
+        }
+        return "This value can't be saved — check the form and try again.";
     }
 
     /** A missing body, or one that isn't valid JSON for the endpoint, is the caller's mistake — 400, not 500. */
@@ -156,7 +278,7 @@ public class GlobalExceptionHandler {
         log.debug("Unreadable request body: {}", ex.getMessage());
         boolean missing = ex.getMessage() != null && ex.getMessage().startsWith("Required request body is missing");
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(ApiResponse.<Void>builder()
-                .status("error").code(400)
+                .status("ERROR").code(400)
                 .message(missing
                         ? "This request needs a JSON body."
                         : "The request body isn't valid for this endpoint — check the field names and value types.")
@@ -177,10 +299,13 @@ public class GlobalExceptionHandler {
             org.springframework.web.server.ResponseStatusException ex) {
         int code = ex.getStatusCode().value();
         log.debug("Deliberate {} from a controller: {}", code, ex.getReason());
+        String errorCode = ex instanceof com.multiship.backend.exception.CodedStatusException coded
+                && coded.getErrorCode() != null
+                ? coded.getErrorCode().name() : HttpStatus.valueOf(code).name();
         return ResponseEntity.status(code).body(ApiResponse.<Void>builder()
-                .status("error").code(code)
+                .status("ERROR").code(code)
                 .message(ex.getReason() != null ? ex.getReason() : "Request refused.")
-                .errorCode(HttpStatus.valueOf(code).name())
+                .errorCode(errorCode)
                 .build());
     }
 
@@ -200,10 +325,61 @@ public class GlobalExceptionHandler {
             com.multiship.backend.exception.CarrierConnectionException ex) {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(ApiResponse.<Void>builder()
-                        .status("error")
+                        .status("ERROR")
                         .code(HttpStatus.BAD_REQUEST.value())
                         .errorCode(com.multiship.backend.dto.ErrorCode.CARRIER_CONNECTION_FAILED.name())
                         .message(ex.getMessage())
+                        .build());
+    }
+
+    /**
+     * Spring Security's @PreAuthorize-based method security throws
+     * AuthorizationDeniedException (a RuntimeException) which, pre-fix,
+     * fell to {@link #handleUnexpectedRuntime} and returned 500 with a
+     * correlation id — opaque to the operator and misleading in logs
+     * (the request wasn't a server bug, the caller lacked a role). Map
+     * to a clean 403 FORBIDDEN with a user-facing message. Spotted
+     * running a USER-role smoke test against /api/v1/orders.
+     */
+    @ExceptionHandler(org.springframework.security.authorization.AuthorizationDeniedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleAuthorizationDenied(
+            org.springframework.security.authorization.AuthorizationDeniedException ex) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ApiResponse.<Void>builder()
+                        .status("ERROR")
+                        .code(HttpStatus.FORBIDDEN.value())
+                        .errorCode("FORBIDDEN")
+                        .message("You do not have permission to perform this action.")
+                        .build());
+    }
+
+    /**
+     * R3-BUG-002 — {@link org.springframework.security.access.AccessDeniedException}
+     * is Spring Security's older access-denied type; service layers (e.g.
+     * {@code TenantScopeEnforcer#crossTenantDenied}) throw it from inside a
+     * {@code @Transactional} method so the servlet-level ExceptionTranslationFilter
+     * doesn't see it. Pre-fix it fell to {@link #handleUnexpectedRuntime} and
+     * came back as a 500 INTERNAL_ERROR with a correlation id, drowning the
+     * logs in false-positives for routine cross-tenant request shaping (e.g.
+     * a USER posting /shipments/validate with a foreign clientCode).
+     */
+    @ExceptionHandler(org.springframework.security.access.AccessDeniedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleAccessDenied(
+            org.springframework.security.access.AccessDeniedException ex) {
+        String message = ex.getMessage();
+        String errorCode = "FORBIDDEN";
+        // TenantScopeEnforcer tags its exceptions with "CROSS_TENANT_ACCESS_DENIED: ..."
+        // so machine-readable callers can distinguish tenant isolation from
+        // a plain role check.
+        if (message != null && message.startsWith(com.multiship.backend.dto.ErrorCode.CROSS_TENANT_ACCESS_DENIED.name())) {
+            errorCode = com.multiship.backend.dto.ErrorCode.CROSS_TENANT_ACCESS_DENIED.name();
+        }
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ApiResponse.<Void>builder()
+                        .status("ERROR")
+                        .code(HttpStatus.FORBIDDEN.value())
+                        .errorCode(errorCode)
+                        .message("You do not have permission to perform this action.")
                         .build());
     }
 
@@ -289,7 +465,7 @@ public class GlobalExceptionHandler {
     private static ResponseEntity<ApiResponse<Void>> respondFriendly(String correlationId, HttpStatus status) {
         return ResponseEntity.status(status)
                 .body(ApiResponse.<Void>builder()
-                        .status("error")
+                        .status("ERROR")
                         .code(status.value())
                         .errorCode(ErrorCode.INTERNAL_ERROR.name())
                         .message("Something went wrong on the server. Please try again in a moment. "

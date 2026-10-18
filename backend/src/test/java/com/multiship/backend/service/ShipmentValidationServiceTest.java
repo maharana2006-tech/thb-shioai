@@ -204,6 +204,139 @@ class ShipmentValidationServiceTest {
                 "phone missing must produce a warning so the operator sees it");
     }
 
+    // === BUG-003 - UI-parity phone + email ===========================
+    //
+    // Non-blank phone or email the UI would reject must FAIL pre-flight
+    // (bulk / external callers otherwise slip past until the carrier
+    // label call). Mirrors shipmentSchema.ts phoneErrorFor + Yup email().
+
+    @Test
+    void nonNumericPhone_errorsAsInvalidPhone_BUG003() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.getRecipient().setPhone("abc");
+        stubServiceAndPreset();
+
+        ApiResponse<ShipmentValidationResult> res = service.validate(req);
+
+        assertEquals("FAIL", res.getData().getOverall());
+        assertTrue(res.getData().getLocalErrors().stream()
+                        .anyMatch(e -> "recipient.phone".equals(e.getField())),
+                "'abc' phone must FAIL - got: " + res.getData().getLocalErrors());
+    }
+
+    @Test
+    void shortDigitsPhone_errorsForUS_BUG003() {
+        // US expects exactly 10 digits; '12345' is 5.
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.getRecipient().setPhone("12345");
+        stubServiceAndPreset();
+
+        ApiResponse<ShipmentValidationResult> res = service.validate(req);
+
+        assertEquals("FAIL", res.getData().getOverall());
+        assertTrue(res.getData().getLocalErrors().stream()
+                        .anyMatch(e -> "recipient.phone".equals(e.getField())
+                                && e.getMessage().contains("10 digits")),
+                "short US phone must name the expected 10-digit length");
+    }
+
+    @Test
+    void invalidEmail_errorsAsInvalidEmail_BUG003() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.getRecipient().setEmail("not-an-email");
+        stubServiceAndPreset();
+
+        ApiResponse<ShipmentValidationResult> res = service.validate(req);
+
+        assertEquals("FAIL", res.getData().getOverall());
+        assertTrue(res.getData().getLocalErrors().stream()
+                        .anyMatch(e -> "recipient.email".equals(e.getField())),
+                "'not-an-email' must FAIL recipient.email");
+    }
+
+    @Test
+    void validEmailAndValidPhone_pass_BUG003() {
+        // Pin the happy path - a 10-digit US phone + RFC-ish email
+        // must leave overall at PASS (no new errors).
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.getRecipient().setPhone("(415) 555-0100"); // 10 digits after stripping
+        req.getRecipient().setEmail("jane@example.com");
+        stubServiceAndPreset();
+
+        ApiResponse<ShipmentValidationResult> res = service.validate(req);
+
+        assertEquals("PASS", res.getData().getOverall(),
+                "happy path must PASS - got errors: " + res.getData().getLocalErrors());
+    }
+
+    // === BUG-004 - carrier field length limits ======================
+    //
+    // UPS caps name / address line 1 / address line 2 / reference /
+    // company at 35 chars (120201 'Missing or invalid ship to
+    // attention name' otherwise). Boundary: 35 OK, 36 FAIL.
+
+    @Test
+    void referenceOverLimit_errorsAt36_passesAt35_BUG004() {
+        // 35-char reference is OK
+        ManualShipmentRequest ok = fullDomesticRequest();
+        ok.setReference("A".repeat(35));
+        stubServiceAndPreset();
+        ApiResponse<ShipmentValidationResult> okRes = service.validate(ok);
+        assertTrue(okRes.getData().getLocalErrors().stream()
+                        .noneMatch(e -> "reference".equals(e.getField())),
+                "35-char reference must not error; got " + okRes.getData().getLocalErrors());
+
+        // 36-char reference FAILs
+        ManualShipmentRequest bad = fullDomesticRequest();
+        bad.setReference("A".repeat(36));
+        stubServiceAndPreset();
+        ApiResponse<ShipmentValidationResult> badRes = service.validate(bad);
+        assertEquals("FAIL", badRes.getData().getOverall());
+        assertTrue(badRes.getData().getLocalErrors().stream()
+                        .anyMatch(e -> "reference".equals(e.getField())
+                                && e.getMessage().contains("35")),
+                "36-char reference must FAIL with the limit named");
+    }
+
+    @Test
+    void recipientNameOverLimit_errorsAt36_passesAt35_BUG004() {
+        ManualShipmentRequest ok = fullDomesticRequest();
+        ok.getRecipient().setName("J".repeat(35));
+        stubServiceAndPreset();
+        assertTrue(service.validate(ok).getData().getLocalErrors().stream()
+                        .noneMatch(e -> "recipient.name".equals(e.getField())),
+                "35-char recipient name must not error");
+
+        ManualShipmentRequest bad = fullDomesticRequest();
+        bad.getRecipient().setName("J".repeat(36));
+        stubServiceAndPreset();
+        ApiResponse<ShipmentValidationResult> res = service.validate(bad);
+        assertEquals("FAIL", res.getData().getOverall());
+        assertTrue(res.getData().getLocalErrors().stream()
+                        .anyMatch(e -> "recipient.name".equals(e.getField())
+                                && e.getMessage().contains("35")),
+                "36-char recipient name must FAIL with the limit named");
+    }
+
+    @Test
+    void recipientAddressLine1OverLimit_errorsAt36_passesAt35_BUG004() {
+        ManualShipmentRequest ok = fullDomesticRequest();
+        ok.getRecipient().setAddressLine1("1".repeat(35));
+        stubServiceAndPreset();
+        assertTrue(service.validate(ok).getData().getLocalErrors().stream()
+                        .noneMatch(e -> "recipient.addressLine1".equals(e.getField())),
+                "35-char address line 1 must not error");
+
+        ManualShipmentRequest bad = fullDomesticRequest();
+        bad.getRecipient().setAddressLine1("1".repeat(36));
+        stubServiceAndPreset();
+        ApiResponse<ShipmentValidationResult> res = service.validate(bad);
+        assertEquals("FAIL", res.getData().getOverall());
+        assertTrue(res.getData().getLocalErrors().stream()
+                        .anyMatch(e -> "recipient.addressLine1".equals(e.getField())),
+                "36-char address line 1 must FAIL");
+    }
+
     // ─── Missing sender fields ─────────────────────────────────────────
 
     @Test
@@ -951,6 +1084,46 @@ class ShipmentValidationServiceTest {
 
     // ─── Helpers ───────────────────────────────────────────────────────
 
+    // === BUG-009 - insured <= declared ===============================
+    //
+    // UPS / FedEx / DHL / USPS all expose ONE "declared value" field
+    // that doubles as the insured amount above the free tier. An
+    // insuredValue greater than the declaredValue means the operator is
+    // paying for more insurance than they declared, which the connectors
+    // can't honour on the wire. The validator must FAIL (matching the
+    // Yup rule), not merely WARN, so bulk + external callers can't slip
+    // past.
+
+    @Test
+    void insuredValueGreaterThanDeclaredValue_fails_BUG009() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setDeclaredValue(new BigDecimal("80"));
+        req.setInsuredValue(new BigDecimal("200"));
+        stubServiceAndPreset();
+
+        ApiResponse<ShipmentValidationResult> res = service.validate(req);
+
+        assertEquals("FAIL", res.getData().getOverall(),
+                "insuredValue > declaredValue must FAIL — got: " + res.getData().getLocalErrors());
+        assertTrue(res.getData().getLocalErrors().stream()
+                .anyMatch(e -> "insuredValue".equals(e.getField())
+                        && e.getMessage().contains("exceed declared")),
+                "expected an insuredValue error — got: " + res.getData().getLocalErrors());
+    }
+
+    @Test
+    void insuredValueEqualToDeclaredValue_passes_BUG009() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setDeclaredValue(new BigDecimal("200"));
+        req.setInsuredValue(new BigDecimal("200"));
+        stubServiceAndPreset();
+
+        ApiResponse<ShipmentValidationResult> res = service.validate(req);
+
+        assertTrue(res.getData().getLocalErrors().stream()
+                .noneMatch(e -> "insuredValue".equals(e.getField())),
+                "insured == declared is OK — got: " + res.getData().getLocalErrors());
+    }
     private ManualShipmentRequest fullDomesticRequest() {
         ManualShipmentRequest r = new ManualShipmentRequest();
         r.setCarrierCode("FEDEX");

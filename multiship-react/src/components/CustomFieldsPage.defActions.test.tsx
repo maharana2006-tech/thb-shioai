@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, act, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, Outlet } from 'react-router-dom'
 import type { ComponentType } from 'react'
@@ -50,13 +50,14 @@ vi.mock('../api/clientService', () => ({
 const notifySuccessMock = vi.fn()
 const notifyErrorMock = vi.fn()
 const notifyApiErrorMock = vi.fn()
+const notifyConfirmMock = vi.fn()
 vi.mock('../utils/notify', () => ({
   notify: {
     success: (...args: unknown[]) => notifySuccessMock(...args),
     error: (...args: unknown[]) => notifyErrorMock(...args),
     apiError: (...args: unknown[]) => notifyApiErrorMock(...args),
     info: vi.fn(),
-    confirm: vi.fn().mockResolvedValue(true),
+    confirm: (...args: unknown[]) => notifyConfirmMock(...args),
   },
 }))
 
@@ -96,24 +97,23 @@ const def = (id: number | undefined, overrides: Partial<{
 // ---------- Fail-loud fetch spy + window.confirm stub ----------
 
 let confirmResult = true
-const originalConfirm = globalThis.confirm
 
 beforeEach(() => {
   vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
     throw new Error('un-mocked fetch forbidden in unit tests')
   })
   ;[listMock, saveMock, removeMock, listClientsMock,
-    notifySuccessMock, notifyErrorMock, notifyApiErrorMock].forEach((m) => m.mockReset())
+    notifySuccessMock, notifyErrorMock, notifyApiErrorMock, notifyConfirmMock].forEach((m) => m.mockReset())
   listClientsMock.mockResolvedValue({ data: { content: [] } })
   confirmResult = true
-  // The Delete path uses window.confirm — stub for happy + cancel paths.
-  globalThis.confirm = vi.fn(() => confirmResult)
+  // BUG-075 — Delete path now uses notify.confirm (in-app dialog) instead
+  // of window.confirm. Stub the mock to resolve to confirmResult.
+  notifyConfirmMock.mockImplementation(() => Promise.resolve(confirmResult))
 })
 
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
-  globalThis.confirm = originalConfirm
 })
 
 async function loadPage(): Promise<ComponentType> {
@@ -313,8 +313,11 @@ describe('CustomFieldsPage — editor save flow', () => {
     const baseCalls = listMock.mock.calls.length
     await act(async () => { await userEvent.click(screen.getByRole('button', { name: /New field/i })) })
 
-    await userEvent.type(await screen.findByPlaceholderText(/po_number/i), 'notes')
-    await userEvent.type(screen.getByPlaceholderText(/PO Number/i), 'Notes')
+    // fireEvent.change (one event with the full value) rather than userEvent.type:
+    // the key field's BUG-112 sanitizer onChange desyncs char-by-char typing on
+    // the controlled input, leaving fieldKey empty so save never validates.
+    fireEvent.change(await screen.findByPlaceholderText(/po_number/i), { target: { value: 'notes' } })
+    fireEvent.change(screen.getByPlaceholderText(/PO Number/i), { target: { value: 'Notes' } })
 
     await act(async () => {
       await userEvent.click(screen.getByRole('button', { name: /Save/i }))
@@ -338,8 +341,11 @@ describe('CustomFieldsPage — editor save flow', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /New field/i })).toBeInTheDocument())
     await act(async () => { await userEvent.click(screen.getByRole('button', { name: /New field/i })) })
 
-    await userEvent.type(await screen.findByPlaceholderText(/po_number/i), 'notes')
-    await userEvent.type(screen.getByPlaceholderText(/PO Number/i), 'Notes')
+    // fireEvent.change (one event with the full value) rather than userEvent.type:
+    // the key field's BUG-112 sanitizer onChange desyncs char-by-char typing on
+    // the controlled input, leaving fieldKey empty so save never validates.
+    fireEvent.change(await screen.findByPlaceholderText(/po_number/i), { target: { value: 'notes' } })
+    fireEvent.change(screen.getByPlaceholderText(/PO Number/i), { target: { value: 'Notes' } })
 
     await act(async () => {
       await userEvent.click(screen.getByRole('button', { name: /Save/i }))

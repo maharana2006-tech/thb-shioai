@@ -111,6 +111,10 @@ export interface ClientListParams {
   sortDirection?: 'ASC' | 'DESC'
   page?: number
   size?: number
+  /** BUG-038 — comma-joined list of visible columns to include in the
+   *  CSV export. When omitted the server includes every column. The
+   *  table surfaces these from table.getVisibleLeafColumns(). */
+  columns?: string
 }
 
 export const clientService = {
@@ -181,6 +185,7 @@ export const clientService = {
     if (params.code?.trim()) query.set('code', params.code.trim())
     if (params.name?.trim()) query.set('name', params.name.trim())
     if (params.city?.trim()) query.set('city', params.city.trim())
+    if (params.columns?.trim()) query.set('columns', params.columns.trim())
 
     // Sprint 50 PR Q3 — cookie-mode auth.
     const response = await fetch(`${BASE_URL}/clients/export.csv?${query.toString()}`, {

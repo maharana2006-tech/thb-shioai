@@ -874,6 +874,19 @@ public class BulkLabelServiceImpl implements BulkLabelService {
      * {@code /mps-progress/{orderNo}}.
      */
     private OrderOutcome processOneOrder(long jobId, long orderNo, UserDetails jobUser) {
+        // BUG-015 - fan-out workers run on their own threads; the
+        // CarrierCallContext wrap inside CarrierServiceImpl.generateLabel
+        // misses any sibling HTTP (USPS routing resolution, address-check
+        // fallbacks, etc.) made from this worker. Tag at the top of the
+        // worker so every carrier_api_log row from this iteration links
+        // to the right order.
+        try (var ignored = com.multiship.backend.service.observability
+                .CarrierCallContext.forOrder(orderNo)) {
+            return processOneOrderInner(jobId, orderNo, jobUser);
+        }
+    }
+
+    private OrderOutcome processOneOrderInner(long jobId, long orderNo, UserDetails jobUser) {
         // Cancellation gate — checked BEFORE calling the carrier so a
         // cancel() request stops new labels from being generated even if
         // dozens of worker tasks are still queued behind it. Already-

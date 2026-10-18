@@ -144,11 +144,40 @@ export default function LabelTemplateEditorPage() {
 
   const handleLogo = async (file: File | null) => {
     if (!file) return
+    // BUG-107 — accept attribute is 'image/png,image/jpeg' but the browser
+    // still lets a file picker return other types + a File-API read bypasses
+    // the accept filter entirely. SVG is script-capable and renders inside
+    // the generated commercial invoice, which is a stored-XSS vector when
+    // the invoice is viewed in a browser context. Validate the MIME type
+    // AND the magic bytes before persisting.
+    if (!['image/png', 'image/jpeg'].includes(file.type)) {
+      notify.error({ title: 'Not a supported logo', body: 'Logo must be a PNG or JPEG. SVG and other formats are not supported.' })
+      return
+    }
     if (file.size > 200 * 1024) {
       notify.error('Logo must be under 200 KB. Try compressing the image.')
       return
     }
     const dataUrl = await readAsDataUrl(file)
+    // Second-line defence: data URL must start with the PNG or JPEG MIME
+    // prefix so a renamed .svg can't slip through.
+    const okPrefix = dataUrl.startsWith('data:image/png;') || dataUrl.startsWith('data:image/jpeg;')
+    if (!okPrefix) {
+      notify.error({ title: 'Not a supported logo', body: 'The file did not match PNG or JPEG format.' })
+      return
+    }
+    // BUG-107 — a text file renamed with a .png extension can still slip
+    // past the MIME check (the browser trusts the filename). Verify the
+    // decoded bytes start with the PNG magic signature (89 50 4E 47)
+    // or JPEG SOI (FF D8 FF).
+    const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1)
+    const bytes = Uint8Array.from(atob(base64.slice(0, 8)), (c) => c.charCodeAt(0))
+    const isPng = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47
+    const isJpeg = bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF
+    if (!isPng && !isJpeg) {
+      notify.error({ title: 'Not a supported logo', body: 'The file bytes aren\'t a PNG or JPEG. Try a real image.' })
+      return
+    }
     updateField('logoBase64', dataUrl)
   }
 
@@ -203,7 +232,7 @@ export default function LabelTemplateEditorPage() {
 
   const clientOptions = useMemo(
     () => [
-      { value: PLATFORM_DEFAULT_VALUE, label: 'Platform default (all tenants without their own)' },
+      { value: PLATFORM_DEFAULT_VALUE, label: 'Platform default (all clients without their own)' },
       ...clients.map((c) => ({
         value: c.clientCode,
         label: `${c.clientCode} — ${c.name}`,
@@ -311,8 +340,8 @@ export default function LabelTemplateEditorPage() {
 
             <p className={fieldHint}>
               {isEdit
-                ? 'Tenant + type are locked after creation (unique per pair).'
-                : "A tenant's row overrides the platform default for the same type."}
+                ? 'Client + type are locked after creation (unique per pair).'
+                : "A client's row overrides the platform default for the same type."}
             </p>
           </Panel>
 
@@ -379,12 +408,31 @@ export default function LabelTemplateEditorPage() {
                   className="absolute inset-0 cursor-pointer opacity-0"
                 />
               </label>
+              {/* BUG-108 — box used to accept any text ('zzz' saved as a
+                  white swatch). Validate the typed value as a #RRGGBB or
+                  #RGB hex colour; only commit when it parses. Live-type
+                  up to 7 chars but roll back + flag otherwise. */}
+              {/* BUG-108 — box used to accept any text ('zzz' saved as a
+                  white swatch). Reject anything that isn't #RRGGBB or
+                  #RGB on blur; let paste reach seven chars first. */}
               <div className="w-28">
                 <FieldCell label="Hex">
                   <input
                     type="text"
                     value={template.primaryColor || ''}
-                    onChange={(e) => updateField('primaryColor', e.target.value)}
+                    onChange={(e) => {
+                      const raw = e.target.value.toUpperCase().slice(0, 7)
+                      updateField('primaryColor', raw)
+                    }}
+                    onBlur={(e) => {
+                      const v = e.target.value.trim()
+                      if (v && !/^#([0-9A-F]{3}|[0-9A-F]{6})$/.test(v)) {
+                        notify.error({ title: 'Not a hex colour', body: 'Use #RRGGBB (e.g. #112233) or the colour picker on the left.' })
+                        updateField('primaryColor', DEFAULT_COLOR)
+                      }
+                    }}
+                    pattern="^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$"
+                    maxLength={7}
                     placeholder={DEFAULT_COLOR}
                     className="w-full bg-transparent font-mono text-[12px] font-semibold uppercase text-[#1f150c] outline-none"
                   />
@@ -471,8 +519,12 @@ export default function LabelTemplateEditorPage() {
             {template.layoutJson ? (
               <button
                 type="button"
-                onClick={() => {
-                  if (!window.confirm('Clear the whole layout? The branding header / footer / logo will be used at render time until you rebuild.')) return
+                onClick={async () => {
+                  const ok = await notify.confirm(
+                    'Clear the whole layout? The branding header / footer / logo will be used at render time until you rebuild.',
+                    { title: 'Clear layout', confirmLabel: 'Clear', cancelLabel: 'Keep', danger: true },
+                  )
+                  if (!ok) return
                   setTemplate((prev) => ({ ...prev, layoutJson: null }))
                 }}
                 className="mb-2 inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[10.5px] font-semibold text-[#6b5c42] transition hover:bg-[#faf7f0]"
@@ -514,7 +566,7 @@ export default function LabelTemplateEditorPage() {
               </li>
               <li className="flex items-start gap-1.5">
                 <FiCheck className="mt-0.5 h-3 w-3 shrink-0 text-emerald-600" />
-                Tenant-scoped — each client can override the platform default.
+                Client-scoped — each client can override the platform default.
               </li>
               <li className="flex items-start gap-1.5 text-[#6b5c42]">
                 <FiInfo className="mt-0.5 h-3 w-3 shrink-0" />

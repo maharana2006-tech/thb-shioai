@@ -618,6 +618,52 @@ class AccountRefServiceImplTest {
         verify(publisher).publishEvent(any(CarrierConfigChangedEvent.class));
     }
 
+    private CarrierAccountRef authorizedUspsAccount(AccountRefUpsertRequest req) {
+        when(tenantScope.clampClientCode("ACME")).thenReturn("ACME");
+        CarrierConnector connector = mock(CarrierConnector.class);
+        when(connector.getCarrierCode()).thenReturn("USPS");
+        when(carrierService.getCarrierConnector("USPS")).thenReturn(connector);
+        CarrierAccountRef existing = accountWithTenant(51L, "ACME");
+        existing.setCarrierCode("USPS");
+        existing.setClientId("cid");
+        existing.setClientSecret("csec");
+        existing.setEnvironment("SANDBOX");
+        existing.setStampsRefreshToken("rt-sandbox");
+        existing.setVerified(true);
+        existing.setLastVerifiedAt(LocalDateTime.of(2026, 10, 1, 0, 0));
+        when(accountRepo
+                .findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCaseAndCustomerNoIgnoreCase(
+                        "874157", "USPS", "ACME"))
+                .thenReturn(Optional.of(existing));
+        when(accountRepo.save(any(CarrierAccountRef.class))).thenAnswer(inv -> inv.getArgument(0));
+        return existing;
+    }
+
+    @Test
+    void upsertAccount_environmentChanged_dropsTheStampsTokenSoItIsAuthorizedAgain() {
+        AccountRefUpsertRequest req = AccountRefUpsertRequest.builder()
+                .accountNumber("874157").carrierCode("USPS").customerNo("ACME")
+                .environment("PRODUCTION").build();
+        CarrierAccountRef existing = authorizedUspsAccount(req);
+
+        service.upsertAccount(req);
+
+        assertNull(existing.getStampsRefreshToken(), "a sandbox token must not be used in production");
+        assertNull(existing.getVerified());
+    }
+
+    @Test
+    void upsertAccount_renameOnly_keepsTheStampsToken() {
+        AccountRefUpsertRequest req = AccountRefUpsertRequest.builder()
+                .accountNumber("874157").carrierCode("USPS").customerNo("ACME")
+                .accountName("Renamed").environment("sandbox").clientId("cid").build();
+        CarrierAccountRef existing = authorizedUspsAccount(req);
+
+        service.upsertAccount(req);
+
+        assertEquals("rt-sandbox", existing.getStampsRefreshToken());
+    }
+
     /* -------------------------- getPlatformCredentials --------------------- */
 
     @Test

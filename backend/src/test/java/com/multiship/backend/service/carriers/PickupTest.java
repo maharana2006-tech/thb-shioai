@@ -127,6 +127,17 @@ class PickupTest {
         assertEquals("ERROR", r.status());
     }
 
+    /** BUG-008 — PaymentMethod and OverweightIndicator are required by UPS PickupCreationRequest. */
+    @Test
+    @SuppressWarnings("unchecked")
+    void ups_pickup_body_billsTheShipperAccount_andFlagsOverweight() {
+        UpsConnector c = new UpsConnector(new CarrierProperties(), new ObjectMapper());
+        java.util.Map<String, Object> pcr = (java.util.Map<String, Object>)
+                c.buildUpsPickupRequest(baseRequest()).get("PickupCreationRequest");
+        assertEquals("01", pcr.get("PaymentMethod"));
+        assertEquals("N", pcr.get("OverweightIndicator"));
+    }
+
     @Test
     @SuppressWarnings("unchecked")
     void ups_pickup_body_carries_real_account_number_not_contact_name() {
@@ -248,6 +259,25 @@ class PickupTest {
     }
 
     /* -------------------------- FedEx -------------------------- */
+
+    /** BUG-007 — the typed wall-clock time, with seconds, not shifted by the server's zone. */
+    @Test
+    @SuppressWarnings("unchecked")
+    void fedexReadyTimestamp_isTheTypedLocalTimeWithSeconds() {
+        java.util.TimeZone saved = java.util.TimeZone.getDefault();
+        try {
+            java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("UTC"));
+            FedExConnector c = new FedExConnector(new CarrierProperties(), new ObjectMapper(), noFx());
+            PickupRequest r = new PickupRequest(java.time.LocalDate.of(2026, 10, 15), java.time.LocalTime.of(9, 0),
+                    java.time.LocalTime.of(17, 0), new AddressToValidate("Dock", null, "1 QA Test Street", null, null,
+                    "Zeeland", "MI", "49464", "US"), "QA", "6165550100", 2, new BigDecimal("10"), "LB", null,
+                    "740561111", null, null, null, null, null);
+            java.util.Map<String, Object> origin = (java.util.Map<String, Object>) c.buildFedExPickupRequest(r).get("originDetail");
+            assertEquals("2026-10-15T09:00:00Z", origin.get("readyDateTimestamp"));
+        } finally {
+            java.util.TimeZone.setDefault(saved);
+        }
+    }
 
     @Test
     @SuppressWarnings("unchecked")

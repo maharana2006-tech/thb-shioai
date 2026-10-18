@@ -69,6 +69,7 @@ class ShippingConfigServiceTest {
     private WarehouseRepository warehouseRepository;
     private CarrierAccountRefRepository carrierAccountRefRepository;
     private ApplicationEventPublisher eventPublisher;
+    private TenantScopeEnforcer tenantScope;
     private CarrierConnector upsMock;
     private CarrierConnector fedexMock;
 
@@ -86,6 +87,11 @@ class ShippingConfigServiceTest {
         warehouseRepository = mock(WarehouseRepository.class);
         carrierAccountRefRepository = mock(CarrierAccountRefRepository.class);
         eventPublisher = mock(ApplicationEventPublisher.class);
+        // Default: pass-through clamp (platform-operator behaviour) so the
+        // existing catalog/preset tests are unaffected. The tenant-clamp
+        // behaviour itself is exercised separately below with a real enforcer.
+        tenantScope = mock(TenantScopeEnforcer.class);
+        when(tenantScope.clampClientCode(any())).thenAnswer(inv -> inv.getArgument(0));
 
         // Anti-fallback: two mock connectors stand in for the real UPS and
         // FedEx classes. Their impls (Ups/FedEx/Stamps/DhlConnector) are
@@ -100,7 +106,7 @@ class ShippingConfigServiceTest {
                 clientShipviaAliasRepository, clientShipviaMapPackageRepository,
                 clientServiceAliasRepository, clientAllowedPackageRepository,
                 warehouseRepository, List.of(upsMock, fedexMock),
-                carrierAccountRefRepository, eventPublisher);
+                carrierAccountRefRepository, eventPublisher, tenantScope);
     }
 
     // ================ helpers ================
@@ -693,5 +699,37 @@ class ShippingConfigServiceTest {
         assertTrue(service.serviceByCode("FEDEX", null, "US").isEmpty());
         assertTrue(service.serviceByCode("", "GROUND", "US").isEmpty());
         assertTrue(service.serviceByCode("FEDEX", "", "US").isEmpty());
+    }
+
+    // ================ tenant clamp on shipViaCodesFor ================
+
+    @org.junit.jupiter.api.AfterEach
+    void clearSecurityContext() {
+        org.springframework.security.core.context.SecurityContextHolder.clearContext();
+    }
+
+    @Test
+    void shipViaCodesFor_scopedUser_foreignClientCode_isRejected() {
+        // A tenant-scoped USER (ACME) asking for client OTHER's ship-via maps
+        // must be clamped → AccessDeniedException, before any row is read.
+        var authorities = List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_USER"));
+        var principal = org.springframework.security.core.userdetails.User
+                .withUsername("acmeuser").password("").authorities(authorities).build();
+        var token = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                principal, null, authorities);
+        token.setDetails(new com.multiship.backend.config.JwtAuthenticationFilter.AuthDetails("ACME"));
+        org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(token);
+
+        ShippingConfigService scoped = new ShippingConfigService(
+                serviceRepository, presetRepository, servicePackageRepository,
+                clientShipviaAliasRepository, clientShipviaMapPackageRepository,
+                clientServiceAliasRepository, clientAllowedPackageRepository,
+                warehouseRepository, List.of(upsMock, fedexMock),
+                carrierAccountRefRepository, eventPublisher,
+                new TenantScopeEnforcer(new com.multiship.backend.config.AccessScopePolicy(true)));
+
+        org.junit.jupiter.api.Assertions.assertThrows(
+                org.springframework.security.access.AccessDeniedException.class,
+                () -> scoped.shipViaCodesFor("OTHER"));
     }
 }

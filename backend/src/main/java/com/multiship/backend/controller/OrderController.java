@@ -1,6 +1,5 @@
 package com.multiship.backend.controller;
 
-import com.multiship.backend.config.CarrierProperties;
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.OrderAccountResolutionDTO;
 import com.multiship.backend.dto.OrderListFilters;
@@ -77,13 +76,6 @@ public class OrderController {
 
     @org.springframework.beans.factory.annotation.Value("${label.render-carrier-zpl:false}")
     private boolean renderCarrierZplEnabled;
-
-    @Autowired
-    private CarrierProperties carrierProperties;
-
-    // C1 — resolves tenant_settings.shipper.* on top of the platform default.
-    @Autowired
-    private com.multiship.backend.service.carrier.ShipperDefaultsService shipperDefaultsService;
 
     @Autowired
     private com.multiship.backend.repository.OrderTrackingRepository orderTrackingRepository;
@@ -622,18 +614,24 @@ public class OrderController {
             shipper = addressMap(client.getShipFrom(), client.getName());
             returnTo = addressMap(client.effectiveReturnAddress(), client.getName());
         } else {
-            // C1 — tenant-scoped shipper defaults keyed on the order's tenant.
-            String orderTenant = order.getTenantId() != null ? order.getTenantId() : order.getCustNo();
-            CarrierProperties.ShipperDefaults d = shipperDefaultsService.resolveFor(orderTenant);
+            // BUG-137 R7 — removed the platform-default fallback. It printed
+            // "Multiship Warehouse, Bengaluru" on the preview whenever the
+            // order's ship_from_* was blank + the client had no ship-from
+            // configured, which lied about what's on the label the carrier
+            // already has. Return the order's columns as-is (likely blank);
+            // the FE renders dashes and the operator knows the data is
+            // missing instead of trusting a fake address.
             shipper = new LinkedHashMap<>();
-            shipper.put("name", d.getName());
-            shipper.put("phone", d.getPhone());
-            shipper.put("addressLine1", d.getAddressLine1());
-            shipper.put("addressLine2", d.getAddressLine2());
-            shipper.put("city", d.getCity());
-            shipper.put("state", d.getState());
-            shipper.put("postalCode", d.getPostalCode());
-            shipper.put("countryCode", d.getCountryCode());
+            shipper.put("name", org.springframework.util.StringUtils.hasText(order.getShipFromName())
+                    ? order.getShipFromName() : order.getShipFromCompany());
+            shipper.put("company", order.getShipFromCompany());
+            shipper.put("phone", order.getShipFromPhone());
+            shipper.put("addressLine1", order.getShipFromAddr1());
+            shipper.put("addressLine2", order.getShipFromAddr2());
+            shipper.put("city", order.getShipFromCity());
+            shipper.put("state", order.getShipFromState());
+            shipper.put("postalCode", order.getShipFromZip());
+            shipper.put("countryCode", order.getShipFromCountryCd());
             returnTo = shipper;
         }
 
@@ -1345,12 +1343,35 @@ public class OrderController {
                     + "feature flag is off or the carrier artifact isn't ZPL; FE "
                     + "falls back to its JSX facsimile.")
     @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
-    @GetMapping(value = "/{orderNo}/label/preview.png",
+    // BUG-015 — also serve HEAD so the FE's existence-probe doesn't get
+    // 503 from the dispatcher. Spring maps HEAD to GET automatically for
+    // explicitly-named methods; this entry declares both so Spring Security
+    // + the method-matcher short-circuit for HEAD stop at a cheap 200/404.
+    @org.springframework.web.bind.annotation.RequestMapping(
+            value = "/{orderNo}/label/preview.png",
+            method = { org.springframework.web.bind.annotation.RequestMethod.GET,
+                       org.springframework.web.bind.annotation.RequestMethod.HEAD },
             produces = org.springframework.http.MediaType.IMAGE_PNG_VALUE)
     public ResponseEntity<byte[]> getLabelPreviewPng(@PathVariable Integer orderNo,
-            @org.springframework.web.bind.annotation.RequestParam(name = "pkg", required = false) Integer pkgIndex) {
+            @org.springframework.web.bind.annotation.RequestParam(name = "pkg", required = false) Integer pkgIndex,
+            jakarta.servlet.http.HttpServletRequest httpReq) {
         if (!renderCarrierZplEnabled) {
             return ResponseEntity.status(404).build();
+        }
+        // BUG-015 — HEAD is a cheap existence probe (the FE calls it to
+        // decide between the carrier PNG and the local facsimile). If
+        // zebrash isn't installed, the render path throws and we 502;
+        // the FE then re-reads it as "503" and the page shows a slow
+        // fallback. Short-circuit on HEAD: return 200 if the ZPL bytes
+        // resolve, 404 otherwise, with no render involved.
+        if ("HEAD".equalsIgnoreCase(httpReq.getMethod())) {
+            Integer probePkg = (pkgIndex != null && pkgIndex > 0) ? pkgIndex : null;
+            java.util.Optional<byte[]> zpl =
+                    labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", probePkg);
+            return zpl.isPresent()
+                    ? ResponseEntity.ok().header("Content-Type",
+                            org.springframework.http.MediaType.IMAGE_PNG_VALUE).build()
+                    : ResponseEntity.status(404).build();
         }
         try {
             byte[] png;
@@ -1429,9 +1450,15 @@ public class OrderController {
     @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
     @GetMapping(value = "/{orderNo}/packing-slip",
             produces = org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
-    public ResponseEntity<byte[]> getPackingSlip(@PathVariable Integer orderNo) {
+    public ResponseEntity<byte[]> getPackingSlip(
+            @PathVariable Integer orderNo,
+            // BUG-109 — Settings > Templates > Preview passes templateId so
+            // an admin previews THIS template on the order's data, not
+            // whatever the order's own client resolves to. Blank/absent =
+            // per-order resolution (regular order-view path).
+            @RequestParam(value = "templateId", required = false) Long templateId) {
         try {
-            byte[] pdf = packingSlipService.render(orderNo);
+            byte[] pdf = packingSlipService.renderWithTemplate(orderNo, templateId);
             return ResponseEntity.ok()
                     .header("Content-Disposition",
                             "inline; filename=packing-slip-" + orderNo + ".pdf")

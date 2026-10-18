@@ -31,12 +31,17 @@ public interface ClientRepository extends JpaRepository<Client, Long> {
     @Query("select c from Client c where upper(c.clientCode) in :codes")
     List<Client> findByClientCodeInIgnoreCase(@Param("codes") java.util.Collection<String> codes);
 
+    // BUG-022 — the service escapes % and _ in the search keyword with
+    // backslash, but the LIKE clauses had no ESCAPE token so Postgres
+    // treated the backslash as literal and the % stayed as a wildcard.
+    // Add ESCAPE '\' to every LIKE so the escapeLike() call actually
+    // takes effect.
     @Query("""
         SELECT c FROM Client c
         WHERE :keyword = ''
-           OR UPPER(c.clientCode) LIKE CONCAT('%', UPPER(:keyword), '%')
-           OR UPPER(c.name) LIKE CONCAT('%', UPPER(:keyword), '%')
-           OR UPPER(COALESCE(c.shipFrom.city, '')) LIKE CONCAT('%', UPPER(:keyword), '%')
+           OR UPPER(c.clientCode) LIKE CONCAT('%', UPPER(:keyword), '%') ESCAPE '\\'
+           OR UPPER(c.name) LIKE CONCAT('%', UPPER(:keyword), '%') ESCAPE '\\'
+           OR UPPER(COALESCE(c.shipFrom.city, '')) LIKE CONCAT('%', UPPER(:keyword), '%') ESCAPE '\\'
         ORDER BY c.clientCode
     """)
     Page<Client> search(@Param("keyword") String keyword, Pageable pageable);
@@ -48,13 +53,13 @@ public interface ClientRepository extends JpaRepository<Client, Long> {
 
     String CLIENT_FILTER_SQL = """
         WHERE (:keyword = ''
-               OR UPPER(c.client_code) LIKE CONCAT('%', UPPER(:keyword), '%')
-               OR UPPER(c.name) LIKE CONCAT('%', UPPER(:keyword), '%')
-               OR UPPER(COALESCE(c.city,'')) LIKE CONCAT('%', UPPER(:keyword), '%'))
+               OR UPPER(c.client_code) LIKE CONCAT('%', UPPER(:keyword), '%') ESCAPE '\\'
+               OR UPPER(c.name) LIKE CONCAT('%', UPPER(:keyword), '%') ESCAPE '\\'
+               OR UPPER(COALESCE(c.city,'')) LIKE CONCAT('%', UPPER(:keyword), '%') ESCAPE '\\')
           AND (:status = '' OR UPPER(c.status) = :status)
-          AND (:codeLike = '' OR UPPER(c.client_code) LIKE CONCAT('%', UPPER(:codeLike), '%'))
-          AND (:nameLike = '' OR UPPER(c.name) LIKE CONCAT('%', UPPER(:nameLike), '%'))
-          AND (:cityLike = '' OR UPPER(COALESCE(c.city,'')) LIKE CONCAT('%', UPPER(:cityLike), '%'))
+          AND (:codeLike = '' OR UPPER(c.client_code) LIKE CONCAT('%', UPPER(:codeLike), '%') ESCAPE '\\')
+          AND (:nameLike = '' OR UPPER(c.name) LIKE CONCAT('%', UPPER(:nameLike), '%') ESCAPE '\\')
+          AND (:cityLike = '' OR UPPER(COALESCE(c.city,'')) LIKE CONCAT('%', UPPER(:cityLike), '%') ESCAPE '\\')
           AND (:carrier = '' OR EXISTS (SELECT 1 FROM carrier_account_ref r
                 WHERE UPPER(TRIM(COALESCE(r.customer_no,''))) = UPPER(c.client_code)
                 AND UPPER(r.carrier_code) = :carrier))

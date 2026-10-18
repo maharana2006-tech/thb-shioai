@@ -5349,6 +5349,15 @@ public class OrderImportServiceImpl implements OrderImportService {
         // countryOfOrigin (see HEADERS). Row values below must stay in
         // that exact positional order.
         StringBuilder sb = new StringBuilder();
+        // BUG-014 - a sample row that names an internal carrier service code
+        // (FEDEX_GROUND / INTERNATIONAL_PRIORITY) gets its own sample rejected
+        // by the importer, which only accepts the client's own ship-via codes
+        // (ClientShipviaCodeMap). Lead with a comment line naming what goes
+        // in serviceType so operators don't guess.
+        String sampleClient = sampleClientCode();
+        String sampleShipVia = sampleShipViaCode(sampleClient);
+        sb.append("# serviceType is this client's own ship-via code (see /settings/shipping-service-mapping) - e.g. ")
+                .append(sampleShipVia == null ? "<client ship-via code>" : sampleShipVia).append('\n');
         sb.append(String.join(",", HEADERS)).append('\n');
         // Sample row — international UK shipment with 1 line-item so
         // operators see all the columns exercised in one go. Column
@@ -5359,7 +5368,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         // fold into one shipment). Client / warehouse / account are left blank
         // so the sample never names entities that don't exist on this install
         // — blank values resolve through the client default cascade.
-        for (Map<String, String> row : sampleRows(sampleClientCode())) {
+        for (Map<String, String> row : sampleRows(sampleClient, sampleShipVia)) {
             List<String> cells = new ArrayList<>(HEADERS.size());
             for (String h : HEADERS) cells.add(row.getOrDefault(h, ""));
             sb.append(String.join(",", cells)).append('\n');
@@ -5371,7 +5380,8 @@ public class OrderImportServiceImpl implements OrderImportService {
     public byte[] clientLayoutCsvTemplate() {
         List<String> keys = ImportColumnAliases.clientLayoutKeys();
         StringBuilder sb = new StringBuilder(String.join(",", ImportColumnAliases.CLIENT_LAYOUT)).append('\n');
-        for (Map<String, String> row : sampleRows(sampleClientCode())) {
+        String sampleClient = sampleClientCode();
+        for (Map<String, String> row : sampleRows(sampleClient, sampleShipViaCode(sampleClient))) {
             // An extra item line joins its order by orderRef, which this layout doesn't have.
             if (!StringUtils.hasText(row.get("recipientName"))) continue;
             List<String> cells = new ArrayList<>(keys.size());
@@ -5390,7 +5400,10 @@ public class OrderImportServiceImpl implements OrderImportService {
                 shipViaCodesByClient(d.clients(), d.services()));
     }
 
-    /** A CSV cell, quoted when it holds a comma, quote or line break. */
+    /** A CSV cell, quoted when it holds a comma, quote or line break.
+     *  No BUG-076 guard here: this is the import-TEMPLATE generator (a
+     *  re-importable round-trip of our own sample data, not an export of
+     *  tenant content) — a leading-quote would corrupt re-import. */
     private static String csvCell(String v) {
         if (v == null) return "";
         return v.contains(",") || v.contains("\"") || v.contains("\n") ? "\"" + v.replace("\"", "\"\"") + "\"" : v;
@@ -5418,14 +5431,21 @@ public class OrderImportServiceImpl implements OrderImportService {
         }
     }
 
-    static List<Map<String, String>> sampleRows(String clientCode) {
+    /**
+     * BUG-014 - serviceType is the client's own ship-via code (ClientShipviaCodeMap),
+     * NOT a carrier wire code. Caller passes a resolvable code or the
+     * "<client ship-via code>" placeholder; carrierCode is left blank
+     * because the mapping rule picks it.
+     */
+    static List<Map<String, String>> sampleRows(String clientCode, String shipViaCode) {
+        String svc = shipViaCode == null || shipViaCode.isBlank() ? "<client ship-via code>" : shipViaCode;
         return List.of(
                 sampleRow("orderRef", "SAMPLE-1001", "clientCode", clientCode, "billTo", "SENDER",
                         "recipientName", "Jordan Lee", "recipientPhone", "2125550101",
                         "recipientEmail", "jordan.lee@example.com",
                         "addressLine1", "1600 Amphitheatre Pkwy", "city", "Mountain View", "state", "CA",
                         "postalCode", "94043", "countryCode", "US",
-                        "carrierCode", "FEDEX", "serviceType", "FEDEX_GROUND", "packageType", "YOUR_PACKAGING",
+                        "serviceType", svc,
                         "weight", "2.5", "weightUnit", "LB", "length", "12", "width", "10", "height", "8", "dimUnit", "IN",
                         "currency", "USD", "reference", "SAMPLE-1001"),
                 sampleRow("orderRef", "SAMPLE-1002", "clientCode", clientCode, "billTo", "SENDER",
@@ -5433,7 +5453,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                         "recipientPhone", "442071234567", "recipientEmail", "ava.chen@example.co.uk",
                         "addressLine1", "221B Baker Street", "city", "London",
                         "postalCode", "NW1 6XE", "countryCode", "GB",
-                        "carrierCode", "FEDEX", "serviceType", "INTERNATIONAL_PRIORITY", "packageType", "YOUR_PACKAGING",
+                        "serviceType", svc,
                         "weight", "3.2", "weightUnit", "LB", "length", "14", "width", "12", "height", "10", "dimUnit", "IN",
                         "currency", "USD", "incoterms", "DAP", "reference", "SAMPLE-1002",
                         "itemDescription", "Silk lining natural", "itemSku", "SKU-100", "itemQuantity", "2",
@@ -5441,6 +5461,24 @@ public class OrderImportServiceImpl implements OrderImportService {
                 sampleRow("orderRef", "SAMPLE-1002",
                         "itemDescription", "Cotton scarf", "itemSku", "SKU-101", "itemQuantity", "3",
                         "itemUnitValue", "12.00", "hsCode", "6214.90.00", "countryOfOrigin", "IN"));
+    }
+
+    /**
+     * First ship-via code the client has mapped (ClientShipviaCodeMap),
+     * else null. Used by the plain-CSV template so its sample row names
+     * a code the importer will accept rather than a carrier wire code.
+     */
+    private String sampleShipViaCode(String clientCode) {
+        if (shippingConfigService == null || clientCode == null || clientCode.isBlank()) return null;
+        try {
+            return shippingConfigService.shipViaCodesFor(clientCode).stream()
+                    .map(m -> java.util.Objects.toString(m.get("code"), null))
+                    .filter(c -> c != null && !c.isBlank())
+                    .findFirst()
+                    .orElse(null);
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     /* -------------------------- Parsers -------------------------- */
@@ -7668,7 +7706,13 @@ public class OrderImportServiceImpl implements OrderImportService {
             case "countryCode" -> r.getCountryCode();
             case "carrierCode" -> r.getCarrierCode();
             case "accountNumber" -> r.getAccountNumber();
-            case "serviceType" -> r.getServiceType();
+            // BUG-014 - round-trip the operator's own ship-via code when the
+            // mapping rule rewrote serviceType to a carrier wire code at parse
+            // time. Fixing + re-uploading the errors file must keep the same
+            // vocabulary the file arrived in.
+            case "serviceType" -> r.getShipViaCode() != null && !r.getShipViaCode().isBlank()
+                    ? r.getShipViaCode()
+                    : r.getServiceType();
             case "packageType" -> r.getPackageType();
             // An item line took its order's weight; leave it blank so a re-upload
             // doesn't turn the line into an extra parcel.

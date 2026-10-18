@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { formatDateTime } from '../utils/formatDateTime'
+import { useOutletContext } from 'react-router-dom'
+import type { SettingsOutletContext } from './layout/SettingsLayout'
 import { FiClock, FiList, FiPlay, FiPlus, FiRefreshCw, FiRotateCcw, FiTrash2, FiX } from 'react-icons/fi'
 import {
   dtcSchedulerService,
@@ -8,7 +11,7 @@ import {
   type SchedulerRun,
   type SchedulerWindow,
 } from '../api/dtcSchedulerService'
-import { dtcService } from '../api/dtcService'
+import { clientService } from '../api/clientService'
 import { notify } from '../utils/notify'
 
 /**
@@ -48,7 +51,7 @@ const describe = (w: SchedulerWindow) =>
 const fmtDateTime = (iso: string | null) => {
   if (!iso) return '—'
   const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString()
+  return Number.isNaN(d.getTime()) ? iso : formatDateTime(iso)
 }
 
 /** Next-run label in the scheduler's own zone ("Mon 14:05"), read straight off the ISO string. */
@@ -176,11 +179,27 @@ export default function DtcSchedulerPage() {
 
   useEffect(() => { void reload(false) }, [reload])
 
+  const outlet = useOutletContext<SettingsOutletContext>()
+  const refresh = useCallback(() => { void reload() }, [reload])
+  useEffect(() => {
+    outlet.registerRefresh(refresh)
+    return () => outlet.registerRefresh(null)
+  }, [outlet, refresh])
+
   // Tenant choices for the label job's tenant picker.
+  // BUG-124 — pre-fix this called dtcService.orderTenants() which polls
+  // the DTC source system (Oracle NDS) and returned only 'ARHDEV', a
+  // code that doesn't exist in Multiship. Use the Multiship clients
+  // list so the picker offers only real tenants the scheduler can
+  // actually generate labels for.
   const [tenants, setTenants] = useState<string[]>([])
   useEffect(() => {
-    dtcService.orderTenants()
-      .then((r) => setTenants((r.data ?? []).filter((t): t is string => !!t)))
+    clientService.listClients({ page: 0, size: 100, sortBy: 'code' })
+      .then((r) => setTenants(
+        (r.data?.content ?? [])
+          .map((c) => c.clientCode)
+          .filter((t): t is string => !!t),
+      ))
       .catch(() => {})
   }, [])
 
@@ -329,7 +348,11 @@ export default function DtcSchedulerPage() {
         const draft = drafts[job.jobKey]
         if (!draft) return null
         const dirty = dirtyKeys.includes(job.jobKey)
-        const numericParams = Object.entries(draft.params).filter(([, v]) => typeof v === 'number')
+        // Keys come from the saved job (stable) so a field stays visible after
+        // it's cleared; the current (possibly null) value is read from the draft.
+        const numericParams = Object.keys(job.params)
+          .filter((k) => typeof job.params[k] === 'number' || job.params[k] === null)
+          .map((k) => [k, draft.params[k]] as const)
         const grid = weekGrid(draft.windows)
         return (
           <section key={job.jobKey} className="rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -449,7 +472,7 @@ export default function DtcSchedulerPage() {
                       <td className="px-3 py-2">
                         {isDaily(w) ? <span className="text-[11.5px] text-slate-400">—</span> : (
                           <div className="flex items-center gap-1 text-[11.5px] text-slate-500">
-                            <input type="number" min={1} max={1440} className={`${inputCls} w-20`}
+                            <input type="number" min={1} max={1440} className={`${inputCls} w-16 shrink-0`}
                                    value={w.intervalMinutes ?? ''}
                                    onChange={(e) => setWindow(job.jobKey, idx, {
                                      intervalMinutes: e.target.value === '' ? null : Number(e.target.value),
@@ -518,9 +541,11 @@ export default function DtcSchedulerPage() {
                 {numericParams.map(([k, v]) => (
                   <label key={k} className="text-[11px] font-semibold text-slate-500">
                     {paramLabel(k)}
-                    <input type="number" min={1} className={`${inputCls} mt-0.5 w-28`} value={v as number}
+                    <input type="number" min={1} className={`${inputCls} mt-0.5 w-28`}
+                           value={typeof v === 'number' ? v : ''}
+                           placeholder={typeof job.params[k] === 'number' ? `${job.params[k]} (default)` : 'Default'}
                            onChange={(e) => setDraft(job.jobKey, {
-                             params: { ...draft.params, [k]: e.target.value === '' ? 0 : Number(e.target.value) },
+                             params: { ...draft.params, [k]: e.target.value === '' ? null : Number(e.target.value) },
                            })} />
                   </label>
                 ))}
@@ -532,8 +557,14 @@ export default function DtcSchedulerPage() {
                 ) : null}
               </div>
               <div className="flex items-center gap-2">
+                {/* BUG-061 R6 — rows seeded by platform migrations store the
+                    migration id (V132, V134, …) as updatedBy. Operators don't
+                    need to see internal version tags, so show a plain hint. */}
                 {job.updatedBy ? (
-                  <span className="text-[11px] text-slate-400">Last changed by {job.updatedBy} · {fmtDateTime(job.updatedAt)}</span>
+                  <span className="text-[11px] text-slate-400">
+                    Last changed by {/^V\d+$/i.test(job.updatedBy) ? 'platform (default)' : job.updatedBy}
+                    {' · '}{fmtDateTime(job.updatedAt)}
+                  </span>
                 ) : null}
                 <button type="button" className={btnCls} disabled={!dirty} onClick={() => discardJob(job.jobKey)}>
                   Discard
@@ -556,6 +587,8 @@ export default function DtcSchedulerPage() {
 const PARAM_LABELS: Record<string, string> = {
   lookbackHours: 'Only lines from the last (hours)',
   maxBatchesPerRun: 'Max batches per run',
+  thresholdUsd: 'Threshold (USD)',
+  refillUsd: 'Refill (USD)',
 }
 
 /** Empty selection = every tenant (the DTC_LABELS default). */

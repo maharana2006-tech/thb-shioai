@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { FiAlertCircle, FiCalendar, FiCheckCircle, FiMapPin, FiPackage, FiTruck, FiX } from 'react-icons/fi'
 import { pickupService, type PickupRequest, type PickupResponse } from '../../api/pickupService'
+import { requestErrorText } from '../../api/apiClient'
+import { clientService, type Client } from '../../api/clientService'
 import { settingsPaths } from '../../routes/workspaceRoutes'
 import { notify } from '../../utils/notify'
 import {
@@ -13,6 +15,8 @@ import {
   validateZip,
 } from '../../utils/clientValidation'
 import { useModalDismiss } from '../../hooks/useModalDismiss'
+import { localDateIso } from '../../utils/formatDateTime'
+import { useLiftToasts } from '../../hooks/useLiftToasts'
 import { useConnectedCarriers } from '../../hooks/useConnectedCarriers'
 
 /**
@@ -64,7 +68,8 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
   // A11y audit — focus trap + Escape-to-close + focus restoration.
   const dialogRef = useRef<HTMLDivElement>(null)
   useModalDismiss(true, dialogRef, onClose)
-  const today = new Date().toISOString().slice(0, 10)
+  useLiftToasts() // BUG-005 — keep toasts clear of the footer buttons
+  const today = localDateIso()
   const [form, setForm] = useState<PickupRequest>({
     carrierCode: defaults?.carrierCode ?? 'UPS',
     customerNo: defaults?.customerNo ?? null,
@@ -87,6 +92,14 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
     // to Express or International via the new picker in the modal.
     pickupServiceType: defaults?.pickupServiceType ?? 'GROUND',
   })
+  // BUG-013 — let the operator pick the client whose carrier account books the
+  // pickup; without it customerNo is null and UPS/FedEx fail "No live credentials".
+  const [clients, setClients] = useState<Client[]>([])
+  useEffect(() => {
+    clientService.listClients({ size: 500, sortBy: 'code' })
+      .then((r) => setClients(r.data?.content ?? []))
+      .catch(() => undefined)
+  }, [])
   const [result, setResult] = useState<PickupResponse | null>(null)
   /** Transport-level failure (network / 5xx) — rendered as an inline banner
    *  in the modal body, never as a popup. */
@@ -134,7 +147,7 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
     } else {
       const horizon = new Date()
       horizon.setDate(horizon.getDate() + MAX_PICKUP_DAYS_AHEAD)
-      if (d > horizon.toISOString().slice(0, 10)) {
+      if (d > localDateIso(horizon)) {
         e.pickupDate = `Pickup date must be within ${MAX_PICKUP_DAYS_AHEAD} days.`
       }
     }
@@ -230,7 +243,7 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
         notify.error(`Pickup not scheduled — ${response.data.message}`)
       }
     } catch (e) {
-      setApiError(e instanceof Error ? e.message : 'Pickup call failed.')
+      setApiError(requestErrorText(e, 'Pickup call failed.'))
     } finally {
       setSubmitting(false)
     }
@@ -242,7 +255,6 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
       aria-modal="true"
       aria-label="Schedule courier pickup"
       className="fixed inset-0 z-50 flex items-center justify-center bg-[#1f150c]/45 p-4 backdrop-blur-sm"
-      onClick={onClose}
     >
       <div
         ref={dialogRef}
@@ -295,6 +307,18 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
               ))}
             </div>
             {err('carrierCode') ? <p data-field-error className="mt-1 text-[10.5px] text-rose-600">{err('carrierCode')}</p> : null}
+
+            <div className="mt-3">
+              <Field label="Client / account">
+                <select className={inputCls()} value={form.customerNo ?? ''}
+                        onChange={(e) => update({ customerNo: e.target.value || null })}>
+                  <option value="">Platform / house account</option>
+                  {clients.map((c) => (
+                    <option key={c.clientCode} value={c.clientCode}>{c.clientCode} — {c.name}</option>
+                  ))}
+                </select>
+              </Field>
+            </div>
 
             <div className="mt-3">
               <Field label="Pickup date" required error={err('pickupDate')}>
@@ -394,14 +418,14 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
             <div className="grid grid-cols-3 gap-2.5">
               <Field label="Package count" required error={err('packageCount')}>
                 <input type="number" min="1" max={MAX_PACKAGE_COUNT} step="1" className={inputCls('packageCount')}
-                       value={form.packageCount}
-                       onChange={(e) => update({ packageCount: Number(e.target.value) })}
+                       value={Number.isNaN(form.packageCount) ? '' : form.packageCount}
+                       onChange={(e) => update({ packageCount: e.target.value === '' ? NaN : Number(e.target.value) })}
                        onBlur={() => touch('packageCount')} />
               </Field>
               <Field label="Total weight" required error={err('totalWeight')}>
                 <input type="number" min="0" max={MAX_TOTAL_WEIGHT} step="0.1" className={inputCls('totalWeight')}
-                       value={form.totalWeight}
-                       onChange={(e) => update({ totalWeight: Number(e.target.value) })}
+                       value={Number.isNaN(form.totalWeight) ? '' : form.totalWeight}
+                       onChange={(e) => update({ totalWeight: e.target.value === '' ? NaN : Number(e.target.value) })}
                        onBlur={() => touch('totalWeight')} />
               </Field>
               <Field label="Unit">

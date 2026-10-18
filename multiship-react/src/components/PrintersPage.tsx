@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useOutletContext, useSearchParams } from 'react-router-dom'
+import type { SettingsOutletContext } from './layout/SettingsLayout'
 import {
   FiAlertTriangle, FiCheckCircle, FiCheckSquare, FiCopy, FiEdit2, FiFileText, FiPlus, FiPower,
   FiPrinter, FiRadio, FiSearch, FiSquare, FiTag, FiTrash2, FiWifi, FiX,
 } from 'react-icons/fi'
 import { notify } from '../utils/notify'
+import { useModalDismiss } from '../hooks/useModalDismiss'
 import { clientService, type Client } from '../api/clientService'
 import AssignmentMatrix from './AssignmentMatrix'
 import InvoiceCopiesMatrix from './InvoiceCopiesMatrix'
@@ -153,6 +155,12 @@ export default function PrintersPage() {
   useEffect(() => {
     void load()
   }, [load])
+
+  const outlet = useOutletContext<SettingsOutletContext>()
+  useEffect(() => {
+    outlet.registerRefresh(load)
+    return () => outlet.registerRefresh(null)
+  }, [outlet, load])
 
   const runTest = async (p: Printer) => {
     setTestingIds((cur) => new Set(cur).add(p.id))
@@ -437,8 +445,8 @@ export default function PrintersPage() {
                 >
                   <option value="">
                     {tenantChoices.length === 0
-                      ? (loading ? 'Loading tenants…' : 'No tenants available')
-                      : 'Choose a tenant…'}
+                      ? (loading ? 'Loading clients…' : 'No clients available')
+                      : 'Choose a client…'}
                   </option>
                   {tenantChoices.map((code) => (
                     <option key={code} value={code}>{code}</option>
@@ -446,7 +454,7 @@ export default function PrintersPage() {
                 </select>
               </label>
               <span className="text-[11px] text-slate-400">
-                Pick the tenant to enroll a LAN scanner for.
+                Pick the client to enroll a LAN scanner for.
               </span>
             </div>
           </section>
@@ -751,7 +759,7 @@ export default function PrintersPage() {
               <h3 className="text-[14px] font-semibold text-slate-900">How many copies per (client, carrier)</h3>
               <p className="mt-0.5 text-[12px] text-slate-500">
                 Enter a number 1..20 to override, leave empty to inherit the Default row (or 1 if the
-                Default is also empty). Carriers come from the tenant’s connected accounts.
+                Default is also empty). Carriers come from the client’s connected accounts.
               </p>
             </div>
             <AddClientDropdown
@@ -862,6 +870,10 @@ function PrinterEditor({
   onClose: () => void
   onSaved: () => Promise<void>
 }) {
+  // BUG-123 R7 — add Escape-to-close + focus trap + focus restoration.
+  // Pre-fix the Add printer dialog left focus on the Add button behind.
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useModalDismiss(true, dialogRef, onClose)
   const [form, setForm] = useState<PrinterInput>(() => printer
     ? {
         name: printer.name, location: printer.location, connection: printer.connection, host: printer.host,
@@ -961,9 +973,13 @@ function PrinterEditor({
       // Show the server's reason next to the field it is about.
       const message = e instanceof Error && e.message ? e.message : 'Could not save the printer.'
       const lower = message.toLowerCase()
-      if (lower.includes('name')) setErrors({ name: message })
-      else if (lower.includes('hostname') || lower.includes('ip address')) setErrors({ host: message })
+      // BUG-114 — the pre-fix order checked 'name' first, so 'hostname'
+      // / 'IP address or hostname' routed to the name field (which is
+      // what QA saw: the address error turned the Name box red). Check
+      // the specific terms before the generic 'name' substring.
+      if (lower.includes('hostname') || lower.includes('ip address') || lower.includes('host')) setErrors({ host: message })
       else if (lower.includes('port')) setErrors({ port: message })
+      else if (lower.includes('name')) setErrors({ name: message })
       else setErrors({ form: message })
     } finally {
       setSaving(false)
@@ -982,7 +998,8 @@ function PrinterEditor({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>
-      <div className="w-full max-w-[560px] rounded-xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}
+      <div ref={dialogRef}
+        className="w-full max-w-[560px] rounded-xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}
         role="dialog" aria-modal="true" aria-label={printer ? `Edit ${printer.name}` : 'Add printer'}>
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
           <h3 className="text-[15px] font-semibold text-slate-900">{printer ? `Edit ${printer.name}` : 'Add printer'}</h3>

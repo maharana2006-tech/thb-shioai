@@ -2,11 +2,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, cleanup, act, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BrowserRouter, MemoryRouter, Route, Routes } from 'react-router-dom'
-import { Provider } from 'react-redux'
-import { combineReducers, configureStore } from '@reduxjs/toolkit'
 import { useEffect } from 'react'
-import carrierReducer from '../store/carrierSlice'
-import orderReducer from '../store/orderSlice'
 
 /**
  * PR-G4 — DataHistoryPage USPS_DIRECT UX coverage (audit U2 + U3).
@@ -267,12 +263,7 @@ vi.mock('./batchGrid', () => ({
 /** Renders the page under its real route, starting at {@code path}. */
 async function renderAt(path: string) {
   const { default: DataHistoryPage } = await import('./DataHistoryPage')
-  const store = configureStore({
-    reducer: combineReducers({ carriers: carrierReducer, orders: orderReducer }),
-    middleware: (getDefaultMiddleware) => getDefaultMiddleware({ serializableCheck: false }),
-  })
   return render(
-    <Provider store={store}>
       <MemoryRouter initialEntries={[path]}>
         <Routes>
           <Route path="/bulk/batches/:batchId" element={<DataHistoryPage />} />
@@ -281,23 +272,15 @@ async function renderAt(path: string) {
           <Route path="/orders/api-batches/:batchId" element={<DataHistoryPage apiBatches />} />
         </Routes>
       </MemoryRouter>
-    </Provider>,
   )
 }
 
 async function loadAndRender() {
   const { default: DataHistoryPage } = await import('./DataHistoryPage')
-  const store = configureStore({
-    reducer: combineReducers({ carriers: carrierReducer, orders: orderReducer }),
-    middleware: (getDefaultMiddleware) =>
-      getDefaultMiddleware({ serializableCheck: false }),
-  })
   return render(
-    <Provider store={store}>
       <BrowserRouter>
         <DataHistoryPage />
       </BrowserRouter>
-    </Provider>,
   )
 }
 
@@ -366,7 +349,6 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
 })
-
 
 // ==================================================================
 // Test 0: sanity — page renders

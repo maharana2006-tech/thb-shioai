@@ -1,14 +1,21 @@
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { getSettingsGroupsForRole } from '../../routes/workspaceRoutes'
 import { useAppSession } from '../../hooks/useAppSession'
 import { normalizeRole } from '../../utils/roles'
 
-/** /settings — every settings page the role can open, by group. */
-export default function SettingsOverview() {
+/** /settings — every settings page the role can open, by group.
+ *  `notFound` is set by the catch-all route so an unknown URL is honest about it. */
+export default function SettingsOverview({ notFound }: { notFound?: boolean }) {
   const { role } = useAppSession()
+  const location = useLocation()
   const groups = getSettingsGroupsForRole(normalizeRole(role))
   return (
     <div>
+      {notFound ? (
+        <p className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[13px] text-amber-800">
+          There’s no settings page at <span className="font-mono">{location.pathname}</span>. Here are all settings.
+        </p>
+      ) : null}
       <h1 className="text-[24px] font-bold tracking-tight text-[#1f150c]">All settings</h1>
       <p className="mt-1 text-[14px] text-[#6b5c42]">Everything that shapes how Multiship ships, grouped by what it controls.</p>
       <div className="mt-5 grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(280px,1fr))]">

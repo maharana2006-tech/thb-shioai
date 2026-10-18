@@ -37,7 +37,10 @@ import RegionCountryPicker from '../workspace/RegionCountryPicker'
  * addition here that isn't reachable from a country default is fine; the
  * reverse (a country code that maps to a currency missing here) is not.
  */
-const CUSTOMS_CURRENCIES = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'NZD', 'JPY', 'CNY', 'HKD', 'INR', 'MXN', 'BRL', 'SGD', 'CHF'] as const
+// BUG-125 — shared with NewShipmentPage so every currency the client profile
+// can declare is also pickable on the order form.
+import { CURRENCY_ALLOWLIST } from '../../utils/money'
+const CUSTOMS_CURRENCIES = CURRENCY_ALLOWLIST
 
 /**
  * ISO-2 country → default currency mapping used to preselect the
@@ -325,7 +328,17 @@ export default function CustomsProfileModal({
     const spec = territory ? taxIdentityFor(territory) : null
     if (spec) {
       for (const f of spec.fields) {
-        out[f.column] = opt((form as unknown as Record<string, unknown>)[f.column], 40, f.label)
+        const raw = (form as unknown as Record<string, unknown>)[f.column]
+        out[f.column] = opt(raw, 40, f.label)
+        // BUG-104 R7: pattern mismatch blocks Create — pre-fix the inline
+        // 'Format: 9 digits + RM + 4 digits' message was advice-only and
+        // the malformed BN was still POSTed. Fold the pattern error into
+        // fieldErrors so hasFieldErrors catches it.
+        if (!out[f.column] && f.pattern && typeof raw === 'string' && raw.trim()) {
+          if (!f.pattern.test(raw.trim())) {
+            out[f.column] = f.patternMsg ?? `Doesn't match the expected ${f.label} format.`
+          }
+        }
       }
     }
     return out
@@ -462,7 +475,8 @@ export default function CustomsProfileModal({
         importerType: 'BUSINESS',
         clientCode,
       })
-      notify.success(`Importer/Broker for ${clientCode} saved (${form.countries.length} destinations).`)
+      // BUG-106 — '1 destinations' is grammatically wrong on singular.
+      notify.success(`Importer/Broker for ${clientCode} saved (${form.countries.length} ${form.countries.length === 1 ? 'destination' : 'destinations'}).`)
       onSaved?.()
       onClose()
     } catch (e) {
@@ -671,18 +685,28 @@ export default function CustomsProfileModal({
               {activeTerritory && taxSpec ? (
                 <>
                   <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                    {taxSpec.fields.map((f) => (
-                      <Field key={f.column} label={f.label} error={err(f.column)}>
-                        <input
-                          value={(form[f.column] as string | null | undefined) ?? ''}
-                          onChange={set(f.column)}
-                          onBlur={() => markTouched(f.column)}
-                          placeholder={f.placeholder}
-                          maxLength={40}
-                          className={fieldCls(err(f.column))}
-                        />
-                      </Field>
-                    ))}
+                    {taxSpec.fields.map((f) => {
+                      // BUG-104 — per-territory pattern check so e.g.
+                      // Canadian 'Business Number + RM account' doesn't
+                      // save 'ABC' silently. Inline error shows when the
+                      // typed value is non-empty + doesn't match.
+                      const val = (form[f.column] as string | null | undefined) ?? ''
+                      const patternError = f.pattern && val && !f.pattern.test(val.trim())
+                          ? (f.patternMsg ?? `Doesn't match the expected ${f.label} format.`)
+                          : null
+                      return (
+                        <Field key={f.column} label={f.label} error={err(f.column) ?? patternError}>
+                          <input
+                            value={val}
+                            onChange={set(f.column)}
+                            onBlur={() => markTouched(f.column)}
+                            placeholder={f.placeholder}
+                            maxLength={40}
+                            className={fieldCls(err(f.column) ?? patternError)}
+                          />
+                        </Field>
+                      )
+                    })}
                   </div>
                   {taxSpec.note ? <p className="mt-2 text-[10.5px] text-[#5a4526]">{taxSpec.note}</p> : null}
                 </>
@@ -868,11 +892,48 @@ export default function CustomsProfileModal({
 
   if (asPage) return card
   return (
+    <ModalShell onClose={onClose}>{card}</ModalShell>
+  )
+}
+
+/** BUG-024 — backdrop click used to call onClose directly, which lost
+ *  typed data (e.g. a half-filled importer profile). Esc did nothing.
+ *  Shell now:
+ *    - swallows backdrop clicks on the inner card (stopPropagation);
+ *    - only closes on backdrop click when the operator confirms;
+ *    - wires Escape to the same confirm so Esc isn't dead. */
+function ModalShell({
+  onClose,
+  children,
+}: {
+  onClose: () => void
+  children: React.ReactNode
+}) {
+  const confirmClose = async () => {
+    // BUG-075 — the previous window.confirm blocked the whole tab +
+    // looked foreign to the rest of the app. Use notify.confirm so
+    // the dialog matches the Stay / Leave pattern used by the client
+    // editor.
+    const ok = await notify.confirm(
+      'Discard this draft and close?\n\nAny unsaved changes to this importer/broker profile will be lost.',
+      { title: 'Discard draft?', confirmLabel: 'Discard', cancelLabel: 'Keep editing', danger: true },
+    )
+    if (ok) onClose()
+  }
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') confirmClose()
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-[#1f150c]/45 p-4 backdrop-blur-sm"
-      onClick={onClose}
+      onClick={confirmClose}
     >
-      {card}
+      <div onClick={(e) => e.stopPropagation()}>{children}</div>
     </div>
   )
 }

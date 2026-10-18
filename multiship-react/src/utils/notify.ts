@@ -29,9 +29,13 @@ export type NotifyType = 'success' | 'error' | 'info' | 'confirm'
 const AUTO_DISMISS_MS: Record<Exclude<NotifyType, 'confirm'>, number> = {
   success: 4000,
   info: 5000,
-  // Errors are sticky on purpose: they're the ones worth reading, and a
-  // non-blocking toast that vanishes is worse than one you close yourself.
-  error: 0,
+  // BUG-037 — error toasts WERE sticky-forever on the theory that they're
+  // worth reading. Reality (QA R2): a failed-delete message stayed on
+  // screen 38 minutes through navigation + other work. 15 s is enough
+  // time to read an operator-facing message; the server-side audit log
+  // is the authoritative record if the operator needs it later.
+  // Call sites that want sticky behaviour can still pass durationMs: 0.
+  error: 15000,
 }
 
 export interface NotifyMessage {
@@ -138,7 +142,14 @@ export const notify = {
     const detail = fieldError?.field && fieldError?.message
       ? `${fieldError.field} — ${fieldError.message}`
       : undefined
-    const body = detail
+    // BUG-048 — don't echo the same message twice. When the top-line
+    // (friendly.message) already contains the per-field text, drop the
+    // raw "field — message" line. Compare case-insensitively against
+    // the trimmed field message only, since the top-line is sentence-cased
+    // with a period and the field pair is lowercase without one.
+    const dup = detail && friendly.message && fieldError?.message
+      && friendly.message.toLowerCase().includes(fieldError.message.toLowerCase().replace(/\.$/, ''))
+    const body = detail && !dup
       ? (friendly.message ? `${friendly.message}\n${detail}` : detail)
       : friendly.message
     return toast('error', { title: friendly.title, body })

@@ -134,7 +134,11 @@ export default function RoutingRulesPage() {
 
   const delRule = async (rule: RoutingRule) => {
     if (!rule.id) return
-    if (!window.confirm(`Delete rule "${rule.name}"? Historic orders keep their routing.`)) return
+    const ok = await notify.confirm(
+      `Delete rule "${rule.name}"? Historic orders keep their routing.`,
+      { title: 'Delete routing rule', confirmLabel: 'Delete', cancelLabel: 'Keep', danger: true },
+    )
+    if (!ok) return
     try {
       await routingRuleService.remove(clientCode, rule.id)
       notify.success('Rule deleted.')

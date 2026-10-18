@@ -13,9 +13,11 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.DateTimeException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -40,6 +42,12 @@ public class CutoffAdminController {
     private final WarehouseRepository warehouseRepo;
     private final CarrierAccountRefRepository carrierAccountRepo;
 
+    // BUG-128 sprint 2: audit cutoff rule + holiday writes. Platform-wide
+    // scope, CLIENT_POLICY bucket + "cutoff/" or "holiday/" entityKey prefix.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.AuditService audit;
+    private static final String CUTOFF_ENTITY = com.multiship.backend.service.AuditService.CLIENT_POLICY;
+
     // ── Rules ────────────────────────────────────────────────────────
 
     @GetMapping("/rules")
@@ -52,7 +60,29 @@ public class CutoffAdminController {
         req.setId(null);
         req.setUpdatedBy(actor(auth));
         if (req.getCutoffTime() == null) req.setCutoffTime(DEFAULT_CUTOFF);
-        return ok(ruleRepo.save(req));
+        // BUG-099 R6: pre-validate FK so the operator sees the actual
+        // offending field name instead of the GlobalExceptionHandler's
+        // generic "references something that doesn't exist". The FE dropdown
+        // already blocks unknown ids via BUG-101, but a direct API call
+        // can still send one.
+        if (req.getWarehouseId() != null
+                && !warehouseRepo.existsById(req.getWarehouseId())) {
+            throw new IllegalArgumentException(
+                    "warehouseId " + req.getWarehouseId() + " doesn't match any warehouse.");
+        }
+        // BUG-146 R7: operator can type a free-form timezone in the combobox
+        // (preserves unrecognised values on purpose). If it's not a valid
+        // java.time.ZoneId, Cutoff dispatch later NPEs — reject at save time
+        // with a specific message instead of letting the rule go live broken.
+        validateTimezone(req.getTimezone());
+        CutoffRule saved = ruleRepo.save(req);
+        if (audit != null) {
+            audit.record(com.multiship.backend.service.AuditService.CREATE,
+                    CUTOFF_ENTITY, saved.getId(),
+                    "cutoff/" + saved.getSource() + "/" + saved.getCarrierCode() + "/" + saved.getWarehouseId(),
+                    saved, "Cutoff rule created.");
+        }
+        return ok(saved);
     }
 
     @PutMapping("/rules/{id}")
@@ -65,15 +95,29 @@ public class CutoffAdminController {
         if (req.getCarrierCode() != null) existing.setCarrierCode(req.getCarrierCode());
         if (req.getWarehouseId() != null) existing.setWarehouseId(req.getWarehouseId());
         if (req.getCutoffTime() != null) existing.setCutoffTime(req.getCutoffTime());
-        if (req.getTimezone() != null) existing.setTimezone(req.getTimezone());
+        if (req.getTimezone() != null) {
+            validateTimezone(req.getTimezone());
+            existing.setTimezone(req.getTimezone());
+        }
         if (req.getActive() != null) existing.setActive(req.getActive());
         existing.setUpdatedBy(actor(auth));
-        return ok(ruleRepo.save(existing));
+        CutoffRule saved = ruleRepo.save(existing);
+        if (audit != null) {
+            audit.record(com.multiship.backend.service.AuditService.UPDATE,
+                    CUTOFF_ENTITY, saved.getId(),
+                    "cutoff/" + saved.getSource() + "/" + saved.getCarrierCode() + "/" + saved.getWarehouseId(),
+                    saved, "Cutoff rule updated.");
+        }
+        return ok(saved);
     }
 
     @DeleteMapping("/rules/{id}")
     public ResponseEntity<ApiResponse<Void>> deleteRule(@PathVariable Long id) {
         ruleRepo.deleteById(id);
+        if (audit != null) {
+            audit.record(com.multiship.backend.service.AuditService.DELETE,
+                    CUTOFF_ENTITY, id, "cutoff/" + id, null, "Cutoff rule deleted.");
+        }
         return ok(null);
     }
 
@@ -140,7 +184,14 @@ public class CutoffAdminController {
         });
         req.setId(null);
         req.setUpdatedBy(actor(auth));
-        return ok(holidayRepo.save(req));
+        Holiday saved = holidayRepo.save(req);
+        if (audit != null) {
+            audit.record(com.multiship.backend.service.AuditService.CREATE,
+                    CUTOFF_ENTITY, saved.getId(),
+                    "holiday/" + saved.getHolidayDate(), saved,
+                    "Holiday created: " + saved.getName() + ".");
+        }
+        return ok(saved);
     }
 
     @PutMapping("/holidays/{id}")
@@ -153,12 +204,23 @@ public class CutoffAdminController {
         if (req.getHolidayDate() != null) existing.setHolidayDate(req.getHolidayDate());
         if (req.getActive() != null) existing.setActive(req.getActive());
         existing.setUpdatedBy(actor(auth));
-        return ok(holidayRepo.save(existing));
+        Holiday saved = holidayRepo.save(existing);
+        if (audit != null) {
+            audit.record(com.multiship.backend.service.AuditService.UPDATE,
+                    CUTOFF_ENTITY, saved.getId(),
+                    "holiday/" + saved.getHolidayDate(), saved,
+                    "Holiday updated: " + saved.getName() + ".");
+        }
+        return ok(saved);
     }
 
     @DeleteMapping("/holidays/{id}")
     public ResponseEntity<ApiResponse<Void>> deleteHoliday(@PathVariable Long id) {
         holidayRepo.deleteById(id);
+        if (audit != null) {
+            audit.record(com.multiship.backend.service.AuditService.DELETE,
+                    CUTOFF_ENTITY, id, "holiday/" + id, null, "Holiday deleted.");
+        }
         return ok(null);
     }
 
@@ -172,6 +234,21 @@ public class CutoffAdminController {
 
     private String actor(Authentication a) {
         return a == null ? "unknown" : a.getName();
+    }
+
+    /** BUG-146 R7 — refuse unknown IANA zones so the rule never silently
+     *  saves a value that CutoffShiftService can't resolve. Blank/null is OK:
+     *  cutoff dispatch falls back to the client timezone when the column is
+     *  null. ZoneId.of throws ZoneRulesException (subclass of DateTimeException)
+     *  on an unknown id — the message names the rejected string already. */
+    private static void validateTimezone(String tz) {
+        if (tz == null || tz.isBlank()) return;
+        try {
+            ZoneId.of(tz.trim());
+        } catch (DateTimeException e) {
+            throw new IllegalArgumentException(
+                "timezone '" + tz + "' is not a valid IANA zone (e.g. America/New_York).");
+        }
     }
 
     private <T> ResponseEntity<ApiResponse<T>> ok(T body) {

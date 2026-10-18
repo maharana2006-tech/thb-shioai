@@ -114,6 +114,45 @@ export const AU_STATE_OPTIONS: StateOption[] = [
   { code: 'WA', label: 'Western Australia' },
 ]
 
+/** BUG-008 — Mexican states (ISO 3166-2:MX). 31 states + the federal
+ *  entity (CMX). FedEx and DHL both accept the 3-letter codes; the
+ *  dropdown saves the operator from typing a free-text value a carrier
+ *  then rejects. Alphabetical by label. */
+export const MX_STATE_OPTIONS: StateOption[] = [
+  { code: 'AGU', label: 'Aguascalientes' },
+  { code: 'BCN', label: 'Baja California' },
+  { code: 'BCS', label: 'Baja California Sur' },
+  { code: 'CAM', label: 'Campeche' },
+  { code: 'CHP', label: 'Chiapas' },
+  { code: 'CHH', label: 'Chihuahua' },
+  { code: 'COA', label: 'Coahuila' },
+  { code: 'COL', label: 'Colima' },
+  { code: 'DUR', label: 'Durango' },
+  { code: 'CMX', label: 'Ciudad de México' },
+  { code: 'GUA', label: 'Guanajuato' },
+  { code: 'GRO', label: 'Guerrero' },
+  { code: 'HID', label: 'Hidalgo' },
+  { code: 'JAL', label: 'Jalisco' },
+  { code: 'MEX', label: 'México (Estado)' },
+  { code: 'MIC', label: 'Michoacán' },
+  { code: 'MOR', label: 'Morelos' },
+  { code: 'NAY', label: 'Nayarit' },
+  { code: 'NLE', label: 'Nuevo León' },
+  { code: 'OAX', label: 'Oaxaca' },
+  { code: 'PUE', label: 'Puebla' },
+  { code: 'QUE', label: 'Querétaro' },
+  { code: 'ROO', label: 'Quintana Roo' },
+  { code: 'SLP', label: 'San Luis Potosí' },
+  { code: 'SIN', label: 'Sinaloa' },
+  { code: 'SON', label: 'Sonora' },
+  { code: 'TAB', label: 'Tabasco' },
+  { code: 'TAM', label: 'Tamaulipas' },
+  { code: 'TLA', label: 'Tlaxcala' },
+  { code: 'VER', label: 'Veracruz' },
+  { code: 'YUC', label: 'Yucatán' },
+  { code: 'ZAC', label: 'Zacatecas' },
+]
+
 /**
  * Country code (uppercase) → list of valid states/provinces. Consumers
  * typically check `STATE_CODE_OPTIONS[country.toUpperCase()]`; falsy
@@ -123,6 +162,7 @@ export const STATE_CODE_OPTIONS: Record<string, StateOption[]> = {
   US: US_STATE_OPTIONS,
   CA: CA_PROVINCE_OPTIONS,
   AU: AU_STATE_OPTIONS,
+  MX: MX_STATE_OPTIONS,
 }
 
 /** Convenience: valid-code Set per country, for schema membership tests. */
@@ -130,4 +170,5 @@ export const STATE_CODE_SETS: Record<string, Set<string>> = {
   US: new Set(US_STATE_OPTIONS.map((s) => s.code)),
   CA: new Set(CA_PROVINCE_OPTIONS.map((s) => s.code)),
   AU: new Set(AU_STATE_OPTIONS.map((s) => s.code)),
+  MX: new Set(MX_STATE_OPTIONS.map((s) => s.code)),
 }

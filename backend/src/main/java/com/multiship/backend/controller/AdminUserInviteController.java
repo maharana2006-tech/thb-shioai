@@ -43,6 +43,11 @@ public class AdminUserInviteController {
      *  Set.of("USER","TENANT") lives inside the service as the bootstrap
      *  default, so first boot + DB outage still accept the same two codes. */
     private final RolePlatformService rolePlatformService;
+    /** BUG-050 — audit the invite mint via the admin-user service's
+     *  recordInviteSent helper. @Autowired(required=false) so pure-Mockito
+     *  constructor-arg tests built pre-fix still compile. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.AdminUserService adminUserService;
 
     /**
      * Base URL the invite-accept link points at. Defaults to the
@@ -72,8 +77,25 @@ public class AdminUserInviteController {
         }
 
         String baseUrl = resolveBaseUrl(request);
-        UserInvite invite = inviteService.mint(req.getEmail(), clientCode, role,
-                admin != null ? admin.getUsername() : "system", baseUrl);
+        UserInvite invite;
+        try {
+            invite = inviteService.mint(req.getEmail(), clientCode, role,
+                    admin != null ? admin.getUsername() : "system", baseUrl);
+        } catch (IllegalStateException duplicate) {
+            // BUG-084 — a live pending invite already exists for this email.
+            return ResponseEntity.status(409).body(ApiResponse.<UserInviteResponse>builder()
+                    .status("ERROR").code(409).timestamp(LocalDateTime.now())
+                    .errorCode(ErrorCode.VALIDATION_ERROR.name())
+                    .message(duplicate.getMessage())
+                    .build());
+        }
+
+        // BUG-050 — record the mint on user_admin_audit so Recent-admin-actions
+        // shows the invite. subject_user_id is null (invitee not yet a user row).
+        if (adminUserService != null) {
+            adminUserService.recordInviteSent(req.getEmail(), clientCode,
+                    admin != null ? admin.getUsername() : "system");
+        }
 
         UserInviteResponse body = UserInviteResponse.of(invite,
                 baseUrl + "/invite/" + invite.getToken());
@@ -95,6 +117,53 @@ public class AdminUserInviteController {
                 .status("SUCCESS").code(200).timestamp(LocalDateTime.now())
                 .message(data.size() + " invite(s).")
                 .data(data).build());
+    }
+
+    @Operation(summary = "Resend an existing invite (admin)")
+    @PostMapping("/{id}/resend")
+    public ResponseEntity<ApiResponse<UserInviteResponse>> resend(
+            @PathVariable Long id, @AuthenticationPrincipal UserDetails admin,
+            HttpServletRequest request) {
+        String baseUrl = resolveBaseUrl(request);
+        try {
+            UserInvite invite = inviteService.resend(id, baseUrl);
+            // BUG-085 — audit the resend so Recent admin actions shows it.
+            if (adminUserService != null) {
+                adminUserService.recordInviteResent(invite.getEmail(), invite.getClientCode(),
+                        admin != null ? admin.getUsername() : "system");
+            }
+            UserInviteResponse body = UserInviteResponse.of(invite,
+                    baseUrl + "/invite/" + invite.getToken());
+            return ResponseEntity.ok(ApiResponse.<UserInviteResponse>builder()
+                    .status("SUCCESS").code(200).timestamp(LocalDateTime.now())
+                    .message("Invite re-sent and expiry extended.")
+                    .data(body).build());
+        } catch (IllegalArgumentException notFound) {
+            return ResponseEntity.status(404).body(error(404, ErrorCode.VALIDATION_ERROR,
+                    notFound.getMessage()));
+        } catch (IllegalStateException consumed) {
+            return ResponseEntity.status(409).body(error(409, ErrorCode.VALIDATION_ERROR,
+                    consumed.getMessage()));
+        }
+    }
+
+    @Operation(summary = "Revoke an invite (admin)")
+    @DeleteMapping("/{id}")
+    public ResponseEntity<ApiResponse<Void>> revoke(@PathVariable Long id,
+            @AuthenticationPrincipal UserDetails admin) {
+        // BUG-085 — look up the invite BEFORE deleting so we can audit who
+        // was revoked. If it was already gone (concurrent revoke), just no-op.
+        inviteService.findById(id).ifPresent(invite -> {
+            inviteService.revoke(id);
+            if (adminUserService != null) {
+                adminUserService.recordInviteRevoked(invite.getEmail(), invite.getClientCode(),
+                        admin != null ? admin.getUsername() : "system");
+            }
+        });
+        return ResponseEntity.ok(ApiResponse.<Void>builder()
+                .status("SUCCESS").code(200).timestamp(LocalDateTime.now())
+                .message("Invite revoked. The accept link is no longer valid.")
+                .build());
     }
 
     private String resolveBaseUrl(HttpServletRequest request) {

@@ -110,7 +110,9 @@ class GlobalExceptionHandlerTest {
         assertEquals(500, resp.getStatusCode().value());
         com.multiship.backend.dto.ApiResponse<Void> body = resp.getBody();
         org.junit.jupiter.api.Assertions.assertNotNull(body);
-        assertEquals("error", body.getStatus());
+        // BUG-070 R7: status now uppercase to match the ERROR canon used by
+        // 115 call sites across the app.
+        assertEquals("ERROR", body.getStatus());
         assertEquals("INTERNAL_ERROR", body.getErrorCode());
         // The raw exception message must NOT leak — the user sees a
         // friendly line + a reference id.

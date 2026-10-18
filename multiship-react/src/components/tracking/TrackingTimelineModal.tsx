@@ -10,6 +10,7 @@ import {
 } from 'react-icons/fi'
 import { orderService, type TrackingResponseDTO } from '../../api/orderService'
 import { notify } from '../../utils/notify'
+import { useModalDismiss } from '../../hooks/useModalDismiss'
 
 /**
  * Live tracking timeline for one order. Fetches from
@@ -82,13 +83,11 @@ export default function TrackingTimelineModal({
     void load()
   }, [load])
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
+  // BUG-123 R7 — swap bespoke Escape handler for the shared useModalDismiss
+  // hook so focus traps inside the modal (Tab doesn't walk into the page
+  // behind) + focus restores to the Track live button on close.
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useModalDismiss(true, dialogRef, onClose)
 
   /**
    * Auto-refresh loop. Ticks every second so the countdown badge decays
@@ -150,6 +149,7 @@ export default function TrackingTimelineModal({
 
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-modal="true"
       aria-label={`Tracking for order ${orderNo}`}

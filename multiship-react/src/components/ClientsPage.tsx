@@ -244,7 +244,7 @@ export default function ClientsPage() {
     }
   }
 
-  const handleExport = async () => {
+  const handleExport = async (visibleColumnIds?: string[]) => {
     try {
       await clientService.exportClientsCsv({
         search: debouncedSearch || undefined,
@@ -256,6 +256,10 @@ export default function ClientsPage() {
         city: debouncedCols.city || undefined,
         sortBy,
         sortDirection,
+        // BUG-038 — pass the visible column ids so hidden columns don't
+        // appear in the CSV. Backend treats a missing param as "all
+        // columns" so this is backwards-compatible with older clients.
+        columns: visibleColumnIds?.length ? visibleColumnIds.join(',') : undefined,
       })
     } catch (error) {
       notify.apiError(error, 'Failed to export clients.')
@@ -430,6 +434,7 @@ export default function ClientsPage() {
       },
       {
         id: 'actions',
+        size: 56, minSize: 56, maxSize: 56,
         header: '',
         enableSorting: false,
         cell: ({ row }) => (
@@ -442,7 +447,7 @@ export default function ClientsPage() {
             />
           </div>
         ),
-        meta: { headerLabel: 'Actions', hideable: false, exportable: false },
+        meta: { headerLabel: 'Actions', hideable: false, exportable: false, pinnedByDefault: 'end' },
       },
     ],
     // Handlers close over admin + refresh + toggle/delete which are stable

@@ -105,6 +105,11 @@ public class StampsConnector implements CarrierConnector {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.repository.LabelPackageRepository labelPackageRepository;
 
+    /** Field injection — where a SERA account's saved refresh token is found
+     *  when the caller didn't push one (see {@link #savedRefreshToken}). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.CarrierAccountRefRepository accountRefRepository;
+
     /** Field injection — SERA 3-legged OAuth token refresh. Absent in unit
      *  tests that drive SWSIM paths; when absent, {@code getAccessTokenSera}
      *  falls back to the legacy {@code client_credentials} attempt (which
@@ -282,13 +287,29 @@ public class StampsConnector implements CarrierConnector {
         if (!"US".equals(o) && !"PR".equals(o)) {
             return List.of();
         }
-        return List.of(
-                new ServiceOffering("GROUND_ADVANTAGE", "USPS Ground Advantage", "DOMESTIC"),
-                new ServiceOffering("PRIORITY", "USPS Priority Mail", "DOMESTIC"),
-                new ServiceOffering("PRIORITY_EXPRESS", "USPS Priority Mail Express", "DOMESTIC"),
-                new ServiceOffering("FIRST_CLASS_INTL", "USPS First-Class Package Intl", "INTERNATIONAL"),
-                new ServiceOffering("PRIORITY_INTL", "USPS Priority Mail Intl", "INTERNATIONAL"),
-                new ServiceOffering("EXPRESS_INTL", "USPS Priority Mail Express Intl", "INTERNATIONAL"));
+        return US_SERVICES;
+    }
+
+    /** The USPS services the catalog syncs (codes are what orders and rate picks carry). */
+    private static final List<ServiceOffering> US_SERVICES = List.of(
+            new ServiceOffering("GROUND_ADVANTAGE", "USPS Ground Advantage", "DOMESTIC"),
+            new ServiceOffering("PRIORITY", "USPS Priority Mail", "DOMESTIC"),
+            new ServiceOffering("PRIORITY_EXPRESS", "USPS Priority Mail Express", "DOMESTIC"),
+            new ServiceOffering("FIRST_CLASS_INTL", "USPS First-Class Package Intl", "INTERNATIONAL"),
+            new ServiceOffering("PRIORITY_INTL", "USPS Priority Mail Intl", "INTERNATIONAL"),
+            new ServiceOffering("EXPRESS_INTL", "USPS Priority Mail Express Intl", "INTERNATIONAL"));
+
+    /**
+     * A SERA {@code service_type} back to the catalog service it came from
+     * ({@code usps_ground_advantage} → GROUND_ADVANTAGE), so a quote matches the
+     * service the order picked. Unknown types pass through unchanged.
+     */
+    static ServiceOffering catalogServiceForSera(String seraServiceType) {
+        if (seraServiceType == null) return null;
+        for (ServiceOffering o : US_SERVICES) {
+            if (mapSwsimServiceToSera(o.serviceCode()).equalsIgnoreCase(seraServiceType.trim())) return o;
+        }
+        return null;
     }
 
     @Override
@@ -367,7 +388,7 @@ public class StampsConnector implements CarrierConnector {
     @Override
     public String getAccessToken(String clientId, String clientSecret, String accountNumber, String environment) {
         if (isSeraFlavor()) {
-            return getAccessTokenSera(clientId, clientSecret, environment);
+            return getAccessTokenSera(clientId, clientSecret, environment, accountNumber);
         }
         return getAccessTokenSwsim(clientId, clientSecret, accountNumber, environment);
     }
@@ -417,7 +438,30 @@ public class StampsConnector implements CarrierConnector {
      * successful verification; anything else falls back to a -local-* token
      * with the server's error surfaced via LAST_AUTH_DETAIL.
      */
+    /**
+     * The refresh token saved on the USPS account these credentials belong to:
+     * same account number, Client ID and environment (a token only works with
+     * the Client ID and environment it was issued for). Null when not found.
+     */
+    String savedRefreshToken(String clientId, String accountNumber, String environment) {
+        if (accountRefRepository == null || !StringUtils.hasText(accountNumber)) return null;
+        String id = clientId == null ? "" : clientId.trim();
+        return accountRefRepository.findByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase(accountNumber.trim(), "USPS")
+                .stream()
+                .filter(a -> StringUtils.hasText(a.getStampsRefreshToken()))
+                .filter(a -> id.equals(a.getClientId() == null ? "" : a.getClientId().trim()))
+                .filter(a -> environment == null || a.getEnvironment() == null
+                        || environment.trim().equalsIgnoreCase(a.getEnvironment().trim()))
+                .map(com.multiship.backend.model.CarrierAccountRef::getStampsRefreshToken)
+                .findFirst()
+                .orElse(null);
+    }
+
     String getAccessTokenSera(String clientId, String clientSecret, String environment) {
+        return getAccessTokenSera(clientId, clientSecret, environment, null);
+    }
+
+    String getAccessTokenSera(String clientId, String clientSecret, String environment, String accountNumber) {
         if (!StringUtils.hasText(clientId) || !StringUtils.hasText(clientSecret)) {
             LAST_AUTH_DETAIL.set("SERA requires a non-blank Client ID and Client Secret. "
                     + "Copy the values from your Stamps.com / Endicia developer portal.");
@@ -432,6 +476,9 @@ public class StampsConnector implements CarrierConnector {
         // machine-to-machine (rare), but the primary path is refresh.
         String refresh = SERA_REFRESH_TOKEN.get();
         SERA_REFRESH_TOKEN.remove();  // one-shot; caller re-pushes for the next call
+        // Most callers (void, tracking, rates, pickup, close-out, …) never push
+        // one — find the account's own saved token instead of falling back.
+        if (!StringUtils.hasText(refresh)) refresh = savedRefreshToken(clientId, accountNumber, environment);
         if (StringUtils.hasText(refresh) && seraOAuthService != null) {
             StampsSeraOAuthService.TokenExchangeResult r =
                     seraOAuthService.refreshToken(refresh, clientId.trim(), clientSecret, environment);
@@ -920,15 +967,40 @@ public class StampsConnector implements CarrierConnector {
      * same compensating-transaction pattern as the SWSIM path uses via
      * {@link #rollbackSuccessfulPieces}.
      */
+    static final String LOW_POSTAGE_MESSAGE = "Not enough USPS postage on the Stamps.com account to buy "
+            + "this label. An admin can click \"Add funds\" on the USPS account in Settings → Carriers, "
+            + "then generate the label again.";
+
+    /** SERA has no error code for a short balance — only its message says so. */
+    private static final java.util.regex.Pattern LOW_POSTAGE = java.util.regex.Pattern.compile(
+            "insufficient\\s+(funds|postage|balance)|not\\s+enough\\s+(funds|postage|balance)"
+                    + "|balance\\s+(is\\s+)?too\\s+low",
+            java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    static boolean isLowPostage(String carrierMessage) {
+        return carrierMessage != null && LOW_POSTAGE.matcher(carrierMessage).find();
+    }
+
+    /** BUG-135 — order number helper for alert enrichment. referenceNumber
+     *  is a String on ShipmentRequestDTO because manual labels send
+     *  "MAN{orderNo}" and bulk imports can carry non-numeric codes;
+     *  returns null when the reference isn't a bare integer so the alert
+     *  Order filter still works for the common ERP/API path (bare orderNo). */
+    static Long parseLongSafe(String s) {
+        if (s == null) return null;
+        try { return Long.parseLong(s.trim()); }
+        catch (NumberFormatException ignore) { return null; }
+    }
+
     ShipmentResult createShipmentSera(ShipmentRequestDTO request, String accessToken, String environment) {
         // Same fallback-token guard as the SWSIM path — a `-local-*` token
         // is a rejected credential, calling SERA with it just wastes an
         // API call and returns a bewildering 401 to the operator.
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             throw new com.multiship.backend.exception.CarrierConnectionException(
-                    "USPS via Stamps.com (SERA): this account's credentials aren't verified "
-                            + "(no live SERA access_token). Re-verify the account on the "
-                            + "Carriers page before shipping.");
+                    "This USPS account isn't authorized with Stamps.com yet (or the authorization "
+                            + "expired). An admin must open Settings → Carriers and click "
+                            + "\"Authorize with Stamps.com\" on this account.");
         }
         if (!StringUtils.hasText(request.getRecipientCountryCode())) {
             throw new IllegalArgumentException(
@@ -973,7 +1045,14 @@ public class StampsConnector implements CarrierConnector {
                         .body(String.class);
                 perPackage.add(parseSeraCreateLabelResponse(response, request));
             } catch (com.multiship.backend.service.carriers.exceptions.CarrierException cex) {
-                rollbackSuccessfulPiecesSera(perPackage, accessToken, environment);
+                // BUG-135 — thread tenantCode (Order.custNo via departmentNumber,
+                // populated by CarrierServiceImpl per PR #543) + orderNo
+                // (referenceNumber parsed as Long when numeric) so the
+                // Alerts History row names the shipment that failed instead
+                // of just a label_id in the Reason tooltip.
+                rollbackSuccessfulPiecesSera(perPackage, accessToken, environment,
+                        parseLongSafe(request.getReferenceNumber()),
+                        request.getDepartmentNumber());
                 throw cex;
             } catch (Exception ex) {
                 // PR-T1 — classify by SERA error_code (800xxx) when
@@ -1002,7 +1081,13 @@ public class StampsConnector implements CarrierConnector {
                     log.warn("Stamps SERA /labels failed for package {}/{}: {}",
                             i + 1, packages.size(), errMsg);
                 }
-                rollbackSuccessfulPiecesSera(perPackage, accessToken, environment);
+                // BUG-135 — same thread as the CarrierException branch above.
+                rollbackSuccessfulPiecesSera(perPackage, accessToken, environment,
+                        parseLongSafe(request.getReferenceNumber()),
+                        request.getDepartmentNumber());
+                if (isLowPostage(errMsg)) {
+                    throw new com.multiship.backend.exception.CarrierConnectionException(LOW_POSTAGE_MESSAGE);
+                }
                 throw com.multiship.backend.service.carriers.exceptions.CarrierExceptionMapper
                         .map("STAMPS", ex, "createShipmentSera[pkg " + (i + 1) + "/" + packages.size() + "]");
             }
@@ -1022,6 +1107,20 @@ public class StampsConnector implements CarrierConnector {
      */
     void rollbackSuccessfulPiecesSera(java.util.List<ShipmentResult> succeeded,
                                        String accessToken, String environment) {
+        rollbackSuccessfulPiecesSera(succeeded, accessToken, environment, null, null);
+    }
+
+    /** BUG-135 — tenantCode + orderNo overload. The per-piece void failure
+     *  alert is a data-loss signal; without tenant+order on the row the
+     *  operator can only see a label_id in the Reason tooltip and has to
+     *  cross-reference label_package manually. Caller
+     *  ({@link #createShipmentSera}) has {@code request} in scope and can
+     *  pull both: tenantCode = {@code request.getDepartmentNumber()}
+     *  (populated with Order.custNo per PR #543), orderNo =
+     *  {@code request.getReferenceNumber()} parsed as Long. */
+    void rollbackSuccessfulPiecesSera(java.util.List<ShipmentResult> succeeded,
+                                       String accessToken, String environment,
+                                       Long orderNo, String tenantCode) {
         if (succeeded == null || succeeded.isEmpty()) return;
         log.warn("Stamps SERA MPS partial failure: rolling back {} successful piece(s) via /labels/{{label_id}}/void.",
                 succeeded.size());
@@ -1032,7 +1131,7 @@ public class StampsConnector implements CarrierConnector {
         // itself fails (that's the data-loss case: label was paid for and
         // we can't void it, so a human has to reconcile).
         if (fallbackAlertService != null) {
-            fallbackAlertService.record(null, null, null,
+            fallbackAlertService.record(orderNo, tenantCode, null,
                     "STAMPS_SERA_MPS_PARTIAL_ROLLBACK",
                     "SERA MPS partial failure — rolling back " + succeeded.size()
                             + " successful piece(s).");
@@ -1044,7 +1143,7 @@ public class StampsConnector implements CarrierConnector {
             log.warn("Stamps SERA rollback: cannot resolve base URL ({}), skipping — "
                     + "operator must void the pieces manually.", ex.getMessage());
             if (fallbackAlertService != null) {
-                fallbackAlertService.record(null, null, null,
+                fallbackAlertService.record(orderNo, tenantCode, null,
                         "STAMPS_SERA_MPS_ROLLBACK_VOID_FAILED",
                         "Rollback aborted — SERA base URL unresolved (" + ex.getMessage()
                                 + "). Operator must void " + succeeded.size()
@@ -1076,7 +1175,7 @@ public class StampsConnector implements CarrierConnector {
                 // Rolled-back shipment left a paid-for label that nobody
                 // will void — ops reconciles manually from this alert.
                 if (fallbackAlertService != null) {
-                    fallbackAlertService.record(null, null, null,
+                    fallbackAlertService.record(orderNo, tenantCode, null,
                             "STAMPS_SERA_MPS_ROLLBACK_VOID_FAILED",
                             "SERA rollback void failed for label_id " + labelId
                                     + ": " + cancelEx.getMessage() + ". Manual void required.");
@@ -1309,7 +1408,15 @@ public class StampsConnector implements CarrierConnector {
                                                   String country, String phone, String email,
                                                   String residentialIndicator) {
         Map<String, Object> a = new LinkedHashMap<>();
-        if (StringUtils.hasText(name)) a.put("name", name);
+        // BUG-001 — SERA validates "fullname" when the `name` field is
+        // provided: "If provided, fullname must contain at least 2
+        // alphabetic characters, followed by a space, followed by at
+        // least another 2 alphabetic characters." (error 6619409). A
+        // client-default sender like "MKL" (3 chars, no space) tripped
+        // this and sent order #<N> to ERROR after save. Omit the field
+        // when it doesn't match the rule, so SERA falls back to
+        // company_name as the entity identity.
+        if (StringUtils.hasText(name) && isSeraValidFullname(name)) a.put("name", name);
         if (StringUtils.hasText(company)) a.put("company_name", company);
         if (StringUtils.hasText(line1)) a.put("address_line1", line1);
         if (StringUtils.hasText(line2)) a.put("address_line2", line2);
@@ -1605,9 +1712,18 @@ public class StampsConnector implements CarrierConnector {
         // specified is invalid." Pass through only for codes that already
         // carry a SERA shape (bare generic or carrier-prefixed).
         String lower = v.toLowerCase(Locale.ROOT);
+        // Non-USPS carrier-prefixed packaging (fedex_tube, ups_envelope,
+        // dhl_box, …) is not a valid USPS SERA packaging — SERA rejects
+        // the whole /rates call with 4522242 "The carrier specified does
+        // not match the service requested." Operators MPS-shipping with
+        // a mix of per-package packagings must be tolerated here, not
+        // 400'd. Collapse any foreign-carrier packaging to the generic
+        // "package" so the rate shop keeps going.
+        if (lower.startsWith("fedex_") || lower.startsWith("ups_") || lower.startsWith("dhl_")) {
+            return "package";
+        }
         if ("package".equals(lower) || "letter".equals(lower) || "large_envelope".equals(lower)
-                || lower.startsWith("usps_") || lower.startsWith("ups_")
-                || lower.startsWith("fedex_") || lower.startsWith("dhl_")) {
+                || lower.startsWith("usps_")) {
             return lower;
         }
         return switch (v.toUpperCase(Locale.ROOT)) {
@@ -2352,13 +2468,37 @@ public class StampsConnector implements CarrierConnector {
 
     /** Resolve the SERA {@code label_id} for a tracking number by reading
      *  {@code label_package.carrier_label_ref} (V44). Returns null when the
-     *  repository isn't wired (unit tests) or no row matches. */
+     *  repository isn't wired (unit tests) or no row matches.
+     *
+     *  <p>BUG-010 — tracking numbers aren't unique across orders (Stamps
+     *  sandbox emits the same placeholder for every label; in prod, two
+     *  labels ever sharing a tracking crash the void path with
+     *  {@code IncorrectResultSizeDataAccessException}). When the void path
+     *  tags the MDC with {@code carrierCallOrderNo} (it always does — see
+     *  {@link com.multiship.backend.service.VoidServiceImpl}), scope the
+     *  lookup by (orderNo, trackingNumber) so it's a point-lookup. */
     String resolveSeraLabelId(String trackingNumber) {
         if (!StringUtils.hasText(trackingNumber) || labelPackageRepository == null) return null;
-        return labelPackageRepository.findByTrackingNumber(trackingNumber)
-                .map(com.multiship.backend.model.LabelPackage::getCarrierLabelRef)
+        Integer orderNo = parseOrderNoFromMdc();
+        java.util.Optional<com.multiship.backend.model.LabelPackage> row = (orderNo != null)
+                ? labelPackageRepository.findByOrderNoAndTrackingNumber(orderNo, trackingNumber)
+                : labelPackageRepository.findByTrackingNumber(trackingNumber);
+        return row.map(com.multiship.backend.model.LabelPackage::getCarrierLabelRef)
                 .filter(StringUtils::hasText)
                 .orElse(null);
+    }
+
+    /** BUG-010 — read the current carrier-call order number from MDC. Returns
+     *  null when the context isn't tagged (legacy call sites). */
+    private static Integer parseOrderNoFromMdc() {
+        String v = org.slf4j.MDC.get(
+                com.multiship.backend.service.observability.CarrierCallContext.MDC_CARRIER_ORDER_NO);
+        if (v == null || v.isBlank()) return null;
+        try {
+            return Integer.valueOf(v.trim());
+        } catch (NumberFormatException ignore) {
+            return null;
+        }
     }
 
     /**
@@ -2459,7 +2599,8 @@ public class StampsConnector implements CarrierConnector {
                     .accept(MediaType.APPLICATION_JSON)
                     .contentType(MediaType.APPLICATION_JSON)
                     .header("Authorization", "Bearer " + accessToken)
-                    .header("Idempotency-Key", idempotencyKey == null ? "" : idempotencyKey)
+                    .header("Idempotency-Key", StringUtils.hasText(idempotencyKey)
+                            ? idempotencyKey : java.util.UUID.randomUUID().toString())
                     .body(body)
                     .retrieve()
                     .body(String.class);
@@ -2476,6 +2617,36 @@ public class StampsConnector implements CarrierConnector {
             log.warn("Stamps SERA /balance/add-funds call failed: {}", ex.getMessage());
             return new BalanceResult(CARRIER_CODE, null, null, cur, "ERROR",
                     "SERA add-funds call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /**
+     * A one-use link into the Stamps.com web app ({@code GET /url?url_type=…}),
+     * e.g. {@code store_default_payment_methods} or {@code reports_balances}. Valid for one
+     * request only, so it is fetched when the user clicks, never stored.
+     *
+     * @throws IllegalStateException with Stamps.com's message when it refuses.
+     */
+    public String getHostedUrlSera(String accessToken, String urlType, String environment) {
+        try {
+            String response = HttpClients.newBuilder().baseUrl(seraApiBaseUrl(environment)).build()
+                    .get()
+                    .uri(b -> b.path("/url").queryParam("url_type", urlType).build())
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .retrieve()
+                    .body(String.class);
+            String url = objectMapper.readTree(Optional.ofNullable(response).orElse("{}")).path("url").asText("");
+            if (!url.startsWith("https://")) {
+                throw new IllegalStateException("Stamps.com didn't return a link.");
+            }
+            return url;
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            throw new IllegalStateException(extractSeraError(ex.getResponseBodyAsString()), ex);
+        } catch (IllegalStateException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new IllegalStateException("Couldn't reach Stamps.com: " + ex.getMessage(), ex);
         }
     }
 
@@ -2902,7 +3073,19 @@ public class StampsConnector implements CarrierConnector {
                     "USPS confirmed this address is deliverable.", responseXml);
         }
         if (cityStateZipOk) {
+            // BUG-018 — USPS SWSIM returns AddressMatch=false + CityStateZipOK=true
+            // for every intl address (it can validate the ZIP but not the foreign
+            // street). Pre-fix we unconditionally flagged "USPS normalised the
+            // address" even when the SWSIM echo equaled the input character for
+            // character. Compare on the canonicalised form; emit the warning
+            // only when SWSIM actually changed something.
             AddressToValidate suggested = readSwsimAddressEcho(responseXml, input);
+            boolean sameAsInput = suggested != null && seraAddressesEqual(input, suggested);
+            if (sameAsInput) {
+                return new AddressValidationResult(true, "EXACT", "UNKNOWN", null,
+                        java.util.List.of(),
+                        "USPS confirmed this address is deliverable.", responseXml);
+            }
             return new AddressValidationResult(true, "CORRECTED", "UNKNOWN", suggested,
                     java.util.List.of("USPS normalised the street address; review before shipping."),
                     "USPS suggested a corrected address.", responseXml);
@@ -3100,31 +3283,65 @@ public class StampsConnector implements CarrierConnector {
     }
 
     /** Read a SERA address object into our {@link AddressToValidate} record.
-     *  Missing fields fall back to the input (so a partial echo doesn't
-     *  erase the operator's entry). Returns null when the node is empty. */
+     *  Missing OR blank fields fall back to the input (so a partial echo
+     *  doesn't erase the operator's entry — BUG-018 R7: SERA for non-US
+     *  addresses echoes empty string on street-level fields, pre-fix that
+     *  tripped the "normalised" warning + emptied the suggestion panel).
+     *  Returns null when the node is empty. */
     private static AddressToValidate readSeraAddress(JsonNode node, AddressToValidate input) {
         if (node == null || node.isMissingNode() || node.isNull() || !node.isObject()) return null;
         return new AddressToValidate(
-                node.path("name").asText(input == null ? null : input.name()),
-                node.path("company_name").asText(input == null ? null : input.company()),
-                node.path("address_line1").asText(input == null ? null : input.addressLine1()),
-                node.path("address_line2").asText(input == null ? null : input.addressLine2()),
-                node.path("address_line3").asText(input == null ? null : input.addressLine3()),
-                node.path("city").asText(input == null ? null : input.city()),
-                node.path("state_province").asText(input == null ? null : input.state()),
-                node.path("postal_code").asText(input == null ? null : input.postalCode()),
-                node.path("country_code").asText(input == null ? null : input.countryCode()));
+                orInput(node, "name",         input == null ? null : input.name()),
+                orInput(node, "company_name", input == null ? null : input.company()),
+                orInput(node, "address_line1", input == null ? null : input.addressLine1()),
+                orInput(node, "address_line2", input == null ? null : input.addressLine2()),
+                orInput(node, "address_line3", input == null ? null : input.addressLine3()),
+                orInput(node, "city",         input == null ? null : input.city()),
+                orInput(node, "state_province", input == null ? null : input.state()),
+                orInput(node, "postal_code",  input == null ? null : input.postalCode()),
+                orInput(node, "country_code", input == null ? null : input.countryCode()));
+    }
+
+    private static String orInput(JsonNode node, String field, String fallback) {
+        String v = node.path(field).asText(null);
+        return (v == null || v.isBlank()) ? fallback : v;
     }
 
     /** Field-level equality for the SERA matched_address echo. Case-
      *  insensitive + trim-tolerant on the comparable fields; nulls equal. */
+    /** BUG-001 — SERA 6619409 fullname rule: "If provided, fullname must
+     *  contain at least 2 alphabetic characters, followed by a space,
+     *  followed by at least another 2 alphabetic characters." Used by
+     *  both buildSeraAddress (wire) and ShipmentValidationService
+     *  (pre-flight) so the two agree. */
+    public static boolean isSeraValidFullname(String name) {
+        if (name == null) return false;
+        return name.trim().matches("[A-Za-z]{2,}\\s+[A-Za-z]{2,}.*");
+    }
+
+    /** R2-BUG-002 — expand a short / non-pattern contact name to meet
+     *  SERA's fullname rule ({@link #isSeraValidFullname}) for the pickup
+     *  wire. Used only on {@code /pickups} where the field is required
+     *  (not on label writes, which fall back to {@code company_name}).
+     *  Returns the input unchanged when already valid; otherwise appends
+     *  " Pickup" so a 3-letter shipper name like "MKL" becomes
+     *  "MKL Pickup" which clears the pattern without inventing a real
+     *  person's name. */
+    static String padToSeraFullname(String name) {
+        if (name == null) return "";
+        String trimmed = name.trim();
+        if (trimmed.isEmpty()) return "";
+        if (isSeraValidFullname(trimmed)) return trimmed;
+        return trimmed + " Pickup";
+    }
+
     private static boolean seraAddressesEqual(AddressToValidate a, AddressToValidate b) {
         if (a == null || b == null) return false;
-        return eqCI(a.addressLine1(), b.addressLine1())
-                && eqCI(a.addressLine2(), b.addressLine2())
+        return eqAddressLine(a.addressLine1(), b.addressLine1())
+                && eqAddressLine(a.addressLine2(), b.addressLine2())
                 && eqCI(a.city(), b.city())
                 && eqCI(a.state(), b.state())
-                && eqCI(a.postalCode(), b.postalCode())
+                && eqZip(a.postalCode(), b.postalCode())
                 && eqCI(a.countryCode(), b.countryCode());
     }
 
@@ -3132,6 +3349,57 @@ public class StampsConnector implements CarrierConnector {
         String ta = a == null ? "" : a.trim();
         String tb = b == null ? "" : b.trim();
         return ta.equalsIgnoreCase(tb);
+    }
+
+    /** BUG-018 — USPS normalises common street-type suffixes (STREET→ST,
+     *  AVENUE→AVE, BOULEVARD→BLVD, ROAD→RD, DRIVE→DR, LANE→LN, COURT→CT,
+     *  SUITE→STE, APARTMENT→APT) and lower-casing / punctuation changes.
+     *  Pre-fix we flagged all of those as "USPS normalised the address",
+     *  which fired on every validate. Compare on a canonical form so only
+     *  real street changes trip the warning. */
+    private static boolean eqAddressLine(String a, String b) {
+        return canonAddressLine(a).equalsIgnoreCase(canonAddressLine(b));
+    }
+
+    private static String canonAddressLine(String s) {
+        if (s == null) return "";
+        String out = s.trim().toUpperCase(java.util.Locale.ROOT)
+                .replaceAll("[.,#]+", " ")
+                .replaceAll("\\s+", " ");
+        // Common USPS abbreviations — map long form → short so either input matches.
+        out = out.replaceAll("\\bSTREET\\b", "ST")
+                .replaceAll("\\bAVENUE\\b", "AVE")
+                .replaceAll("\\bBOULEVARD\\b", "BLVD")
+                .replaceAll("\\bROAD\\b", "RD")
+                .replaceAll("\\bDRIVE\\b", "DR")
+                .replaceAll("\\bLANE\\b", "LN")
+                .replaceAll("\\bCOURT\\b", "CT")
+                .replaceAll("\\bHIGHWAY\\b", "HWY")
+                .replaceAll("\\bSUITE\\b", "STE")
+                .replaceAll("\\bAPARTMENT\\b", "APT")
+                .replaceAll("\\bPARKWAY\\b", "PKWY")
+                .replaceAll("\\bPLACE\\b", "PL")
+                .replaceAll("\\bNORTH\\b", "N")
+                .replaceAll("\\bSOUTH\\b", "S")
+                .replaceAll("\\bEAST\\b", "E")
+                .replaceAll("\\bWEST\\b", "W");
+        return out.trim();
+    }
+
+    /** BUG-018 — ZIP+4 expansion (10001 → 10001-0001) is a benign
+     *  carrier addition, not a street change. Compare on the 5-digit
+     *  base so the expansion doesn't trip the "normalised" warning. */
+    private static boolean eqZip(String a, String b) {
+        String ca = canonZip(a);
+        String cb = canonZip(b);
+        return ca.equals(cb);
+    }
+
+    private static String canonZip(String s) {
+        if (s == null) return "";
+        String out = s.trim();
+        int dash = out.indexOf('-');
+        return dash > 0 ? out.substring(0, dash) : out;
     }
 
 
@@ -3318,11 +3586,23 @@ public class StampsConnector implements CarrierConnector {
         body.put("carrier", "usps");
         CarrierConnector.AddressToValidate a = req.address();
         if (a != null) {
-            body.put("pickup_address", buildSeraAddress(
+            Map<String, Object> pickupAddress = buildSeraAddress(
                     req.contactName(), null,
                     a.addressLine1(), a.addressLine2(), null,
                     a.city(), a.state(), a.postalCode(), a.countryCode(),
-                    req.contactPhone(), null, null));
+                    req.contactPhone(), null, null);
+            // R2-BUG-002 — SERA's /pickups endpoint REQUIRES contact "name"
+            // (error 4522242). buildSeraAddress drops the field when the
+            // supplied value fails SERA's fullname pattern ("Foo Bar", 2+ /
+            // 2+ alpha chars) — fine for shipments (SERA falls back to
+            // company_name) but a hard reject for pickups. Force-include it,
+            // padding short values so the pattern passes. ponytail: the real
+            // fix is a Pickup-form field for the driver-facing contact
+            // (first + last) separate from the shipper's company name.
+            if (!pickupAddress.containsKey("name") && StringUtils.hasText(req.contactName())) {
+                pickupAddress.put("name", padToSeraFullname(req.contactName()));
+            }
+            body.put("pickup_address", pickupAddress);
         }
         // pickup_window — ISO-8601 timestamps per SERA spec. When the caller
         // didn't pin a window, default to 09:00-17:00 UTC on pickupDate so

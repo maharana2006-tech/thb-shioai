@@ -1,16 +1,24 @@
 import type { WorkspaceRouteKey } from '../routes/workspaceRoutes'
 
-export type UserRole = 'ADMIN' | 'USER' | 'TENANT'
+export type UserRole = 'SUPERADMIN' | 'ADMIN' | 'USER' | 'TENANT'
 
 export const normalizeRole = (value?: string | null): UserRole => {
   const normalized = value?.trim().toUpperCase()
 
-  if (normalized === 'ADMIN' || normalized === 'TENANT') {
+  if (normalized === 'SUPERADMIN' || normalized === 'ADMIN' || normalized === 'TENANT') {
     return normalized
   }
 
   return 'USER'
 }
+
+/**
+ * SUPERADMIN inherits everything ADMIN and USER can reach (mirrors the backend
+ * where its JWT carries ROLE_SUPERADMIN + ROLE_ADMIN + ROLE_USER). Use this for
+ * every role gate instead of a bare `roles.includes(userRole)`.
+ */
+export const roleSatisfies = (userRole: UserRole, required: UserRole): boolean =>
+  userRole === required || (userRole === 'SUPERADMIN' && (required === 'ADMIN' || required === 'USER'))
 
 /**
  * Navigation visibility per role:
@@ -20,6 +28,7 @@ export const normalizeRole = (value?: string | null): UserRole => {
  */
 export const getNavKeysForRole = (role: UserRole): WorkspaceRouteKey[] => {
   switch (role) {
+    case 'SUPERADMIN':
     case 'ADMIN':
       return ['dashboard', 'orders', 'bulk', 'd2c', 'settings']
     case 'USER':
@@ -34,7 +43,7 @@ export const canAccessRoute = (role: UserRole, key: WorkspaceRouteKey) =>
 
 export const canGenerateLabels = (role: UserRole) => role !== 'TENANT'
 
-export const canManageCarriers = (role: UserRole) => role === 'ADMIN'
+export const canManageCarriers = (role: UserRole) => role === 'ADMIN' || role === 'SUPERADMIN'
 
 /**
  * Landing page after authentication:
@@ -47,7 +56,7 @@ export const getHomePathForRole = (role: UserRole, hasConnectedCarrier: boolean)
     return '/orders'
   }
 
-  if (role === 'ADMIN' && !hasConnectedCarrier) {
+  if ((role === 'ADMIN' || role === 'SUPERADMIN') && !hasConnectedCarrier) {
     return '/settings/carriers'
   }
 

@@ -1,4 +1,4 @@
-import { getNavKeysForRole, type UserRole } from '../utils/roles'
+import { getNavKeysForRole, roleSatisfies, type UserRole } from '../utils/roles'
 
 /** Top-level nav destinations. Master-data pages now live under Settings. */
 export const workspacePaths = {
@@ -44,6 +44,8 @@ export const settingsPaths = {
   clients: '/settings/clients',
   warehouses: '/settings/warehouses',
   carriers: '/settings/carriers',
+  /** Full-page USPS postage top-up for one carrier account. */
+  carrierAddFunds: (accountId: number | string) => `/settings/carriers/${accountId}/add-funds`,
   /** Merged catalog: shipping services + packages under sub-tabs. Replaces
    *  the old `shipping-services` and `packages` routes. Deep-link the tab
    *  with `?tab=services` or `?tab=packages`. */
@@ -189,7 +191,7 @@ export const settingsNavItems: Array<{
     description: 'Per-client shipping label, packing slip and commercial invoice templates. Fall back to platform defaults when a client hasn\'t set one.',
     roles: ['ADMIN', 'USER'] },
   { key: 'custom-fields', label: 'Custom Fields', to: settingsPaths.customFields, iconKey: 'mapping',
-    description: 'Per-tenant metadata on orders (PO number, department, marketplace order id) — flows through the form and order detail.',
+    description: 'Per-client metadata on orders (PO number, department, marketplace order id) — flows through the form and order detail.',
     roles: ['ADMIN', 'USER'] },
   { key: 'audit-log', label: 'Logs', to: settingsPaths.auditLog, iconKey: 'dashboard',
     description: 'Error, shipment and user-activity logs in one table — who did what, which labels generated or failed, and why. Filter by category, order number, actor and date.',
@@ -198,10 +200,10 @@ export const settingsNavItems: Array<{
     description: 'Admin-managed encrypted secrets — OpenAI key and other overrides for env vars. AES-GCM at rest.',
     roles: ['ADMIN'] },
   { key: 'users', label: 'Users', to: settingsPaths.users, iconKey: 'clients',
-    description: 'Assign each USER account to a client, deactivate revoked accounts, and audit the changes. Backfill client_code before flipping the tenant-scope flag.',
+    description: 'Assign each user account to a client, deactivate revoked accounts, and audit the changes.',
     roles: ['ADMIN'] },
   { key: 'carrier-limits', label: 'Carrier Limits', to: settingsPaths.carrierLimits, iconKey: 'carrier',
-    description: 'Per-carrier / per-service caps on packages, commodities, weight and free declared value. Direction-aware (FORWARD vs RETURN); edits invalidate the resolver cache immediately.',
+    description: 'Per-carrier / per-service caps on packages, commodities, weight and free declared value. Direction-aware (forward vs return); changes take effect right away.',
     roles: ['ADMIN'] },
   { key: 'output-destinations', label: 'Output Destinations', to: settingsPaths.outputDestinations, iconKey: 'mapping',
     description: 'Deliver generated labels + commercial invoices per client to a folder or an SFTP server. Every dispatch is also copied to the database. Printers are set up under Printers.',
@@ -210,13 +212,13 @@ export const settingsNavItems: Array<{
     description: 'Register network label and invoice printers, choose which printer each client prints on, and send test pages. Used by Send to printer on the Orders page.',
     roles: ['ADMIN'] },
   { key: 'external-systems', label: 'External Systems', to: settingsPaths.externalSystems, iconKey: 'apiKey',
-    description: 'DB-driven connection manager for external systems (Oracle WMS today, REST/gRPC/SFTP later). Set host/port/creds/pool params + per-tenant login overrides + test the connection live.',
+    description: 'Connections to external systems (Oracle WMS, REST, SFTP). Set host, port, credentials, pool settings and per-client login overrides, and test the connection live.',
     roles: ['ADMIN'] },
   { key: 'dtc-scheduler', label: 'DTC Scheduler', to: settingsPaths.dtcScheduler, iconKey: 'dashboard',
     description: 'When the Oracle DTC order sync and the automatic label generation run, each on its own schedule. Set days, hours and how often; changes apply within a minute.',
     roles: ['ADMIN'] },
   { key: 'mail', label: 'Mail', to: settingsPaths.mail, iconKey: 'mail',
-    description: 'Outbound email provider — pick SMTP today (SendGrid/SES/Postmark coming), edit host/port/creds, and send a live test message. Config lives in mail_provider + mail_config.',
+    description: 'Outbound email provider — pick SMTP, SendGrid, SES or Postmark, edit host/port/creds, and send a live test message.',
     roles: ['ADMIN'] },
   { key: 'notification-templates', label: 'Email Templates', to: settingsPaths.notificationTemplates, iconKey: 'apiDocs',
     description: 'Handlebars templates for every outbound email event (invite, verify, password reset, and future alerts). Live preview against a JSON var map before saving.',
@@ -243,25 +245,25 @@ export const settingsNavItems: Array<{
     description: 'Platform-wide carrier registry — toggle enabled org-wide and flip LIVE/TEST mode without a code deploy.',
     roles: ['ADMIN'] },
   { key: 'alerts-history', label: 'Alerts History', to: settingsPaths.alertsHistory, iconKey: 'dashboard',
-    description: 'Durable record of fired alerts (USPS fallback, Stamps SERA, future). Filter by source, tenant and order.',
+    description: 'Record of fired carrier and system alerts. Filter by source, client and order.',
     roles: ['ADMIN'] },
   { key: 'carrier-api-log', label: 'Carrier API Log', to: settingsPaths.carrierApiLog, iconKey: 'dashboard',
-    description: 'Per-request carrier API round-trips with request / response bodies. Infrastructure present; connector wiring lands as follow-ups.',
+    description: 'Per-request carrier API round-trips with request and response bodies. Filter by carrier, host, method, status and client.',
     roles: ['ADMIN'] },
   { key: 'roles', label: 'Roles', to: settingsPaths.roles, iconKey: 'clients',
-    description: 'Platform-wide role registry. Read-only; add roles via SQL today.',
+    description: 'Platform-wide role registry. Read-only.',
     roles: ['ADMIN'] },
   { key: 'countries', label: 'Countries', to: settingsPaths.countries, iconKey: 'mapping',
-    description: 'ISO country list + is_us_territory flag. Read-only; edit via SQL today.',
+    description: 'ISO country list with US-territory flag. Read-only.',
     roles: ['ADMIN'] },
   { key: 'reasons-for-export', label: 'Reasons for Export', to: settingsPaths.reasonsForExport, iconKey: 'customs',
-    description: 'Reason-for-export codes used on commercial invoices (Sale / Gift / Sample / …). Read-only; edit via SQL today.',
+    description: 'Reason-for-export codes used on commercial invoices (Sale / Gift / Sample / …). Read-only.',
     roles: ['ADMIN'] },
   { key: 'currencies', label: 'Currencies', to: settingsPaths.currencies, iconKey: 'apiDocs',
-    description: 'ISO 4217 currency catalog. Read-only; per-tenant allowlist layered via tenant_settings.currency.allowlist.',
+    description: 'ISO 4217 currency catalog. Read-only.',
     roles: ['ADMIN'] },
   { key: 'carrier-error-messages', label: 'Carrier Error Messages', to: settingsPaths.carrierErrorMessages, iconKey: 'dashboard',
-    description: 'Pattern → humanized sentence rules CarrierErrorMessages applies to raw carrier payloads. Read-only; edit via SQL today.',
+    description: 'Rules that turn raw carrier error payloads into humanized sentences. Read-only.',
     roles: ['ADMIN'] },
   { key: 'carrier-dropdowns', label: 'Carrier Dropdowns', to: settingsPaths.carrierDropdowns, iconKey: 'carrier',
     description: 'Per-carrier vocabularies the /orders/new wizard uses — label formats, pickup types, clearance options. Read-only.',
@@ -324,7 +326,7 @@ export const getNavItemsForRole = (role: UserRole) => {
 }
 
 export const getSettingsNavForRole = (role: UserRole) =>
-  settingsNavItems.filter((item) => item.roles.includes(role))
+  settingsNavItems.filter((item) => item.roles.some((r) => roleSatisfies(role, r)))
 
 /** Which main sidebar item is active for a path (Settings owns all master data). */
 export const resolveWorkspaceRouteKey = (pathname: string): WorkspaceRouteKey | null => {
@@ -389,7 +391,13 @@ export const resolveBreadcrumb = (
     return { section: 'Operations', label: 'Automatic Label', iconKey: 'd2c' }
   }
   if (pathname.startsWith('/settings') || pathname === '/clients' || pathname === '/carrier') {
-    const sub = settingsNavItems.find((i) => i.to === pathname)
+    // BUG-039 — sub-routes like /settings/clients/new or
+    // /settings/clients/MKL246/edit used to miss the parent nav item
+    // (which has `to = /settings/clients`) and fell back to the generic
+    // "Settings" label. Prefix-match so child pages carry the parent
+    // crumb.
+    const sub = settingsNavItems.find((i) =>
+      pathname === i.to || pathname.startsWith(i.to + '/'))
     return { section: 'Settings', label: sub?.label ?? 'Settings', iconKey: sub?.iconKey ?? 'settings' }
   }
   return null

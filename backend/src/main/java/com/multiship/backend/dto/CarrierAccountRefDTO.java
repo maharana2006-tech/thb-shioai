@@ -29,6 +29,10 @@ public class CarrierAccountRefDTO {
     /** Result of the last credential check against the carrier API; null = never checked. */
     private Boolean verified;
     private LocalDateTime lastVerifiedAt;
+    /** Set only on a Verify answer: the carrier (Stamps.com SERA) needs a browser
+     *  consent first; the FE opens {@link #authorizeUrl}. Null otherwise. */
+    private Boolean needsAuthorization;
+    private String authorizeUrl;
     /** Labels generated with this account and when it last shipped. */
     private Long labelsGenerated;
     private LocalDateTime lastUsedAt;

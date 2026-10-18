@@ -3,6 +3,7 @@ package com.multiship.backend.service.external;
 import com.multiship.backend.config.ApiKeyPrincipal;
 import com.multiship.backend.config.CarrierProperties;
 import com.multiship.backend.dto.ApiResponse;
+import com.multiship.backend.dto.VoidLabelResponseDTO;
 import com.multiship.backend.dto.ErrorCode;
 import com.multiship.backend.dto.LabelGenerationResponse;
 import com.multiship.backend.dto.ManualShipmentRequest;
@@ -88,6 +89,24 @@ public class ExternalApiService {
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.service.TenantChannelGuard channelGuard;
+
+    /**
+     * R2-BUG-001 — the External API void path has to call the carrier to
+     * cancel the label (same as the internal /orders/{n}/void UI path).
+     * Pre-fix this service flipped the local status to VOIDED and
+     * returned {@code carrierVoided:false} with a disclaimer; the carrier
+     * never heard about it. Delegating to {@link VoidService#voidLabel}
+     * routes the external call through the same connector cancel + MDC
+     * tagging + VOIDED persistence as the internal path.
+     *
+     * <p>{@code required=false} so unit-test contexts without the full
+     * Spring wiring still construct; the method null-guards and falls
+     * back to the pre-fix local-only behaviour (with a WARN log) when
+     * missing, preserving the only path that would reach that branch
+     * (Mockito tests). Every real deployment wires it.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.VoidService voidService;
 
     public ExternalApiService(ShippingConfigService shippingConfigService,
                               ShippingServiceRepository serviceRepository,
@@ -624,6 +643,41 @@ public class ExternalApiService {
             throw new ExternalApiException(409, ErrorCode.VALIDATION_ERROR,
                     "Shipment " + shipmentId + " is already voided.");
         }
+
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("shipmentId", shipmentId);
+
+        // R2-BUG-001 — delegate to the internal void path so the carrier
+        // actually hears the cancel (connector.voidShipment) and the row
+        // ends up VOIDED with the carrier_api_log entry tying back.
+        if (voidService != null) {
+            ApiResponse<VoidLabelResponseDTO> resp = voidService.voidLabel(order.getOrderNo());
+            int code = resp == null ? 0 : resp.getCode();
+            if (code < 200 || code >= 300) {
+                // Carrier (or validator) refused — propagate as an External API
+                // failure so the caller sees the status + reason instead of
+                // the misleading pre-fix "VOIDED" happy response.
+                throw new ExternalApiException(
+                        code == 0 ? 502 : code,
+                        ErrorCode.CARRIER_FAILURE,
+                        resp == null || resp.getMessage() == null
+                                ? "Carrier void failed for shipment " + shipmentId
+                                : resp.getMessage());
+            }
+            out.put("status", "VOIDED");
+            out.put("carrierVoided", true);
+            if (resp.getData() != null && resp.getData().getStatus() != null) {
+                out.put("carrierStatus", resp.getData().getStatus());
+            }
+            return out;
+        }
+
+        // Fallback: only reachable in bare-Mockito unit contexts without
+        // the Spring-wired VoidService. Logs loud so a prod misconfig is
+        // visible instead of silently reverting to disclaimer-only.
+        log.warn("ExternalApiService.voidShipment: VoidService not wired; "
+                + "falling back to local-only void of shipment {}. "
+                + "This should never happen in production.", shipmentId);
         order.setOrderStatus("VOIDED");
         orderRepository.save(order);
         orderTrackingRepository.findByOrderNo(order.getOrderNo()).ifPresent(t -> {
@@ -631,9 +685,6 @@ public class ExternalApiService {
             t.setUpdatedAt(LocalDateTime.now());
             orderTrackingRepository.save(t);
         });
-
-        Map<String, Object> out = new java.util.LinkedHashMap<>();
-        out.put("shipmentId", shipmentId);
         out.put("status", "VOIDED");
         out.put("carrierVoided", false);
         out.put("note", "Shipment voided on the platform. A carrier-side label cancellation is not wired in this "

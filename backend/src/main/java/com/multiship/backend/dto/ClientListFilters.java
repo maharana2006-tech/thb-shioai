@@ -28,4 +28,8 @@ public class ClientListFilters {
     private String sortDirection;
     private int page;
     private int size;
+    /** BUG-038 — comma-joined column ids from table.getVisibleLeafColumns().
+     *  Only honoured by exportClientsCsv (the list endpoints always
+     *  return every column). Null / empty = include every column. */
+    private String columns;
 }

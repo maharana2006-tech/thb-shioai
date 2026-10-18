@@ -55,6 +55,10 @@ public class OutputDestinationAdminService {
      *  destinations at internal infra + AWS/GCP/Azure metadata endpoints. */
     private final com.multiship.backend.service.external.WebhookUrlValidator webhookUrlValidator;
 
+    // BUG-128 sprint 2: audit output-destination writes.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.AuditService audit;
+
     /** Sentinel prefix on system_settings.setting_key for SFTP secrets. */
     static final String SFTP_SECRET_PREFIX = "sftp.secret.";
 
@@ -76,6 +80,7 @@ public class OutputDestinationAdminService {
         refuseNewPrinterDestination(req, null);
         validateHostForSsrf(req);
         validateClientExists(req);
+        validateConfigShape(req);
         ClientOutputDestination entity = ClientOutputDestination.builder()
                 .clientCode(req.getClientCode().trim())
                 .docType(req.getDocType())
@@ -89,6 +94,13 @@ public class OutputDestinationAdminService {
         log.info("OutputDestination created id={} client={} docType={} destType={} by={}",
                 entity.getId(), entity.getClientCode(), entity.getDocType(),
                 entity.getDestinationType(), actor);
+        if (audit != null) {
+            audit.record(com.multiship.backend.service.AuditService.CREATE,
+                    com.multiship.backend.service.AuditService.CLIENT_POLICY, entity.getId(),
+                    "output-destination/" + entity.getClientCode() + "/" + entity.getDocType()
+                            + "/" + entity.getDestinationType(),
+                    null, "Output destination created.");
+        }
         return toDto(entity);
     }
 
@@ -97,6 +109,7 @@ public class OutputDestinationAdminService {
         refuseNewPrinterDestination(req, destinationRepository.findById(id).orElse(null));
         validateHostForSsrf(req);
         validateClientExists(req);
+        validateConfigShape(req);
         return destinationRepository.findById(id).map(entity -> {
             entity.setClientCode(req.getClientCode().trim());
             entity.setDocType(req.getDocType());
@@ -107,8 +120,65 @@ public class OutputDestinationAdminService {
             entity.setUpdatedAt(LocalDateTime.now(ZoneOffset.UTC));
             validateAuthPointersForSftp(entity);
             log.info("OutputDestination updated id={} by={}", entity.getId(), actor);
+            if (audit != null) {
+                audit.record(com.multiship.backend.service.AuditService.UPDATE,
+                        com.multiship.backend.service.AuditService.CLIENT_POLICY, entity.getId(),
+                        "output-destination/" + entity.getClientCode() + "/" + entity.getDocType()
+                                + "/" + entity.getDestinationType(),
+                        null, "Output destination updated.");
+            }
             return toDto(entity);
         });
+    }
+
+    /**
+     * BUG-159 R7 — kind-specific config shape guard. The admin UI applies
+     * these client-side; this is the backstop so a direct POST (curl,
+     * Postman, a future automation) can't persist a destination with a
+     * missing host, out-of-range port, or path-traversal LOCAL_FS target.
+     * Running after validateHostForSsrf so SSRF rejects claim precedence
+     * on bad hosts.
+     */
+    private void validateConfigShape(OutputDestinationUpsertRequest req) {
+        DestinationType type = req.getDestinationType();
+        if (type == null) return;
+        JsonNode cfg;
+        try {
+            cfg = objectMapper.readTree(req.getConfig());
+        } catch (Exception parseErr) {
+            // processConfig will produce the richer parse error — bail here.
+            return;
+        }
+        if (type == DestinationType.SFTP) {
+            String host = str(cfg, "host");
+            if (host == null || host.isBlank()) {
+                throw new IllegalArgumentException("SFTP destinations require a host.");
+            }
+            String username = str(cfg, "username");
+            if (username == null || username.isBlank()) {
+                throw new IllegalArgumentException("SFTP destinations require a username.");
+            }
+            JsonNode portNode = cfg.get("port");
+            if (portNode != null && !portNode.isNull()) {
+                int port = portNode.isInt() ? portNode.asInt() : -1;
+                if (port < 1 || port > 65535) {
+                    throw new IllegalArgumentException(
+                            "SFTP port must be between 1 and 65535 (got " + portNode.asText() + ").");
+                }
+            }
+        } else if (type == DestinationType.LOCAL_FS) {
+            String path = str(cfg, "path");
+            if (path == null || path.isBlank()) {
+                throw new IllegalArgumentException("Local folder destinations require a path.");
+            }
+            // Reject .. segments so a destination can't be set to climb
+            // out of the configured drop root. Dispatch resolves paths
+            // against a jail already; this is a save-time belt.
+            if (path.contains("..")) {
+                throw new IllegalArgumentException(
+                        "Local folder path can't contain '..' segments: " + path);
+            }
+        }
     }
 
     /**
@@ -166,6 +236,13 @@ public class OutputDestinationAdminService {
             cleanupSecrets(row);
             destinationRepository.delete(row);
             log.info("OutputDestination deleted id={}", id);
+            if (audit != null) {
+                audit.record(com.multiship.backend.service.AuditService.DELETE,
+                        com.multiship.backend.service.AuditService.CLIENT_POLICY, id,
+                        "output-destination/" + row.getClientCode() + "/" + row.getDocType()
+                                + "/" + row.getDestinationType(),
+                        null, "Output destination deleted.");
+            }
             return true;
         }).orElse(false);
     }

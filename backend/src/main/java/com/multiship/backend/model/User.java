@@ -53,6 +53,10 @@ public class User {
     @Column(name = "client_code", length = 50)
     private String clientCode;
 
+    /** Self-service profile photo: a small client-resized image as a data URL, or null for none. */
+    @Column(name = "avatar", columnDefinition = "text")
+    private String avatar;
+
     /**
      * Sprint 50 Tier 0.5 PR D — login gate. Public-signup users start
      * {@code false} and must consume the verification email. Invite-created

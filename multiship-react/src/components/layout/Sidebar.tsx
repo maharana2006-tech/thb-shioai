@@ -7,8 +7,6 @@ import { clearAuthSession, useAppSession } from '../../hooks/useAppSession'
 import { getNavItemsForRole, resolveWorkspaceRouteKey } from '../../routes/workspaceRoutes'
 import { normalizeRole } from '../../utils/roles'
 import { navIcons } from './navIcons'
-import { useAppDispatch } from '../../store/hooks'
-import { logout as logoutAction } from '../../store/store'
 import { useFocusTrap } from '../../hooks/useFocusTrap'
 
 // Sprint 52 a11y — stable id for the drawer's labelling heading so
@@ -54,7 +52,6 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
     if (mobileOpen) onMobileClose?.()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fires only on route change; mobileOpen + onMobileClose are read but intentionally not deps (route change is the sole trigger).
   }, [activePath])
-  const dispatch = useAppDispatch()
   const { username, role } = useAppSession()
   const [loggingOut, setLoggingOut] = useState(false)
 
@@ -107,13 +104,9 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
       await authService.logout()
     } catch {
       // Logout UI flow continues regardless of the backend's response —
-      // the Redux reset + cookie clear + redirect below is authoritative.
+      // cookie clear + redirect below is authoritative.
     }
 
-    // Sprint 49 Tier 4 Fix 2 — reset ALL Redux user-data slices BEFORE
-    // navigating so the next signed-in user never briefly sees the
-    // previous operator's orders / carrier status / stats.
-    dispatch(logoutAction())
     clearAuthSession()
     notify.success('Logged out')
     navigate('/login')
@@ -302,15 +295,23 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
         </div>
 
         <div className="flex items-center gap-3 rounded-lg px-1.5 py-1.5">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#e1dcc9] text-[11px] font-bold text-[#1f150c]">
-            {initials}
-          </span>
-          <span className={`min-w-0 flex-1 ${labelClass}`}>
-            <span className="block truncate text-[12.5px] font-semibold text-white">{username || 'Signed in'}</span>
-            <span className="block truncate whitespace-nowrap font-mono text-[9px] uppercase tracking-[0.16em] text-slate-400">
-              {normalizedRole}
+          <button
+            type="button"
+            onClick={() => navigate('/profile')}
+            title="My profile"
+            aria-label="My profile"
+            className="flex min-w-0 flex-1 items-center gap-3 rounded-lg text-left transition hover:bg-white/5"
+          >
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#e1dcc9] text-[11px] font-bold text-[#1f150c]">
+              {initials}
             </span>
-          </span>
+            <span className={`min-w-0 flex-1 ${labelClass}`}>
+              <span className="block truncate text-[12.5px] font-semibold text-white">{username || 'Signed in'}</span>
+              <span className="block truncate whitespace-nowrap font-mono text-[9px] uppercase tracking-[0.16em] text-slate-400">
+                {normalizedRole}
+              </span>
+            </span>
+          </button>
           <button
             type="button"
             onClick={() => {

@@ -82,6 +82,22 @@ public class PrinterService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.repository.PrinterTestHistoryRepository testHistory;
 
+    // BUG-128 sprint 2: audit printer + assignment writes. Printer is a
+    // platform-wide piece of infrastructure (not scoped to a client), so
+    // we fall back to CLIENT_POLICY as the closest entity-type bucket;
+    // Logs filter can target entityKey prefix "printer/" to find them.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.AuditService audit;
+    private static final String PRINTER_ENTITY_TYPE =
+            com.multiship.backend.service.AuditService.CLIENT_POLICY;
+
+    /** IDOR guard on the read endpoints — optional (null in pure-unit tests =
+     *  unfiltered). A scoped USER sees only their own client's assignments plus
+     *  the defaults (clientCode null, used by clients without their own); a
+     *  platform operator (empty scope) sees everything, unchanged. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.TenantScopeEnforcer tenantScope;
+
     public PrinterService(PrinterRepository printers, PrinterAssignmentRepository assignments,
                           ClientRepository clients, OrderRepository orders) {
         this.printers = printers;
@@ -93,7 +109,43 @@ public class PrinterService {
     /* ------------------------------ printers ------------------------------ */
 
     public List<Printer> list() {
-        return printers.findAllByOrderByNameAscIdAsc();
+        List<Printer> all = printers.findAllByOrderByNameAscIdAsc();
+        Optional<String> tenant = scope();
+        if (tenant.isEmpty()) return all;
+        Set<Long> visible = visiblePrinterIds(tenant.get());
+        return all.stream().filter(p -> visible.contains(p.getId())).toList();
+    }
+
+    /** Empty = platform operator / unscoped (sees all); present = the caller's
+     *  client code. Null tenantScope (pure-unit tests) = unfiltered. */
+    private Optional<String> scope() {
+        return tenantScope == null ? Optional.empty() : tenantScope.resolveScope();
+    }
+
+    /** Printer ids a scoped client may see: those assigned to it or to the
+     *  default (clientCode null). */
+    private Set<Long> visiblePrinterIds(String tenant) {
+        return assignments.findAllByOrderByClientCodeAscDocTypeAsc().stream()
+                .filter(a -> a.getClientCode() == null || tenant.equalsIgnoreCase(a.getClientCode().trim()))
+                .map(PrinterAssignment::getPrinterId)
+                .filter(java.util.Objects::nonNull)
+                .collect(java.util.stream.Collectors.toSet());
+    }
+
+    /**
+     * Guard the by-id read endpoints (queue-depth, tags, test-history): a scoped
+     * caller may only read a printer in its visible set (own-client or default).
+     * Silent for platform operators. Throws {@link org.springframework.security.access.AccessDeniedException}
+     * (mapped to 403) for a scoped caller asking for a foreign printer id.
+     */
+    public void assertPrinterVisible(Long id) {
+        Optional<String> tenant = scope();
+        if (tenant.isEmpty()) return;
+        if (id == null || !visiblePrinterIds(tenant.get()).contains(id)) {
+            throw new org.springframework.security.access.AccessDeniedException(
+                    com.multiship.backend.dto.ErrorCode.CROSS_TENANT_ACCESS_DENIED.name()
+                            + ": that printer is not visible to your client.");
+        }
     }
 
     public Printer get(Long id) {
@@ -106,14 +158,35 @@ public class PrinterService {
         apply(p, input);
         p.setCreatedAt(LocalDateTime.now());
         p.setUpdatedAt(p.getCreatedAt());
-        return printers.save(p);
+        Printer saved = printers.save(p);
+        if (audit != null) {
+            audit.record(com.multiship.backend.service.AuditService.CREATE,
+                    PRINTER_ENTITY_TYPE, saved.getId(),
+                    "printer/" + saved.getName(), null,
+                    "Printer created (" + saved.getHost() + ":" + saved.getPort() + ").");
+        }
+        return saved;
     }
 
     @Transactional
     public Printer update(Long id, PrinterInput input) {
         Printer p = get(id);
         String oldFormat = p.getFormat();
+        String oldHost = p.getHost();
+        Integer oldPort = p.getPort();
         apply(p, input);
+        // BUG-115 — if the printer address or port changed, the previous
+        // test result applies to a different endpoint. Clear the stale
+        // test state so the Status column + tooltip don't mislead the
+        // operator ('Test OK' / 'Could not reach <old-ip>'). The next
+        // Test print writes a fresh result.
+        boolean addressChanged = !java.util.Objects.equals(oldHost, p.getHost())
+                || !java.util.Objects.equals(oldPort, p.getPort());
+        if (addressChanged) {
+            p.setLastTestOk(null);
+            p.setLastTestMessage(null);
+            p.setLastTestAt(null);
+        }
         if ("ZPL".equals(p.getFormat()) && !"ZPL".equals(oldFormat)
                 && assignments.findAllByOrderByClientCodeAscDocTypeAsc().stream()
                         .anyMatch(a -> a.getPrinterId().equals(id)
@@ -123,12 +196,25 @@ public class PrinterService {
                     + "Move those assignments to a PDF printer before switching it to ZPL.");
         }
         p.setUpdatedAt(LocalDateTime.now());
-        return printers.save(p);
+        Printer saved = printers.save(p);
+        if (audit != null) {
+            audit.record(com.multiship.backend.service.AuditService.UPDATE,
+                    PRINTER_ENTITY_TYPE, saved.getId(),
+                    "printer/" + saved.getName(), null,
+                    "Printer updated (" + saved.getHost() + ":" + saved.getPort() + ").");
+        }
+        return saved;
     }
 
     @Transactional
     public void delete(Long id) {
-        printers.delete(get(id));   // assignments go with it (ON DELETE CASCADE)
+        Printer existing = get(id);
+        printers.delete(existing);   // assignments go with it (ON DELETE CASCADE)
+        if (audit != null) {
+            audit.record(com.multiship.backend.service.AuditService.DELETE,
+                    PRINTER_ENTITY_TYPE, id,
+                    "printer/" + existing.getName(), null, "Printer deleted.");
+        }
     }
 
     private void apply(Printer p, PrinterInput in) {
@@ -189,7 +275,13 @@ public class PrinterService {
     /* ------------------------------ assignments ------------------------------ */
 
     public List<PrinterAssignment> listAssignments() {
-        return assignments.findAllByOrderByClientCodeAscDocTypeAsc();
+        List<PrinterAssignment> all = assignments.findAllByOrderByClientCodeAscDocTypeAsc();
+        Optional<String> tenant = scope();
+        if (tenant.isEmpty()) return all;
+        String t = tenant.get();
+        return all.stream()
+                .filter(a -> a.getClientCode() == null || t.equalsIgnoreCase(a.getClientCode().trim()))
+                .toList();
     }
 
     /** Create or replace the printer for (client, document type). Blank client = the default. */
@@ -286,6 +378,7 @@ public class PrinterService {
      *  surfaced in the QueueDepth.ippQueueError field.
      */
     public QueueDepth queueDepth(Long id) {
+        assertPrinterVisible(id);
         Printer p = get(id);
         int inFlight = inFlightByPrinter.getOrDefault(id, new AtomicInteger()).get();
         Integer ippQueue = null;

@@ -13,6 +13,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useOutletContext } from 'react-router-dom'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import { notify } from '../utils/notify'
+import { fmtServerTs } from '../utils/relativeTime'
 import {
   mailProviderService,
   type MailKindDescriptor,
@@ -207,7 +208,10 @@ export default function MailSettingsPage() {
                     )}
                   </td>
                   <td className="px-4 py-2 text-[#b6a684]">
-                    {p.updatedAt ? new Date(p.updatedAt).toLocaleString() : '—'}
+                    {/* BUG-119 — timestamps come back without a zone;
+                        parse as UTC so IST operators don't see times
+                        5½ hours behind. */}
+                    {fmtServerTs(p.updatedAt) || '—'}
                   </td>
                   <td className="px-4 py-2 text-right">
                     <div className="inline-flex gap-2">
@@ -318,7 +322,7 @@ export default function MailSettingsPage() {
             <input
               value={testSubject}
               onChange={(e) => setTestSubject(e.target.value)}
-              placeholder="shioai mail test"
+              placeholder="Multiship mail test"
               className="mt-1 block w-full rounded-lg border border-[#e3d9c4] px-3 py-2 text-[13px] text-[#1f150c]"
             />
           </label>

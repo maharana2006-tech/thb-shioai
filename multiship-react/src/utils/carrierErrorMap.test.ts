@@ -78,7 +78,8 @@ describe('summarizeCarrierError', () => {
 
   it('packaging_type invalid → use package or flat-rate', () => {
     const raw = 'STAMPS createShipmentSera[pkg 1/1] HTTP 400: {"errors":[{"error_message":"The packaging_type specified is invalid."}]}'
-    expect(summarizeCarrierError(raw)).toContain('flat-rate')
+    // Current copy uses sentence-case "Flat-rate". Match case-insensitive.
+    expect(summarizeCarrierError(raw)).toMatch(/flat-rate/i)
   })
 
   it('certificate_number invalid → check ITN', () => {

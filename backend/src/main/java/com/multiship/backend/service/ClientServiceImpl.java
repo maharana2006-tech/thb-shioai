@@ -34,6 +34,8 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Locale;
 
+import static com.multiship.backend.util.CsvUtil.csvCell;
+
 @Service
 @RequiredArgsConstructor
 public class ClientServiceImpl implements ClientService {
@@ -49,6 +51,11 @@ public class ClientServiceImpl implements ClientService {
     private final com.multiship.backend.repository.ClientCustomsProfileRepository customsProfileRepository;
     private final WarehouseRepository warehouseRepository;
     private final ClientWarehouseRepository clientWarehouseRepository;
+    /** BUG-140 — @Autowired(required=false) + field injection so existing
+     *  pure-Mockito constructor-arg tests keep compiling. Null-safe at the
+     *  one delete call site below. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.PrinterScanAgentRepository printerScanAgentRepository;
     private final AuditService auditService;
     private final AuditLogRepository auditLogRepository;
     /**
@@ -61,15 +68,18 @@ public class ClientServiceImpl implements ClientService {
     @Override
     @Transactional(readOnly = true)
     public String exportClientsCsv(ClientListFilters filters) {
-        String keyword = norm(filters.getSearch());
+        // BUG-022 — escape LIKE wildcards on fields that reach a LIKE
+        // pattern in the repo. Status / carrier / hasOrders are literal
+        // equality compares; those keep plain norm().
+        String keyword = escapeLike(filters.getSearch());
         String status = norm(filters.getStatus());
         String carrier = norm(filters.getCarrier());
         String hasOrders = norm(filters.getHasOrders());
         // Sprint 50 Tier 0.5 PR E - clamp so a scoped USER exports only
         // their own client row even when they omit / spoof the code param.
-        String code = norm(tenantScope.clampClientCode(filters.getCode()));
-        String name = norm(filters.getName());
-        String city = norm(filters.getCity());
+        String code = escapeLike(tenantScope.clampClientCode(filters.getCode()));
+        String name = escapeLike(filters.getName());
+        String city = escapeLike(filters.getCity());
         String sortBy = filters.getSortBy() != null ? filters.getSortBy() : "code";
         String sortDirection = filters.getSortDirection() != null ? filters.getSortDirection() : "ASC";
 
@@ -87,39 +97,79 @@ public class ClientServiceImpl implements ClientService {
                 .map(this::toDTO)
                 .toList();
 
-        StringBuilder csv = new StringBuilder(64 + clients.size() * 96);
-        csv.append("Code,Name,Email,Phone,Country,Ship-from city,Carrier accounts,Orders,Status,Created,Updated\r\n");
-        for (ClientDTO c : clients) {
+        // BUG-038 — columns parameter honours table.getVisibleLeafColumns()
+        // so hidden columns don't appear in the CSV. Unknown ids are
+        // ignored; null/blank => include every column (prior behaviour).
+        java.util.LinkedHashMap<String, java.util.function.Function<ClientDTO, String>> cols = new java.util.LinkedHashMap<>();
+        cols.put("code",     c -> csvCell(c.getClientCode()));
+        cols.put("name",     c -> csvCell(c.getName()));
+        cols.put("email",    c -> csvCell(c.getEmail()));
+        cols.put("phone",    c -> csvCell(c.getPhone()));
+        cols.put("country",  c -> {
             AddressDTO ship = c.getShipFrom();
-            String country = ship != null && ship.getCountry() != null ? ship.getCountry().toUpperCase(Locale.ROOT) : "";
-            String cityValue = ship != null && ship.getCity() != null ? ship.getCity() : "";
-            String accounts = c.getCarrierAccounts() == null ? "" :
-                    c.getCarrierAccounts().stream()
-                            .map(a -> a.getCarrierCode() + ":" + a.getAccountNumber() + (Boolean.TRUE.equals(a.getClientDefault()) ? "*" : ""))
-                            .reduce((a, b) -> a + "; " + b)
-                            .orElse("");
-            csv.append(csvCell(c.getClientCode())).append(',')
-               .append(csvCell(c.getName())).append(',')
-               .append(csvCell(c.getEmail())).append(',')
-               .append(csvCell(c.getPhone())).append(',')
-               .append(csvCell(country)).append(',')
-               .append(csvCell(cityValue)).append(',')
-               .append(csvCell(accounts)).append(',')
-               .append(c.getOrderCount() == null ? 0L : c.getOrderCount()).append(',')
-               .append(csvCell(c.getStatus())).append(',')
-               .append(csvCell(c.getCreatedAt() == null ? "" : c.getCreatedAt().toString())).append(',')
-               .append(csvCell(c.getUpdatedAt() == null ? "" : c.getUpdatedAt().toString())).append("\r\n");
+            return csvCell(ship != null && ship.getCountry() != null ? ship.getCountry().toUpperCase(Locale.ROOT) : "");
+        });
+        cols.put("city",     c -> {
+            AddressDTO ship = c.getShipFrom();
+            return csvCell(ship != null && ship.getCity() != null ? ship.getCity() : "");
+        });
+        cols.put("accounts", c -> csvCell(c.getCarrierAccounts() == null ? "" :
+                c.getCarrierAccounts().stream()
+                        .map(a -> a.getCarrierCode() + ":" + a.getAccountNumber()
+                                + (Boolean.TRUE.equals(a.getClientDefault()) ? "*" : ""))
+                        .reduce((a, b) -> a + "; " + b)
+                        .orElse("")));
+        cols.put("orders",   c -> String.valueOf(c.getOrderCount() == null ? 0L : c.getOrderCount()));
+        cols.put("status",   c -> csvCell(c.getStatus()));
+        cols.put("created",  c -> csvCell(c.getCreatedAt() == null ? "" : c.getCreatedAt().toString()));
+        cols.put("updated",  c -> csvCell(c.getUpdatedAt() == null ? "" : c.getUpdatedAt().toString()));
+
+        java.util.LinkedHashMap<String, String> headers = new java.util.LinkedHashMap<>();
+        headers.put("code", "Code"); headers.put("name", "Name"); headers.put("email", "Email");
+        headers.put("phone", "Phone"); headers.put("country", "Country");
+        headers.put("city", "Ship-from city"); headers.put("accounts", "Carrier accounts");
+        headers.put("orders", "Orders"); headers.put("status", "Status");
+        headers.put("created", "Created"); headers.put("updated", "Updated");
+
+        // BUG-038 (R6) — the FE column IDs don't all match the backend
+        // map keys (FE sends 'contact' + 'orderCount' + 'actions'; backend
+        // has 'email'/'phone' + 'orders'). Alias so the operator's visible
+        // columns actually land in the CSV. 'actions' is a UI-only chip,
+        // never exported.
+        java.util.Map<String, java.util.List<String>> ALIASES = java.util.Map.of(
+                "contact", java.util.List.of("email", "phone"),
+                "ordercount", java.util.List.of("orders"),
+                "actions", java.util.List.of()
+        );
+        java.util.List<String> selected;
+        if (filters.getColumns() != null && !filters.getColumns().isBlank()) {
+            selected = new java.util.ArrayList<>();
+            for (String raw : filters.getColumns().split(",")) {
+                String id = raw.trim().toLowerCase(Locale.ROOT);
+                if (ALIASES.containsKey(id)) {
+                    for (String real : ALIASES.get(id)) {
+                        if (cols.containsKey(real) && !selected.contains(real)) selected.add(real);
+                    }
+                } else if (cols.containsKey(id) && !selected.contains(id)) {
+                    selected.add(id);
+                }
+            }
+            if (selected.isEmpty()) selected = new java.util.ArrayList<>(cols.keySet());
+        } else {
+            selected = new java.util.ArrayList<>(cols.keySet());
+        }
+
+        StringBuilder csv = new StringBuilder(64 + clients.size() * 96);
+        csv.append(selected.stream().map(headers::get).reduce((a, b) -> a + "," + b).orElse("")).append("\r\n");
+        for (ClientDTO c : clients) {
+            StringBuilder row = new StringBuilder();
+            for (int i = 0; i < selected.size(); i++) {
+                if (i > 0) row.append(',');
+                row.append(cols.get(selected.get(i)).apply(c));
+            }
+            csv.append(row).append("\r\n");
         }
         return csv.toString();
-    }
-
-    /** RFC-4180 CSV field: quote when the value contains ", newline, or a comma. */
-    private static String csvCell(String value) {
-        if (value == null) return "";
-        boolean needsQuote = value.indexOf(',') >= 0 || value.indexOf('"') >= 0
-                || value.indexOf('\n') >= 0 || value.indexOf('\r') >= 0;
-        if (!needsQuote) return value;
-        return '"' + value.replace("\"", "\"\"") + '"';
     }
 
     @Override
@@ -127,7 +177,9 @@ public class ClientServiceImpl implements ClientService {
     public ApiResponse<PageResponseDTO<ClientDTO>> listClients(ClientListFilters filters) {
         int page = Math.max(filters.getPage(), 0);
         int size = Math.min(Math.max(filters.getSize(), 1), 100);
-        String keyword = norm(filters.getSearch());
+        // BUG-022 — escape LIKE wildcards on fields that reach a LIKE
+        // pattern in the repo. See exportClientsCsv for the same rule.
+        String keyword = escapeLike(filters.getSearch());
         String status = norm(filters.getStatus());
         String carrier = norm(filters.getCarrier());
         String hasOrders = norm(filters.getHasOrders());
@@ -135,9 +187,9 @@ public class ClientServiceImpl implements ClientService {
         // to the caller's own tenant when scoped. Platform operators pass
         // through unchanged; tenant-scoped callers see only their own row
         // even if they omitted the code param.
-        String code = norm(tenantScope.clampClientCode(filters.getCode()));
-        String name = norm(filters.getName());
-        String city = norm(filters.getCity());
+        String code = escapeLike(tenantScope.clampClientCode(filters.getCode()));
+        String name = escapeLike(filters.getName());
+        String city = escapeLike(filters.getCity());
         String sortBy = filters.getSortBy() != null ? filters.getSortBy() : "code";
         String sortDirection = filters.getSortDirection() != null ? filters.getSortDirection() : "ASC";
 
@@ -157,6 +209,18 @@ public class ClientServiceImpl implements ClientService {
 
     private String norm(String value) {
         return value != null ? value.trim().toUpperCase(Locale.ROOT) : "";
+    }
+
+    /** BUG-022: operator-typed '%' and '_' were leaking into LIKE patterns
+     *  and matching every row. Escape them (plus backslash) at the service
+     *  boundary so the repo's CONCAT('%', :keyword, '%') treats them as
+     *  literals. Postgres LIKE honours backslash by default. */
+    private String escapeLike(String value) {
+        String v = norm(value);
+        if (v.isEmpty()) return v;
+        return v.replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_");
     }
 
     @Override
@@ -466,6 +530,26 @@ public class ClientServiceImpl implements ClientService {
                 if (!links.isEmpty()) clientWarehouseRepository.deleteAll(links);
             }
             warehouseRepository.deleteAll(ownedWarehouses);
+        }
+
+        // BUG-080 — client_warehouse links to PLATFORM-owned warehouses
+        // were orphaned on delete (the client-owned branch above only
+        // cleans links for the deleted client's own warehouses). 3PL-EAST
+        // showed Attached 7 but the dialog only had 3 live clients because
+        // 4 of those rows belonged to deleted clients. Delete every
+        // client_warehouse row for the departing client up-front so the
+        // attached-count reflects reality.
+        List<ClientWarehouse> allAttachments = clientWarehouseRepository
+                .findByClientCodeIgnoreCaseOrderByIsDefaultDescCreatedAtAsc(code);
+        if (!allAttachments.isEmpty()) {
+            clientWarehouseRepository.deleteAll(allAttachments);
+        }
+
+        // BUG-140 — scanner enrolments live under tenant_code; left behind
+        // on client delete they become unreachable in Settings > Printers
+        // because the Tenant picker drops the code. Clean them up.
+        if (printerScanAgentRepository != null) {
+            printerScanAgentRepository.deleteAllByTenantCodeIgnoreCase(code);
         }
 
         clientRepository.delete(client);

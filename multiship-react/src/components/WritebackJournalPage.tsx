@@ -8,6 +8,7 @@
  * async attempt completes.
  */
 import { Fragment, useCallback, useEffect, useState } from 'react'
+import { formatDateTime } from '../utils/formatDateTime'
 import { useOutletContext } from 'react-router-dom'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import { notify } from '../utils/notify'
@@ -24,6 +25,7 @@ const PAGE_SIZE = 50
 const STATUS_BADGE: Record<WritebackJournalStatus, string> = {
   OK: 'bg-emerald-100 text-emerald-800',
   SKIPPED: 'bg-slate-100 text-slate-700',
+  SKIPPED_INACTIVE: 'bg-slate-100 text-slate-700',
   FAILED: 'bg-rose-100 text-rose-800',
   PENDING: 'bg-amber-100 text-amber-800',
 }
@@ -117,9 +119,13 @@ export default function WritebackJournalPage() {
               onChange={(e) => { setStatus(e.target.value as WritebackJournalStatus | ''); setPageIndex(0) }}
               className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-1.5 text-[13px]"
             >
+              {/* BUG-134 — journal rows store SKIPPED_INACTIVE (the sub-
+                  reason), not plain 'SKIPPED'. The filter was sending
+                  'SKIPPED' which matched zero rows. List the actual
+                  stored statuses so the picker matches reality. */}
               <option value="">Any</option>
               <option value="OK">OK</option>
-              <option value="SKIPPED">SKIPPED</option>
+              <option value="SKIPPED_INACTIVE">Skipped (inactive target)</option>
               <option value="FAILED">FAILED</option>
               <option value="PENDING">PENDING</option>
             </select>
@@ -169,7 +175,7 @@ export default function WritebackJournalPage() {
         {loading ? (
           <div className="px-4 py-6 text-center text-[13px] text-slate-500">Loading…</div>
         ) : items.length === 0 ? (
-          <div className="px-4 py-6 text-center text-[13px] text-slate-500">No journal rows match those filters.</div>
+          <div className="px-4 py-6 text-center text-[13px] text-slate-500">{(connectionName || status || mode || orderNo) ? 'No journal rows match those filters.' : 'No writebacks yet.'}</div>
         ) : (
           <table className="w-full text-[13px]">
             <thead>
@@ -193,7 +199,7 @@ export default function WritebackJournalPage() {
                       onClick={() => setExpandedId(expanded ? null : row.id)}
                       className={`cursor-pointer border-t border-slate-100 hover:bg-slate-50 ${expanded ? 'bg-slate-50' : ''}`}
                     >
-                      <td className="px-3 py-2 text-slate-600">{new Date(row.createdAt).toLocaleString()}</td>
+                      <td className="px-3 py-2 text-slate-600">{formatDateTime(row.createdAt)}</td>
                       <td className="px-3 py-2 font-mono text-[12px] text-slate-700">
                         {row.connectionName}
                         {row.systemType && (
@@ -211,20 +217,31 @@ export default function WritebackJournalPage() {
                       </td>
                       <td className="px-3 py-2 tabular-nums text-slate-700">{row.orderNo ?? '—'}</td>
                       <td className="px-3 py-2">
-                        <span className={`rounded px-2 py-0.5 ${badge}`}>{row.status}</span>
+                        {/* BUG-134 — pre-fix the Status cell printed the
+                            raw enum ('SKIPPED_INACTIVE'). Humanize. */}
+                        <span className={`rounded px-2 py-0.5 ${badge}`}>
+                          {row.status === 'SKIPPED_INACTIVE' ? 'Skipped (inactive)' : row.status}
+                        </span>
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums text-slate-500">
                         {row.latencyMs != null ? `${row.latencyMs} ms` : '—'}
                       </td>
                       <td className="px-3 py-2 text-right">
-                        <button
-                          type="button"
-                          onClick={(e) => { e.stopPropagation(); void retry(row) }}
-                          disabled={retrying === row.id}
-                          className="rounded border border-slate-300 px-2 py-1 text-[12px] hover:bg-white disabled:opacity-60"
-                        >
-                          {retrying === row.id ? 'Retrying…' : 'Retry'}
-                        </button>
+                        {/* BUG-134 — Retry on an OK row re-fires a successful
+                            writeback and creates a duplicate dispatch. Hide
+                            Retry on OK; only non-success statuses can retry. */}
+                        {row.status === 'OK' ? (
+                          <span className="text-[12px] text-slate-400">—</span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); void retry(row) }}
+                            disabled={retrying === row.id}
+                            className="rounded border border-slate-300 px-2 py-1 text-[12px] hover:bg-white disabled:opacity-60"
+                          >
+                            {retrying === row.id ? 'Retrying…' : 'Retry'}
+                          </button>
+                        )}
                       </td>
                     </tr>
                     {expanded && (

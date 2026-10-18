@@ -39,22 +39,30 @@ export interface CarrierAccountRule {
 
 export const CARRIER_ACCOUNT_RULES: Record<CarrierCode, CarrierAccountRule> = {
   UPS: {
-    maxLength: 6,
-    placeholder: '6-digit UPS shipper number',
-    pattern: '[A-Za-z0-9]{6}',
-    helper: 'UPS shipper numbers are exactly 6 alphanumerics.',
+    // BUG-029 — the Yup validation accepts 6-10 chars but this rule's
+    // helper + pattern claimed "exactly 6", causing a validator vs
+    // hint mismatch. UPS shipper numbers are 6-10 alphanumerics.
+    maxLength: 10,
+    placeholder: '6–10 letters or digits (UPS shipper #)',
+    pattern: '[A-Za-z0-9]{6,10}',
+    helper: 'UPS shipper numbers are 6–10 letters or digits.',
   },
   FEDEX: {
-    maxLength: 12,
-    placeholder: 'Up to 12 digits (FedEx account #)',
-    pattern: '[0-9A-Za-z]{1,12}',
-    helper: 'FedEx account numbers are up to 12 digits.',
+    // BUG-029 R7: FedEx shipper account numbers are 9 digits — the
+    // permissive '[0-9A-Za-z]{1,12}' pattern + 'Up to 12 digits' hint
+    // let QA type letters that got rejected only on save. Pattern now
+    // enforces 9 digits so the CarrierDraftStep strip-non-digits path
+    // (keyed on pattern.startsWith('[0-9]')) applies to FedEx too.
+    maxLength: 9,
+    placeholder: '9 digits (FedEx account #)',
+    pattern: '[0-9]{9}',
+    helper: 'FedEx account numbers are 9 digits.',
   },
   DHL: {
-    maxLength: 9,
-    placeholder: 'Up to 9 digits (DHL account #)',
-    pattern: '[0-9A-Za-z]{1,9}',
-    helper: 'DHL Express account numbers are up to 9 digits.',
+    maxLength: 12,
+    placeholder: '9–12 digits (DHL account #)',
+    pattern: '[0-9]{9,12}',
+    helper: 'DHL Express account numbers are 9–12 digits.',
   },
   USPS: {
     maxLength: 40,
@@ -84,7 +92,11 @@ export interface AddressCaps {
 }
 
 export const CARRIER_ADDRESS_CAPS: Record<CarrierCode, AddressCaps> = {
-  UPS: { name: 35, line: 35, city: 30, state: 5, zip: 9, phone: 15 },
+  // BUG-028: UPS zip raised 9 → 10 so ZIP+4 "12345-6789" fits in the input.
+  // UPS Ship API wants 9 digits no separator; the connector strips the dash
+  // before send. Previously the intersection (min across UPS+USPS) capped
+  // the Return address at 9, truncating the dashed form on type.
+  UPS: { name: 35, line: 35, city: 30, state: 5, zip: 10, phone: 15 },
   FEDEX: { name: 70, line: 35, city: 35, state: 5, zip: 16, phone: 15 },
   USPS: { name: 40, line: 40, city: 40, state: 2, zip: 10, phone: 30 },
   DHL: { name: 60, line: 45, city: 45, state: 35, zip: 12, phone: 25 },

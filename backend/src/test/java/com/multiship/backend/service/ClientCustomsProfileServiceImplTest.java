@@ -383,4 +383,29 @@ class ClientCustomsProfileServiceImplTest {
         // CRLF line endings per RFC 4180.
         assertTrue(csv.contains("\r\n"), "CSV must use CRLF line endings.");
     }
+
+    @Test
+    void exportProfilesCsv_neutralizesFormulaInjection() {
+        // BUG-076 — a tenant-saved importerName starting with = (e.g. a
+        // =HYPERLINK exfil payload) must come out formula-neutralized when a
+        // platform ADMIN exports the all-tenant CSV and opens it in Excel.
+        when(clientRepo.findAll()).thenReturn(List.of());
+        ClientCustomsProfile p = ClientCustomsProfile.builder()
+                .id(1L).clientCode("ACME")
+                .importerName("=HYPERLINK(\"http://evil\",\"x\")")
+                .build();
+        p.syncCountries(new java.util.LinkedHashSet<>(List.of("US")));
+        when(repo.findAll()).thenReturn(List.of(p));
+
+        CustomsProfileFilters filters = CustomsProfileFilters.builder()
+                .page(0).size(200).sortBy("client").sortDirection("ASC").build();
+
+        String csv = service.exportProfilesCsv(filters);
+
+        // Prefixed with a single quote, then RFC-4180 quoted (it contains
+        // commas/quotes) → the cell opens with "'=HYPERLINK. The pre-fix bug
+        // would have emitted "=HYPERLINK (no leading quote), which executes.
+        assertTrue(csv.contains("\"'=HYPERLINK"),
+                "importerName starting with = must be neutralized with a leading quote. Got: " + csv);
+    }
 }

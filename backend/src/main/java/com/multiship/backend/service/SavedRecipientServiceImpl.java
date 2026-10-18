@@ -41,6 +41,11 @@ public class SavedRecipientServiceImpl implements SavedRecipientService {
      */
     private final TenantScopeEnforcer tenantScope;
 
+    // BUG-128 sprint 2: audit address-book writes under CLIENT_POLICY
+    // (per-tenant settings data) with "recipient/" entityKey prefix.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private AuditService audit;
+
     @Override
     public ApiResponse<List<SavedRecipientDTO>> search(String q, String customerNo) {
         String norm = q == null ? null : q.trim();
@@ -117,7 +122,13 @@ public class SavedRecipientServiceImpl implements SavedRecipientService {
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         row.setCreatedAt(now);
         row.setUpdatedAt(now);
-        return success(toDto(repository.save(row)), "Recipient saved.");
+        SavedRecipient saved = repository.save(row);
+        if (audit != null) {
+            audit.record(AuditService.CREATE, AuditService.CLIENT_POLICY, saved.getId(),
+                    "recipient/" + saved.getOwnerCustomerNo() + "/" + saved.getName(),
+                    null, "Address-book entry created.");
+        }
+        return success(toDto(saved), "Recipient saved.");
     }
 
     @Override
@@ -153,7 +164,13 @@ public class SavedRecipientServiceImpl implements SavedRecipientService {
         // shifts the dedup identity.
         row.setDedupHash(newHash);
         row.setUpdatedAt(LocalDateTime.now(ZoneOffset.UTC));
-        return success(toDto(repository.save(row)), "Recipient updated.");
+        SavedRecipient saved = repository.save(row);
+        if (audit != null) {
+            audit.record(AuditService.UPDATE, AuditService.CLIENT_POLICY, saved.getId(),
+                    "recipient/" + saved.getOwnerCustomerNo() + "/" + saved.getName(),
+                    null, "Address-book entry updated.");
+        }
+        return success(toDto(saved), "Recipient updated.");
     }
 
     @Override
@@ -168,8 +185,14 @@ public class SavedRecipientServiceImpl implements SavedRecipientService {
         }
         // Sprint 50 Tier 0.5 PR G - Pattern B on the loaded row so a
         // scoped USER can't delete a foreign tenant's recipient by id.
-        tenantScope.requireTenantMatch(maybe.get().getOwnerCustomerNo());
+        SavedRecipient existing = maybe.get();
+        tenantScope.requireTenantMatch(existing.getOwnerCustomerNo());
         repository.deleteById(id);
+        if (audit != null) {
+            audit.record(AuditService.DELETE, AuditService.CLIENT_POLICY, id,
+                    "recipient/" + existing.getOwnerCustomerNo() + "/" + existing.getName(),
+                    null, "Address-book entry deleted.");
+        }
         return ApiResponse.<Void>builder()
                 .status("success").code(200)
                 .message("Recipient deleted.").data(null).build();

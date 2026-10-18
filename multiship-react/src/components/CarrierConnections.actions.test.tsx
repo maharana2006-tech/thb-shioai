@@ -31,6 +31,7 @@ const deleteAccount = vi.fn()
 const setClientDefault = vi.fn()
 const toggleActive = vi.fn()
 const verifyAccount = vi.fn()
+const disconnectStampsSera = vi.fn()
 const verifyCredentials = vi.fn()
 const getPlatformCredentials = vi.fn()
 
@@ -42,6 +43,8 @@ vi.mock('../api/accountRefService', () => ({
     setClientDefault: (...a: unknown[]) => setClientDefault(...a),
     toggleActive: (...a: unknown[]) => toggleActive(...a),
     verifyAccount: (...a: unknown[]) => verifyAccount(...a),
+    disconnectStampsSera: (...a: unknown[]) => disconnectStampsSera(...a),
+    authorizeStampsSera: (id: number) => `http://stub/authorize/${id}`,
     verifyCredentials: (...a: unknown[]) => verifyCredentials(...a),
     getPlatformCredentials: (...a: unknown[]) => getPlatformCredentials(...a),
     resolveOrders: vi.fn().mockResolvedValue([]),
@@ -297,6 +300,25 @@ describe('Per-account actions — positive', () => {
     })
   })
 
+  it('Disconnect from Stamps.com asks first, then disconnects and refetches', async () => {
+    listAccounts.mockResolvedValue([makeAccount({ id: 9, carrierCode: 'USPS', accountNumber: 'A1', verified: true })])
+    disconnectStampsSera.mockReset().mockResolvedValue({})
+    // BUG-075 R7: component now uses notify.confirm (mocked at top of file,
+    // resolves true by default).
+    notifyConfirm.mockClear()
+
+    const user = userEvent.setup()
+    await renderPage()
+    await waitForRow('A1')
+    const menu = await openRowActions()
+    expect(menu.queryByRole('menuitem', { name: /Authorize with Stamps.com/i })).toBeNull()
+    await user.click(menu.getByRole('menuitem', { name: /Disconnect from Stamps.com/i }))
+
+    expect(notifyConfirm).toHaveBeenCalled()
+    await waitFor(() => expect(disconnectStampsSera).toHaveBeenCalledWith(9))
+    await waitFor(() => expect(notifySuccess).toHaveBeenCalledWith('A1 disconnected from Stamps.com.'))
+  })
+
   it('Toggle-active calls toggleActive(id) + refetches the list', async () => {
     listAccounts
       .mockResolvedValueOnce([makeAccount({ id: 3, active: true })])
@@ -324,8 +346,9 @@ describe('Per-account actions — positive', () => {
     listAccounts
       .mockResolvedValueOnce([makeAccount({ id: 9 })])
       .mockResolvedValue([])
-    // Confirm-dialog is window.confirm (component uses native). Stub to accept.
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    // BUG-075 R7: component swapped window.confirm for notify.confirm.
+    // The mock at top of file defaults to resolving true (accept).
+    notifyConfirm.mockClear()
 
     const user = userEvent.setup()
     await renderPage()
@@ -335,7 +358,7 @@ describe('Per-account actions — positive', () => {
     await user.click(menu.getByRole('menuitem', { name: /^Delete$/ }))
 
     await waitFor(() => {
-      expect(confirmSpy).toHaveBeenCalledTimes(1)
+      expect(notifyConfirm).toHaveBeenCalledTimes(1)
     })
     await waitFor(() => {
       expect(deleteAccount).toHaveBeenCalledWith(9)
@@ -415,7 +438,10 @@ describe('Per-account actions — negative', () => {
 
   it('Delete: user cancels confirm → deleteAccount is NOT called', async () => {
     listAccounts.mockResolvedValue([makeAccount({ id: 9 })])
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    // BUG-075 R7: notify.confirm now gates the delete. Resolve false
+    // for this test (cancel).
+    notifyConfirm.mockClear()
+    notifyConfirm.mockResolvedValueOnce(false)
 
     const user = userEvent.setup()
     await renderPage()
@@ -424,7 +450,7 @@ describe('Per-account actions — negative', () => {
     const menu = await openRowActions()
     await user.click(menu.getByRole('menuitem', { name: /^Delete$/ }))
 
-    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(notifyConfirm).toHaveBeenCalledTimes(1))
     // Give the microtask queue a beat — if deleteAccount were called it'd have
     // resolved by now. Assert it was never invoked.
     await Promise.resolve()

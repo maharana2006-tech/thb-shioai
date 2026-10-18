@@ -691,10 +691,24 @@ public class DhlConnector implements CarrierConnector {
             boolean cityDiffers = StringUtils.hasText(input.city())
                     && !input.city().equalsIgnoreCase(matchedCity);
             if (cityDiffers) {
+                // BUG-018 sibling R7: `.asText(default)` returns "" on a JSON
+                // blank-string echo (only MISSING fields fall back), so DHL
+                // echoing postalCode="" used to produce a suggestion with a
+                // blank zip that would wipe the operator's entry on "Apply
+                // suggested." Hard-block: if DHL blanks either required
+                // field, refuse to build a suggestion — surface the city
+                // change as a warning only, let the operator fix manually.
+                String echoedZip = first.path("postalCode").asText("");
+                String echoedCc = first.path("countryCode").asText("");
+                if (!StringUtils.hasText(echoedZip) || !StringUtils.hasText(echoedCc)) {
+                    warnings.add("DHL suggested '" + matchedCity
+                            + "' as the city but didn't echo a full postal/country — review manually.");
+                    return new AddressValidationResult(true, "EXACT", "UNKNOWN", null, warnings,
+                            "DHL confirmed this is a valid delivery combination.", response);
+                }
                 AddressToValidate suggested = new AddressToValidate(
                         null, null, input.addressLine1(), input.addressLine2(), input.addressLine3(),
-                        matchedCity, input.state(), first.path("postalCode").asText(input.postalCode()),
-                        first.path("countryCode").asText(input.countryCode()));
+                        matchedCity, input.state(), echoedZip, echoedCc);
                 return new AddressValidationResult(true, "CORRECTED", "UNKNOWN", suggested,
                         warnings, "DHL normalised the city to '" + matchedCity + "'.", response);
             }

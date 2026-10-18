@@ -276,4 +276,28 @@ class StampsSeraTokenCacheTest {
         assertTrue(value >= 30 && value <= 300,
                 "TOKEN_REFRESH_MARGIN_SECONDS must be between 30 and 300; got " + value);
     }
+
+    @Test
+    void aRotatedRefreshTokenIsSavedOnTheAccountThatHeldTheOldOne() {
+        var repo = org.mockito.Mockito.mock(com.multiship.backend.repository.CarrierAccountRefRepository.class);
+        var holder = new com.multiship.backend.model.CarrierAccountRef();
+        holder.setStampsRefreshToken("rt-old");
+        var other = new com.multiship.backend.model.CarrierAccountRef();
+        other.setStampsRefreshToken("rt-someone-else");
+        org.mockito.Mockito.when(repo.findAll()).thenReturn(java.util.List.of(holder, other));
+        ReflectionTestUtils.setField(service, "accountRepository", repo);
+
+        service.saveRotatedRefreshToken("rt-old",
+                StampsSeraOAuthService.TokenExchangeResult.success("access", "rt-new", 3600));
+
+        assertEquals("rt-new", holder.getStampsRefreshToken());
+        assertEquals("rt-someone-else", other.getStampsRefreshToken());
+        org.mockito.Mockito.verify(repo).save(holder);
+
+        // Same token back (no rotation): nothing to save.
+        org.mockito.Mockito.clearInvocations(repo);
+        service.saveRotatedRefreshToken("rt-new",
+                StampsSeraOAuthService.TokenExchangeResult.success("access", "rt-new", 3600));
+        org.mockito.Mockito.verifyNoInteractions(repo);
+    }
 }

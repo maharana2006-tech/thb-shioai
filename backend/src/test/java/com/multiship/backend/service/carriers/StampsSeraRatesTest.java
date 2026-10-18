@@ -364,6 +364,25 @@ class StampsSeraRatesTest {
                 "message must call out the missing country; got: " + ex.getMessage());
     }
 
+    @Test
+    void mapPackagingTypeToSera_nonUspsCarrierPackaging_collapsesToPackage() {
+        // Live SERA 400 observed 2026-10-12 on an MPS submit — pkg 2 had
+        // packaging_type "fedex_tube" against service "usps_priority_mail_
+        // international". SERA rejected with 4522242 "The carrier specified
+        // does not match the service requested" because any non-USPS
+        // carrier-prefixed packaging is invalid on a USPS service. The
+        // mapper now collapses foreign-carrier packagings to the generic
+        // "package" so the rate shop keeps going.
+        assertEquals("package", StampsConnector.mapPackagingTypeToSera("fedex_tube"));
+        assertEquals("package", StampsConnector.mapPackagingTypeToSera("FEDEX_ENVELOPE"));
+        assertEquals("package", StampsConnector.mapPackagingTypeToSera("ups_pak"));
+        assertEquals("package", StampsConnector.mapPackagingTypeToSera("dhl_box"));
+        // USPS-family packaging must still pass through unchanged.
+        assertEquals("usps_small_flat_rate_box",
+                StampsConnector.mapPackagingTypeToSera("usps_small_flat_rate_box"));
+        assertEquals("letter", StampsConnector.mapPackagingTypeToSera("letter"));
+    }
+
     // ===== helpers =====
 
     private ShipmentRequestDTO baseDomesticRequest() {

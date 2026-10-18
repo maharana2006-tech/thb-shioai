@@ -658,6 +658,12 @@ export interface ManualShipmentPayload {
    *  requested; the free tier still applies. */
   insuredValue?: number | null
   insuredValueCurrency?: string | null
+  /** R2-BUG-008 — per-tenant custom-field values keyed on fieldKey. The
+   *  BE's required-definition guard reads this on validate + generate so
+   *  a 'Required on new shipments' definition is enforced at the trust
+   *  boundary. */
+  customFields?: Record<string, string>
+
   /** Per-shipment override of the account's default label file format —
    *  UPS/DHL/USPS only (FedEx uses labelImageType/labelStockType instead).
    *  Null / omitted → use the account default. */

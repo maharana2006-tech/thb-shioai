@@ -46,6 +46,11 @@ public class CustomFieldServiceImpl implements CustomFieldService {
     @Autowired(required = false)
     private OrderRepository orderRepository;
 
+    // BUG-128: audit custom-field definition writes under entityType=
+    // CLIENT_POLICY (closest matching bucket in AuditService constants).
+    @Autowired(required = false)
+    private AuditService audit;
+
     @Autowired
     public CustomFieldServiceImpl(CustomFieldDefinitionRepository defRepo,
                                   OrderCustomFieldValueRepository valueRepo) {
@@ -85,10 +90,47 @@ public class CustomFieldServiceImpl implements CustomFieldService {
                 && (d.getSelectOptions() == null || d.getSelectOptions().isBlank())) {
             throw new IllegalArgumentException("SELECT fields require selectOptions");
         }
+        // BUG-112 R7 — trim + dedup selectOptions server-side so an
+        // operator pasting "Red, Red , Green,  blue, Blue" doesn't end
+        // up with a dropdown that renders duplicates / phantom blanks.
+        // Case-insensitive compare, preserve first-seen casing + order.
+        if (d.getSelectOptions() != null && !d.getSelectOptions().isBlank()) {
+            java.util.LinkedHashMap<String, String> seen = new java.util.LinkedHashMap<>();
+            for (String raw : d.getSelectOptions().split(",")) {
+                String t = raw.trim();
+                if (t.isEmpty()) continue;
+                seen.putIfAbsent(t.toLowerCase(java.util.Locale.ROOT), t);
+            }
+            d.setSelectOptions(String.join(",", seen.values()));
+        }
         LocalDateTime now = LocalDateTime.now();
-        if (d.getId() == null) d.setCreatedAt(now);
+        // BUG-111 — on edit the FE doesn't send createdAt back, so d.createdAt
+        // is null. defRepo.save() does a merge-write which stamps NULL into
+        // the NOT NULL created_at column and the whole request bombs with a
+        // DataIntegrityViolation ('null value in column "created_at" violates
+        // not-null constraint'). Load the existing row and preserve its
+        // created_at + original tenant_id (the tenantId-clamp above may
+        // have narrowed it) so UPDATE goes through cleanly.
+        if (d.getId() != null) {
+            defRepo.findById(d.getId()).ifPresent(existing -> {
+                if (d.getCreatedAt() == null) d.setCreatedAt(existing.getCreatedAt());
+            });
+            if (d.getCreatedAt() == null) d.setCreatedAt(now);
+        } else {
+            d.setCreatedAt(now);
+        }
         d.setUpdatedAt(now);
-        return defRepo.save(d);
+        boolean isCreate = d.getId() == null;
+        CustomFieldDefinition saved = defRepo.save(d);
+        if (audit != null) {
+            audit.record(isCreate ? AuditService.CREATE : AuditService.UPDATE,
+                    AuditService.CLIENT_POLICY, saved.getId(),
+                    (saved.getTenantId() == null ? "PLATFORM" : saved.getTenantId())
+                            + "/custom-field/" + saved.getFieldKey(),
+                    saved,
+                    isCreate ? "Custom field definition created." : "Custom field definition updated.");
+        }
+        return saved;
     }
 
     @Override
@@ -103,6 +145,12 @@ public class CustomFieldServiceImpl implements CustomFieldService {
                 tenantScope.requireTenantMatch(def.getTenantId());
             }
             defRepo.delete(def);
+            if (audit != null) {
+                audit.record(AuditService.DELETE, AuditService.CLIENT_POLICY, def.getId(),
+                        (def.getTenantId() == null ? "PLATFORM" : def.getTenantId())
+                                + "/custom-field/" + def.getFieldKey(),
+                        null, "Custom field definition deleted.");
+            }
         });
     }
 

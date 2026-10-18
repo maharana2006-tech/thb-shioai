@@ -2,11 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, render, screen, waitFor, within, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { Provider } from 'react-redux'
-import { combineReducers, configureStore } from '@reduxjs/toolkit'
 import type { ComponentType } from 'react'
-import carrierReducer from '../store/carrierSlice'
-import orderReducer from '../store/orderSlice'
 
 /**
  * Sprint 51 wizard-tests (Importer / Broker step).
@@ -203,9 +199,13 @@ function seedDraftOnImporterStep(overrides: Record<string, unknown> = {}) {
     selectedShipFromWarehouseId: 1,
     visitedSteps: ['identity', 'shipFrom', 'return', 'carriers', 'mapping', 'importerBroker', 'summary'],
     activeStep: 'importerBroker',
+    // BUG-138 — carriersStepComplete now requires every staged draft to
+    // carry non-blank clientId AND clientSecret or Submit stays disabled;
+    // seed stub values so the importer-broker tests reach Submit.
     carrierDrafts: [{
       id: 1, carrierCode: 'UPS', accountNumber: 'A1', accountName: 'Main',
-      clientId: '', clientSecret: '', environment: 'PROD', clientDefault: true,
+      clientId: 'test-client-id', clientSecret: 'test-client-secret',
+      environment: 'PROD', clientDefault: true,
       shippingPurpose: '', clearanceOption: '',
       thirdPartyAccount: '', thirdPartyName: '', thirdPartyAddress1: '',
       thirdPartyCity: '', thirdPartyState: '', thirdPartyPostcode: '', thirdPartyCountry: '',
@@ -218,14 +218,6 @@ function seedDraftOnImporterStep(overrides: Record<string, unknown> = {}) {
   return draft
 }
 
-function makeStore() {
-  const rootReducer = combineReducers({ carriers: carrierReducer, orders: orderReducer })
-  return configureStore({
-    reducer: rootReducer,
-    middleware: (getDefault) => getDefault({ serializableCheck: false }),
-  })
-}
-
 async function loadPage(): Promise<ComponentType> {
   // Dynamic import so vi.mock() calls above land before the module evaluates.
   const mod = await import('./ClientEditorPage')
@@ -234,29 +226,25 @@ async function loadPage(): Promise<ComponentType> {
 
 function renderCreate(Page: ComponentType) {
   return render(
-    <Provider store={makeStore()}>
-      <MemoryRouter initialEntries={['/settings/clients/new']}>
-        <Routes>
-          <Route path="/settings/clients/new" element={<Page />} />
-          <Route path="/settings/clients/:clientCode" element={<Page />} />
-          <Route path="/settings/clients" element={<div>CLIENTS_LIST</div>} />
-        </Routes>
-      </MemoryRouter>
-    </Provider>,
+    <MemoryRouter initialEntries={['/settings/clients/new']}>
+      <Routes>
+        <Route path="/settings/clients/new" element={<Page />} />
+        <Route path="/settings/clients/:clientCode" element={<Page />} />
+        <Route path="/settings/clients" element={<div>CLIENTS_LIST</div>} />
+      </Routes>
+    </MemoryRouter>
   )
 }
 
 function renderEdit(Page: ComponentType, clientCode = 'EDIT1') {
   return render(
-    <Provider store={makeStore()}>
-      <MemoryRouter initialEntries={[`/settings/clients/${clientCode}`]}>
-        <Routes>
-          <Route path="/settings/clients/new" element={<Page />} />
-          <Route path="/settings/clients/:clientCode" element={<Page />} />
-          <Route path="/settings/clients" element={<div>CLIENTS_LIST</div>} />
-        </Routes>
-      </MemoryRouter>
-    </Provider>,
+    <MemoryRouter initialEntries={[`/settings/clients/${clientCode}`]}>
+      <Routes>
+        <Route path="/settings/clients/new" element={<Page />} />
+        <Route path="/settings/clients/:clientCode" element={<Page />} />
+        <Route path="/settings/clients" element={<div>CLIENTS_LIST</div>} />
+      </Routes>
+    </MemoryRouter>
   )
 }
 

@@ -4,7 +4,6 @@ import com.multiship.backend.model.CarrierAccountRef;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
 import org.springframework.util.StringUtils;
 
-import java.util.Optional;
 
 /**
  * PR-S1 (audit finding S-B1) — auto-push the account's SERA
@@ -63,27 +62,32 @@ public final class StampsSeraAuthContext {
 
     /**
      * Overload for paths that don't already hold a {@link CarrierAccountRef}
-     * (import + bulk-worker paths — they carry only carrierCode +
-     * accountNumber from resolution). Loads the account via
-     * {@link CarrierAccountRefRepository#findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase}
-     * then delegates to {@link #openFor(CarrierAccountRef)}.
+     * (import + bulk-worker paths — they carry carrierCode, accountNumber
+     * and clientId from resolution). Picks the authorized row with that
+     * account number AND client ID, then delegates to {@link #openFor(CarrierAccountRef)}.
      *
      * <p>NOOP when any input is missing or the account isn't found —
      * the caller keeps the pre-S1 behaviour on those edges.
      */
     public static AutoCloseable openFor(CarrierAccountRefRepository repo,
                                         String carrierCode,
-                                        String accountNumber) {
+                                        String accountNumber,
+                                        String clientId) {
         if (repo == null
                 || !StringUtils.hasText(carrierCode)
                 || !StringUtils.hasText(accountNumber)) {
             return NOOP;
         }
         if (!isStampsCarrier(carrierCode)) return NOOP;
-        Optional<CarrierAccountRef> account =
-                repo.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase(
-                        accountNumber, carrierCode);
-        return account.map(StampsSeraAuthContext::openFor).orElse(NOOP);
+        // Several clients can hold the same account number, each with its own
+        // authorization; a token only works with the client ID it was issued to.
+        String wanted = clientId == null ? "" : clientId.trim();
+        return repo.findByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase(accountNumber, carrierCode).stream()
+                .filter(a -> StringUtils.hasText(a.getStampsRefreshToken()))
+                .filter(a -> wanted.equals(a.getClientId() == null ? "" : a.getClientId().trim()))
+                .findFirst()
+                .map(StampsSeraAuthContext::openFor)
+                .orElse(NOOP);
     }
 
     /**

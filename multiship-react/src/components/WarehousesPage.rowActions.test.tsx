@@ -12,7 +12,7 @@ import type { ComponentType } from 'react'
  *   Row actions (WarehousesPage)
  *     • Edit → opens WarehouseEditorModal
  *     • Toggle active → warehouseService.toggleActive + refetch + busyId guard
- *     • Delete → notify.confirm → warehouseService.deleteWarehouse + refetch
+ *     • Delete → type-to-confirm modal (R2-BUG-010) → warehouseService.deleteWarehouse + refetch
  *     • Attach clients → PLATFORM only
  *     • New warehouse button → opens editor in create mode
  *
@@ -325,7 +325,9 @@ describe('WarehousesPage · row actions · positive', () => {
     await waitFor(() => expect(listWarehouses.mock.calls.length).toBeGreaterThanOrEqual(2))
   })
 
-  it('Delete action confirms then calls deleteWarehouse + refetches', async () => {
+  // R2-BUG-010 — Delete is a type-to-confirm modal; operator must retype
+  // the warehouse code before the Delete button enables.
+  it('Delete action opens type-to-confirm modal; typing the code enables Delete and fires deleteWarehouse', async () => {
     const Page = await loadPage()
     const user = userEvent.setup()
     renderList(Page)
@@ -335,10 +337,18 @@ describe('WarehousesPage · row actions · positive', () => {
     await openRowMenu(user, 'PLAT1')
     await user.click(await screen.findByRole('menuitem', { name: /delete/i }))
 
-    await waitFor(() => expect(notifyConfirm).toHaveBeenCalled())
-    const opts = notifyConfirm.mock.calls[0]?.[1] as { title?: string; danger?: boolean } | undefined
-    expect(opts?.title).toMatch(/delete warehouse/i)
-    expect(opts?.danger).toBe(true)
+    // Dialog opens — Delete button is initially disabled.
+    const dialog = await screen.findByRole('dialog', { name: /delete warehouse plat1/i })
+    const deleteBtn = within(dialog).getByRole('button', { name: /delete warehouse/i })
+    expect(deleteBtn).toBeDisabled()
+    expect(deleteWarehouse).not.toHaveBeenCalled()
+
+    // Type the exact code → Delete enables.
+    const input = within(dialog).getByLabelText(/type warehouse code to confirm/i)
+    await user.type(input, 'PLAT1')
+    expect(deleteBtn).not.toBeDisabled()
+
+    await user.click(deleteBtn)
     await waitFor(() => expect(deleteWarehouse).toHaveBeenCalledWith('PLAT1'))
     await waitFor(() => expect(notifySuccess).toHaveBeenCalled())
     await waitFor(() => expect(listWarehouses.mock.calls.length).toBeGreaterThanOrEqual(2))
@@ -350,17 +360,34 @@ describe('WarehousesPage · row actions · positive', () => {
 // ============================================================================
 
 describe('WarehousesPage · row actions · negative', () => {
-  it('Delete cancel → deleteWarehouse is NOT called', async () => {
+  // R2-BUG-010 — Delete button stays disabled while the typed value doesn't
+  // match the code; typing the wrong value or hitting Cancel never calls
+  // deleteWarehouse.
+  it('Delete modal: wrong typed code keeps Delete disabled; Cancel closes without calling deleteWarehouse', async () => {
     const Page = await loadPage()
     const user = userEvent.setup()
-    notifyConfirm.mockResolvedValue(false)
     renderList(Page)
 
     await openRowMenu(user, 'PLAT1')
     await user.click(await screen.findByRole('menuitem', { name: /delete/i }))
 
-    await waitFor(() => expect(notifyConfirm).toHaveBeenCalled())
+    const dialog = await screen.findByRole('dialog', { name: /delete warehouse plat1/i })
+    const input = within(dialog).getByLabelText(/type warehouse code to confirm/i)
+    const deleteBtn = within(dialog).getByRole('button', { name: /delete warehouse/i })
+
+    // Partial / mismatched values — Delete stays disabled.
+    await user.type(input, 'plat1') // wrong case
+    expect(deleteBtn).toBeDisabled()
+    await user.clear(input)
+    await user.type(input, 'PLAT') // partial
+    expect(deleteBtn).toBeDisabled()
+
+    // Cancel closes the modal; deleteWarehouse never called.
+    await user.click(within(dialog).getByRole('button', { name: /^cancel$/i }))
     await act(async () => { await Promise.resolve() })
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: /delete warehouse plat1/i })).toBeNull(),
+    )
     expect(deleteWarehouse).not.toHaveBeenCalled()
     expect(notifySuccess).not.toHaveBeenCalled()
   })
@@ -666,27 +693,14 @@ describe('WarehouseEditorModal · internals · negative', () => {
     expect(verifyBtn).toBeDisabled()
   })
 
-  it('Invalid country (single letter) surfaces a country error after blur', async () => {
-    const Page = await loadPage()
-    const user = userEvent.setup()
-    renderList(Page)
-
-    await screen.findByText('PLAT1')
-    await user.click(screen.getByRole('button', { name: /add warehouse/i }))
-    const dialog = await screen.findByRole('dialog', { name: /add warehouse/i })
-
-    // Country default is 'US' (valid). Clear it and set to 'X' — 1 letter fails validateCountry.
-    const countryInput = dialog.querySelector('input[maxlength="2"]') as HTMLInputElement
-    await user.clear(countryInput)
-    await user.type(countryInput, 'X')
-    await user.tab() // blur → touched
-
-    // validateCountry emits a required-length message on ISO-2 mismatch.
-    await waitFor(() => {
-      const errs = dialog.querySelectorAll('p.text-rose-600')
-      const hasCountryErr = Array.from(errs).some((el) => /country/i.test(el.textContent ?? ''))
-      expect(hasCountryErr).toBe(true)
-    })
+  // BUG-046 R6: Country is now the shared CountrySelect (searchable
+  // combobox, no `maxlength="2"` free-text input). A single-letter query
+  // shows "No match" rather than committing an invalid code, so the
+  // ISO-2-length validation path is no longer reachable from this form.
+  // The equivalent coverage lives in the CountrySelect own-tests.
+  it.skip('Invalid country (single letter) surfaces a country error after blur', async () => {
+    // kept as a placeholder for the behaviour the previous free-text
+    // input exercised; delete when CountrySelect has its own slice.
   })
 
   it('Invalid US zip (letters) surfaces a zip error after blur', async () => {
@@ -790,20 +804,19 @@ describe('WarehouseEditorModal · audit fixes', () => {
     await user.clear(nameInput)
     await user.type(nameInput, 'Changed')
 
-    // Stub confirm to reject; Cancel should NOT close.
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    // Dirty-edit guard now uses notify.confirm; stub reject first, then accept.
+    notifyConfirm.mockReset().mockResolvedValueOnce(false)
     await user.click(within(dialog).getByRole('button', { name: /^cancel$/i }))
-    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(notifyConfirm).toHaveBeenCalledTimes(1))
     // Dialog still visible → onClose wasn't called.
     expect(await screen.findByRole('dialog', { name: /edit warehouse plat1/i })).toBeInTheDocument()
 
     // Accept the confirm → dialog closes.
-    confirmSpy.mockReturnValue(true)
+    notifyConfirm.mockResolvedValueOnce(true)
     await user.click(within(dialog).getByRole('button', { name: /^cancel$/i }))
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: /edit warehouse plat1/i })).toBeNull()
     })
-    confirmSpy.mockRestore()
   })
 
   it('4.2: closing WITHOUT dirty edits skips the confirm', async () => {
@@ -816,9 +829,8 @@ describe('WarehouseEditorModal · audit fixes', () => {
     const dialog = await screen.findByRole('dialog', { name: /edit warehouse plat1/i })
 
     // No edits — Cancel closes immediately with no confirm prompt.
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    notifyConfirm.mockReset()
     await user.click(within(dialog).getByRole('button', { name: /^cancel$/i }))
-    expect(confirmSpy).not.toHaveBeenCalled()
-    confirmSpy.mockRestore()
+    expect(notifyConfirm).not.toHaveBeenCalled()
   })
 })

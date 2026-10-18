@@ -2,12 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { Provider } from 'react-redux'
-import { combineReducers, configureStore } from '@reduxjs/toolkit'
 import type { ReactNode } from 'react'
-
-import carrierReducer from '../store/carrierSlice'
-import orderReducer from '../store/orderSlice'
 
 /**
  * Wizard test-agent MAPPING step coverage.
@@ -207,24 +202,15 @@ function seedDraft(overrides: {
   localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft))
 }
 
-function makeStore() {
-  return configureStore({
-    reducer: combineReducers({ carriers: carrierReducer, orders: orderReducer }),
-    middleware: (getDefault) => getDefault({ serializableCheck: false }),
-  })
-}
-
 function Providers({ children, path = '/settings/clients/new' }: { children: ReactNode; path?: string }) {
   return (
-    <Provider store={makeStore()}>
-      <MemoryRouter initialEntries={[path]}>
-        <Routes>
-          <Route path="/settings/clients/:clientCode" element={<>{children}</>} />
-          <Route path="/settings/clients/new" element={<>{children}</>} />
-          <Route path="/settings/clients" element={<div>CLIENTS_LIST</div>} />
-        </Routes>
-      </MemoryRouter>
-    </Provider>
+    <MemoryRouter initialEntries={[path]}>
+      <Routes>
+        <Route path="/settings/clients/:clientCode" element={<>{children}</>} />
+        <Route path="/settings/clients/new" element={<>{children}</>} />
+        <Route path="/settings/clients" element={<div>CLIENTS_LIST</div>} />
+      </Routes>
+    </MemoryRouter>
   )
 }
 

@@ -1,6 +1,6 @@
 import { Suspense } from 'react'
 import { lazyWithRetry as lazy } from '../utils/lazyWithRetry'
-import { Navigate, Route, Routes, useParams } from 'react-router-dom'
+import { Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom'
 
 /** Redirect the legacy `/settings/label-templates/:id` URL to the new
  *  `/settings/templates/:id`, preserving the id. Standalone helper because
@@ -60,6 +60,8 @@ const CarrierPage = lazy(() => import('../pages/CarrierPage'))
 const ClientsPage = lazy(() => import('../pages/ClientsPage'))
 const ClientEditorPage = lazy(() => import('../components/ClientEditorPage'))
 const ImporterBrokerPage = lazy(() => import('../components/ImporterBrokerPage'))
+const StampsAddFundsPage = lazy(() => import('../components/StampsPostage'))
+const ProfilePage = lazy(() => import('../components/ProfilePage'))
 const CustomsProfileEditorPage = lazy(() => import('../components/CustomsProfileEditorPage'))
 const LabelTemplatesListPage = lazy(() => import('../components/LabelTemplatesListPage'))
 const LabelTemplateEditorPage = lazy(() => import('../components/LabelTemplateEditorPage'))
@@ -174,6 +176,8 @@ export default function AppRoutes() {
 
         <Route element={<ProtectedRoute />}>
           <Route element={<WorkspaceLayout />}>
+            {/* Self-service profile — every authenticated role (incl. TENANT). */}
+            <Route path="/profile" element={<ProfilePage />} />
             <Route element={<RequireRole roles={['ADMIN', 'USER']} />}>
               <Route path={workspacePaths.dashboard} element={<DashboardPage />} />
 
@@ -216,11 +220,14 @@ export default function AppRoutes() {
                     have redirected USER role to /dashboard even though the
                     sidebar shows the entry. */}
                 <Route path="carriers" element={<CarrierPage />} />
+                <Route path="carriers/:accountId/add-funds" element={<StampsAddFundsPage />} />
                 <Route path="audit-log" element={<AuditLogPage />} />
                 {/* A4.5 — self-serve email opt-outs. USER + ADMIN so any
                     authenticated user can silence alert-style templates
                     without touching admin surfaces. */}
                 <Route path="notifications" element={<MyNotificationSubscriptionsPage />} />
+                {/* Legacy alias for the Notifications page. */}
+                <Route path="my-subscriptions" element={<Navigate to="/settings/notifications" replace />} />
                 <Route element={<RequireRole roles={['ADMIN']} />}>
                   <Route path="api-keys" element={<ApiKeysPage />} />
                   <Route path="api-reference" element={<ApiReferencePage />} />
@@ -253,6 +260,13 @@ export default function AppRoutes() {
                       inline defense-in-depth check inside the page). */}
                   <Route path="usps-direct/dashboard" element={<UspsDirectDashboardPage />} />
                 </Route>
+                {/* BUG-062 — unknown /settings/* used to silently fall
+                    through to whatever matched first (observed: dropped on
+                    Carrier Accounts with the URL rewritten). Explicit
+                    catch-all renders the overview so the operator sees
+                    where they are instead of a wrong page claiming
+                    otherwise. */}
+                <Route path="*" element={<SettingsOverview notFound />} />
               </Route>
             </Route>
 
@@ -289,11 +303,51 @@ export default function AppRoutes() {
             <Route path="/labels" element={<Navigate to={workspacePaths.orders} replace />} />
             <Route path="/generate-labels" element={<Navigate to={workspacePaths.orders} replace />} />
             <Route path="/track-orders" element={<Navigate to={workspacePaths.orders} replace />} />
+            {/* BUG-068 — unknown routes INSIDE the authenticated shell
+                used to silently redirect to /dashboard (destroying the
+                attempted URL) or /login. Render a tiny NotFound card
+                in-place so the URL survives, operator sees what they
+                asked for, and can navigate back cleanly. */}
+            <Route path="*" element={<NotFoundPage />} />
           </Route>
         </Route>
 
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
     </Suspense>
+  )
+}
+
+/** BUG-068 — in-shell NotFound. URL is preserved; operator sees the
+ *  path they asked for and can navigate back. One component inline so
+ *  the deferred-page loader doesn't need to pull a route for it. */
+function NotFoundPage() {
+  const location = useLocation()
+  return (
+    <div className="flex min-h-[70vh] items-center justify-center p-8">
+      <div className="max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-400">404</p>
+        <h1 className="mt-1 text-[18px] font-semibold text-slate-900">Page not found</h1>
+        <p className="mt-2 text-[13px] text-slate-600">
+          Nothing lives at <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[12px] text-slate-700">{location.pathname}</code>.
+          Check the link, or jump back to the dashboard.
+        </p>
+        <div className="mt-4 flex items-center gap-2">
+          {/* BUG-152: App.css sets `a { color: inherit }`, so plain
+              `text-white` on an anchor resolves to the inherited brown
+              on this card and the label becomes invisible on the dark
+              navy button. Pin the color with the Tailwind !important
+              prefix so the anchor overrides inherit. */}
+          <a href={workspacePaths.dashboard}
+             className="rounded-lg bg-slate-900 px-3 py-1.5 text-[12.5px] font-semibold !text-white hover:bg-slate-800">
+            Go to Dashboard
+          </a>
+          <button type="button" onClick={() => history.back()}
+             className="rounded-lg border border-slate-300 px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:bg-slate-50">
+            Back
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }

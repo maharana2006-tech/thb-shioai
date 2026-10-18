@@ -4,10 +4,13 @@
  * isolation and no longer sits in the middle of a 3.5K-LoC file.
  * Behavior 1:1 with the pre-extraction inline function.
  */
+import type React from 'react'
 import type { ClientUpsertPayload } from '../../api/clientService'
 import { FIELD_LIMITS } from '../../utils/clientValidation'
+import { CountrySelect } from '../NewShipmentComponents/CountrySelect'
 import { TimezoneCombobox } from '../TimezoneCombobox'
 import { Field, inputBaseClass, inputErr, inputOk } from './_shared'
+import { CURRENCY_ALLOWLIST } from '../../utils/money'
 
 export interface IdentityStepProps {
   form: ClientUpsertPayload
@@ -110,17 +113,12 @@ export function IdentityStep({
               onChange={set('defaultCurrency')}
               className={`${inputBaseClass} ${inputOk}`}
             >
+              {/* BUG-125 — shared allowlist so the client-default currency
+                  matches what the order form + Importer/Broker offer. */}
               <option value="">— none —</option>
-              <option value="USD">USD</option>
-              <option value="EUR">EUR</option>
-              <option value="GBP">GBP</option>
-              <option value="CAD">CAD</option>
-              <option value="AUD">AUD</option>
-              <option value="INR">INR</option>
-              <option value="JPY">JPY</option>
-              <option value="CNY">CNY</option>
-              <option value="MXN">MXN</option>
-              <option value="AED">AED</option>
+              {CURRENCY_ALLOWLIST.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
             </select>
           </Field>
           <Field label="Weight unit">
@@ -149,25 +147,14 @@ export function IdentityStep({
             </select>
           </Field>
           <Field label="Origin country">
-            <select
+            {/* BUG-046 — the hardcoded 12-country list diverged from the
+                address-book 250. Share the same CountrySelect so an
+                operator can pick any country here that they can enter
+                on the order form. */}
+            <CountrySelect
               value={form.defaultOriginCountry || ''}
-              onChange={set('defaultOriginCountry')}
-              className={`${inputBaseClass} ${inputOk}`}
-            >
-              <option value="">— none —</option>
-              <option value="US">US — United States</option>
-              <option value="CA">CA — Canada</option>
-              <option value="MX">MX — Mexico</option>
-              <option value="GB">GB — United Kingdom</option>
-              <option value="DE">DE — Germany</option>
-              <option value="FR">FR — France</option>
-              <option value="IN">IN — India</option>
-              <option value="CN">CN — China</option>
-              <option value="AU">AU — Australia</option>
-              <option value="JP">JP — Japan</option>
-              <option value="AE">AE — UAE</option>
-              <option value="SG">SG — Singapore</option>
-            </select>
+              onChange={(code) => set('defaultOriginCountry')({ target: { value: code } } as React.ChangeEvent<HTMLSelectElement>)}
+            />
           </Field>
           <Field label="Timezone" hint="IANA (e.g. America/New_York)">
             <TimezoneCombobox

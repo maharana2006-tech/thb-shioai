@@ -18,4 +18,17 @@ public interface PackingSlipService {
      * @throws IllegalArgumentException when the order does not exist
      */
     byte[] render(Integer orderNo);
+
+    /**
+     * BUG-109 — render a specific template against the order's data.
+     * Used by Settings &gt; Templates &gt; Preview so an admin can check
+     * one template without first having to make an order that routes
+     * to that template's client. When {@code templateId} is null,
+     * falls back to the per-order resolution ({@link #render(Integer)}).
+     *
+     * @throws IllegalArgumentException when the order OR the template id doesn't exist
+     */
+    default byte[] renderWithTemplate(Integer orderNo, Long templateId) {
+        return render(orderNo);
+    }
 }

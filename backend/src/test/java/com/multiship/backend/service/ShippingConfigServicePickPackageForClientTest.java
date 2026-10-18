@@ -82,7 +82,8 @@ class ShippingConfigServicePickPackageForClientTest {
                 clientShipviaAliasRepository, clientShipviaMapPackageRepository,
                 clientServiceAliasRepository, clientAllowedPackageRepository,
                 warehouseRepository, List.<CarrierConnector>of(),
-                carrierAccountRefRepository, eventPublisher);
+                carrierAccountRefRepository, eventPublisher,
+                mock(TenantScopeEnforcer.class));
     }
 
     // ===== helpers =====

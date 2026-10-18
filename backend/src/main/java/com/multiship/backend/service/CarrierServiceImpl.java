@@ -76,6 +76,10 @@ public class CarrierServiceImpl implements CarrierService {
     private final ShipViaRepository shipViaRepository;
     private final OrderRepository orderRepository;
     private final OrderTrackingRepository orderTrackingRepository;
+
+    /** BUG-014 — ties a manual shipment's carrier calls to the order it creates. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.observability.CarrierApiLogService carrierApiLogService;
     private final CarrierProperties carrierProperties;
     // C1 — resolves tenant_settings.shipper.* overrides on top of the
     // platform carrier.shipper.* defaults. Every call site that used to
@@ -123,6 +127,14 @@ public class CarrierServiceImpl implements CarrierService {
      *  in test wiring; the STD detection block short-circuits when null. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private StdShipMethodResolver stdShipMethodResolver;
+
+    /** R2-BUG-008 — defense-in-depth custom-field enforcement at the
+     *  Generate boundary. The primary gate is in {@link ShipmentValidationService}
+     *  which the UI calls before Generate; External API callers skip that
+     *  pre-flight so the same guard runs here too. {@code required=false}
+     *  keeps the ~30 pure-Mockito unit tests happy. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.CustomFieldDefinitionRepository customFieldDefinitionRepository;
 
     /** G7 — decides whether the shipment's SHIP_DATE should shift to the
      *  next working day based on the (source × carrier × warehouse) cutoff
@@ -1728,6 +1740,18 @@ public class CarrierServiceImpl implements CarrierService {
                                     clientCodeForReturn);
                         });
             }
+            // BUG-136 R7 sibling hard-block — after the recipient clamp,
+            // reject the write (not just the FE preflight) when the sender
+            // address matches the clamped recipient. A direct POST
+            // /orders/{n}/label with isReturn + sender == client's return
+            // address used to produce a label whose FROM == TO (useless as
+            // a return — the carrier would deliver it to the sender).
+            if (from != null && addressesSameForReturn(from, to)) {
+                return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
+                        "Return label \"from\" and \"to\" are the same address. "
+                                + "\"Return from · customer\" should be the customer's address, "
+                                + "not your warehouse — the warehouse is the \"Return to\" block.");
+            }
         }
         if (!StringUtils.hasText(to.getName()) || !StringUtils.hasText(to.getAddressLine1())
                 || !StringUtils.hasText(to.getCity()) || !StringUtils.hasText(to.getPostalCode())
@@ -1759,6 +1783,58 @@ public class CarrierServiceImpl implements CarrierService {
                     "Enter the bill-to account number for the shipment.");
         }
 
+        // BUG-006 — refuse a (client, reference) that already shipped on a
+        // different label. Idempotency-Key replay already catches the "same
+        // click twice" race; this blocks the "same reference, DIFFERENT
+        // key" case (the UI generates a fresh key per attempt, so a
+        // retry-after-success button press was buying a second paid label).
+        // Only applies to new orders (existingOrderNo == null); the
+        // regenerate path intentionally re-labels the SAME reference on
+        // the SAME order. ponytail: no advisory lock yet — the duplicate
+        // check is a non-atomic SELECT, so two concurrent POSTs can both
+        // miss and both ship. Add pg_try_advisory_xact_lock(hashtext('ref:'
+        // || client || ':' || reference)) if a happy-path race test flakes.
+        if (existingOrderNo == null && orderRepository != null
+                && StringUtils.hasText(req.getReference())) {
+            String refClient = StringUtils.hasText(req.getClientCode())
+                    ? req.getClientCode().trim() : "MANUAL";
+            java.util.Optional<Order> alreadyShipped =
+                    orderRepository.findShippedByClientAndReference(refClient, req.getReference().trim());
+            if (alreadyShipped.isPresent()) {
+                Order o = alreadyShipped.get();
+                return failure(HttpStatus.CONFLICT, ErrorCode.LABEL_ALREADY_GENERATED,
+                        "Reference " + req.getReference().trim()
+                                + " already shipped on order #" + o.getOrderNo()
+                                + (StringUtils.hasText(o.getTrack()) ? " (tracking " + o.getTrack() + ")" : "")
+                                + ". Use a different reference or void the existing label first.");
+            }
+        }
+
+        // R2-BUG-008 — defense-in-depth: refuse missing required custom
+        // fields (External API bypasses ShipmentValidationService; UI
+        // callers that call /shipments/validate first still get the
+        // primary error there with better per-field messaging).
+        if (customFieldDefinitionRepository != null
+                && StringUtils.hasText(req.getClientCode())) {
+            java.util.List<com.multiship.backend.model.CustomFieldDefinition> defs =
+                    customFieldDefinitionRepository.findApplicable(req.getClientCode());
+            if (defs != null) {
+                java.util.Map<String, String> submitted = req.getCustomFields();
+                for (com.multiship.backend.model.CustomFieldDefinition def : defs) {
+                    if (def == null || !Boolean.TRUE.equals(def.getRequired())
+                            || !Boolean.TRUE.equals(def.getActive())) continue;
+                    String key = def.getFieldKey();
+                    if (!StringUtils.hasText(key)) continue;
+                    String value = submitted == null ? null : submitted.get(key);
+                    if (!StringUtils.hasText(value)) {
+                        String label = StringUtils.hasText(def.getLabel()) ? def.getLabel() : key;
+                        return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+                                label + " is required for this shipment.");
+                    }
+                }
+            }
+        }
+
         // 3PL guardrails — clientCode may be empty for ad-hoc shipments, in
         // which case every resolver call is a no-op (backward-compat).
         String resolvedClient = req.getClientCode();
@@ -1777,12 +1853,32 @@ public class CarrierServiceImpl implements CarrierService {
         // client has a default attached), override the `from` block with the
         // warehouse address. Any override throws WAREHOUSE_ATTACH_FORBIDDEN
         // when the caller borrowed a warehouse from another tenant.
+        //
+        // BUG-149: on RETURN mode the sender is the CUSTOMER (physical
+        // origin of the return), not the warehouse. The FE sends the
+        // typed customer address in req.getSender(); overriding it from
+        // req.getWarehouseCode() (which the FE still sends for other
+        // resolver code paths) made every return label print warehouse →
+        // warehouse, which can't be used.
         String resolvedWarehouseCode = null;
         Long resolvedWarehouseId = null;
-        if (hasClient && StringUtils.hasText(req.getWarehouseCode())) {
+        if (hasClient && StringUtils.hasText(req.getWarehouseCode())
+                && !Boolean.TRUE.equals(req.getIsReturn())) {
             try {
                 Warehouse w = resolutionService.assertWarehouse(resolvedClient, req.getWarehouseCode());
                 from = mergeFromWarehouse(from, w);
+                resolvedWarehouseCode = w.getCode();
+                resolvedWarehouseId = w.getId();
+            } catch (ShipmentResolutionException e) {
+                return toResolutionFailure(e);
+            }
+        } else if (hasClient && StringUtils.hasText(req.getWarehouseCode())) {
+            // On return, still VERIFY the warehouse code (tenant check +
+            // existence) but don't override the sender. Carry the id/code
+            // through so downstream persistence tags the order with its
+            // owning warehouse without rewriting the customer address.
+            try {
+                Warehouse w = resolutionService.assertWarehouse(resolvedClient, req.getWarehouseCode());
                 resolvedWarehouseCode = w.getCode();
                 resolvedWarehouseId = w.getId();
             } catch (ShipmentResolutionException e) {
@@ -1844,6 +1940,22 @@ public class CarrierServiceImpl implements CarrierService {
             return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
                     "accountNumber " + account.getAccountNumber() + " is deactivated. "
                             + "Re-activate it in Settings → Carriers or pick another account.");
+        }
+        // BUG-005 — the typed carrierCode must match the picked account's
+        // carrier. Pre-fix, carrierCode=FEDEX + accountId=<UPS#2> actually
+        // called FedEx with UPS credentials — a 502 NOT.AUTHORIZED that
+        // persisted the order as ERROR for no reason. The validator mirrors
+        // this (same message) so operators see FAIL at /validate instead of
+        // a 502 at /manual-label.
+        if (StringUtils.hasText(req.getCarrierCode()) && StringUtils.hasText(account.getCarrierCode())) {
+            String requestedCanonical = resolveCanonicalCarrierCode(req.getCarrierCode().trim());
+            String accountCanonical = resolveCanonicalCarrierCode(account.getCarrierCode().trim());
+            if (!requestedCanonical.equalsIgnoreCase(accountCanonical)) {
+                return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
+                        "carrierCode '" + req.getCarrierCode().trim()
+                                + "' does not match carrier account's carrier '"
+                                + account.getCarrierCode().trim() + "'.");
+            }
         }
         // Bill-to account number that prints on the label: the typed number wins.
         // Pre-fix had a "ACCOUNT" literal string as the ultimate fallback which
@@ -2508,7 +2620,7 @@ public class CarrierServiceImpl implements CarrierService {
                     errOrder.setShiptoCountryCd(to.getCountryCode());
                     errOrder.setCountryName(to.getCountryCode());
                     errOrder.setPhone(to.getPhone());
-                    errOrder.setWeight(req.getWeight());
+                    errOrder.setWeight(aggregateShipmentWeight(req.getPackages(), req.getWeight()));
                     errOrder.setWeightUnit(firstNonBlank(req.getWeightUnit(), "LB"));
                     if (fromForErr != null) {
                         errOrder.setShipFromName(fromForErr.getName());
@@ -2567,6 +2679,11 @@ public class CarrierServiceImpl implements CarrierService {
                         persistEx.getMessage(), persistEx);
             }
             Integer failedOrderNo = failedOrderNoHolder[0];
+            // BUG-014 — the failed attempt's carrier calls are the ones support
+            // needs to find by order number.
+            if (failedOrderNo != null && carrierApiLogService != null) {
+                carrierApiLogService.tagCurrentRequest(failedOrderNo.longValue(), null);
+            }
             // Persist the commodity lines on the failed order too — in a SEPARATE
             // transaction AFTER the ERROR order committed above, so the just-saved
             // order is visible to upsertCustoms and a customs hiccup can't roll
@@ -2731,7 +2848,12 @@ public class CarrierServiceImpl implements CarrierService {
         order.setShiptoCountryCd(to.getCountryCode());
         order.setCountryName(to.getCountryCode());
         order.setPhone(to.getPhone());
-        order.setWeight(req.getWeight());
+        // BUG-017 — MPS orders used to persist req.weight (the first
+        // box's weight) as the shipment-level total, which the Order
+        // API then surfaced as shippingDetails.weight. Sum per-package
+        // weights when the request carries a packages[] list; fall back
+        // to req.weight on single-box legacy requests.
+        order.setWeight(aggregateShipmentWeight(req.getPackages(), req.getWeight()));
         order.setWeightUnit(firstNonBlank(req.getWeightUnit(), "LB"));
         // Persist the ship-FROM the operator entered (the effective `from`,
         // after any warehouse merge) so the label document + commercial invoice
@@ -2777,6 +2899,9 @@ public class CarrierServiceImpl implements CarrierService {
         }
         orderRepository.save(order);
         persistOrderLines(order, req);
+        if (carrierApiLogService != null) {
+            carrierApiLogService.tagCurrentRequest((long) orderNo, result.trackingNumber());
+        }
 
         // On regenerate the order row is reused, so the prior attempt's
         // shipment_batch + label_package rows still exist. Clear them before
@@ -3216,7 +3341,11 @@ public class CarrierServiceImpl implements CarrierService {
         // token state to the next order it services.
         AutoCloseable stampsSeraCtx =
                 com.multiship.backend.service.carriers.StampsSeraAuthContext.openFor(
-                        carrierAccountRefRepository, res.carrierCode(), res.accountNumber());
+                        carrierAccountRefRepository, res.carrierCode(), res.accountNumber(), res.clientId());
+        // BUG-014 — tag this order's carrier calls in the API log.
+        com.multiship.backend.service.observability.CarrierCallContext callTag =
+                com.multiship.backend.service.observability.CarrierCallContext.forOrder(
+                        order.getOrderNo() == null ? null : order.getOrderNo().longValue());
         try {
         connector.validateCredentials(res.clientId(), res.clientSecret());
         // F-MODE-3 — pass the resolved account's env so FedEx routes the
@@ -3400,6 +3529,7 @@ public class CarrierServiceImpl implements CarrierService {
             // worker thread starts clean. NOOP path from openFor swallows
             // its own close(); this catch is only for the real push path.
             try { stampsSeraCtx.close(); } catch (Exception ignored) {}
+            callTag.close();
         }
     }
 
@@ -3528,6 +3658,29 @@ public class CarrierServiceImpl implements CarrierService {
         String x = a.trim().toUpperCase(Locale.ROOT);
         String y = b.trim().toUpperCase(Locale.ROOT);
         return ("US".equals(x) && "PR".equals(y)) || ("PR".equals(x) && "US".equals(y));
+    }
+
+    /** BUG-136 R7 sibling guard — same address on both sides of a return
+     *  label. Case-insensitive on text; ZIP compared on the 5-digit base. */
+    private static boolean addressesSameForReturn(
+            com.multiship.backend.dto.ManualShipmentRequest.Address a,
+            com.multiship.backend.dto.ManualShipmentRequest.Address b) {
+        return eqAddr(a.getAddressLine1(), b.getAddressLine1())
+                && eqAddr(a.getCity(), b.getCity())
+                && eqAddr(a.getState(), b.getState())
+                && zip5(a.getPostalCode()).equals(zip5(b.getPostalCode()))
+                && eqAddr(a.getCountryCode(), b.getCountryCode());
+    }
+
+    private static boolean eqAddr(String a, String b) {
+        return (a == null ? "" : a.trim()).equalsIgnoreCase(b == null ? "" : b.trim());
+    }
+
+    private static String zip5(String s) {
+        if (s == null) return "";
+        String t = s.trim();
+        int dash = t.indexOf('-');
+        return dash > 0 ? t.substring(0, dash) : t;
     }
 
     /**
@@ -5390,6 +5543,27 @@ public class CarrierServiceImpl implements CarrierService {
 
     private <T> T firstNonNull(T first, T second) {
         return first != null ? first : second;
+    }
+
+    /** BUG-017 — sum per-package weights for MPS persistence. Falls back
+     *  to the supplied shipment-level weight on single-box legacy
+     *  requests (null packages[]) or when every package's weight is
+     *  null. Returns null when both sources are empty rather than
+     *  inventing a zero. Package-list source lets this work for both
+     *  ShipmentRequestDTO (regen path) and ManualShipmentRequest
+     *  (manual-label path). */
+    private static java.math.BigDecimal aggregateShipmentWeight(
+            java.util.List<com.multiship.backend.dto.PackageDetailDTO> pkgs,
+            java.math.BigDecimal fallback) {
+        if (pkgs == null || pkgs.isEmpty()) return fallback;
+        java.math.BigDecimal sum = java.math.BigDecimal.ZERO;
+        boolean any = false;
+        for (com.multiship.backend.dto.PackageDetailDTO p : pkgs) {
+            if (p == null || p.getWeight() == null) continue;
+            sum = sum.add(p.getWeight());
+            any = true;
+        }
+        return any ? sum : fallback;
     }
 
     /**

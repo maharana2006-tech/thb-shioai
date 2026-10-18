@@ -47,8 +47,9 @@ vi.mock('../api/clientService', () => ({
   },
 }))
 
+const customsProfileList = vi.fn().mockResolvedValue([])
 vi.mock('../api/customsProfileService', () => ({
-  customsProfileService: { list: vi.fn().mockResolvedValue({ data: [] }) },
+  customsProfileService: { list: (...a: unknown[]) => customsProfileList(...a) },
 }))
 
 const notifyInfo = vi.fn()
@@ -244,6 +245,7 @@ const loadPage = async () => {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  customsProfileList.mockResolvedValue([])
 
   // Default: platform has UPS + FEDEX accounts loaded so carrierOptions
   // renders {UPS, FEDEX}.
@@ -671,6 +673,110 @@ describe('NewShipmentPage — D2C line fix mode', () => {
         expect((screen.getByLabelText(/^Client\s*\*?$/i) as HTMLSelectElement).value).toBe('ACME')
       })
       expect(dtcEditLine).not.toHaveBeenCalled()
+    } finally {
+      window.history.pushState({}, '', '/')
+    }
+  })
+})
+
+// ==================================================================
+// 7. BUG-002 — carrier account shippingPurpose must NOT prefill Reason of export
+// ==================================================================
+
+describe('NewShipmentPage — BUG-002 reason-of-export does not inherit account shippingPurpose', () => {
+  it('intl shipment with account.shippingPurpose=SAMPLE leaves Reason of export blank (no silent default)', async () => {
+    // Platform-side account carries the SAMPLE default. matchedAccount
+    // resolves against listAccounts() on (carrier, accountNumber), so
+    // the row for ACME-UPS must be in that fixture with shippingPurpose
+    // populated — reproducing the production MKL246/THB000 wiring.
+    listAccounts.mockResolvedValue([
+      acc({ id: 10, accountNumber: 'ACME-UPS', carrierCode: 'UPS', shippingPurpose: 'SAMPLE' }),
+      acc({ id: 101, accountNumber: 'PLAT-FDX', carrierCode: 'FEDEX' }),
+    ])
+
+    const Page = await loadPage()
+    renderWithProviders(<Page />)
+    const clientSel = await waitForClientSelect()
+
+    // Pick ACME → applyClient sets carrier=UPS + accountNumber=ACME-UPS,
+    // the prefill effect fires. Pre-fix the account's shippingPurpose
+    // SAMPLE would silently land in Reason-of-export; post-fix it stays
+    // blank so the operator must pick explicitly.
+    fireEvent.change(clientSel, { target: { value: 'ACME' } })
+    await waitFor(() => {
+      const carrierSel = screen.getByLabelText(/^Carrier\s?\*?$/i) as HTMLSelectElement
+      expect(carrierSel.value).toBe('UPS')
+    })
+
+    // Flip recipient country to Canada so the gated Reason-of-export field renders.
+    const countryInputs = screen.getAllByPlaceholderText(/Search country/i) as HTMLInputElement[]
+    const recipientCountryInput = countryInputs[countryInputs.length - 1]
+    await userEvent.click(recipientCountryInput)
+    await userEvent.type(recipientCountryInput, 'Canada')
+    const canadaBtn = await screen.findByRole('button', { name: /Canada\s*CA/i })
+    await userEvent.click(canadaBtn)
+
+    await waitFor(() => {
+      const label = screen.getByText(/Reason of export/i)
+      const field = label.closest('label') ?? label.parentElement
+      const sel = field?.querySelector('select') as HTMLSelectElement | null
+      expect(sel).toBeTruthy()
+      // Pre-fix: 'SAMPLE'. Post-fix: '' (force-pick).
+      expect(sel!.value).toBe('')
+    })
+  })
+})
+// ==================================================================
+// 8. BUG-011 — return mode must NOT paint merchant warehouse into Return-from (customer) block
+// ==================================================================
+
+describe('NewShipmentPage — BUG-011 return-mode sender does not inherit merchant warehouse address', () => {
+  it('fresh return mount + client pick leaves Return-from · customer block empty (merchant warehouse does not leak)', async () => {
+    // Reproduces: /orders/new/return → pick client MKL246 → warehouse
+    // auto-picks → sender block gets painted with merchant warehouse
+    // ('8191 Logistics Dr'). Operator fills a name, validation passes,
+    // label gets cut from the merchant's own address. Post-fix the
+    // warehouse-overlay effect short-circuits when isReturn=true.
+    listForClientWH.mockResolvedValueOnce({
+      data: [
+        {
+          clientCode: 'ACME',
+          isDefault: true,
+          warehouse: {
+            code: 'WH-ZEELAND',
+            name: 'Zeeland Fulfillment',
+            address: {
+              name: 'Zeeland Fulfillment',
+              line1: '8191 Logistics Dr',
+              line2: null,
+              city: 'Zeeland',
+              state: 'MI',
+              zip: '49464',
+              country: 'US',
+              phone: '6165551212',
+            },
+          },
+        },
+      ],
+    })
+
+    // Push /orders/new/return so isReturn starts true.
+    window.history.pushState({}, '', '/orders/new/return')
+    try {
+      const Page = await loadPage()
+      renderWithProviders(<Page />)
+      const clientSel = await waitForClientSelect()
+
+      fireEvent.change(clientSel, { target: { value: 'ACME' } })
+
+      // Give the warehouse-list fetch + auto-pick + overlay effect time to settle.
+      // Then assert the merchant warehouse line1 did NOT land in the sender
+      // ('Return from · customer') block.
+      await waitFor(() => {
+        // Negative assertion first (what the bug produced).
+        expect(screen.queryByDisplayValue('8191 Logistics Dr')).toBeNull()
+        expect(screen.queryByDisplayValue('Zeeland')).toBeNull()
+      })
     } finally {
       window.history.pushState({}, '', '/')
     }

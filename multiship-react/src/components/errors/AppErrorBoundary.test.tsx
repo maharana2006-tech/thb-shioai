@@ -34,7 +34,9 @@ describe('AppErrorBoundary', () => {
       )
       expect(screen.getByRole('alert')).toBeInTheDocument()
       expect(screen.getByRole('button', { name: /reload/i })).toBeInTheDocument()
-      expect(screen.getByText(/something went wrong/i)).toBeInTheDocument()
+      // BUG-036 R7: heading changed from "Something went wrong" to a more
+      // specific line; error detail still rendered below for support.
+      expect(screen.getByText(/couldn't finish loading/i)).toBeInTheDocument()
     } finally {
       spy.mockRestore()
     }

@@ -43,6 +43,13 @@ public class PrinterScanService {
     private final PrinterDiscoveryEventPublisher discoveryPublisher;
     private final SecureRandom secureRandom = new SecureRandom();
 
+    // BUG-128: audit scanner enroll / revoke / reactivate under
+    // AuditService.CLIENT_POLICY (scanner enrolments are per-tenant policy
+    // state). AuditService doesn't have a dedicated PRINTER_SCAN_AGENT
+    // constant yet; CLIENT_POLICY is the closest matching bucket.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private AuditService audit;
+
     // ================================================================
     // Enrollment (admin)
     // ================================================================
@@ -57,10 +64,28 @@ public class PrinterScanService {
      * warehouses can enroll N agents. A duplicate throws
      * {@link IllegalStateException} so the caller returns 409.
      */
+    /** BUG-117 — agent id + hostname patterns. The pre-fix enroll accepted
+     *  'QA 1013 R5 <b>sc</b>' and 'not a host!' which, while not injected
+     *  (the FE output-encodes everything), ended up on screen as the
+     *  tenant's visible agent id. Lock to alphanumerics + hyphen + '.' and
+     *  '_' so operators can't paste HTML or spaces into either field. */
+    private static final java.util.regex.Pattern AGENT_ID_PATTERN =
+            java.util.regex.Pattern.compile("^[A-Za-z0-9._-]{1,100}$");
+    private static final java.util.regex.Pattern HOSTNAME_PATTERN =
+            java.util.regex.Pattern.compile("^[A-Za-z0-9._:-]{0,255}$");
+
     @Transactional
     public EnrollResult enrollAgent(String tenantCode, String agentId, String hostname, String enrolledBy) {
         if (!StringUtils.hasText(tenantCode) || !StringUtils.hasText(agentId)) {
             throw new IllegalArgumentException("tenantCode + agentId are required.");
+        }
+        if (!AGENT_ID_PATTERN.matcher(agentId).matches()) {
+            throw new IllegalArgumentException(
+                    "Agent id must be 1-100 letters, digits, '.', '-' or '_'. No spaces or symbols.");
+        }
+        if (StringUtils.hasText(hostname) && !HOSTNAME_PATTERN.matcher(hostname).matches()) {
+            throw new IllegalArgumentException(
+                    "Hostname must be a plain host or IP (letters, digits, '.', '-', '_', ':').");
         }
         Optional<PrinterScanAgent> existing = agentRepository.findByTenantCodeAndAgentId(tenantCode, agentId);
         if (existing.isPresent() && Boolean.TRUE.equals(existing.get().getActive())) {
@@ -84,6 +109,11 @@ public class PrinterScanService {
         PrinterScanAgent saved = agentRepository.save(agent);
         log.info("Printer scan agent enrolled: tenant={} agentId={} enrolledBy={}",
                 tenantCode, agentId, enrolledBy);
+        if (audit != null) {
+            audit.record(AuditService.CREATE, AuditService.CLIENT_POLICY, saved.getId(),
+                    tenantCode + "/scan-agent/" + agentId, null,
+                    "Scanner enrolled (hostname=" + (hostname == null ? "" : hostname) + ").");
+        }
         return new EnrollResult(saved.getId(), rawKey);
     }
 
@@ -121,6 +151,11 @@ public class PrinterScanService {
         agentRepository.save(a);
         log.info("Printer scan agent unrevoked: tenant={} agentId={} id={}",
                 a.getTenantCode(), a.getAgentId(), a.getId());
+        if (audit != null) {
+            audit.record(AuditService.UPDATE, AuditService.CLIENT_POLICY, a.getId(),
+                    a.getTenantCode() + "/scan-agent/" + a.getAgentId(), null,
+                    "Scanner reactivated.");
+        }
         return true;
     }
 
@@ -150,6 +185,11 @@ public class PrinterScanService {
         agentRepository.save(a);
         log.info("Printer scan agent revoked: tenant={} agentId={} id={}",
                 a.getTenantCode(), a.getAgentId(), a.getId());
+        if (audit != null) {
+            audit.record(AuditService.DELETE, AuditService.CLIENT_POLICY, a.getId(),
+                    a.getTenantCode() + "/scan-agent/" + a.getAgentId(), null,
+                    "Scanner revoked.");
+        }
         return true;
     }
 

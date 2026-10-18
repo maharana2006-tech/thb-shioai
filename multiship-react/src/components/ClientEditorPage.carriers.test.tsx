@@ -2,11 +2,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { Provider } from 'react-redux'
-import { combineReducers, configureStore } from '@reduxjs/toolkit'
 import type { ComponentType } from 'react'
-import carrierReducer from '../store/carrierSlice'
-import orderReducer from '../store/orderSlice'
 
 /**
  * Sprint 52 wizard-tests — Carriers step (create + edit mode).
@@ -157,17 +153,7 @@ async function loadPage(): Promise<ComponentType> {
 
 /** Render the page under a MemoryRouter that resolves /settings/clients/:clientCode. */
 function renderPage(Page: ComponentType, path: string) {
-  const rootReducer = combineReducers({
-    carriers: carrierReducer,
-    orders: orderReducer,
-  })
-  const store = configureStore({
-    reducer: rootReducer,
-    middleware: (getDefaultMiddleware) =>
-      getDefaultMiddleware({ serializableCheck: false }),
-  })
   return render(
-    <Provider store={store}>
       <MemoryRouter initialEntries={[path]}>
         <Routes>
           <Route path="/settings/clients/new" element={<Page />} />
@@ -175,7 +161,6 @@ function renderPage(Page: ComponentType, path: string) {
           <Route path="/settings/clients" element={<div>CLIENTS_LIST</div>} />
         </Routes>
       </MemoryRouter>
-    </Provider>,
   )
 }
 
@@ -482,19 +467,21 @@ describe('CarrierDraftStep — positive cases', () => {
 
     await user.click(screen.getByRole('button', { name: /Add carrier account/i }))
 
-    // UPS rule: maxLength 6, placeholder mentions "6-digit UPS".
+    // BUG-029 widened UPS to 6-10 chars (shipper numbers are 6-10
+    // alphanumerics, not strictly 6). maxLength is now 10.
     const acctInput = screen.getAllByRole('textbox')[0] as HTMLInputElement
-    expect(acctInput.maxLength).toBe(6)
+    expect(acctInput.maxLength).toBe(10)
     expect(acctInput.placeholder).toMatch(/UPS/i)
 
-    // Flip carrier to FEDEX → maxLength should become 12.
+    // Flip carrier to FEDEX → BUG-029 R7: maxLength is now 9 (FedEx
+    // account numbers are 9 digits).
     const carrierSelect = screen.getAllByRole('combobox').find(
       (s) => Array.from((s as HTMLSelectElement).options).some((o) => o.value === 'FEDEX'),
     ) as HTMLSelectElement
     await user.selectOptions(carrierSelect, 'FEDEX')
 
     const acctAfter = screen.getAllByRole('textbox')[0] as HTMLInputElement
-    expect(acctAfter.maxLength).toBe(12)
+    expect(acctAfter.maxLength).toBe(9)
     expect(acctAfter.placeholder).toMatch(/FedEx/i)
   })
 
@@ -896,7 +883,9 @@ describe('CarrierDraftStep — cross-cutting', () => {
     await user.selectOptions(carrierSelect, 'DHL')
 
     const acctInput = screen.getAllByRole('textbox')[0] as HTMLInputElement
-    expect(acctInput.maxLength).toBe(9)
+    // BUG-029 widened DHL to 9-12 digits (DHL account numbers vary 9-12).
+    // maxLength is now 12.
+    expect(acctInput.maxLength).toBe(12)
     expect(acctInput.placeholder).toMatch(/DHL/i)
   })
 

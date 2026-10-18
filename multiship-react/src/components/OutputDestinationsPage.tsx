@@ -1,4 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useOutletContext } from 'react-router-dom'
+import { useModalDismiss } from '../hooks/useModalDismiss'
+import type { SettingsOutletContext } from './layout/SettingsLayout'
 import { FiCheck, FiEdit2, FiPlus, FiRadio, FiSlash, FiTrash2, FiUpload, FiX } from 'react-icons/fi'
 import { notify } from '../utils/notify'
 import {
@@ -63,6 +66,12 @@ export default function OutputDestinationsPage() {
     void load()
   }, [load])
 
+  const outlet = useOutletContext<SettingsOutletContext>()
+  useEffect(() => {
+    outlet.registerRefresh(load)
+    return () => outlet.registerRefresh(null)
+  }, [outlet, load])
+
   const grouped = useMemo(() => {
     const map: Record<string, OutputDestination[]> = {}
     for (const r of rows) {
@@ -73,7 +82,13 @@ export default function OutputDestinationsPage() {
   }, [rows])
 
   const onDelete = async (row: OutputDestination) => {
-    if (!window.confirm(`Delete ${row.destinationType} destination for ${row.clientCode}?`)) return
+    // BUG-158: swap window.confirm for notify.confirm so Delete uses
+    // the same in-app dialog as Custom Fields / Code Maps / Clients.
+    const ok = await notify.confirm(
+      `Delete ${row.destinationType} destination for ${row.clientCode}? This can't be undone.`,
+      { title: 'Delete output destination', confirmLabel: 'Delete', danger: true },
+    )
+    if (!ok) return
     try {
       await outputDestinationService.delete(row.id)
       notify.success(`Destination ${row.id} deleted.`)
@@ -89,8 +104,9 @@ export default function OutputDestinationsPage() {
     // Confirm first so an admin exploring the ledger doesn't wake up a
     // Zebra at 2am.
     if (row.destinationType === 'PRINTER') {
-      const ok = window.confirm(
-        `Send a real test page to the printer at ${summariseConfig(row.destinationType, row.configSafe)}?\n\nThis will physically print a page on the device.`,
+      const ok = await notify.confirm(
+        `Send a real test page to the printer at ${summariseConfig(row.destinationType, row.configSafe)}? This will physically print a page on the device.`,
+        { title: 'Send real test page?', confirmLabel: 'Print test page', cancelLabel: 'Cancel' },
       )
       if (!ok) return
     }
@@ -130,7 +146,7 @@ export default function OutputDestinationsPage() {
         </div>
         <button
           onClick={() => setCreating(true)}
-          className="rounded-md bg-slate-900 px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-slate-700"
+          className="shrink-0 whitespace-nowrap rounded-md bg-slate-900 px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-slate-700"
         >
           <FiPlus className="mr-1 inline h-3.5 w-3.5" />
           Add destination
@@ -266,6 +282,9 @@ function DestinationEditorDialog({
   onClose: () => void
   onSaved: () => void
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const titleId = useId()
+  useModalDismiss(true, dialogRef, onClose)
   const [clientCode, setClientCode] = useState(existing?.clientCode ?? '')
   const [docType, setDocType] = useState<DocType>(existing?.docType ?? 'LABEL')
   const [destinationType, setDestinationType] = useState<DestinationType>(
@@ -379,10 +398,12 @@ function DestinationEditorDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-      <div className="w-full max-w-2xl rounded-xl border border-slate-200 bg-white p-4 shadow-xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-2xl rounded-xl border border-slate-200 bg-white p-4 shadow-xl">
         <header className="mb-3 flex items-center justify-between">
-          <h3 className="text-[15px] font-semibold text-slate-900">
+          <h3 id={titleId} className="text-[15px] font-semibold text-slate-900">
             {existing ? `Edit destination ${existing.id}` : 'New output destination'}
           </h3>
           <IconButton
@@ -412,8 +433,10 @@ function DestinationEditorDialog({
                 onChange={(e) => setDocType(e.target.value as DocType)}
                 className="mt-1 block w-full rounded-md border border-slate-300 px-2 py-1.5 text-[13px]"
               >
-                <option value="LABEL">LABEL</option>
-                <option value="COMMERCIAL_INVOICE">COMMERCIAL_INVOICE</option>
+                {/* BUG-110 R6 — show the humanised doc-type names;
+                    the wire codes are kept as the <option> values. */}
+                <option value="LABEL">Label</option>
+                <option value="COMMERCIAL_INVOICE">Commercial invoice</option>
               </select>
             </label>
             <label className="block text-[12.5px] font-semibold text-slate-700">
@@ -423,7 +446,8 @@ function DestinationEditorDialog({
                 onChange={(e) => setDestinationType(e.target.value as DestinationType)}
                 className="mt-1 block w-full rounded-md border border-slate-300 px-2 py-1.5 text-[13px]"
               >
-                <option value="LOCAL_FS">LOCAL_FS</option>
+                {/* BUG-110 R6 — humanised destination-type names. */}
+                <option value="LOCAL_FS">Local folder</option>
                 <option value="SFTP">SFTP</option>
                 {/* Only an existing printer row keeps the option, so it can be
                     switched off; new printers go to Settings → Printers. */}

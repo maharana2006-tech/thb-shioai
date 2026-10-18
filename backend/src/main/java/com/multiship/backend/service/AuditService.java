@@ -74,7 +74,14 @@ public class AuditService {
     public static final String LOGIN_FAILED = "LOGIN_FAILED";
 
     private final AuditLogRepository repo;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    // JavaTimeModule registered here (vs the Spring-managed @Autowired bean)
+    // because this field is initialised at class-load. Pre-fix every audit of
+    // an entity carrying a LocalDateTime (createdAt/updatedAt — ClientDTO,
+    // CarrierAccountRefDTO, WarehouseDTO...) WARN'd "Java 8 date/time type
+    // not supported by default" and the audit_log row shipped with an empty
+    // 'changes' column. Dev backend log 2026-10-12 shows ~4+ hits in 1h.
+    private final ObjectMapper objectMapper = new ObjectMapper()
+            .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
 
     /** For the REQUIRES_NEW event writes — optional so plain unit tests
      *  (no Spring tx infrastructure) fall back to a direct save. */
@@ -114,7 +121,15 @@ public class AuditService {
                 .notes(truncate(notes, 500))
                 .clientCode(currentClientCode())
                 .build();
-        return repo.save(row);
+        AuditLog saved = repo.save(row);
+        // BUG-128 R7 — tester reports settings-write audit rows aren't
+        // surfacing in /audit-log. Log at INFO so operators can confirm
+        // whether record() even fires for the write they tested; the row
+        // id makes it trivial to go find the ambient-tx rollback (if any)
+        // in the DB. Volume is bounded by write-throughput; INFO is cheap.
+        log.info("audit.record id={} action={} entity={} actor={} client={}",
+                saved.getId(), action, entityType, saved.getActor(), saved.getClientCode());
+        return saved;
     }
 
     /** Same as {@link #record(String, String, Object, String, Object, String)}

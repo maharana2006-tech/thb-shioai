@@ -326,7 +326,15 @@ export const accountRefService = {
     // and hits the backend directly for the 302 redirect chain.
     const base = (import.meta.env?.VITE_API_BASE_URL as string | undefined)
       ?? `${window.location.protocol}//${window.location.hostname}:8080/api/v1`
+    // returnTo: after Stamps.com, the backend sends the browser back to this
+    // screen's origin (it only accepts the app's own origins).
     return `${base.replace(/\/$/, '')}/carrier-accounts/stamps-sera/authorize/${accountId}`
+      + `?returnTo=${encodeURIComponent(window.location.origin)}`
+  },
+
+  /** Forget the account's Stamps.com authorization (it must be authorized again to ship). */
+  disconnectStampsSera: (accountId: number) => {
+    return apiClient.delete<void>(`/carrier-accounts/stamps-sera/authorize/${accountId}`)
   },
 
   /** Poll whether the given SERA account has completed the authorize flow. */

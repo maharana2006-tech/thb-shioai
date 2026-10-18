@@ -118,7 +118,12 @@ const canon = (c?: string | null) => {
 // hardcode (SALE|GIFT|SAMPLE|RETURN|REPAIR|PERSONAL) sent invalid
 // enum values (REPAIR / PERSONAL not accepted; DOCUMENTS /
 // MERCHANDISE / REPAIR_AND_RETURN / PERSONAL_USE missing).
-const CURRENCIES = ['USD', 'EUR', 'GBP', 'CAD', 'INR', 'AUD', 'SGD', 'JPY', 'CNY', 'AED']
+// BUG-125 — shared with CustomsProfileModal + ClientMarkup/IdentityStep so
+// the three pickers offer the same 15 currencies. Previous page-local
+// 10-currency list left MXN/NZD/HKD/BRL/CHF choosable on the client
+// profile but not on the order form.
+import { CURRENCY_ALLOWLIST } from '../utils/money'
+const CURRENCIES = CURRENCY_ALLOWLIST
 
 /** Persist the last-used value for a field so it prefills next time (sticky default). */
 const readSticky = (key: string, fallback: string) => {
@@ -404,6 +409,19 @@ export default function NewShipmentPage() {
       !a.name && !a.addressLine1 && !a.city && !a.postalCode
     if (isReturn) {
       setRecipient((cur) => (untouched(cur) ? filled : cur))
+      // BUG-136 R6: Return mode's "Return from · customer" sender block
+      // used to inherit the warehouse address from an earlier SHIPMENT
+      // paint — operator saw the client's own warehouse as the return
+      // origin, which is never right (the customer is the shipper on a
+      // return). Clear the sender when it still holds the exact warehouse
+      // address so the operator fills in the customer's address instead;
+      // leave anything the operator has already typed alone.
+      setSender((cur) =>
+        cur.name === filled.name
+          && cur.addressLine1 === filled.addressLine1
+          && cur.postalCode === filled.postalCode
+          ? blankAddress() : cur,
+      )
     } else {
       setSender((cur) => (untouched(cur) ? filled : cur))
     }
@@ -769,6 +787,14 @@ export default function NewShipmentPage() {
   // `{ ...cur, ...filledFields }` — swap `cur` on the first spread.
   useEffect(() => {
     if (!warehouseCode) return
+    // BUG-011 — in return mode sender is the CUSTOMER (Return from),
+    // not the merchant warehouse. Painting the client's warehouse
+    // address onto sender on return mode caused the customer block to
+    // show '8191 Logistics Dr' (merchant address) with only name blank;
+    // operator who didn't notice could cut a label from the merchant's
+    // own address. Merchant side ('Return to · your address' =
+    // recipient) is filled by applyClient from client.returnAddress.
+    if (isReturn) return
     const cw = clientWarehouses.find((w) => w.warehouse?.code === warehouseCode)
     const a = cw?.warehouse?.address
     if (!a) return
@@ -790,7 +816,7 @@ export default function NewShipmentPage() {
         ...(a.phone ? { phone: a.phone } : {}),
       }
     })
-  }, [warehouseCode, clientWarehouses])
+  }, [warehouseCode, clientWarehouses, isReturn])
 
   // Route: does this shipment cross a customs border? Drives which services/packages apply.
   const EU = new Set([
@@ -1102,15 +1128,20 @@ export default function NewShipmentPage() {
     })
     setPackageChoice((cur) => {
       if (cur === CUSTOM_PKG || packagesForCarrier.some((p) => String(p.id) === cur)) return cur
-      if (
-        defaultPackagePresetId != null
-        && packagesForCarrier.some((p) => p.id === defaultPackagePresetId)
-      ) {
-        return String(defaultPackagePresetId)
+      // BUG-150 R7 — carrier switch was silently clearing a packaging
+      // preset the operator had picked (e.g. UPS Letter → FedEx 2Day,
+      // where UPS Letter has no FedEx equivalent). Surface the swap in
+      // a toast so they know their choice changed under them.
+      const prior = packages.find((p) => String(p.id) === cur)
+      const next = (defaultPackagePresetId != null
+        && packagesForCarrier.some((p) => p.id === defaultPackagePresetId))
+        ? packagesForCarrier.find((p) => p.id === defaultPackagePresetId)
+        : packagesForCarrier[0]
+      if (prior && cur && cur !== CUSTOM_PKG) {
+        const nextLabel = next?.name ?? 'Your own box'
+        notify.info(`Packaging "${prior.name}" isn't available on ${carrier}; switched to "${nextLabel}".`)
       }
-      return packagesForCarrier[0]?.id != null
-        ? String(packagesForCarrier[0]?.id)
-        : CUSTOM_PKG
+      return next?.id != null ? String(next.id) : CUSTOM_PKG
     })
     // Re-validate account/service/package whenever the carrier, client, or route changes.
   }, [carrier, clientCode, accountsForCarrier, servicesForCarrier, packagesForCarrier, defaultServiceId, defaultPackagePresetId])
@@ -1303,14 +1334,42 @@ export default function NewShipmentPage() {
     // operator already picked instead of silently blanking it.
     setLabelImageType((cur) => matchedAccount?.labelImageType ?? cur)
     setLabelStockType((cur) => matchedAccount?.labelStockType ?? cur)
+    // BUG-020 — handled in a separate effect below; this account-switch
+    // path keeps the saved stock type verbatim so the operator's account
+    // defaults aren't overwritten here.
     setLabelImageFormat((cur) => matchedAccount?.labelImageFormat ?? cur)
     setPickupType(matchedAccount?.pickupType ?? 'USE_SCHEDULED_PICKUP')
-    setReasonForExport(matchedAccount?.shippingPurpose ?? '')
+    // BUG-143 — reason of export used to reset to the saved account
+    // default on every carrier switch, silently discarding the
+    // operator's picked value. 'Sale' flipped to 'Sample' across a
+    // USPS → FedEx switch, so a sale shipment went out on the commercial
+    // invoice declared as a sample. Only auto-fill when the field is
+    // empty — once the operator has picked a reason, keep it.
+    // BUG-002 — dropped the `matchedAccount?.shippingPurpose` fallback.
+    // Account defaults to 'Sample' silently classified commercial sales
+    // as samples on customs. Keep user-set value (sticky across carrier
+    // swaps per BUG-143); otherwise blank → force-pick guard fires.
+    setReasonForExport((cur) => cur || '')
     const saved = matchedAccount?.clearanceOption
     const allowed = clearanceOptionsForCarrier(canon(carrier))
     setClearanceOption(saved && allowed.some((o) => o.value === saved) ? saved : '')
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [matchedAccount, carrier])
+
+  // BUG-020 — Label size should track Label type for FedEx: switching
+  // to PDF/PNG implies paper stock, switching back to ZPLII implies
+  // thermal stock. Only auto-flip when the current value is in the
+  // other family so the operator's custom pick isn't blown away.
+  useEffect(() => {
+    const type = (labelImageType ?? '').toUpperCase()
+    const stock = (labelStockType ?? '').toUpperCase()
+    if ((type === 'PDF' || type === 'PNG') && stock.startsWith('STOCK_')) {
+      setLabelStockType('PAPER_4X6')
+    } else if (type === 'ZPLII' && stock.startsWith('PAPER_')) {
+      setLabelStockType('STOCK_4X6')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only fires on labelImageType change; reading stock here would re-trigger ourselves
+  }, [labelImageType])
 
   /**
    * Which label fields are required-but-blank for the currently-picked
@@ -1355,6 +1414,17 @@ export default function NewShipmentPage() {
         && Number(declaredValue || 0) >= EEI_THRESHOLD_USD
         && !ftrExemption && !aesCitation) {
       missing.push(`FTR exemption or AES ITN (required at ≥ $${EEI_THRESHOLD_USD.toLocaleString()})`)
+    }
+    // BUG-072 — US → Canada under $2,500 still needs ONE of {FTR
+    // exemption, AES ITN}. Pre-fix the exemption picker defaulted to
+    // 'None (using AES)' but no AES ITN was typed, so Customs passed
+    // locally and FedEx rejected ('FTR Exemption or AES Citation ...
+    // not valid for EEI'). Require a pick when both are empty.
+    if (isInternational
+        && originIsUs
+        && destCcNorm === 'CA'
+        && !ftrExemption && !aesCitation) {
+      missing.push('FTR exemption (pick NOEEI 30.36 for Canada) or AES ITN')
     }
     // Incoterms same pattern as Reason of export — prefill from
     // ClientCustomsProfile via importerProfile; NULL profile / value
@@ -2087,6 +2157,19 @@ export default function NewShipmentPage() {
       scrollToFirstError()
       return
     }
+    // BUG-053 — the single-piece-too-many-boxes gate used to live AFTER
+    // the formik.validateForm call. In a state where the form is red-
+    // field-free but the box count exceeds the packaging cap, validate
+    // ran to the carrier and returned mid-shaped results (or silently
+    // did nothing when a formik check fired for an unrelated field).
+    // Check it first so the operator always sees the actual reason.
+    if (singlePieceOnlyWarning) {
+      setSubmitAttempted(true)
+      setShipmentValidationResult(null)
+      setChecklistOpen(false)
+      showToast(singlePieceOnlyWarning, 'Too many boxes for this packaging')
+      return
+    }
     // The same form rules Generate label enforces (lengths, phone digits,
     // HS format, insured ≤ declared…) — highlighted in red, as on Generate.
     // Busy from the click on: the form check itself takes a moment, and a click
@@ -2422,7 +2505,9 @@ export default function NewShipmentPage() {
     requestAnimationFrame(() => document.querySelector('[data-items-scroll]')?.scrollTo({ top: 0 }))
   }
   const addItem = () => {
-    setItems((rows) => [blankItem(), ...rows])
+    // BUG-013: append to end, not prepend — the operator sees the new
+    // blank row below their last filled row and keeps typing downward.
+    setItems((rows) => [...rows, blankItem()])
     // New rows are prepended; the virtualised list only paints the rows in
     // its window, so scroll to the top or the new row is invisible and the
     // click looks ignored (the stress test read that as a 16-row cap).
@@ -2725,6 +2810,12 @@ export default function NewShipmentPage() {
       ...(insuredValue && Number(insuredValue) > 0
         ? { insuredValue: Number(insuredValue), insuredValueCurrency: currency }
         : {}),
+      // R2-BUG-008 — thread filled custom-field values into the generate
+      // payload so BE validate + Generate's required-field guard see them.
+      // Pre-fix these were persisted only via a post-generate upsert, so
+      // the BE never knew whether a 'required on new shipments' field was
+      // filled or empty before buying the label.
+      ...(Object.keys(customFieldValues).length > 0 ? { customFields: customFieldValues } : {}),
       // FDX-H3 — per-shipment FedEx labelSpecification override. Blank →
       // omit so the backend falls back to the account default (which
       // itself falls back to PDF/PAPER_4X6). Only meaningful for FEDEX.
@@ -2889,6 +2980,18 @@ export default function NewShipmentPage() {
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
   }, [formHasWork, submitting])
+
+  // BUG-014: the sticky Validate/Generate footer is ~96 px above the viewport
+  // bottom; the default toast position (bottom-4 = 1rem) sits directly over
+  // the buttons. Lift the toast stack above the footer while this page is
+  // mounted and restore on unmount so other pages keep the default.
+  useEffect(() => {
+    document.documentElement.style.setProperty('--toast-bottom', '7rem')
+    return () => {
+      document.documentElement.style.removeProperty('--toast-bottom')
+    }
+  }, [])
+
   const leaveForm = async () => {
     if (formHasWork && !(await notify.confirm(
       "This shipment hasn't been created yet. Leave and lose what you've entered?",
@@ -2947,6 +3050,18 @@ export default function NewShipmentPage() {
       return
     }
 
+    // BUG-067 — Returns Analytics was 100% "Unknown" because the reason
+    // picker was optional and operators left it blank. Make it required
+    // when isReturn so every new return rolls up into a real bucket.
+    // The picker options match CarrierServiceImpl.RETURN_REASON_CODES.
+    if (isReturn && !returnReason) {
+      showToast(
+        'Pick a return reason — it drives the Returns Analytics breakdown. '
+          + 'Options: Wrong item, Defective, No longer needed, Size, Other.',
+        'Return reason required',
+      )
+      return
+    }
     // Packaging ↔ service compatibility gate (carrier would otherwise 400).
     if (pkgServiceWarning) {
       showToast(pkgServiceWarning, 'Incompatible package + service')
@@ -3330,6 +3445,35 @@ export default function NewShipmentPage() {
                         type="number"
                         value={originalOrderNo}
                         onChange={(e) => setOriginalOrderNo(e.target.value)}
+                        // R2-BUG-017 — fetch the original order on blur and
+                        // backfill the customer block (sender in return mode)
+                        // from its recipient. Operator typed the number; we
+                        // save them the retype.
+                        onBlur={async (e) => {
+                          const v = e.target.value.trim()
+                          if (!v || !Number.isFinite(Number(v))) return
+                          try {
+                            const res = await orderService.getOrderWithLines(Number(v))
+                            const o = res.data?.order
+                            if (!o) return
+                            setSender((cur) => ({
+                              ...cur,
+                              name:         o.shipName ?? cur.name,
+                              company:      o.shipAttn ?? cur.company,
+                              addressLine1: o.shipAddr1 ?? cur.addressLine1,
+                              addressLine2: o.shipAddr2 ?? cur.addressLine2,
+                              city:         o.shiptoCity ?? cur.city,
+                              state:        o.shiptoState ?? cur.state,
+                              postalCode:   o.shiptoZip ?? cur.postalCode,
+                              countryCode:  o.shiptoCountryCd ?? cur.countryCode,
+                              phone:        o.phone ?? cur.phone,
+                            }))
+                          } catch {
+                            // 404 or network: silently leave fields empty for
+                            // the operator to type. No toast — a stale typed
+                            // digit shouldn't bark.
+                          }
+                        }}
                         placeholder="optional"
                         min={1}
                         className="w-24 border-0 bg-transparent p-0 text-[11.5px] font-semibold text-[#1f150c] placeholder:font-normal placeholder:text-[#a08f6c] focus:outline-none focus:ring-0"
@@ -3337,8 +3481,17 @@ export default function NewShipmentPage() {
                     </label>
                     {/* Returns F11 — canonical reason picklist. Codes must
                         match CarrierServiceImpl.RETURN_REASON_CODES. */}
-                    <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11.5px] font-semibold text-[#5a4526] shadow-sm">
-                      <span className="whitespace-nowrap">Reason</span>
+                    {/* BUG-067 — reason is required on return submit now
+                        (handleGenerateLabel guards). Flag the asterisk
+                        + an inline red note when the submit guard would
+                        fire, matching the pattern on other required
+                        fields across the form. */}
+                    <label className={`inline-flex cursor-pointer items-center gap-1.5 rounded-xl border bg-white px-2.5 py-1 text-[11.5px] font-semibold shadow-sm ${
+                      submitAttempted && !returnReason
+                        ? 'border-rose-300 text-rose-800'
+                        : 'border-[#e3d9c4] text-[#5a4526]'
+                    }`}>
+                      <span className="whitespace-nowrap">Reason<span className="text-rose-600">*</span></span>
                       <select
                         value={returnReason}
                         onChange={(e) => setReturnReason(e.target.value)}
@@ -3613,10 +3766,14 @@ export default function NewShipmentPage() {
                     </select>
                   </Field>
                 ) : null}
-                {/* US Export EEI — FTR §30.37 exemption OR AES ITN. Only on
-                    US-origin exports to non-Canada destinations (Canada
-                    uses §30.36 which is bilateral / auto-applied by
-                    carriers). Empty on shipments where the rule doesn't
+                {/* US Export EEI — FTR §30.37 exemption OR AES ITN. Shown
+                    for ALL US-origin international exports including Canada
+                    (BUG-005: FedEx explicitly requires FTR Exemption /
+                    AES ITN on CA when Export declaration ref is empty;
+                    the §30.36 bilateral is NOT auto-applied by every
+                    carrier). FTR_EXEMPTIONS already carries NO_EEI_30_36
+                    "export to Canada" so the operator picks it. Empty on
+                    shipments where the rule doesn't
                     apply keeps the form terse. Mutually-exclusive picker:
                     filling one disables the other so the wire payload can
                     never carry both.
@@ -3631,7 +3788,7 @@ export default function NewShipmentPage() {
                     the $2,500 mark. */}
                 {isInternational
                     && (sender.countryCode ?? '').trim().toUpperCase() === 'US'
-                    && !['CA', 'US', ''].includes(recipientEffectiveCountry) ? (
+                    && !['US', ''].includes(recipientEffectiveCountry) ? (
                   <>
                     <Field label="FTR exemption"
                            error={submitAttempted
@@ -3706,11 +3863,19 @@ export default function NewShipmentPage() {
                               value={labelImageType}
                               onChange={(e) => setLabelImageType(e.target.value)}>
                         <option value="">-- Select --</option>
-                        <option value="PDF">PDF (vector, sharp)</option>
-                        <option value="PNG">PNG (raster)</option>
-                        <option value="ZPLII">ZPLII (Zebra)</option>
-                        <option value="EPL2">EPL2 (Eltron/legacy Zebra)</option>
-                        <option value="DPL">DPL (Datamax)</option>
+                        {/* BUG-057 R6 — the FEDEX branch previously
+                            hardcoded five options with its own wording.
+                            The order form's vocabulary must come from
+                            Settings > Carrier Dropdowns (same DB registry
+                            UPS/DHL/USPS already read), so renaming a
+                            FEDEX row there or adding/removing a code
+                            flows through here without a code change.
+                            Bootstrap fallback (LABEL_FORMAT_BY_CARRIER)
+                            kicks in only when the DB is empty — a
+                            first-boot cushion, not a parallel source. */}
+                        {labelFormatsForCarrier('FEDEX').map((opt) => (
+                          <option key={opt.value} value={opt.value}>{opt.label}</option>
+                        ))}
                       </select>
                     </Field>
                     <Field label="Label Size" required
@@ -4565,7 +4730,31 @@ export default function NewShipmentPage() {
                           : 200
                         const n = Math.max(1, Math.min(200, Math.min(roomLeft, Number(bulkAddCount) || 1)))
                         const last = extraPackages[extraPackages.length - 1]
-                        const t: ExtraPackage = last && last.weight ? { ...last } : { ...blankExtraPackage(), weight, length, width, height }
+                        // BUG-006: when no previous extra and a CARRIER
+                        // preset is active, top-level length/width/height are
+                        // blank (isCustomPkg=false). Read effective dims from
+                        // the selected preset so each cloned box carries the
+                        // preset's L/W/H instead of empty strings.
+                        const preset = isCustomPkg
+                          ? null
+                          : packagesForCarrier.find((p) => String(p.id) === packageChoice)
+                        const effLength = isCustomPkg
+                          ? length
+                          : (preset?.length != null ? String(preset.length) : '')
+                        const effWidth = isCustomPkg
+                          ? width
+                          : (preset?.width != null ? String(preset.width) : '')
+                        const effHeight = isCustomPkg
+                          ? height
+                          : (preset?.height != null ? String(preset.height) : '')
+                        const effPackageType = isCustomPkg
+                          ? ''
+                          : (preset?.carrierPackageCode || '')
+                        const t: ExtraPackage = last && last.weight
+                          ? { ...last }
+                          : { ...blankExtraPackage(), weight,
+                              length: effLength, width: effWidth, height: effHeight,
+                              packageType: effPackageType }
                         setExtraPackages((cur) => [...cur, ...Array.from({ length: n }, () => ({ ...t }))])
                       }}
                       className="rounded px-1 hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:hover:bg-transparent"
@@ -4640,9 +4829,17 @@ export default function NewShipmentPage() {
                       <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-amber-700">
                         Overridden · this shipment
                       </span>
-                    ) : (
+                    ) : activeParties ? (
+                      // BUG-010: only show the "Resolved" badge when a profile
+                      // actually covers destCountry. Pre-fix the badge rendered
+                      // next to the "No importer/broker profile covers MX"
+                      // warning, which was contradictory.
                       <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-sky-700">
                         Resolved for {destCountry || '—'}
+                      </span>
+                    ) : (
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-slate-600">
+                        Not configured
                       </span>
                     )}
                     <button
@@ -4839,6 +5036,7 @@ export default function NewShipmentPage() {
                     weightUnit={weightUnit}
                     autoItemWeight={autoItemWeight}
                     hsPlaceholder={hsExampleFor(destCountry)}
+                    destCountry={destCountry}
                   />
 
                   {/* invoice total */}
@@ -5045,6 +5243,18 @@ export default function NewShipmentPage() {
           importer={editorSeed.importer}
           broker={editorSeed.broker}
           destCountry={destCountry}
+          // BUG-021 — pass the ship-to so Type=Receiver can autofill.
+          recipient={{
+            name: recipient.name ?? '',
+            phone: recipient.phone ?? '',
+            email: recipient.email ?? '',
+            addressLine1: recipient.addressLine1 ?? '',
+            addressLine2: recipient.addressLine2 ?? '',
+            city: recipient.city ?? '',
+            state: recipient.state ?? '',
+            postalCode: recipient.postalCode ?? '',
+            countryCode: recipient.countryCode ?? '',
+          }}
           onClose={() => setOverrideEditorOpen(false)}
           onSave={(importer, broker) => {
             setOverride({ importer, broker })
@@ -5148,6 +5358,7 @@ export function VirtualizedNewShipmentItems({
   weightUnit,
   autoItemWeight,
   hsPlaceholder,
+  destCountry,
 }: {
   items: NewShipmentItemRow[]
   patchItem: (i: number, patch: Partial<NewShipmentItemRow>) => void
@@ -5163,6 +5374,8 @@ export function VirtualizedNewShipmentItems({
   autoItemWeight: (it: NewShipmentItemRow) => number
   /** Destination-aware HS example (hsExampleFor) for the code placeholder. */
   hsPlaceholder?: string
+  /** BUG-011 — forwarded to each row's HsCodeCombobox for min-digit padding. */
+  destCountry?: string
 }) {
   const parentRef = useRef<HTMLDivElement>(null)
   // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Virtual's useVirtualizer() returns functions that cannot be memoized safely — library-level incompatibility with react-hooks analyzer, not a code issue
@@ -5212,6 +5425,7 @@ export function VirtualizedNewShipmentItems({
               weightUnit={weightUnit}
               autoItemWeight={autoItemWeight}
               hsPlaceholder={hsPlaceholder}
+              destCountry={destCountry}
             />
           </div>
         ))}
@@ -5233,6 +5447,7 @@ const NewShipmentItemsRow = memo(function NewShipmentItemsRow({
   weightUnit,
   autoItemWeight,
   hsPlaceholder,
+  destCountry,
 }: {
   index: number
   it: NewShipmentItemRow
@@ -5247,6 +5462,8 @@ const NewShipmentItemsRow = memo(function NewShipmentItemsRow({
   /** Destination-aware HS example (from hsExampleFor) so the placeholder
    *  never suggests a code the country-minimum rule would reject. */
   hsPlaceholder?: string
+  /** BUG-011 — passed through to HsCodeCombobox for min-digit padding. */
+  destCountry?: string
 }) {
   const patch = useCallback((delta: Partial<NewShipmentItemRow>) => patchItem(index, delta), [patchItem, index])
   const remove = useCallback(() => removeItem(index), [removeItem, index])
@@ -5264,6 +5481,7 @@ const NewShipmentItemsRow = memo(function NewShipmentItemsRow({
         <HsCodeCombobox
           value={it.hsCode}
           placeholder={hsPlaceholder}
+          destCountry={destCountry}
           onChange={(v) => patch({ hsCode: v })}
           onDescriptionSuggest={(desc) => {
             if (!it.description || !it.description.trim()) patch({ description: desc })

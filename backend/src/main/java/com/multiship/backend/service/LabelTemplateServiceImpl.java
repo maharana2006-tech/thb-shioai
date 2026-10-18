@@ -26,6 +26,13 @@ public class LabelTemplateServiceImpl implements LabelTemplateService {
     @Autowired(required = false)
     private TenantScopeEnforcer tenantScope;
 
+    // BUG-128: audit every create/update/delete so Logs > Entity type
+    // LABEL_TEMPLATE actually turns up. @Autowired(required=false) so
+    // pure-Mockito tests that construct the service by hand still
+    // compile without wiring a mock.
+    @Autowired(required = false)
+    private AuditService audit;
+
     @Autowired
     public LabelTemplateServiceImpl(LabelTemplateRepository repo) {
         this.repo = repo;
@@ -75,6 +82,51 @@ public class LabelTemplateServiceImpl implements LabelTemplateService {
         return tenantScope == null ? tenantId : tenantScope.clampClientCode(tenantId);
     }
 
+    /**
+     * BUG-107 R7 — belt on the client-side magic-byte check in
+     * LabelTemplateEditorPage.handleLogo. A direct POST (curl, bulk
+     * import, future endpoint) bypasses the browser filter, so re-check
+     * the first bytes here. Logo renders into generated commercial
+     * invoices — an SVG with embedded JS = stored-XSS in any browser
+     * that opens the invoice PDF via a viewer that executes SVG.
+     *
+     * Accepts: data:image/png;base64,… + PNG magic (89 50 4E 47)
+     *          data:image/jpeg;base64,… + JPEG SOI (FF D8 FF)
+     * Blank / null is OK — logo is optional.
+     */
+    private static void validateLogoBytes(String dataUrl) {
+        if (dataUrl == null || dataUrl.isBlank()) return;
+        boolean png = dataUrl.startsWith("data:image/png;base64,");
+        boolean jpg = dataUrl.startsWith("data:image/jpeg;base64,");
+        if (!png && !jpg) {
+            throw new IllegalArgumentException(
+                "logo must be PNG or JPEG (received a different data URL)");
+        }
+        String b64 = dataUrl.substring(dataUrl.indexOf(',') + 1);
+        if (b64.length() < 8) {
+            throw new IllegalArgumentException("logo payload too short to classify");
+        }
+        byte[] head;
+        try {
+            head = java.util.Base64.getDecoder().decode(b64.substring(0, 8));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("logo base64 is not valid");
+        }
+        if (png) {
+            boolean okPng = head.length >= 4
+                    && (head[0] & 0xFF) == 0x89 && (head[1] & 0xFF) == 0x50
+                    && (head[2] & 0xFF) == 0x4E && (head[3] & 0xFF) == 0x47;
+            if (!okPng) throw new IllegalArgumentException(
+                    "logo claims PNG MIME but bytes aren't PNG — refusing to save");
+        } else {
+            boolean okJpg = head.length >= 3
+                    && (head[0] & 0xFF) == 0xFF && (head[1] & 0xFF) == 0xD8
+                    && (head[2] & 0xFF) == 0xFF;
+            if (!okJpg) throw new IllegalArgumentException(
+                    "logo claims JPEG MIME but bytes aren't JPEG — refusing to save");
+        }
+    }
+
     @Override
     public LabelTemplate save(LabelTemplate template) {
         if (template.getTemplateType() == null || template.getTemplateType().isBlank()) {
@@ -83,12 +135,22 @@ public class LabelTemplateServiceImpl implements LabelTemplateService {
         if (template.getTenantId() != null && template.getTenantId().isBlank()) {
             template.setTenantId(null);
         }
+        validateLogoBytes(template.getLogoBase64());
         LocalDateTime now = LocalDateTime.now();
-        if (template.getId() == null) {
+        boolean isCreate = template.getId() == null;
+        if (isCreate) {
             template.setCreatedAt(now);
         }
         template.setUpdatedAt(now);
-        return repo.save(template);
+        LabelTemplate saved = repo.save(template);
+        if (audit != null) {
+            String key = (saved.getTenantId() == null ? "PLATFORM" : saved.getTenantId())
+                    + "/" + saved.getTemplateType();
+            audit.record(isCreate ? AuditService.CREATE : AuditService.UPDATE,
+                    AuditService.LABEL_TEMPLATE, saved.getId(), key, saved,
+                    isCreate ? "Template created." : "Template updated.");
+        }
+        return saved;
     }
 
     @Override
@@ -97,13 +159,19 @@ public class LabelTemplateServiceImpl implements LabelTemplateService {
         // the row's tenantId matches the caller's scope, then delete. Mirrors
         // the findById belt from PR F. Platform-owned templates (tenantId ==
         // null) stay operator-only via the existing controller SpEL.
+        Optional<LabelTemplate> existing = repo.findById(id);
         if (tenantScope != null) {
-            repo.findById(id)
-                    .map(LabelTemplate::getTenantId)
+            existing.map(LabelTemplate::getTenantId)
                     .filter(t -> t != null && !t.isBlank())
                     .ifPresent(tenantScope::requireTenantMatch);
         }
         repo.deleteById(id);
+        if (audit != null && existing.isPresent()) {
+            LabelTemplate row = existing.get();
+            String key = (row.getTenantId() == null ? "PLATFORM" : row.getTenantId())
+                    + "/" + row.getTemplateType();
+            audit.record(AuditService.DELETE, AuditService.LABEL_TEMPLATE, id, key, null, "Template deleted.");
+        }
     }
 
     @Override

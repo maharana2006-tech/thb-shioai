@@ -8,12 +8,19 @@ import { useOutletContext } from 'react-router-dom'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import { notify } from '../utils/notify'
 import { refdataService, type IsoCurrencyRow } from '../api/refdataService'
+import TablePagination from './workspace/TablePagination'
 
 export default function CurrenciesPage() {
   const outlet = useOutletContext<SettingsOutletContext>()
 
   const [rows, setRows] = useState<IsoCurrencyRow[]>([])
   const [loading, setLoading] = useState(true)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(25)
+
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize))
+  const safePage = Math.min(page, totalPages)
+  const pagedRows = rows.slice((safePage - 1) * pageSize, safePage * pageSize)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -29,31 +36,45 @@ export default function CurrenciesPage() {
   }, [outlet, load])
 
   return (
-    <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
-      {loading ? (
-        <div className="px-4 py-6 text-center text-[13px] text-slate-500">Loading…</div>
-      ) : rows.length === 0 ? (
-        <div className="px-4 py-6 text-center text-[13px] text-slate-500">
-          No currencies seeded. V117 seeds 10 codes (USD/EUR/GBP/CAD/INR/AUD/SGD/JPY/CNY/AED).
-        </div>
-      ) : (
-        <table className="w-full text-[13px]">
-          <thead>
-            <tr className="text-left text-slate-500">
-              <th className="px-3 py-2 font-semibold">Code</th>
-              <th className="px-3 py-2 font-semibold">Name</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={row.code} className="border-t border-slate-100">
-                <td className="px-3 py-2 font-mono text-[12px] text-slate-700">{row.code}</td>
-                <td className="px-3 py-2 text-slate-700">{row.name ?? '—'}</td>
+    <>
+      <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
+        {loading ? (
+          <div className="px-4 py-6 text-center text-[13px] text-slate-500">Loading…</div>
+        ) : rows.length === 0 ? (
+          <div className="px-4 py-6 text-center text-[13px] text-slate-500">
+            No currencies seeded. V117 seeds 10 codes (USD/EUR/GBP/CAD/INR/AUD/SGD/JPY/CNY/AED).
+          </div>
+        ) : (
+          <table className="w-full text-[13px]">
+            <thead>
+              <tr className="text-left text-slate-500">
+                <th className="px-3 py-2 font-semibold">Code</th>
+                <th className="px-3 py-2 font-semibold">Name</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </section>
+            </thead>
+            <tbody>
+              {pagedRows.map((row) => (
+                <tr key={row.code} className="border-t border-slate-100">
+                  <td className="px-3 py-2 font-mono text-[12px] text-slate-700">{row.code}</td>
+                  <td className="px-3 py-2 text-slate-700">{row.name ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+      {rows.length > pageSize ? (
+        <TablePagination
+          page={safePage}
+          pageSize={pageSize}
+          totalPages={totalPages}
+          onPageChange={setPage}
+          onPageSizeChange={(size) => {
+            setPageSize(size)
+            setPage(1)
+          }}
+        />
+      ) : null}
+    </>
   )
 }

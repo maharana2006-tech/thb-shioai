@@ -15,6 +15,7 @@ import {
   type NotificationTemplatePreviewResponse,
 } from '../api/notificationTemplateService'
 import Modal, { ModalActions } from './common/Modal'
+import { formatDateTime } from '../utils/formatDateTime'
 
 /** Reasonable starter var-maps per key so operators aren't hunting for
  *  variable names on first open. New template keys default to `{}`. */
@@ -250,7 +251,7 @@ export default function NotificationTemplatesPage() {
                 </div>
                 {draft.updatedAt && (
                   <div className="text-[11px] text-slate-500">
-                    Updated {new Date(draft.updatedAt).toLocaleString()}
+                    Updated {formatDateTime(draft.updatedAt)}
                     {draft.updatedBy ? ` by ${draft.updatedBy}` : ''}
                   </div>
                 )}

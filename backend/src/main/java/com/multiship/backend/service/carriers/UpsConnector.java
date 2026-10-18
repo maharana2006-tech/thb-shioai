@@ -1644,7 +1644,7 @@ public class UpsConnector implements CarrierConnector {
     private static java.math.BigDecimal zero() { return java.math.BigDecimal.ZERO; }
 
     /**
-     * UPS Pickup Creation — {@code POST /api/shipments/v1/pickup} with a
+     * UPS Pickup Creation — {@code POST /api/pickupcreation/v1/pickup} with a
      * Bearer token. Body carries the origin address, pickup date + window,
      * per-service piece counts, and the shipper account number for
      * billing. Response includes a PRN (Pickup Request Number) that
@@ -1710,15 +1710,23 @@ public class UpsConnector implements CarrierConnector {
             String baseUrl = isSandbox(environment)
                     ? carrierProperties.getUps().getSandboxUrl()
                     : carrierProperties.getUps().getApiBaseUrl();
+            // R2-BUG-002 — some UPS tenants scope pickup authorization to a
+            // specific merchant id. Pre-fix the pickup call lacked the
+            // x-merchant-id header that /ship + /rate carry (the OAuth
+            // token-request already supplies it); UPS then rejected the
+            // call with 401 code 250002 ("locked out"). Mirror the shape
+            // of other UPS endpoints so pickup picks up the same merchant
+            // scope as the token.
             String response = HttpClients.newBuilder()
                     .baseUrl(baseUrl).build()
                     .post()
-                    .uri("/api/shipments/v1/pickup")
+                    .uri("/api/pickupcreation/v1/pickup")
                     .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.APPLICATION_JSON)
                     .header("Authorization", "Bearer " + accessToken)
                     .header("transId", java.util.UUID.randomUUID().toString())
                     .header("transactionSrc", "multiship")
+                    .header("x-merchant-id", request.accountNumber().trim())
                     .body(body)
                     .retrieve()
                     .body(String.class);
@@ -1821,6 +1829,13 @@ public class UpsConnector implements CarrierConnector {
         if (StringUtils.hasText(req.specialInstructions())) {
             pcr.put("SpecialInstruction", req.specialInstructions());
         }
+        // BUG-008 — both are required by PickupCreationRequest: bill the
+        // shipper account above (01), and flag a package over 70 lb.
+        pcr.put("PaymentMethod", "01");
+        java.math.BigDecimal perPackageLb = pickupWeight == null ? java.math.BigDecimal.ZERO
+                : ("KGS".equals(weightUnitCode) ? pickupWeight.multiply(new java.math.BigDecimal("2.20462")) : pickupWeight)
+                        .divide(java.math.BigDecimal.valueOf(Math.max(1, req.packageCount())), 2, java.math.RoundingMode.HALF_UP);
+        pcr.put("OverweightIndicator", perPackageLb.compareTo(new java.math.BigDecimal("70")) > 0 ? "Y" : "N");
 
         body.put("PickupCreationRequest", pcr);
         return body;
@@ -2736,16 +2751,22 @@ public class UpsConnector implements CarrierConnector {
         // Sprint 48 B11 — resolution chain for DeclaredValue:
         //   1. per-pkg value from CI-derived context (wins when present)
         //   2. shipment-level insuredValue (legacy insurance-only orders)
-        // Note: UPS's DeclaredValue drives BOTH carriage liability and
-        // customs — same wire field. The customs invoice total lives
-        // separately under InternationalForms.InvoiceLineTotal.
+        // BUG-009 — UPS's DeclaredValue is ONE wire field that doubles as
+        // carriage liability AND the insured amount above the free tier.
+        // So when the operator sets insuredValue higher than the piece
+        // declaredValue, the carrier needs the HIGHER number to actually
+        // cover the shipment. Take the max of the two (not strict fallback).
+        // The customs invoice total lives separately under
+        // InternationalForms.InvoiceLineTotal.
         java.math.BigDecimal effectiveDeclared = null;
         String effectiveCurrency = null;
-        if (pieceDeclaredValue != null && pieceDeclaredValue.signum() > 0) {
+        boolean pieceSet = pieceDeclaredValue != null && pieceDeclaredValue.signum() > 0;
+        boolean insuredSet = request.getInsuredValue() != null && request.getInsuredValue().signum() > 0;
+        if (pieceSet && (!insuredSet || pieceDeclaredValue.compareTo(request.getInsuredValue()) >= 0)) {
             effectiveDeclared = pieceDeclaredValue;
             effectiveCurrency = firstNonBlank(currency,
                     firstNonBlank(request.getDeclaredValueCurrency(), "USD")).toUpperCase();
-        } else if (request.getInsuredValue() != null && request.getInsuredValue().signum() > 0) {
+        } else if (insuredSet) {
             effectiveDeclared = request.getInsuredValue();
             effectiveCurrency = firstNonBlank(
                     firstNonBlank(request.getInsuredValueCurrency(), request.getDeclaredValueCurrency()),

@@ -280,16 +280,20 @@ describe('SystemSettingsPage — populated state', () => {
 // ===================== Deployment prerequisite banner =====================
 
 describe('SystemSettingsPage — deployment banner', () => {
-  it('always renders the SECRETS_ENCRYPTION_KEY banner', async () => {
+  // BUG-061 R6: env-var / 32-byte internals scrubbed. Assert the
+  // operator-facing copy instead.
+  it('always renders the deployment prerequisite banner', async () => {
     listMock.mockResolvedValue([])
 
     const Page = await loadPage()
     renderPage(Page)
 
     await waitFor(() =>
-      expect(screen.getByText(/SECRETS_ENCRYPTION_KEY/i)).toBeInTheDocument(),
+      expect(screen.getByText(/Deployment prerequisite/i)).toBeInTheDocument(),
     )
-    expect(screen.getByText(/base64-encoded 32-byte/i)).toBeInTheDocument()
+    expect(
+      screen.getByText(/platform secrets key to be configured/i),
+    ).toBeInTheDocument()
   })
 })
 

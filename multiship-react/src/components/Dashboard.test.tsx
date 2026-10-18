@@ -95,9 +95,13 @@ beforeEach(() => {
   vi.clearAllMocks()
   dashboardLoad.mockResolvedValue(seed())
   mockRole = 'ADMIN'
-  vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
-    throw new Error('un-mocked fetch forbidden')
-  })
+  // Dashboard calls fetch('/actuator/health') directly for the ADMIN
+  // system-health card. React 18 crashes the whole tree if the spy
+  // throws synchronously inside a useEffect, so hand back a rejected
+  // promise instead — the component's .catch(() => {}) swallows it.
+  vi.spyOn(globalThis, 'fetch').mockImplementation(() =>
+    Promise.reject(new Error('un-mocked fetch forbidden')),
+  )
 })
 
 afterEach(() => {

@@ -93,6 +93,11 @@ export const warehouseService = {
 
   deleteWarehouse: (code: string) =>
     apiClient.delete<ApiResponse<void>>(`/warehouses/${encodeURIComponent(code)}`),
+
+  /** BUG-041 — client codes attached to this warehouse. Powers the
+   *  Attach-Clients dialog's "already attached" badge + Detach button. */
+  listAttachedClientCodes: (code: string) =>
+    apiClient.get<ApiResponse<string[]>>(`/warehouses/${encodeURIComponent(code)}/clients`),
 }
 
 export const clientWarehouseService = {

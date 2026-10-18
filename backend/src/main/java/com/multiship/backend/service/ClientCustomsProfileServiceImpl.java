@@ -28,6 +28,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static com.multiship.backend.util.CsvUtil.csvCell;
+
 @Service
 @RequiredArgsConstructor
 public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileService {
@@ -43,6 +45,10 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
      */
     @Autowired(required = false)
     private TenantScopeEnforcer tenantScope;
+
+    // BUG-128: audit every CUSTOMS_PROFILE write.
+    @Autowired(required = false)
+    private AuditService audit;
 
     @Override
     @Transactional(readOnly = true)
@@ -230,10 +236,42 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
         if (p.getBrokerName() != null) hay.append(p.getBrokerName()).append(' ');
         if (p.getBrokerCompany() != null) hay.append(p.getBrokerCompany()).append(' ');
         for (com.multiship.backend.model.CustomsProfileCountry link : p.getCountryLinks()) {
-            if (link.getCountry() != null) hay.append(link.getCountry()).append(' ');
+            if (link.getCountry() != null) {
+                hay.append(link.getCountry()).append(' ');
+                // BUG-105 — search by country NAME ('canada', 'mexico'),
+                // not just the ISO code already appended above. The box
+                // label promises 'Search client, country, importer, broker';
+                // without the full name 'canada' matched 0 profiles.
+                String fullName = COUNTRY_NAMES.get(link.getCountry().toUpperCase(Locale.ROOT));
+                if (fullName != null) hay.append(fullName).append(' ');
+            }
         }
         return hay.toString().toLowerCase(Locale.ROOT).contains(needle);
     }
+
+    /** BUG-105 — common country name map so the search finds profiles by
+     *  'canada' / 'mexico' etc. Not exhaustive — covers the lanes
+     *  Multiship actually ships to today. Expand as new lanes land. */
+    private static final Map<String, String> COUNTRY_NAMES = Map.ofEntries(
+            Map.entry("US", "United States"),
+            Map.entry("CA", "Canada"),
+            Map.entry("MX", "Mexico"),
+            Map.entry("GB", "United Kingdom"),
+            Map.entry("DE", "Germany"),
+            Map.entry("FR", "France"),
+            Map.entry("IT", "Italy"),
+            Map.entry("ES", "Spain"),
+            Map.entry("NL", "Netherlands"),
+            Map.entry("AU", "Australia"),
+            Map.entry("NZ", "New Zealand"),
+            Map.entry("JP", "Japan"),
+            Map.entry("CN", "China"),
+            Map.entry("HK", "Hong Kong"),
+            Map.entry("SG", "Singapore"),
+            Map.entry("IN", "India"),
+            Map.entry("AE", "United Arab Emirates"),
+            Map.entry("BR", "Brazil")
+    );
 
     private Comparator<ClientCustomsProfileDTO> profileComparator(String sortBy, String sortDirection) {
         Comparator<ClientCustomsProfileDTO> cmp;
@@ -263,15 +301,9 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
         return "";
     }
 
-    /** RFC-4180 CSV field: quote when the value contains ", newline, or a comma. */
-    private static String csvCell(String value) {
-        if (value == null) return "";
-        boolean needsQuote = value.indexOf(',') >= 0 || value.indexOf('"') >= 0
-                || value.indexOf('\n') >= 0 || value.indexOf('\r') >= 0;
-        if (!needsQuote) return value;
-        return '"' + value.replace("\"", "\"\"") + '"';
-    }
-
+    // CSV formula-injection (BUG-076) is handled by the shared CsvUtil.csvCell,
+    // imported statically and used by the export above. dev's R7 branch added an
+    // equivalent inline guard here; dropped in favour of the shared helper.
     @Override
     @Transactional(readOnly = true)
     public ApiResponse<List<ClientCustomsProfileDTO>> list(String clientCode) {
@@ -404,6 +436,7 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
         p.setAccountCarrier(upper(r.getAccountCarrier()));
         p.setAccountNo(trim(r.getAccountNo()));
 
+        boolean isCreate = r.getId() == null;
         try {
             // Flush now so the unique(client_code, country) constraint fires inside
             // this method — the service pre-check above gives the friendly message;
@@ -413,6 +446,13 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
             return failure(HttpStatus.CONFLICT, ErrorCode.VALIDATION_ERROR,
                     "One of those countries was just claimed by another " + code
                             + " profile. Refresh and try again.");
+        }
+        if (audit != null) {
+            audit.record(isCreate ? AuditService.CREATE : AuditService.UPDATE,
+                    AuditService.CUSTOMS_PROFILE, p.getId(),
+                    code + "/" + (p.getImporterName() == null ? "" : p.getImporterName()), p,
+                    "Importer/Broker profile saved (" + countries.size() + " destination"
+                            + (countries.size() == 1 ? "" : "s") + ").");
         }
         return success("Importer/Broker profile for " + code + " saved (" + countries.size()
                 + " destination" + (countries.size() == 1 ? "" : "s") + ").", toDTO(p));
@@ -426,9 +466,14 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
         ApiResponse<Void> guard = requireClient(code);
         if (guard != null) return guard;
 
+        boolean[] deleted = {false};
         repository.findById(id)
                 .filter(p -> p.getClientCode().equalsIgnoreCase(code))
-                .ifPresent(repository::delete);
+                .ifPresent(p -> { repository.delete(p); deleted[0] = true; });
+        if (deleted[0] && audit != null) {
+            audit.record(AuditService.DELETE, AuditService.CUSTOMS_PROFILE, id,
+                    code + "/" + id, null, "Customs profile removed.");
+        }
         return success("Customs profile removed.", null);
     }
 

@@ -64,6 +64,8 @@ export default function SettingsLayout() {
   const registerRefresh = useCallback((handler: RefreshHandler | null) => {
     setRefresh(() => handler)
   }, [])
+  // Stable context value so pages' register effects don't re-run every render.
+  const outletContext = useMemo<SettingsOutletContext>(() => ({ registerRefresh }), [registerRefresh])
 
   // Nested routes (e.g. /settings/templates/{id}) keep their parent page lit.
   const isActive = (to: string) => location.pathname === to || location.pathname.startsWith(to + '/')
@@ -220,7 +222,7 @@ export default function SettingsLayout() {
           </div>
         ) : null}
 
-        <Outlet context={{ registerRefresh } satisfies SettingsOutletContext} />
+        <Outlet context={outletContext} />
       </div>
     </div>
   )

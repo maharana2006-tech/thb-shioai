@@ -17,8 +17,8 @@ import type { ComponentType } from 'react'
  *     modal open + apiError.
  *   - Anti-fallback: per-carrier scope — sync only invokes that carrier's
  *     mock; other carrier mocks are never() called.
- *   - Role parity — action buttons render for every role (no useAppSession
- *     import on this page).
+ *   - Role gating — catalog writes (enable toggle, Allowed-packages editor)
+ *     are ADMIN-only; USER/TENANT see the controls (read) but disabled.
  */
 
 // ---------- Service mocks ----------
@@ -365,25 +365,46 @@ describe('ShippingServicesPage — allowed packages modal', () => {
   })
 })
 
-// ===================== Role parity =====================
+// ===================== Role gating (catalog writes are ADMIN-only) =====================
 
-describe('ShippingServicesPage — action buttons render for every role', () => {
-  it.each(['ADMIN', 'USER', 'TENANT'] as const)(
-    '%s can see the toggle + Allowed-packages controls (no per-row FE gate)',
+describe('ShippingServicesPage — write controls gated to ADMIN', () => {
+  async function renderWithRole(role: 'ADMIN' | 'USER' | 'TENANT') {
+    mockRole = role
+    catalogMock.mockResolvedValue(baseCatalog(
+      [svc(1, 'UPS', 'GROUND', true)],
+      [{ serviceId: 1, presetId: 100 }],
+    ))
+    listPresetsMock.mockResolvedValue([])
+    const Page = await loadPage()
+    renderPage(Page)
+    await waitFor(() => expect(screen.getByText('UPS Ground')).toBeInTheDocument())
+  }
+
+  it('ADMIN: enable toggle + Allowed-packages control are interactive', async () => {
+    await renderWithRole('ADMIN')
+    // Reads stay visible AND the write controls are enabled for admins.
+    expect(screen.getByRole('switch')).toBeEnabled()
+    expect(screen.getByTestId('pkg-count-1')).toBeEnabled()
+  })
+
+  it.each(['USER', 'TENANT'] as const)(
+    '%s: controls still visible (read) but disabled (no platform-wide writes)',
     async (role) => {
-      mockRole = role
-      catalogMock.mockResolvedValue(baseCatalog(
-        [svc(1, 'UPS', 'GROUND', true)],
-        [{ serviceId: 1, presetId: 100 }],
-      ))
-      listPresetsMock.mockResolvedValue([])
-
-      const Page = await loadPage()
-      renderPage(Page)
-
-      await waitFor(() => expect(screen.getByText('UPS Ground')).toBeInTheDocument())
+      await renderWithRole(role)
+      // The list/count stay visible so operators can still read the catalog…
       expect(screen.getByRole('switch')).toBeInTheDocument()
       expect(screen.getByTestId('pkg-count-1')).toBeInTheDocument()
+      // …but the enable toggle and packages editor are gated off.
+      expect(screen.getByRole('switch')).toBeDisabled()
+      expect(screen.getByTestId('pkg-count-1')).toBeDisabled()
     },
   )
+
+  it('USER: clicking the gated packages control does NOT open the modal', async () => {
+    await renderWithRole('USER')
+    await act(async () => { await userEvent.click(screen.getByTestId('pkg-count-1')) })
+    // Modal entry point is inert — no dialog, so the branded-packaging toggle
+    // and Save packages control are unreachable for a non-admin.
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
 })

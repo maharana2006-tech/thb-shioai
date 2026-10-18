@@ -118,6 +118,12 @@ public class ShipmentValidationService {
     private com.multiship.backend.repository.OrderRepository orderRepository;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.repository.ClientShippingPolicyRepository shippingPolicyRepository;
+    /** R2-BUG-008 — required-custom-field enforcement at the service boundary.
+     *  Autowired(required=false) so pure-Mockito ctor-arg tests keep compiling
+     *  without a repo mock; null-guarded in {@link #checkRequiredCustomFields}
+     *  so a missing bean silently skips the check (matching legacy behaviour). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.CustomFieldDefinitionRepository customFieldDefinitionRepository;
     /** Clock for the cutoff check — replaceable in tests. */
     java.time.Clock clock = java.time.Clock.systemUTC();
     @Value("${packaging.validation-enabled:true}")
@@ -155,6 +161,9 @@ public class ShipmentValidationService {
         checkRecipientRequired(to, errors, warnings);
         checkSenderRequired(from, req, errors);
         checkShipmentRequired(req, errors);
+        checkCarrierLengthLimits(req, errors); // BUG-004
+        checkRequiredCustomFields(req, clientCode, errors); // R2-BUG-008
+        checkSanctionedDestination(to, errors); // R2-BUG-011
         // Generate label rejects these with a 400 before anything else runs.
         if (beanValidator != null) {
             for (jakarta.validation.ConstraintViolation<ManualShipmentRequest> v : beanValidator.validate(req)) {
@@ -267,7 +276,7 @@ public class ShipmentValidationService {
 
         labelTimeChecks(req, service, preset, warehouseId, errors, warnings, skipped);
         checkPoBoxAndMilitary(req, service, errors);
-        checkDuplicateReference(req, warnings);
+        checkDuplicateReference(req, errors); // BUG-006 — fail, not warn
         checkCutoff(req, warnings);
         checkInsuranceCost(req, service, warnings);
 
@@ -834,6 +843,26 @@ public class ShipmentValidationService {
                             + "Re-activate it in Settings → Carrier Accounts or pick another account.",
                     "accountNumber"));
         }
+        // BUG-005 — mirror the generateManualLabel guard: a typed
+        // carrierCode that disagrees with the picked account's carrier is
+        // a FAIL, not a WARN. Pre-fix the mismatch slipped through
+        // /validate and surfaced as a 502 NOT.AUTHORIZED at /manual-label.
+        if (StringUtils.hasText(req.getCarrierCode()) && StringUtils.hasText(account.getCarrierCode())) {
+            String requested = canonicalOrRaw(req.getCarrierCode());
+            String accountCanonical = canonicalOrRaw(account.getCarrierCode());
+            if (!requested.equalsIgnoreCase(accountCanonical)) {
+                errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                        "carrierCode '" + req.getCarrierCode().trim()
+                                + "' does not match carrier account's carrier '"
+                                + account.getCarrierCode().trim() + "'.",
+                        "carrierCode"));
+            }
+        }
+    }
+
+    private static String canonicalOrRaw(String code) {
+        String c = ShippingConfigService.canonicalCarrierFor(code);
+        return StringUtils.hasText(c) ? c : code.trim().toUpperCase(Locale.ROOT);
     }
 
     // ─── Field checks (comprehensive — every missing field errors) ──────────
@@ -894,10 +923,25 @@ public class ShipmentValidationService {
         // exceptions. Downgraded to a warning because some domestic ground
         // services accept a blank phone; the label call will surface the
         // hard error if the specific service requires it.
+        // BUG-003 — if a phone IS supplied, enforce the same country-aware
+        // digit count the UI uses (shipmentSchema.ts -> phoneErrorFor).
+        // An 'abc' or '12345' phone would otherwise pass pre-flight and
+        // be rejected at the carrier call; mirror the UI so bulk / external
+        // callers fail fast with a readable error.
         if (!StringUtils.hasText(to.getPhone())) {
             warnings.add(issue(ErrorCode.VALIDATION_ERROR,
                     "Recipient phone is recommended — most carriers require it for delivery exceptions.",
                     "recipient.phone"));
+        } else {
+            String phoneErr = phoneErrorFor(country, to.getPhone());
+            if (phoneErr != null) {
+                errors.add(issue(ErrorCode.VALIDATION_ERROR, phoneErr, "recipient.phone"));
+            }
+        }
+        // BUG-003 — email: UI accepts blank, rejects non-RFC-ish. Mirror.
+        if (StringUtils.hasText(to.getEmail()) && !isValidEmail(to.getEmail())) {
+            errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                    "Recipient email is not a valid email address.", "recipient.email"));
         }
     }
 
@@ -979,6 +1023,17 @@ public class ShipmentValidationService {
             errors.add(issue(ErrorCode.VALIDATION_ERROR,
                     "A shipment weight greater than zero is required.", "weight"));
         }
+        // BUG-009 — insured value must not exceed declared value. UPS,
+        // FedEx, DHL, and USPS all expose ONE "declared value" field that
+        // doubles as the insured amount above the free tier; two
+        // conflicting numbers in the form means the operator is paying
+        // for more insurance than they declared. Mirrors the client-side
+        // Yup rule so bulk / external callers can't slip past.
+        if (req.getInsuredValue() != null && req.getDeclaredValue() != null
+                && req.getInsuredValue().compareTo(req.getDeclaredValue()) > 0) {
+            errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                    "Insured value can't exceed declared value.", "insuredValue"));
+        }
     }
 
     /**
@@ -1001,9 +1056,54 @@ public class ShipmentValidationService {
      *       operator → ClientCustomsProfile.incoterms.</li>
      * </ul>
      */
+    /** BUG-004 — compare rate-quote serviceCode to the picked service code
+     *  tolerant of carrier prefix drift. FedEx /rate returns "FEDEX_INTERNATIONAL_PRIORITY"
+     *  while the local shipping_service.service_code is "INTERNATIONAL_PRIORITY"
+     *  (same for UPS/USPS/DHL on some codes). equalsIgnoreCase on raw strings
+     *  false-negatived valid matches; normalise by stripping any
+     *  FEDEX_/UPS_/USPS_/DHL_ prefix from both sides before comparing. */
+    private static boolean matchServiceCode(String a, String b) {
+        if (a == null || b == null) return false;
+        return stripCarrierPrefix(a).equalsIgnoreCase(stripCarrierPrefix(b));
+    }
+
+    private static String stripCarrierPrefix(String code) {
+        String u = code.trim().toUpperCase(Locale.ROOT);
+        for (String p : new String[]{"FEDEX_", "UPS_", "USPS_", "DHL_"}) {
+            if (u.startsWith(p)) return u.substring(p.length());
+        }
+        return u;
+    }
+
     private void checkIntlRequiredFields(ManualShipmentRequest req,
                                          String recipientCountry,
                                          List<ValidationIssue> errors) {
+        // BUG-001 — USPS SERA validates sender_info.name for international
+        // shipments and rejects single-token names like "MKL" (the client's
+        // company name typed into the Full name field). Pre-flight guard
+        // so the operator sees "needs a full name" BEFORE the label hop
+        // instead of a cryptic carrier reject after order #<N> is saved
+        // as ERROR. Scoped to USPS international + where no company name
+        // supplies the entity identity.
+        if ("USPS".equalsIgnoreCase(req.getCarrierCode())
+                && req.getSender() != null) {
+            String senderName = req.getSender().getName() == null ? ""
+                    : req.getSender().getName().trim();
+            String senderCompany = req.getSender().getCompany() == null ? ""
+                    : req.getSender().getCompany().trim();
+            // USPS accepts either a SERA-valid personal name OR a company
+            // name as the sender identity. Match the exact SERA rule so
+            // pre-flight and connector agree.
+            boolean nameLooksLikeFull = com.multiship.backend.service.carriers
+                    .StampsConnector.isSeraValidFullname(senderName);
+            if (!nameLooksLikeFull && senderCompany.isBlank()) {
+                errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                        "USPS international needs a sender full name (first + last) "
+                                + "or a company name. Current ship-from name '"
+                                + senderName + "' is a single token with no company set.",
+                        "sender.name"));
+            }
+        }
         // Currency + incoterms — resolvable via precedence, else error.
         if (resolveCustomsCurrency(req) == null) {
             errors.add(issue(ErrorCode.VALIDATION_ERROR,
@@ -1033,6 +1133,49 @@ public class ShipmentValidationService {
         // right row.
         java.util.List<ManualShipmentRequest.Item> items = req.getItems();
         if (items == null || items.isEmpty()) return; // IntlShipmentValidator flags commodities.empty
+
+        // BUG-002 — USPS MPS international: carrier requires customs lines
+        // on EVERY piece, but the "Spread items across N boxes" button
+        // can leave a piece empty if the operator removes assignments.
+        // Pre-flight guard: when international + 2+ boxes, every box must
+        // have at least one item (boxSeq=N). Pre-fix the first piece
+        // bought successfully and the second piece failed "Missing customs
+        // lines", leaving the shipment partially booked.
+        int boxCount = req.getPackages() == null ? 0 : req.getPackages().size();
+        if (boxCount >= 2) {
+            boolean[] boxHasItem = new boolean[boxCount + 1]; // 1-based
+            boolean anyUnassigned = false;
+            for (ManualShipmentRequest.Item it : items) {
+                if (it == null) continue;
+                Integer bs = it.getBoxSeq();
+                if (bs == null || bs < 1 || bs > boxCount) {
+                    anyUnassigned = true;
+                } else {
+                    boxHasItem[bs] = true;
+                }
+            }
+            if (anyUnassigned) {
+                // Any item lacking boxSeq means we can't tell which box
+                // should carry it. Spread + unassigned is operator-visible
+                // on the FE; still flag so the carrier hop doesn't 500.
+                errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                        "One or more items don't have a box assigned. "
+                                + "Click 'Spread across " + boxCount + " boxes' "
+                                + "or set Pkg# on each item.",
+                        "items"));
+            } else {
+                for (int b = 1; b <= boxCount; b++) {
+                    if (!boxHasItem[b]) {
+                        errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                                "Box " + b + " has no customs lines. "
+                                        + "Every box in a multi-box international "
+                                        + "shipment needs at least one item — "
+                                        + "redistribute items or remove the box.",
+                                "packages[" + (b - 1) + "]"));
+                    }
+                }
+            }
+        }
         boolean canSpreadWeight = req.getWeight() != null && req.getWeight().signum() > 0;
         for (int i = 0; i < items.size(); i++) {
             ManualShipmentRequest.Item it = items.get(i);
@@ -1246,6 +1389,44 @@ public class ShipmentValidationService {
             errors.add(issue(ErrorCode.VALIDATION_ERROR, "Return labels need the customer's email (in \"Return from · "
                     + "customer\"), so the carrier can send or announce the return label.", "sender.email"));
         }
+        // BUG-136 R7 — reject a return whose "Return from · customer" address
+        // is the same as "Return to · your address". This is almost always the
+        // FE pre-fill leaking the warehouse address into the customer block,
+        // and the resulting label has FROM == TO (useless as a return).
+        if (Boolean.TRUE.equals(req.getIsReturn()) && from != null && to != null
+                && addressesMatch(from, to)) {
+            errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                    "Return label \"from\" and \"to\" are the same address. "
+                            + "\"Return from · customer\" should be the customer's address, "
+                            + "not your warehouse — the warehouse is the \"Return to\" block.",
+                    "sender.addressLine1"));
+        }
+    }
+
+    /** BUG-136 R7 — address-equality for the return origin/destination guard.
+     *  Case-insensitive + trim-tolerant on the comparable fields. ZIP compared
+     *  on the 5-digit base (ZIP+4 vs 5-digit still counts as same place). */
+    private static boolean addressesMatch(ManualShipmentRequest.Address a, ManualShipmentRequest.Address b) {
+        return eqCI(a.getAddressLine1(), b.getAddressLine1())
+                && eqCI(a.getCity(), b.getCity())
+                && eqCI(a.getState(), b.getState())
+                && eqZip5(a.getPostalCode(), b.getPostalCode())
+                && eqCI(a.getCountryCode(), b.getCountryCode());
+    }
+
+    private static boolean eqCI(String a, String b) {
+        return (a == null ? "" : a.trim()).equalsIgnoreCase(b == null ? "" : b.trim());
+    }
+
+    private static boolean eqZip5(String a, String b) {
+        return zip5(a).equals(zip5(b));
+    }
+
+    private static String zip5(String s) {
+        if (s == null) return "";
+        String t = s.trim();
+        int dash = t.indexOf('-');
+        return dash > 0 ? t.substring(0, dash) : t;
     }
 
     /** The client's customs profile for the destination, or null. */
@@ -1354,10 +1535,18 @@ public class ShipmentValidationService {
                 .filter(r -> r.totalAmount() != null)
                 .sorted(java.util.Comparator.comparing(com.multiship.backend.service.carriers.CarrierConnector.RateOption::totalAmount))
                 .toList();
+        // BUG-004 — FedEx returns serviceType with inconsistent carrier
+        // prefix: INTERNATIONAL_PRIORITY arrives as "FEDEX_INTERNATIONAL_PRIORITY"
+        // while INTERNATIONAL_FIRST arrives as-is. Local DB stores the no-prefix
+        // form, so equalsIgnoreCase failed on IP + reported "did not quote"
+        // even though IP was in the quoted list. Normalize both sides by
+        // stripping the carrier prefix before compare.
         com.multiship.backend.service.carriers.CarrierConnector.RateOption picked = serviceCode == null ? null
-                : sorted.stream().filter(r -> serviceCode.equalsIgnoreCase(r.serviceCode())).findFirst().orElse(null);
+                : sorted.stream()
+                        .filter(r -> matchServiceCode(serviceCode, r.serviceCode()))
+                        .findFirst().orElse(null);
         List<String> others = sorted.stream()
-                .filter(r -> picked == null || !r.serviceCode().equalsIgnoreCase(picked.serviceCode()))
+                .filter(r -> picked == null || !matchServiceCode(r.serviceCode(), picked.serviceCode()))
                 .limit(5)
                 .map(r -> blankTo(r.serviceName(), r.serviceCode()) + " — " + r.currency() + " "
                         + r.totalAmount().setScale(2, java.math.RoundingMode.HALF_UP)
@@ -1480,16 +1669,19 @@ public class ShipmentValidationService {
         }
     }
 
-    /** The same reference / PO already shipped for this client — likely a double shipment. */
-    private void checkDuplicateReference(ManualShipmentRequest req, List<ValidationIssue> warnings) {
+    /** BUG-006 — the same reference / PO already shipped for this client is
+     *  a hard FAIL at /validate (was a WARN). Mirrors the /manual-label
+     *  409 CONFLICT so operators can't buy two paid labels under the
+     *  same reference. */
+    private void checkDuplicateReference(ManualShipmentRequest req, List<ValidationIssue> errors) {
         if (orderRepository == null || !StringUtils.hasText(req.getReference())) return;
         String client = blankTo(req.getClientCode(), "MANUAL").trim();
         orderRepository.findShippedByClientAndReference(client, req.getReference().trim()).ifPresent(o ->
-                warnings.add(issue(ErrorCode.VALIDATION_ERROR, "Reference " + req.getReference().trim()
+                errors.add(issue(ErrorCode.VALIDATION_ERROR, "Reference " + req.getReference().trim()
                         + " already shipped on order #" + o.getOrderNo()
                         + (o.getCreatedDate() != null ? " (" + o.getCreatedDate() + ")" : "")
                         + (StringUtils.hasText(o.getTrack()) ? ", tracking " + o.getTrack() : "")
-                        + ". Make sure this isn't a second shipment of the same order.", "reference")));
+                        + ". Use a different reference or void the existing label first.", "reference")));
     }
 
     /** Past the client's daily cutoff, the label counts as the next business day's. */
@@ -1857,6 +2049,186 @@ public class ShipmentValidationService {
             }
         }
         return null;
+    }
+
+    // === BUG-003 - UI-parity phone + email validation ===============
+    //
+    // Ported from multiship-react/src/utils/countryFormats.ts
+    // (phoneErrorFor + PHONE_DIGITS + DIAL_CODES). Keep in sync with
+    // the FE; a country not listed falls back to a generic 7-15 digit
+    // rule.
+    private static final java.util.Map<String, int[]> PHONE_DIGITS = java.util.Map.ofEntries(
+            java.util.Map.entry("US", new int[]{10,10}), java.util.Map.entry("CA", new int[]{10,10}),
+            java.util.Map.entry("GB", new int[]{9,10}), java.util.Map.entry("IE", new int[]{7,9}),
+            java.util.Map.entry("IN", new int[]{10,10}), java.util.Map.entry("AU", new int[]{9,9}),
+            java.util.Map.entry("NZ", new int[]{8,10}), java.util.Map.entry("DE", new int[]{6,11}),
+            java.util.Map.entry("FR", new int[]{9,9}), java.util.Map.entry("ES", new int[]{9,9}),
+            java.util.Map.entry("IT", new int[]{9,11}), java.util.Map.entry("NL", new int[]{9,9}),
+            java.util.Map.entry("BE", new int[]{8,9}), java.util.Map.entry("CH", new int[]{9,9}),
+            java.util.Map.entry("AT", new int[]{10,11}), java.util.Map.entry("SE", new int[]{7,9}),
+            java.util.Map.entry("NO", new int[]{8,8}), java.util.Map.entry("DK", new int[]{8,8}),
+            java.util.Map.entry("FI", new int[]{9,10}), java.util.Map.entry("PL", new int[]{9,9}),
+            java.util.Map.entry("PT", new int[]{9,9}), java.util.Map.entry("JP", new int[]{9,10}),
+            java.util.Map.entry("CN", new int[]{11,11}), java.util.Map.entry("KR", new int[]{9,10}),
+            java.util.Map.entry("SG", new int[]{8,8}), java.util.Map.entry("MY", new int[]{9,10}),
+            java.util.Map.entry("TH", new int[]{9,9}), java.util.Map.entry("VN", new int[]{9,10}),
+            java.util.Map.entry("PH", new int[]{10,10}), java.util.Map.entry("ID", new int[]{9,12}),
+            java.util.Map.entry("AE", new int[]{8,9}), java.util.Map.entry("SA", new int[]{9,9}),
+            java.util.Map.entry("BR", new int[]{10,11}), java.util.Map.entry("MX", new int[]{10,10}),
+            java.util.Map.entry("AR", new int[]{10,11}), java.util.Map.entry("ZA", new int[]{9,9}),
+            java.util.Map.entry("TR", new int[]{10,10}), java.util.Map.entry("RU", new int[]{10,10}));
+    private static final java.util.Map<String, String> DIAL_CODES = java.util.Map.ofEntries(
+            java.util.Map.entry("US","1"), java.util.Map.entry("CA","1"), java.util.Map.entry("GB","44"),
+            java.util.Map.entry("IE","353"), java.util.Map.entry("FR","33"), java.util.Map.entry("DE","49"),
+            java.util.Map.entry("ES","34"), java.util.Map.entry("IT","39"), java.util.Map.entry("NL","31"),
+            java.util.Map.entry("BE","32"), java.util.Map.entry("CH","41"), java.util.Map.entry("AT","43"),
+            java.util.Map.entry("SE","46"), java.util.Map.entry("NO","47"), java.util.Map.entry("DK","45"),
+            java.util.Map.entry("FI","358"), java.util.Map.entry("PL","48"), java.util.Map.entry("PT","351"),
+            java.util.Map.entry("JP","81"), java.util.Map.entry("CN","86"), java.util.Map.entry("KR","82"),
+            java.util.Map.entry("IN","91"), java.util.Map.entry("SG","65"), java.util.Map.entry("MY","60"),
+            java.util.Map.entry("TH","66"), java.util.Map.entry("VN","84"), java.util.Map.entry("PH","63"),
+            java.util.Map.entry("ID","62"), java.util.Map.entry("AE","971"), java.util.Map.entry("SA","966"),
+            java.util.Map.entry("BR","55"), java.util.Map.entry("MX","52"), java.util.Map.entry("AR","54"),
+            java.util.Map.entry("ZA","27"), java.util.Map.entry("TR","90"), java.util.Map.entry("RU","7"),
+            java.util.Map.entry("AU","61"), java.util.Map.entry("NZ","64"));
+    private static final int[] GENERIC_PHONE_DIGITS = new int[]{7, 15};
+    // Pragmatic RFC-ish email: non-space + @ + non-space + . + non-space.
+    // Not full RFC 5322 - YAGNI; matches the FE's Yup email() rule.
+    private static final java.util.regex.Pattern EMAIL_RE =
+            java.util.regex.Pattern.compile("^\\S+@\\S+\\.\\S+$");
+
+    /** Mirrors shipmentSchema.ts phoneErrorFor. Returns null if OK. */
+    static String phoneErrorFor(String countryCode, String phone) {
+        if (phone == null) return null;
+        String raw = phone.trim();
+        if (raw.isEmpty()) return null;
+        String country = countryCode == null ? "" : countryCode.toUpperCase(Locale.ROOT);
+        String national = raw.replaceAll("\\D", "");
+        if (national.isEmpty()) return "Enter a phone number";
+        int[] range = PHONE_DIGITS.getOrDefault(country, GENERIC_PHONE_DIGITS);
+        int min = range[0], max = range[1];
+        String dial = DIAL_CODES.getOrDefault(country, "");
+        if (!dial.isEmpty() && national.length() > max && national.startsWith(dial)) {
+            String stripped = national.substring(dial.length());
+            if (stripped.length() >= min && stripped.length() <= max) national = stripped;
+        }
+        if (national.length() < min || national.length() > max) {
+            String label = country.isEmpty() ? "This country" : country;
+            return min == max
+                    ? label + " phone numbers are " + min + " digits (you entered " + national.length() + ")."
+                    : label + " phone numbers are " + min + "-" + max + " digits (you entered " + national.length() + ").";
+        }
+        return null;
+    }
+
+    static boolean isValidEmail(String email) {
+        if (email == null) return false;
+        return EMAIL_RE.matcher(email.trim()).matches();
+    }
+
+    // === BUG-004 - carrier field length limits ======================
+    //
+    // UPS caps name / address line 1 / address line 2 / reference /
+    // company at 35 characters each; the carrier returns 120201
+    // 'Missing or invalid ship to attention name' when exceeded. FedEx
+    // + DHL are 35-45 depending on field, so 35 is a safe lower bound
+    // across all four carriers. Enforce upfront so pre-flight blocks
+    // over-long values instead of letting UPS reject at purchase.
+    private static final int CARRIER_FIELD_MAX = 35;
+
+    private void checkCarrierLengthLimits(ManualShipmentRequest req, List<ValidationIssue> errors) {
+        checkAddressLengths(req.getRecipient(), "recipient", errors);
+        checkAddressLengths(req.getSender(), "sender", errors);
+        if (req.getReference() != null && req.getReference().length() > CARRIER_FIELD_MAX) {
+            errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                    "Reference exceeds the " + CARRIER_FIELD_MAX + "-character carrier limit (currently "
+                            + req.getReference().length() + ").", "reference"));
+        }
+    }
+
+    /**
+     * R2-BUG-011 — OFAC comprehensive-sanctions destinations are a hard
+     * block regardless of carrier. Pre-fix the app relied on the carrier
+     * to refuse (USPS validate PASSed shipments to Iran because USPS
+     * returned WARN not FAIL for IR). Shipping to CU/IR/KP/SY without
+     * an export licence is a US federal offence.
+     *
+     * <p>REGULATORY_REFERENCE: 31 CFR Parts 515 (Cuba), 560 (Iran), 544
+     * / EO 13466 (North Korea), 542 (Syria). The country set must be
+     * reviewed by compliance before change — see
+     * {@link ErrorCode#SANCTIONED_DESTINATION}. ponytail: Russia-annexed
+     * Ukraine regions (Crimea / DNR / LNR) require ISO-3166 subdivision
+     * checks the carriers already perform for us; add if OFAC updates
+     * tighten and ops signs off.
+     */
+    private static final java.util.Set<String> OFAC_COMPREHENSIVE_SANCTIONS =
+            java.util.Set.of("CU", "IR", "KP", "SY");
+
+    private void checkSanctionedDestination(ManualShipmentRequest.Address to,
+                                            List<ValidationIssue> errors) {
+        if (to == null) return;
+        String country = to.getCountryCode();
+        if (!StringUtils.hasText(country)) return;
+        String iso = country.trim().toUpperCase(java.util.Locale.ROOT);
+        if (OFAC_COMPREHENSIVE_SANCTIONS.contains(iso)) {
+            errors.add(issue(ErrorCode.SANCTIONED_DESTINATION,
+                    "Shipping to " + iso + " is blocked under OFAC comprehensive sanctions. "
+                            + "An OFAC export licence is required before this shipment can be filed.",
+                    "recipient.countryCode"));
+        }
+    }
+
+    /**
+     * R2-BUG-008 — every active {@link com.multiship.backend.model.CustomFieldDefinition}
+     * for the submitter's tenant whose {@code required=true} and {@code active=true}
+     * must have a non-blank value in {@code req.customFields}. Pre-fix, the
+     * form marked these fields with a red asterisk but Validate + Generate
+     * both returned PASS for an empty submission (and the UI's purchase
+     * body dropped the map entirely), so the "required" flag was advisory
+     * only. Null repository / null clientCode / null map all skip the check
+     * so bare-Mockito tests + ad-hoc shipments (no client picked) still
+     * pass through — matching legacy behaviour for those paths.
+     */
+    private void checkRequiredCustomFields(ManualShipmentRequest req,
+                                           String clientCode,
+                                           List<ValidationIssue> errors) {
+        if (customFieldDefinitionRepository == null) return;
+        if (!StringUtils.hasText(clientCode)) return;
+        java.util.List<com.multiship.backend.model.CustomFieldDefinition> defs =
+                customFieldDefinitionRepository.findApplicable(clientCode);
+        if (defs == null || defs.isEmpty()) return;
+        java.util.Map<String, String> submitted = req.getCustomFields();
+        for (com.multiship.backend.model.CustomFieldDefinition def : defs) {
+            if (def == null) continue;
+            if (!Boolean.TRUE.equals(def.getRequired())) continue;
+            if (!Boolean.TRUE.equals(def.getActive())) continue;
+            String key = def.getFieldKey();
+            if (!StringUtils.hasText(key)) continue;
+            String value = submitted == null ? null : submitted.get(key);
+            if (!StringUtils.hasText(value)) {
+                String label = StringUtils.hasText(def.getLabel()) ? def.getLabel() : key;
+                errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                        label + " is required for this shipment.",
+                        "customFields." + key));
+            }
+        }
+    }
+
+    private void checkAddressLengths(ManualShipmentRequest.Address addr, String prefix, List<ValidationIssue> errors) {
+        if (addr == null) return;
+        checkFieldLength(addr.getName(), prefix + ".name", "Name", errors);
+        checkFieldLength(addr.getCompany(), prefix + ".company", "Company", errors);
+        checkFieldLength(addr.getAddressLine1(), prefix + ".addressLine1", "Address line 1", errors);
+        checkFieldLength(addr.getAddressLine2(), prefix + ".addressLine2", "Address line 2", errors);
+    }
+
+    private void checkFieldLength(String value, String field, String label, List<ValidationIssue> errors) {
+        if (value == null) return;
+        if (value.length() > CARRIER_FIELD_MAX) {
+            errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                    label + " exceeds the " + CARRIER_FIELD_MAX + "-character carrier limit (currently "
+                            + value.length() + ").", field));
+        }
     }
 
     private ValidationIssue issue(ErrorCode code, String message, String field) {

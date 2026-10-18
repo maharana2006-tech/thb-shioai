@@ -34,6 +34,16 @@ public class MailConfigService {
     private final MailProviderRegistry registry;
     private final CryptoService crypto;
 
+    // BUG-128: audit mail provider / config writes. Secrets (SMTP password,
+    // SendGrid key etc.) land here encrypted — the audit row records WHO
+    // changed WHICH provider WHEN, never the secret value itself.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.AuditService audit;
+    // AuditService doesn't carry a MAIL_PROVIDER constant; CLIENT_POLICY is
+    // the closest platform-scoped bucket. Logs page filter can target by
+    // entityKey prefix "mail/" to find them.
+    private static final String MAIL_ENTITY_TYPE = com.multiship.backend.service.AuditService.CLIENT_POLICY;
+
     public List<MailProviderEntity> listProviders() {
         return providerRepo.findAll();
     }
@@ -90,7 +100,16 @@ public class MailConfigService {
             row.setUpdatedAt(now);
             row.setUpdatedBy(actor);
         }
-        return providerRepo.save(row);
+        boolean isCreate = id == null;
+        MailProviderEntity saved = providerRepo.save(row);
+        if (audit != null) {
+            audit.record(isCreate ? com.multiship.backend.service.AuditService.CREATE
+                            : com.multiship.backend.service.AuditService.UPDATE,
+                    MAIL_ENTITY_TYPE, saved.getId(),
+                    "mail/" + saved.getKind() + "/" + saved.getDisplayName(),
+                    null, isCreate ? "Mail provider created." : "Mail provider updated.");
+        }
+        return saved;
     }
 
     /**
@@ -113,13 +132,27 @@ public class MailConfigService {
         target.setActive(true);
         target.setUpdatedAt(now);
         target.setUpdatedBy(actor);
-        return providerRepo.save(target);
+        MailProviderEntity saved = providerRepo.save(target);
+        if (audit != null) {
+            audit.record(com.multiship.backend.service.AuditService.TOGGLE_ACTIVE,
+                    MAIL_ENTITY_TYPE, saved.getId(),
+                    "mail/" + saved.getKind() + "/" + saved.getDisplayName(), null,
+                    "Mail provider activated.");
+        }
+        return saved;
     }
 
     @Transactional
     public void deleteProvider(Long providerId) {
         // ON DELETE CASCADE on mail_config handles children.
+        MailProviderEntity existing = providerRepo.findById(providerId).orElse(null);
         providerRepo.deleteById(providerId);
+        if (audit != null && existing != null) {
+            audit.record(com.multiship.backend.service.AuditService.DELETE,
+                    MAIL_ENTITY_TYPE, providerId,
+                    "mail/" + existing.getKind() + "/" + existing.getDisplayName(), null,
+                    "Mail provider deleted.");
+        }
     }
 
     // ────────────────────────── config KV ────────────────────────────

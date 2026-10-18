@@ -4,9 +4,10 @@ import {
   clientBillingMarkupService,
   type MarkupKind,
 } from '../../api/clientPolicyService'
-import { addMoney, applyMarkupPercent, fromCents, toCents } from '../../utils/money'
+import { addMoney, applyMarkupPercent, CURRENCY_ALLOWLIST, fromCents, toCents } from '../../utils/money'
 
-const COMMON_CURRENCIES = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'INR', 'JPY', 'SGD', 'AED']
+// BUG-125 — shared allowlist across every currency picker.
+const COMMON_CURRENCIES = CURRENCY_ALLOWLIST
 
 /**
  * Markup tab — kind (PERCENT | FLAT) + non-negative value + ISO-4217
@@ -14,7 +15,17 @@ const COMMON_CURRENCIES = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'INR', 'JPY', 'SGD
  * onto every shipment at label time so a later change here doesn't move
  * historical bills.
  */
-export default function ClientMarkupTab({ clientCode }: { clientCode: string }) {
+export default function ClientMarkupTab({
+  clientCode,
+  onSaved,
+}: {
+  clientCode: string
+  /** BUG-078 — parent's step-pill reads client.hasBillingMarkup to
+   *  decide whether to show the amber 'No billing markup saved' warning.
+   *  After a successful save the parent's copy is stale until the page
+   *  reloads. Call onSaved so the parent can patch its state. */
+  onSaved?: () => void
+}) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
@@ -62,11 +73,14 @@ export default function ClientMarkupTab({ clientCode }: { clientCode: string }) 
     if (saving) return
     const parsed = Number(valueStr)
     if (!Number.isFinite(parsed) || parsed < 0) {
-      notify.error('Value must be a non-negative number.')
+      // BUG-036 — pass an explicit title so the toast heading reads
+      // "Check the form for errors" instead of the generic
+      // "Something went wrong" that the server-failure path uses.
+      notify.error({ title: 'Check the form for errors', body: 'Value must be a non-negative number.' })
       return
     }
     if (!/^[A-Za-z]{3}$/.test(currency)) {
-      notify.error('Currency must be a 3-letter ISO code (e.g. USD).')
+      notify.error({ title: 'Check the form for errors', body: 'Currency must be a 3-letter ISO code (e.g. USD).' })
       return
     }
     setSaving(true)
@@ -78,6 +92,7 @@ export default function ClientMarkupTab({ clientCode }: { clientCode: string }) 
       })
       notify.success(`Markup saved for ${clientCode}.`)
       await load()
+      onSaved?.()
     } catch (error) {
       // MARKUP_INVALID falls through the friendly-message map (no entry) to the
       // raw server message, which is what the inline branch surfaced too.
@@ -162,20 +177,36 @@ export default function ClientMarkupTab({ clientCode }: { clientCode: string }) 
           </div>
 
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            <div>
-              <label className="mb-1 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
-                Value {kind === 'PERCENT' ? '(%)' : ''}
-                <span className="ml-1 text-rose-500">*</span>
-              </label>
-              <input
-                type="text"
-                inputMode="decimal"
-                value={valueStr}
-                onChange={(e) => setValueStr(e.target.value)}
-                placeholder={kind === 'PERCENT' ? '12.5' : '3.50'}
-                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] font-semibold text-slate-950 outline-none transition focus:border-[#412d15]"
-              />
-            </div>
+            {(() => {
+              // BUG-034 — inline validity on the Value field so the operator
+              // sees the problem without clicking Save + reading a toast.
+              const parsed = Number(valueStr)
+              const invalid = valueStr.trim() !== '' && (!Number.isFinite(parsed) || parsed < 0)
+              return (
+                <div>
+                  <label className="mb-1 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+                    Value {kind === 'PERCENT' ? '(%)' : ''}
+                    <span className="ml-1 text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={valueStr}
+                    onChange={(e) => setValueStr(e.target.value)}
+                    placeholder={kind === 'PERCENT' ? '12.5' : '3.50'}
+                    aria-invalid={invalid || undefined}
+                    className={`w-full rounded-xl border bg-white px-3 py-2 text-[13px] font-semibold text-slate-950 outline-none transition focus:border-[#412d15] ${
+                      invalid ? 'border-rose-400' : 'border-slate-200'
+                    }`}
+                  />
+                  {invalid ? (
+                    <p className="mt-1 text-[11px] font-semibold text-rose-600">
+                      Value must be a non-negative number.
+                    </p>
+                  ) : null}
+                </div>
+              )
+            })()}
             <div>
               <label className="mb-1 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
                 Currency <span className="text-rose-500">*</span>

@@ -134,6 +134,7 @@ public class LabelArtifactResolver {
         }
         if (!StringUtils.hasText(stored)) return Optional.empty();
 
+        boolean wasUrl = isUrl(stored);
         byte[] bytes = fetchBytes(stored);
         if (bytes == null || bytes.length == 0) return Optional.empty();
 
@@ -141,7 +142,39 @@ public class LabelArtifactResolver {
         if (detected == null) return Optional.empty();
         if (!detected.equals(normalized)) return Optional.empty();
 
+        // BUG-007 R7 — order #934118's label_file_path is a FedEx cache URL;
+        // every /label fetch pays a 3-4s carrier round-trip + at some point
+        // the URL expires. Replace the URL with the base64-encoded bytes so
+        // subsequent reads are free + the artifact survives the URL expiry.
+        // Shipment-level path only (pkgIndex=null); per-package rows go
+        // through the pre-rendered column path which doesn't have this.
+        if (wasUrl && pkgIndex == null) {
+            cacheBytesInline(orderNo, bytes);
+        }
+
         return Optional.of(bytes);
+    }
+
+    private static boolean isUrl(String stored) {
+        String lower = stored.trim().toLowerCase(Locale.ROOT);
+        return lower.startsWith("http://") || lower.startsWith("https://");
+    }
+
+    /** Replace the carrier-URL label_file_path with the base64 of the fetched
+     *  bytes so subsequent fetches skip the HTTP round-trip and survive the
+     *  URL's expiry. Best-effort: a write failure is logged + ignored (the
+     *  URL still works for now; we'll try again on the next read). */
+    private void cacheBytesInline(Integer orderNo, byte[] bytes) {
+        try {
+            orderTrackingRepository.findByOrderNo(orderNo).ifPresent(row -> {
+                row.setLabelFilePath(Base64.getEncoder().encodeToString(bytes));
+                orderTrackingRepository.save(row);
+                log.info("BUG-007: cached {} bytes inline for order {} (URL → base64).",
+                        bytes.length, orderNo);
+            });
+        } catch (Exception e) {
+            log.warn("BUG-007: inline-cache write failed for order {}: {}", orderNo, e.getMessage());
+        }
     }
 
     /** V143 — read the pre-rendered column for the requested format.

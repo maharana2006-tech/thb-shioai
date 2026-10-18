@@ -64,9 +64,34 @@ public class UserInviteService {
         // Sprint 50 Tier 0.5 PR E - Pattern A clamp: scoped USER can only
         // invite to their own tenant. ADMIN pass-through.
         String scopedClientCode = tenantScope.clampClientCode(clientCode);
+        // BUG-084 — refuse a mint when a live pending invite for this email
+        // already exists. Previously the second POST would issue a fresh
+        // token so the recipient saw two live accept links in two emails,
+        // which is confusing on the admin side (the Pending-invites panel
+        // listed the same address twice) and a token-sprawl risk. Operator
+        // can Revoke the existing invite first, or Resend it (which already
+        // refreshes the expiry) if they want to send again.
+        String normalisedEmail = email.trim().toLowerCase();
+        java.util.List<UserInvite> live = repository.findLivePendingByEmail(normalisedEmail);
+        if (!live.isEmpty()) {
+            // BUG-145 — pre-fix we printed LocalDateTime.toString ('2026-10-21T14:06:40.879515')
+            // which looks like a timestamp from a stacktrace, not an expiry date
+            // an operator can read. Format as 'Oct 21, 2026, 2:06 PM UTC' instead.
+            java.time.LocalDateTime exp = live.get(0).getExpiresAt();
+            // BUG-145 R7: dropped the ' UTC' suffix — the stored
+            // LocalDateTime is server-local (whatever the JVM runs on),
+            // not UTC. Pending invites prints the same value as a local
+            // time; the suffix was 5½ hours off on an IST deploy.
+            String expiryText = exp.format(
+                java.time.format.DateTimeFormatter.ofPattern("MMM d, yyyy, h:mm a"));
+            throw new IllegalStateException(
+                "An invite for " + normalisedEmail + " is still pending (expires "
+                    + expiryText + "). Revoke it from Pending invites, "
+                    + "or use Resend to extend its expiry.");
+        }
         UserInvite invite = new UserInvite();
         invite.setToken(randomToken());
-        invite.setEmail(email.trim().toLowerCase());
+        invite.setEmail(normalisedEmail);
         invite.setClientCode(scopedClientCode.trim().toUpperCase());
         invite.setRole(role.trim().toUpperCase());
         invite.setInvitedBy(invitedBy);
@@ -114,6 +139,45 @@ public class UserInviteService {
 
     public List<UserInvite> listAll() {
         return repository.findAll();
+    }
+
+    /** BUG-050 — resend an existing invite. Refreshes the expiry so the
+     *  recipient has another {@code tokenTtlDays} window and re-fires
+     *  the AUTH.USER_INVITE email. Token is kept, so any link the
+     *  recipient still has in their mailbox keeps working. Rejects if
+     *  the invite was already consumed. */
+    @Transactional
+    public UserInvite resend(Long id, String acceptLinkBaseUrl) {
+        UserInvite invite = repository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Invite " + id + " not found"));
+        if (invite.getConsumedAt() != null) {
+            throw new IllegalStateException("Invite " + id + " was already consumed; cannot resend.");
+        }
+        invite.setExpiresAt(LocalDateTime.now().plusDays(tokenTtlDays));
+        repository.save(invite);
+        String acceptLink = acceptLinkBaseUrl + "/invite/" + invite.getToken();
+        notifications.send("AUTH.USER_INVITE", invite.getEmail(), java.util.Map.of(
+                "acceptLink", acceptLink,
+                "role", invite.getRole(),
+                "clientCode", invite.getClientCode(),
+                "ttlDays", tokenTtlDays,
+                "invitedBy", invite.getInvitedBy() == null ? "" : invite.getInvitedBy()));
+        return invite;
+    }
+
+    /** BUG-050 — revoke an invite by deleting the row. The token is
+     *  purged so the accept URL stops working immediately. Admin can
+     *  mint a new invite afterwards if they want to retry. */
+    @Transactional
+    public void revoke(Long id) {
+        repository.deleteById(id);
+    }
+
+    /** BUG-085 — read-only lookup so the controller can audit resend /
+     *  revoke with the email + client code before the row is gone. */
+    @Transactional(readOnly = true)
+    public java.util.Optional<UserInvite> findById(Long id) {
+        return repository.findById(id);
     }
 
     private static String randomToken() {

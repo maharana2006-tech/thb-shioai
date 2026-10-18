@@ -324,6 +324,10 @@ class AddressValidationTest {
 
     @Test
     void stampsCorrectedWhenCityStateZipOkButNotAddressMatch() {
+        // BUG-018 R6 (seraAddressesEqual): a response that only differs
+        // from the input in casing / ZIP+4 is now EXACT, not CORRECTED.
+        // To exercise CORRECTED, hand back a canonical street-number
+        // change so the compare really differs.
         StampsConnector c = new StampsConnector(new CarrierProperties(), new ObjectMapper());
         String canned = """
                 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
@@ -331,7 +335,7 @@ class AddressValidationTest {
                     <CleanseAddressResponse>
                       <AddressMatch>false</AddressMatch>
                       <CityStateZipOK>true</CityStateZipOK>
-                      <Address1>42 BROADWAY</Address1>
+                      <Address1>44 BROADWAY</Address1>
                       <City>NEW YORK</City>
                       <State>NY</State>
                       <ZIPCode>10001-1234</ZIPCode>

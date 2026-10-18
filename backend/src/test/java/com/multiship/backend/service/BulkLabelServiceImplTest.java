@@ -244,6 +244,51 @@ class BulkLabelServiceImplTest {
         assertEquals(3, entryCount);
     }
 
+    /**
+     * BUG-015 - the carrier_api_log interceptor reads orderNo off MDC via
+     * {@link com.multiship.backend.service.observability.CarrierCallContext}.
+     * Bulk workers run on their own fan-out threads outside the
+     * CarrierServiceImpl.generateLabel wrap, so pre-fix every carrier HTTP
+     * call from a bulk iteration landed in the log with orderNo=null and
+     * support couldn't retrieve the request/response for dispute evidence.
+     * The fix wraps processOneOrder with CarrierCallContext.forOrder(orderNo)
+     * so any HTTP the worker triggers - sibling calls included - inherits
+     * the right order tag.
+     */
+    @Test
+    void bulkDispatchPropagatesOrderNoToMdcForCarrierApiLog() {
+        // Capture whatever is on the MDC key at the moment carrierService
+        // sees the generateLabel call; that is the same thread the HTTP
+        // interceptor runs on, so if this value is non-null the log row
+        // the interceptor writes for the real call picks it up too.
+        java.util.concurrent.atomic.AtomicReference<String> captured =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        when(carrierService.generateLabel(eq(934279L), any(), anyString(), any()))
+                .thenAnswer(inv -> {
+                    captured.set(org.slf4j.MDC.get(
+                            com.multiship.backend.service.observability.CarrierCallContext.MDC_CARRIER_ORDER_NO));
+                    return ApiResponse.<LabelGenerationResponse>builder()
+                            .status("success").code(200).message("ok")
+                            .data(okLabel(934279L)).build();
+                });
+
+        BulkLabelJob job = new BulkLabelJob();
+        job.setId(934L);
+        job.setOrderNumbers("934279");
+        job.setTotalCount(1);
+        job.setStatus("PENDING");
+        job.setCreatedAt(java.time.LocalDateTime.now());
+        saved.put(934L, job);
+
+        service.runJob(934L);
+
+        assertEquals("934279", captured.get(),
+                "Bulk dispatch must tag CarrierCallContext.forOrder() so carrier_api_log rows link to the order");
+        // Context must not leak outside the worker.
+        assertNull(org.slf4j.MDC.get(
+                com.multiship.backend.service.observability.CarrierCallContext.MDC_CARRIER_ORDER_NO));
+    }
+
     @Test
     void runJobMixedSuccessAndFailure() {
         stubGenerate(1L, okLabel(1L));

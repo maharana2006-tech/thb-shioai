@@ -21,8 +21,8 @@ import java.util.Set;
 
 /**
  * D2C History — read the dtc_orders table filled by the Oracle sync
- * (POST /api/v1/dtc/sync/oracle). Postgres only, so it works even when
- * multiship.oracle.enabled is false.
+ * (POST /api/v1/dtc/sync/oracle). Postgres only, so it works even when the
+ * nds-default connection is inactive in Settings → External Systems.
  */
 @Tag(name = "D2C Orders", description = "Synced DTC orders (dtc_orders table)")
 @RestController

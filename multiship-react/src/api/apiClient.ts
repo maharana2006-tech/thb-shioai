@@ -247,3 +247,16 @@ export function isAbortError(err: unknown): boolean {
   if (err instanceof DOMException && err.name === 'AbortError') return true;
   return typeof err === 'object' && (err as { name?: string }).name === 'AbortError';
 }
+
+/**
+ * BUG-004 — what to tell the operator when a call failed. A dropped connection
+ * surfaces as the browser's raw "Failed to fetch"; say instead that the server
+ * wasn't reached, so nothing was booked or manifested.
+ */
+export function requestErrorText(err: unknown, fallback: string): string {
+  const raw = err instanceof Error ? err.message : ''
+  if (/failed to fetch|networkerror|load failed|network request failed/i.test(raw)) {
+    return "Couldn't reach the Multiship server — nothing was booked. Check your connection and try again."
+  }
+  return raw || fallback
+}

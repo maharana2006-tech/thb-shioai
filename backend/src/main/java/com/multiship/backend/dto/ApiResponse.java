@@ -16,7 +16,12 @@ public class ApiResponse<T> {
     private String status;
     private int code;
     private String message;
-    private LocalDateTime timestamp;
+    // BUG-070 R7 — default to construction time so every ApiResponse carries
+    // a timestamp. Pre-fix, GlobalExceptionHandler built responses without
+    // .timestamp(...), producing `"timestamp":null` on 400s while the
+    // controllers' success/error paths carried a real time.
+    @Builder.Default
+    private LocalDateTime timestamp = LocalDateTime.now();
     private T data;
     private ErrorDetails errors;
 

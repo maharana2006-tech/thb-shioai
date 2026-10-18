@@ -120,7 +120,14 @@ function CartonMarks() {
  * Both ShippingCatalogPage tabs stay mounted (preserves modal drafts);
  * only the active one registers its refresh handler. Defaults to true.
  */
-export default function PackagesPage({ active = true }: { active?: boolean } = {}) {
+export default function PackagesPage({ active = true, origin: originProp, onOriginChange }: {
+  active?: boolean
+  // BUG-090: ShippingCatalogPage lifts origin so both tabs share it. When
+  // the component is rendered standalone (route-direct), these are
+  // undefined and we fall back to local state.
+  origin?: string
+  onOriginChange?: (v: string) => void
+} = {}) {
   const { role } = useAppSession()
   // Sync pulls the carrier's live packaging catalog — requires the admin-only
   // carrier credentials on the backend, so gate the button to admins.
@@ -133,8 +140,11 @@ export default function PackagesPage({ active = true }: { active?: boolean } = {
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState<PackagePreset | null>(null)
   const [saving, setSaving] = useState(false)
-  /** Ship-from origin for carrier packaging (USPS Flat Rate is US-only, etc.). */
-  const [origin, setOrigin] = useState('US')
+  /** Ship-from origin for carrier packaging (USPS Flat Rate is US-only, etc.).
+   *  BUG-090: prefer parent-lifted origin when provided. */
+  const [localOrigin, setLocalOrigin] = useState('US')
+  const origin = originProp ?? localOrigin
+  const setOrigin = onOriginChange ?? setLocalOrigin
   /** Carrier filter: 'ALL' | 'CUSTOM' | a carrier code (UPS/FEDEX/USPS…). */
   const [carrierFilter, setCarrierFilter] = useState('ALL')
   const [syncing, setSyncing] = useState(false)
@@ -194,6 +204,18 @@ export default function PackagesPage({ active = true }: { active?: boolean } = {
     }
     if (editing.kind === 'CARRIER' && !editing.carrierPackageCode?.trim()) {
       notify.error("Carrier packaging needs the carrier's package code.")
+      return
+    }
+    // BUG-092 — tare > max weight is physically impossible (an empty
+    // box can't weigh more than its loaded max). Reject at save so
+    // operators don't ship against a box the service rules will refuse.
+    const maxW = Number(editing.maxWeight ?? 0)
+    const tareW = Number(editing.tareWeight ?? 0)
+    if (maxW > 0 && tareW > 0 && tareW >= maxW) {
+      notify.error({
+        title: 'Check the form for errors',
+        body: `Tare weight (${tareW}) must be less than max weight (${maxW}). The max weight is for the LOADED box.`,
+      })
       return
     }
     setSaving(true)
@@ -296,8 +318,14 @@ export default function PackagesPage({ active = true }: { active?: boolean } = {
   const currentEditingSnapshot = editing ? JSON.stringify(editing) : null
   const editorIsDirty = editorSnapshot !== null && currentEditingSnapshot !== editorSnapshot
 
-  const closeEditor = () => {
-    if (editorIsDirty && !window.confirm('Discard unsaved changes to this package?')) return
+  const closeEditor = async () => {
+    if (editorIsDirty) {
+      const ok = await notify.confirm(
+        'Discard unsaved changes to this package?',
+        { title: 'Discard changes', confirmLabel: 'Discard', cancelLabel: 'Keep editing', danger: true },
+      )
+      if (!ok) return
+    }
     setEditing(null)
   }
 
@@ -484,13 +512,15 @@ export default function PackagesPage({ active = true }: { active?: boolean } = {
             {syncing ? 'Syncing…' : 'Sync carrier packaging'}
           </button>
         ) : null}
-        <button
-          type="button"
-          onClick={() => setEditing(blankPreset())}
-          className="ml-auto inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[12.5px] font-semibold text-white transition hover:bg-[#412d15]"
-        >
-          <FiPlus className="h-3.5 w-3.5" /> Add Package
-        </button>
+        {canSync ? (
+          <button
+            type="button"
+            onClick={() => setEditing(blankPreset())}
+            className="ml-auto inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[12.5px] font-semibold text-white transition hover:bg-[#412d15]"
+          >
+            <FiPlus className="h-3.5 w-3.5" /> Add Package
+          </button>
+        ) : null}
       </div>
 
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -553,19 +583,22 @@ export default function PackagesPage({ active = true }: { active?: boolean } = {
                     ) : null}
                     {(() => {
                       const rows = p.id != null ? assignmentsByPreset.get(p.id) ?? [] : []
+                      // BUG-091 — empty allowlist is not a gate; clients
+                      // ship with every package by default. Reword the
+                      // tooltip + chip to reflect reality.
                       const tooltip = rows.length
-                        ? rows.map((r) => `${r.clientCode}${r.isDefault ? ' ★' : ''}`).join(', ')
-                        : 'No clients allowed yet.'
+                        ? `Allowlisted for: ${rows.map((r) => `${r.clientCode}${r.isDefault ? ' ★' : ''}`).join(', ')}`
+                        : 'All clients (no per-tenant restriction).'
                       return (
                         <span
-                          title={`Assigned to: ${tooltip}`}
+                          title={tooltip}
                           className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wide ring-1 ${
                             rows.length
                               ? 'bg-[#412d15]/[0.06] text-[#412d15] ring-[#412d15]/20'
                               : 'bg-white text-slate-400 ring-slate-200'
                           }`}
                         >
-                          <FiUsers className="h-2.5 w-2.5" /> {rows.length}
+                          <FiUsers className="h-2.5 w-2.5" /> {rows.length ? rows.length : 'all'}
                         </span>
                       )
                     })()}
@@ -630,32 +663,34 @@ export default function PackagesPage({ active = true }: { active?: boolean } = {
               {/* stencil footer: carton markings + actions */}
               <div className="mt-3 flex items-center justify-between gap-2 border-t border-dashed border-slate-200 px-4 py-2.5">
                 <CartonMarks />
-                <div className="flex items-center gap-1.5">
-                  {!p.default ? (
+                {canSync ? (
+                  <div className="flex items-center gap-1.5">
+                    {!p.default ? (
+                      <button
+                        type="button"
+                        onClick={() => void makeDefault(p)}
+                        className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-600 transition hover:border-amber-300 hover:text-amber-700"
+                      >
+                        <FiStar className="h-3 w-3" /> Make default
+                      </button>
+                    ) : null}
                     <button
                       type="button"
-                      onClick={() => void makeDefault(p)}
-                      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-600 transition hover:border-amber-300 hover:text-amber-700"
+                      onClick={() => setEditing({ ...p })}
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
                     >
-                      <FiStar className="h-3 w-3" /> Make default
+                      <FiEdit3 className="h-3 w-3" /> Edit
                     </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    onClick={() => setEditing({ ...p })}
-                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
-                  >
-                    <FiEdit3 className="h-3 w-3" /> Edit
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void remove(p)}
-                    aria-label={`Delete ${p.name}`}
-                    className="rounded-lg border border-rose-200 bg-white p-1.5 text-rose-600 transition hover:bg-rose-50"
-                  >
-                    <FiTrash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
+                    <button
+                      type="button"
+                      onClick={() => void remove(p)}
+                      aria-label={`Delete ${p.name}`}
+                      className="rounded-lg border border-rose-200 bg-white p-1.5 text-rose-600 transition hover:bg-rose-50"
+                    >
+                      <FiTrash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ) : null}
               </div>
             </div>
           ))

@@ -191,8 +191,8 @@ export default function SystemSettingsPage() {
             System settings
           </h2>
           <p className="mt-1 text-[12.5px] text-slate-500">
-            Admin-managed secrets stored encrypted at rest (AES-GCM). Values overlay the
-            corresponding environment variables so you can rotate a key without a redeploy.
+            Admin-managed secrets stored encrypted at rest. Change a value here
+            and the new one is live immediately — no restart needed.
           </p>
         </div>
       </header>
@@ -370,11 +370,13 @@ export default function SystemSettingsPage() {
         </div>
       )}
 
+      {/* BUG-061 R6 — operator-facing deployment banner. The DevOps-level
+          detail (env var name, 32-byte random value) belongs in the runbook,
+          not under every admin's nose. Kept short + actionable. */}
       <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-[11.5px] text-amber-800">
-        <strong>Deployment prerequisite:</strong> the backend needs the{' '}
-        <code className="rounded bg-amber-100 px-1 py-0.5 font-mono text-[11px]">SECRETS_ENCRYPTION_KEY</code>{' '}
-        environment variable set to a base64-encoded 32-byte random value. Without it, save
-        will fail with a "not configured" error.
+        <strong>Deployment prerequisite:</strong> saves on this page need the
+        platform secrets key to be configured on the server. If a save fails with
+        "not configured", ask your Multiship administrator.
       </p>
     </div>
   )
