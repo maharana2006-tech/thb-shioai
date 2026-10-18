@@ -78,7 +78,11 @@ public class OrderServiceImpl implements OrderService {
     @Autowired
     private TenantScopeEnforcer tenantScope;
 
-    private static final Set<String> VALID_STATUSES = Set.of("PENDING", "GENERATED", "ERROR");
+    // R2-BUG-012 (run-4) — VOIDED added so External API voids and
+    // internal voids both have a working filter + bucket. Pre-fix,
+    // status=VOIDED answered 400 'Unknown status filter' and the 9 orders
+    // in that state had no tab or badge (bucket sum != list total).
+    private static final Set<String> VALID_STATUSES = Set.of("PENDING", "GENERATED", "ERROR", "VOIDED");
     private static final Set<String> VALID_RESOLUTIONS = Set.of("READY", "NEEDS_DETAILS", "CHOOSE_ACCOUNT", "CLIENT_MISSING");
 
     /**
@@ -193,7 +197,7 @@ public class OrderServiceImpl implements OrderService {
                     .status("ERROR")
                     .code(400)
                     .errorCode(ErrorCode.VALIDATION_ERROR.name())
-                    .message("Unknown status filter '" + status + "'. Valid: PENDING, GENERATED, ERROR.")
+                    .message("Unknown status filter '" + status + "'. Valid: PENDING, GENERATED, ERROR, VOIDED.")
                     .timestamp(LocalDateTime.now())
                     .build();
         }
@@ -298,7 +302,7 @@ public class OrderServiceImpl implements OrderService {
             return ApiResponse.<java.util.List<Integer>>builder()
                     .status("ERROR").code(400)
                     .errorCode(ErrorCode.VALIDATION_ERROR.name())
-                    .message("Unknown status filter '" + filters.getStatus() + "'. Valid: PENDING, GENERATED, ERROR.")
+                    .message("Unknown status filter '" + filters.getStatus() + "'. Valid: PENDING, GENERATED, ERROR, VOIDED.")
                     .timestamp(LocalDateTime.now())
                     .build();
         }
@@ -413,6 +417,10 @@ public class OrderServiceImpl implements OrderService {
         stats.put("clientMissing", toLong(row[3]));
         stats.put("failed", toLong(row[4]));
         stats.put("generated", toLong(row[5]));
+        // R2-BUG-012 (run-4) — VOIDED exposed so UI badge counts match the
+        // list total. Pre-fix the 9 VOIDED orders had no bucket, so bucket
+        // sum (34,039) != list total (34,048).
+        stats.put("voided", row.length > 6 ? toLong(row[6]) : 0L);
 
         return ApiResponse.<Map<String, Long>>builder()
                 .status("SUCCESS")
@@ -823,12 +831,18 @@ public class OrderServiceImpl implements OrderService {
                 })
                 .collect(Collectors.toList());
 
+        // R2-BUG-012 (run-4) — surface the voided bucket so UI tabs cover
+        // every row. The new 7th column is appended; guard length so a
+        // stale harness without the migration still returns zero rather
+        // than crashing on an ArrayIndexOutOfBounds.
+        long voidedOrders = row.length > 6 && row[6] != null ? ((Number) row[6]).longValue() : 0L;
         Map<String, Object> stats = new LinkedHashMap<>();
         stats.put("orderStats", Map.of(
                 "totalOrders", row[0] != null ? ((Number) row[0]).longValue() : 0L,
                 "pendingOrders", row[1] != null ? ((Number) row[1]).longValue() : 0L,
                 "generatedOrders", row[2] != null ? ((Number) row[2]).longValue() : 0L,
-                "failedOrders", row[3] != null ? ((Number) row[3]).longValue() : 0L
+                "failedOrders", row[3] != null ? ((Number) row[3]).longValue() : 0L,
+                "voidedOrders", voidedOrders
         ));
 
         stats.put("weightStats", Map.of(
@@ -845,6 +859,7 @@ public class OrderServiceImpl implements OrderService {
                 "labelGenerated", generatedLabels,
                 "pendingLabels", row[1] != null ? ((Number) row[1]).longValue() : 0L,
                 "errorLabels", row[3] != null ? ((Number) row[3]).longValue() : 0L,
+                "voidedLabels", voidedOrders,
                 "completionRate", totalOrders > 0
                         ? String.format("%.1f%%", (generatedLabels * 100.0) / totalOrders)
                         : "0%"

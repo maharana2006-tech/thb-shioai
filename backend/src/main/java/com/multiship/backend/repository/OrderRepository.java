@@ -178,7 +178,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             COUNT(CASE WHEN t.status = 'GENERATED' THEN 1 END) as generated_labels,
             COUNT(CASE WHEN t.status IN ('ERROR', 'FAILED') THEN 1 END) as failed_labels,
             COUNT(CASE WHEN t.is_label_generated = true THEN 1 END) as labels_generated,
-            COALESCE(SUM(b.weight), 0) as total_weight
+            COALESCE(SUM(b.weight), 0) as total_weight,
+            COUNT(CASE WHEN t.status = 'VOIDED' THEN 1 END) as voided_labels
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
     """, nativeQuery = true)
@@ -197,7 +198,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             COUNT(CASE WHEN t.status = 'GENERATED' THEN 1 END) as generated_labels,
             COUNT(CASE WHEN t.status IN ('ERROR', 'FAILED') THEN 1 END) as failed_labels,
             COUNT(CASE WHEN t.is_label_generated = true THEN 1 END) as labels_generated,
-            COALESCE(SUM(b.weight), 0) as total_weight
+            COALESCE(SUM(b.weight), 0) as total_weight,
+            COUNT(CASE WHEN t.status = 'VOIDED' THEN 1 END) as voided_labels
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
         WHERE UPPER(COALESCE(b.tenant_id, b.cust_no)) = UPPER(:tenantId)
@@ -597,7 +599,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             COUNT(*) FILTER (WHERE COALESCE(t.status, 'PENDING') = 'PENDING' AND """ + RESOLUTION_CLIENT_MISSING_SQL + """
             ) as client_missing,
             COUNT(*) FILTER (WHERE t.status IN ('ERROR', 'FAILED')) as failed,
-            COUNT(*) FILTER (WHERE t.status = 'GENERATED') as generated
+            COUNT(*) FILTER (WHERE t.status = 'GENERATED') as generated,
+            COUNT(*) FILTER (WHERE t.status = 'VOIDED') as voided
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
     """, nativeQuery = true)
@@ -619,7 +622,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             COUNT(*) FILTER (WHERE COALESCE(t.status, 'PENDING') = 'PENDING' AND """ + RESOLUTION_CLIENT_MISSING_SQL + """
             ) as client_missing,
             COUNT(*) FILTER (WHERE t.status IN ('ERROR', 'FAILED')) as failed,
-            COUNT(*) FILTER (WHERE t.status = 'GENERATED') as generated
+            COUNT(*) FILTER (WHERE t.status = 'GENERATED') as generated,
+            COUNT(*) FILTER (WHERE t.status = 'VOIDED') as voided
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
         WHERE UPPER(COALESCE(b.tenant_id, b.cust_no)) = UPPER(:tenantId)

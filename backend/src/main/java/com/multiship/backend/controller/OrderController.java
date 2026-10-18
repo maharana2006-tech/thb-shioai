@@ -254,7 +254,7 @@ public class OrderController {
             @RequestParam(defaultValue = com.multiship.backend.common.PaginationDefaults.DEFAULT_SIZE_STR) int size,
             @Parameter(description = "orderNo | city | weight | status | createdDate") @RequestParam(defaultValue = "orderNo") String sortBy,
             @RequestParam(defaultValue = "ASC") String sortDirection,
-            @Parameter(description = "PENDING | GENERATED | ERROR") @RequestParam(required = false) String status,
+            @Parameter(description = "PENDING | GENERATED | ERROR | VOIDED") @RequestParam(required = false) String status,
             @Parameter(description = "Scope to one tenant (required for TENANT role)") @RequestParam(required = false) String tenantId,
             @Parameter(description = "Matches order #, batch #, city, customer code, customer_ref, or tracking number as substrings. "
                     + "Prefix syntax (2026-09-15) narrows to one field: batch:14 (exact), order:900044, tracking:1Z, client:ARHDEV. "
