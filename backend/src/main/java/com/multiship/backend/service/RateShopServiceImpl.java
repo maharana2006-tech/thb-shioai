@@ -430,44 +430,20 @@ public class RateShopServiceImpl implements RateShopService {
 
     /** Return a shallow copy of {@code shipment} with {@code accountNumber}
      *  overlaid — connectors rate against the account whose credentials
-     *  we're using, not the account in the incoming envelope. */
+     *  we're using, not the account in the incoming envelope.
+     *
+     *  <p>BUG-008 — uses Lombok's {@code toBuilder()} so EVERY field is
+     *  carried through verbatim (signatureOption, insuredValue, packages,
+     *  recipientResidential, …). The previous hand-rolled field-by-field
+     *  copy silently dropped accessorials, so a quote with ADULT signature
+     *  landed on the carrier Rate call with the signature stripped —
+     *  returned base rate was 45-80 % below the real label cost. The
+     *  carrier Rate API already honours the same accessorial fields the
+     *  Ship API does (see {@link UpsConnector#buildRateShopShipment}
+     *  reusing {@code buildPackage}), so threading them in is all that
+     *  was missing. */
     private static ShipmentRequestDTO withAccountNumber(ShipmentRequestDTO shipment, String accountNumber) {
-        ShipmentRequestDTO out = new ShipmentRequestDTO();
-        out.setCarrierCode(shipment.getCarrierCode());
-        out.setAccountNumber(accountNumber);
-        out.setServiceType(shipment.getServiceType());
-        out.setPackageType(shipment.getPackageType());
-        out.setWeight(shipment.getWeight());
-        out.setLength(shipment.getLength());
-        out.setWidth(shipment.getWidth());
-        out.setHeight(shipment.getHeight());
-        out.setShipperName(shipment.getShipperName());
-        out.setShipperPhone(shipment.getShipperPhone());
-        out.setShipperAddressLine1(shipment.getShipperAddressLine1());
-        out.setShipperAddressLine2(shipment.getShipperAddressLine2());
-        out.setShipperCity(shipment.getShipperCity());
-        out.setShipperState(shipment.getShipperState());
-        out.setShipperPostalCode(shipment.getShipperPostalCode());
-        out.setShipperCountryCode(shipment.getShipperCountryCode());
-        out.setRecipientName(shipment.getRecipientName());
-        out.setRecipientPhone(shipment.getRecipientPhone());
-        out.setRecipientAddressLine1(shipment.getRecipientAddressLine1());
-        out.setRecipientAddressLine2(shipment.getRecipientAddressLine2());
-        out.setRecipientAddressLine3(shipment.getRecipientAddressLine3());
-        out.setRecipientCity(shipment.getRecipientCity());
-        out.setRecipientState(shipment.getRecipientState());
-        out.setRecipientPostalCode(shipment.getRecipientPostalCode());
-        out.setRecipientCountryCode(shipment.getRecipientCountryCode());
-        out.setReferenceNumber(shipment.getReferenceNumber());
-        out.setSpecialInstructions(shipment.getSpecialInstructions());
-        out.setDeclaredValue(shipment.getDeclaredValue());
-        out.setDeclaredValueCurrency(shipment.getDeclaredValueCurrency());
-        out.setWeightUnit(shipment.getWeightUnit());
-        out.setDimUnit(shipment.getDimUnit());
-        out.setIntl(shipment.getIntl());
-        out.setRecipientResidential(shipment.getRecipientResidential());
-        out.setRecipientPhoneCountryCode(shipment.getRecipientPhoneCountryCode());
-        return out;
+        return shipment.toBuilder().accountNumber(accountNumber).build();
     }
 
     /**

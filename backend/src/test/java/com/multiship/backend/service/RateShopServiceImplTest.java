@@ -599,4 +599,47 @@ class RateShopServiceImplTest {
         org.mockito.Mockito.verify(accountRepo, org.mockito.Mockito.never())
                 .findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc(anyString());
     }
+
+    /**
+     * BUG-008 — the rate-shop fan-out must thread accessorial fields
+     * (signatureOption, insuredValue, insuredValueCurrency, residential,
+     * packages) through to the connector's Rate call. Pre-fix,
+     * {@code withAccountNumber} hand-rolled a shallow copy that dropped
+     * these, so a quote for a signature-required shipment returned the
+     * base rate (no surcharge) — operators picked service options from a
+     * number 45-80 % below the label cost.
+     */
+    @Test
+    void threadsAccessorialFieldsIntoCarrierRateCall_BUG008() {
+        when(accountRepo.findPlatformAccountsByCarrier("UPS")).thenReturn(List.of(acct("UPS")));
+        when(accountRepo.findPlatformAccountsByCarrier("FEDEX")).thenReturn(List.of());
+        when(accountRepo.findPlatformAccountsByCarrier("USPS")).thenReturn(List.of());
+        when(accountRepo.findPlatformAccountsByCarrier("DHL")).thenReturn(List.of());
+        when(upsConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
+        when(upsConn.getRates(any(), eq("tok"), any())).thenReturn(List.of(option("UPS", "03", "32.23")));
+
+        ShipmentRequestDTO ship = shipment();
+        ship.setSignatureOption("ADULT");
+        ship.setInsuredValue(new BigDecimal("500.00"));
+        ship.setInsuredValueCurrency("USD");
+        ship.setRecipientResidential(Boolean.TRUE);
+        ship.setDeclaredValue(new BigDecimal("250.00"));
+
+        var request = RateShopRequestDTO.builder().shipment(ship).build();
+        var response = service.rateShop(request);
+        assertEquals("success", response.getStatus());
+
+        var captor = org.mockito.ArgumentCaptor.forClass(ShipmentRequestDTO.class);
+        org.mockito.Mockito.verify(upsConn).getRates(captor.capture(), eq("tok"), any());
+        ShipmentRequestDTO seen = captor.getValue();
+        assertEquals("ADULT", seen.getSignatureOption(),
+                "signatureOption must survive the account-number overlay");
+        assertEquals(0, new BigDecimal("500.00").compareTo(seen.getInsuredValue()),
+                "insuredValue must survive the account-number overlay");
+        assertEquals("USD", seen.getInsuredValueCurrency());
+        assertEquals(Boolean.TRUE, seen.getRecipientResidential());
+        assertEquals(0, new BigDecimal("250.00").compareTo(seen.getDeclaredValue()));
+        assertEquals("AUPS", seen.getAccountNumber(),
+                "account-number overlay must still land");
+    }
 }
