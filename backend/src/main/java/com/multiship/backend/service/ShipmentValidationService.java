@@ -155,6 +155,7 @@ public class ShipmentValidationService {
         checkRecipientRequired(to, errors, warnings);
         checkSenderRequired(from, req, errors);
         checkShipmentRequired(req, errors);
+        checkCarrierLengthLimits(req, errors); // BUG-004
         // Generate label rejects these with a 400 before anything else runs.
         if (beanValidator != null) {
             for (jakarta.validation.ConstraintViolation<ManualShipmentRequest> v : beanValidator.validate(req)) {
@@ -2081,6 +2082,43 @@ public class ShipmentValidationService {
     static boolean isValidEmail(String email) {
         if (email == null) return false;
         return EMAIL_RE.matcher(email.trim()).matches();
+    }
+
+    // === BUG-004 - carrier field length limits ======================
+    //
+    // UPS caps name / address line 1 / address line 2 / reference /
+    // company at 35 characters each; the carrier returns 120201
+    // 'Missing or invalid ship to attention name' when exceeded. FedEx
+    // + DHL are 35-45 depending on field, so 35 is a safe lower bound
+    // across all four carriers. Enforce upfront so pre-flight blocks
+    // over-long values instead of letting UPS reject at purchase.
+    private static final int CARRIER_FIELD_MAX = 35;
+
+    private void checkCarrierLengthLimits(ManualShipmentRequest req, List<ValidationIssue> errors) {
+        checkAddressLengths(req.getRecipient(), "recipient", errors);
+        checkAddressLengths(req.getSender(), "sender", errors);
+        if (req.getReference() != null && req.getReference().length() > CARRIER_FIELD_MAX) {
+            errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                    "Reference exceeds the " + CARRIER_FIELD_MAX + "-character carrier limit (currently "
+                            + req.getReference().length() + ").", "reference"));
+        }
+    }
+
+    private void checkAddressLengths(ManualShipmentRequest.Address addr, String prefix, List<ValidationIssue> errors) {
+        if (addr == null) return;
+        checkFieldLength(addr.getName(), prefix + ".name", "Name", errors);
+        checkFieldLength(addr.getCompany(), prefix + ".company", "Company", errors);
+        checkFieldLength(addr.getAddressLine1(), prefix + ".addressLine1", "Address line 1", errors);
+        checkFieldLength(addr.getAddressLine2(), prefix + ".addressLine2", "Address line 2", errors);
+    }
+
+    private void checkFieldLength(String value, String field, String label, List<ValidationIssue> errors) {
+        if (value == null) return;
+        if (value.length() > CARRIER_FIELD_MAX) {
+            errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                    label + " exceeds the " + CARRIER_FIELD_MAX + "-character carrier limit (currently "
+                            + value.length() + ").", field));
+        }
     }
 
     private ValidationIssue issue(ErrorCode code, String message, String field) {

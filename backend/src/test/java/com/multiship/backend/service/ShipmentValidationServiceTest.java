@@ -269,6 +269,74 @@ class ShipmentValidationServiceTest {
                 "happy path must PASS - got errors: " + res.getData().getLocalErrors());
     }
 
+    // === BUG-004 - carrier field length limits ======================
+    //
+    // UPS caps name / address line 1 / address line 2 / reference /
+    // company at 35 chars (120201 'Missing or invalid ship to
+    // attention name' otherwise). Boundary: 35 OK, 36 FAIL.
+
+    @Test
+    void referenceOverLimit_errorsAt36_passesAt35_BUG004() {
+        // 35-char reference is OK
+        ManualShipmentRequest ok = fullDomesticRequest();
+        ok.setReference("A".repeat(35));
+        stubServiceAndPreset();
+        ApiResponse<ShipmentValidationResult> okRes = service.validate(ok);
+        assertTrue(okRes.getData().getLocalErrors().stream()
+                        .noneMatch(e -> "reference".equals(e.getField())),
+                "35-char reference must not error; got " + okRes.getData().getLocalErrors());
+
+        // 36-char reference FAILs
+        ManualShipmentRequest bad = fullDomesticRequest();
+        bad.setReference("A".repeat(36));
+        stubServiceAndPreset();
+        ApiResponse<ShipmentValidationResult> badRes = service.validate(bad);
+        assertEquals("FAIL", badRes.getData().getOverall());
+        assertTrue(badRes.getData().getLocalErrors().stream()
+                        .anyMatch(e -> "reference".equals(e.getField())
+                                && e.getMessage().contains("35")),
+                "36-char reference must FAIL with the limit named");
+    }
+
+    @Test
+    void recipientNameOverLimit_errorsAt36_passesAt35_BUG004() {
+        ManualShipmentRequest ok = fullDomesticRequest();
+        ok.getRecipient().setName("J".repeat(35));
+        stubServiceAndPreset();
+        assertTrue(service.validate(ok).getData().getLocalErrors().stream()
+                        .noneMatch(e -> "recipient.name".equals(e.getField())),
+                "35-char recipient name must not error");
+
+        ManualShipmentRequest bad = fullDomesticRequest();
+        bad.getRecipient().setName("J".repeat(36));
+        stubServiceAndPreset();
+        ApiResponse<ShipmentValidationResult> res = service.validate(bad);
+        assertEquals("FAIL", res.getData().getOverall());
+        assertTrue(res.getData().getLocalErrors().stream()
+                        .anyMatch(e -> "recipient.name".equals(e.getField())
+                                && e.getMessage().contains("35")),
+                "36-char recipient name must FAIL with the limit named");
+    }
+
+    @Test
+    void recipientAddressLine1OverLimit_errorsAt36_passesAt35_BUG004() {
+        ManualShipmentRequest ok = fullDomesticRequest();
+        ok.getRecipient().setAddressLine1("1".repeat(35));
+        stubServiceAndPreset();
+        assertTrue(service.validate(ok).getData().getLocalErrors().stream()
+                        .noneMatch(e -> "recipient.addressLine1".equals(e.getField())),
+                "35-char address line 1 must not error");
+
+        ManualShipmentRequest bad = fullDomesticRequest();
+        bad.getRecipient().setAddressLine1("1".repeat(36));
+        stubServiceAndPreset();
+        ApiResponse<ShipmentValidationResult> res = service.validate(bad);
+        assertEquals("FAIL", res.getData().getOverall());
+        assertTrue(res.getData().getLocalErrors().stream()
+                        .anyMatch(e -> "recipient.addressLine1".equals(e.getField())),
+                "36-char address line 1 must FAIL");
+    }
+
     // ─── Missing sender fields ─────────────────────────────────────────
 
     @Test
