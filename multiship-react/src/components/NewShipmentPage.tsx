@@ -787,6 +787,14 @@ export default function NewShipmentPage() {
   // `{ ...cur, ...filledFields }` — swap `cur` on the first spread.
   useEffect(() => {
     if (!warehouseCode) return
+    // BUG-011 — in return mode sender is the CUSTOMER (Return from),
+    // not the merchant warehouse. Painting the client's warehouse
+    // address onto sender on return mode caused the customer block to
+    // show '8191 Logistics Dr' (merchant address) with only name blank;
+    // operator who didn't notice could cut a label from the merchant's
+    // own address. Merchant side ('Return to · your address' =
+    // recipient) is filled by applyClient from client.returnAddress.
+    if (isReturn) return
     const cw = clientWarehouses.find((w) => w.warehouse?.code === warehouseCode)
     const a = cw?.warehouse?.address
     if (!a) return
@@ -808,7 +816,7 @@ export default function NewShipmentPage() {
         ...(a.phone ? { phone: a.phone } : {}),
       }
     })
-  }, [warehouseCode, clientWarehouses])
+  }, [warehouseCode, clientWarehouses, isReturn])
 
   // Route: does this shipment cross a customs border? Drives which services/packages apply.
   const EU = new Set([

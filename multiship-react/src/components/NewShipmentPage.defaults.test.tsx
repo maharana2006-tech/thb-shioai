@@ -726,3 +726,59 @@ describe('NewShipmentPage — BUG-002 reason-of-export does not inherit account 
     })
   })
 })
+// ==================================================================
+// 8. BUG-011 — return mode must NOT paint merchant warehouse into Return-from (customer) block
+// ==================================================================
+
+describe('NewShipmentPage — BUG-011 return-mode sender does not inherit merchant warehouse address', () => {
+  it('fresh return mount + client pick leaves Return-from · customer block empty (merchant warehouse does not leak)', async () => {
+    // Reproduces: /orders/new/return → pick client MKL246 → warehouse
+    // auto-picks → sender block gets painted with merchant warehouse
+    // ('8191 Logistics Dr'). Operator fills a name, validation passes,
+    // label gets cut from the merchant's own address. Post-fix the
+    // warehouse-overlay effect short-circuits when isReturn=true.
+    listForClientWH.mockResolvedValueOnce({
+      data: [
+        {
+          clientCode: 'ACME',
+          isDefault: true,
+          warehouse: {
+            code: 'WH-ZEELAND',
+            name: 'Zeeland Fulfillment',
+            address: {
+              name: 'Zeeland Fulfillment',
+              line1: '8191 Logistics Dr',
+              line2: null,
+              city: 'Zeeland',
+              state: 'MI',
+              zip: '49464',
+              country: 'US',
+              phone: '6165551212',
+            },
+          },
+        },
+      ],
+    })
+
+    // Push /orders/new/return so isReturn starts true.
+    window.history.pushState({}, '', '/orders/new/return')
+    try {
+      const Page = await loadPage()
+      renderWithProviders(<Page />)
+      const clientSel = await waitForClientSelect()
+
+      fireEvent.change(clientSel, { target: { value: 'ACME' } })
+
+      // Give the warehouse-list fetch + auto-pick + overlay effect time to settle.
+      // Then assert the merchant warehouse line1 did NOT land in the sender
+      // ('Return from · customer') block.
+      await waitFor(() => {
+        // Negative assertion first (what the bug produced).
+        expect(screen.queryByDisplayValue('8191 Logistics Dr')).toBeNull()
+        expect(screen.queryByDisplayValue('Zeeland')).toBeNull()
+      })
+    } finally {
+      window.history.pushState({}, '', '/')
+    }
+  })
+})
