@@ -1,6 +1,7 @@
 package com.multiship.backend.util;
 
 import com.multiship.backend.dto.CustomsCommodityDTO;
+import com.multiship.backend.dto.PackageDetailDTO;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -84,6 +85,34 @@ public final class DeclaredValueContextBuilder {
         int n = Math.max(1, packageCount);
         BigDecimal[] buckets = new BigDecimal[n];
         for (int i = 0; i < n; i++) buckets[i] = BigDecimal.ZERO;
+
+        // BUG-007 — per-package declaredValue is the most authoritative source:
+        // when the UI's multi-box form sets it, every carrier must receive that
+        // exact per-box amount, not the shipment-level fallback split evenly.
+        // Short-circuits before commodity grouping (which would still produce
+        // the right answer for intl CI shipments) is intentional: if any
+        // package carries its own declaredValue, the operator chose per-box.
+        if (packages != null && !packages.isEmpty()) {
+            boolean anyPerPackage = false;
+            for (PackageDetailDTO p : packages) {
+                if (p != null && p.getDeclaredValue() != null && p.getDeclaredValue().signum() > 0) {
+                    anyPerPackage = true;
+                    break;
+                }
+            }
+            if (anyPerPackage) {
+                int boxes = Math.min(packages.size(), n);
+                for (int i = 0; i < boxes; i++) {
+                    PackageDetailDTO p = packages.get(i);
+                    if (p != null && p.getDeclaredValue() != null) {
+                        buckets[i] = p.getDeclaredValue();
+                    }
+                }
+                BigDecimal perPkgTotal = BigDecimal.ZERO;
+                for (BigDecimal b : buckets) perPkgTotal = perPkgTotal.add(b);
+                return new DeclaredValueContext(List.of(buckets), perPkgTotal, perPkgTotal, currency);
+            }
+        }
 
         // Map boxSeq (original global sequence) → local array index.
         // When packages is null / seq numbers absent, fall through to

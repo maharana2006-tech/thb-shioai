@@ -133,6 +133,47 @@ class DeclaredValueContextBuilderTest {
     }
 
     @Test
+    void perPackageDeclaredValue_overridesFallbackSplit_bug007() {
+        // BUG-007 — 3 boxes with per-package declared 80/60/40.
+        // Before the fix: fallback (box 1's 80, since the DTO's shipment-level
+        // declaredValue was set to box 1's value) got divided evenly across
+        // 3 boxes → 26.67/26.67/26.66 on every carrier wire format.
+        // After the fix: per-package values win → 80/60/40.
+        List<PackageDetailDTO> packages = List.of(
+                PackageDetailDTO.builder().sequenceNumber(1).weight(new BigDecimal("4")).declaredValue(new BigDecimal("80")).build(),
+                PackageDetailDTO.builder().sequenceNumber(2).weight(new BigDecimal("2.5")).declaredValue(new BigDecimal("60")).build(),
+                PackageDetailDTO.builder().sequenceNumber(3).weight(new BigDecimal("1")).declaredValue(new BigDecimal("40")).build());
+
+        DeclaredValueContextBuilder.DeclaredValueContext ctx =
+                DeclaredValueContextBuilder.build(null, 3, packages, "USD", new BigDecimal("80"));
+
+        assertEquals(new BigDecimal("80"), ctx.perPackage().get(0));
+        assertEquals(new BigDecimal("60"), ctx.perPackage().get(1));
+        assertEquals(new BigDecimal("40"), ctx.perPackage().get(2));
+        assertEquals(new BigDecimal("180"), ctx.shipmentTotal());
+    }
+
+    @Test
+    void perPackage_partialDeclared_absentPackagesContributeZero_bug007() {
+        // One package carries its own declaredValue, two are null → trigger
+        // per-package mode (any non-null wins). Null boxes stay at zero;
+        // the fallback is NOT used in this mode by design.
+        List<PackageDetailDTO> packages = List.of(
+                PackageDetailDTO.builder().sequenceNumber(1).weight(new BigDecimal("1")).build(),
+                PackageDetailDTO.builder().sequenceNumber(2).weight(new BigDecimal("1")).declaredValue(new BigDecimal("50")).build(),
+                PackageDetailDTO.builder().sequenceNumber(3).weight(new BigDecimal("1")).build());
+
+        DeclaredValueContextBuilder.DeclaredValueContext ctx =
+                DeclaredValueContextBuilder.build(null, 3, packages, "USD", new BigDecimal("200"));
+
+        assertEquals(BigDecimal.ZERO, ctx.perPackage().get(0));
+        assertEquals(new BigDecimal("50"), ctx.perPackage().get(1));
+        assertEquals(BigDecimal.ZERO, ctx.perPackage().get(2));
+        assertEquals(new BigDecimal("50"), ctx.shipmentTotal(),
+                "fallback is ignored once per-package mode kicks in");
+    }
+
+    @Test
     void sumInvariant_perPackageSumsToShipmentTotal() {
         List<CustomsCommodityDTO> items = List.of(
                 item("A", 3, "17.33", 1),
