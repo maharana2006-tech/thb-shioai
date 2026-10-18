@@ -136,6 +136,18 @@ public class CarrierServiceImpl implements CarrierService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.repository.CustomFieldDefinitionRepository customFieldDefinitionRepository;
 
+    /**
+     * R4-BUG-001 — the full validator at the purchase boundary. Pre-fix,
+     * {@link ShipmentValidationService} enforced OFAC sanctions, phone/email
+     * format, 35-char field length and insured≤declared rules, but only
+     * the UI called it before Generate; direct {@code /orders/manual-label}
+     * and External API callers slipped past. Running the validator here
+     * closes that gap for every entry point in one place.
+     * {@code required=false} to keep ~30 pure-Mockito unit tests compiling.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ShipmentValidationService shipmentValidationService;
+
     /** G7 — decides whether the shipment's SHIP_DATE should shift to the
      *  next working day based on the (source × carrier × warehouse) cutoff
      *  matrix + global holiday list. Nullable for test wiring. */
@@ -1794,6 +1806,38 @@ public class CarrierServiceImpl implements CarrierService {
         // check is a non-atomic SELECT, so two concurrent POSTs can both
         // miss and both ship. Add pg_try_advisory_xact_lock(hashtext('ref:'
         // || client || ':' || reference)) if a happy-path race test flakes.
+        // R4-BUG-001 — fire the full validator at the purchase boundary so
+        // OFAC / contact-format / 35-char-length / insured≤declared rules
+        // (previously UI-path-only) refuse the carrier call. Rules the AM
+        // sprint already duplicated in this method (dup-reference below,
+        // carrier/account mismatch, required custom fields) stay as
+        // explicit guards too — belt-and-braces, and the dup-check below
+        // keeps its specific 409 LABEL_ALREADY_GENERATED code (versus the
+        // 422 the validator would return for the same condition).
+        if (shipmentValidationService != null && existingOrderNo == null) {
+            ApiResponse<com.multiship.backend.dto.ShipmentValidationResult> pre =
+                    shipmentValidationService.validate(req);
+            if (pre != null && pre.getData() != null
+                    && "FAIL".equalsIgnoreCase(pre.getData().getOverall())) {
+                java.util.List<com.multiship.backend.dto.ShipmentValidationResult.ValidationIssue> errs =
+                        pre.getData().getLocalErrors();
+                com.multiship.backend.dto.ShipmentValidationResult.ValidationIssue first =
+                        errs == null ? null : errs.stream().findFirst().orElse(null);
+                ErrorCode code = ErrorCode.VALIDATION_ERROR;
+                if (first != null && first.getCode() != null) {
+                    try { code = ErrorCode.valueOf(first.getCode()); }
+                    catch (IllegalArgumentException ignored) {
+                        // Validator returned a snake_case code not in the enum.
+                        // Keep VALIDATION_ERROR; the message still carries the detail.
+                    }
+                }
+                String msg = first != null && first.getMessage() != null
+                        ? first.getMessage()
+                        : (pre.getMessage() != null ? pre.getMessage() : "Request failed validation.");
+                return failure(HttpStatus.UNPROCESSABLE_ENTITY, code, msg);
+            }
+        }
+
         if (existingOrderNo == null && orderRepository != null
                 && StringUtils.hasText(req.getReference())) {
             String refClient = StringUtils.hasText(req.getClientCode())
