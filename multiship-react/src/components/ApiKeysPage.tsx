@@ -50,11 +50,15 @@ const AVAILABLE_SCOPES: { token: string; label: string; hint: string }[] = [
   { token: 'landed-cost',  label: 'Landed cost',  hint: 'POST /landed-cost (duty + tax + fees estimate).' },
 ]
 
-/** Default = all scopes on, matching the pre-fix behavior. Golden path
- *  stays fast; operators wanting to narrow uncheck what they don't need. */
+/** Recommended scope set for the "Recommended defaults" one-click
+ *  restore button. Dialog itself opens with ZERO scopes checked
+ *  (R2-BUG-019 least-privilege); operators opt in per scope or hit
+ *  "Recommended defaults" to re-select the golden path all-on set. */
 const DEFAULT_SCOPE_SET = new Set(AVAILABLE_SCOPES.map((s) => s.token))
 
-const emptyForm = { name: '', environment: 'live' }
+// R2-BUG-019 — environment defaults to 'test' (not 'live') so a
+// mis-click doesn't mint a production key with no guardrails.
+const emptyForm = { name: '', environment: 'test' }
 
 /**
  * External API Keys — mint the `msk_...` tokens client systems use to call the
@@ -70,15 +74,14 @@ export default function ApiKeysPage() {
   const [issueOpen, setIssueOpen] = useState(false)
   const [form, setForm] = useState(emptyForm)
   const [issuing, setIssuing] = useState(false)
-  /** Audit R2 #338 — per-scope check-state. Initialised to all-on so the
-   *  golden path stays "issue = full key"; operators wanting least-privilege
-   *  uncheck specific tokens. */
-  const [scopes, setScopes] = useState<Set<string>>(() => new Set(DEFAULT_SCOPE_SET))
-  /** Audit A6 (#339) — per-client vs platform-wide scope. Default stays
-   *  "all clients" (prior behaviour); "one client" reveals a picker.
-   *  Load the client list once on mount (best-effort; callers that can't
-   *  listClients just lose the picker and fall back to all-clients). */
-  const [scopeMode, setScopeMode] = useState<'ALL' | 'ONE'>('ALL')
+  /** R2-BUG-019 — per-scope check-state. Opens EMPTY (least-privilege);
+   *  operator must opt in per scope. "Recommended defaults" button restores
+   *  the all-on set in one click for the golden path. */
+  const [scopes, setScopes] = useState<Set<string>>(() => new Set<string>())
+  /** R2-BUG-019 — client scope. Opens UNSET so the operator must
+   *  consciously pick "All clients" or "One client" + a code. No
+   *  silent all-clients mint on a mis-click. */
+  const [scopeMode, setScopeMode] = useState<'ALL' | 'ONE' | null>(null)
   const [pickedClientCode, setPickedClientCode] = useState('')
   const [clientOptions, setClientOptions] = useState<string[]>([])
 
@@ -134,12 +137,10 @@ export default function ApiKeysPage() {
 
   const openIssue = () => {
     setForm(emptyForm)
-    // Audit R2 #338 — reset scope-set to all-on when the modal reopens
-    // so a prior narrow selection doesn't carry over silently.
-    setScopes(new Set(DEFAULT_SCOPE_SET))
-    // Audit A6 (#339) — reset client-scope choice on reopen for the
-    // same reason as the scope reset above.
-    setScopeMode('ALL')
+    // R2-BUG-019 — reset to least-privilege blank state on every open
+    // so a prior wide selection can't leak into a fresh dialog.
+    setScopes(new Set<string>())
+    setScopeMode(null)
     setPickedClientCode('')
     setIssueOpen(true)
   }
@@ -156,9 +157,12 @@ export default function ApiKeysPage() {
       notify.error('Pick at least one scope — a key with no scopes can’t call anything.')
       return
     }
-    // Audit A6 (#339) — require a client when scopeMode='ONE'; blank
-    // picker is operator error, not "fall back to all clients" (that
-    // would silently mint a platform-wide key).
+    // R2-BUG-019 — require an explicit client-scope choice; no silent
+    // fallback to all-clients.
+    if (scopeMode === null) {
+      notify.error('Pick a client scope — "All clients" or "One client".')
+      return
+    }
     if (scopeMode === 'ONE' && !pickedClientCode.trim()) {
       notify.error('Pick a client for a single-client key, or switch to "All clients".')
       return
@@ -462,10 +466,9 @@ export default function ApiKeysPage() {
               </button>
             </div>
             <p className="text-[12px] text-slate-500">
-              The key works for <span className="font-semibold text-slate-700">all clients</span> — every external call
-              names the client it ships for via <span className="font-mono font-semibold text-slate-700">clientCode</span>{' '}
-              in the request body. The full token is shown{' '}
-              <span className="font-semibold text-slate-700">once</span>, right after issue.
+              Pick a <span className="font-semibold text-slate-700">client scope</span> and{' '}
+              <span className="font-semibold text-slate-700">at least one scope</span>. The full token
+              is shown <span className="font-semibold text-slate-700">once</span>, right after issue.
             </p>
 
             <div className="mt-4 space-y-3">
@@ -525,11 +528,15 @@ export default function ApiKeysPage() {
                       <option key={c} value={c}>{c}</option>
                     ))}
                   </select>
-                ) : (
+                ) : scopeMode === 'ALL' ? (
                   <p className="mt-2 text-[11.5px] text-slate-500">
                     This key works for <span className="font-semibold text-slate-700">all clients</span>. Each external
                     call names the client it ships for via{' '}
                     <span className="font-mono font-semibold text-slate-700">clientCode</span> in the request body.
+                  </p>
+                ) : (
+                  <p className="mt-2 text-[11.5px] text-slate-500">
+                    Pick a client scope above to continue.
                   </p>
                 )}
               </div>
@@ -618,11 +625,19 @@ export default function ApiKeysPage() {
               >
                 Cancel
               </button>
+              {/* R2-BUG-019 — Issue stays disabled until the operator has
+                  made every least-privilege choice: a client scope (and the
+                  client code when 'ONE') and at least one API scope. */}
               <button
                 type="button"
                 onClick={() => void submitIssue()}
-                disabled={issuing}
-                className="rounded-xl bg-[#1f150c] px-5 py-2 text-[13px] font-semibold text-white transition hover:bg-[#412d15] disabled:opacity-50"
+                disabled={
+                  issuing ||
+                  scopeMode === null ||
+                  (scopeMode === 'ONE' && !pickedClientCode.trim()) ||
+                  scopes.size === 0
+                }
+                className="rounded-xl bg-[#1f150c] px-5 py-2 text-[13px] font-semibold text-white transition hover:bg-[#412d15] disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {issuing ? 'Issuing…' : 'Issue key'}
               </button>
