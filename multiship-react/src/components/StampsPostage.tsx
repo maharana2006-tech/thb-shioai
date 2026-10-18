@@ -135,7 +135,7 @@ export function AddFundsForm({ account, onDone }: {
       : custVal && !/^\d+(\.\d{0,2})?$/.test(custVal)
         ? 'Enter dollars and cents, like 25.50.'
         : roomCents !== null && amountCents > roomCents
-          ? `That would go over Stamps.com's ${usd(balance?.maxBalance ?? 0)} balance limit. You can add up to ${usd(room)}.`
+          ? `That would go over Stamps.com's ${usd(balance?.maxBalance ?? 0)} balance limit. You can add up to ${usd(room ?? 0)}.`
           : null
   // BUG-018 — balance fetch failed (unauthorized / Stamps rejected the lookup).
   // Disable the amount controls so the amber warning isn't paired with a live
