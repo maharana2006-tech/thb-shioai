@@ -138,7 +138,11 @@ public class AccessScopePolicy {
         if (!hasKnownRole(auth)) return false;
         Optional<String> mine = tenantOf(auth);
         if (mine.isEmpty()) return true; // operator
-        if (requestedClientCode == null || requestedClientCode.isBlank()) return false;
+        // R3-BUG-001 — tenant-scoped callers that omit the tenant param are
+        // implicitly asking for their own tenant. The service layer applies
+        // TenantScopeEnforcer.clampClientCode which fills in the caller's
+        // clientCode and refuses foreign ones, so a null here is safe to allow.
+        if (requestedClientCode == null || requestedClientCode.isBlank()) return true;
         return mine.get().equalsIgnoreCase(requestedClientCode.trim());
     }
 

@@ -140,12 +140,20 @@ class AccessScopePolicyTest {
     }
 
     @Test
-    void canAccessTenant_scopedCaller_requiresExplicitClient() {
+    void canAccessTenant_scopedCaller_omittedClient_implicitlyAllowed_bugR3_001() {
         var policy = new AccessScopePolicy(true);
         var auth = userAuth("acmeuser", "ACME", "USER");
-        // Null / blank requested client from a tenant-scoped caller means
-        // "unspecified" — cannot be allowed (would leak everything).
-        assertFalse(policy.canAccessTenant(auth, null));
-        assertFalse(policy.canAccessTenant(auth, "  "));
+        // R3-BUG-001 — omitting the tenant param on a GET /orders list call
+        // used to 403 the operator role out of their own grid. The service
+        // layer's TenantScopeEnforcer.clampClientCode fills in the caller's
+        // own clientCode and refuses foreign ones, so this check only needs
+        // to reject *mismatched* explicit values, not unspecified ones.
+        assertTrue(policy.canAccessTenant(auth, null));
+        assertTrue(policy.canAccessTenant(auth, "  "));
+        // Explicit foreign tenant still refused:
+        assertFalse(policy.canAccessTenant(auth, "OTHER"));
+        // Explicit own tenant still allowed:
+        assertTrue(policy.canAccessTenant(auth, "ACME"));
+        assertTrue(policy.canAccessTenant(auth, "acme"));
     }
 }
