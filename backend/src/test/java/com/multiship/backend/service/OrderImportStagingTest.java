@@ -264,4 +264,30 @@ class OrderImportStagingTest {
         assertTrue(row.getErrors() == null || row.getErrors().isEmpty(), String.valueOf(row.getErrors()));
         assertEquals(1, again.getData().getReadyOrders());
     }
+
+    @Test
+    void errorsCsvRoundTripsClientShipViaCodeInServiceTypeColumn() throws Exception {
+        // BUG-014 - the parser rewrites serviceType to the carrier's wire code
+        // (e.g. '03') and stashes the client's own code in shipViaCode. The
+        // errors file must put the client's code back in serviceType so a
+        // fix+re-upload lands on the same vocabulary the operator typed.
+        StagingUploadDTO s = stage("orders.csv", csv(List.of(order("B-1", "")))).getData();
+        // Simulate the parser-side resolution: write the staged row back with
+        // shipViaCode='U11' and serviceType='03' (the carrier wire code).
+        ImportStagingRow ent = stagedRows.get(0);
+        ObjectMapper om = new ObjectMapper();
+        OrderImportRowDTO parsed = om.readValue(ent.getRowJson(), OrderImportRowDTO.class);
+        parsed.setShipViaCode("U11");
+        parsed.setServiceType("03");
+        ent.setRowJson(om.writeValueAsString(parsed));
+
+        String out = new String(service.stagingErrorFile(s.getId(), "csv", "alice").bytes(), StandardCharsets.UTF_8);
+        List<String> lines = out.lines().toList();
+        // Column index of serviceType in the HEADERS layout the errors file uses.
+        int svcIdx = OrderImportServiceImpl.HEADERS.indexOf("serviceType");
+        String[] cells = lines.get(1).split(",", -1);
+        assertEquals("U11", cells[svcIdx],
+                "serviceType cell must emit the client's ship-via code, not the carrier wire code");
+        assertFalse(out.contains(",03,"), "carrier wire code must not leak into errors.csv");
+    }
 }
