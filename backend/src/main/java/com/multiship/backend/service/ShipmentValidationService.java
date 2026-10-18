@@ -268,7 +268,7 @@ public class ShipmentValidationService {
 
         labelTimeChecks(req, service, preset, warehouseId, errors, warnings, skipped);
         checkPoBoxAndMilitary(req, service, errors);
-        checkDuplicateReference(req, warnings);
+        checkDuplicateReference(req, errors); // BUG-006 — fail, not warn
         checkCutoff(req, warnings);
         checkInsuranceCost(req, service, warnings);
 
@@ -1661,16 +1661,19 @@ public class ShipmentValidationService {
         }
     }
 
-    /** The same reference / PO already shipped for this client — likely a double shipment. */
-    private void checkDuplicateReference(ManualShipmentRequest req, List<ValidationIssue> warnings) {
+    /** BUG-006 — the same reference / PO already shipped for this client is
+     *  a hard FAIL at /validate (was a WARN). Mirrors the /manual-label
+     *  409 CONFLICT so operators can't buy two paid labels under the
+     *  same reference. */
+    private void checkDuplicateReference(ManualShipmentRequest req, List<ValidationIssue> errors) {
         if (orderRepository == null || !StringUtils.hasText(req.getReference())) return;
         String client = blankTo(req.getClientCode(), "MANUAL").trim();
         orderRepository.findShippedByClientAndReference(client, req.getReference().trim()).ifPresent(o ->
-                warnings.add(issue(ErrorCode.VALIDATION_ERROR, "Reference " + req.getReference().trim()
+                errors.add(issue(ErrorCode.VALIDATION_ERROR, "Reference " + req.getReference().trim()
                         + " already shipped on order #" + o.getOrderNo()
                         + (o.getCreatedDate() != null ? " (" + o.getCreatedDate() + ")" : "")
                         + (StringUtils.hasText(o.getTrack()) ? ", tracking " + o.getTrack() : "")
-                        + ". Make sure this isn't a second shipment of the same order.", "reference")));
+                        + ". Use a different reference or void the existing label first.", "reference")));
     }
 
     /** Past the client's daily cutoff, the label counts as the next business day's. */

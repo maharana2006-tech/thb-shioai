@@ -1775,6 +1775,33 @@ public class CarrierServiceImpl implements CarrierService {
                     "Enter the bill-to account number for the shipment.");
         }
 
+        // BUG-006 — refuse a (client, reference) that already shipped on a
+        // different label. Idempotency-Key replay already catches the "same
+        // click twice" race; this blocks the "same reference, DIFFERENT
+        // key" case (the UI generates a fresh key per attempt, so a
+        // retry-after-success button press was buying a second paid label).
+        // Only applies to new orders (existingOrderNo == null); the
+        // regenerate path intentionally re-labels the SAME reference on
+        // the SAME order. ponytail: no advisory lock yet — the duplicate
+        // check is a non-atomic SELECT, so two concurrent POSTs can both
+        // miss and both ship. Add pg_try_advisory_xact_lock(hashtext('ref:'
+        // || client || ':' || reference)) if a happy-path race test flakes.
+        if (existingOrderNo == null && orderRepository != null
+                && StringUtils.hasText(req.getReference())) {
+            String refClient = StringUtils.hasText(req.getClientCode())
+                    ? req.getClientCode().trim() : "MANUAL";
+            java.util.Optional<Order> alreadyShipped =
+                    orderRepository.findShippedByClientAndReference(refClient, req.getReference().trim());
+            if (alreadyShipped.isPresent()) {
+                Order o = alreadyShipped.get();
+                return failure(HttpStatus.CONFLICT, ErrorCode.LABEL_ALREADY_GENERATED,
+                        "Reference " + req.getReference().trim()
+                                + " already shipped on order #" + o.getOrderNo()
+                                + (StringUtils.hasText(o.getTrack()) ? " (tracking " + o.getTrack() + ")" : "")
+                                + ". Use a different reference or void the existing label first.");
+            }
+        }
+
         // 3PL guardrails — clientCode may be empty for ad-hoc shipments, in
         // which case every resolver call is a no-op (backward-compat).
         String resolvedClient = req.getClientCode();
