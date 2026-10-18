@@ -426,6 +426,30 @@ export default function LabelDocumentPage() {
   const label = payload?.label
   const shipper = payload?.shipper
   const resolution = payload?.resolution
+  /* BUG-001 — the facsimile fallback must reflect the shipment's own
+     sender (what the operator typed on New Shipment / what persisted on
+     the order), not the client-warehouse / platform default the backend
+     resolves into `payload.shipper` when `order.shipFrom*` is blank.
+     When any ship-from field is set on the order, prefer the per-order
+     capture; otherwise fall through to the resolved shipper. */
+  const facsimileShipper = useMemo(() => {
+    const hasPerOrderShipFrom = Boolean(
+      order?.shipFromName || order?.shipFromAddr1 || order?.shipFromCity
+        || order?.shipFromState || order?.shipFromZip || order?.shipFromCountryCd,
+    )
+    if (!hasPerOrderShipFrom) return shipper
+    return {
+      name: order?.shipFromName ?? null,
+      company: order?.shipFromCompany ?? null,
+      phone: order?.shipFromPhone ?? null,
+      addressLine1: order?.shipFromAddr1 ?? null,
+      addressLine2: order?.shipFromAddr2 ?? null,
+      city: order?.shipFromCity ?? null,
+      state: order?.shipFromState ?? null,
+      postalCode: order?.shipFromZip ?? null,
+      countryCode: order?.shipFromCountryCd ?? null,
+    }
+  }, [order, shipper])
   const legacyAccount = payload?.carrierAccount
   /* PR ρ — carrierResponseDetails is still on the wire (backend keeps
      emitting it so /orders/{n}/carrier-payload-preview and any future
@@ -1124,20 +1148,20 @@ export default function LabelDocumentPage() {
                 ) : null}
                 <div className="mt-1 grid grid-cols-[1.08fr_1fr] font-mono text-[10px] leading-[13px]">
                   <div className="pr-2 uppercase">
-                    <p>ORIGIN ID:{(shipper?.state || 'XX').toUpperCase()}{(shipper?.postalCode || '').slice(0, 2)}A&nbsp;&nbsp;{(shipper?.phone || '').replace(/\s+/g, '')}</p>
-                    <p>{shipper?.name}</p>
+                    <p>ORIGIN ID:{(facsimileShipper?.state || 'XX').toUpperCase()}{(facsimileShipper?.postalCode || '').slice(0, 2)}A&nbsp;&nbsp;{(facsimileShipper?.phone || '').replace(/\s+/g, '')}</p>
+                    <p>{facsimileShipper?.name}</p>
                     {/* PR #535 — shipper COMPANY line, only when it says
                         something the name line doesn't. The backend can emit
                         company === name (ship_from_company mirrors the sender
                         name on manual orders), which printed the shipper
                         twice on the PDF while the ZPL printed it once. */}
-                    {shipper?.company && shipper.company.trim().toLowerCase() !== (shipper?.name || '').trim().toLowerCase()
-                      ? <p>{shipper.company}</p>
+                    {facsimileShipper?.company && facsimileShipper.company.trim().toLowerCase() !== (facsimileShipper?.name || '').trim().toLowerCase()
+                      ? <p>{facsimileShipper.company}</p>
                       : null}
-                    <p>{shipper?.addressLine1}</p>
+                    <p>{facsimileShipper?.addressLine1}</p>
                     <p>&nbsp;</p>
-                    <p>{shipper?.city}, {shipper?.state} {shipper?.postalCode} {shipper?.countryCode}</p>
-                    <p>SIGN: {shipper?.name}</p>
+                    <p>{facsimileShipper?.city}, {facsimileShipper?.state} {facsimileShipper?.postalCode} {facsimileShipper?.countryCode}</p>
+                    <p>SIGN: {facsimileShipper?.name}</p>
                   </div>
                   <div className="border-l border-black pl-2">
                     <p>SHIP DATE: {labelDate(shipDate)}</p>
@@ -1232,7 +1256,8 @@ export default function LabelDocumentPage() {
                 ) : null}
                 <div className="grid grid-cols-2 pr-8 text-[9px] font-bold leading-[12px]">
                   <span>INV:</span>
-                  <span>REF: {orderDisplay}</span>
+                  {/* BUG-001 — REF reflects the user-entered reference; when blank, em-dash. Never the order number (that lives in PO/CAD below). */}
+                  <span>REF: {order?.customerRef?.trim() || '—'}</span>
                   {/* PR #543 — PO / DEPT rows re-added. PO derives from the
                       order source: manual/bulk → "MAN{orderNo}"; WMS →
                       wmsExternalId when present else orderNo; other sources
