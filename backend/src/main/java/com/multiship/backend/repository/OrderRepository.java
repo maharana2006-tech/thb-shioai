@@ -162,7 +162,7 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             COUNT(*) as total_orders,
             COUNT(CASE WHEN COALESCE(t.status, 'PENDING') = 'PENDING' THEN 1 END) as pending_labels,
             COUNT(CASE WHEN t.status = 'GENERATED' THEN 1 END) as generated_labels,
-            COUNT(CASE WHEN t.status = 'ERROR' THEN 1 END) as failed_labels,
+            COUNT(CASE WHEN t.status IN ('ERROR', 'FAILED') THEN 1 END) as failed_labels,
             COUNT(CASE WHEN t.is_label_generated = true THEN 1 END) as labels_generated,
             COALESCE(SUM(b.weight), 0) as total_weight
         FROM label_batch b
@@ -181,7 +181,7 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             COUNT(*) as total_orders,
             COUNT(CASE WHEN COALESCE(t.status, 'PENDING') = 'PENDING' THEN 1 END) as pending_labels,
             COUNT(CASE WHEN t.status = 'GENERATED' THEN 1 END) as generated_labels,
-            COUNT(CASE WHEN t.status = 'ERROR' THEN 1 END) as failed_labels,
+            COUNT(CASE WHEN t.status IN ('ERROR', 'FAILED') THEN 1 END) as failed_labels,
             COUNT(CASE WHEN t.is_label_generated = true THEN 1 END) as labels_generated,
             COALESCE(SUM(b.weight), 0) as total_weight
         FROM label_batch b
@@ -339,7 +339,7 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
     String RESOLUTION_CLIENT_MISSING_SQL = "(NOT " + OCD_ANY_SQL + " AND NOT " + CLIENT_OK_SQL + ")";
 
     String UNIFIED_FILTER_SQL = """
-        WHERE (:status = '' OR COALESCE(t.status, 'PENDING') = :status)
+        WHERE (:status = '' OR COALESCE(t.status, 'PENDING') = :status OR (:status = 'ERROR' AND t.status = 'FAILED'))
           AND (:tenantId = '' OR UPPER(COALESCE(b.tenant_id, b.cust_no)) = :tenantId)
           AND (:keyword = ''
                OR CAST(b.order_no AS TEXT) LIKE CONCAT('%', :keyword, '%')
@@ -582,7 +582,7 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             ) as choose_account,
             COUNT(*) FILTER (WHERE COALESCE(t.status, 'PENDING') = 'PENDING' AND """ + RESOLUTION_CLIENT_MISSING_SQL + """
             ) as client_missing,
-            COUNT(*) FILTER (WHERE t.status = 'ERROR') as failed,
+            COUNT(*) FILTER (WHERE t.status IN ('ERROR', 'FAILED')) as failed,
             COUNT(*) FILTER (WHERE t.status = 'GENERATED') as generated
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
@@ -604,7 +604,7 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             ) as choose_account,
             COUNT(*) FILTER (WHERE COALESCE(t.status, 'PENDING') = 'PENDING' AND """ + RESOLUTION_CLIENT_MISSING_SQL + """
             ) as client_missing,
-            COUNT(*) FILTER (WHERE t.status = 'ERROR') as failed,
+            COUNT(*) FILTER (WHERE t.status IN ('ERROR', 'FAILED')) as failed,
             COUNT(*) FILTER (WHERE t.status = 'GENERATED') as generated
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no

@@ -505,4 +505,29 @@ class OrderServiceImplTest {
                 eq("14"), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
                 anyInt(), anyInt(), anyString(), anyString());
     }
+
+    /**
+     * BUG-013 - rows with order_label_tracking.status='FAILED' were silently
+     * dropped (counted neither in Failed nor Generated nor the PENDING buckets),
+     * so {@code All orders = ready + needs + choose + client + failed + generated}
+     * ran short of the real row count. SQL now unions 'ERROR'+'FAILED' into the
+     * failed bucket. This test locks the service's pass-through of that count
+     * so a future refactor can't drop the mapping.
+     */
+    @Test
+    void getQueueStats_mapsFailedCountFromRepositoryUnion() {
+        // Repo returns the post-fix row shape: 5 failed covers both ERROR and FAILED.
+        Object[] row = new Object[] { 0L, 0L, 0L, 0L, 5L, 10L };
+        when(orderRepository.getQueueStats()).thenReturn(java.util.Collections.singletonList(row));
+
+        ApiResponse<Map<String, Long>> resp = service.getQueueStats();
+
+        assertNotNull(resp.getData());
+        assertEquals(5L, resp.getData().get("failed"));
+        assertEquals(10L, resp.getData().get("generated"));
+        // All = ready + needs + choose + client + failed + generated - union invariant.
+        long all = resp.getData().values().stream().mapToLong(Long::longValue).sum();
+        assertEquals(15L, all);
+    }
+
 }
