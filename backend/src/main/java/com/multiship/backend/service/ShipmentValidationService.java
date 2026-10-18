@@ -894,10 +894,25 @@ public class ShipmentValidationService {
         // exceptions. Downgraded to a warning because some domestic ground
         // services accept a blank phone; the label call will surface the
         // hard error if the specific service requires it.
+        // BUG-003 — if a phone IS supplied, enforce the same country-aware
+        // digit count the UI uses (shipmentSchema.ts -> phoneErrorFor).
+        // An 'abc' or '12345' phone would otherwise pass pre-flight and
+        // be rejected at the carrier call; mirror the UI so bulk / external
+        // callers fail fast with a readable error.
         if (!StringUtils.hasText(to.getPhone())) {
             warnings.add(issue(ErrorCode.VALIDATION_ERROR,
                     "Recipient phone is recommended — most carriers require it for delivery exceptions.",
                     "recipient.phone"));
+        } else {
+            String phoneErr = phoneErrorFor(country, to.getPhone());
+            if (phoneErr != null) {
+                errors.add(issue(ErrorCode.VALIDATION_ERROR, phoneErr, "recipient.phone"));
+            }
+        }
+        // BUG-003 — email: UI accepts blank, rejects non-RFC-ish. Mirror.
+        if (StringUtils.hasText(to.getEmail()) && !isValidEmail(to.getEmail())) {
+            errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                    "Recipient email is not a valid email address.", "recipient.email"));
         }
     }
 
@@ -1991,6 +2006,81 @@ public class ShipmentValidationService {
             }
         }
         return null;
+    }
+
+    // === BUG-003 - UI-parity phone + email validation ===============
+    //
+    // Ported from multiship-react/src/utils/countryFormats.ts
+    // (phoneErrorFor + PHONE_DIGITS + DIAL_CODES). Keep in sync with
+    // the FE; a country not listed falls back to a generic 7-15 digit
+    // rule.
+    private static final java.util.Map<String, int[]> PHONE_DIGITS = java.util.Map.ofEntries(
+            java.util.Map.entry("US", new int[]{10,10}), java.util.Map.entry("CA", new int[]{10,10}),
+            java.util.Map.entry("GB", new int[]{9,10}), java.util.Map.entry("IE", new int[]{7,9}),
+            java.util.Map.entry("IN", new int[]{10,10}), java.util.Map.entry("AU", new int[]{9,9}),
+            java.util.Map.entry("NZ", new int[]{8,10}), java.util.Map.entry("DE", new int[]{6,11}),
+            java.util.Map.entry("FR", new int[]{9,9}), java.util.Map.entry("ES", new int[]{9,9}),
+            java.util.Map.entry("IT", new int[]{9,11}), java.util.Map.entry("NL", new int[]{9,9}),
+            java.util.Map.entry("BE", new int[]{8,9}), java.util.Map.entry("CH", new int[]{9,9}),
+            java.util.Map.entry("AT", new int[]{10,11}), java.util.Map.entry("SE", new int[]{7,9}),
+            java.util.Map.entry("NO", new int[]{8,8}), java.util.Map.entry("DK", new int[]{8,8}),
+            java.util.Map.entry("FI", new int[]{9,10}), java.util.Map.entry("PL", new int[]{9,9}),
+            java.util.Map.entry("PT", new int[]{9,9}), java.util.Map.entry("JP", new int[]{9,10}),
+            java.util.Map.entry("CN", new int[]{11,11}), java.util.Map.entry("KR", new int[]{9,10}),
+            java.util.Map.entry("SG", new int[]{8,8}), java.util.Map.entry("MY", new int[]{9,10}),
+            java.util.Map.entry("TH", new int[]{9,9}), java.util.Map.entry("VN", new int[]{9,10}),
+            java.util.Map.entry("PH", new int[]{10,10}), java.util.Map.entry("ID", new int[]{9,12}),
+            java.util.Map.entry("AE", new int[]{8,9}), java.util.Map.entry("SA", new int[]{9,9}),
+            java.util.Map.entry("BR", new int[]{10,11}), java.util.Map.entry("MX", new int[]{10,10}),
+            java.util.Map.entry("AR", new int[]{10,11}), java.util.Map.entry("ZA", new int[]{9,9}),
+            java.util.Map.entry("TR", new int[]{10,10}), java.util.Map.entry("RU", new int[]{10,10}));
+    private static final java.util.Map<String, String> DIAL_CODES = java.util.Map.ofEntries(
+            java.util.Map.entry("US","1"), java.util.Map.entry("CA","1"), java.util.Map.entry("GB","44"),
+            java.util.Map.entry("IE","353"), java.util.Map.entry("FR","33"), java.util.Map.entry("DE","49"),
+            java.util.Map.entry("ES","34"), java.util.Map.entry("IT","39"), java.util.Map.entry("NL","31"),
+            java.util.Map.entry("BE","32"), java.util.Map.entry("CH","41"), java.util.Map.entry("AT","43"),
+            java.util.Map.entry("SE","46"), java.util.Map.entry("NO","47"), java.util.Map.entry("DK","45"),
+            java.util.Map.entry("FI","358"), java.util.Map.entry("PL","48"), java.util.Map.entry("PT","351"),
+            java.util.Map.entry("JP","81"), java.util.Map.entry("CN","86"), java.util.Map.entry("KR","82"),
+            java.util.Map.entry("IN","91"), java.util.Map.entry("SG","65"), java.util.Map.entry("MY","60"),
+            java.util.Map.entry("TH","66"), java.util.Map.entry("VN","84"), java.util.Map.entry("PH","63"),
+            java.util.Map.entry("ID","62"), java.util.Map.entry("AE","971"), java.util.Map.entry("SA","966"),
+            java.util.Map.entry("BR","55"), java.util.Map.entry("MX","52"), java.util.Map.entry("AR","54"),
+            java.util.Map.entry("ZA","27"), java.util.Map.entry("TR","90"), java.util.Map.entry("RU","7"),
+            java.util.Map.entry("AU","61"), java.util.Map.entry("NZ","64"));
+    private static final int[] GENERIC_PHONE_DIGITS = new int[]{7, 15};
+    // Pragmatic RFC-ish email: non-space + @ + non-space + . + non-space.
+    // Not full RFC 5322 - YAGNI; matches the FE's Yup email() rule.
+    private static final java.util.regex.Pattern EMAIL_RE =
+            java.util.regex.Pattern.compile("^\\S+@\\S+\\.\\S+$");
+
+    /** Mirrors shipmentSchema.ts phoneErrorFor. Returns null if OK. */
+    static String phoneErrorFor(String countryCode, String phone) {
+        if (phone == null) return null;
+        String raw = phone.trim();
+        if (raw.isEmpty()) return null;
+        String country = countryCode == null ? "" : countryCode.toUpperCase(Locale.ROOT);
+        String national = raw.replaceAll("\\D", "");
+        if (national.isEmpty()) return "Enter a phone number";
+        int[] range = PHONE_DIGITS.getOrDefault(country, GENERIC_PHONE_DIGITS);
+        int min = range[0], max = range[1];
+        String dial = DIAL_CODES.getOrDefault(country, "");
+        if (!dial.isEmpty() && national.length() > max && national.startsWith(dial)) {
+            String stripped = national.substring(dial.length());
+            if (stripped.length() >= min && stripped.length() <= max) national = stripped;
+        }
+        if (national.length() < min || national.length() > max) {
+            String label = country.isEmpty() ? "This country" : country;
+            return min == max
+                    ? label + " phone numbers are " + min + " digits (you entered " + national.length() + ")."
+                    : label + " phone numbers are " + min + "-" + max + " digits (you entered " + national.length() + ").";
+        }
+        return null;
+    }
+
+    static boolean isValidEmail(String email) {
+        if (email == null) return false;
+        return EMAIL_RE.matcher(email.trim()).matches();
     }
 
     private ValidationIssue issue(ErrorCode code, String message, String field) {

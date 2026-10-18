@@ -204,6 +204,71 @@ class ShipmentValidationServiceTest {
                 "phone missing must produce a warning so the operator sees it");
     }
 
+    // === BUG-003 - UI-parity phone + email ===========================
+    //
+    // Non-blank phone or email the UI would reject must FAIL pre-flight
+    // (bulk / external callers otherwise slip past until the carrier
+    // label call). Mirrors shipmentSchema.ts phoneErrorFor + Yup email().
+
+    @Test
+    void nonNumericPhone_errorsAsInvalidPhone_BUG003() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.getRecipient().setPhone("abc");
+        stubServiceAndPreset();
+
+        ApiResponse<ShipmentValidationResult> res = service.validate(req);
+
+        assertEquals("FAIL", res.getData().getOverall());
+        assertTrue(res.getData().getLocalErrors().stream()
+                        .anyMatch(e -> "recipient.phone".equals(e.getField())),
+                "'abc' phone must FAIL - got: " + res.getData().getLocalErrors());
+    }
+
+    @Test
+    void shortDigitsPhone_errorsForUS_BUG003() {
+        // US expects exactly 10 digits; '12345' is 5.
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.getRecipient().setPhone("12345");
+        stubServiceAndPreset();
+
+        ApiResponse<ShipmentValidationResult> res = service.validate(req);
+
+        assertEquals("FAIL", res.getData().getOverall());
+        assertTrue(res.getData().getLocalErrors().stream()
+                        .anyMatch(e -> "recipient.phone".equals(e.getField())
+                                && e.getMessage().contains("10 digits")),
+                "short US phone must name the expected 10-digit length");
+    }
+
+    @Test
+    void invalidEmail_errorsAsInvalidEmail_BUG003() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.getRecipient().setEmail("not-an-email");
+        stubServiceAndPreset();
+
+        ApiResponse<ShipmentValidationResult> res = service.validate(req);
+
+        assertEquals("FAIL", res.getData().getOverall());
+        assertTrue(res.getData().getLocalErrors().stream()
+                        .anyMatch(e -> "recipient.email".equals(e.getField())),
+                "'not-an-email' must FAIL recipient.email");
+    }
+
+    @Test
+    void validEmailAndValidPhone_pass_BUG003() {
+        // Pin the happy path - a 10-digit US phone + RFC-ish email
+        // must leave overall at PASS (no new errors).
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.getRecipient().setPhone("(415) 555-0100"); // 10 digits after stripping
+        req.getRecipient().setEmail("jane@example.com");
+        stubServiceAndPreset();
+
+        ApiResponse<ShipmentValidationResult> res = service.validate(req);
+
+        assertEquals("PASS", res.getData().getOverall(),
+                "happy path must PASS - got errors: " + res.getData().getLocalErrors());
+    }
+
     // ─── Missing sender fields ─────────────────────────────────────────
 
     @Test
