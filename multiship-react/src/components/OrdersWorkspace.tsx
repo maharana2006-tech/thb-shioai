@@ -2242,6 +2242,11 @@ export default function OrdersWorkspace() {
                     aria-label="Created to date"
                   />
                 </label>
+                {dateFrom && dateTo && dateFrom > dateTo ? (
+                  <span role="alert" className="inline-flex items-center gap-1 rounded-xl bg-amber-50 px-2.5 py-1.5 text-[11.5px] font-semibold text-amber-800 ring-1 ring-inset ring-amber-200">
+                    From date is after To date
+                  </span>
+                ) : null}
 
                 <button
                   type="button"
