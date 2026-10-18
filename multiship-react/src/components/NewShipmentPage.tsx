@@ -3445,6 +3445,35 @@ export default function NewShipmentPage() {
                         type="number"
                         value={originalOrderNo}
                         onChange={(e) => setOriginalOrderNo(e.target.value)}
+                        // R2-BUG-017 — fetch the original order on blur and
+                        // backfill the customer block (sender in return mode)
+                        // from its recipient. Operator typed the number; we
+                        // save them the retype.
+                        onBlur={async (e) => {
+                          const v = e.target.value.trim()
+                          if (!v || !Number.isFinite(Number(v))) return
+                          try {
+                            const res = await orderService.getOrderWithLines(Number(v))
+                            const o = res.data?.order
+                            if (!o) return
+                            setSender((cur) => ({
+                              ...cur,
+                              name:         o.shipName ?? cur.name,
+                              company:      o.shipAttn ?? cur.company,
+                              addressLine1: o.shipAddr1 ?? cur.addressLine1,
+                              addressLine2: o.shipAddr2 ?? cur.addressLine2,
+                              city:         o.shiptoCity ?? cur.city,
+                              state:        o.shiptoState ?? cur.state,
+                              postalCode:   o.shiptoZip ?? cur.postalCode,
+                              countryCode:  o.shiptoCountryCd ?? cur.countryCode,
+                              phone:        o.phone ?? cur.phone,
+                            }))
+                          } catch {
+                            // 404 or network: silently leave fields empty for
+                            // the operator to type. No toast — a stale typed
+                            // digit shouldn't bark.
+                          }
+                        }}
                         placeholder="optional"
                         min={1}
                         className="w-24 border-0 bg-transparent p-0 text-[11.5px] font-semibold text-[#1f150c] placeholder:font-normal placeholder:text-[#a08f6c] focus:outline-none focus:ring-0"
