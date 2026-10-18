@@ -805,6 +805,14 @@ public class CarrierServiceImpl implements CarrierService {
 
         CarrierConnector.ShipmentResult shipmentResult = attempt.master();
 
+        // R2-BUG-014 (run-4) — persist the real sent shipper onto the
+        // order so View Label renders what was actually on the carrier
+        // label, not whatever fallback the display-time endpoint hits.
+        // The sent DTO is the authoritative source — generateManualLabel
+        // already does this (line ~3005); mirror on the auto path.
+        persistSentShipperToOrder(order, attempt.shipmentRequest());
+        orderRepository.save(order);
+
         OrderTracking tracking = orderTrackingRepository.findByOrderNo(order.getOrderNo()).orElseGet(OrderTracking::new);
         tracking.setOrderNo(order.getOrderNo());
         tracking.setOrderSuffix(order.getOrderSuffix());
@@ -1347,6 +1355,12 @@ public class CarrierServiceImpl implements CarrierService {
         // Success path — mirror legacy inner lines 734-836.
         AutoShipmentAttempt attempt = outcome.attempt();
         CarrierConnector.ShipmentResult shipmentResult = attempt.master();
+
+        // R2-BUG-014 (run-4) — persist the real sent shipper onto the
+        // order so View Label renders what was actually on the carrier
+        // label. Same seam the legacy auto path uses.
+        persistSentShipperToOrder(r.order(), attempt.shipmentRequest());
+        orderRepository.save(r.order());
 
         tracking.setOrderNo(r.order().getOrderNo());
         tracking.setOrderSuffix(r.order().getOrderSuffix());
@@ -4313,6 +4327,35 @@ public class CarrierServiceImpl implements CarrierService {
             log.warn("previewCarrierPayload failed for orderNo={}: {}", orderNo, ex.getMessage(), ex);
             return failure(500, "Preview failed: " + ex.getMessage());
         }
+    }
+
+    /**
+     * R2-BUG-014 (run-4) — mirror {@link #generateManualLabelLegacyBody}'s
+     * shipFrom persistence onto the auto path (generateLabel used by bulk
+     * + /orders/{n}/label). Pre-fix the auto path never wrote the actual
+     * sent shipper to {@code label_batch.ship_from_*}, so a bulk-imported
+     * order shipped from a correctly-resolved warehouse (Zeeland MI) but
+     * the row kept its NULL shipFrom columns. On View Label, the backend
+     * fell to {@code client.getShipFrom()} (often the misconfigured
+     * platform-default Bengaluru) or blanks — and the facsimile rendered
+     * whatever that was. Persisting the real sent shipper here keeps the
+     * stored and sent values honest.
+     *
+     * <p>Only non-blank fields overwrite — defensive against a DTO
+     * missing a sub-field returning the ORDER to NULL where it had a
+     * value from a prior write.
+     */
+    private static void persistSentShipperToOrder(Order order, ShipmentRequestDTO sent) {
+        if (order == null || sent == null) return;
+        if (StringUtils.hasText(sent.getShipperName()))        order.setShipFromName(sent.getShipperName());
+        if (StringUtils.hasText(sent.getShipperCompany()))     order.setShipFromCompany(sent.getShipperCompany());
+        if (StringUtils.hasText(sent.getShipperAddressLine1())) order.setShipFromAddr1(sent.getShipperAddressLine1());
+        if (StringUtils.hasText(sent.getShipperAddressLine2())) order.setShipFromAddr2(sent.getShipperAddressLine2());
+        if (StringUtils.hasText(sent.getShipperCity()))        order.setShipFromCity(sent.getShipperCity());
+        if (StringUtils.hasText(sent.getShipperState()))       order.setShipFromState(sent.getShipperState());
+        if (StringUtils.hasText(sent.getShipperPostalCode()))  order.setShipFromZip(sent.getShipperPostalCode());
+        if (StringUtils.hasText(sent.getShipperCountryCode())) order.setShipFromCountryCd(sent.getShipperCountryCode());
+        if (StringUtils.hasText(sent.getShipperPhone()))       order.setShipFromPhone(sent.getShipperPhone());
     }
 
     /** R2-BUG-005 (run-4) — release the Redis dup claim so a legitimate
