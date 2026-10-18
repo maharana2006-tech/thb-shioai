@@ -32,14 +32,28 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
 
     /** The newest order of this client that already shipped (a label was
      *  bought) with this reference / PO. Backs Validate's duplicate check;
-     *  index idx_label_batch_cust_ref (V74). */
+     *  index idx_label_batch_cust_ref (V74).
+     *
+     *  <p>R2-BUG-016 — the join on order_label_tracking filters out orders
+     *  whose label has been VOIDED. Pre-fix, voiding + reissuing matched
+     *  the pre-void label_batch row (order_status stays 'GENERATED' on
+     *  void; only the tracking.status flips to 'VOIDED') and spuriously
+     *  warned "already shipped on order #N" at the reissue form, calling
+     *  a voided label "shipped". {@code NOT EXISTS} with the inner correlated
+     *  subquery is cheaper than a LEFT JOIN NULL filter on this hot path.
+     */
     @Query(value = """
-            SELECT * FROM label_batch
-             WHERE upper(cust_no) = upper(:client)
-               AND lower(customer_ref) = lower(:ref)
-               AND customer_ref IS NOT NULL
-               AND order_status = 'GENERATED'
-             ORDER BY order_no DESC
+            SELECT * FROM label_batch lb
+             WHERE upper(lb.cust_no) = upper(:client)
+               AND lower(lb.customer_ref) = lower(:ref)
+               AND lb.customer_ref IS NOT NULL
+               AND lb.order_status = 'GENERATED'
+               AND NOT EXISTS (
+                   SELECT 1 FROM order_label_tracking olt
+                    WHERE olt.order_no = lb.order_no
+                      AND olt.status = 'VOIDED'
+               )
+             ORDER BY lb.order_no DESC
              LIMIT 1
             """, nativeQuery = true)
     Optional<Order> findShippedByClientAndReference(@Param("client") String client, @Param("ref") String ref);
