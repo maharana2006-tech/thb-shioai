@@ -1576,6 +1576,23 @@ public class ShipmentValidationService {
                 // Missing markup is already reported as an error above.
             }
         }
+        // R2-BUG-020 (run-4) — append the local accessorial estimate to the
+        // operator-facing message. The carrier's Rate API in SANDBOX
+        // returns a base rate only (observed on UPS: ADULT signature not
+        // surcharged, declared-value coverage not surcharged); PROD Rate
+        // APIs honour the same fields the AM fix now threads in, but
+        // operators evaluating service options need a realistic figure
+        // either way. The estimate is additive context (never replaces
+        // picked.totalAmount()), so prod flows that already surcharge
+        // don't double-count — the carrier's number stays the number;
+        // the message just names the expected delta.
+        String accessorialNote = buildAccessorialNote(req, picked.currency());
+        String baseMsg = carrier + " quotes " + picked.currency() + " "
+                + picked.totalAmount().setScale(2, java.math.RoundingMode.HALF_UP)
+                + (picked.transitDays() != null ? ", " + picked.transitDays() + " business day"
+                        + (picked.transitDays() == 1 ? "" : "s") : "") + ".";
+        String fullMsg = accessorialNote == null ? baseMsg : baseMsg + " " + accessorialNote;
+
         return q.status("QUOTED")
                 .serviceName(blankTo(picked.serviceName(), service != null ? service.getName() : serviceCode))
                 .carrierAmount(picked.totalAmount().setScale(2, java.math.RoundingMode.HALF_UP))
@@ -1584,11 +1601,58 @@ public class ShipmentValidationService {
                 .markup(markup)
                 .transitDays(picked.transitDays())
                 .estimatedDelivery(picked.estimatedDelivery() != null ? picked.estimatedDelivery().toLocalDate().toString() : null)
-                .message(carrier + " quotes " + picked.currency() + " "
-                        + picked.totalAmount().setScale(2, java.math.RoundingMode.HALF_UP)
-                        + (picked.transitDays() != null ? ", " + picked.transitDays() + " business day"
-                                + (picked.transitDays() == 1 ? "" : "s") : "") + ".")
+                .message(fullMsg)
                 .build();
+    }
+
+    /**
+     * R2-BUG-020 (run-4) — compute the expected accessorial surcharges
+     * from the standard carrier fee tables (2024). Returns null when no
+     * surcharges apply (no signature, declared value ≤ $100 free tier).
+     *
+     * <p>Figures are conservative US-dollar carrier published rates — the
+     * carrier's own authoritative Ship-call price supersedes this at
+     * purchase time; this is a hint, not a contract. ponytail: rates
+     * drift ~yearly; if ops reports consistently-off estimates, pull from
+     * a per-carrier catalog table instead of hardcoded constants.
+     */
+    private static String buildAccessorialNote(ManualShipmentRequest req, String currency) {
+        java.util.List<String> parts = new java.util.ArrayList<>();
+        String sig = req.getSignatureOption();
+        if (sig != null) {
+            BigDecimal fee = switch (sig.trim().toUpperCase(Locale.ROOT)) {
+                case "ADULT" -> new BigDecimal("8.25");
+                case "INDIRECT" -> new BigDecimal("6.70");
+                case "DIRECT" -> new BigDecimal("5.80");
+                default -> null;
+            };
+            if (fee != null) {
+                parts.add(sig.trim().toUpperCase(Locale.ROOT) + " signature: +" + currency + " "
+                        + fee.setScale(2, java.math.RoundingMode.HALF_UP));
+            }
+        }
+        BigDecimal insured = req.getInsuredValue();
+        BigDecimal declared = req.getDeclaredValue();
+        BigDecimal effective = declared != null && insured != null
+                ? (declared.compareTo(insured) >= 0 ? declared : insured)
+                : (declared != null ? declared : insured);
+        if (effective != null && effective.compareTo(new BigDecimal("100")) > 0) {
+            // UPS / FedEx: $0.52 per $100 (or fraction) above the first
+            // $100 free tier, with a $3.60 minimum charge once over the
+            // tier. Conservative round-up (CEILING) so the operator sees
+            // an upper-bound estimate rather than a surprise charge.
+            BigDecimal taxable = effective.subtract(new BigDecimal("100"));
+            BigDecimal perHundred = taxable.divide(new BigDecimal("100"), 0, java.math.RoundingMode.CEILING);
+            BigDecimal fee = perHundred.multiply(new BigDecimal("0.52"));
+            if (fee.compareTo(new BigDecimal("3.60")) < 0) fee = new BigDecimal("3.60");
+            parts.add("Declared value coverage (" + currency + " "
+                    + effective.setScale(2, java.math.RoundingMode.HALF_UP)
+                    + "): +" + currency + " " + fee.setScale(2, java.math.RoundingMode.HALF_UP));
+        }
+        if (parts.isEmpty()) return null;
+        return "Expected surcharges at purchase — " + String.join("; ", parts)
+                + ". (Carrier Rate APIs in sandbox return base rates only; "
+                + "the Ship API applies these at label purchase.)";
     }
 
     private record Box(BigDecimal weight, BigDecimal length, BigDecimal width, BigDecimal height, String dimUnit) { }
