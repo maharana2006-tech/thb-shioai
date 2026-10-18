@@ -64,6 +64,18 @@ public enum ErrorCode {
     ACCOUNT_DEACTIVATED,
     /** Caller tried to read/write a row that belongs to a different client. */
     CROSS_TENANT_ACCESS_DENIED,
+    /**
+     * R2-BUG-011 — recipient country is on OFAC's comprehensive-sanctions
+     * tier. Shipping without an export licence is a US federal offence;
+     * the platform refuses regardless of what the downstream carrier
+     * would say.
+     *
+     * @REGULATORY_REFERENCE 31 CFR Parts 515 (Cuba), 560 (Iran), 544 /
+     *     Executive Order 13466 (North Korea), 542 (Syria). Updates per
+     *     the OFAC Sanctions List Search at
+     *     https://sanctionssearch.ofac.treas.gov need compliance sign-off.
+     */
+    SANCTIONED_DESTINATION,
     /** Admin tried to move a user to a client that does not exist. */
     ADMIN_TARGET_CLIENT_NOT_FOUND,
     /** Admin tried to modify or deactivate a user that does not exist. */

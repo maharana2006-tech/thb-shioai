@@ -163,6 +163,7 @@ public class ShipmentValidationService {
         checkShipmentRequired(req, errors);
         checkCarrierLengthLimits(req, errors); // BUG-004
         checkRequiredCustomFields(req, clientCode, errors); // R2-BUG-008
+        checkSanctionedDestination(to, errors); // R2-BUG-011
         // Generate label rejects these with a 400 before anything else runs.
         if (beanValidator != null) {
             for (jakarta.validation.ConstraintViolation<ManualShipmentRequest> v : beanValidator.validate(req)) {
@@ -2142,6 +2143,38 @@ public class ShipmentValidationService {
             errors.add(issue(ErrorCode.VALIDATION_ERROR,
                     "Reference exceeds the " + CARRIER_FIELD_MAX + "-character carrier limit (currently "
                             + req.getReference().length() + ").", "reference"));
+        }
+    }
+
+    /**
+     * R2-BUG-011 — OFAC comprehensive-sanctions destinations are a hard
+     * block regardless of carrier. Pre-fix the app relied on the carrier
+     * to refuse (USPS validate PASSed shipments to Iran because USPS
+     * returned WARN not FAIL for IR). Shipping to CU/IR/KP/SY without
+     * an export licence is a US federal offence.
+     *
+     * <p>REGULATORY_REFERENCE: 31 CFR Parts 515 (Cuba), 560 (Iran), 544
+     * / EO 13466 (North Korea), 542 (Syria). The country set must be
+     * reviewed by compliance before change — see
+     * {@link ErrorCode#SANCTIONED_DESTINATION}. ponytail: Russia-annexed
+     * Ukraine regions (Crimea / DNR / LNR) require ISO-3166 subdivision
+     * checks the carriers already perform for us; add if OFAC updates
+     * tighten and ops signs off.
+     */
+    private static final java.util.Set<String> OFAC_COMPREHENSIVE_SANCTIONS =
+            java.util.Set.of("CU", "IR", "KP", "SY");
+
+    private void checkSanctionedDestination(ManualShipmentRequest.Address to,
+                                            List<ValidationIssue> errors) {
+        if (to == null) return;
+        String country = to.getCountryCode();
+        if (!StringUtils.hasText(country)) return;
+        String iso = country.trim().toUpperCase(java.util.Locale.ROOT);
+        if (OFAC_COMPREHENSIVE_SANCTIONS.contains(iso)) {
+            errors.add(issue(ErrorCode.SANCTIONED_DESTINATION,
+                    "Shipping to " + iso + " is blocked under OFAC comprehensive sanctions. "
+                            + "An OFAC export licence is required before this shipment can be filed.",
+                    "recipient.countryCode"));
         }
     }
 
