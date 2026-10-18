@@ -2743,16 +2743,22 @@ public class UpsConnector implements CarrierConnector {
         // Sprint 48 B11 — resolution chain for DeclaredValue:
         //   1. per-pkg value from CI-derived context (wins when present)
         //   2. shipment-level insuredValue (legacy insurance-only orders)
-        // Note: UPS's DeclaredValue drives BOTH carriage liability and
-        // customs — same wire field. The customs invoice total lives
-        // separately under InternationalForms.InvoiceLineTotal.
+        // BUG-009 — UPS's DeclaredValue is ONE wire field that doubles as
+        // carriage liability AND the insured amount above the free tier.
+        // So when the operator sets insuredValue higher than the piece
+        // declaredValue, the carrier needs the HIGHER number to actually
+        // cover the shipment. Take the max of the two (not strict fallback).
+        // The customs invoice total lives separately under
+        // InternationalForms.InvoiceLineTotal.
         java.math.BigDecimal effectiveDeclared = null;
         String effectiveCurrency = null;
-        if (pieceDeclaredValue != null && pieceDeclaredValue.signum() > 0) {
+        boolean pieceSet = pieceDeclaredValue != null && pieceDeclaredValue.signum() > 0;
+        boolean insuredSet = request.getInsuredValue() != null && request.getInsuredValue().signum() > 0;
+        if (pieceSet && (!insuredSet || pieceDeclaredValue.compareTo(request.getInsuredValue()) >= 0)) {
             effectiveDeclared = pieceDeclaredValue;
             effectiveCurrency = firstNonBlank(currency,
                     firstNonBlank(request.getDeclaredValueCurrency(), "USD")).toUpperCase();
-        } else if (request.getInsuredValue() != null && request.getInsuredValue().signum() > 0) {
+        } else if (insuredSet) {
             effectiveDeclared = request.getInsuredValue();
             effectiveCurrency = firstNonBlank(
                     firstNonBlank(request.getInsuredValueCurrency(), request.getDeclaredValueCurrency()),

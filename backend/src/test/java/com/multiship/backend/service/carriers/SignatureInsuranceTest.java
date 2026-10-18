@@ -123,6 +123,28 @@ class SignatureInsuranceTest {
         assertEquals("EUR", dv.get("CurrencyCode"));
     }
 
+    @Test
+    @SuppressWarnings("unchecked")
+    void upsInsuredAboveDeclaredWinsOnWire_BUG009() throws Exception {
+        // BUG-009 — when the operator sets both declaredValue AND
+        // insuredValue, the carrier's single "declared value" wire field
+        // must carry the MAX of the two so the shipment is actually
+        // insured for the higher amount (not the lower declared amount).
+        // Validator FAILS the mismatch at /validate; the connector
+        // tolerates it defensively for anything that slipped past.
+        ShipmentRequestDTO r = baseRequest();
+        r.setDeclaredValue(new BigDecimal("80.00"));
+        r.setInsuredValue(new BigDecimal("300.00"));
+        r.setInsuredValueCurrency("USD");
+        Map<String, Object> pkg = upsFirstPackage(r);
+        Map<String, Object> pso = (Map<String, Object>) pkg.get("PackageServiceOptions");
+        assertNotNull(pso);
+        Map<String, Object> dv = (Map<String, Object>) pso.get("DeclaredValue");
+        assertNotNull(dv, "DeclaredValue block must be emitted when either value is set");
+        assertEquals("300.00", dv.get("MonetaryValue"),
+                "UPS DeclaredValue must carry max(declared, insured) so the "
+                        + "shipment is covered for the higher amount");
+    }
     /* -------------------------- FedEx -------------------------- */
 
     @SuppressWarnings("unchecked")
@@ -157,21 +179,26 @@ class SignatureInsuranceTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void fedexDeclaredValueWinsOverInsuredValueOnLineItem() throws Exception {
-        // Sprint 48 B11 — new priority chain: items > p.declaredValue >
-        // shipment-level declaredValue > insuredValue. Customs declared
-        // value ($50 split across 1 pkg = $50) now wins on the line item
-        // over the shipment-level insurance value. Ops who need to insure
-        // for a higher amount than the customs value can set p.declaredValue
-        // or use InternationalForms.
+    void fedexInsuredAboveDeclaredWinsOnLineItem_BUG009() throws Exception {
+        // BUG-009 — FedEx's declaredValue is ONE wire field that doubles
+        // as carriage liability AND the insured amount above the free tier.
+        // When the operator sets insuredValue higher than declaredValue
+        // (e.g. $50 customs value + $500 insurance rider), the wire must
+        // carry the HIGHER number so the shipment is actually insured for
+        // $500. Pre-BUG-009 Sprint 48 B11 had the opposite behaviour:
+        // declared always won, silently capping insurance at the customs
+        // value. Validator FAILS this at /validate so bulk + external
+        // callers can't rely on the wire-side max; connector tolerates it
+        // defensively for anything that slipped past.
         ShipmentRequestDTO r = baseRequest();
         r.setDeclaredValue(new BigDecimal("50.00"));    // customs (feeds context)
         r.setInsuredValue(new BigDecimal("500.00"));    // insurance
         r.setInsuredValueCurrency("USD");
         Map<String, Object> item = fedexFirstLineItem(r);
         Map<String, Object> dv = (Map<String, Object>) item.get("declaredValue");
-        assertEquals(0, new BigDecimal("50.00").compareTo((BigDecimal) dv.get("amount")),
-                "Sprint 48 B11: declared value (from items/shipment total) wins over insuredValue.");
+        assertEquals(0, new BigDecimal("500.00").compareTo((BigDecimal) dv.get("amount")),
+                "BUG-009: FedEx declaredValue carries max(declared, insured) so "
+                        + "the shipment is covered for the higher of the two.");
     }
 
     /* -------------------------- DHL -------------------------- */

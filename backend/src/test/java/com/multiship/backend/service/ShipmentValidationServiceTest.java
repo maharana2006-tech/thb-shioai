@@ -1084,6 +1084,46 @@ class ShipmentValidationServiceTest {
 
     // ─── Helpers ───────────────────────────────────────────────────────
 
+    // === BUG-009 - insured <= declared ===============================
+    //
+    // UPS / FedEx / DHL / USPS all expose ONE "declared value" field
+    // that doubles as the insured amount above the free tier. An
+    // insuredValue greater than the declaredValue means the operator is
+    // paying for more insurance than they declared, which the connectors
+    // can't honour on the wire. The validator must FAIL (matching the
+    // Yup rule), not merely WARN, so bulk + external callers can't slip
+    // past.
+
+    @Test
+    void insuredValueGreaterThanDeclaredValue_fails_BUG009() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setDeclaredValue(new BigDecimal("80"));
+        req.setInsuredValue(new BigDecimal("200"));
+        stubServiceAndPreset();
+
+        ApiResponse<ShipmentValidationResult> res = service.validate(req);
+
+        assertEquals("FAIL", res.getData().getOverall(),
+                "insuredValue > declaredValue must FAIL — got: " + res.getData().getLocalErrors());
+        assertTrue(res.getData().getLocalErrors().stream()
+                .anyMatch(e -> "insuredValue".equals(e.getField())
+                        && e.getMessage().contains("exceed declared")),
+                "expected an insuredValue error — got: " + res.getData().getLocalErrors());
+    }
+
+    @Test
+    void insuredValueEqualToDeclaredValue_passes_BUG009() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setDeclaredValue(new BigDecimal("200"));
+        req.setInsuredValue(new BigDecimal("200"));
+        stubServiceAndPreset();
+
+        ApiResponse<ShipmentValidationResult> res = service.validate(req);
+
+        assertTrue(res.getData().getLocalErrors().stream()
+                .noneMatch(e -> "insuredValue".equals(e.getField())),
+                "insured == declared is OK — got: " + res.getData().getLocalErrors());
+    }
     private ManualShipmentRequest fullDomesticRequest() {
         ManualShipmentRequest r = new ManualShipmentRequest();
         r.setCarrierCode("FEDEX");

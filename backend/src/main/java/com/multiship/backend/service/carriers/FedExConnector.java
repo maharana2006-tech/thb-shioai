@@ -2418,8 +2418,13 @@ public class FedExConnector implements CarrierConnector {
             // package-level CARRIAGEVALUE.EXCEEDS.CUSTOMVALUE when it is higher
             // than the customs value, so it must be skipped for intl too.
             if (declared == null && !fedexIntl && p.getDeclaredValue() != null) declared = p.getDeclaredValue();
-            if (declared == null && !fedexIntl && request.getInsuredValue() != null
-                    && request.getInsuredValue().signum() > 0) {
+            // BUG-009 — FedEx's declaredValue is ONE wire field that doubles
+            // as carriage liability AND the insured amount above the free
+            // tier. Take max(declared, insuredValue) on domestic so the
+            // shipment is actually covered for the higher of the two.
+            if (!fedexIntl && request.getInsuredValue() != null
+                    && request.getInsuredValue().signum() > 0
+                    && (declared == null || request.getInsuredValue().compareTo(declared) > 0)) {
                 declared = request.getInsuredValue();
             }
             if (declared != null) {

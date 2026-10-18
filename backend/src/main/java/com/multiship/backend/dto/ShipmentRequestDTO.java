@@ -441,7 +441,32 @@ public class ShipmentRequestDTO {
     private java.math.BigDecimal labelStockHeight;
     private java.math.BigDecimal labelStockWidth;
 
-    /**
+        /**
+     * BUG-009 — the effective declared-value number that goes on the carrier
+     * wire's DeclaredValue field. UPS + FedEx + Stamps + DHL all use ONE
+     * "declared value" number that drives BOTH carriage liability AND the
+     * insured amount above the carrier's free tier — so when a caller sets
+     * {@link #insuredValue} higher than {@link #declaredValue} the carrier
+     * needs the HIGHER number to actually insure the shipment.
+     *
+     * <p>Priority:
+     * <ul>
+     *   <li>Both set → the max of the two.</li>
+     *   <li>One null → the other.</li>
+     *   <li>Both null → null (connectors omit the wire field).</li>
+     * </ul>
+     *
+     * <p>The validator enforces {@code insuredValue <= declaredValue} at
+     * {@code /shipments/validate} so operators are told to reconcile the
+     * two fields rather than silently paying for more insurance than they
+     * declared.
+     */
+    public java.math.BigDecimal effectiveDeclaredValue() {
+        if (declaredValue == null) return insuredValue;
+        if (insuredValue == null) return declaredValue;
+        return insuredValue.compareTo(declaredValue) > 0 ? insuredValue : declaredValue;
+    }
+/**
      * Return the packages list connectors should iterate. Guarantees a
      * non-empty list so per-connector code doesn't have to fork on
      * null/empty:
