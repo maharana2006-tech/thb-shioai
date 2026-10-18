@@ -353,6 +353,36 @@ public class GlobalExceptionHandler {
                         .build());
     }
 
+    /**
+     * R3-BUG-002 — {@link org.springframework.security.access.AccessDeniedException}
+     * is Spring Security's older access-denied type; service layers (e.g.
+     * {@code TenantScopeEnforcer#crossTenantDenied}) throw it from inside a
+     * {@code @Transactional} method so the servlet-level ExceptionTranslationFilter
+     * doesn't see it. Pre-fix it fell to {@link #handleUnexpectedRuntime} and
+     * came back as a 500 INTERNAL_ERROR with a correlation id, drowning the
+     * logs in false-positives for routine cross-tenant request shaping (e.g.
+     * a USER posting /shipments/validate with a foreign clientCode).
+     */
+    @ExceptionHandler(org.springframework.security.access.AccessDeniedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleAccessDenied(
+            org.springframework.security.access.AccessDeniedException ex) {
+        String message = ex.getMessage();
+        String errorCode = "FORBIDDEN";
+        // TenantScopeEnforcer tags its exceptions with "CROSS_TENANT_ACCESS_DENIED: ..."
+        // so machine-readable callers can distinguish tenant isolation from
+        // a plain role check.
+        if (message != null && message.startsWith(com.multiship.backend.dto.ErrorCode.CROSS_TENANT_ACCESS_DENIED.name())) {
+            errorCode = com.multiship.backend.dto.ErrorCode.CROSS_TENANT_ACCESS_DENIED.name();
+        }
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ApiResponse.<Void>builder()
+                        .status("ERROR")
+                        .code(HttpStatus.FORBIDDEN.value())
+                        .errorCode(errorCode)
+                        .message("You do not have permission to perform this action.")
+                        .build());
+    }
+
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<ApiResponse<Void>> handleUnexpectedRuntime(RuntimeException ex) {
         // Client-disconnect detection: HttpMessageNotWritableException
