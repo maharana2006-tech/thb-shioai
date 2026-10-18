@@ -148,6 +148,20 @@ public class CarrierServiceImpl implements CarrierService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ShipmentValidationService shipmentValidationService;
 
+    /**
+     * R2-BUG-005 (run-4) — concurrent-duplicate fast-path dedup. The AM
+     * read-then-check guard loses to concurrent racers (retest: 3/3
+     * simultaneous POSTs with the same reference all bought labels). A
+     * Redis SETNX on {@code manual-label:dup:{client}:{reference}} wins
+     * atomically at the Redis server — only the first caller sees
+     * {@code setIfAbsent → true} and proceeds; the rest get 409 before
+     * any carrier call fires. ObjectProvider to degrade gracefully when
+     * Redis isn't wired (unit tests, dev-without-redis) — the DB partial-
+     * unique index (V171) is the correctness floor.
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<org.springframework.data.redis.core.StringRedisTemplate> dupGuardRedisProvider;
+
     /** G7 — decides whether the shipment's SHIP_DATE should shift to the
      *  next working day based on the (source × carrier × warehouse) cutoff
      *  matrix + global holiday list. Nullable for test wiring. */
@@ -1447,14 +1461,50 @@ public class CarrierServiceImpl implements CarrierService {
             com.multiship.backend.dto.ManualShipmentRequest req,
             org.springframework.security.core.userdetails.UserDetails user,
             Integer existingOrderNo) {
-        if (phaseSplitEnabled && requiresNewTransactionTemplate != null) {
-            return generateManualLabelSplit(req, user, existingOrderNo);
+        try {
+            if (phaseSplitEnabled && requiresNewTransactionTemplate != null) {
+                return generateManualLabelSplit(req, user, existingOrderNo);
+            }
+            if (requiresNewTransactionTemplate != null) {
+                return requiresNewTransactionTemplate.execute(status ->
+                        generateManualLabelLegacyBody(req, user, existingOrderNo));
+            }
+            return generateManualLabelLegacyBody(req, user, existingOrderNo);
+        } catch (org.springframework.dao.DataIntegrityViolationException ex) {
+            // R2-BUG-005 (run-4) — V171 partial-unique index backstop fired.
+            // Reached only when Redis SETNX didn't block (outage, TTL miss,
+            // app crash between SETNX and the INSERT). Translate to the same
+            // 409 LABEL_ALREADY_GENERATED the SELECT guard returns so API
+            // callers see one consistent code for every dedup path.
+            String refTag = req != null && StringUtils.hasText(req.getReference())
+                    ? " for reference " + req.getReference().trim() : "";
+            if (isDuplicateReferenceConstraint(ex)) {
+                log.warn("Dup-guard DB-index tripped{} — Redis SETNX didn't block "
+                        + "(outage, TTL miss, or crash between SETNX + INSERT). "
+                        + "Translating to 409 LABEL_ALREADY_GENERATED.", refTag);
+                return failure(HttpStatus.CONFLICT, ErrorCode.LABEL_ALREADY_GENERATED,
+                        "This reference is already in use on a GENERATED label"
+                                + refTag + ". Use a different reference or void "
+                                + "the existing label first.");
+            }
+            // Not our index — some other integrity violation. Rethrow so
+            // the global handler returns the usual 400 shape.
+            throw ex;
         }
-        if (requiresNewTransactionTemplate != null) {
-            return requiresNewTransactionTemplate.execute(status ->
-                    generateManualLabelLegacyBody(req, user, existingOrderNo));
+    }
+
+    /** Matches on V171's constraint name — Postgres surfaces it in the
+     *  underlying SQLException's message (and sometimes nested cause).
+     *  Narrow pattern-match avoids catching unrelated DIV exceptions. */
+    private static boolean isDuplicateReferenceConstraint(
+            org.springframework.dao.DataIntegrityViolationException ex) {
+        Throwable t = ex;
+        while (t != null) {
+            String m = t.getMessage();
+            if (m != null && m.contains("uniq_label_batch_client_ref_active")) return true;
+            t = t.getCause();
         }
-        return generateManualLabelLegacyBody(req, user, existingOrderNo);
+        return false;
     }
 
     /**
@@ -1842,15 +1892,62 @@ public class CarrierServiceImpl implements CarrierService {
                 && StringUtils.hasText(req.getReference())) {
             String refClient = StringUtils.hasText(req.getClientCode())
                     ? req.getClientCode().trim() : "MANUAL";
-            java.util.Optional<Order> alreadyShipped =
-                    orderRepository.findShippedByClientAndReference(refClient, req.getReference().trim());
-            if (alreadyShipped.isPresent()) {
-                Order o = alreadyShipped.get();
-                return failure(HttpStatus.CONFLICT, ErrorCode.LABEL_ALREADY_GENERATED,
-                        "Reference " + req.getReference().trim()
-                                + " already shipped on order #" + o.getOrderNo()
-                                + (StringUtils.hasText(o.getTrack()) ? " (tracking " + o.getTrack() + ")" : "")
-                                + ". Use a different reference or void the existing label first.");
+            String refKey = refClient.toUpperCase(java.util.Locale.ROOT)
+                    + ":" + req.getReference().trim().toLowerCase(java.util.Locale.ROOT);
+
+            // R2-BUG-005 (run-4) — Redis SETNX fast-path dedup. Pre-fix the
+            // SELECT below was the only guard; two POSTs arriving in the
+            // same ms both missed the SELECT and both bought labels. SETNX
+            // is atomic at the Redis server, so only one of N concurrent
+            // callers sees `claimed=true`. The claim TTL covers the carrier
+            // call + grace (120s). We DON'T release on success — the DB
+            // row + the GENERATED order_status now dedupe future calls
+            // via the SELECT and the V171 partial-unique index. We DO
+            // release on error so a transient carrier failure doesn't
+            // block a legitimate retry.
+            org.springframework.data.redis.core.StringRedisTemplate redis =
+                    dupGuardRedisProvider == null ? null : dupGuardRedisProvider.getIfAvailable();
+            boolean redisClaimed = false;
+            if (redis != null) {
+                String dupKey = "manual-label:dup:" + refKey;
+                try {
+                    Boolean claimed = redis.opsForValue().setIfAbsent(
+                            dupKey, "1", java.time.Duration.ofSeconds(120));
+                    if (Boolean.FALSE.equals(claimed)) {
+                        return failure(HttpStatus.CONFLICT, ErrorCode.LABEL_ALREADY_GENERATED,
+                                "Reference " + req.getReference().trim()
+                                        + " is already being processed for client "
+                                        + refClient + ". Wait for the first request to settle"
+                                        + " or use a different reference.");
+                    }
+                    redisClaimed = Boolean.TRUE.equals(claimed);
+                } catch (Exception ex) {
+                    // Redis outage — degrade to the SELECT + DB-index path.
+                    // Correctness still holds (V171 partial unique index
+                    // enforces at the DB) at the cost of a wasted carrier
+                    // call on the hot race.
+                    log.warn("Dup-guard Redis SETNX unavailable; falling through to DB "
+                            + "guards. refKey={}: {}", refKey, ex.getMessage());
+                }
+            }
+
+            try {
+                java.util.Optional<Order> alreadyShipped =
+                        orderRepository.findShippedByClientAndReference(refClient, req.getReference().trim());
+                if (alreadyShipped.isPresent()) {
+                    Order o = alreadyShipped.get();
+                    // Release the Redis claim so a retry after void can proceed.
+                    if (redisClaimed) releaseDupClaim(redis, refKey);
+                    return failure(HttpStatus.CONFLICT, ErrorCode.LABEL_ALREADY_GENERATED,
+                            "Reference " + req.getReference().trim()
+                                    + " already shipped on order #" + o.getOrderNo()
+                                    + (StringUtils.hasText(o.getTrack()) ? " (tracking " + o.getTrack() + ")" : "")
+                                    + ". Use a different reference or void the existing label first.");
+                }
+            } catch (RuntimeException ex) {
+                // Release on any failure before the carrier call so a retry can go.
+                if (redisClaimed) releaseDupClaim(redis, refKey);
+                throw ex;
             }
         }
 
@@ -4215,6 +4312,20 @@ public class CarrierServiceImpl implements CarrierService {
         } catch (Exception ex) {
             log.warn("previewCarrierPayload failed for orderNo={}: {}", orderNo, ex.getMessage(), ex);
             return failure(500, "Preview failed: " + ex.getMessage());
+        }
+    }
+
+    /** R2-BUG-005 (run-4) — release the Redis dup claim so a legitimate
+     *  retry (after a carrier error, before the TTL expires) isn't blocked.
+     *  Best-effort: a delete failure doesn't matter — the TTL will purge
+     *  the key within 120s regardless. */
+    private static void releaseDupClaim(
+            org.springframework.data.redis.core.StringRedisTemplate redis, String refKey) {
+        if (redis == null) return;
+        try {
+            redis.delete("manual-label:dup:" + refKey);
+        } catch (Exception ignored) {
+            // TTL will clean up.
         }
     }
 
