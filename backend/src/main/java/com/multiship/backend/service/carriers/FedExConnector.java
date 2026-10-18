@@ -2039,7 +2039,10 @@ public class FedExConnector implements CarrierConnector {
 
             String response = HttpClients.newBuilder().baseUrl(getBaseUrl(environment)).build()
                     .post()
-                    .uri("/ship/v1/shipments/endofday")
+                    // R2-BUG-003 (run-4) — FedEx spec is /ship/v1/endofday
+                    // (closeout is a top-level /ship resource, NOT nested
+                    // under /shipments). Pre-fix path 404'd NOT.FOUND.ERROR.
+                    .uri("/ship/v1/endofday")
                     .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.APPLICATION_JSON)
                     .header("Authorization", "Bearer " + accessToken)

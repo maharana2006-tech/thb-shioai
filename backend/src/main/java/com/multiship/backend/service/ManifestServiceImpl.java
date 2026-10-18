@@ -206,7 +206,7 @@ public class ManifestServiceImpl implements ManifestService {
         }
         if (account == null || !StringUtils.hasText(account.getClientId())
                 || !StringUtils.hasText(account.getClientSecret())) {
-            return success(singleFleetResponse(new CloseOutResult(carrier, null, null, null,
+            return respond(singleFleetResponse(new CloseOutResult(carrier, null, null, null,
                     request.getTrackingNumbers().size(), "NOT_SUPPORTED",
                     "No live credentials for " + carrier + " — cannot close out.", null)));
         }
@@ -219,7 +219,7 @@ public class ManifestServiceImpl implements ManifestService {
         } catch (Exception ex) {
             log.warn("Close-out — token acquisition for {} failed: {}",
                     carrier, ex.getMessage());
-            return success(singleFleetResponse(new CloseOutResult(carrier, null, null, null,
+            return respond(singleFleetResponse(new CloseOutResult(carrier, null, null, null,
                     request.getTrackingNumbers().size(), "ERROR",
                     carrier + " token acquisition failed: " + ex.getMessage(), null)));
         }
@@ -272,7 +272,7 @@ public class ManifestServiceImpl implements ManifestService {
         // return a NOT_SUPPORTED-shaped response so the operator sees the
         // failedToClassify list clearly rather than a confusing zero-manifest.
         if (results.isEmpty()) {
-            return success(ManifestResponseDTO.builder()
+            return respond(ManifestResponseDTO.builder()
                     .carrierCode(carrier)
                     .trackingCount(0)
                     .status("ERROR")
@@ -282,7 +282,7 @@ public class ManifestServiceImpl implements ManifestService {
                     .build());
         }
 
-        return success(buildResponse(carrier, results, classify.failed,
+        return respond(buildResponse(carrier, results, classify.failed,
                 classify.groundTrackings, classify.expressTrackings));
     }
 
@@ -652,6 +652,36 @@ public class ManifestServiceImpl implements ManifestService {
     private static ApiResponse<ManifestResponseDTO> success(ManifestResponseDTO data) {
         return ApiResponse.<ManifestResponseDTO>builder()
                 .status("success").code(200).message(data.getMessage()).data(data).build();
+    }
+
+    /**
+     * R2-BUG-003 (run-4 API hygiene) — pick the HTTP envelope based on the
+     * aggregated carrier outcome inside the DTO instead of blindly wrapping
+     * every reply as 200 "success". Pre-fix, {@code POST /manifests/close-day}
+     * returned HTTP 200 + {@code status:"success"} even when every carrier
+     * call failed and {@code data.status} was ERROR — API callers that
+     * polled the HTTP status thought close-out succeeded.
+     * <ul>
+     *   <li>{@code MANIFESTED} / {@code PARTIAL} → 200 success (the operator
+     *       got at least one real manifest; failures are itemised in {@code
+     *       manifests[]} or {@code failedToClassify})</li>
+     *   <li>{@code ERROR} → 502 CARRIER_FAILURE so callers see non-2xx</li>
+     *   <li>{@code NOT_SUPPORTED} → 200 (informational — UPS Daily Pickup
+     *       auto-manifests at the driver scan; not a server failure)</li>
+     * </ul>
+     */
+    private static ApiResponse<ManifestResponseDTO> respond(ManifestResponseDTO data) {
+        String s = data == null ? null : data.getStatus();
+        if (s != null && "ERROR".equalsIgnoreCase(s)) {
+            return ApiResponse.<ManifestResponseDTO>builder()
+                    .status("error")
+                    .code(HttpStatus.BAD_GATEWAY.value())
+                    .errorCode(ErrorCode.CARRIER_FAILURE.name())
+                    .message(data.getMessage())
+                    .data(data)
+                    .build();
+        }
+        return success(data);
     }
 
     private static ApiResponse<ManifestResponseDTO> failure(HttpStatus status, String message) {

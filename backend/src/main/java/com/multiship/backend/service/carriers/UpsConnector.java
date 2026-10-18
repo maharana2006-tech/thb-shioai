@@ -1905,62 +1905,37 @@ public class UpsConnector implements CarrierConnector {
     }
 
     /**
-     * UPS End of Day — {@code POST /api/shipments/v1/endofday} with a
-     * Bearer token. Body carries the list of tracking numbers to
-     * manifest. Response includes a BOL (Bill of Lading) number and a
-     * base64 manifest PDF the driver signs at pickup.
+     * UPS End of Day — NOT_SUPPORTED on the REST catalog.
      *
-     * <p>{@code -local-*} fallback tokens short-circuit to NOT_SUPPORTED.
+     * <p>R2-BUG-003 (run-4) — UPS does not offer an end-of-day resource
+     * in its current REST Shipping API catalog; the previous guess
+     * {@code POST /api/shipments/v1/endofday} 404'd on every call. UPS
+     * manifest shape depends on the shipper's pickup programme:
+     * <ul>
+     *   <li><b>Daily Pickup / Smart Pickup / Letter Center</b>: driver
+     *       scans at pickup; labels auto-manifest. No end-of-day call
+     *       needed.</li>
+     *   <li><b>On-Call Pickup</b>: use the Pickup API
+     *       ({@link #schedulePickup}); no end-of-day call.</li>
+     *   <li><b>Legacy PLD upload</b>: operator transmits a flat-file
+     *       manifest via UPS EDI (SFTP-style batch), handled outside
+     *       this app.</li>
+     * </ul>
+     *
+     * <p>Short-circuit to NOT_SUPPORTED with an operator-facing
+     * explanation. ponytail: wire a real end-of-day only if UPS adds
+     * one to the REST catalog AND an account on this platform needs it.
      */
     @Override
     public CloseOutResult closeOutDay(CloseOutRequest request, String accessToken, String environment) {
-        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
-            return new CloseOutResult("UPS", null, null, null, 0, "NOT_SUPPORTED",
-                    "UPS close-out needs live credentials; the account is on a fallback token.",
-                    null);
-        }
-        java.util.List<String> tracking = request.trackingNumbers();
-        if (tracking == null || tracking.isEmpty()) {
-            return new CloseOutResult("UPS", null, null, null, 0, "ERROR",
-                    "UPS close-out requires at least one tracking number.", null);
-        }
-        try {
-            java.util.List<Map<String, Object>> shipments = new java.util.ArrayList<>();
-            for (String t : tracking) shipments.add(Map.of("TrackingNumber", t));
-
-            Map<String, Object> eodRequest = new LinkedHashMap<>();
-            eodRequest.put("Request", Map.of(
-                    "TransactionReference", Map.of("CustomerContext", "eod-" + java.util.UUID.randomUUID())));
-            eodRequest.put("Shipments", shipments);
-
-            Map<String, Object> body = Map.of("EndOfDayRequest", eodRequest);
-            String baseUrl = isSandbox(environment)
-                    ? carrierProperties.getUps().getSandboxUrl()
-                    : carrierProperties.getUps().getApiBaseUrl();
-            String response = HttpClients.newBuilder()
-                    .baseUrl(baseUrl).build()
-                    .post()
-                    .uri("/api/shipments/v1/endofday")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .accept(MediaType.APPLICATION_JSON)
-                    .header("Authorization", "Bearer " + accessToken)
-                    .header("transId", java.util.UUID.randomUUID().toString())
-                    .header("transactionSrc", "multiship")
-                    .body(body)
-                    .retrieve()
-                    .body(String.class);
-            return parseUpsCloseOutResponse(request, response);
-        } catch (org.springframework.web.client.RestClientResponseException ex) {
-            log.warn("UPS end-of-day rejected (HTTP {}): {}",
-                    ex.getStatusCode().value(), ex.getResponseBodyAsString());
-            return new CloseOutResult("UPS", null, null, null, tracking.size(), "ERROR",
-                    "UPS end-of-day rejected: HTTP " + ex.getStatusCode().value(),
-                    ex.getResponseBodyAsString());
-        } catch (Exception ex) {
-            log.warn("UPS end-of-day call failed: {}", ex.getMessage());
-            return new CloseOutResult("UPS", null, null, null, tracking.size(), "ERROR",
-                    "UPS end-of-day call failed: " + ex.getMessage(), null);
-        }
+        int count = request.trackingNumbers() == null ? 0 : request.trackingNumbers().size();
+        return new CloseOutResult("UPS", null, null, null, count, "NOT_SUPPORTED",
+                "UPS has no end-of-day call in its REST API. Daily Pickup accounts "
+                        + "auto-manifest when the driver scans the first package; schedule "
+                        + "the pickup via Pickups & End-of-Day > Schedule a pickup instead. "
+                        + "Legacy PLD-upload accounts must transmit the daily manifest via "
+                        + "UPS EDI (handled outside this app).",
+                null);
     }
 
     /**

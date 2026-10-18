@@ -2482,7 +2482,13 @@ public class StampsConnector implements CarrierConnector {
         Integer orderNo = parseOrderNoFromMdc();
         java.util.Optional<com.multiship.backend.model.LabelPackage> row = (orderNo != null)
                 ? labelPackageRepository.findByOrderNoAndTrackingNumber(orderNo, trackingNumber)
-                : labelPackageRepository.findByTrackingNumber(trackingNumber);
+                // R2-BUG-003 (run-4) — the manifest/close-out path can't
+                // tag MDC per tracking (sweeps a whole day). The old
+                // findByTrackingNumber(Optional<>) threw on dupes (163
+                // results on sandbox). First-by-id tolerates ambiguity:
+                // prod trackings are 1:1 (first == only), sandbox dupes
+                // all point at the same carrier label id anyway.
+                : labelPackageRepository.findFirstByTrackingNumberOrderByIdAsc(trackingNumber);
         return row.map(com.multiship.backend.model.LabelPackage::getCarrierLabelRef)
                 .filter(StringUtils::hasText)
                 .orElse(null);
