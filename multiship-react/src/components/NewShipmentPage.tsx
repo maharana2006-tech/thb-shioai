@@ -2810,6 +2810,12 @@ export default function NewShipmentPage() {
       ...(insuredValue && Number(insuredValue) > 0
         ? { insuredValue: Number(insuredValue), insuredValueCurrency: currency }
         : {}),
+      // R2-BUG-008 — thread filled custom-field values into the generate
+      // payload so BE validate + Generate's required-field guard see them.
+      // Pre-fix these were persisted only via a post-generate upsert, so
+      // the BE never knew whether a 'required on new shipments' field was
+      // filled or empty before buying the label.
+      ...(Object.keys(customFieldValues).length > 0 ? { customFields: customFieldValues } : {}),
       // FDX-H3 — per-shipment FedEx labelSpecification override. Blank →
       // omit so the backend falls back to the account default (which
       // itself falls back to PDF/PAPER_4X6). Only meaningful for FEDEX.

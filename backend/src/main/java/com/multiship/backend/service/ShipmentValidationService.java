@@ -118,6 +118,12 @@ public class ShipmentValidationService {
     private com.multiship.backend.repository.OrderRepository orderRepository;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.repository.ClientShippingPolicyRepository shippingPolicyRepository;
+    /** R2-BUG-008 — required-custom-field enforcement at the service boundary.
+     *  Autowired(required=false) so pure-Mockito ctor-arg tests keep compiling
+     *  without a repo mock; null-guarded in {@link #checkRequiredCustomFields}
+     *  so a missing bean silently skips the check (matching legacy behaviour). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.CustomFieldDefinitionRepository customFieldDefinitionRepository;
     /** Clock for the cutoff check — replaceable in tests. */
     java.time.Clock clock = java.time.Clock.systemUTC();
     @Value("${packaging.validation-enabled:true}")
@@ -156,6 +162,7 @@ public class ShipmentValidationService {
         checkSenderRequired(from, req, errors);
         checkShipmentRequired(req, errors);
         checkCarrierLengthLimits(req, errors); // BUG-004
+        checkRequiredCustomFields(req, clientCode, errors); // R2-BUG-008
         // Generate label rejects these with a 400 before anything else runs.
         if (beanValidator != null) {
             for (jakarta.validation.ConstraintViolation<ManualShipmentRequest> v : beanValidator.validate(req)) {
@@ -2135,6 +2142,42 @@ public class ShipmentValidationService {
             errors.add(issue(ErrorCode.VALIDATION_ERROR,
                     "Reference exceeds the " + CARRIER_FIELD_MAX + "-character carrier limit (currently "
                             + req.getReference().length() + ").", "reference"));
+        }
+    }
+
+    /**
+     * R2-BUG-008 — every active {@link com.multiship.backend.model.CustomFieldDefinition}
+     * for the submitter's tenant whose {@code required=true} and {@code active=true}
+     * must have a non-blank value in {@code req.customFields}. Pre-fix, the
+     * form marked these fields with a red asterisk but Validate + Generate
+     * both returned PASS for an empty submission (and the UI's purchase
+     * body dropped the map entirely), so the "required" flag was advisory
+     * only. Null repository / null clientCode / null map all skip the check
+     * so bare-Mockito tests + ad-hoc shipments (no client picked) still
+     * pass through — matching legacy behaviour for those paths.
+     */
+    private void checkRequiredCustomFields(ManualShipmentRequest req,
+                                           String clientCode,
+                                           List<ValidationIssue> errors) {
+        if (customFieldDefinitionRepository == null) return;
+        if (!StringUtils.hasText(clientCode)) return;
+        java.util.List<com.multiship.backend.model.CustomFieldDefinition> defs =
+                customFieldDefinitionRepository.findApplicable(clientCode);
+        if (defs == null || defs.isEmpty()) return;
+        java.util.Map<String, String> submitted = req.getCustomFields();
+        for (com.multiship.backend.model.CustomFieldDefinition def : defs) {
+            if (def == null) continue;
+            if (!Boolean.TRUE.equals(def.getRequired())) continue;
+            if (!Boolean.TRUE.equals(def.getActive())) continue;
+            String key = def.getFieldKey();
+            if (!StringUtils.hasText(key)) continue;
+            String value = submitted == null ? null : submitted.get(key);
+            if (!StringUtils.hasText(value)) {
+                String label = StringUtils.hasText(def.getLabel()) ? def.getLabel() : key;
+                errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                        label + " is required for this shipment.",
+                        "customFields." + key));
+            }
         }
     }
 

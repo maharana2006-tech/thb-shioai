@@ -128,6 +128,14 @@ public class CarrierServiceImpl implements CarrierService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private StdShipMethodResolver stdShipMethodResolver;
 
+    /** R2-BUG-008 — defense-in-depth custom-field enforcement at the
+     *  Generate boundary. The primary gate is in {@link ShipmentValidationService}
+     *  which the UI calls before Generate; External API callers skip that
+     *  pre-flight so the same guard runs here too. {@code required=false}
+     *  keeps the ~30 pure-Mockito unit tests happy. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.CustomFieldDefinitionRepository customFieldDefinitionRepository;
+
     /** G7 — decides whether the shipment's SHIP_DATE should shift to the
      *  next working day based on the (source × carrier × warehouse) cutoff
      *  matrix + global holiday list. Nullable for test wiring. */
@@ -1799,6 +1807,31 @@ public class CarrierServiceImpl implements CarrierService {
                                 + " already shipped on order #" + o.getOrderNo()
                                 + (StringUtils.hasText(o.getTrack()) ? " (tracking " + o.getTrack() + ")" : "")
                                 + ". Use a different reference or void the existing label first.");
+            }
+        }
+
+        // R2-BUG-008 — defense-in-depth: refuse missing required custom
+        // fields (External API bypasses ShipmentValidationService; UI
+        // callers that call /shipments/validate first still get the
+        // primary error there with better per-field messaging).
+        if (customFieldDefinitionRepository != null
+                && StringUtils.hasText(req.getClientCode())) {
+            java.util.List<com.multiship.backend.model.CustomFieldDefinition> defs =
+                    customFieldDefinitionRepository.findApplicable(req.getClientCode());
+            if (defs != null) {
+                java.util.Map<String, String> submitted = req.getCustomFields();
+                for (com.multiship.backend.model.CustomFieldDefinition def : defs) {
+                    if (def == null || !Boolean.TRUE.equals(def.getRequired())
+                            || !Boolean.TRUE.equals(def.getActive())) continue;
+                    String key = def.getFieldKey();
+                    if (!StringUtils.hasText(key)) continue;
+                    String value = submitted == null ? null : submitted.get(key);
+                    if (!StringUtils.hasText(value)) {
+                        String label = StringUtils.hasText(def.getLabel()) ? def.getLabel() : key;
+                        return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+                                label + " is required for this shipment.");
+                    }
+                }
             }
         }
 
