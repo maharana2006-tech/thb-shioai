@@ -364,12 +364,11 @@ export default function NewShipmentPage() {
   const [accountNumber, setAccountNumber] = useState('') // bill-to account, manually editable
   const [serviceId, setServiceId] = useState<number | ''>('')
   // Incoterms prefills from ClientCustomsProfile.incoterms via the
-  // resolved importerProfile (per client + destination country). NULL
-  // profile / NULL value → blank + force-pick guard blocks
-  // international shipments until the operator picks. Default was
-  // 'DDP' pre-PR #532 — swapped for force-pick per operator call
-  // (getting incoterms wrong = surprise fees at destination).
-  const [incoterms, setIncoterms] = useState('')
+  // resolved importerProfile (per client + destination country). On
+  // lanes with no saved profile, falls back to the operator's last
+  // picked value (sticky, matches reason/currency). Submit guard
+  // still blocks blank + intl so force-pick safety survives.
+  const [incoterms, setIncoterms] = useState(() => readSticky('ms:lastIncoterms', ''))
   // F6-C — per-carrier customs clearance option. Prefills from
   // CarrierAccountRef.clearanceOption when the value is in the current
   // carrier's vocabulary (UPS SENDER/RECEIVER/THIRD_PARTY vs FedEx
@@ -383,9 +382,22 @@ export default function NewShipmentPage() {
   const [length, setLength] = useState('')
   const [width, setWidth] = useState('')
   const [height, setHeight] = useState('')
-  const [dimUnit, setDimUnit] = useState<'IN' | 'CM'>('IN')
+  // Seed from sticky so returning operators don't see 'IN' flash on
+  // every visit; client.defaultDimUnit still wins when it resolves
+  // (applyClient at :1525), unless the operator has already touched
+  // the toggle this session.
+  const [dimUnit, setDimUnit] = useState<'IN' | 'CM'>(
+    () => (readSticky('ms:lastDimUnit', 'IN') === 'CM' ? 'CM' : 'IN'),
+  )
+  const [dimUnitTouched, setDimUnitTouched] = useState(false)
   const [weight, setWeight] = useState('')
-  const [weightUnit, setWeightUnit] = useState<'LB' | 'KG'>('LB')
+  // Same shape as dimUnit — sticky seed, operator pick survives client
+  // switch via weightUnitTouched. AI Suggest + customs-wizard Save still
+  // force the unit on purpose (AI returns LB; wizard = fresh truth).
+  const [weightUnit, setWeightUnit] = useState<'LB' | 'KG'>(
+    () => (readSticky('ms:lastWeightUnit', 'LB') === 'KG' ? 'KG' : 'LB'),
+  )
+  const [weightUnitTouched, setWeightUnitTouched] = useState(false)
   const [declaredValue, setDeclaredValue] = useState('')
   /** Customer reference / PO — stored as the order's Ref #, printed on the label and invoice,
    *  and what the importer's duplicate guard matches on. */
@@ -469,7 +481,10 @@ export default function NewShipmentPage() {
   // sees the effective value in the UI). FedEx-only; hidden in
   // Return mode (connector always emits CONTACT_FEDEX_TO_SCHEDULE
   // for returns regardless).
-  const [pickupType, setPickupType] = useState('USE_SCHEDULED_PICKUP')
+  // Sticky seed; carrier-account default (:1340) wins on carrier/account
+  // resolve only when the operator hasn't touched the dropdown.
+  const [pickupType, setPickupType] = useState(() => readSticky('ms:lastPickupType', 'USE_SCHEDULED_PICKUP'))
+  const [pickupTypeTouched, setPickupTypeTouched] = useState(false)
   // Sprint 22 — rate picker: opens the RatePickerModal with current form
   // state; on select we populate carrier + serviceId + accountNumber.
   const [ratePickerOpen, setRatePickerOpen] = useState(false)
@@ -512,7 +527,7 @@ export default function NewShipmentPage() {
   // normal day, not an edge case): duplicate a box, add N like the last,
   // apply box 1 everywhere, and collapse filled boxes to one-line summaries.
   const [expandedBoxes, setExpandedBoxes] = useState<Set<number>>(new Set())
-  const [bulkAddCount, setBulkAddCount] = useState('5')
+  const [bulkAddCount, setBulkAddCount] = useState(() => readSticky('ms:lastBulkAddCount', '5'))
   const toggleBox = (idx: number) =>
     setExpandedBoxes((cur) => { const n = new Set(cur); if (n.has(idx)) n.delete(idx); else n.add(idx); return n })
   const duplicateBox = (idx: number) =>
@@ -587,12 +602,12 @@ export default function NewShipmentPage() {
   // commercial invoice can always say which package holds which lines.
   const blankItem = (): ItemRow => ({ description: '', sku: '', hsCode: '', countryOfOrigin: '', quantity: '1', unitValue: '', boxSeq: '1', weight: '' })
   const [items, setItems] = useState<ItemRow[]>([blankItem()])
-  // Reason of export prefills from `CarrierAccountRef.shippingPurpose`
-  // (see prefill useEffect below). Sticky read removed — force-pick
-  // semantic per PR #529: blank + account-NULL + international blocks
-  // submit, so the operator explicitly picks. Sticky-writes retained
-  // as a no-op for legacy readers.
-  const [reasonForExport, setReasonForExport] = useState('')
+  // Reason of export: force-pick guard in submit/validate still fires
+  // when blank + intl (PR #529). Sticky-read seeds the dropdown with
+  // the operator's last pick as a hint — convenience, not a safety
+  // release — so lane changes (CA → DE) don't drop them back to
+  // "-- Select --" when the client has no saved CustomsProfile.
+  const [reasonForExport, setReasonForExport] = useState(() => readSticky('ms:lastReason', ''))
   const [currency, setCurrency] = useState(() => readSticky('ms:lastCurrency', 'USD'))
   // EEI — US Foreign Trade Regulations §30.37 exemption code (from the
   // FTR_EXEMPTIONS list) or the AES ITN filed with US Census. Mutually
@@ -1338,7 +1353,7 @@ export default function NewShipmentPage() {
     // path keeps the saved stock type verbatim so the operator's account
     // defaults aren't overwritten here.
     setLabelImageFormat((cur) => matchedAccount?.labelImageFormat ?? cur)
-    setPickupType(matchedAccount?.pickupType ?? 'USE_SCHEDULED_PICKUP')
+    if (!pickupTypeTouched) setPickupType(matchedAccount?.pickupType ?? readSticky('ms:lastPickupType', 'USE_SCHEDULED_PICKUP'))
     // BUG-143 — reason of export used to reset to the saved account
     // default on every carrier switch, silently discarding the
     // operator's picked value. 'Sale' flipped to 'Sample' across a
@@ -1520,10 +1535,10 @@ export default function NewShipmentPage() {
     // to KG/CM at /settings/clients lands on the shipment form with the
     // right unit already picked — no per-shipment manual flip. Null /
     // unrecognised value leaves the current session unit intact.
-    if (client.defaultWeightUnit === 'LB' || client.defaultWeightUnit === 'KG') {
+    if (!weightUnitTouched && (client.defaultWeightUnit === 'LB' || client.defaultWeightUnit === 'KG')) {
       setWeightUnit(client.defaultWeightUnit)
     }
-    if (client.defaultDimUnit === 'IN' || client.defaultDimUnit === 'CM') {
+    if (!dimUnitTouched && (client.defaultDimUnit === 'IN' || client.defaultDimUnit === 'CM')) {
       setDimUnit(client.defaultDimUnit)
     }
   }
@@ -1555,7 +1570,9 @@ export default function NewShipmentPage() {
       phoneCountryCode: dialCodeFor(country) || '',
     })
     if (o.weight != null && o.weight > 0) setWeight(String(o.weight))
-    setWeightUnit('LB')
+    // weightUnit comes from applyClient(o.tenantId) above (client's
+    // defaultWeightUnit), honouring weightUnitTouched. DtcOrder carries
+    // no unit of its own.
     setReference(`DTC batch ${Number(o.batchId)}${o.toteNumber ? ` / tote ${o.toteNumber}` : ''}`)
     if (o.goodsDesc) {
       setItems([{ ...blankItem(), description: o.goodsDesc, unitValue: o.unitValue != null ? String(o.unitValue) : '' }])
@@ -2057,11 +2074,14 @@ export default function NewShipmentPage() {
    * importerProfile change).
    */
   useEffect(() => {
-    // A profile with an Incoterm wins; with none, keep what is already set
-    // (the fix-order prefill from the saved customs record, or the
-    // operator's pick) instead of blanking a required field.
+    // Priority: saved CustomsProfile → operator's prior pick → last-
+    // used sticky value → blank. Sticky kicks in only when the lane
+    // has no profile row AND the field is still untouched, so operator
+    // picks are preserved across lane changes.
     // eslint-disable-next-line react-hooks/set-state-in-effect -- prefill incoterms from resolved customs profile on lane change (matches accountNumber / label-field reset semantic).
-    if (isInternational) setIncoterms((cur) => importerProfile?.incoterms ?? cur)
+    if (isInternational) {
+      setIncoterms((cur) => importerProfile?.incoterms || cur || readSticky('ms:lastIncoterms', ''))
+    }
   }, [importerProfile, isInternational])
 
   /**
@@ -2110,9 +2130,17 @@ export default function NewShipmentPage() {
     setOverride(null)
   }, [clientCode, destCountry])
 
-  // Sticky defaults: remember the last reason/currency for the next shipment.
+  // Sticky defaults: remember the last reason/incoterms/currency so
+  // lane changes (CA → DE) and page returns don't drop the operator
+  // back to "-- Select --". Submit-guards still enforce force-pick on
+  // blank intl shipments.
   useEffect(() => writeSticky('ms:lastReason', reasonForExport), [reasonForExport])
+  useEffect(() => writeSticky('ms:lastIncoterms', incoterms), [incoterms])
   useEffect(() => writeSticky('ms:lastCurrency', currency), [currency])
+  useEffect(() => writeSticky('ms:lastDimUnit', dimUnit), [dimUnit])
+  useEffect(() => writeSticky('ms:lastWeightUnit', weightUnit), [weightUnit])
+  useEffect(() => writeSticky('ms:lastPickupType', pickupType), [pickupType])
+  useEffect(() => writeSticky('ms:lastBulkAddCount', bulkAddCount), [bulkAddCount])
 
   // A changed recipient invalidates a previous validation result.
   useEffect(() => {
@@ -2943,7 +2971,12 @@ export default function NewShipmentPage() {
                 orderNos: pk.orderNos ?? [],
                 orderSuffix: pk.orderSuffix ?? null,
                 weight: pk.weight != null ? Number(pk.weight) : null,
-                weightUnit: 'LB',
+                // Oracle NDS doesn't carry a weight unit on the package;
+                // use the owning client's defaultWeightUnit so the number
+                // is reported in the same unit the client works in. 'LB'
+                // when the client isn't resolved or defaultWeightUnit is
+                // null (keeps the pre-fix wire shape).
+                weightUnit: ((clients.find((c) => c.clientCode === clientCode)?.defaultWeightUnit) === 'KG' ? 'KG' : 'LB') as 'LB' | 'KG',
               })),
             }
           : {}),
@@ -3905,7 +3938,7 @@ export default function NewShipmentPage() {
                       <Field label="Pickup Type">
                         <select className={inputCls}
                                 value={pickupType}
-                                onChange={(e) => setPickupType(e.target.value)}>
+                                onChange={(e) => { setPickupType(e.target.value); setPickupTypeTouched(true) }}>
                           {/* V120 — options come from carrier_pickup_type
                               (via pickupTypesForCarrier). Bootstrap mirrors
                               the pre-V120 hardcoded set when DB is empty. */}
@@ -4442,7 +4475,7 @@ export default function NewShipmentPage() {
                         <button
                           key={u}
                           type="button"
-                          onClick={() => setWeightUnit(u)}
+                          onClick={() => { setWeightUnit(u); setWeightUnitTouched(true) }}
                           className={`px-2 py-0.5 text-[11px] font-semibold transition ${weightUnit === u ? 'bg-[#1f150c] text-[#f4eede]' : 'text-[#5a4526] hover:bg-[#efe7d4]'}`}
                         >
                           {u.toLowerCase()}
@@ -4456,7 +4489,7 @@ export default function NewShipmentPage() {
                         <button
                           key={u}
                           type="button"
-                          onClick={() => setDimUnit(u)}
+                          onClick={() => { setDimUnit(u); setDimUnitTouched(true) }}
                           className={`px-2 py-0.5 text-[11px] font-semibold transition ${dimUnit === u ? 'bg-[#1f150c] text-[#f4eede]' : 'text-[#5a4526] hover:bg-[#efe7d4]'}`}
                         >
                           {u.toLowerCase()}
