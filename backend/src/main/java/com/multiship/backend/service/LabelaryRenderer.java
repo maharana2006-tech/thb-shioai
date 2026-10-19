@@ -59,6 +59,13 @@ public class LabelaryRenderer {
     @Value("${label.labelary.retry-backoff-ms:400}")
     private long retryBackoffMs;
 
+    /** Labelary {@code X-Rotation} header: 0 | 90 | 180 | 270. Stored
+     *  ZPL on this stack renders upside-down in the browser because
+     *  the carrier emits a bottom-up origin; a 180° rotation makes
+     *  the PNG preview match printed orientation. */
+    @Value("${label.labelary.rotation:180}")
+    private int rotation;
+
     /** @return {@code true} when Labelary is enabled by config and
      *  reachable at the configured base URL. */
     public boolean isAvailable() {
@@ -96,13 +103,16 @@ public class LabelaryRenderer {
         String lastReason = null;
         for (int attempt = 1; attempt <= attempts; attempt++) {
             try {
-                java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder()
+                java.net.http.HttpRequest.Builder rb = java.net.http.HttpRequest.newBuilder()
                         .uri(URI.create(url))
                         .timeout(Duration.ofSeconds(timeoutSeconds))
                         .header("Accept", "image/png")
                         .header("Content-Type", "application/x-www-form-urlencoded")
-                        .POST(java.net.http.HttpRequest.BodyPublishers.ofByteArray(zpl))
-                        .build();
+                        .POST(java.net.http.HttpRequest.BodyPublishers.ofByteArray(zpl));
+                if (rotation == 90 || rotation == 180 || rotation == 270) {
+                    rb.header("X-Rotation", String.valueOf(rotation));
+                }
+                java.net.http.HttpRequest req = rb.build();
                 java.net.http.HttpResponse<byte[]> resp = client.send(req,
                         java.net.http.HttpResponse.BodyHandlers.ofByteArray());
                 int status = resp.statusCode();
