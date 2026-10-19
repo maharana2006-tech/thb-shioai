@@ -271,6 +271,12 @@ export const settingsNavItems: Array<{
   { key: 'code-maps', label: 'Code Maps', to: settingsPaths.codeMaps, iconKey: 'mapping',
     description: 'Per-client ERP ship-via / service / country / package aliases. Maps external codes (P80, F77, L01, …) to the platform catalog.',
     roles: ['ADMIN'] },
+  { key: 'api-keys', label: 'API Keys', to: settingsPaths.apiKeys, iconKey: 'apiKey',
+    description: 'Issue, rotate and revoke msk_ keys that outside systems use to call the External API.',
+    roles: ['ADMIN'] },
+  { key: 'api-reference', label: 'API Reference', to: settingsPaths.apiReference, iconKey: 'apiDocs',
+    description: 'External Shipping API v2 — endpoints with request / response bodies, error codes and a live Try-it console.',
+    roles: ['ADMIN'] },
   // ===== Hidden from the Settings menu =====
   // Routes below still resolve so direct URLs and any hard-coded links keep
   // working — only the nav-menu entries are removed. Re-add an object to the
@@ -279,8 +285,6 @@ export const settingsNavItems: Array<{
   // { key: 'routing-rules',        label: 'Routing Rules',      to: settingsPaths.routingRules,          iconKey: 'mapping', description: '…', roles: ['ADMIN', 'USER'] },
   // { key: 'reports',              label: 'Reports',            to: settingsPaths.reports,               iconKey: 'apiDocs', description: '…', roles: ['ADMIN', 'USER'] },
   // { key: 'webhook-subscriptions',label: 'Webhooks',           to: settingsPaths.webhookSubs,           iconKey: 'apiKey',  description: '…', roles: ['ADMIN', 'USER'] },
-  // { key: 'api-keys',             label: 'API Keys',           to: settingsPaths.apiKeys,               iconKey: 'apiKey',  description: '…', roles: ['ADMIN']         },
-  // { key: 'api-reference',        label: 'API Reference',      to: settingsPaths.apiReference,          iconKey: 'apiDocs', description: '…', roles: ['ADMIN']         },
 ]
 
 /** How the Settings menu groups its pages, in menu order. A settings item not
@@ -297,7 +301,7 @@ export const settingsGroups: Array<{ key: string; label: string; blurb: string; 
   { key: 'email', label: 'Email & alerts', blurb: 'Who hears about what, and how it reads.',
     items: ['mail', 'notification-templates', 'my-subscriptions'] },
   { key: 'integrations', label: 'Integrations', blurb: 'Systems Multiship reads from and writes back to.',
-    items: ['external-systems', 'dtc-scheduler'] },
+    items: ['external-systems', 'dtc-scheduler', 'api-keys', 'api-reference'] },
   { key: 'system', label: 'System', blurb: 'Workspace-wide defaults and wording.',
     items: ['system', 'carrier-error-messages'] },
   { key: 'activity', label: 'Activity & logs', blurb: 'History to look things up in, not settings to change.',
