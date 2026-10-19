@@ -4330,6 +4330,13 @@ public class CarrierServiceImpl implements CarrierService {
                     .message("Carrier payload reconstructed.")
                     .timestamp(java.time.LocalDateTime.now())
                     .data(wrapped).build();
+        } catch (IllegalStateException configEx) {
+            // BUG-001 F-002: strict-mode / rule-engine throws are
+            // configuration errors, not server bugs. Surface as 422 so
+            // the FE can display the actionable guidance without
+            // triggering the generic "server error" branch.
+            log.warn("previewCarrierPayload rejected for orderNo={}: {}", orderNo, configEx.getMessage());
+            return failure(422, configEx.getMessage());
         } catch (Exception ex) {
             log.warn("previewCarrierPayload failed for orderNo={}: {}", orderNo, ex.getMessage(), ex);
             return failure(500, "Preview failed: " + ex.getMessage());
@@ -4876,7 +4883,14 @@ public class CarrierServiceImpl implements CarrierService {
         String orderClient = firstNonBlank(order.getTenantId(), order.getCustNo());
         // C1 — tenant-scoped shipper defaults keyed on the same identifier
         // resolveWarehouse uses below.
-        CarrierProperties.ShipperDefaults shipper = shipperDefaults.resolveFor(orderClient);
+        // BUG-001 F-002: skip the strict-mode throw when the order already
+        // carries a persisted sender (every shipped order does via
+        // persistSentShipperToOrder). resolveFor only runs — and only its
+        // IllegalStateException matters — when the order has NO shipFromX
+        // to fall back on, which never happens post-F-001.
+        CarrierProperties.ShipperDefaults shipper = StringUtils.hasText(order.getShipFromName())
+                ? new CarrierProperties.ShipperDefaults()
+                : shipperDefaults.resolveFor(orderClient);
         // Origin warehouse: use the client's default attachment when we can
         // find one, otherwise null (unrestricted rules still match). This is
         // what feeds client_shipvia_code_map.warehouse_id filtering — AND the
@@ -4890,15 +4904,24 @@ public class CarrierServiceImpl implements CarrierService {
                 : null;
         Long originWarehouseId = originWarehouse != null ? originWarehouse.getId() : null;
         com.multiship.backend.model.Address whAddr = originWarehouse != null ? originWarehouse.getAddress() : null;
-        String shipperName = firstNonBlank(whAddr != null ? whAddr.getName() : null, shipper.getName());
-        String shipperPhone = firstNonBlank(whAddr != null ? whAddr.getPhone() : null, shipper.getPhone());
-        String shipperLine1 = firstNonBlank(whAddr != null ? whAddr.getLine1() : null, shipper.getAddressLine1());
-        String shipperLine2 = whAddr != null && StringUtils.hasText(whAddr.getLine1())
-                ? whAddr.getLine2() : shipper.getAddressLine2();
-        String shipperCity = firstNonBlank(whAddr != null ? whAddr.getCity() : null, shipper.getCity());
-        String shipperState = firstNonBlank(whAddr != null ? whAddr.getState() : null, shipper.getState());
-        String shipperPostal = firstNonBlank(whAddr != null ? whAddr.getZip() : null, shipper.getPostalCode());
-        String shipperCountry = firstNonBlank(whAddr != null ? whAddr.getCountry() : null, shipper.getCountryCode());
+        // BUG-001 F-002 (2026-10-19) — the order's persisted shipFrom
+        // wins over every fallback. For already-shipped orders this is
+        // the exact sender the carrier received (persisted via
+        // persistSentShipperToOrder); for a fresh regen it's whatever
+        // the operator chose at ship time. Warehouse + ShipperDefaults
+        // remain the staircase for the edge case where no sender was
+        // persisted.
+        String shipperName = firstNonBlank(order.getShipFromName(), whAddr != null ? whAddr.getName() : null, shipper.getName());
+        String shipperPhone = firstNonBlank(order.getShipFromPhone(), whAddr != null ? whAddr.getPhone() : null, shipper.getPhone());
+        String shipperLine1 = firstNonBlank(order.getShipFromAddr1(), whAddr != null ? whAddr.getLine1() : null, shipper.getAddressLine1());
+        String shipperLine2 = StringUtils.hasText(order.getShipFromAddr2())
+                ? order.getShipFromAddr2()
+                : (whAddr != null && StringUtils.hasText(whAddr.getLine1())
+                        ? whAddr.getLine2() : shipper.getAddressLine2());
+        String shipperCity = firstNonBlank(order.getShipFromCity(), whAddr != null ? whAddr.getCity() : null, shipper.getCity());
+        String shipperState = firstNonBlank(order.getShipFromState(), whAddr != null ? whAddr.getState() : null, shipper.getState());
+        String shipperPostal = firstNonBlank(order.getShipFromZip(), whAddr != null ? whAddr.getZip() : null, shipper.getPostalCode());
+        String shipperCountry = firstNonBlank(order.getShipFromCountryCd(), whAddr != null ? whAddr.getCountry() : null, shipper.getCountryCode());
         boolean international = order.getShiptoCountryCd() != null && shipperCountry != null
                 && !order.getShiptoCountryCd().trim().equalsIgnoreCase(shipperCountry.trim());
         // F5-B — resolveRoute returns both the matched shipvia-map ID AND the

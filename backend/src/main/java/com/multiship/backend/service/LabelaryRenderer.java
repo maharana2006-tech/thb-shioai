@@ -83,6 +83,21 @@ public class LabelaryRenderer {
      * metre-tall bitmap.
      */
     public byte[] renderPng(byte[] zpl) {
+        return render(zpl, "image/png");
+    }
+
+    /**
+     * Render {@code zpl} bytes to a 4×6 PDF via Labelary. Same shape as
+     * {@link #renderPng} — only the Accept header differs. Used by the
+     * {@code /label/pdf} path when the stored carrier ZPL exists; the
+     * carrier's own SHIP FROM burns in directly instead of being
+     * reconstructed from DB fields (closes BUG-001 F-001).
+     */
+    public byte[] renderPdf(byte[] zpl) {
+        return render(zpl, "application/pdf");
+    }
+
+    private byte[] render(byte[] zpl, String acceptType) {
         if (zpl == null || zpl.length == 0) {
             throw new IllegalArgumentException("zpl bytes required");
         }
@@ -106,7 +121,7 @@ public class LabelaryRenderer {
                 java.net.http.HttpRequest.Builder rb = java.net.http.HttpRequest.newBuilder()
                         .uri(URI.create(url))
                         .timeout(Duration.ofSeconds(timeoutSeconds))
-                        .header("Accept", "image/png")
+                        .header("Accept", acceptType)
                         .header("Content-Type", "application/x-www-form-urlencoded")
                         .POST(java.net.http.HttpRequest.BodyPublishers.ofByteArray(zpl));
                 if (rotation == 90 || rotation == 180 || rotation == 270) {
@@ -125,7 +140,7 @@ public class LabelaryRenderer {
                         }
                         return body;
                     }
-                    lastReason = "empty PNG body";
+                    lastReason = "empty " + acceptType + " body";
                 } else {
                     String snippet = resp.body() == null ? ""
                             : new String(resp.body(), StandardCharsets.UTF_8);

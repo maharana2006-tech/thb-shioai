@@ -1223,7 +1223,7 @@ public class OrderController {
                     }
                 }
                 if (!zpls.isEmpty()) {
-                    byte[] pdf = zebrashPdfService.renderZplsToPdf(zpls);
+                    byte[] pdf = renderZplsToPdfViaLabelary(zpls);
                     String suffix = pkgIndex != null && pkgIndex > 0
                             ? "-pkg" + pkgIndex
                             : (zpls.size() > 1 ? "-all" + zpls.size() : "");
@@ -1233,12 +1233,10 @@ public class OrderController {
                             .body(pdf);
                 }
             } catch (RuntimeException ex) {
-                // ZebrashRenderer.RendererUnavailableException,
-                // ZplParseException, ZplRenderException — all recoverable
-                // via the facsimile path below. Warn-log for observability
-                // but don't 500.
+                // Labelary network / parse failure — fall through to the
+                // facsimile path. Warn-log for observability but don't 500.
                 org.slf4j.LoggerFactory.getLogger(OrderController.class)
-                        .warn("zebrash PDF render failed for order {} pkg={}, falling back to facsimile: {}",
+                        .warn("Labelary PDF render failed for order {} pkg={}, falling back to facsimile: {}",
                                 orderNo, pkgIndex, ex.getMessage());
             }
         }
@@ -1300,10 +1298,10 @@ public class OrderController {
                             labelDetails, currentPkg, totalPkgs, perPkg)
                             .getBytes(java.nio.charset.StandardCharsets.UTF_8));
                 }
-                pdf = zebrashPdfService.renderZplsToPdf(facsimileZpls);
+                pdf = renderZplsToPdfViaLabelary(facsimileZpls);
             } catch (RuntimeException ex) {
                 org.slf4j.LoggerFactory.getLogger(OrderController.class)
-                        .warn("zebrash render of the facsimile ZPL failed for order {} pkg={}, "
+                        .warn("Labelary render of the facsimile ZPL failed for order {} pkg={}, "
                                 + "falling back to the PDFBox drawing: {}", orderNo, pkgIndex, ex.getMessage());
             }
         }
@@ -1441,6 +1439,46 @@ public class OrderController {
                             orderNo, pkgIndex, ex.getMessage());
             return ResponseEntity.status(502).build();
         }
+    }
+
+    /**
+     * BUG-001 F-001 (2026-10-19) — fan out ZPLs to Labelary in parallel
+     * and merge the per-ZPL PDFs into one multi-page document. Replaces
+     * the two {@code zebrashPdfService.renderZplsToPdf} call sites in
+     * {@link #getLabelPdf}; keeps the carrier's own ZPL as the source of
+     * truth so SHIP FROM burns in directly instead of being
+     * reconstructed from DB columns.
+     *
+     * <p>Parallel: 4-pkg order pays ~1 round-trip of latency instead of
+     * 4. {@link LabelaryRenderer#renderPdf} throws
+     * {@link ZebrashRenderer.RendererUnavailableException} on failure;
+     * caller catches and falls through to the PDFBox facsimile.
+     */
+    private byte[] renderZplsToPdfViaLabelary(java.util.List<byte[]> zpls) {
+        if (zpls.isEmpty()) {
+            throw new IllegalStateException("no ZPLs to render");
+        }
+        if (zpls.size() == 1) {
+            return labelaryRenderer.renderPdf(zpls.get(0));
+        }
+        java.util.List<java.util.concurrent.CompletableFuture<byte[]>> futures = zpls.stream()
+                .map(zpl -> java.util.concurrent.CompletableFuture
+                        .supplyAsync(() -> labelaryRenderer.renderPdf(zpl)))
+                .toList();
+        java.util.List<byte[]> pdfs = new java.util.ArrayList<>(zpls.size());
+        for (java.util.concurrent.CompletableFuture<byte[]> f : futures) {
+            try {
+                pdfs.add(f.get());
+            } catch (java.util.concurrent.ExecutionException ee) {
+                Throwable cause = ee.getCause() != null ? ee.getCause() : ee;
+                if (cause instanceof RuntimeException re) throw re;
+                throw new RuntimeException(cause);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException(ie);
+            }
+        }
+        return pdfMerger.mergeToOne(pdfs);
     }
 
     @Operation(
