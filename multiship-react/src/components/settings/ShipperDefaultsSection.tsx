@@ -119,6 +119,22 @@ export default function ShipperDefaultsSection() {
   }
 
   const anyOverride = SHIPPER_KEYS.some((k) => stored[k]?.isTenantOverride)
+  // BUG-001 F-005: the chip used to show "Using platform default"
+  // regardless of whether the platform actually had defaults. After
+  // 7a906fbc blanked carrier.shipper.* and flipped strict-mode on,
+  // tier 4 is empty — the chip's statement is a lie. Three-state:
+  // "Tenant configured" | "Using platform default" (only when the
+  // platform really has values) | "No platform default configured"
+  // (amber, warns admins strict-mode will reject this tenant).
+  const anyPlatformValue = SHIPPER_KEYS.some(
+    (k) => (stored[k]?.platformValue ?? '').trim() !== '',
+  )
+  const chipLabel = anyOverride
+    ? 'Tenant configured'
+    : anyPlatformValue ? 'Using platform default' : 'No platform default configured'
+  const chipClass = anyOverride
+    ? 'bg-emerald-100 text-emerald-800'
+    : anyPlatformValue ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-800'
 
   return (
     <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -128,15 +144,13 @@ export default function ShipperDefaultsSection() {
             <h2 className="text-[14px] font-semibold text-slate-800">Ship-from defaults</h2>
             <p className="mt-0.5 text-[12px] text-slate-500">
               Fallback shipper stamped on labels when the request has no sender and no warehouse
-              resolves. Blank field ⇒ uses the platform default (shown as placeholder).
+              resolves. {anyPlatformValue
+                ? 'Blank field ⇒ uses the platform default (shown as placeholder).'
+                : 'No platform default is configured — tenants without an override here will be rejected by strict-mode at ship time.'}
             </p>
           </div>
-          <span
-            className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
-              anyOverride ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
-            }`}
-          >
-            {anyOverride ? 'Tenant configured' : 'Using platform default'}
+          <span className={`rounded px-2 py-0.5 text-[11px] font-semibold ${chipClass}`}>
+            {chipLabel}
           </span>
         </div>
       </header>
