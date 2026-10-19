@@ -51,6 +51,11 @@ public class OrderController {
     // renderers (ZplLabelService + PdfLabelService).
     @Autowired
     private com.multiship.backend.service.ZebrashRenderer zebrashRenderer;
+    // R2-BUG-014 (run-6) — HTTP-based ZPL→PNG renderer backed by
+    // labelary.com. Retry-on-transient inside the renderer; see its
+    // javadoc for the privacy ceiling.
+    @Autowired
+    private com.multiship.backend.service.LabelaryRenderer labelaryRenderer;
     @Autowired
     private com.multiship.backend.service.ZebrashPdfService zebrashPdfService;
     @Autowired
@@ -1393,7 +1398,7 @@ public class OrderController {
                 java.util.Optional<byte[]> zpl =
                         labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", pkgIndex);
                 if (zpl.isEmpty()) return ResponseEntity.status(404).build();
-                byte[] rendered = zebrashRenderer.renderPng(zpl.get());
+                byte[] rendered = labelaryRenderer.renderPng(zpl.get());
                 String badge = badgeFor(pkgIndex, totalPkgs, pkgList);
                 png = badge == null
                         ? rendered
@@ -1406,7 +1411,7 @@ public class OrderController {
                 java.util.Optional<byte[]> zpl =
                         labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", null);
                 if (zpl.isEmpty()) return ResponseEntity.status(404).build();
-                png = zebrashRenderer.renderPng(zpl.get());
+                png = labelaryRenderer.renderPng(zpl.get());
             } else {
                 // Multi-pkg composite — one panel per package, each with a
                 // "PKG N OF M" + tracking badge overlaid before stacking.
@@ -1419,7 +1424,7 @@ public class OrderController {
                     java.util.Optional<byte[]> zpl =
                             labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", i);
                     if (zpl.isEmpty()) continue; // skip missing panels rather than 404 the whole request
-                    panels.add(zebrashRenderer.renderPng(zpl.get()));
+                    panels.add(labelaryRenderer.renderPng(zpl.get()));
                     String b = badgeFor(i, totalPkgs, pkgList);
                     badges.add(b == null ? "" : b);
                 }
