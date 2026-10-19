@@ -1057,7 +1057,22 @@ export default function LabelDocumentPage() {
           ) : null}
 
         <div className="flex flex-wrap justify-center gap-6 rounded-[26px] border border-slate-200/80 bg-slate-100/70 p-6 shadow-inner print:block print:border-0 print:bg-white print:p-0 print:shadow-none">
-          {activeTab === 'label' && printableState === 'ready' && printablePdf ? (
+          {/* R2-BUG-014 (run-6) — Labelary PNG goes FIRST. The PDF
+              branch below is a fallback when the carrier returned no
+              parseable ZPL; otherwise we show the carrier-canonical
+              render of the stored ZPL via Labelary, not a PDFBox-drawn
+              facsimile.  */}
+          {activeTab === 'label' && carrierPreviewState === 'ready' ? (
+            <div className="print-doc relative w-[430px] shrink-0 border border-slate-300 bg-white shadow-xl print:w-[3.76in] print:border-0 print:shadow-none">
+              <img
+                src={orderService.labelPreviewPngUrl(orderNo, pkgIndex)}
+                alt={`Shipping label for order ${orderNo}`}
+                className="block h-auto w-full"
+                onError={() => setCarrierPreviewState('unavailable')}
+                data-testid="label-preview-png"
+              />
+            </div>
+          ) : activeTab === 'label' && printableState === 'ready' && printablePdf ? (
             /* The printable document itself — every page the carrier
                returned (FedEx intl: label + consignee/agent copies + doc
                pages), or the zebrash render of our ZPL. Page 1 is what
@@ -1080,31 +1095,6 @@ export default function LabelDocumentPage() {
           ) : activeTab === 'label' && printableState === 'loading' ? (
             <div className="flex h-[400px] w-[430px] items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white text-[12px] text-slate-500">
               Loading printable label…
-            </div>
-          ) : activeTab === 'label' && carrierPreviewState === 'ready' ? (
-            /* ==================== PR #538 — CARRIER-CANONICAL PNG (from backend zebrash render) ==================== */
-            /* When the backend feature flag label.render-carrier-zpl is on
-               AND the carrier stored parseable ZPL, backend renders the
-               canonical thermal label to PNG server-side. This <img> is
-               byte-for-byte what will print — no facsimile approximation.
-               onError falls back to the facsimile (rare — HEAD probe
-               already checked, but a mid-session backend restart could
-               invalidate). */
-            <div className="print-doc relative w-[430px] shrink-0 border border-slate-300 bg-white shadow-xl print:w-[3.76in] print:border-0 print:shadow-none">
-              {/* Label preview strictly shows the carrier's own PNG — no
-                  overlays, no captions, no augmentation. Operators asked
-                  for the label view to be exclusively what the carrier
-                  returned; anything sourced from local Order or from the
-                  MaxiCode decoder was moved off this surface. AWB is
-                  still visible above the toolbar via the Track button;
-                  line 2 is on the Commercial Invoice tab. */}
-              <img
-                src={orderService.labelPreviewPngUrl(orderNo, pkgIndex)}
-                alt={`Shipping label for order ${orderNo}`}
-                className="block h-auto w-full"
-                onError={() => setCarrierPreviewState('unavailable')}
-                data-testid="label-preview-png"
-              />
             </div>
           ) : activeTab === 'label' ? (
             /* ==================== 4x6 SHIPPING LABEL (JSX facsimile fallback) ==================== */
