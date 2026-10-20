@@ -52,6 +52,18 @@ public class ZebrashRenderer {
     @Value("${label.zebrash.timeout-seconds:5}")
     private int timeoutSeconds;
 
+    /**
+     * G3 — fail-closed knob for environments that MUST use the local
+     * zebrash binary and never fall through to Labelary (so label
+     * content never leaves the VPC). Default false matches historical
+     * behaviour: boot continues with a warn-log if the binary is
+     * absent, LabelaryRenderer serves the preview path. Prod flips to
+     * true so a mis-packaged jar fails at startup, not silently at
+     * first preview request. See {@code docs/zebrash-deploy.md}.
+     */
+    @Value("${label.require-zebrash:false}")
+    private boolean requireZebrash;
+
     /** Per-JVM extraction destination. Kept for the JVM's lifetime; on
      *  shutdown the OS reaps the temp file via {@link Path#toFile()}
      *  ({@code deleteOnExit}). Null until first extraction. */
@@ -72,11 +84,25 @@ public class ZebrashRenderer {
         // bootable when the ZPL feature is off.
         try {
             ensureExtracted();
-            log.info("ZebrashRenderer ready at {} (timeout={}s)", binaryPath, timeoutSeconds);
+            log.info("ZebrashRenderer ready at {} (timeout={}s) — label content stays in the VPC.",
+                    binaryPath, timeoutSeconds);
         } catch (RendererUnavailableException ex) {
+            // G3 fail-closed: when label.require-zebrash=true, a
+            // missing binary surfaces at BOOT, not silently on the
+            // first preview request. Prod flips this on so a
+            // mis-packaged jar (-Dzebrash.skip left as true) can't
+            // route label content through Labelary.
+            if (requireZebrash) {
+                throw new IllegalStateException(
+                        "ZebrashRenderer required but binary missing: " + ex.getMessage()
+                        + " — rebuild with -Dzebrash.skip=false or flip label.require-zebrash=false "
+                        + "to allow the Labelary fallback (see docs/zebrash-deploy.md).",
+                        ex);
+            }
             log.warn("ZebrashRenderer not available at startup: {}. "
-                    + "First render will retry extraction; enable label.render-carrier-zpl "
-                    + "only when the binary is present under src/main/resources/native/.",
+                    + "LabelaryRenderer will serve the preview path (label content leaves the VPC). "
+                    + "Build with -Dzebrash.skip=false to bundle the native binary; "
+                    + "flip label.require-zebrash=true in prod so a missing binary fails startup.",
                     ex.getMessage());
         }
     }

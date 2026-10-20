@@ -291,14 +291,18 @@
 			<resource>
 				<directory>src/main/resources</directory>
 			</resource>
-			<!-- Zebrash resources disabled; runtime will warn if binary missing -->
-			<!--
+			<!-- PR #539 — zebrash binaries bundled under classpath
+			     native/{slug}/ when -Dzebrash.skip=false is passed
+			     (and the download-plugin below has pulled them into
+			     target/generated-resources/zebrash/). When skip=true
+			     the generated-resources dir is empty, the resource
+			     copy is a no-op, and ZebrashRenderer logs its
+			     missing-binary warning at boot. -->
 			<resource>
 				<directory>${project.build.directory}/generated-resources/zebrash</directory>
 				<targetPath>native</targetPath>
 				<filtering>false</filtering>
 			</resource>
-			-->
 		</resources>
 		<plugins>
 			<plugin>
@@ -417,9 +421,16 @@
 					</execution>
 				</executions>
 			</plugin>
-			<!-- PR #539 — zebrash plugin disabled for offline builds.
-			     Runtime service still boots, just logs missing-binary warning. -->
-			<!--
+			<!-- PR #539 — zebrash binary bundler. Disabled by default
+			     (zebrash.skip=true at :38) so dev builds don't pay the
+			     GitHub-release network cost on every mvn invocation.
+			     Opt-in with -Dzebrash.skip=false to pull the 4-platform
+			     binaries into target/generated-resources/zebrash and
+			     bundle them under native/{slug}/ on the classpath. Prod
+			     deploy MUST pass -Dzebrash.skip=false; see
+			     docs/zebrash-deploy.md. Runtime service still boots when
+			     the binary is absent — logs missing-binary warning and
+			     the preview path falls through to Labelary. -->
 			<plugin>
 				<groupId>com.googlecode.maven-download-plugin</groupId>
 				<artifactId>download-maven-plugin</artifactId>
@@ -475,7 +486,6 @@
 					</execution>
 				</executions>
 			</plugin>
-			-->
 		</plugins>
 	</build>
 
