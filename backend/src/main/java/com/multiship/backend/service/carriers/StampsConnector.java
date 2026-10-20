@@ -3996,7 +3996,17 @@ public class StampsConnector implements CarrierConnector {
         // still manifest (SERA sweeps every unmanifested USPS label for the
         // day at the shipper address).
         if (labelIds.size() == tracking.size() && !labelIds.isEmpty()) {
-            body.put("label_ids", labelIds);
+            // R2-BUG-003 (run-5): sandbox labels share tracking numbers,
+            // so resolveSeraLabelId returns the same label_id many times
+            // and SERA refuses "Duplicated SCAN form items are not
+            // allowed." Dedupe here, AFTER the "every tracking resolved"
+            // check — the check must still see raw-count equality so a
+            // legacy tracking missing its label_id falls through to the
+            // by-carrier+ship_date path. Production is 1:1 and the set
+            // wrap is a no-op; a legitimate retry after a partial
+            // close-out also benefits (same label_id appears twice in
+            // the retry's input).
+            body.put("label_ids", new java.util.ArrayList<>(new java.util.LinkedHashSet<>(labelIds)));
         } else {
             log.info("Stamps SERA manifest: {} of {} tracking numbers had a persisted label_id; "
                     + "falling back to by-carrier+ship_date manifest.",

@@ -65,9 +65,9 @@ class StampsSeraManifestTest {
 
     @Test
     void buildBody_allTrackingHaveLabelId_usesByLabelIdsPath() {
-        when(labelPackageRepository.findByTrackingNumber("T1")).thenReturn(
+        when(labelPackageRepository.findFirstByTrackingNumberOrderByIdAsc("T1")).thenReturn(
                 Optional.of(LabelPackage.builder().trackingNumber("T1").carrierLabelRef("L1").build()));
-        when(labelPackageRepository.findByTrackingNumber("T2")).thenReturn(
+        when(labelPackageRepository.findFirstByTrackingNumberOrderByIdAsc("T2")).thenReturn(
                 Optional.of(LabelPackage.builder().trackingNumber("T2").carrierLabelRef("L2").build()));
 
         CloseOutRequest req = new CloseOutRequest(List.of("T1", "T2"), LocalDate.now(), null);
@@ -84,9 +84,9 @@ class StampsSeraManifestTest {
     void buildBody_someTrackingMissingLabelId_fallsBackToByCarrierShipDate() {
         // T1 has a label_id; T2 is legacy pre-V44 (null). Must fall back to
         // the by-carrier+ship_date shape so the legacy label still manifests.
-        when(labelPackageRepository.findByTrackingNumber("T1")).thenReturn(
+        when(labelPackageRepository.findFirstByTrackingNumberOrderByIdAsc("T1")).thenReturn(
                 Optional.of(LabelPackage.builder().trackingNumber("T1").carrierLabelRef("L1").build()));
-        when(labelPackageRepository.findByTrackingNumber("T2")).thenReturn(Optional.empty());
+        when(labelPackageRepository.findFirstByTrackingNumberOrderByIdAsc("T2")).thenReturn(Optional.empty());
 
         CloseOutRequest req = new CloseOutRequest(List.of("T1", "T2"),
                 LocalDate.of(2026, 9, 8),
@@ -100,6 +100,35 @@ class StampsSeraManifestTest {
         assertEquals("2026-09-08", body.get("ship_date"));
         assertTrue(body.containsKey("from_address"),
                 "fallback path must include shipper address so SERA scopes the manifest correctly");
+    }
+
+    @Test
+    void buildBody_sandboxTrackingSharesLabelId_dedupesLabelIdsBeforePost() {
+        // R2-BUG-003 (run-5): SERA sandbox labels share tracking
+        // numbers from a 3-value pool and resolveSeraLabelId returns
+        // the same label_id for each duplicate. Posting the raw
+        // 21-entry / 3-unique list triggered SERA 4522284
+        // "Duplicated SCAN form items are not allowed." The exact
+        // size check must still pass (every tracking resolved) but
+        // the body must carry each label_id at most once.
+        //
+        // Stubs findFirstByTrackingNumberOrderByIdAsc because MDC is
+        // empty in unit tests → resolveSeraLabelId takes the no-order
+        // branch (StampsConnector:2491).
+        when(labelPackageRepository.findFirstByTrackingNumberOrderByIdAsc("T1")).thenReturn(
+                Optional.of(LabelPackage.builder().trackingNumber("T1").carrierLabelRef("L1").build()));
+        when(labelPackageRepository.findFirstByTrackingNumberOrderByIdAsc("T2")).thenReturn(
+                Optional.of(LabelPackage.builder().trackingNumber("T2").carrierLabelRef("L1").build()));
+        when(labelPackageRepository.findFirstByTrackingNumberOrderByIdAsc("T3")).thenReturn(
+                Optional.of(LabelPackage.builder().trackingNumber("T3").carrierLabelRef("L1").build()));
+
+        CloseOutRequest req = new CloseOutRequest(List.of("T1", "T2", "T3"), LocalDate.now(), null);
+        Map<String, Object> body = connector.buildSeraManifestBody(req);
+
+        assertEquals(List.of("L1"), body.get("label_ids"),
+                "duplicate label_ids must collapse to a single SCAN form item");
+        assertFalse(body.containsKey("carrier"),
+                "size check still passes (3 trackings → 3 resolutions) so we stay on the label_ids path");
     }
 
     @Test
@@ -196,7 +225,7 @@ class StampsSeraManifestTest {
 
     @Test
     void buildBody_serialisesToValidJson() throws Exception {
-        when(labelPackageRepository.findByTrackingNumber("T1")).thenReturn(
+        when(labelPackageRepository.findFirstByTrackingNumberOrderByIdAsc("T1")).thenReturn(
                 Optional.of(LabelPackage.builder().trackingNumber("T1").carrierLabelRef("L1").build()));
         CloseOutRequest req = new CloseOutRequest(List.of("T1"), LocalDate.now(), null);
         Map<String, Object> body = connector.buildSeraManifestBody(req);
