@@ -832,11 +832,22 @@ public class ExternalApiService {
         if (w == null || w.getAddress() == null) return null;
         com.multiship.backend.model.Address a = w.getAddress();
         ExternalAddress ext = new ExternalAddress();
-        // Warehouse address doesn't carry a company field distinct from name;
-        // reuse name for both so labels look right regardless of which the
-        // carrier expects.
-        ext.setName(a.getName());
-        ext.setCompany(a.getName());
+        // R5-BUG-002 (2026-10-20) — the embedded Address's `name` maps to
+        // the warehouse's `contact_name` column (optional person) via
+        // @AttributeOverride on Warehouse; the warehouse's business name
+        // lives on w.getName() (@NotNull per schema). Pre-fix this used
+        // a.getName() for BOTH ext.name and ext.company, so warehouses
+        // with a NULL contact_name produced a NULL sender name — which
+        // the R4-BUG-001 purchase-boundary validator now rejects as 422
+        // "Sender name is required." MKL246's platform warehouses have
+        // contact_name NULL in the test env; same would hit any client
+        // whose operator didn't set a contact person. Fix: fall back to
+        // the warehouse's own name when contact_name is blank, and
+        // always put the warehouse brand on the company line.
+        String contact = a.getName();
+        String whName = w.getName();
+        ext.setName(StringUtils.hasText(contact) ? contact : whName);
+        ext.setCompany(whName);
         ext.setPhone(a.getPhone());
         ext.setAddressLine1(a.getLine1());
         ext.setAddressLine2(a.getLine2());
