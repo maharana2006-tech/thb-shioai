@@ -271,26 +271,36 @@ export default function AppRoutes() {
             </Route>
 
             <Route path={workspacePaths.orders} element={<OrdersPage />} />
-            <Route path="/orders/new" element={<NewShipmentPage />} />
-            {/* Returns F4 — same component; pathname check inside pre-selects mode=RETURN. */}
-            <Route path="/orders/new/return" element={<NewShipmentPage />} />
-            {/* Bulk Mailer — opens on Import history; the tab is in the URL. */}
-            <Route path={workspacePaths.bulk} element={<Navigate to={bulkPaths.imports} replace />} />
-            <Route path={bulkPaths.importFile} element={<BulkImportPage />} />
-            <Route path="/bulk/batches/:batchId" element={<DataHistoryPage />} />
-            {/* API batches left Bulk Mailer for their own page under Orders. */}
-            <Route path="/bulk/api" element={<Navigate to={apiBatchesPath} replace />} />
-            <Route path={apiBatchesPath} element={<DataHistoryPage apiBatches />} />
-            <Route path={`${apiBatchesPath}/:batchId`} element={<DataHistoryPage apiBatches />} />
-            {/* D2C History — Dtcal-style batch summary + HstDetails-style shipment history. */}
-            <Route path={workspacePaths.d2c} element={<DtcOrdersPage />} />
-            <Route path={`${workspacePaths.d2c}/:batchId`} element={<DtcBatchDetailPage />} />
-            {/* Labels & Invoices — its own page, opened from Bulk Mailer (was the Documents tab). */}
-            <Route path={bulkPaths.labels} element={<LabelsInvoicesPage />} />
-            <Route path="/bulk/documents" element={<Navigate to={bulkPaths.labels} replace />} />
-            <Route path="/bulk/:tab" element={<DataHistoryPage />} />
-            {/* Old "Order History" address — bookmarks and links keep working. */}
-            <Route path="/orders/history" element={<Navigate to={bulkPaths.imports} replace />} />
+            {/* R2-BUG run-5 §8 — pre-fix TENANT could navigate to
+                /orders/new and /bulk/imports even though the APIs 403
+                the write-side requests. Backend @PreAuthorize on the
+                /orders/manual-label and /bulk/* endpoints already
+                blocks TENANT; the route gate here matches so the role
+                doesn't land on a page that then errors. TENANT redirect
+                target comes from getHomePathForRole() (→ /orders, the
+                "Your orders" page per R4-BUG-003). */}
+            <Route element={<RequireRole roles={['ADMIN', 'USER']} />}>
+              <Route path="/orders/new" element={<NewShipmentPage />} />
+              {/* Returns F4 — same component; pathname check inside pre-selects mode=RETURN. */}
+              <Route path="/orders/new/return" element={<NewShipmentPage />} />
+              {/* Bulk Mailer — opens on Import history; the tab is in the URL. */}
+              <Route path={workspacePaths.bulk} element={<Navigate to={bulkPaths.imports} replace />} />
+              <Route path={bulkPaths.importFile} element={<BulkImportPage />} />
+              <Route path="/bulk/batches/:batchId" element={<DataHistoryPage />} />
+              {/* API batches left Bulk Mailer for their own page under Orders. */}
+              <Route path="/bulk/api" element={<Navigate to={apiBatchesPath} replace />} />
+              <Route path={apiBatchesPath} element={<DataHistoryPage apiBatches />} />
+              <Route path={`${apiBatchesPath}/:batchId`} element={<DataHistoryPage apiBatches />} />
+              {/* D2C History — Dtcal-style batch summary + HstDetails-style shipment history. */}
+              <Route path={workspacePaths.d2c} element={<DtcOrdersPage />} />
+              <Route path={`${workspacePaths.d2c}/:batchId`} element={<DtcBatchDetailPage />} />
+              {/* Labels & Invoices — its own page, opened from Bulk Mailer (was the Documents tab). */}
+              <Route path={bulkPaths.labels} element={<LabelsInvoicesPage />} />
+              <Route path="/bulk/documents" element={<Navigate to={bulkPaths.labels} replace />} />
+              <Route path="/bulk/:tab" element={<DataHistoryPage />} />
+              {/* Old "Order History" address — bookmarks and links keep working. */}
+              <Route path="/orders/history" element={<Navigate to={bulkPaths.imports} replace />} />
+            </Route>
 
             <Route path="/label/:orderNo" element={<LabelDocumentPage />} />
             {/* /orders/900213 is what people type; the order's page lives at /label/:orderNo. */}
