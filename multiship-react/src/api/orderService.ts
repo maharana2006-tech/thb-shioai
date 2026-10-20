@@ -865,6 +865,12 @@ export interface QueueStats {
   clientMissing: number
   failed: number
   generated: number
+  /** R2-BUG-012 UI residual — the 'VOIDED' bucket surfaced on the
+   *  backend side (OrderServiceImpl.getQueueStats:423) but the FE
+   *  type didn't declare it, so OrdersWorkspace's badge sum was 12
+   *  short of the list total. Optional so pre-existing test
+   *  fixtures that stub a stats-5 payload still typecheck. */
+  voided?: number
 }
 
 /** One row of the unified Documents table (GET /orders/documents). */

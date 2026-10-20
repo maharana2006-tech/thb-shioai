@@ -70,7 +70,7 @@ const BulkLabelModal = lazyWithRetry(() => import('./modals/BulkLabelModal'))
 const MultiWarehouseSplitModal = lazyWithRetry(() => import('./modals/MultiWarehouseSplitModal'))
 const OrderImportModal = lazyWithRetry(() => import('./modals/OrderImportModal'))
 
-type View = 'all' | 'ready' | 'details' | 'client' | 'choose' | 'failed' | 'generated'
+type View = 'all' | 'ready' | 'details' | 'client' | 'choose' | 'failed' | 'generated' | 'voided'
 
 /** "City, State" for the destination column — omits a blank/null state so an
  *  international address with no province doesn't render "City, null". */
@@ -86,6 +86,7 @@ const VIEW_QUERY: Record<View, { status?: string; resolution?: string; defaultDi
   choose: { status: 'PENDING', resolution: 'CHOOSE_ACCOUNT', defaultDirection: 'DESC' },
   failed: { status: 'ERROR', defaultDirection: 'DESC' },
   generated: { status: 'GENERATED', defaultDirection: 'DESC' },
+  voided: { status: 'VOIDED', defaultDirection: 'DESC' },
 }
 
 /** How many ready orders one "Generate all ready" run will pull from the server. */
@@ -507,7 +508,11 @@ export default function OrdersWorkspace() {
   const clientMissingCount = stats?.clientMissing ?? 0
   const failedCount = stats?.failed ?? 0
   const generatedCount = stats?.generated ?? 0
-  const totalCount = readyCount + detailsCount + chooseCount + clientMissingCount + failedCount + generatedCount
+  // R2-BUG-012 UI residual — include VOIDED so the 'All' badge
+  // matches the list total (backend exposed it in queue-stats;
+  // pre-fix we were 12 short of /orders.totalElements).
+  const voidedCount = stats?.voided ?? 0
+  const totalCount = readyCount + detailsCount + chooseCount + clientMissingCount + failedCount + generatedCount + voidedCount
 
   // Which tabs exist right now (exceptions vanish at zero).
   const tabs = useMemo(() => {
@@ -519,9 +524,10 @@ export default function OrdersWorkspace() {
     if (clientMissingCount) list.push({ key: 'client', label: 'No client', count: clientMissingCount, tone: 'violet' })
     if (chooseCount) list.push({ key: 'choose', label: 'Pick account', count: chooseCount, tone: 'sky' })
     if (failedCount) list.push({ key: 'failed', label: 'Failed', count: failedCount, tone: 'rose' })
+    if (voidedCount) list.push({ key: 'voided', label: 'Voided', count: voidedCount, tone: 'slate' })
     list.push({ key: 'generated', label: 'Archive', count: generatedCount, tone: 'slate' })
     return list
-  }, [totalCount, readyCount, detailsCount, chooseCount, clientMissingCount, failedCount, generatedCount])
+  }, [totalCount, readyCount, detailsCount, chooseCount, clientMissingCount, failedCount, voidedCount, generatedCount])
 
   // If the active exception tab empties out, fall back to All orders.
   useEffect(() => {
@@ -1368,7 +1374,7 @@ export default function OrdersWorkspace() {
   // just show a "—" in the chip cell (guarded in the cell renderer). No
   // point exposing on Ready/Details/Client/Choose since those are PENDING-
   // resolution filters and no tracking exists yet.
-  const showTracking = view === 'all' || view === 'generated'
+  const showTracking = view === 'all' || view === 'generated' || view === 'voided'
 
   const formatCreated = (value?: string | null) =>
     value
@@ -2688,6 +2694,8 @@ export default function OrdersWorkspace() {
                 </span>
               ) : view === 'generated' ? (
                 'No labels have been generated yet.'
+              ) : view === 'voided' ? (
+                'No voided labels.'
               ) : (
                 'No orders yet.'
               )
