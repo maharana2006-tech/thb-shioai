@@ -628,19 +628,42 @@ export default function ApiKeysPage() {
               {/* R2-BUG-019 — Issue stays disabled until the operator has
                   made every least-privilege choice: a client scope (and the
                   client code when 'ONE') and at least one API scope. */}
-              <button
-                type="button"
-                onClick={() => void submitIssue()}
-                disabled={
+              {(() => {
+                const issueDisabled =
                   issuing ||
                   scopeMode === null ||
                   (scopeMode === 'ONE' && !pickedClientCode.trim()) ||
                   scopes.size === 0
-                }
-                className="rounded-xl bg-[#1f150c] px-5 py-2 text-[13px] font-semibold text-white transition hover:bg-[#412d15] disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {issuing ? 'Issuing…' : 'Issue key'}
-              </button>
+                // R2-BUG-019 run-5 §9 — QA saw the dark-brand button look
+                // active even when disabled (opacity-50 on #1f150c reads
+                // ~#504040, not far from the enabled state). Flatten to
+                // slate on disabled so the state is unambiguous, and
+                // surface the first missing piece as a hover tooltip.
+                const issueHint = issuing
+                  ? 'Issuing…'
+                  : scopeMode === null
+                    ? 'Pick a key scope first — All clients or One client.'
+                    : scopeMode === 'ONE' && !pickedClientCode.trim()
+                      ? 'Pick the client this key is scoped to.'
+                      : scopes.size === 0
+                        ? 'Pick at least one scope — a key with no scopes can’t call anything.'
+                        : undefined
+                return (
+                  <button
+                    type="button"
+                    onClick={() => void submitIssue()}
+                    disabled={issueDisabled}
+                    title={issueHint}
+                    className={`rounded-xl px-5 py-2 text-[13px] font-semibold transition ${
+                      issueDisabled
+                        ? 'cursor-not-allowed bg-slate-200 text-slate-500'
+                        : 'bg-[#1f150c] text-white hover:bg-[#412d15]'
+                    }`}
+                  >
+                    {issuing ? 'Issuing…' : 'Issue key'}
+                  </button>
+                )
+              })()}
             </div>
           </div>
         </div>
