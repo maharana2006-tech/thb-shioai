@@ -3,7 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import type { IconType } from 'react-icons'
 import {
   FiActivity, FiAlertCircle, FiAlertTriangle, FiBell, FiChevronsLeft, FiChevronsRight, FiBookOpen, FiBriefcase, FiCalendar, FiCircle,
-  FiCornerUpLeft, FiCreditCard, FiDollarSign, FiEdit3, FiFileText, FiGlobe, FiGrid, FiHome, FiInbox,
+  FiClock, FiCornerUpLeft, FiCreditCard, FiDollarSign, FiEdit3, FiFileText, FiGlobe, FiGrid, FiHome, FiInbox,
   FiLayout, FiLink, FiList, FiMail, FiMap, FiMessageSquare, FiPackage, FiPrinter, FiRefreshCw, FiRepeat,
   FiSearch, FiSend, FiSettings, FiShield, FiShuffle, FiSliders, FiTerminal, FiTruck, FiUsers,
 } from 'react-icons/fi'
@@ -21,7 +21,7 @@ const PAGE_ICONS: Record<string, IconType> = {
   clients: FiBriefcase, warehouses: FiHome, 'address-book': FiBookOpen, users: FiUsers, roles: FiShield,
   carriers: FiCreditCard, 'carriers-platform': FiTruck, 'shipping-catalog': FiPackage, 'code-maps': FiShuffle,
   'carrier-limits': FiSliders, 'carrier-dropdowns': FiList, cutoffs: FiCalendar,
-  'importer-broker': FiGlobe, countries: FiMap, 'reasons-for-export': FiFileText, currencies: FiDollarSign,
+  'importer-broker': FiGlobe, countries: FiMap, 'reasons-for-export': FiFileText, 'state-zones': FiClock, currencies: FiDollarSign,
   templates: FiLayout, 'custom-fields': FiEdit3, printers: FiPrinter, 'output-destinations': FiSend,
   mail: FiMail, 'notification-templates': FiMessageSquare, 'my-subscriptions': FiBell,
   'external-systems': FiLink, system: FiSettings, 'carrier-error-messages': FiAlertTriangle,

@@ -134,6 +134,8 @@ export const settingsPaths = {
   countries: '/settings/countries',
   /** V117 — reason-for-export registry (read-only). */
   reasonsForExport: '/settings/reasons-for-export',
+  /** V176 — country+state → IANA zone (drives DST-aware carrier timestamps). */
+  stateZones: '/settings/state-zones',
   /** V117 — ISO 4217 currency catalog (read-only). */
   currencies: '/settings/currencies',
   /** V118 — carrier-error-message pattern → humanized rules (read-only). */
@@ -259,6 +261,9 @@ export const settingsNavItems: Array<{
   { key: 'reasons-for-export', label: 'Reasons for Export', to: settingsPaths.reasonsForExport, iconKey: 'customs',
     description: 'Reason-for-export codes used on commercial invoices (Sale / Gift / Sample / …). Read-only.',
     roles: ['ADMIN'] },
+  { key: 'state-zones', label: 'State Zones', to: settingsPaths.stateZones, iconKey: 'mapping',
+    description: 'Country + state → IANA zone map. Drives DST-aware offsets on carrier timestamps (FedEx pickup, future UPS/DHL slots).',
+    roles: ['ADMIN'] },
   { key: 'currencies', label: 'Currencies', to: settingsPaths.currencies, iconKey: 'apiDocs',
     description: 'ISO 4217 currency catalog. Read-only.',
     roles: ['ADMIN'] },
@@ -295,7 +300,7 @@ export const settingsGroups: Array<{ key: string; label: string; blurb: string; 
   { key: 'carriers', label: 'Carriers & services', blurb: 'Accounts, services and the rules that pick them.',
     items: ['carriers', 'carriers-platform', 'shipping-catalog', 'code-maps', 'carrier-limits', 'carrier-dropdowns', 'cutoffs', 'pickups-eod'] },
   { key: 'intl', label: 'International', blurb: 'What customs paperwork needs.',
-    items: ['importer-broker', 'countries', 'reasons-for-export', 'currencies'] },
+    items: ['importer-broker', 'countries', 'reasons-for-export', 'state-zones', 'currencies'] },
   { key: 'docs', label: 'Labels & documents', blurb: 'What gets printed, and where it goes.',
     items: ['templates', 'custom-fields', 'printers', 'output-destinations'] },
   { key: 'email', label: 'Email & alerts', blurb: 'Who hears about what, and how it reads.',

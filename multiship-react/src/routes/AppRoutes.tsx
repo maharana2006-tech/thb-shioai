@@ -116,6 +116,9 @@ const RolesPage = lazy(() => import('../components/RolesPage'))
 const CountriesPage = lazy(() => import('../components/CountriesPage'))
 // V117 — read-only reason-for-export registry.
 const ReasonsForExportPage = lazy(() => import('../components/ReasonsForExportPage'))
+// G2 — DB-driven country+state → IANA zone map. Drives DST-aware
+// offsets on FedEx readyDateTimestamp and (future) UPS/DHL slots.
+const StateZonesPage = lazy(() => import('../components/StateZonesPage'))
 // V117 — read-only ISO 4217 currency catalog.
 const CurrenciesPage = lazy(() => import('../components/CurrenciesPage'))
 // V118 — read-only carrier-error-message rules.
@@ -249,6 +252,7 @@ export default function AppRoutes() {
                   <Route path="roles" element={<RolesPage />} />
                   <Route path="countries" element={<CountriesPage />} />
                   <Route path="reasons-for-export" element={<ReasonsForExportPage />} />
+                  <Route path="state-zones" element={<StateZonesPage />} />
                   <Route path="currencies" element={<CurrenciesPage />} />
                   <Route path="carrier-error-messages" element={<CarrierErrorMessagesPage />} />
                   <Route path="carrier-dropdowns" element={<CarrierDropdownsPage />} />
