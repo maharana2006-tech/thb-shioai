@@ -556,6 +556,21 @@ public class CarrierServiceImpl implements CarrierService {
                         generateLabelInner(orderNo, userDetails, idempotencyKey, accountId, useHouseAccount));
             }
             return generateLabelInner(orderNo, userDetails, idempotencyKey, accountId, useHouseAccount);
+        } catch (org.springframework.dao.DataIntegrityViolationException ex) {
+            // R2-BUG-005 (run-5 follow-up) — V173 UNIQUE floor can fire
+            // on the order-grid Generate path too: two Orders that share
+            // (cust_no, customer_ref) landing concurrently in
+            // /orders/{N}/label would otherwise surface as a raw 500.
+            // Mirror the manual-label translator so every entry point
+            // returns one consistent 409 LABEL_ALREADY_GENERATED.
+            if (isDuplicateReferenceConstraint(ex)) {
+                log.warn("Dup-guard DB-index tripped on order {} — translating to 409 LABEL_ALREADY_GENERATED.",
+                        orderNo);
+                return failure(HttpStatus.CONFLICT, ErrorCode.LABEL_ALREADY_GENERATED,
+                        "This order's reference is already in use on a GENERATED label. "
+                                + "Use a different reference or void the existing label first.");
+            }
+            throw ex;
         }
     }
 
