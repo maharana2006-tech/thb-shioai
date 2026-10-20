@@ -174,15 +174,27 @@ public class PdfLabelService {
             y = rule(cs, y - 8f);
 
             // ─── SHIP FROM block ────────────────────────────────────────
+            // BUG-001 F-001 / F-003 (run-5 §9) — the order's persisted
+            // shipFrom wins over the platform shipper. Pre-fix this
+            // read only shipper.*, which rendered the Bengaluru
+            // leftover on pre-7a906fbc builds and a lone comma on
+            // post-blank builds. Mirrors the firstNonBlank chain in
+            // CarrierServiceImpl.buildShipmentRequest:4893-4901 and the
+            // Labelary-rendered main path. The city line composes
+            // conditionally so a shipFrom with blank city+state no
+            // longer prints the ", " stray mark (F-003).
             CarrierProperties.ShipperDefaults shipper = carrierProperties.getShipper();
+            String shipperName = firstNonBlank(order.getShipFromName(), shipper.getName(), "");
+            String shipperLine1 = firstNonBlank(order.getShipFromAddr1(), shipper.getAddressLine1(), "");
+            String city = firstNonBlank(order.getShipFromCity(), shipper.getCity(), "");
+            String state = firstNonBlank(order.getShipFromState(), shipper.getState(), "");
+            String postal = firstNonBlank(order.getShipFromZip(), shipper.getPostalCode(), "");
+            String cityStatePostal = buildCityStatePostal(city, state, postal);
             y = drawText(cs, HELVETICA_BOLD, 8f, MUTED, MARGIN_PT, y - 12f, "SHIP FROM");
             y -= 2f;
-            y = drawText(cs, HELVETICA, 10f, BLACK, MARGIN_PT, y - 12f, firstNonBlank(shipper.getName(), ""));
-            y = drawText(cs, HELVETICA, 10f, BLACK, MARGIN_PT, y - 12f, firstNonBlank(shipper.getAddressLine1(), ""));
-            y = drawText(cs, HELVETICA, 10f, BLACK, MARGIN_PT, y - 12f,
-                    String.join(", ",
-                            firstNonBlank(shipper.getCity(), ""),
-                            firstNonBlank(shipper.getState(), "") + " " + firstNonBlank(shipper.getPostalCode(), "")).trim());
+            y = drawText(cs, HELVETICA, 10f, BLACK, MARGIN_PT, y - 12f, shipperName);
+            y = drawText(cs, HELVETICA, 10f, BLACK, MARGIN_PT, y - 12f, shipperLine1);
+            y = drawText(cs, HELVETICA, 10f, BLACK, MARGIN_PT, y - 12f, cityStatePostal);
             y = rule(cs, y - 8f);
 
             // ─── Tracking + reference ───────────────────────────────────
@@ -264,6 +276,21 @@ public class PdfLabelService {
         if (values == null) return "";
         for (String v : values) if (StringUtils.hasText(v)) return v;
         return "";
+    }
+
+    /**
+     * BUG-001 F-003 — compose "City, STATE ZIP" without the lone-comma
+     * stray mark when city + state are both blank. Pre-fix a blank
+     * sender printed as ", " because the join emitted "" + ", " + " ".
+     */
+    static String buildCityStatePostal(String city, String state, String postal) {
+        String right = (StringUtils.hasText(state) ? state : "")
+                + (StringUtils.hasText(postal) ? (StringUtils.hasText(state) ? " " : "") + postal : "");
+        if (StringUtils.hasText(city) && StringUtils.hasText(right)) {
+            return city + ", " + right;
+        }
+        if (StringUtils.hasText(city)) return city;
+        return right; // may be empty — prints as a blank line, no stray comma
     }
 
     private byte[] blankPdf() {
