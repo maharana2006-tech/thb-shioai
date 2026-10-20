@@ -69,7 +69,14 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
   const dialogRef = useRef<HTMLDivElement>(null)
   useModalDismiss(true, dialogRef, onClose)
   useLiftToasts() // BUG-005 — keep toasts clear of the footer buttons
-  const today = localDateIso()
+  // R2-BUG-002 run-5 §9 — "switching the carrier resets the pickup
+  // date to today" (seen twice). `today` was recomputed every render,
+  // and the <input type="date" min={today} value={form.pickupDate}>
+  // reconciliation can transiently clear a value below the new min on
+  // some browsers. Capture once on mount so the `min` attribute stays
+  // byte-stable across state updates (carrier pill click, validation
+  // re-run, etc.). Dates don't move within a single modal session.
+  const [today] = useState(() => localDateIso())
   const [form, setForm] = useState<PickupRequest>({
     carrierCode: defaults?.carrierCode ?? 'UPS',
     customerNo: defaults?.customerNo ?? null,
