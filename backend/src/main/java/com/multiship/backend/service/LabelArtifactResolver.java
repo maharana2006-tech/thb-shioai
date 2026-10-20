@@ -268,7 +268,31 @@ public class LabelArtifactResolver {
         if (startsWithAt(bytes, MAGIC_PDF, start)) return "PDF";
         if (startsWithAt(bytes, MAGIC_GIF, start)) return "GIF";
         if (startsWithAt(bytes, MAGIC_PNG, start)) return "PNG";
+        // BUG-001 I-001 sub-issue 1 (2026-10-20) — USPS writer prepends
+        // a `^FX … ^FS` provenance comment before the `^XA` label-start
+        // command, so the strict leading-magic check above misses real
+        // USPS ZPLs (934392, 934393). PDF/GIF/PNG magic appears only at
+        // byte 0 — they're already handled above — so a full-buffer scan
+        // for `^XA` can only match ZPL semantics (even if a PDF content
+        // stream happens to contain the three bytes, that PDF already
+        // matched line 268 and returned). Keeps HEAD-probe cheap: scan
+        // short-circuits on first hit.
+        if (indexOf(bytes, MAGIC_ZPL) >= 0) return "ZPL";
         return null;
+    }
+
+    /** First-match offset of {@code needle} inside {@code haystack}, or -1. */
+    private static int indexOf(byte[] haystack, byte[] needle) {
+        if (haystack == null || needle.length == 0) return -1;
+        int limit = haystack.length - needle.length;
+        outer:
+        for (int i = 0; i <= limit; i++) {
+            for (int j = 0; j < needle.length; j++) {
+                if (haystack[i + j] != needle[j]) continue outer;
+            }
+            return i;
+        }
+        return -1;
     }
 
     /**
