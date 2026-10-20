@@ -273,7 +273,10 @@ class PickupTest {
                     "Zeeland", "MI", "49464", "US"), "QA", "6165550100", 2, new BigDecimal("10"), "LB", null,
                     "740561111", null, null, null, null, null);
             java.util.Map<String, Object> origin = (java.util.Map<String, Object>) c.buildFedExPickupRequest(r).get("originDetail");
-            assertEquals("2026-10-15T09:00:00Z", origin.get("readyDateTimestamp"));
+            // R2-BUG-002 (run-5) — naive local (no Z); see
+            // formatFedExPickupTimestamp. FedEx reads readyDateTimestamp as
+            // local to the pickup location, matching customerCloseTime below.
+            assertEquals("2026-10-15T09:00:00", origin.get("readyDateTimestamp"));
         } finally {
             java.util.TimeZone.setDefault(saved);
         }

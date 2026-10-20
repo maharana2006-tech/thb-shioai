@@ -1927,13 +1927,24 @@ public class FedExConnector implements CarrierConnector {
         java.time.LocalTime time = req.pickupWindowStart() != null
                 ? req.pickupWindowStart() : java.time.LocalTime.of(9, 0);
         // BUG-007 — FedEx rejects a timestamp without seconds (LocalTime.toString()
-        // drops ':00' → 400 INCORRECT.READYTIMESTAMP.FORMAT). It reads pickup times
-        // as local to the pickup location (as it does the cutoff), so send the
-        // operator's wall-clock time as typed, in FedEx's documented shape
-        // (2020-07-03T11:00:00Z) — never converted through the server's zone,
-        // which moved a 09:00 Michigan pickup to 05:00 on a UTC server.
+        // drops ':00' → 400 INCORRECT.READYTIMESTAMP.FORMAT). It reads pickup
+        // times as local to the pickup location (as it does customerCloseTime
+        // below), so send the operator's wall-clock as typed in naive-local
+        // ISO 8601 (yyyy-MM-dd'T'HH:mm:ss) — never converted through the
+        // server's zone, which moved a 09:00 Michigan pickup to 05:00 on a
+        // UTC server.
+        //
+        // R2-BUG-002 (run-5): the trailing 'Z' marker was added in the
+        // BUG-007 fix on the belief FedEx reads 'Z' as "local" — but Z is
+        // the ISO 8601 UTC marker. QA observed FedEx returning UNABLE.TO.
+        // PICKUP 'Unable To Pickup before Close time' on a 19-10 13:00-
+        // 17:00 window, suggesting FedEx honours the Z and converts to
+        // local, collapsing the window relative to the naive-local
+        // customerCloseTime at :1875-1876. Dropped the Z so both fields
+        // use the same naive-local shape FedEx documents for pickup
+        // timestamps.
         return java.time.LocalDateTime.of(date, time)
-                .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")) + "Z";
+                .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"));
     }
 
     /**
