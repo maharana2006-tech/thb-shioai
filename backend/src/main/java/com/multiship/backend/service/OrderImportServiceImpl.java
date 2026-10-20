@@ -2195,6 +2195,30 @@ public class OrderImportServiceImpl implements OrderImportService {
         return null;
     }
 
+    /**
+     * R5-BUG-001 (2026-10-20) — auto-pick a package preset for the
+     * request's (service, weight) when the row carries no explicit
+     * dimensions AND no preset. Mirrors the run-4 behaviour where
+     * the connector picked internally; R4-BUG-001 moved the strict
+     * dim-check in front of the carrier call, so this needs to run
+     * BEFORE {@link ShipmentValidationService#validate}.
+     *
+     * <p>No-op when (a) a preset is already set (the operator /
+     * CSV picked one), (b) explicit length is already set (dim
+     * check will validate against it), (c) no service is resolved
+     * (nothing to pick against), or (d) no preset candidate fits
+     * the carrier's service × weight constraints — in that last
+     * case the strict dim check still fires and the operator gets
+     * the actionable "Missing: length, width, height" message.
+     */
+    private void applyDefaultPackagePreset(com.multiship.backend.dto.ManualShipmentRequest req) {
+        if (req == null || req.getPackagePresetId() != null) return;
+        if (req.getLength() != null && req.getLength().signum() > 0) return;
+        if (req.getServiceId() == null || shippingConfigService == null) return;
+        shippingConfigService.pickPackage(req.getServiceId(), req.getWeight())
+                .ifPresent(pp -> req.setPackagePresetId(pp.preset().getId()));
+    }
+
     private static void addError(OrderImportRowDTO row, String message) {
         List<String> errs = new ArrayList<>(row.getErrors() == null ? List.of() : row.getErrors());
         if (!errs.contains(message)) errs.add(message);
@@ -6508,6 +6532,18 @@ public class OrderImportServiceImpl implements OrderImportService {
                 }
                 return new GroupOutcome(0, group.size(), 0);
             }
+            // R5-BUG-001 (2026-10-20) — the shipped CSV layout has no
+            // LENGTH/WIDTH/HEIGHT columns. R4-BUG-001 moved the
+            // ShipmentValidationService dim check IN FRONT of the
+            // carrier call, so the auto-pick that used to happen
+            // inside the connector now fires too late and bulk rows
+            // 422 with "Pick a package preset OR fill in custom
+            // dimensions". Resolve the preset for (service, weight)
+            // here, before the validate() gate — mirrors the run-4
+            // auto-pick behaviour. Explicit CSV dims still win: the
+            // check is "no preset AND no length" so a row that
+            // DID carry dimensions gets validated against them.
+            applyDefaultPackagePreset(req);
 
             // Sprint 51 fix #1 — when the CSV leaves the bill-to account blank,
             // resolve it the way the operator-facing flow would instead of
