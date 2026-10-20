@@ -16,6 +16,12 @@ const CONNECTED_CARRIERS_KEY = 'multiship_connected_carriers'
 // picked LAN scan tenant. Sweep on logout so a shared machine doesn't
 // hand the next admin a stale tenant scope on the printers page.
 const SCAN_TENANT_KEY = 'multiship_scan_tenant'
+// R2-BUG (run-5 §8 security notes): pre-Sprint-50-PR-Q3 FE stored the
+// JWT at this key before the cookie-mode migration. Nothing on current
+// dev writes it, but accounts that logged in before the migration
+// still carry the expired token across subsequent logouts. Dead on
+// the server (backend reads the cookie only) — sweep for hygiene.
+const LEGACY_JWT_KEY = 'multiship_token'
 
 export const clearAppStorage = (): void => {
   if (typeof window === 'undefined') return
@@ -29,7 +35,8 @@ export const clearAppStorage = (): void => {
         key.startsWith(CLIENT_EDITOR_DRAFT_PREFIX) ||
         key.startsWith(ADVANCED_DATA_TABLE_PREFIX) ||
         key === CONNECTED_CARRIERS_KEY ||
-        key === SCAN_TENANT_KEY
+        key === SCAN_TENANT_KEY ||
+        key === LEGACY_JWT_KEY
       ) {
         keys.push(key)
       }
