@@ -1171,10 +1171,17 @@ export default function NewShipmentPage() {
     let cancelled = false
     ;(async () => {
       try {
-        const [details, byId, customs] = await Promise.all([
+        const [details, byId, customs, cfValues] = await Promise.all([
           orderService.getOrderWithLines(fixOrderNo),
           orderService.getOrderById(fixOrderNo).catch(() => null),
           customsService.getCustoms(fixOrderNo).catch(() => null),
+          // R2-BUG-008 run-5 residual — carry the stored custom-field
+          // values across to the reissue form. Pre-fix this was never
+          // fetched, so a required field (qa_1018e_dept = "Dept-42")
+          // showed as blank and blocked Generate until the operator
+          // retyped. 404 / null degrades gracefully to no prefill —
+          // same as the other optional-fetch siblings above.
+          customFieldService.values(fixOrderNo).catch(() => null),
         ])
         if (cancelled) return
         const o = details.data.order
@@ -1253,6 +1260,9 @@ export default function NewShipmentPage() {
               weight: it.weight != null ? String(it.weight) : '',
             })))
           }
+        }
+        if (cfValues && Object.keys(cfValues).length > 0) {
+          setCustomFieldValues(cfValues)
         }
         pendingFixRef.current = {
           serviceCode: o.shipviaCd,
