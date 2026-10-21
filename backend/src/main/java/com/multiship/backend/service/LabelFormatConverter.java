@@ -103,6 +103,27 @@ public class LabelFormatConverter {
 
     // ─── Primitive conversions ──────────────────────────────────────────────
 
+    /**
+     * Rasterize page 1 of a carrier PDF to PNG (203 DPI, thermal-equivalent).
+     * Public so the label endpoints can turn a stored carrier PDF (USPS/
+     * Stamps) into a preview PNG or an {@code ^GFA} ZPL without duplicating
+     * the PDFBox plumbing. Throws {@link ZebrashRenderer.ZplRenderException}
+     * on failure (callers already catch it / fall back).
+     */
+    public byte[] pdfFirstPageToPng(byte[] pdfBytes) {
+        try {
+            byte[] png = pdfToPng(pdfBytes);
+            if (png == null) {
+                throw new ZebrashRenderer.ZplRenderException("PDF has no pages to rasterize");
+            }
+            return png;
+        } catch (ZebrashRenderer.ZplRenderException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ZebrashRenderer.ZplRenderException("PDF→PNG failed: " + e.getMessage());
+        }
+    }
+
     private byte[] pdfToPng(byte[] pdfBytes) throws Exception {
         try (PDDocument doc = Loader.loadPDF(pdfBytes)) {
             if (doc.getNumberOfPages() == 0) return null;
