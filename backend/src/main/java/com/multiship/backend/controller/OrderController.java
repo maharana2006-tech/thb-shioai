@@ -1393,10 +1393,9 @@ public class OrderController {
                 // stored ZPL. Overlay a badge so the operator knows which
                 // box this label goes on even when the picker isn't
                 // visible (e.g. printing directly).
-                java.util.Optional<byte[]> zpl =
-                        labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", pkgIndex);
-                if (zpl.isEmpty()) return ResponseEntity.status(404).build();
-                byte[] rendered = labelaryRenderer.renderPng(zpl.get());
+                java.util.Optional<byte[]> previewPng = resolvePreviewPng(orderNo, pkgIndex);
+                if (previewPng.isEmpty()) return ResponseEntity.status(404).build();
+                byte[] rendered = previewPng.get();
                 String badge = badgeFor(pkgIndex, totalPkgs, pkgList);
                 png = badge == null
                         ? rendered
@@ -1406,10 +1405,9 @@ public class OrderController {
                 // Single-pkg order — keep the pre-PR-#544 behavior
                 // (shipment-level fetch, no badge — there's nothing to
                 // annotate against).
-                java.util.Optional<byte[]> zpl =
-                        labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", null);
-                if (zpl.isEmpty()) return ResponseEntity.status(404).build();
-                png = labelaryRenderer.renderPng(zpl.get());
+                java.util.Optional<byte[]> previewPng = resolvePreviewPng(orderNo, null);
+                if (previewPng.isEmpty()) return ResponseEntity.status(404).build();
+                png = previewPng.get();
             } else {
                 // Multi-pkg composite — one panel per package, each with a
                 // "PKG N OF M" + tracking badge overlaid before stacking.
@@ -1419,10 +1417,9 @@ public class OrderController {
                 java.util.List<byte[]> panels = new java.util.ArrayList<>(totalPkgs);
                 java.util.List<String> badges = new java.util.ArrayList<>(totalPkgs);
                 for (int i = 1; i <= totalPkgs; i++) {
-                    java.util.Optional<byte[]> zpl =
-                            labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", i);
-                    if (zpl.isEmpty()) continue; // skip missing panels rather than 404 the whole request
-                    panels.add(labelaryRenderer.renderPng(zpl.get()));
+                    java.util.Optional<byte[]> previewPng = resolvePreviewPng(orderNo, i);
+                    if (previewPng.isEmpty()) continue; // skip missing panels rather than 404 the whole request
+                    panels.add(previewPng.get());
                     String b = badgeFor(i, totalPkgs, pkgList);
                     badges.add(b == null ? "" : b);
                 }
@@ -1438,6 +1435,31 @@ public class OrderController {
                     .warn("zebrash PNG render failed for order {} pkg={}: {}",
                             orderNo, pkgIndex, ex.getMessage());
             return ResponseEntity.status(502).build();
+        }
+    }
+
+    /** Preview PNG for one package, same engine+geometry as /label/pdf:
+     *  the V143 zebrash pngData column first (identical bytes to the PDF
+     *  page), else the carrier ZPL rendered through zebrash. Empty when no
+     *  ZPL resolves so the caller 404s. */
+    private java.util.Optional<byte[]> resolvePreviewPng(Integer orderNo, Integer pkg) {
+        if (pkg != null && pkg > 0) {
+            java.util.Optional<byte[]> col = labelArtifactResolver.resolveAsBytes(orderNo, "PNG", pkg);
+            if (col.isPresent()) return col; // zero-conversion, == PDF source bitmap
+        }
+        return labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", pkg)
+                .map(this::renderPngPreferZebrash);
+    }
+
+    /** zebrash is the engine; Labelary (now un-rotated) only when the binary
+     *  is unavailable. Honors prod require-zebrash=true (labelary disabled →
+     *  rethrow → caller 502s → FE facsimile). Parse/render failures propagate. */
+    private byte[] renderPngPreferZebrash(byte[] zpl) {
+        try {
+            return zebrashRenderer.renderPng(zpl);
+        } catch (com.multiship.backend.service.ZebrashRenderer.RendererUnavailableException unavailable) {
+            if (!labelaryRenderer.isAvailable()) throw unavailable;
+            return labelaryRenderer.renderPng(zpl); // un-rotated fallback
         }
     }
 
