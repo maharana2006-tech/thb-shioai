@@ -84,6 +84,21 @@ class OrderControllerLabelArtifactTest {
                 .thenReturn(Optional.empty());
     }
 
+    // ── Native-ZPL carrier (FedEx): raw ZPL served verbatim, not rasterized ──
+
+    @Test
+    void labelZpl_nativeZplCarrier_servedVerbatim_notRerasterized() {
+        String rawZpl = "^XA^CI28^PW812^LL1218^FO40,40^A0N,30,30^FDFEDEX GROUND^FS^XZ";
+        when(resolver.resolveAsBytes(eq(ORDER), eq("ZPL"), nullable(Integer.class)))
+                .thenReturn(Optional.of(rawZpl.getBytes()));
+
+        ResponseEntity<String> resp = controller.getLabelZpl(ORDER, null);
+
+        assertEquals(200, resp.getStatusCode().value());
+        assertTrue(resp.getBody().contains("FEDEX GROUND"), "raw carrier ZPL passes through");
+        assertFalse(resp.getBody().contains("^GFA"), "native ZPL is NOT re-rasterized into ^GFA");
+    }
+
     // ── PRIMARY: PDF carrier /label/zpl is the real label, not a facsimile ──
 
     @Test

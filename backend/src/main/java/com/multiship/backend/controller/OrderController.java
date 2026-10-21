@@ -41,8 +41,7 @@ public class OrderController {
     private com.multiship.backend.service.LabelArtifactResolver labelArtifactResolver;
 
     // PR #536 — carrier ZPL → PNG/PDF via bundled zebrash-cli. Feature-
-    // flagged; when off, falls back to the pre-existing facsimile
-    // renderers (ZplLabelService + PdfLabelService).
+    // flagged by label.render-carrier-zpl.
     @Autowired
     private com.multiship.backend.service.ZebrashRenderer zebrashRenderer;
     // R2-BUG-014 (run-6) — HTTP-based ZPL→PNG renderer backed by
