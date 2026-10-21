@@ -59,11 +59,15 @@ public class LabelaryRenderer {
     @Value("${label.labelary.retry-backoff-ms:400}")
     private long retryBackoffMs;
 
-    /** Labelary {@code X-Rotation} header: 0 | 90 | 180 | 270. Stored
-     *  ZPL on this stack renders upside-down in the browser because
-     *  the carrier emits a bottom-up origin; a 180° rotation makes
-     *  the PNG preview match printed orientation. */
-    @Value("${label.labelary.rotation:180}")
+    /** Labelary {@code X-Rotation} header: 0 | 90 | 180 | 270. The carrier
+     *  ZPL does NOT encode a bottom-up origin (no {@code ^PO}/{@code ^FWR}
+     *  anywhere in carrier output) — zebrash and a real Zebra both render it
+     *  upright, and the zebrash-rendered pngData/pdfData columns and raw ZPL
+     *  are un-rotated. A blanket 180° here only flipped the Labelary preview
+     *  relative to the printed label, so the default is now 0 (no rotation).
+     *  Still honored at 90/180/270 (guard below) as an escape hatch via
+     *  {@code LABEL_LABELARY_ROTATION} for a future carrier-specific need. */
+    @Value("${label.labelary.rotation:0}")
     private int rotation;
 
     /** @return {@code true} when Labelary is enabled by config and

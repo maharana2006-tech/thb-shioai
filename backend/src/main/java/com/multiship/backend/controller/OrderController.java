@@ -1254,9 +1254,9 @@ public class OrderController {
 
             if (pkgIndex != null && pkgIndex > 0) {
                 // Explicit pkg → single-panel render of that package's REAL
-                // carrier label (ZPL, GIF, or PDF — not just raw ZPL). Overlay
+                // carrier label (pre-rendered PNG, ZPL, GIF, or PDF). Overlay
                 // a badge so the operator knows which box this goes on.
-                java.util.Optional<byte[]> rendered = realLabelPng(orderNo, pkgIndex);
+                java.util.Optional<byte[]> rendered = resolvePreviewPng(orderNo, pkgIndex);
                 if (rendered.isEmpty()) return ResponseEntity.status(404).build();
                 String badge = badgeFor(pkgIndex, totalPkgs, pkgList);
                 png = badge == null
@@ -1267,7 +1267,7 @@ public class OrderController {
                 // Single-pkg order — keep the pre-PR-#544 behavior
                 // (shipment-level fetch, no badge — there's nothing to
                 // annotate against).
-                java.util.Optional<byte[]> rendered = realLabelPng(orderNo, null);
+                java.util.Optional<byte[]> rendered = resolvePreviewPng(orderNo, null);
                 if (rendered.isEmpty()) return ResponseEntity.status(404).build();
                 png = rendered.get();
             } else {
@@ -1279,7 +1279,7 @@ public class OrderController {
                 java.util.List<byte[]> panels = new java.util.ArrayList<>(totalPkgs);
                 java.util.List<String> badges = new java.util.ArrayList<>(totalPkgs);
                 for (int i = 1; i <= totalPkgs; i++) {
-                    java.util.Optional<byte[]> rendered = realLabelPng(orderNo, i);
+                    java.util.Optional<byte[]> rendered = resolvePreviewPng(orderNo, i);
                     if (rendered.isEmpty()) continue; // skip missing panels rather than 404 the whole request
                     panels.add(rendered.get());
                     String b = badgeFor(i, totalPkgs, pkgList);
@@ -1297,6 +1297,47 @@ public class OrderController {
                     .warn("zebrash PNG render failed for order {} pkg={}: {}",
                             orderNo, pkgIndex, ex.getMessage());
             return ResponseEntity.status(502).build();
+        }
+    }
+
+    /** Preview PNG for one package, same engine+geometry as /label/pdf:
+     *  the V143 zebrash pngData column first (identical bytes to the PDF
+     *  page), else the carrier ZPL rendered through zebrash. Empty when no
+     *  ZPL resolves so the caller 404s. */
+    private java.util.Optional<byte[]> resolvePreviewPng(Integer orderNo, Integer pkg) {
+        // Zero-conversion: pre-rendered PNG column when present (pkg rows).
+        if (pkg != null && pkg > 0) {
+            java.util.Optional<byte[]> col = labelArtifactResolver.resolveAsBytes(orderNo, "PNG", pkg);
+            if (col.isPresent()) return col; // zero-conversion, == PDF source bitmap
+        }
+        // Raw carrier ZPL → PNG (prefer in-VPC zebrash, Labelary fallback).
+        java.util.Optional<byte[]> zpl = labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", pkg);
+        if (zpl.isPresent()) return java.util.Optional.of(renderPngPreferZebrash(zpl.get()));
+        // Raster carrier label (UPS GIF) → via imagesToPdf (handles UPS's
+        // rotation) → rasterize. Previously 404'd — no raw ZPL stored.
+        java.util.Optional<com.multiship.backend.service.LabelArtifactResolver.ImageArtifact> img =
+                labelArtifactResolver.resolveImage(orderNo, pkg);
+        if (img.isPresent()) {
+            byte[] pdf = labelImagePdfService.imagesToPdf(java.util.List.of(img.get().bytes()));
+            return java.util.Optional.of(labelFormatConverter.pdfFirstPageToPng(pdf));
+        }
+        // PDF carrier (USPS/Stamps) → rasterize page 1. Previously 404'd.
+        java.util.Optional<byte[]> pdf = labelArtifactResolver.resolveAsBytes(orderNo, "PDF", pkg);
+        if (pdf.isPresent()) {
+            return java.util.Optional.of(labelFormatConverter.pdfFirstPageToPng(pdf.get()));
+        }
+        return java.util.Optional.empty();
+    }
+
+    /** zebrash is the engine; Labelary (now un-rotated) only when the binary
+     *  is unavailable. Honors prod require-zebrash=true (labelary disabled →
+     *  rethrow → caller 502s → FE facsimile). Parse/render failures propagate. */
+    private byte[] renderPngPreferZebrash(byte[] zpl) {
+        try {
+            return zebrashRenderer.renderPng(zpl);
+        } catch (com.multiship.backend.service.ZebrashRenderer.RendererUnavailableException unavailable) {
+            if (!labelaryRenderer.isAvailable()) throw unavailable;
+            return labelaryRenderer.renderPng(zpl); // un-rotated fallback
         }
     }
 
@@ -1358,32 +1399,6 @@ public class OrderController {
         if (pdf.isPresent()) {
             String zpl = labelFormatConverter.renderAll(pdf.get(), "PDF").zpl();
             if (zpl != null && !zpl.isBlank()) return java.util.Optional.of(zpl);
-        }
-        return java.util.Optional.empty();
-    }
-
-    /**
-     * The carrier's REAL label for one package rendered to PNG, for the
-     * preview surface. Mirrors {@link #getLabelPdf} per format so the preview
-     * matches the printable: raw ZPL → zebrash/Labelary (the carrier's
-     * bottom-up origin needs the renderer's 180° flip); GIF → through
-     * {@code imagesToPdf} (which handles UPS's rotation) then rasterized; PDF
-     * → page 1 rasterized. Empty when no carrier label is stored.
-     */
-    private java.util.Optional<byte[]> realLabelPng(Integer orderNo, Integer pkgIndex) {
-        java.util.Optional<byte[]> zpl = labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", pkgIndex);
-        if (zpl.isPresent()) {
-            return java.util.Optional.of(labelaryRenderer.renderPng(zpl.get()));
-        }
-        java.util.Optional<com.multiship.backend.service.LabelArtifactResolver.ImageArtifact> img =
-                labelArtifactResolver.resolveImage(orderNo, pkgIndex);
-        if (img.isPresent()) {
-            byte[] pdf = labelImagePdfService.imagesToPdf(java.util.List.of(img.get().bytes()));
-            return java.util.Optional.of(labelFormatConverter.pdfFirstPageToPng(pdf));
-        }
-        java.util.Optional<byte[]> pdf = labelArtifactResolver.resolveAsBytes(orderNo, "PDF", pkgIndex);
-        if (pdf.isPresent()) {
-            return java.util.Optional.of(labelFormatConverter.pdfFirstPageToPng(pdf.get()));
         }
         return java.util.Optional.empty();
     }

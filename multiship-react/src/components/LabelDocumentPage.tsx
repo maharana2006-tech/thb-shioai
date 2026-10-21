@@ -1057,11 +1057,13 @@ export default function LabelDocumentPage() {
           ) : null}
 
         <div className="flex flex-wrap justify-center gap-6 rounded-[26px] border border-slate-200/80 bg-slate-100/70 p-6 shadow-inner print:block print:border-0 print:bg-white print:p-0 print:shadow-none">
-          {/* R2-BUG-014 (run-6) — Labelary PNG goes FIRST. The PDF
+          {/* R2-BUG-014 (run-6) — carrier PNG goes FIRST. The PDF
               branch below is a fallback when the carrier returned no
               parseable ZPL; otherwise we show the carrier-canonical
-              render of the stored ZPL via Labelary, not a PDFBox-drawn
-              facsimile.  */}
+              render of the stored ZPL. The backend serves this preview
+              from zebrash (same engine + un-rotated geometry as the
+              downloaded/printed PDF), so preview == PDF == source ZPL
+              orientation — not a PDFBox-drawn facsimile.  */}
           {activeTab === 'label' && carrierPreviewState === 'ready' ? (
             <div className="print-doc relative w-[430px] shrink-0 border border-slate-300 bg-white shadow-xl print:w-[3.76in] print:border-0 print:shadow-none">
               <img
