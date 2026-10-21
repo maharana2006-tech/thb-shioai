@@ -64,6 +64,16 @@ public class ZebrashRenderer {
     @Value("${label.require-zebrash:false}")
     private boolean requireZebrash;
 
+    /**
+     * Density override (dots-per-mm) for the rare shop whose stock isn't
+     * 4" wide, so {@code ^PW}-based inference guesses the wrong density.
+     * 0 (default) = auto-infer from {@code ^PW}. Set to 12 to force a
+     * 300-dpi render for every label, 6 for 152-dpi, etc. See
+     * {@code docs/zebrash-deploy.md}.
+     */
+    @Value("${label.zebrash.force-dpmm:0}")
+    private int forceDpmm;
+
     /** Per-JVM extraction destination. Kept for the JVM's lifetime; on
      *  shutdown the OS reaps the temp file via {@link Path#toFile()}
      *  ({@code deleteOnExit}). Null until first extraction. */
@@ -115,8 +125,97 @@ public class ZebrashRenderer {
     private static final java.util.regex.Pattern LL_RE = java.util.regex.Pattern.compile("\\^LL(\\d+)");
     private static final java.util.regex.Pattern LH_RE = java.util.regex.Pattern.compile("\\^LH(\\d+),(\\d+)");
     private static final java.util.regex.Pattern FO_RE = java.util.regex.Pattern.compile("\\^F[OT](\\d+),(\\d+)");
+    private static final java.util.regex.Pattern PW_RE = java.util.regex.Pattern.compile("\\^PW(\\d+)");
+    private static final double MM_PER_INCH = 25.4;
     private static final double DOTS_PER_INCH = 203.2;
     private static final int STOCK_DOTS = 1218;
+    /** Standard Zebra densities (dpmm): 6=152dpi, 8=203dpi, 12=300dpi, 24=600dpi. */
+    private static final int[] STD_DPMM = {6, 8, 12, 24};
+
+    /**
+     * The render geometry zebrash-cli is invoked with: physical label
+     * size in inches + print density. {@code widthIn × 25.4 × dpmm} is
+     * the output canvas width in px, and ZPL {@code ^FO}/{@code ^PW}
+     * coordinates land 1 dot = 1 px — so the canvas must be at least
+     * {@code ^PW} dots wide at the ZPL's own density or content clips.
+     */
+    public record RenderSpec(double widthIn, double heightIn, int dpmm) {}
+
+    /**
+     * Pick the zebrash geometry for this ZPL.
+     *
+     * <p>A thermal printer renders the raw ZPL at its own native density,
+     * so the preview only matches if the emulator renders at that same
+     * density. We can't read the printer, but the ZPL's {@code ^PW}
+     * (print width, in dots) pins it down: assuming the overwhelmingly
+     * common 4" stock, {@code dpmm ≈ ^PW / (4 × 25.4)}, snapped to the
+     * nearest standard density. A 203-dpi label (^PW≈812) stays on the
+     * legacy 4"/8dpmm path byte-for-byte; a 300-dpi label (^PW≈1200)
+     * renders at 12dpmm on a canvas wide enough to hold all 1200 dots
+     * instead of clipping at 812.
+     *
+     * <p>{@code forceDpmm > 0} overrides the inference for the rare shop
+     * whose stock isn't 4" wide (where ^PW alone is ambiguous).
+     *
+     * <p>ponytail: assumes 4"-wide stock. 6"-wide 203-dpi stock (^PW≈1219)
+     * is misread as 300-dpi/4" — set {@code label.zebrash.force-dpmm} for
+     * such a shop, or add a per-printer density if more than one needs it.
+     */
+    static RenderSpec computeSpec(byte[] zpl, int forceDpmm) {
+        String text = new String(zpl, java.nio.charset.StandardCharsets.ISO_8859_1);
+        Integer pw = parsePrintWidth(text);
+        // Legacy 203-dpi path, unchanged: no ^PW to infer from, or ^PW
+        // infers to 8dpmm (standard 4" thermal) with no override. Keeps
+        // every existing 203-dpi label rendering identically.
+        int inferred = (pw != null) ? snapDpmm(pw / (4.0 * MM_PER_INCH)) : 8;
+        if (forceDpmm <= 0 && (pw == null || inferred == 8)) {
+            return new RenderSpec(4.0, Double.parseDouble(canvasHeightInches(zpl)), 8);
+        }
+        int dpmm = forceDpmm > 0 ? forceDpmm : inferred;
+        double dotsPerInch = dpmm * MM_PER_INCH;
+        double widthIn = (pw != null) ? pw / dotsPerInch : 4.0;
+        int neededDots = heightDots(text, dpmm);
+        double heightIn = Math.min(8.0, Math.ceil(neededDots / dotsPerInch * 20) / 20.0);
+        return new RenderSpec(widthIn, heightIn, dpmm);
+    }
+
+    /** Geometry for this ZPL applying the configured density override. */
+    public RenderSpec renderSpecFor(byte[] zpl) {
+        return computeSpec(zpl, forceDpmm);
+    }
+
+    static Integer parsePrintWidth(String text) {
+        java.util.regex.Matcher m = PW_RE.matcher(text);
+        return m.find() ? Integer.parseInt(m.group(1)) : null;
+    }
+
+    /** Snap a raw dpmm estimate to the nearest standard Zebra density. */
+    static int snapDpmm(double raw) {
+        int best = 8;
+        double bestDiff = Double.MAX_VALUE;
+        for (int d : STD_DPMM) {
+            double diff = Math.abs(d - raw);
+            if (diff < bestDiff) { bestDiff = diff; best = d; }
+        }
+        return best;
+    }
+
+    /** Needed canvas height in dots at {@code dpmm}: 6" stock unless the
+     *  ZPL draws past it (same ^LL / ^LH / ^FO logic as {@link
+     *  #canvasHeightInches}, but density-aware). */
+    static int heightDots(String text, int dpmm) {
+        int needed = (int) Math.round(6.0 * MM_PER_INCH * dpmm);
+        java.util.regex.Matcher ll = LL_RE.matcher(text);
+        if (ll.find()) needed = Math.max(needed, Integer.parseInt(ll.group(1)));
+        int lhY = 0;
+        java.util.regex.Matcher lh = LH_RE.matcher(text);
+        if (lh.find()) lhY = Integer.parseInt(lh.group(2));
+        int maxY = 0;
+        java.util.regex.Matcher fo = FO_RE.matcher(text);
+        while (fo.find()) maxY = Math.max(maxY, Integer.parseInt(fo.group(2)));
+        if (maxY > 0) needed = Math.max(needed, maxY + lhY + 40);
+        return needed;
+    }
 
     /**
      * Label height for the render canvas, in inches, as a string for the CLI.
@@ -148,15 +247,19 @@ public class ZebrashRenderer {
         }
         ensureExtracted();
 
-        // Canvas height follows the ZPL's own extent. UPS's ZPL draws to
-        // y≈1203 under a ^LH10,12 offset — past a fixed 6" (1218-dot) canvas,
-        // which clipped its Purchase/Dept lines and version strings. The PDF
-        // wrapper fits whatever height comes back onto the 4×6 sheet.
+        // Geometry follows the ZPL's own density + extent so the preview
+        // matches what the printer renders from the same raw ZPL. A
+        // 300-dpi label (^PW≈1200) renders at 12dpmm on a 1200-dot-wide
+        // canvas instead of clipping to 812; a 203-dpi label is unchanged.
+        // Height still grows past 6" for ZPL that draws below the stock
+        // edge (UPS's y≈1203 under ^LH10,12). Go parses these floats, so
+        // the legacy "4"/"8" args map to identical output bytes.
+        RenderSpec spec = renderSpecFor(zpl);
         ProcessBuilder pb = new ProcessBuilder(
                 binaryPath.toString(),
-                "--width", "4",
-                "--height", canvasHeightInches(zpl),
-                "--dpmm", "8");
+                "--width", fmt(spec.widthIn()),
+                "--height", fmt(spec.heightIn()),
+                "--dpmm", Integer.toString(spec.dpmm()));
         // Explicit env prune — sidesteps macOS Spotlight quarantine and
         // avoids the child inheriting LC_ALL / TERM values that break
         // Go's default UTF-8 output handling.
@@ -295,6 +398,11 @@ public class ZebrashRenderer {
         if (os.contains("win")) return "windows-" + canonicalArch;
         if (os.contains("mac") || os.contains("darwin")) return "darwin-" + canonicalArch;
         return "linux-" + canonicalArch;
+    }
+
+    /** Format inches for the CLI; trimmed precision, locale-independent. */
+    private static String fmt(double inches) {
+        return String.format(Locale.ROOT, "%.3f", inches);
     }
 
     private static byte[] drainBytes(InputStream in) {
