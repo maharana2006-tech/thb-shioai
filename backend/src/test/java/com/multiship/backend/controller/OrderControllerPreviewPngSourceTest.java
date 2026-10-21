@@ -13,16 +13,15 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Label-preview orientation/engine fix — preview PNG must come from the
- * SAME engine+geometry as /label/pdf (zebrash pngData column, else zebrash
- * render), with Labelary only as an un-rotated fallback. Locks the
+ * Label-preview orientation/engine fix — a ZPL carrier's preview PNG must
+ * come from the SAME engine+geometry as /label/pdf (zebrash, un-rotated),
+ * with Labelary only as an un-rotated fallback. Locks the
  * prod-critical invariant: when the zebrash binary is unavailable AND
  * Labelary is disabled (require-zebrash=true, labelary.enabled=false),
  * the preview path must RETHROW rather than route label content to
@@ -48,10 +47,10 @@ class OrderControllerPreviewPngSourceTest {
         ReflectionTestUtils.setField(controller, "labelaryRenderer", labelary);
     }
 
-    private Optional<byte[]> resolvePreview(Integer pkg) {
+    private Optional<byte[]> realLabelPng(Integer pkg) {
         //noinspection unchecked
         return (Optional<byte[]>) ReflectionTestUtils.invokeMethod(
-                controller, "resolvePreviewPng", 42, pkg);
+                controller, "realLabelPng", 42, pkg);
     }
 
     private byte[] renderPreferZebrash() {
@@ -59,26 +58,14 @@ class OrderControllerPreviewPngSourceTest {
     }
 
     @Test
-    void pngColumn_served_verbatim_without_any_render() {
-        byte[] col = {(byte) 0x89, 'P', 'N', 'G'};
-        when(resolver.resolveAsBytes(42, "PNG", 2)).thenReturn(Optional.of(col));
-
-        Optional<byte[]> out = resolvePreview(2);
-
-        assertArrayEquals(col, out.orElseThrow());
-        verify(resolver, never()).resolveAsBytes(eq(42), eq("ZPL"), any());
-        verify(zebrash, never()).renderPng(any());
-        verify(labelary, never()).renderPng(any());
-    }
-
-    @Test
-    void noPngColumn_renders_zpl_through_zebrash() {
+    void zplCarrier_preview_renders_through_zebrash_not_labelary() {
+        // A ZPL carrier's preview must go through zebrash (same un-rotated
+        // engine+geometry as /label/pdf), never Labelary with its old 180° flip.
         byte[] rendered = {(byte) 0x89, 'P', 'N', 'G', 'Z'};
-        when(resolver.resolveAsBytes(42, "PNG", 2)).thenReturn(Optional.empty());
         when(resolver.resolveAsBytes(42, "ZPL", 2)).thenReturn(Optional.of(ZPL));
         when(zebrash.renderPng(ZPL)).thenReturn(rendered);
 
-        assertArrayEquals(rendered, resolvePreview(2).orElseThrow());
+        assertArrayEquals(rendered, realLabelPng(2).orElseThrow());
         verify(labelary, never()).renderPng(any());
     }
 

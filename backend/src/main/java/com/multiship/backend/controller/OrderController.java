@@ -34,12 +34,6 @@ public class OrderController {
     @Autowired
     private CarrierService carrierService;
 
-    @Autowired
-    private com.multiship.backend.service.ZplLabelService zplLabelService;
-
-    @Autowired
-    private com.multiship.backend.service.PdfLabelService pdfLabelService;
-
     // Sprint 52 PR B — passthrough for carrier's real label bytes when
     // the stored artifact matches the requested format. See
     // LabelArtifactResolver javadoc.
@@ -47,8 +41,7 @@ public class OrderController {
     private com.multiship.backend.service.LabelArtifactResolver labelArtifactResolver;
 
     // PR #536 — carrier ZPL → PNG/PDF via bundled zebrash-cli. Feature-
-    // flagged; when off, falls back to the pre-existing facsimile
-    // renderers (ZplLabelService + PdfLabelService).
+    // flagged by label.render-carrier-zpl.
     @Autowired
     private com.multiship.backend.service.ZebrashRenderer zebrashRenderer;
     // R2-BUG-014 (run-6) — HTTP-based ZPL→PNG renderer backed by
@@ -66,6 +59,10 @@ public class OrderController {
     /** Raster carrier labels → ^GFA ZPL, so Copy ZPL is the carrier's real label. */
     @org.springframework.beans.factory.annotation.Autowired
     private com.multiship.backend.service.LabelImageZplService labelImageZplService;
+    /** PDF carrier labels (USPS/Stamps) → PNG / ^GFA ZPL, so /label/zpl and
+     *  /label/preview.png serve the carrier's real label, not a facsimile. */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.multiship.backend.service.LabelFormatConverter labelFormatConverter;
     /** /label/pdf?main=true — page 1 of a carrier PDF, cropped to the label
      *  and fitted to 4×6, so Print Label spools one label-sized sheet instead
      *  of FedEx's 3–4 Letter pages. zebrash/facsimile output is already one
@@ -985,26 +982,26 @@ public class OrderController {
             }
         }
 
-        // Raster carrier labels (UPS's default GIF): convert the stored image
-        // into ^GFA ZPL rather than falling through to the platform
-        // facsimile — Copy ZPL / Download .zpl must be the carrier's label.
+        // Carrier labels that aren't raw ZPL: UPS's GIF, or a PDF carrier's
+        // (USPS/Stamps) PDF. Wrap the real label into ^GFA ZPL rather than
+        // synthesizing a facsimile — Copy ZPL / Download .zpl must be the
+        // carrier's actual label. Pre-fix, only GIF/PNG was handled here, so
+        // PDF carriers fell through to a FedEx-layout facsimile with the
+        // wrong service + barcodes (the "zpl ≠ label" the client reported).
         {
             java.util.List<String> imageZpls = new java.util.ArrayList<>();
             if (pkgIndex != null && pkgIndex > 0) {
-                labelArtifactResolver.resolveImage(orderNo, pkgIndex)
-                        .ifPresent(a -> imageZpls.add(labelImageZplService.imageToZpl(a.bytes())));
+                rasterOrPdfCarrierZpl(orderNo, pkgIndex).ifPresent(imageZpls::add);
             } else {
                 ApiResponse<OrderWithLinesDTO> peekImg = orderService.getOrderWithLines(orderNo);
                 int totalForImg = effectivePkgCount(peekImg.getData());
                 if (totalForImg > 1) {
                     for (int i = 1; i <= totalForImg; i++) {
-                        labelArtifactResolver.resolveImage(orderNo, i)
-                                .ifPresent(a -> imageZpls.add(labelImageZplService.imageToZpl(a.bytes())));
+                        rasterOrPdfCarrierZpl(orderNo, i).ifPresent(imageZpls::add);
                     }
                 }
                 if (imageZpls.isEmpty()) {
-                    labelArtifactResolver.resolveImage(orderNo, null)
-                            .ifPresent(a -> imageZpls.add(labelImageZplService.imageToZpl(a.bytes())));
+                    rasterOrPdfCarrierZpl(orderNo, null).ifPresent(imageZpls::add);
                 }
             }
             if (!imageZpls.isEmpty()) {
@@ -1017,71 +1014,13 @@ public class OrderController {
             }
         }
 
-        ApiResponse<OrderWithLinesDTO> orderResponse = orderService.getOrderWithLines(orderNo);
-        if (!"SUCCESS".equalsIgnoreCase(orderResponse.getStatus()) || orderResponse.getData() == null) {
-            return ResponseEntity.status(orderResponse.getCode()).body("Order " + orderNo + " was not found.");
-        }
-
-        OrderAccountResolutionDTO resolution = asShippedResolution(orderNo);
-        if (resolution == null) {
-            ApiResponse<List<OrderAccountResolutionDTO>> resolutionResponse =
-                    carrierService.resolveOrderAccounts(List.of(orderNo));
-            resolution = resolutionResponse.getData() != null && !resolutionResponse.getData().isEmpty()
-                    ? resolutionResponse.getData().get(0)
-                    : null;
-        }
-
-        ApiResponse<OrderResponseDTO> trackingResponse = orderService.getOrderWithTracking(orderNo);
-        OrderResponseDTO.LabelDetails labelDetails = trackingResponse.getData() != null
-                ? trackingResponse.getData().getLabelDetails()
-                : null;
-        if (labelDetails != null) {
-            final OrderResponseDTO.LabelDetails ld = labelDetails;
-            orderTrackingRepository.findByOrderNo(orderNo).ifPresent(t ->
-                    ld.setHistory(com.multiship.backend.util.LabelHistory.parse(t.getLabelHistory())));
-        }
-
-        // Incoterms ride on order_customs, not the order row — thread them onto
-        // the DTO so the ZPL prints the shipment's actual term (the facsimile
-        // used to hardcode DAP while the CI/PDF said DDP).
-        orderCustomsRepository.findByOrderNoIgnoreCase(String.valueOf(orderNo))
-                .ifPresent(c -> orderResponse.getData().setIncoterms(c.getIncoterms()));
-
-        int totalPkgs = effectivePkgCount(orderResponse.getData());
-        java.util.List<com.multiship.backend.dto.LabelPackageDTO> allPackages =
-                orderResponse.getData().getPackages() == null
-                        ? java.util.List.of()
-                        : orderResponse.getData().getPackages();
-
-        // When ?pkg is omitted on a multi-box shipment, stream ALL labels in
-        // one file (thermal printers spool multi-label ZPL sequentially via
-        // consecutive ^XA…^XZ blocks). When ?pkg=N is given, return only that
-        // box's label — same as before.
-        boolean allPkgs = (pkgIndex == null) && totalPkgs > 1;
-        StringBuilder zplOut = new StringBuilder();
-        int firstPkg = allPkgs ? 1 : (pkgIndex == null || pkgIndex < 1 ? 1 : Math.min(pkgIndex, totalPkgs));
-        int lastPkg = allPkgs ? totalPkgs : firstPkg;
-        for (int p = firstPkg; p <= lastPkg; p++) {
-            final int currentPkg = p;
-            com.multiship.backend.dto.LabelPackageDTO perPkg = allPackages.stream()
-                    .filter(x -> x.getSequenceNumber() != null && x.getSequenceNumber() == currentPkg)
-                    .findFirst().orElse(null);
-            zplOut.append(zplLabelService.buildLabel(orderResponse.getData(), resolution, labelDetails,
-                    currentPkg, totalPkgs, perPkg));
-        }
-
-        String filenameSuffix;
-        if (totalPkgs <= 1) {
-            filenameSuffix = "";
-        } else if (allPkgs) {
-            filenameSuffix = "-all" + totalPkgs;
-        } else {
-            filenameSuffix = "-pkg" + firstPkg;
-        }
-        return ResponseEntity.ok()
-                .header("Content-Disposition", "attachment; filename=label-" + orderNo
-                        + filenameSuffix + ".zpl")
-                .body(zplOut.toString());
+        // No carrier label of any format is stored — this order hasn't been
+        // labelled yet. Honest 404 instead of a synthesized "DO NOT SHIP"
+        // FedEx-layout facsimile: the facsimile misled operators into thinking
+        // Copy ZPL / Download gave the carrier's real label. The FE shows its
+        // own on-screen draft for ungenerated orders.
+        return ResponseEntity.status(404)
+                .body("No label has been generated for order " + orderNo + " yet.");
     }
 
     /**
@@ -1241,89 +1180,13 @@ public class OrderController {
             }
         }
 
-        ApiResponse<OrderWithLinesDTO> orderResponse = orderService.getOrderWithLines(orderNo);
-        if (!"SUCCESS".equalsIgnoreCase(orderResponse.getStatus()) || orderResponse.getData() == null) {
-            return ResponseEntity.status(orderResponse.getCode()).build();
-        }
-
-        OrderAccountResolutionDTO resolution = asShippedResolution(orderNo);
-        if (resolution == null) {
-            ApiResponse<List<OrderAccountResolutionDTO>> resolutionResponse =
-                    carrierService.resolveOrderAccounts(List.of(orderNo));
-            resolution = resolutionResponse.getData() != null && !resolutionResponse.getData().isEmpty()
-                    ? resolutionResponse.getData().get(0)
-                    : null;
-        }
-
-        ApiResponse<OrderResponseDTO> trackingResponse = orderService.getOrderWithTracking(orderNo);
-        OrderResponseDTO.LabelDetails labelDetails = trackingResponse.getData() != null
-                ? trackingResponse.getData().getLabelDetails()
-                : null;
-        if (labelDetails != null) {
-            final OrderResponseDTO.LabelDetails ld = labelDetails;
-            orderTrackingRepository.findByOrderNo(orderNo).ifPresent(t ->
-                    ld.setHistory(com.multiship.backend.util.LabelHistory.parse(t.getLabelHistory())));
-        }
-
-        int totalPkgs = effectivePkgCount(orderResponse.getData());
-        java.util.List<com.multiship.backend.dto.LabelPackageDTO> allPackages =
-                orderResponse.getData().getPackages() == null
-                        ? java.util.List.of()
-                        : orderResponse.getData().getPackages();
-
-        boolean allPkgs = (pkgIndex == null) && totalPkgs > 1;
-        int firstPkg = allPkgs ? 1 : (pkgIndex == null || pkgIndex < 1 ? 1 : Math.min(pkgIndex, totalPkgs));
-        int lastPkg = allPkgs ? totalPkgs : firstPkg;
-
-        // No carrier artifact — the printable is OUR ZPL. Render the exact
-        // ZPL the /label/zpl endpoint serves through zebrash so "Print
-        // Label" puts on paper what a Zebra would print from Copy ZPL; the
-        // PDFBox drawing below is a separate renderer and drifts from the
-        // ZPL (it is only the fallback when the native renderer is absent
-        // for this platform or the ZPL fails to parse).
-        byte[] pdf = null;
-        if (renderCarrierZplEnabled) {
-            try {
-                // Same incoterms threading as /label/zpl — keeps the two
-                // byte-identical.
-                orderCustomsRepository.findByOrderNoIgnoreCase(String.valueOf(orderNo))
-                        .ifPresent(c -> orderResponse.getData().setIncoterms(c.getIncoterms()));
-                java.util.List<byte[]> facsimileZpls = new java.util.ArrayList<>(lastPkg - firstPkg + 1);
-                for (int p = firstPkg; p <= lastPkg; p++) {
-                    final int currentPkg = p;
-                    com.multiship.backend.dto.LabelPackageDTO perPkg = allPackages.stream()
-                            .filter(x -> x.getSequenceNumber() != null && x.getSequenceNumber() == currentPkg)
-                            .findFirst().orElse(null);
-                    facsimileZpls.add(zplLabelService.buildLabel(orderResponse.getData(), resolution,
-                            labelDetails, currentPkg, totalPkgs, perPkg)
-                            .getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                }
-                pdf = renderZplsToPdfViaLabelary(facsimileZpls);
-            } catch (RuntimeException ex) {
-                org.slf4j.LoggerFactory.getLogger(OrderController.class)
-                        .warn("Labelary render of the facsimile ZPL failed for order {} pkg={}, "
-                                + "falling back to the PDFBox drawing: {}", orderNo, pkgIndex, ex.getMessage());
-            }
-        }
-        if (pdf == null) {
-            pdf = pdfLabelService.buildMultiPagePdf(
-                    orderResponse.getData(), resolution, labelDetails,
-                    firstPkg, lastPkg, totalPkgs, allPackages);
-        }
-
-        String filenameSuffix;
-        if (totalPkgs <= 1) {
-            filenameSuffix = "";
-        } else if (allPkgs) {
-            filenameSuffix = "-all" + totalPkgs;
-        } else {
-            filenameSuffix = "-pkg" + firstPkg;
-        }
-        return ResponseEntity.ok()
-                .header("Content-Disposition", "attachment; filename=label-" + orderNo
-                        + filenameSuffix + ".pdf")
-                .header("Content-Type", org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
-                .body(pdf);
+        // No carrier label stored, and no renderable carrier ZPL — the order
+        // isn't labelled yet. Honest 404 instead of a synthesized FedEx-layout
+        // facsimile (the fake "DO NOT SHIP" PDF, which also rendered 180°
+        // upside-down). Downstream callers (shipment-documents, bulk/print
+        // flows) already gate on isLabelGenerated and tolerate a non-2xx, so
+        // none of them relied on this facsimile. The FE shows its own draft.
+        return ResponseEntity.status(404).build();
     }
 
     /**
@@ -1369,9 +1232,10 @@ public class OrderController {
         // resolve, 404 otherwise, with no render involved.
         if ("HEAD".equalsIgnoreCase(httpReq.getMethod())) {
             Integer probePkg = (pkgIndex != null && pkgIndex > 0) ? pkgIndex : null;
-            java.util.Optional<byte[]> zpl =
-                    labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", probePkg);
-            return zpl.isPresent()
+            // Existence check across ALL stored formats (ZPL / GIF-PNG / PDF),
+            // not just raw ZPL — otherwise UPS (GIF) and USPS/Stamps (PDF)
+            // probe as "no label" and the FE never asks for the real preview.
+            return hasRealLabel(orderNo, probePkg)
                     ? ResponseEntity.ok().header("Content-Type",
                             org.springframework.http.MediaType.IMAGE_PNG_VALUE).build()
                     : ResponseEntity.status(404).build();
@@ -1389,25 +1253,23 @@ public class OrderController {
                             : java.util.List.of();
 
             if (pkgIndex != null && pkgIndex > 0) {
-                // Explicit pkg → single-panel render for that package's
-                // stored ZPL. Overlay a badge so the operator knows which
-                // box this label goes on even when the picker isn't
-                // visible (e.g. printing directly).
-                java.util.Optional<byte[]> previewPng = resolvePreviewPng(orderNo, pkgIndex);
-                if (previewPng.isEmpty()) return ResponseEntity.status(404).build();
-                byte[] rendered = previewPng.get();
+                // Explicit pkg → single-panel render of that package's REAL
+                // carrier label (ZPL, GIF, or PDF — not just raw ZPL). Overlay
+                // a badge so the operator knows which box this goes on.
+                java.util.Optional<byte[]> rendered = realLabelPng(orderNo, pkgIndex);
+                if (rendered.isEmpty()) return ResponseEntity.status(404).build();
                 String badge = badgeFor(pkgIndex, totalPkgs, pkgList);
                 png = badge == null
-                        ? rendered
+                        ? rendered.get()
                         : zebrashCompositor.stackVerticallyWithBadges(
-                                java.util.List.of(rendered), java.util.List.of(badge));
+                                java.util.List.of(rendered.get()), java.util.List.of(badge));
             } else if (totalPkgs <= 1) {
                 // Single-pkg order — keep the pre-PR-#544 behavior
                 // (shipment-level fetch, no badge — there's nothing to
                 // annotate against).
-                java.util.Optional<byte[]> previewPng = resolvePreviewPng(orderNo, null);
-                if (previewPng.isEmpty()) return ResponseEntity.status(404).build();
-                png = previewPng.get();
+                java.util.Optional<byte[]> rendered = realLabelPng(orderNo, null);
+                if (rendered.isEmpty()) return ResponseEntity.status(404).build();
+                png = rendered.get();
             } else {
                 // Multi-pkg composite — one panel per package, each with a
                 // "PKG N OF M" + tracking badge overlaid before stacking.
@@ -1417,9 +1279,9 @@ public class OrderController {
                 java.util.List<byte[]> panels = new java.util.ArrayList<>(totalPkgs);
                 java.util.List<String> badges = new java.util.ArrayList<>(totalPkgs);
                 for (int i = 1; i <= totalPkgs; i++) {
-                    java.util.Optional<byte[]> previewPng = resolvePreviewPng(orderNo, i);
-                    if (previewPng.isEmpty()) continue; // skip missing panels rather than 404 the whole request
-                    panels.add(previewPng.get());
+                    java.util.Optional<byte[]> rendered = realLabelPng(orderNo, i);
+                    if (rendered.isEmpty()) continue; // skip missing panels rather than 404 the whole request
+                    panels.add(rendered.get());
                     String b = badgeFor(i, totalPkgs, pkgList);
                     badges.add(b == null ? "" : b);
                 }
@@ -1436,19 +1298,6 @@ public class OrderController {
                             orderNo, pkgIndex, ex.getMessage());
             return ResponseEntity.status(502).build();
         }
-    }
-
-    /** Preview PNG for one package, same engine+geometry as /label/pdf:
-     *  the V143 zebrash pngData column first (identical bytes to the PDF
-     *  page), else the carrier ZPL rendered through zebrash. Empty when no
-     *  ZPL resolves so the caller 404s. */
-    private java.util.Optional<byte[]> resolvePreviewPng(Integer orderNo, Integer pkg) {
-        if (pkg != null && pkg > 0) {
-            java.util.Optional<byte[]> col = labelArtifactResolver.resolveAsBytes(orderNo, "PNG", pkg);
-            if (col.isPresent()) return col; // zero-conversion, == PDF source bitmap
-        }
-        return labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", pkg)
-                .map(this::renderPngPreferZebrash);
     }
 
     /** zebrash is the engine; Labelary (now un-rotated) only when the binary
@@ -1501,6 +1350,65 @@ public class OrderController {
             }
         }
         return pdfMerger.mergeToOne(pdfs);
+    }
+
+    /**
+     * The carrier's REAL label for one package as {@code ^GFA} ZPL, for
+     * carriers that don't store raw ZPL. UPS stores a GIF; USPS/Stamps store
+     * a PDF — both get wrapped into {@code ^GFA} (the PDF is rasterized
+     * first). Raw carrier ZPL is served by the passthrough block above and
+     * never reaches here. Empty when no raster/PDF label is stored — the
+     * caller then returns an honest 404 rather than a synthesized facsimile.
+     */
+    private java.util.Optional<String> rasterOrPdfCarrierZpl(Integer orderNo, Integer pkgIndex) {
+        java.util.Optional<com.multiship.backend.service.LabelArtifactResolver.ImageArtifact> img =
+                labelArtifactResolver.resolveImage(orderNo, pkgIndex);
+        if (img.isPresent()) {
+            return java.util.Optional.of(labelImageZplService.imageToZpl(img.get().bytes()));
+        }
+        java.util.Optional<byte[]> pdf = labelArtifactResolver.resolveAsBytes(orderNo, "PDF", pkgIndex);
+        if (pdf.isPresent()) {
+            String zpl = labelFormatConverter.renderAll(pdf.get(), "PDF").zpl();
+            if (zpl != null && !zpl.isBlank()) return java.util.Optional.of(zpl);
+        }
+        return java.util.Optional.empty();
+    }
+
+    /**
+     * The carrier's REAL label for one package rendered to PNG, for the
+     * preview surface. Mirrors {@link #getLabelPdf} per format so the preview
+     * matches the printable: raw ZPL → zebrash (same engine+geometry as the
+     * PDF/print, un-rotated; Labelary only as the un-rotated fallback when the
+     * zebrash binary is absent); GIF → through {@code imagesToPdf} (which
+     * handles UPS's rotation) then rasterized; PDF → page 1 rasterized
+     * (ARGB + white flatten, no black band). Empty when no carrier label is
+     * stored.
+     */
+    private java.util.Optional<byte[]> realLabelPng(Integer orderNo, Integer pkgIndex) {
+        java.util.Optional<byte[]> zpl = labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", pkgIndex);
+        if (zpl.isPresent()) {
+            return java.util.Optional.of(renderPngPreferZebrash(zpl.get()));
+        }
+        java.util.Optional<com.multiship.backend.service.LabelArtifactResolver.ImageArtifact> img =
+                labelArtifactResolver.resolveImage(orderNo, pkgIndex);
+        if (img.isPresent()) {
+            byte[] pdf = labelImagePdfService.imagesToPdf(java.util.List.of(img.get().bytes()));
+            return java.util.Optional.of(labelFormatConverter.pdfFirstPageToPng(pdf));
+        }
+        java.util.Optional<byte[]> pdf = labelArtifactResolver.resolveAsBytes(orderNo, "PDF", pkgIndex);
+        if (pdf.isPresent()) {
+            return java.util.Optional.of(labelFormatConverter.pdfFirstPageToPng(pdf.get()));
+        }
+        return java.util.Optional.empty();
+    }
+
+    /** True when a carrier label of any stored format (ZPL / GIF-PNG / PDF)
+     *  exists for this package — the cheap existence check behind the
+     *  preview.png HEAD probe. */
+    private boolean hasRealLabel(Integer orderNo, Integer pkgIndex) {
+        return labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", pkgIndex).isPresent()
+                || labelArtifactResolver.resolveImage(orderNo, pkgIndex).isPresent()
+                || labelArtifactResolver.resolveAsBytes(orderNo, "PDF", pkgIndex).isPresent();
     }
 
     @Operation(

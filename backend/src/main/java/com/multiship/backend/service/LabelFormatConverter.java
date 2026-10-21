@@ -4,10 +4,13 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.rendering.ImageType;
 import org.apache.pdfbox.rendering.PDFRenderer;
 import org.springframework.stereotype.Service;
 
 import javax.imageio.ImageIO;
+import java.awt.Color;
+import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.util.Base64;
@@ -103,15 +106,56 @@ public class LabelFormatConverter {
 
     // ─── Primitive conversions ──────────────────────────────────────────────
 
+    /**
+     * Rasterize page 1 of a carrier PDF to PNG (203 DPI, thermal-equivalent).
+     * Public so the label endpoints can turn a stored carrier PDF (USPS/
+     * Stamps) into a preview PNG or an {@code ^GFA} ZPL without duplicating
+     * the PDFBox plumbing. Throws {@link ZebrashRenderer.ZplRenderException}
+     * on failure (callers already catch it / fall back).
+     */
+    public byte[] pdfFirstPageToPng(byte[] pdfBytes) {
+        try {
+            byte[] png = pdfToPng(pdfBytes);
+            if (png == null) {
+                throw new ZebrashRenderer.ZplRenderException("PDF has no pages to rasterize");
+            }
+            return png;
+        } catch (ZebrashRenderer.ZplRenderException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ZebrashRenderer.ZplRenderException("PDF→PNG failed: " + e.getMessage());
+        }
+    }
+
     private byte[] pdfToPng(byte[] pdfBytes) throws Exception {
         try (PDDocument doc = Loader.loadPDF(pdfBytes)) {
             if (doc.getNumberOfPages() == 0) return null;
             PDFRenderer renderer = new PDFRenderer(doc);
             // Page 1 only — thermal labels are single-page by convention.
             // Multi-piece MPS stores ONE page per label_package row anyway.
-            BufferedImage img = renderer.renderImageWithDPI(0, PDF_RENDER_DPI);
+            //
+            // Render ARGB, then flatten onto an explicit WHITE background.
+            // Carrier labels (USPS/Stamps) draw their address/postage block
+            // inside a transparency group; PDFBox's RGB path composites such
+            // a group over a BLACK backdrop, which left the right ~40% of the
+            // Stamps label a solid-black band on screen while a PDF viewer (and
+            // the raw /label/pdf) showed it correctly. ARGB keeps the group's
+            // own alpha, and the manual white flatten gives any unpainted area
+            // white instead of black.
+            float scale = PDF_RENDER_DPI / 72f;
+            BufferedImage argb = renderer.renderImage(0, scale, ImageType.ARGB);
+            BufferedImage flat = new BufferedImage(
+                    argb.getWidth(), argb.getHeight(), BufferedImage.TYPE_INT_RGB);
+            Graphics2D g = flat.createGraphics();
+            try {
+                g.setColor(Color.WHITE);
+                g.fillRect(0, 0, flat.getWidth(), flat.getHeight());
+                g.drawImage(argb, 0, 0, null);
+            } finally {
+                g.dispose();
+            }
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            ImageIO.write(img, "PNG", baos);
+            ImageIO.write(flat, "PNG", baos);
             return baos.toByteArray();
         }
     }
