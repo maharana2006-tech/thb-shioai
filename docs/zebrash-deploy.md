@@ -48,6 +48,30 @@ unzip -l target/backend-0.0.1-SNAPSHOT.jar | grep native/.*zebrash
 | `label.render-carrier-zpl` | `true` | `true` | Master switch for the ZPL→PNG preview path. Off = /label/preview.png 404s. |
 | `label.require-zebrash` | `false` | **`true`** | Fail-closed knob. When true, startup throws if the binary isn't on the classpath. Prevents silent Labelary fallback. |
 | `label.labelary.enabled` | `true` | **`false`** | Explicitly disables the Labelary fallback. With require-zebrash=true the fallback is unreachable anyway, but belt-and-braces. |
+| `label.zebrash.force-dpmm` | `0` | `0` | Density override (dots/mm). `0` = auto-infer from the ZPL's `^PW`. See **Render density** below. |
+
+## Render density
+
+The preview PNG and PDF must render at the **same density the Zebra printer
+uses**, or the two won't match (a 300-dpi label clips on screen while printing
+in full). We can't read the printer, so the density is inferred from the ZPL's
+`^PW` (print width, in dots), assuming the standard 4"-wide stock:
+`dpmm ≈ ^PW / (4 × 25.4)`, snapped to the nearest standard `{6, 8, 12, 24}`
+(152/203/300/600 dpi). A 203-dpi label (`^PW≈812`) stays on the legacy
+4"/8dpmm path byte-for-byte; a 300-dpi label (`^PW≈1200`) renders at 12dpmm on
+a canvas wide enough to hold all 1200 dots. The PDF page follows the label's
+true physical size instead of a fixed 4×6 sheet.
+
+**When to set `label.zebrash.force-dpmm`:** only for a shop whose stock is
+**not 4" wide**, where `^PW` inference guesses the wrong density. `12` forces
+300-dpi, `6` forces 152-dpi, etc. It is **global** — it can't distinguish
+printers within one tenant, so a tenant mixing 203- and 300-dpi printers on
+non-4" stock is not fully served by it; that case needs a per-printer density
+(not implemented). Leave at `0` (auto) unless you have that specific problem.
+
+> This applies to the **zebrash** path only. When the Labelary fallback serves
+> the preview (binary missing), density is Labelary's own request parameter and
+> is unaffected by this fix — another reason prod should run zebrash.
 
 Example prod overlay:
 

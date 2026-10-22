@@ -15,10 +15,12 @@ import java.util.List;
 
 /**
  * PR #536 — Wraps zebrash-rendered PNGs into single- or multi-page PDFs
- * for the {@code /orders/{n}/label/pdf} endpoint. The Zebra thermal
- * label ships at 4×6" at 8dpmm (812×1218 px); PDFBox draws each PNG
- * into a 4×6" (288×432 point) page so the printed PDF matches thermal
- * layout when routed to a laser/inkjet.
+ * for the {@code /orders/{n}/label/pdf} endpoint. Each page is sized to
+ * the label's true physical dimensions (from {@link
+ * ZebrashRenderer#renderSpecFor}) — a 203-dpi 4×6 label is a 288×432 pt
+ * page, a 300-dpi label its own size — so the printed PDF matches the
+ * thermal layout 1:1 when routed to a laser/inkjet instead of being
+ * down-scaled onto a fixed sheet.
  *
  * <p>Multi-package shipments: concatenates one page per ZPL bytes[]
  * entry. Callers pass the list ordered by package sequence number.
@@ -30,10 +32,10 @@ public class ZebrashPdfService {
 
     private final ZebrashRenderer zebrashRenderer;
 
-    /** 4×6" at 72dpi = 288 × 432 pt. Matches the thermal label
-     *  physical size so print scaling is 1:1. */
-    private static final float PAGE_WIDTH_PT = 288f;
-    private static final float PAGE_HEIGHT_PT = 432f;
+    /** PDF points per inch (72). Page size is derived per-label from the
+     *  renderer's geometry so the PDF is the label's true physical size
+     *  (a 300-dpi 4×6 prints as 4×6, not down-scaled onto a fixed sheet). */
+    private static final float PT_PER_INCH = 72f;
 
     /**
      * Render one ZPL blob to a single-page PDF. Convenience wrapper
@@ -53,19 +55,25 @@ public class ZebrashPdfService {
         }
         try (PDDocument doc = new PDDocument()) {
             for (int i = 0; i < zpls.size(); i++) {
-                byte[] png = zebrashRenderer.renderPng(zpls.get(i));
+                byte[] zpl = zpls.get(i);
+                byte[] png = zebrashRenderer.renderPng(zpl);
                 PDImageXObject image = PDImageXObject.createFromByteArray(
                         doc, png, "label-" + (i + 1));
-                PDPage page = new PDPage(new PDRectangle(PAGE_WIDTH_PT, PAGE_HEIGHT_PT));
+                // Page = the label's true physical size, so a correctly-
+                // sized render isn't down-scaled onto a fixed 4×6 sheet.
+                ZebrashRenderer.RenderSpec spec = zebrashRenderer.renderSpecFor(zpl);
+                float pageW = (float) (spec.widthIn() * PT_PER_INCH);
+                float pageH = (float) (spec.heightIn() * PT_PER_INCH);
+                PDPage page = new PDPage(new PDRectangle(pageW, pageH));
                 doc.addPage(page);
-                // Fit preserving aspect (the renderer may hand back a canvas
-                // taller than 6" when the ZPL draws past the stock edge); a
-                // full-bleed stretch would squash the barcodes' module ratios.
-                float scale = Math.min(PAGE_WIDTH_PT / image.getWidth(), PAGE_HEIGHT_PT / image.getHeight());
+                // Fit preserving aspect (the render already matches the page
+                // closely); a full-bleed stretch would squash barcode module
+                // ratios.
+                float scale = Math.min(pageW / image.getWidth(), pageH / image.getHeight());
                 float w = image.getWidth() * scale;
                 float h = image.getHeight() * scale;
                 try (PDPageContentStream stream = new PDPageContentStream(doc, page)) {
-                    stream.drawImage(image, (PAGE_WIDTH_PT - w) / 2f, PAGE_HEIGHT_PT - h, w, h);
+                    stream.drawImage(image, (pageW - w) / 2f, pageH - h, w, h);
                 }
             }
             try (ByteArrayOutputStream out = new ByteArrayOutputStream(16384)) {
