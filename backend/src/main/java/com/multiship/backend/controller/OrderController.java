@@ -1364,12 +1364,25 @@ public class OrderController {
         java.util.Optional<com.multiship.backend.service.LabelArtifactResolver.ImageArtifact> img =
                 labelArtifactResolver.resolveImage(orderNo, pkgIndex);
         if (img.isPresent()) {
+            // Fallback: carrier stored a raster (GIF/PNG) rather than native ZPL,
+            // so /label/zpl can only wrap it in a ^GFA bitmap. Warn so an account
+            // still returning raster (wrong label format, or a format-less path)
+            // is visible in logs instead of surfacing as a client complaint.
+            org.slf4j.LoggerFactory.getLogger(OrderController.class).warn(
+                    "/label/zpl order {} pkg={}: carrier stored a raster image, serving ^GFA (no native ZPL).",
+                    orderNo, pkgIndex);
             return java.util.Optional.of(labelImageZplService.imageToZpl(img.get().bytes()));
         }
         java.util.Optional<byte[]> pdf = labelArtifactResolver.resolveAsBytes(orderNo, "PDF", pkgIndex);
         if (pdf.isPresent()) {
             String zpl = labelFormatConverter.renderAll(pdf.get(), "PDF").zpl();
-            if (zpl != null && !zpl.isBlank()) return java.util.Optional.of(zpl);
+            if (zpl != null && !zpl.isBlank()) {
+                // Fallback: carrier stored a PDF, rasterised into ^GFA. See note above.
+                org.slf4j.LoggerFactory.getLogger(OrderController.class).warn(
+                        "/label/zpl order {} pkg={}: carrier stored a PDF, serving rasterised ^GFA (no native ZPL).",
+                        orderNo, pkgIndex);
+                return java.util.Optional.of(zpl);
+            }
         }
         return java.util.Optional.empty();
     }

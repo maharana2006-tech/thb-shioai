@@ -4476,17 +4476,23 @@ public class StampsConnector implements CarrierConnector {
             appendCustomsInfo(xml, request);
         }
 
-        // Per-account/per-shipment label file format override (request →
-        // account → SWSIM's own default). Pre-existing behavior omitted
-        // this element entirely, so a null/blank override preserves that
-        // exact behavior instead of forcing a specific format.
-        if (StringUtils.hasText(request.getLabelImageFormat())) {
-            String raw = request.getLabelImageFormat().trim().toUpperCase(java.util.Locale.ROOT);
-            // SWSIM's ImageType enum is PascalCase (Pdf, Png, Gif, Jpg) —
-            // capitalize just the first letter of the validated uppercase value.
-            String imageType = raw.substring(0, 1) + raw.substring(1).toLowerCase(java.util.Locale.ROOT);
-            xml.append("<ImageType>").append(imageType).append("</ImageType>");
-        }
+        // Label file format: request → account → ZPL default. SWSIM's
+        // ImageType enum DOES include Zpl/AZpl/BZpl (and Epl), not just
+        // Pdf/Png/Gif/Jpg — see developer.stamps.com SWS/IM reference.
+        // Omitting the element makes SWSIM fall back to Auto, which returns
+        // a PNG/GIF/PDF raster; the carrier then has no native ZPL, so
+        // /label/zpl must rasterise the label into a giant ^GFA bitmap. We
+        // default to Zpl here to match DEFAULT_LABEL_IMAGE_FORMAT and the
+        // SERA path (normaliseSeraLabelFormat also defaults to zpl), so the
+        // stored artefact is the carrier's own thermal-label markup and the
+        // ZPL endpoint serves it verbatim.
+        String raw = StringUtils.hasText(request.getLabelImageFormat())
+                ? request.getLabelImageFormat().trim().toUpperCase(java.util.Locale.ROOT)
+                : "ZPL";
+        // SWSIM's ImageType enum is PascalCase (Pdf, Png, Gif, Jpg, Zpl, …) —
+        // capitalize just the first letter of the validated uppercase value.
+        String imageType = raw.substring(0, 1) + raw.substring(1).toLowerCase(java.util.Locale.ROOT);
+        xml.append("<ImageType>").append(imageType).append("</ImageType>");
 
         // PR #543 — SWSIM prints <CustomerID> on the label's "Reference"
         // slot. USPS has no separate PO / DEPT fields, so concat both
