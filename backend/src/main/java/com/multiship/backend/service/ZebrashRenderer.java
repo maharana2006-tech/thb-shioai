@@ -236,6 +236,8 @@ public class ZebrashRenderer {
             throw new ZplRenderException("zebrash-cli produced non-PNG output ("
                     + stdout.length + " bytes)");
         }
+        // zebrash does not emulate ^POI (verified on UPS ZPL: the raw render is
+        // already upright), so nothing to turn here — see ZplOrientation.
         return stdout;
     }
 

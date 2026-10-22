@@ -59,17 +59,6 @@ public class LabelaryRenderer {
     @Value("${label.labelary.retry-backoff-ms:400}")
     private long retryBackoffMs;
 
-    /** Labelary {@code X-Rotation} header: 0 | 90 | 180 | 270. The carrier
-     *  ZPL does NOT encode a bottom-up origin (no {@code ^PO}/{@code ^FWR}
-     *  anywhere in carrier output) — zebrash and a real Zebra both render it
-     *  upright, and the zebrash-rendered pngData/pdfData columns and raw ZPL
-     *  are un-rotated. A blanket 180° here only flipped the Labelary preview
-     *  relative to the printed label, so the default is now 0 (no rotation).
-     *  Still honored at 90/180/270 (guard below) as an escape hatch via
-     *  {@code LABEL_LABELARY_ROTATION} for a future carrier-specific need. */
-    @Value("${label.labelary.rotation:0}")
-    private int rotation;
-
     /** @return {@code true} when Labelary is enabled by config and
      *  reachable at the configured base URL. */
     public boolean isAvailable() {
@@ -87,15 +76,17 @@ public class LabelaryRenderer {
      * metre-tall bitmap.
      */
     public byte[] renderPng(byte[] zpl) {
-        return render(zpl, "image/png");
+        // Labelary honours ^POI (inverted) where zebrash does not; turn it so
+        // the fallback agrees with the primary engine.
+        return com.multiship.backend.util.ZplOrientation.uprightPng(zpl, render(zpl, "image/png"));
     }
 
     /**
      * Render {@code zpl} bytes to a 4×6 PDF via Labelary. Same shape as
-     * {@link #renderPng} — only the Accept header differs. Used by the
-     * {@code /label/pdf} path when the stored carrier ZPL exists; the
-     * carrier's own SHIP FROM burns in directly instead of being
-     * reconstructed from DB fields (closes BUG-001 F-001).
+     * {@link #renderPng} — only the Accept header differs. Dev-only
+     * single-label fallback for the printable when zebrash is unavailable.
+     * ponytail: a ^POI label comes back inverted here (Labelary PDFs can't be
+     * turned without rasterising); rotate the page if this path ever ships.
      */
     public byte[] renderPdf(byte[] zpl) {
         return render(zpl, "application/pdf");
@@ -128,9 +119,6 @@ public class LabelaryRenderer {
                         .header("Accept", acceptType)
                         .header("Content-Type", "application/x-www-form-urlencoded")
                         .POST(java.net.http.HttpRequest.BodyPublishers.ofByteArray(zpl));
-                if (rotation == 90 || rotation == 180 || rotation == 270) {
-                    rb.header("X-Rotation", String.valueOf(rotation));
-                }
                 java.net.http.HttpRequest req = rb.build();
                 java.net.http.HttpResponse<byte[]> resp = client.send(req,
                         java.net.http.HttpResponse.BodyHandlers.ofByteArray());
