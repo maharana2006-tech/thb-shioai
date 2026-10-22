@@ -73,6 +73,20 @@ public class LabelPackage {
     @Column(name = "label_file_path", columnDefinition = "text")
     private String labelFilePath;
 
+    /** Phase 0 (Shipment & Label re-architecture) — the artifact's format,
+     *  ZPL | PDF | GIF | PNG | UNKNOWN, written at persist time from the bytes
+     *  we store so no reader has to sniff magic bytes. Defaults to UNKNOWN
+     *  so any builder site that does not set it still satisfies NOT NULL. */
+    @Column(name = "format", length = 16, nullable = false)
+    @Builder.Default
+    private String format = "UNKNOWN";
+
+    /** CARRIER_NATIVE (real ZPL) | CARRIER_RASTER (image or PDF the ZPL
+     *  endpoint must wrap in ^GFA) | UNKNOWN. See LabelFormatPolicy.sourceFor. */
+    @Column(name = "source", length = 16, nullable = false)
+    @Builder.Default
+    private String source = "UNKNOWN";
+
     /** V143 (ZPL-first Stage 2): pre-rendered ZPL/PDF/PNG for this
      *  package. All three populated at label-generate time so the
      *  /label/{zpl,pdf,png} endpoints are zero-conversion reads.

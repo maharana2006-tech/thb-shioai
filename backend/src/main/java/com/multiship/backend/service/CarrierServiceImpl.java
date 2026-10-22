@@ -107,6 +107,9 @@ public class CarrierServiceImpl implements CarrierService {
      *  hardcode/throw. Replaces the scattered fallback logic that used to
      *  live inline in buildShipmentRequest. */
     private final ShipmentDefaultsResolver shipmentDefaultsResolver;
+    // Phase 0 (Shipment & Label re-architecture) — single source of truth for
+    // the label format we request from a carrier. See LabelFormatPolicy.
+    private final com.multiship.backend.service.label.LabelFormatPolicy labelFormatPolicy;
     /** F6-D — converts every money field on the outgoing request DTO into
      *  the carrier account's billing currency (via ECB FX rates) so a EUR
      *  client shipping on a USD UPS account no longer sends EUR figures
@@ -1026,6 +1029,10 @@ public class CarrierServiceImpl implements CarrierService {
                         // (survives URL expiry) instead of a signed URL that
                         // dies in 24-48h.
                         .labelFilePath(persistedLabel)
+                        // Phase 0 — explicit format/provenance, from the same
+                        // sniff the pre-render below already performs.
+                        .format(sniffPersistedFormat(persistedLabel))
+                        .source(com.multiship.backend.service.label.LabelFormatPolicy.sourceFor(sniffPersistedFormat(persistedLabel)))
                         // V143 (ZPL-first Stage 2) — all three serve-time
                         // formats pre-rendered so /label/{zpl,pdf,png} are
                         // zero-conversion reads. Null when the converter
@@ -3141,14 +3148,19 @@ public class CarrierServiceImpl implements CarrierService {
                 if (!StringUtils.hasText(pieceTracking)) pieceTracking = batchResult.trackingNumber();
                 String pieceTrackingUrl = pieceMatch != null ? pieceMatch.trackingUrl() : null;
                 if (!StringUtils.hasText(pieceTrackingUrl)) pieceTrackingUrl = batchResult.trackingUrl();
+                // PR #550 — pre-fetch URL labels; survives URL expiry. Hoisted
+                // so Phase 0 can derive format/provenance from the same bytes.
+                String persistedPiece = persistLabelPath(piecelabel);
                 com.multiship.backend.model.LabelPackage row = com.multiship.backend.model.LabelPackage.builder()
                         .orderNo(orderNo)
                         .batchId(batch.getId())
                         .sequenceNumber(seq)
                         .trackingNumber(pieceTracking)
                         .trackingUrl(pieceTrackingUrl)
-                        // PR #550 — pre-fetch URL labels; survives URL expiry.
-                        .labelFilePath(persistLabelPath(piecelabel))
+                        .labelFilePath(persistedPiece)
+                        // Phase 0 — explicit format/provenance (see site ~1019).
+                        .format(sniffPersistedFormat(persistedPiece))
+                        .source(com.multiship.backend.service.label.LabelFormatPolicy.sourceFor(sniffPersistedFormat(persistedPiece)))
                         .weight(p.getWeight() != null ? p.getWeight() : req.getWeight())
                         .weightUnit(firstNonBlank(p.getWeightUnit(), req.getWeightUnit()))
                         .length(p.getLength() != null ? p.getLength() : length)
@@ -4555,6 +4567,17 @@ public class CarrierServiceImpl implements CarrierService {
         return labelFormatConverter.renderAll(bytes, format);
     }
 
+    /** Phase 0 — the artifact's format, detected once at persist time from the
+     *  bytes we are about to store, so the label_package row carries it and no
+     *  reader has to sniff. UNKNOWN for a URL or undecodable label; never null
+     *  (the column is NOT NULL). Reuses the same sniff the pre-render uses. */
+    private static String sniffPersistedFormat(String persisted) {
+        if (!StringUtils.hasText(persisted)) return com.multiship.backend.service.label.LabelFormatPolicy.FORMAT_UNKNOWN;
+        byte[] bytes = decodePersistedLabel(persisted);
+        String format = (bytes == null || bytes.length == 0) ? null : sniffLabelFormat(bytes);
+        return format == null ? com.multiship.backend.service.label.LabelFormatPolicy.FORMAT_UNKNOWN : format;
+    }
+
     private static byte[] decodePersistedLabel(String persisted) {
         String trimmed = persisted.trim();
         String lower = trimmed.toLowerCase(Locale.ROOT);
@@ -4854,8 +4877,13 @@ public class CarrierServiceImpl implements CarrierService {
                 .insuredValue(req.getInsuredValue())
                 .insuredValueCurrency(req.getInsuredValueCurrency())
                 .packages(req.getPackages())
-                .labelImageFormat(firstNonBlank(req.getLabelImageFormat(),
-                        account != null ? account.getLabelImageFormat() : null))
+                // Phase 0 — request → account → carrier default (ZPL where the
+                // carrier can emit it; DHL stays PDF). Pre-fix this dropped the
+                // default, so a null format reached every connector and
+                // Stamps/UPS labels came back as rasters.
+                .labelImageFormat(labelFormatPolicy.requestedFormat(carrier,
+                        account != null ? account.getLabelImageFormat() : null,
+                        req.getLabelImageFormat()))
                 .labelImageType(firstNonBlank(req.getLabelImageType(),
                         account != null ? account.getFedexLabelImageType() : null))
                 .labelStockType(firstNonBlank(req.getLabelStockType(),
