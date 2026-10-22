@@ -69,7 +69,7 @@ export interface OrderImportRow {
   lastPrintedAt?: string | null
   generatedMessage?: string | null
   /** Label URL endpoint for retrieving the generated label PDF.
-   *  Populated after successful label generation. Format: /api/v1/orders/{orderNo}/label/pdf */
+   *  Populated after successful label generation. Format: /api/v1/labels/{orderNo}/pdf */
   labelUrl?: string | null
   /** Tracking URL for the carrier's tracking page.
    *  Populated after successful label generation. */

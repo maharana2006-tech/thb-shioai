@@ -11,7 +11,7 @@ import type { ApiResponse } from './orderService'
  *   zip      GET /dtc/batches/{batchId}/labels.zip
  *
  * Print/Void per line reuse the order endpoints
- * (/api/v1/orders/{orderNo}/label/pdf, POST /api/v1/orders/{orderNo}/void)
+ * (/api/v1/labels/{orderNo}/pdf, POST /api/v1/orders/{orderNo}/void)
  * against the generated order number.
  */
 export const dtcService = {

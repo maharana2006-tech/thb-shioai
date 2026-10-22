@@ -317,86 +317,6 @@ export interface LabelCustomsItem {
   sku?: string | null
 }
 
-export interface LabelDocumentPayload {
-  order: OrderWithLines
-  /** Which account the order ships with, from the three-scenario cascade. */
-  resolution?: LabelDocumentResolution | null
-  /** Legacy field from older backend builds. */
-  carrierAccount?: OrderWithLinesPayload['carrierAccount']
-  label: LabelDetails | null
-  shipper: ShipperInfo
-  /** True when this is a reverse/return label. */
-  isReturn?: boolean
-  /** International-only customs blocks resolved from the client's profile. */
-  international?: boolean
-  importer?: LabelImporter | null
-  broker?: LabelBroker | null
-  /** CARRIER_DEFAULT (carrier's included brokerage) | BROKER_SELECT (named broker). */
-  brokerage?: 'CARRIER_DEFAULT' | 'BROKER_SELECT' | null
-  customsDefaults?: LabelCustomsDefaults | null
-  /** Per-order commercial-invoice line items entered against the order (international). */
-  customs?: {
-    items?: LabelCustomsItem[] | null
-    incoterms?: string | null
-    reasonForExport?: string | null
-    currency?: string | null
-    weightUnit?: string | null
-    notes?: string | null
-  } | null
-  /** What the shipment was billed — freight for the commercial invoice.
-   *  0.00 in sandbox until a production rate is captured. */
-  charges?: {
-    freight?: number | null
-    carrierAmount?: number | null
-    billableAmount?: number | null
-    currency?: string | null
-  } | null
-  /**
-   * Structured decode of the carrier's label response (currently the FedEx
-   * MaxiCode payload from the returned ZPL). Every field is pure carrier
-   * data — no local Order/OrderCustoms augmentation. Populated when the
-   * stored artifact is parseable ZPL with a MaxiCode block; null otherwise.
-   * Rendered as an authoritative side panel on LabelDocumentPage so the
-   * operator can trust that "line 2 / EEI / commodity is exactly what the
-   * carrier confirmed" — independent of whatever the thermal-label
-   * template chose to render as visible text.
-   */
-  carrierResponseDetails?: {
-    source?: string | null
-    trackingNumber?: string | null
-    serviceCode?: string | null
-    service?: string | null
-    recipientName?: string | null
-    recipientAddressLine1?: string | null
-    recipientAddressLine2?: string | null
-    recipientCity?: string | null
-    recipientState?: string | null
-    recipientPostalCode?: string | null
-    recipientCountryCode?: string | null
-    recipientPhone?: string | null
-    referenceNumber?: string | null
-    customerPo?: string | null
-    customsCountryCode?: string | null
-    customsValue?: string | null
-    customsCurrency?: string | null
-    commodityDescription?: string | null
-    eeiStatement?: string | null
-  } | null
-  /** Service level resolved from the ERP ship-via mapping (Settings → Shipping Services). */
-  service?: { carrier: string; code: string; name: string; scope?: string } | null
-  /** The default package preset (Settings → Packages) used for type + dimensions. */
-  packagePreset?: {
-    name: string
-    kind: string
-    carrierPackageCode?: string | null
-    length?: number | null
-    width?: number | null
-    height?: number | null
-    dimUnit?: string
-    maxWeight?: number | null
-    weightUnit?: string
-  } | null
-}
 
 /** Payload of GET /orders/{orderNo}/details: the order plus the tenant's carrier account. */
 export interface OrderWithLinesPayload {
@@ -1062,23 +982,10 @@ export const orderService = {
    * an operator viewing pkg 3 of 5 in the label doc UI would still
    * download pkg 1's ZPL silently.
    */
-  getLabelZpl: async (orderNo: number, pkgIndex?: number): Promise<string> => {
-    const qs = pkgIndex && pkgIndex > 1 ? `?pkg=${pkgIndex}` : ''
-    // Sprint 50 PR Q3 — cookie-mode auth.
-    const response = await fetch(`${BASE_URL}/orders/${orderNo}/label/zpl${qs}`, {
-      credentials: 'include',
-    })
-
-    if (!response.ok) {
-      throw new Error(`ZPL is unavailable (HTTP ${response.status}) — restart the backend if it was just updated.`)
-    }
-
-    return response.text()
-  },
 
   /**
    * Sprint 52 PR A — 4x6" PDF facsimile of the shipping label. Same
-   * ?pkg semantics as getLabelZpl: omitted on a multi-box shipment
+   * ?seq semantics: omitted on a multi-box shipment
    * returns all packages as one PDF with N pages. Returns a Blob so
    * the caller can trigger a download or preview inline.
    *
@@ -1095,13 +1002,14 @@ export const orderService = {
    */
   getLabelPdf: async (orderNo: number, pkgIndex?: number, opts?: { main?: boolean }): Promise<Blob> => {
     const params = new URLSearchParams()
-    if (pkgIndex && pkgIndex > 0) params.set('pkg', String(pkgIndex))
-    // main=true — page 1 of a carrier PDF cropped to the label and fitted to
-    // 4×6 (one label-sized sheet per package) instead of the carrier's full
-    // Letter-page set with copies/doc pages. What Print Label sends.
-    if (opts?.main) params.set('main', 'true')
+    if (pkgIndex && pkgIndex > 0) params.set('seq', String(pkgIndex))
+    void opts
     const qs = params.size ? `?${params.toString()}` : ''
-    const response = await fetch(`${BASE_URL}/orders/${orderNo}/label/pdf${qs}`, {
+    // Phase 3 (Shipment & Label re-architecture) — the printable comes from the
+    // /labels resource: one 4x6 page per package from the same render as the
+    // preview. Rasters are cropped to the main label on every surface now, so
+    // the old ?main= flag has no separate meaning and is accepted but ignored.
+    const response = await fetch(`${BASE_URL}/labels/${orderNo}/pdf${qs}`, {
       credentials: 'include',
     })
     if (!response.ok) {
@@ -1194,27 +1102,6 @@ export const orderService = {
    * the actual <img> renders the same URL with a fresh GET which the
    * browser caches per Cache-Control: private, max-age=60.
    */
-  headLabelPreviewPng: async (orderNo: number, pkgIndex?: number): Promise<boolean> => {
-    try {
-      const qs = pkgIndex && pkgIndex > 0 ? `?pkg=${pkgIndex}` : ''
-      const response = await fetch(`${BASE_URL}/orders/${orderNo}/label/preview.png${qs}`, {
-        method: 'HEAD',
-        credentials: 'include',
-      })
-      return response.ok
-    } catch {
-      return false
-    }
-  },
-
-  /** PR #538 — URL builder for the <img src=> tag once the HEAD probe
-   *  above confirms the PNG endpoint is live. Kept as a helper so
-   *  LabelDocumentPage doesn't hardcode the path.
-   *  PR #544 — optional pkgIndex forwards as ?pkg=N. */
-  labelPreviewPngUrl: (orderNo: number, pkgIndex?: number): string => {
-    const qs = pkgIndex && pkgIndex > 0 ? `?pkg=${pkgIndex}` : ''
-    return `${BASE_URL}/orders/${orderNo}/label/preview.png${qs}`
-  },
 
   /**
    * Get an order with its line items plus the tenant's carrier account
@@ -1224,13 +1111,6 @@ export const orderService = {
     return apiClient.get<ApiResponse<OrderWithLinesPayload>>(`/orders/${orderNo}/details`)
   },
 
-  /**
-   * Everything needed to render the shipping label + commercial invoice:
-   * order with lines, tenant carrier account, label details, shipper address.
-   */
-  getLabelDocument: (orderNo: number) => {
-    return apiClient.get<ApiResponse<LabelDocumentPayload>>(`/orders/${orderNo}/label`)
-  },
 
   /**
    * Get dashboard statistics

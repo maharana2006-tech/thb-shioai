@@ -29,7 +29,7 @@ function LegacyTemplateRedirect() {
 // async import; the fallback is a simple centered spinner so a
 // slow network doesn't blank the screen.
 //
-// LabelDocumentPage was previously eager on the argument that print is
+// ShipmentLabelPage was previously eager on the argument that print is
 // a "frequent" flow — but the file is 924 LoC and contributed 51 KB
 // rendered / 10 KB gzipped to the main chunk (bundle audit #434). Moved
 // to lazy in the bundle-audit follow-up; the trade-off is a single extra
@@ -74,11 +74,13 @@ const AddressBookPage = lazy(() => import('../components/AddressBookPage'))
 const WarehousesPage = lazy(() => import('../components/WarehousesPage'))
 const CodeMapsPage = lazy(() => import('../components/CodeMapsPage'))
 const AuditLogPage = lazy(() => import('../components/AuditLogPage'))
-// Bundle audit #434 follow-up: LabelDocumentPage moved from eager
+// Bundle audit #434 follow-up: ShipmentLabelPage moved from eager
 // (was justified as "frequent print flow") to lazy — 51 KB rendered /
 // 10 KB gz off the main chunk. One extra RTT the first time an
 // operator opens /label/:orderNo.
-const LabelDocumentPage = lazy(() => import('../components/LabelDocumentPage'))
+// Shipment & Label re-architecture — one preview rendered from the exact ZPL
+// the operator copies and prints. The old document page and its flag are gone.
+const ShipmentLabelPage = lazy(() => import('../components/ShipmentLabelPage'))
 // Lazy — admin-only pages (small user set, loaded on demand).
 const ApiKeysPage = lazy(() => import('../components/ApiKeysPage'))
 const ApiReferencePage = lazy(() => import('../components/ApiReferencePage'))
@@ -306,7 +308,7 @@ export default function AppRoutes() {
               <Route path="/orders/history" element={<Navigate to={bulkPaths.imports} replace />} />
             </Route>
 
-            <Route path="/label/:orderNo" element={<LabelDocumentPage />} />
+            <Route path="/label/:orderNo" element={<ShipmentLabelPage />} />
             {/* /orders/900213 is what people type; the order's page lives at /label/:orderNo. */}
             <Route path="/orders/:orderNo" element={<OrderNoRedirect />} />
 

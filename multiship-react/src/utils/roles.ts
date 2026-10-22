@@ -69,12 +69,12 @@ export const getHomePathForRole = (role: UserRole, hasConnectedCarrier: boolean)
  * invite-time TENANT where user.client_code is set independently of
  * the username, the fabricated value didn't match the real tenant and
  * every call that used it as a filter 403'd (the TENANT 'Your orders'
- * page showed empty, LabelDocumentPage over-blocked valid labels).
+ * page showed empty, ShipmentLabelPage over-blocked valid labels).
  * The backend's TenantScopeEnforcer.clampClientCode already resolves
  * the caller's tenant from the JWT, so the FE must never derive it
  * from the username. Signature preserved for existing callers; they
  * all degrade to safe behaviour (route-by-role on OrdersPage, allow
- * on LabelDocumentPage — backend still 403s cross-tenant attempts).
+ * on ShipmentLabelPage — backend still 403s cross-tenant attempts).
  *
  * @deprecated Always returns null. Route by role instead
  *   (`normalizeRole(role) === 'TENANT'`) and let the backend scope the

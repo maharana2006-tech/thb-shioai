@@ -316,7 +316,7 @@ describe('authFetch — non-JSON endpoints', () => {
 
   it('returns the raw Response on 2xx so callers can consume blob/text/etc.', async () => {
     // jsdom's Blob → Response.stream() has a bug with binary bodies; use a
-    // Uint8Array directly (also what LabelDocumentPage sees over the wire).
+    // Uint8Array directly (also what ShipmentLabelPage sees over the wire).
     const pdfBytes = new Uint8Array([0x25, 0x50, 0x44, 0x46])
     globalThis.fetch = vi.fn(async () =>
       new Response(pdfBytes, {
@@ -328,7 +328,7 @@ describe('authFetch — non-JSON endpoints', () => {
     const res = await authFetch('/label/1.pdf')
     expect(res.status).toBe(200)
     expect(res.headers.get('Content-Type')).toBe('application/pdf')
-    // The caller (LabelDocumentPage) does the .blob() — verify body reads.
+    // The caller (ShipmentLabelPage) does the .blob() — verify body reads.
     const bodyBytes = new Uint8Array(await res.arrayBuffer())
     expect(bodyBytes[0]).toBe(0x25) // '%' — first byte of the PDF magic number
   })

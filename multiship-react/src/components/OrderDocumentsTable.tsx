@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import type { SortingState } from '@tanstack/react-table'
 import { FiCalendar, FiDownload, FiFileText, FiLoader, FiRefreshCw, FiSlash, FiTruck, FiX } from 'react-icons/fi'
 import { orderService, type DocumentFacets, type DocumentsQuery, type OrderDocumentRow } from '../api/orderService'
+import { labelService } from '../api/labelService'
 import { notify } from '../utils/notify'
 import { useLatestRequest } from '../hooks/useLatestRequest'
 import AdvancedDataTable, { type ColumnDef } from './workspace/AdvancedDataTable'
@@ -241,7 +242,7 @@ export default function OrderDocumentsTable() {
               disabled={busyKey === `label-${r.orderNo}`} className={DOC_BTN} title="Download the 4x6 shipping label as PDF">
               {busyKey === `label-${r.orderNo}` ? spin : <FiDownload className="h-3 w-3 text-[#412d15]" />} Label
             </button>
-            <button type="button" onClick={() => void download(`zpl-${r.orderNo}`, async () => new Blob([await orderService.getLabelZpl(r.orderNo)], { type: 'text/plain' }), `label-${r.orderNo}.zpl`, 'ZPL download failed.')}
+            <button type="button" onClick={() => void download(`zpl-${r.orderNo}`, async () => new Blob([await labelService.allZpl(r.orderNo)], { type: 'text/plain' }), `label-${r.orderNo}.zpl`, 'ZPL download failed.')}
               disabled={busyKey === `zpl-${r.orderNo}`} className={DOC_BTN} title="Raw ZPL for thermal printers">
               {busyKey === `zpl-${r.orderNo}` ? spin : <FiDownload className="h-3 w-3 text-[#412d15]" />} ZPL
             </button>

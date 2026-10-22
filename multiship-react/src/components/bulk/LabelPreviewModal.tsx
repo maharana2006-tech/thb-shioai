@@ -69,7 +69,7 @@ export default function LabelPreviewModal({ orderNo, onClose }: { orderNo: numbe
         <div className="flex items-center justify-end gap-2 border-t border-[#e3d9c4] px-6 py-3">
           <button
             type="button"
-            onClick={() => window.open(`/api/v1/orders/${orderNo}/label/pdf`, '_blank')}
+            onClick={() => window.open(`/api/v1/labels/${orderNo}/pdf`, '_blank')}
             className="inline-flex items-center gap-1 rounded-lg px-3 py-2 text-[12px] font-semibold text-[#1f150c] hover:bg-[#f2ecdf]"
           >
             📥 Download
