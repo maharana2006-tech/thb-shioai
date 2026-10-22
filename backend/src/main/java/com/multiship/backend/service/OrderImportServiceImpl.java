@@ -3502,7 +3502,7 @@ public class OrderImportServiceImpl implements OrderImportService {
             if (!hasErrors.test(r)) r.setOrderBlockedBy(brokenBy.get(groupKeyOf(r)));
             if (r.getGeneratedOrderNo() != null && "GENERATED".equalsIgnoreCase(r.getGeneratedStatus())
                     && !StringUtils.hasText(r.getLabelUrl())) {
-                r.setLabelUrl("/api/v1/orders/" + r.getGeneratedOrderNo() + "/label/pdf");
+                r.setLabelUrl("/api/v1/labels/" + r.getGeneratedOrderNo() + "/pdf");
             }
         }
         return com.multiship.backend.dto.ImportBatchRowsPageDTO.builder()
@@ -3539,7 +3539,7 @@ public class OrderImportServiceImpl implements OrderImportService {
             if (clean.test(r) && StringUtils.hasText(r.getOrderRef())) r.setOrderBlockedBy(brokenBy.get(r.getOrderRef().trim()));
             if (r.getGeneratedOrderNo() != null && "GENERATED".equalsIgnoreCase(r.getGeneratedStatus())
                     && !StringUtils.hasText(r.getLabelUrl())) {
-                r.setLabelUrl("/api/v1/orders/" + r.getGeneratedOrderNo() + "/label/pdf");
+                r.setLabelUrl("/api/v1/labels/" + r.getGeneratedOrderNo() + "/pdf");
             }
         }
         return com.multiship.backend.dto.ImportBatchRowsPageDTO.builder()
@@ -5052,7 +5052,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         for (OrderImportRowDTO r : rows) {
             if (r.getGeneratedOrderNo() != null && "GENERATED".equalsIgnoreCase(r.getGeneratedStatus())) {
                 if (!StringUtils.hasText(r.getLabelUrl())) {
-                    r.setLabelUrl("/api/v1/orders/" + r.getGeneratedOrderNo() + "/label/pdf");
+                    r.setLabelUrl("/api/v1/labels/" + r.getGeneratedOrderNo() + "/pdf");
                 }
             }
         }
@@ -6740,7 +6740,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                     gr.setBatchId(batchId);
                     // Set label and tracking URLs for frontend to display
                     if (orderNo != null) {
-                        gr.setLabelUrl("/api/v1/orders/" + orderNo + "/label/pdf");
+                        gr.setLabelUrl("/api/v1/labels/" + orderNo + "/pdf");
                         gr.setTrackingUrl(data.getTrackingUrl());
                     }
                 }

@@ -173,7 +173,7 @@ public class OrderImportRowDTO {
     /**
      * Label URL endpoint for retrieving the generated label PDF/image.
      * Populated after successful label generation. Frontend can GET this URL.
-     * Format: /api/v1/orders/{orderNo}/label/pdf
+     * Format: /api/v1/labels/{orderNo}/pdf
      */
     private String labelUrl;
 

@@ -697,7 +697,7 @@ public class BulkLabelServiceImpl implements BulkLabelService {
                     // but note it in the summary so operators can tell
                     // fresh-vs-skipped apart. No ZIP entry: the existing
                     // label lives on the order row itself and is
-                    // re-downloadable via GET /orders/{n}/label/pdf.
+                    // re-downloadable via GET /labels/{n}/pdf.
                     job.setSuccessfulCount(job.getSuccessfulCount() + 1);
                     String tn = out.trackingNumber == null ? "unknown" : out.trackingNumber;
                     failures.append("order ").append(out.orderNo)

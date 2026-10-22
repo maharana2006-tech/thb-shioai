@@ -25,8 +25,9 @@ import java.util.Optional;
  * {@link com.multiship.backend.service.CarrierServiceImpl#generateManualLabel}
  * around line 580). There is no format column — this resolver
  * content-sniffs to decide whether to serve the stored artifact
- * verbatim or return empty so the caller falls back to a facsimile
- * ({@link ZplLabelService} / {@link PdfLabelService}).
+ * verbatim or return empty so the caller decides (the label read path now
+ * reads the explicit label_package.format column via LabelArtifactService
+ * and never falls back to a synthetic label).
  *
  * <p>Detection rules:
  * <ul>

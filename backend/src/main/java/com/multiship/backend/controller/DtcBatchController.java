@@ -309,7 +309,7 @@ public class DtcBatchController {
             List<Integer> printed = new java.util.ArrayList<>();
             for (DtcOrder row : rows) {
                 // UPS stores its label as a GIF — wrap it into a 4x6 PDF like
-                // GET /orders/{n}/label/pdf does, or the ZIP silently drops it.
+                // GET /labels/{n}/pdf does, or the ZIP silently drops it.
                 Integer no = row.getGeneratedOrderNo();
                 Optional<byte[]> pdf = labelArtifactResolver.resolveAsBytes(no, "PDF", null)
                         .or(() -> labelArtifactResolver.resolveImage(no, null)
