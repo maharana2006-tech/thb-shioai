@@ -1355,15 +1355,27 @@ export default function OrdersWorkspace() {
   const advInputCls =
     'w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1 text-[12px] font-medium text-[#1f150c] outline-none transition placeholder:text-[#b6a684] focus:border-[#cdbf9f] focus:ring-2 focus:ring-[#f0e9d8]'
   /** A labeled advanced-filter field: mono uppercase caption + icon, then control.
-   *  Full width so fields stack one per row in the popover. */
-  const advField = (icon: ReactNode, label: string, control: ReactNode) => (
-    <label className="block w-full">
-      <span className="mb-1 flex items-center gap-1 font-mono text-[8.5px] font-bold uppercase tracking-[0.12em] text-[#a1906d]">
-        <span className="text-[#cdbf9f]">{icon}</span>
+   *  `active` darkens the caption and adds a dot so a set filter reads at a glance. */
+  const advField = (icon: ReactNode, label: string, control: ReactNode, active = false) => (
+    <label className="block w-full min-w-0">
+      <span
+        className={`mb-1 flex items-center gap-1 font-mono text-[8.5px] font-bold uppercase tracking-[0.12em] ${
+          active ? 'text-[#1f150c]' : 'text-[#a1906d]'
+        }`}
+      >
+        <span className={active ? 'text-[#1f150c]' : 'text-[#cdbf9f]'}>{icon}</span>
         {label}
+        {active ? <span aria-hidden className="ml-0.5 h-1.5 w-1.5 rounded-full bg-emerald-500" /> : null}
       </span>
       {control}
     </label>
+  )
+  /** Section heading inside the popover — sentence case, hairline rule. */
+  const advGroup = (title: string, children: ReactNode) => (
+    <section className="flex flex-col gap-2.5">
+      <h3 className="border-b border-[#e3d9c4] pb-1 text-[11.5px] font-semibold text-[#5a4526]">{title}</h3>
+      {children}
+    </section>
   )
 
   const showStatusColumn = view === 'all'
@@ -2433,20 +2445,38 @@ export default function OrdersWorkspace() {
                   <div
                     role="dialog"
                     aria-label="Advanced filters"
-                    className="absolute right-0 top-full z-30 mt-1.5 w-64 rounded-2xl border border-[#e3d9c4] bg-[#faf7f0] p-3.5 shadow-[0_20px_60px_rgba(31,21,12,0.18)]"
+                    className="absolute right-0 top-full z-30 mt-1.5 w-[min(36rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-[#e3d9c4] bg-[#faf7f0] shadow-[0_20px_60px_rgba(31,21,12,0.18)]"
                   >
-                    <div className="mb-2.5 flex items-center justify-between">
-                      <span className="inline-flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-[#b6a684]">
-                        <FiSliders className="h-3 w-3" /> Advanced filters
-                      </span>
-                      <button
-                        type="button"
-                        onClick={clearColumnFilters}
-                        disabled={!activeFilterCount}
-                        className="inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#6b5c42] transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[#e3d9c4] disabled:hover:bg-white disabled:hover:text-[#6b5c42]"
-                      >
-                        <FiX className="h-3.5 w-3.5" /> Clear all
-                      </button>
+                    <div className="flex items-center justify-between gap-3 border-b border-[#e3d9c4] bg-white/70 px-4 py-2.5">
+                      <div className="flex items-center gap-2">
+                        <FiSliders className="h-3.5 w-3.5 text-[#a1906d]" />
+                        <span className="text-[13px] font-semibold text-[#1f150c]">Filters</span>
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[10.5px] font-semibold tabular-nums ${
+                            activeFilterCount ? 'bg-[#1f150c] text-[#f4eede]' : 'bg-[#f0e9d8] text-[#a1906d]'
+                          }`}
+                        >
+                          {activeFilterCount ? `${activeFilterCount} active` : 'None active'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={clearColumnFilters}
+                          disabled={!activeFilterCount}
+                          className="rounded-lg px-2 py-1 text-[11.5px] font-semibold text-[#6b5c42] transition hover:bg-rose-50 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[#6b5c42]"
+                        >
+                          Clear all
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowFilters(false)}
+                          aria-label="Close filters"
+                          className="rounded-lg p-1 text-[#6b5c42] transition hover:bg-[#f0e9d8] hover:text-[#1f150c]"
+                        >
+                          <FiX className="h-4 w-4" />
+                        </button>
+                      </div>
                     </div>
                     {/* Batch-override banner (2026-09-15) — explanatory
                         counterpart to the toolbar chip. Only shown when
@@ -2454,7 +2484,7 @@ export default function OrdersWorkspace() {
                         below understand the ones they populated aren't
                         reaching the server. */}
                     {batchOverrideActive ? (
-                      <div className="mb-2.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] leading-snug text-amber-900">
+                      <div className="mx-4 mt-3 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] leading-snug text-amber-900">
                         <div className="flex items-start gap-1.5">
                           <FiInfo className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
                           <div className="flex-1">
@@ -2473,187 +2503,220 @@ export default function OrdersWorkspace() {
                         </div>
                       </div>
                     ) : null}
-                    <div className="flex flex-col gap-2.5">
-                      {advField(
-                        <FiHash className="h-3 w-3" />,
-                        'Order #',
-                        <input
-                          value={columnFilters.orderNo}
-                          onChange={(e) => setColumnFilter('orderNo')(e.target.value)}
-                          placeholder="e.g. 900044"
-                          className={advInputCls}
-                        />,
-                      )}
-                      {advField(
-                        <FiUser className="h-3 w-3" />,
-                        'Client code',
-                        <input
-                          value={columnFilters.customer}
-                          onChange={(e) => setColumnFilter('customer')(e.target.value)}
-                          placeholder="e.g. ARHDEV"
-                          className={advInputCls}
-                        />,
-                      )}
-                      {advField(
-                        <FiMapPin className="h-3 w-3" />,
-                        'Destination',
-                        <input
-                          value={columnFilters.city}
-                          onChange={(e) => setColumnFilter('city')(e.target.value)}
-                          placeholder="City or state"
-                          className={advInputCls}
-                        />,
-                      )}
-                      {advField(
-                        <FiTruck className="h-3 w-3" />,
-                        'Tracking #',
-                        <input
-                          value={columnFilters.tracking}
-                          onChange={(e) => setColumnFilter('tracking')(e.target.value)}
-                          placeholder="Carrier tracking number"
-                          className={advInputCls}
-                        />,
-                      )}
-                      {/* Batch — dropdown populated from /orders/batches
-                          using the CURRENT filter surface, plus a
-                          free-text fallback (2026-09-14). When set the
-                          batch id overrides every other filter server-
-                          side (see the batchOnly branch above), so the
-                          operator sees the whole batch regardless of
-                          the surrounding scope. */}
-                      {advField(
-                        <FiPackage className="h-3 w-3" />,
-                        'Batch',
-                        <div className="flex items-center gap-1.5">
-                          <select
-                            value={columnFilters.batch}
-                            onChange={(e) => setColumnFilter('batch')(e.target.value)}
-                            className={`${advInputCls} min-w-0 flex-1`}
-                            title="Pick from batches visible under the current filters"
-                          >
-                            <option value="">Any batch</option>
-                            {batchesForPicker.map((b) => (
-                              <option key={b.batchId} value={String(b.batchId)}>
-                                Batch #{b.batchId} — {b.count.toLocaleString()} orders
-                              </option>
-                            ))}
-                          </select>
-                          <input
-                            value={columnFilters.batch}
-                            onChange={(e) => setColumnFilter('batch')(e.target.value.replace(/[^0-9]/g, ''))}
-                            placeholder="or type #"
-                            inputMode="numeric"
-                            className={`${advInputCls} w-20`}
-                            title="Type a batch id if it's not in the dropdown"
-                          />
-                        </div>,
-                      )}
-                      {showStatusColumn
-                        ? advField(
-                            <FiTag className="h-3 w-3" />,
-                            'Status',
+                    <div className="grid gap-x-6 gap-y-4 px-4 py-3.5 sm:grid-cols-2">
+                      <div className="flex flex-col gap-4">
+                        {advGroup('Find an order', (
+                          <>
+                            {advField(
+                              <FiHash className="h-3 w-3" />,
+                              'Order #',
+                              <input
+                                value={columnFilters.orderNo}
+                                onChange={(e) => setColumnFilter('orderNo')(e.target.value)}
+                                placeholder="e.g. 900044"
+                                className={advInputCls}
+                              />,
+                              !!columnFilters.orderNo,
+                            )}
+                            {advField(
+                              <FiUser className="h-3 w-3" />,
+                              'Client code',
+                              <input
+                                value={columnFilters.customer}
+                                onChange={(e) => setColumnFilter('customer')(e.target.value)}
+                                placeholder="e.g. ARHDEV"
+                                className={advInputCls}
+                              />,
+                              !!columnFilters.customer,
+                            )}
+                            {advField(
+                              <FiTruck className="h-3 w-3" />,
+                              'Tracking #',
+                              <input
+                                value={columnFilters.tracking}
+                                onChange={(e) => setColumnFilter('tracking')(e.target.value)}
+                                placeholder="Carrier tracking number"
+                                className={advInputCls}
+                              />,
+                              !!columnFilters.tracking,
+                            )}
+                            {advField(
+                              <FiMapPin className="h-3 w-3" />,
+                              'Destination',
+                              <input
+                                value={columnFilters.city}
+                                onChange={(e) => setColumnFilter('city')(e.target.value)}
+                                placeholder="City or state"
+                                className={advInputCls}
+                              />,
+                              !!columnFilters.city,
+                            )}
+                          </>
+                        ))}
+                        {advGroup('Created', (
+                          advField(
+                            <FiCalendar className="h-3 w-3" />,
+                            'Between',
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="date"
+                                value={dateFrom}
+                                max={dateTo || undefined}
+                                onChange={(e) => setDateFrom(e.target.value)}
+                                aria-label="Created from"
+                                className={`${advInputCls} min-w-0 flex-1`}
+                              />
+                              <span className="text-[11px] text-[#b6a684]">–</span>
+                              <input
+                                type="date"
+                                value={dateTo}
+                                min={dateFrom || undefined}
+                                onChange={(e) => setDateTo(e.target.value)}
+                                aria-label="Created to"
+                                className={`${advInputCls} min-w-0 flex-1`}
+                              />
+                            </div>,
+                            !!(dateFrom || dateTo),
+                          )
+                        ))}
+                      </div>
+
+                      {advGroup('Narrow by', (
+                        <>
+                          {/* Batch — dropdown populated from /orders/batches
+                              using the CURRENT filter surface, plus a
+                              free-text fallback (2026-09-14). When set the
+                              batch id overrides every other filter server-
+                              side (see the batchOnly branch above), so the
+                              operator sees the whole batch regardless of
+                              the surrounding scope. */}
+                          {advField(
+                            <FiPackage className="h-3 w-3" />,
+                            'Batch',
+                            <div className="flex items-center gap-1.5">
+                              <select
+                                value={columnFilters.batch}
+                                onChange={(e) => setColumnFilter('batch')(e.target.value)}
+                                className={`${advInputCls} min-w-0 flex-1`}
+                                title="Pick from batches visible under the current filters"
+                              >
+                                <option value="">Any batch</option>
+                                {batchesForPicker.map((b) => (
+                                  <option key={b.batchId} value={String(b.batchId)}>
+                                    Batch #{b.batchId} — {b.count.toLocaleString()} orders
+                                  </option>
+                                ))}
+                              </select>
+                              <input
+                                value={columnFilters.batch}
+                                onChange={(e) => setColumnFilter('batch')(e.target.value.replace(/[^0-9]/g, ''))}
+                                placeholder="or #"
+                                inputMode="numeric"
+                                aria-label="Batch number"
+                                className={`${advInputCls} max-w-16 shrink-0`}
+                                title="Type a batch id if it's not in the dropdown"
+                              />
+                            </div>,
+                            batchOverrideActive,
+                          )}
+                          {showStatusColumn
+                            ? advField(
+                                <FiTag className="h-3 w-3" />,
+                                'Status',
+                                <select
+                                  value={columnFilters.status}
+                                  onChange={(e) => setColumnFilter('status')(e.target.value)}
+                                  className={advInputCls}
+                                >
+                                  <option value="">Any status</option>
+                                  <option value="PENDING">Pending</option>
+                                  <option value="GENERATED">Generated</option>
+                                  <option value="ERROR">Error</option>
+                                </select>,
+                                !!columnFilters.status,
+                              )
+                            : null}
+                          {advField(
+                            <FiTruck className="h-3 w-3" />,
+                            'Carrier',
                             <select
-                              value={columnFilters.status}
-                              onChange={(e) => setColumnFilter('status')(e.target.value)}
+                              value={carrierFilter}
+                              onChange={(e) => setCarrierFilter(e.target.value)}
                               className={advInputCls}
                             >
-                              <option value="">Any status</option>
-                              <option value="PENDING">Pending</option>
-                              <option value="GENERATED">Generated</option>
-                              <option value="ERROR">Error</option>
+                              <option value="">Any carrier</option>
+                              <option value="UPS">UPS</option>
+                              <option value="FEDEX">FedEx</option>
+                              <option value="USPS">USPS</option>
+                              <option value="DHL">DHL</option>
                             </select>,
-                          )
-                        : null}
-                      {advField(
-                        <FiCalendar className="h-3 w-3" />,
-                        'Created from',
-                        <input
-                          type="date"
-                          value={dateFrom}
-                          max={dateTo || undefined}
-                          onChange={(e) => setDateFrom(e.target.value)}
-                          className={advInputCls}
-                        />,
-                      )}
-                      {advField(
-                        <FiCalendar className="h-3 w-3" />,
-                        'Created to',
-                        <input
-                          type="date"
-                          value={dateTo}
-                          min={dateFrom || undefined}
-                          onChange={(e) => setDateTo(e.target.value)}
-                          className={advInputCls}
-                        />,
-                      )}
-                      {advField(
-                        <FiDatabase className="h-3 w-3" />,
-                        'Source',
-                        <select
-                          value={sourceFilter}
-                          onChange={(e) => {
-                            setSourceFilter(e.target.value)
-                            // D2C / B2B is an API-only classification (client request).
-                            if (e.target.value !== 'API') setChannelFilter('')
-                          }}
-                          className={advInputCls}
-                        >
-                          <option value="">Any source</option>
-                          <option value="MANUAL">Manual</option>
-                          <option value="BULK">Bulk (CSV/Excel)</option>
-                          <option value="API">API</option>
-                        </select>,
-                      )}
-                      {sourceFilter === 'API' && advField(
-                        <FiDatabase className="h-3 w-3" />,
-                        'Channel',
-                        <select
-                          value={channelFilter}
-                          onChange={(e) => setChannelFilter(e.target.value)}
-                          className={advInputCls}
-                        >
-                          <option value="">Any channel</option>
-                          <option value="D2C">D2C (consumer)</option>
-                          <option value="B2B">B2B (business)</option>
-                        </select>,
-                      )}
-                      {advField(
-                        <FiTruck className="h-3 w-3" />,
-                        'Carrier',
-                        <select
-                          value={carrierFilter}
-                          onChange={(e) => setCarrierFilter(e.target.value)}
-                          className={advInputCls}
-                        >
-                          <option value="">Any carrier</option>
-                          <option value="UPS">UPS</option>
-                          <option value="FEDEX">FedEx</option>
-                          <option value="USPS">USPS</option>
-                          <option value="DHL">DHL</option>
-                        </select>,
-                      )}
-                      {/* Returns F3 — surface the hidden return rows that today only
-                          live inside a batch. Tri-state so operators can pivot either way. */}
-                      {advField(
-                        <FiRotateCcw className="h-3 w-3" />,
-                        'Shipment vs return',
-                        <select
-                          value={isReturnFilter}
-                          onChange={(e) => setIsReturnFilter(e.target.value as '' | 'Y' | 'N')}
-                          className={advInputCls}
-                        >
-                          <option value="">Any</option>
-                          <option value="N">Shipments only</option>
-                          <option value="Y">Returns only</option>
-                        </select>,
-                      )}
+                            !!carrierFilter,
+                          )}
+                          <div className="grid grid-cols-2 gap-2">
+                            {advField(
+                              <FiDatabase className="h-3 w-3" />,
+                              'Source',
+                              <select
+                                value={sourceFilter}
+                                onChange={(e) => {
+                                  setSourceFilter(e.target.value)
+                                  // D2C / B2B is an API-only classification (client request).
+                                  if (e.target.value !== 'API') setChannelFilter('')
+                                }}
+                                className={advInputCls}
+                              >
+                                <option value="">Any source</option>
+                                <option value="MANUAL">Manual</option>
+                                <option value="BULK">Bulk (CSV/Excel)</option>
+                                <option value="API">API</option>
+                              </select>,
+                              !!sourceFilter,
+                            )}
+                            {advField(
+                              <FiDatabase className="h-3 w-3" />,
+                              'Channel',
+                              <select
+                                value={channelFilter}
+                                onChange={(e) => setChannelFilter(e.target.value)}
+                                disabled={sourceFilter !== 'API'}
+                                title={sourceFilter !== 'API' ? 'Only API orders have a channel' : undefined}
+                                className={`${advInputCls} disabled:cursor-not-allowed disabled:opacity-50`}
+                              >
+                                <option value="">Any channel</option>
+                                <option value="D2C">D2C (consumer)</option>
+                                <option value="B2B">B2B (business)</option>
+                              </select>,
+                              !!channelFilter,
+                            )}
+                          </div>
+                          {/* Returns F3 — surface the hidden return rows that today only
+                              live inside a batch. Tri-state so operators can pivot either way. */}
+                          {advField(
+                            <FiRotateCcw className="h-3 w-3" />,
+                            'Shipment vs return',
+                            <select
+                              value={isReturnFilter}
+                              onChange={(e) => setIsReturnFilter(e.target.value as '' | 'Y' | 'N')}
+                              className={advInputCls}
+                            >
+                              <option value="">Any</option>
+                              <option value="N">Shipments only</option>
+                              <option value="Y">Returns only</option>
+                            </select>,
+                            !!isReturnFilter,
+                          )}
+                        </>
+                      ))}
                     </div>
 
-                    <div className="mt-3 flex items-center justify-end gap-2 border-t border-dashed border-[#e3d9c4] pt-2.5">
+                    <div className="flex items-center justify-between gap-2 border-t border-[#e3d9c4] bg-white/70 px-4 py-2.5">
+                      <span className="text-[11px] text-[#a1906d]">
+                        Filters apply as you type · <kbd className="rounded border border-[#e3d9c4] bg-white px-1 font-mono text-[10px]">Esc</kbd> closes
+                      </span>
                       <button
                         type="button"
                         onClick={() => setShowFilters(false)}
-                        className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[11.5px] font-semibold text-[#f4eede] transition hover:bg-[#412d15]"
+                        className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-3.5 py-1.5 text-[11.5px] font-semibold text-[#f4eede] transition hover:bg-[#412d15]"
                       >
                         Done
                       </button>
