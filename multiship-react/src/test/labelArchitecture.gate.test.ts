@@ -7,8 +7,8 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 /**
- * Phase 3 gate (Shipment & Label re-architecture) — none of the removed
- * label paths may come back: the old document page, its feature flag, its
+ * Architecture gate (Shipment & Label re-architecture, Manual Shipment
+ * redesign) — none of the removed paths may come back: the old document page, its feature flag, its
  * payload type, and the dead orderService methods that hit the old
  * in-controller endpoints. Precise identifiers, not English words.
  */
@@ -23,6 +23,17 @@ const FORBIDDEN = [
   '/label/zpl',
   '/label/pdf',
   '/label/preview.png',
+  // Manual Shipment redesign, Phase 4 — the retired purchase endpoints and the
+  // dead form paths deleted in Phase 3. The one purchase path is POST /shipments.
+  'orders/manual-label',
+  "/regenerate'",
+  '/regenerate`',
+  'RatePickerModal',
+  'CarrierAddressBanner',
+  'applyCarrierSuggestion',
+  'carrierAddressResult',
+  'recipientCheck',
+  'canOpenRatePicker',
 ]
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))

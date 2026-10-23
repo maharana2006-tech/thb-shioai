@@ -735,6 +735,30 @@ export interface TrackingChildInfo {
 /** Session-stable Idempotency-Keys, one per order (see generateLabel). */
 const generationKeys = new Map<number, string>()
 
+/** Purchase headers: the attempt key, plus the dry-run fingerprint when the form has one. */
+function purchaseHeaders(attemptKey: string, validationFingerprint?: string): Record<string, string> {
+  return validationFingerprint
+    ? { 'Idempotency-Key': attemptKey, 'X-Validation-Fingerprint': validationFingerprint }
+    : { 'Idempotency-Key': attemptKey }
+}
+
+/** One purchase attempt, as GET /shipments/attempts/{key} returns it. */
+export interface ShipmentAttempt {
+  attemptKey: string
+  state: 'PURCHASING' | 'DONE' | 'FAILED' | 'PARTIAL' | 'ABANDONED' | 'UNKNOWN'
+  orderNo: number | null
+  fingerprint: string
+  errorCode: string | null
+  errorMessage: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+/** A fresh Idempotency-Key for one purchase attempt of a manual shipment. */
+export function newAttemptKey(): string {
+  return typeof crypto?.randomUUID === 'function' ? crypto.randomUUID() : `attempt-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
 export interface OrderListParams {
   page?: number
   size?: number
@@ -1140,15 +1164,28 @@ export const orderService = {
     )
   },
 
-  /** One-shot manual shipment: create + purchase the label in a single call. */
-  generateManualLabel: (payload: ManualShipmentPayload) =>
-    apiClient.post<ApiResponse<LabelGenerationResponse>>('/orders/manual-label', payload),
+  /**
+   * One-shot manual shipment: create + purchase the label in a single call.
+   * `attemptKey` is the Idempotency-Key for this purchase attempt (see
+   * newAttemptKey): the same key replays the stored outcome instead of
+   * buying a second label, so a retry after a dropped connection is safe.
+   */
+  generateManualLabel: (payload: ManualShipmentPayload, attemptKey: string, validationFingerprint?: string) =>
+    apiClient.post<ApiResponse<LabelGenerationResponse>>('/shipments', payload, {
+      headers: purchaseHeaders(attemptKey, validationFingerprint),
+    }),
 
   /** Fix a failed order and regenerate its label in place (same order number).
    *  Same payload shape as generateManualLabel; the order flips ERROR → GENERATED
    *  on success, or stays ERROR with the new carrier message on failure. */
-  regenerateOrder: (orderNo: number, payload: ManualShipmentPayload) =>
-    apiClient.post<ApiResponse<LabelGenerationResponse>>(`/orders/${orderNo}/regenerate`, payload),
+  /** Phase 3 — the state of one purchase attempt (recovery after a lost connection). */
+  getAttempt: (attemptKey: string) =>
+    apiClient.get<ApiResponse<ShipmentAttempt>>(`/shipments/attempts/${encodeURIComponent(attemptKey)}`),
+
+  regenerateOrder: (orderNo: number, payload: ManualShipmentPayload, attemptKey: string, validationFingerprint?: string) =>
+    apiClient.post<ApiResponse<LabelGenerationResponse>>(`/shipments/${orderNo}/attempts`, payload, {
+      headers: purchaseHeaders(attemptKey, validationFingerprint),
+    }),
 
   /**
    * Live tracking for an order — status, events, estimated delivery. Backend

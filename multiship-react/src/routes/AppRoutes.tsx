@@ -280,7 +280,7 @@ export default function AppRoutes() {
             {/* R2-BUG run-5 §8 — pre-fix TENANT could navigate to
                 /orders/new and /bulk/imports even though the APIs 403
                 the write-side requests. Backend @PreAuthorize on the
-                /orders/manual-label and /bulk/* endpoints already
+                /shipments and /bulk/* endpoints already
                 blocks TENANT; the route gate here matches so the role
                 doesn't land on a page that then errors. TENANT redirect
                 target comes from getHomePathForRole() (→ /orders, the

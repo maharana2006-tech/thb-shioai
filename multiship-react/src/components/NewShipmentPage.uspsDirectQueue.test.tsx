@@ -475,7 +475,7 @@ describe('NewShipmentPage — submit + queued response integration', () => {
         countryCode: 'US',
       },
       weight: 1,
-    })
+    }, 'attempt-test-key')
     expect(r.data.status).toBe('QUEUED')
     expect(generateManualLabel).toHaveBeenCalledTimes(1)
   })
