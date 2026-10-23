@@ -80,7 +80,7 @@ public class LabelBytesPersister {
         String trimmed = candidate.trim();
         String lower = trimmed.toLowerCase(Locale.ROOT);
         // Raw ZPL passthrough — the format resolver serves this verbatim.
-        if (trimmed.startsWith("^XA")) return candidate;
+        if (trimmed.startsWith("^")) return candidate;  // raw ZPL text (^XA, or Stamps' ^FX preamble)
         // URL branch — fetch + base64 encode. Fallback: return the URL
         // unchanged so we don't block persistence of an otherwise-valid
         // shipment on a transient network problem.

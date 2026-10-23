@@ -139,7 +139,9 @@ public class LabelArtifactService {
         switch (format) {
             case "ZPL" -> {
                 String text = new String(stored, StandardCharsets.ISO_8859_1);
-                return Optional.of(ZplText.stripUnsupportedCommands(text).getBytes(StandardCharsets.ISO_8859_1));
+                // ^GFB → ^GFA keeps the bytes copy/paste-safe; ^DN is UPS noise.
+                String clean = ZplText.asciiSafe(ZplText.stripUnsupportedCommands(text));
+                return Optional.of(clean.getBytes(StandardCharsets.ISO_8859_1));
             }
             case "GIF", "PNG" -> {
                 return Optional.of(labelImageZplService.imageToZpl(stored).getBytes(StandardCharsets.ISO_8859_1));
@@ -165,7 +167,7 @@ public class LabelArtifactService {
         String t = stored.trim();
         String lower = t.toLowerCase(Locale.ROOT);
         if (lower.startsWith("http://") || lower.startsWith("https://")) return null;
-        if (t.startsWith("^XA")) return t.getBytes(StandardCharsets.ISO_8859_1);
+        if (t.startsWith("^")) return t.getBytes(StandardCharsets.ISO_8859_1);  // raw ZPL, ^XA or ^FX-prefixed
         try {
             return Base64.getDecoder().decode(t);
         } catch (IllegalArgumentException notBase64) {

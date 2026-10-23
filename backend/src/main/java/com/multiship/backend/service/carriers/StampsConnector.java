@@ -1019,6 +1019,10 @@ public class StampsConnector implements CarrierConnector {
         for (int i = 0; i < packages.size(); i++) {
             String jsonBody = buildSeraCreateLabelBody(request, packages.get(i),
                     i + 1, packages.size(), shipDate, sandbox);
+            // DEBUG only: the wire body carries addresses. Turn on
+            // logging.level.com.multiship.backend.service.carriers=DEBUG to see
+            // exactly what SERA rejected (it names the field, not the value).
+            log.debug("SERA /labels request pkg {}/{}: {}", i + 1, packages.size(), jsonBody);
             try {
                 // Audit: SERA requires Idempotency-Key on POSTs (developer.stamps.com
                 // §Idempotency). PR-T2 — deterministic key keyed on
@@ -1251,7 +1255,7 @@ public class StampsConnector implements CarrierConnector {
                 request.getRecipientCity(), request.getRecipientState(),
                 request.getRecipientPostalCode(), request.getRecipientCountryCode(),
                 request.getRecipientPhone(), request.getRecipientEmail(),
-                Boolean.TRUE.equals(request.getRecipientResidential()) ? "residential" : null));
+                seraResidentialIndicator(request.getRecipientResidential())));
 
         // Service code — SERA speaks a snake-case vocabulary
         // (usps_priority_mail, usps_ground_advantage, ...). We map when the
@@ -1398,6 +1402,18 @@ public class StampsConnector implements CarrierConnector {
             // mapper can classify it uniformly.
             throw new IllegalStateException("Failed to serialize SERA label body", ex);
         }
+    }
+
+    /**
+     * SERA's {@code residential_indicator} is a yes/no enum (its address
+     * validation answers with {@code "no"}), not a free-text label. Sending
+     * {@code "residential"} was rejected with VALIDATION 800000 "The
+     * residential_indicator specified is invalid" — after rating had passed,
+     * since the rate call doesn't carry the field. Unknown stays omitted.
+     */
+    static String seraResidentialIndicator(Boolean residential) {
+        if (residential == null) return null;
+        return residential ? "yes" : "no";
     }
 
     /** SERA address block — snake-case field names matching the SERA
