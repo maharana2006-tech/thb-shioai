@@ -282,6 +282,11 @@ public class ManualShipmentRequest {
     @JsonIgnore
     private String internalIdempotencyKey;
 
+    /** Phase 1 — the X-Validation-Fingerprint the caller presented; set by
+     *  ManualShipmentService from the header, never from the body. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private String internalValidationFingerprint;
+
     /**
      * PR-S3 (audit finding S-B5) — internal-only audit actor override.
      * Populated by cross-flow callers that have no

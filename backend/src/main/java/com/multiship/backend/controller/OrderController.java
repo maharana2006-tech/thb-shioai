@@ -1048,80 +1048,11 @@ public class OrderController {
         return ResponseEntity.status(response.getCode()).body(response);
     }
 
-    /** One-shot manual shipment: operator enters everything and the label is purchased immediately. */
-    @Operation(summary = "Create a manual shipment and generate its label in one step",
-            description = "The operator supplies ship-from, ship-to, package + weight and picks the carrier account / "
-                    + "service / packaging explicitly. The label is purchased immediately and recorded as a manual "
-                    + "order (is_manual = 'Y') that appears in the queue/archive.")
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Label generated — tracking + label URL in data")
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422", description = "errorCode VALIDATION_ERROR — missing/invalid recipient, weight or account")
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502", description = "errorCode CARRIER_FAILURE — the carrier rejected the shipment")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
-    @PostMapping("/manual-label")
-    public ResponseEntity<ApiResponse<com.multiship.backend.dto.LabelGenerationResponse>> generateManualLabel(
-            @jakarta.validation.Valid @org.springframework.web.bind.annotation.RequestBody com.multiship.backend.dto.ManualShipmentRequest request,
-            @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails,
-            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
-        // Sprint 51 R2 (audit finding #2) — money-touching. A double-click,
-        // browser retry, or 502-then-retry used to purchase N labels; now
-        // the same Idempotency-Key replays the first response. Fail-closed
-        // on Redis outage: without the dedup guarantee we could double-charge.
-        // Namespaced by "user:" + username so this can never collide with
-        // the API-key path's numeric namespace (see IdempotencyService).
-        String callerId = userDetails != null ? "user:" + userDetails.getUsername() : null;
-        return idempotency.executeOrReplay(callerId, idempotencyKey,
-                new com.fasterxml.jackson.core.type.TypeReference<ApiResponse<com.multiship.backend.dto.LabelGenerationResponse>>() {},
-                () -> {
-                    ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> response =
-                            carrierService.generateManualLabel(request, userDetails);
-                    return ResponseEntity.status(response.getCode()).body(response);
-                }, true);
-    }
-
-    /** Fix-and-regenerate a failed order in place: apply the operator's corrected
-     *  input to the existing order and re-purchase its label, keeping the same
-     *  order number and flipping ERROR → GENERATED on success. */
-    @Operation(summary = "Fix a failed order and regenerate its label in place",
-            description = "Applies corrected ship-from/ship-to/package/service/customs input to an existing "
-                    + "order and re-purchases the label on the SAME order number. Rejected (409) when the order "
-                    + "already has a generated label — regenerate never silently re-bills a shipped order.")
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Label generated — order flipped to GENERATED")
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "Order already has a generated label")
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502", description = "errorCode CARRIER_FAILURE — the carrier rejected the corrected shipment")
-    @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
-    @PostMapping("/{orderNo}/regenerate")
-    public ResponseEntity<ApiResponse<com.multiship.backend.dto.LabelGenerationResponse>> regenerateOrder(
-            @PathVariable Integer orderNo,
-            @jakarta.validation.Valid @org.springframework.web.bind.annotation.RequestBody com.multiship.backend.dto.ManualShipmentRequest request,
-            @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails,
-            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
-        // Guard: never regenerate (re-bill) an order that already shipped.
-        com.multiship.backend.dto.OrderResponseDTO.LabelDetails existing =
-                orderService.getOrderWithTracking(orderNo).getData() != null
-                        ? orderService.getOrderWithTracking(orderNo).getData().getLabelDetails() : null;
-        if (existing != null && Boolean.TRUE.equals(existing.getIsGenerated())
-                && "GENERATED".equalsIgnoreCase(existing.getStatus())) {
-            return ResponseEntity.status(409).body(ApiResponse.<com.multiship.backend.dto.LabelGenerationResponse>builder()
-                    .status("error").code(409).message("Order " + orderNo + " already has a generated label; "
-                            + "regenerate is only for failed/pending orders.")
-                    .errorCode(com.multiship.backend.dto.ErrorCode.LABEL_ALREADY_GENERATED.name())
-                    .timestamp(java.time.LocalDateTime.now()).build());
-        }
-        String callerId = userDetails != null ? "user:" + userDetails.getUsername() : null;
-        return idempotency.executeOrReplay(callerId, idempotencyKey,
-                new com.fasterxml.jackson.core.type.TypeReference<ApiResponse<com.multiship.backend.dto.LabelGenerationResponse>>() {},
-                () -> {
-                    ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> response =
-                            carrierService.generateManualLabel(request, userDetails, orderNo);
-                    return ResponseEntity.status(response.getCode()).body(response);
-                }, true);
-    }
-
     @Operation(summary = "Generate labels for a shipment split across warehouses (Sprint 47)",
             description = "Groups the input `lines` by `warehouseCode`, calls the single-shipment " +
                     "label generator once per group, and returns a `ShipmentGroup` id plus one " +
                     "`ChildShipment` per warehouse. Fail-all rollback: any child failure aborts " +
-                    "the whole batch — no partial persistence. Existing `/manual-label` endpoint " +
+                    "the whole batch — no partial persistence. `POST /shipments` " +
                     "still handles single-warehouse cases; this endpoint is opt-in.")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Group + child shipments created")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Validation error — missing clientCode / lines / per-line warehouseCode")
@@ -1138,7 +1069,7 @@ public class OrderController {
         // Sprint 51 R2 (audit finding #2) — money-touching. Multi-warehouse
         // fans out to N carrier calls per request; a retry mid-fanout used
         // to double-generate every warehouse. Same fail-closed policy as
-        // /manual-label above. SplitAbortException must be handled INSIDE
+        // POST /shipments (ManualShipmentService). SplitAbortException must be handled INSIDE
         // the wrapped supplier so the mapped 422 response is what gets
         // cached (not thrown past IdempotencyService).
         String callerId = userDetails != null ? "user:" + userDetails.getUsername() : null;

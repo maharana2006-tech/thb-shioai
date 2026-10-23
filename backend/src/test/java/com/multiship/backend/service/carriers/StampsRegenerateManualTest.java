@@ -136,7 +136,7 @@ class StampsRegenerateManualTest {
         req.getRecipient().setName(""); // hit the field-blank branch
 
         ApiResponse<LabelGenerationResponse> resp =
-                service.generateManualLabel(req, operator(), (int) STAMPS_ORDER_NO);
+                service.purchaseManualLabel(req, operator(), (int) STAMPS_ORDER_NO);
 
         // Routing consult MUST have fired regardless of the downstream
         // validation outcome — the whole point of the S1 wiring.
@@ -156,7 +156,7 @@ class StampsRegenerateManualTest {
                 new RoutingDecision(RoutingDecision.Status.SINGLE_QUEUED, 999L, null, null)));
 
         ApiResponse<LabelGenerationResponse> resp =
-                service.generateManualLabel(stampsRegenerateRequest(), operator(),
+                service.purchaseManualLabel(stampsRegenerateRequest(), operator(),
                         (int) STAMPS_ORDER_NO);
 
         assertNotNull(resp);
@@ -176,7 +176,7 @@ class StampsRegenerateManualTest {
                 new RoutingDecision(RoutingDecision.Status.MPS_QUEUED, null, 4, null)));
 
         ApiResponse<LabelGenerationResponse> resp =
-                service.generateManualLabel(stampsRegenerateRequest(), operator(),
+                service.purchaseManualLabel(stampsRegenerateRequest(), operator(),
                         (int) STAMPS_ORDER_NO);
 
         assertEquals("success", resp.getStatus());
@@ -192,7 +192,7 @@ class StampsRegenerateManualTest {
                 new RoutingDecision(RoutingDecision.Status.REJECTED, null, null, reason)));
 
         ApiResponse<LabelGenerationResponse> resp =
-                service.generateManualLabel(stampsRegenerateRequest(), operator(),
+                service.purchaseManualLabel(stampsRegenerateRequest(), operator(),
                         (int) STAMPS_ORDER_NO);
 
         assertEquals("error", resp.getStatus());
@@ -214,7 +214,7 @@ class StampsRegenerateManualTest {
         ManualShipmentRequest req = stampsRegenerateRequest();
         req.setRecipient(null);
 
-        service.generateManualLabel(req, operator(), null);
+        service.purchaseManualLabel(req, operator(), null);
 
         verifyNoInteractions(routing);
     }

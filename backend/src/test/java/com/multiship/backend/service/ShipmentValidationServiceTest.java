@@ -1241,6 +1241,54 @@ class ShipmentValidationServiceTest {
                 any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.eq(picked), any());
     }
 
+    // ─── Phase 1 — dry-run receipt + strict shipper mode ────────────────
+
+    /** A purchase presenting a fresh dry-run receipt keeps every local rule but never calls the carrier. */
+    @Test
+    void carrierHopIsSkippedWhenTheCallerPresentsAFreshDryRunReceipt() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setAccountId(42L);
+        stubServiceAndPreset();
+        when(carrierAccountRefRepository.findById(42L)).thenReturn(Optional.of(
+                com.multiship.backend.model.CarrierAccountRef.builder().id(42L).carrierCode("FEDEX")
+                        .accountNumber("PICKED1").clientId("cid").clientSecret("sec").environment("SANDBOX").active(true).build()));
+
+        ShipmentValidationResult r = service.validate(req, false).getData();
+
+        assertEquals("PASS", r.getOverall(), "local rules still run: " + r.getLocalErrors());
+        assertTrue(r.getSkipped().stream().anyMatch(sk -> "carrier".equals(sk.getName())), r.getSkipped().toString());
+        org.mockito.Mockito.verify(carrierService, org.mockito.Mockito.never()).getCarrierConnector(any());
+        org.mockito.Mockito.verify(carrierService, org.mockito.Mockito.never()).buildManualShipmentRequestDto(
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    /** Strict shipper mode is reported on the sender block, not thrown as a 500. */
+    @Test
+    void strictShipperModeIsALocalErrorOnTheSender() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setAccountId(42L);
+        stubServiceAndPreset();
+        com.multiship.backend.model.CarrierAccountRef picked = com.multiship.backend.model.CarrierAccountRef.builder()
+                .id(42L).carrierCode("FEDEX").accountNumber("PICKED1").clientId("cid").clientSecret("sec")
+                .environment("SANDBOX").active(true).build();
+        when(carrierAccountRefRepository.findById(42L)).thenReturn(Optional.of(picked));
+        com.multiship.backend.service.carriers.CarrierConnector connector =
+                mock(com.multiship.backend.service.carriers.CarrierConnector.class);
+        when(carrierService.getCarrierConnector("FEDEX")).thenReturn(connector);
+        when(connector.getConfiguration()).thenReturn(mock(com.multiship.backend.service.carriers.CarrierConnector.CarrierConfiguration.class));
+        when(connector.getAccessToken("cid", "sec", "PICKED1", "SANDBOX")).thenReturn("tok");
+        when(carrierService.buildManualShipmentRequestDto(any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any()))
+                .thenThrow(new com.multiship.backend.service.carrier.ShipperDefaultsMissingException("ACME", List.of("shipper.name", "shipper.city")));
+
+        ShipmentValidationResult r = service.validate(req).getData();
+
+        assertEquals("FAIL", r.getOverall());
+        assertTrue(r.getLocalErrors().stream().anyMatch(e -> "sender".equals(e.getField())
+                && "SHIPPER_DEFAULTS_MISSING".equals(e.getCode())
+                && e.getMessage().contains("shipper.name")), r.getLocalErrors().toString());
+    }
+
     // ─── Checks Generate label runs before buying ───────────────────────
 
     private List<String> errorsOf(ManualShipmentRequest req) {

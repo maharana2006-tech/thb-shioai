@@ -277,6 +277,10 @@ public enum ErrorCode {
     // ===== Sprint 50 Tier 1-C — idempotency store =====
     /** Another request with this Idempotency-Key is still processing; retry after a few seconds. */
     IDEMPOTENCY_IN_PROGRESS,
+    /** Manual Shipment Phase 0 — the same attempt key is still being purchased. */
+    ATTEMPT_IN_PROGRESS,
+    /** Manual Shipment Phase 1 — strict shipper mode: the tenant has no shipper.* override. */
+    SHIPPER_DEFAULTS_MISSING,
     /** The idempotency store (Redis) is unavailable; retry after Retry-After header. Only returned on money-touching endpoints where fail-open would risk duplicates. */
     IDEMPOTENCY_UNAVAILABLE,
 

@@ -164,6 +164,9 @@ public interface ShipmentResolutionService {
      */
     MarkupApplied applyMarkup(String clientCode, BigDecimal carrierRate, String carrierCurrency);
 
+    /** The markup decision alone, so it can be taken (and refused) before any purchase. */
+    MarkupRule resolveMarkup(String clientCode, String carrierCurrency);
+
     // ===== Cutoff (soft flag) =====
 
     /**

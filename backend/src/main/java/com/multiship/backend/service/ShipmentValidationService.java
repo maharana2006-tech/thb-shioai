@@ -143,6 +143,15 @@ public class ShipmentValidationService {
 
     @Transactional(readOnly = true)
     public ApiResponse<ShipmentValidationResult> validate(ManualShipmentRequest req) {
+        return validate(req, true);
+    }
+
+    /**
+     * @param carrierHop false to keep every local rule but skip the carrier
+     *                   token/rates/validate round trip — used by a purchase
+     *                   that presents the fingerprint of a recent passing dry run.
+     */
+    public ApiResponse<ShipmentValidationResult> validate(ManualShipmentRequest req, boolean carrierHop) {
         if (req == null || req.getRecipient() == null) {
             return failure("Request body and recipient are required.");
         }
@@ -374,8 +383,22 @@ public class ShipmentValidationService {
         java.util.concurrent.atomic.AtomicReference<List<com.multiship.backend.service.carriers.CarrierConnector.RateOption>> rates =
                 new java.util.concurrent.atomic.AtomicReference<>();
         java.util.concurrent.atomic.AtomicReference<String> rateProblem = new java.util.concurrent.atomic.AtomicReference<>();
-        ShipmentValidationResult.CarrierValidationSubResult carrierResult =
-                callCarrierValidateShipment(req, adapted, pickedAccount, skipped, rates, rateProblem);
+        ShipmentValidationResult.CarrierValidationSubResult carrierResult = null;
+        if (!carrierHop) {
+            skipped.add(ValidationCheckStatus.builder().name("carrier")
+                    .reason("Skipped: this exact shipment passed a dry run within the last "
+                            + com.multiship.backend.service.shipment.ValidationReceipts.TTL.toMinutes() + " minutes.")
+                    .build());
+        } else {
+            try {
+                carrierResult = callCarrierValidateShipment(req, adapted, pickedAccount, skipped, rates, rateProblem);
+            } catch (com.multiship.backend.service.carrier.ShipperDefaultsMissingException e) {
+                // Phase 1 — strict shipper mode is a local error the operator
+                // can fix, reported on the sender block, not a 500.
+                errors.add(ValidationIssue.builder().code(e.getErrorCode().name())
+                        .field("sender").message(e.getMessage()).build());
+            }
+        }
         // A login failure reads as one, whichever carrier said it and however
         // (UPS: HTTP 401 / 250002 "Invalid Authentication Information").
         // BUT — 250002 is also what UPS returns when the OAuth token was minted

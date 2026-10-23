@@ -90,8 +90,10 @@ class ShipperDefaultsServiceTest {
         when(tenantSettings.getSetting(eq("ACME"), eq(ShipperDefaultsService.KEY_STATE)))
                 .thenReturn(Optional.of("NY"));
 
-        IllegalStateException ex = assertThrows(IllegalStateException.class,
+        ShipperDefaultsMissingException ex = assertThrows(ShipperDefaultsMissingException.class,
                 () -> svc.resolveFor("ACME"));
+        assertEquals(com.multiship.backend.dto.ErrorCode.SHIPPER_DEFAULTS_MISSING, ex.getErrorCode());
+        assertTrue(ex.getMissingKeys().contains(ShipperDefaultsService.KEY_NAME));
         assertTrue(ex.getMessage().contains("ACME"),
                 "message must name the tenant: " + ex.getMessage());
         assertTrue(ex.getMessage().contains(ShipperDefaultsService.KEY_NAME),
@@ -108,6 +110,14 @@ class ShipperDefaultsServiceTest {
         var out = svc.resolveFor("ACME");
         assertEquals("tenant-" + ShipperDefaultsService.KEY_NAME, out.getName());
         assertEquals("tenant-" + ShipperDefaultsService.KEY_COUNTRY_CODE, out.getCountryCode());
+    }
+
+    @Test
+    void lenientReadUnderStrictModeReturnsMergedValuesInsteadOfThrowing() {
+        props.getShipper().setStrictMode(true);
+        CarrierProperties.ShipperDefaults d = svc.resolveFor("ARHDEV", false);
+        assertEquals(props.getShipper().getName(), d.getName());
+        assertThrows(ShipperDefaultsMissingException.class, () -> svc.resolveFor("ARHDEV"));
     }
 
     @Test

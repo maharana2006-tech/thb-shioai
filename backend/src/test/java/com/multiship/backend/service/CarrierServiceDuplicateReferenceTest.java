@@ -113,7 +113,7 @@ class CarrierServiceDuplicateReferenceTest {
                 .thenReturn(Optional.of(shippedOrder(934208, "1Z999AA10123456784")));
 
         ApiResponse<LabelGenerationResponse> resp =
-                service.generateManualLabel(reqWithReference("QA-1018-A001"), operator(), null);
+                service.purchaseManualLabel(reqWithReference("QA-1018-A001"), operator(), null);
 
         assertEquals("error", resp.getStatus());
         assertEquals(409, resp.getCode());
@@ -135,7 +135,7 @@ class CarrierServiceDuplicateReferenceTest {
 
         try {
             ApiResponse<LabelGenerationResponse> resp =
-                    service.generateManualLabel(reqWithReference("QA-1018-NEW"), operator(), null);
+                    service.purchaseManualLabel(reqWithReference("QA-1018-NEW"), operator(), null);
             if (resp != null && resp.getMessage() != null) {
                 assertTrue(!resp.getMessage().contains("already shipped"),
                         "first-time reference must not trip the duplicate guard: "
@@ -159,7 +159,7 @@ class CarrierServiceDuplicateReferenceTest {
 
         try {
             ApiResponse<LabelGenerationResponse> resp =
-                    service.generateManualLabel(reqWithReference("QA-1018-A001"), operator(), 934208);
+                    service.purchaseManualLabel(reqWithReference("QA-1018-A001"), operator(), 934208);
             if (resp != null && resp.getMessage() != null) {
                 assertTrue(!resp.getMessage().contains("already shipped"),
                         "regenerate must not trip the dup guard: " + resp.getMessage());

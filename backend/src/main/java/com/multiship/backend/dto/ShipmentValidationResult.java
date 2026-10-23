@@ -110,6 +110,12 @@ public class ShipmentValidationResult {
      *  transit time and billable weight. Null when nothing could be priced. */
     private RateQuote quote;
 
+    /** Phase 1 — sha256 of the canonical payload this result is for; present a
+     *  matching X-Validation-Fingerprint on the purchase to skip the carrier
+     *  rates/validate hop (only while {@code validUntil} is in the future). */
+    private String fingerprint;
+    private java.time.Instant validUntil;
+
     @Data
     @Builder
     @NoArgsConstructor

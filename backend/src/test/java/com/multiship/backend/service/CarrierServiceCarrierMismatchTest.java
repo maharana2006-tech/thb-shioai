@@ -104,7 +104,7 @@ class CarrierServiceCarrierMismatchTest {
         when(carrierAccountRefRepository.findById(2L)).thenReturn(Optional.of(upsAccount(2L)));
 
         ApiResponse<LabelGenerationResponse> resp =
-                service.generateManualLabel(baseRequest("FEDEX", 2L), operator(), null);
+                service.purchaseManualLabel(baseRequest("FEDEX", 2L), operator(), null);
 
         assertEquals("error", resp.getStatus());
         assertEquals(422, resp.getCode());
@@ -123,7 +123,7 @@ class CarrierServiceCarrierMismatchTest {
         when(carrierAccountRefRepository.findById(2L)).thenReturn(Optional.of(upsAccount(2L)));
 
         ApiResponse<LabelGenerationResponse> resp =
-                service.generateManualLabel(baseRequest("FOO", 2L), operator(), null);
+                service.purchaseManualLabel(baseRequest("FOO", 2L), operator(), null);
 
         assertEquals(422, resp.getCode());
         assertEquals(ErrorCode.VALIDATION_ERROR.name(), resp.getErrorCode());
