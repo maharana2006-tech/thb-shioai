@@ -5,6 +5,7 @@ import com.multiship.backend.model.LabelPackage;
 import com.multiship.backend.model.OrderTracking;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
 import com.multiship.backend.repository.LabelPackageRepository;
+import com.multiship.backend.repository.OrderCustomsRepository;
 import com.multiship.backend.repository.OrderTrackingRepository;
 import com.multiship.backend.service.LabelFormatConverter;
 import com.multiship.backend.service.LabelImageZplService;
@@ -46,6 +47,11 @@ public class LabelArtifactService {
     private final LabelImageZplService labelImageZplService;
     private final LabelFormatConverter labelFormatConverter;
     private final LabelMainPageCropper labelMainPageCropper;
+    /** BUG-028 — null-tolerant so ctor-arg Mockito tests keep compiling.
+     *  Null = treat as "no customs"; the FE hides the button, same effect
+     *  as before the field existed. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private OrderCustomsRepository orderCustomsRepository;
 
     /** The label screen's model. Empty when the order has no packages at all. */
     public Optional<LabelArtifactDTO> describe(Integer orderNo) {
@@ -75,13 +81,17 @@ public class LabelArtifactService {
                         p.getTrackingNumber(), p.getTrackingUrl(), p.getCreatedAt()))
                 .toList();
 
+        boolean hasCustoms = orderCustomsRepository != null
+                && orderCustomsRepository.findByOrderNoIgnoreCase(String.valueOf(orderNo)).isPresent();
+
         return Optional.of(new LabelArtifactDTO(
                 orderNo,
                 pkgs.isEmpty() ? "PENDING" : "GENERATED",
                 carrier,
                 environment,
                 tracking.map(OrderTracking::getLabelGeneratedAt).orElse(null),
-                packages));
+                packages,
+                hasCustoms));
     }
 
     public Optional<LabelPackage> pkg(Integer orderNo, Integer seq) {
