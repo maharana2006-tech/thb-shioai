@@ -238,14 +238,24 @@ export default function OrderDocumentsTable() {
         const spin = <FiLoader className="h-3 w-3 animate-spin" />
         return (
           <span className="flex items-center gap-1 whitespace-nowrap">
+            {/* BUG-049 — label PDF + ZPL downloads are hidden on voided
+                rows; the stored bytes stay for audit but the backend
+                also 404s these endpoints. Statement + Commercial
+                invoice remain available (billing audit, customs
+                record). A reissue flips voided=false and both buttons
+                reappear. */}
+            {!r.voided && (
             <button type="button" onClick={() => void download(`label-${r.orderNo}`, () => orderService.getLabelPdf(r.orderNo), `label-${r.orderNo}.pdf`, 'Label PDF download failed.')}
               disabled={busyKey === `label-${r.orderNo}`} className={DOC_BTN} title="Download the 4x6 shipping label as PDF">
               {busyKey === `label-${r.orderNo}` ? spin : <FiDownload className="h-3 w-3 text-[#412d15]" />} Label
             </button>
+            )}
+            {!r.voided && (
             <button type="button" onClick={() => void download(`zpl-${r.orderNo}`, async () => new Blob([await labelService.allZpl(r.orderNo)], { type: 'text/plain' }), `label-${r.orderNo}.zpl`, 'ZPL download failed.')}
               disabled={busyKey === `zpl-${r.orderNo}`} className={DOC_BTN} title="Raw ZPL for thermal printers">
               {busyKey === `zpl-${r.orderNo}` ? spin : <FiDownload className="h-3 w-3 text-[#412d15]" />} ZPL
             </button>
+            )}
             {r.hasInvoice ? (
               <button type="button" onClick={() => void download(`inv-${r.orderNo}`, () => orderService.getCommercialInvoicePdf(r.orderNo), `commercial-invoice-${r.orderNo}.pdf`, 'Commercial invoice download failed.')}
                 disabled={busyKey === `inv-${r.orderNo}`} className={DOC_BTN} title="Commercial invoice PDF (customs document)">
