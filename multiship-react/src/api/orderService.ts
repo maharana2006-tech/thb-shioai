@@ -903,8 +903,15 @@ export const orderService = {
   /**
    * THE order list: one server-side paginated, sorted, filtered endpoint
    * behind every order table in the app.
+   *
+   * <p>BUG-013 — the second-arg {@link RequestInit} lets the caller pass
+   * an {@code AbortSignal} so a stale filter/search change can cancel
+   * its in-flight listOrders instead of letting the late response paint
+   * the wrong list over the current one. Use
+   * {@link import('./apiClient').isAbortError} to silence the rejected
+   * promise on the caller side.
    */
-  listOrders: (params: OrderListParams = {}) => {
+  listOrders: (params: OrderListParams = {}, options?: RequestInit) => {
     const query = new URLSearchParams()
     query.set('page', String(params.page ?? 0))
     query.set('size', String(params.size ?? 20))
@@ -927,7 +934,7 @@ export const orderService = {
     if (params.carrier) query.set('carrier', params.carrier)
     if (params.isReturn) query.set('isReturn', params.isReturn)
 
-    return apiClient.get<ApiResponse<PaginatedOrderData>>(`/orders?${query.toString()}`)
+    return apiClient.get<ApiResponse<PaginatedOrderData>>(`/orders?${query.toString()}`, options)
   },
 
   /**
