@@ -30,6 +30,10 @@ export interface LabelArtifact {
   environment: string | null
   generatedAt: string | null
   packages: PackageArtifact[]
+  /** BUG-028 — true when the order has customs data and the commercial
+   *  invoice PDF would render. Hides the Commercial invoice button on
+   *  domestic orders rather than offer it only to 422 on click. */
+  hasCommercialInvoice: boolean
 }
 
 async function text(url: string, what: string): Promise<string> {

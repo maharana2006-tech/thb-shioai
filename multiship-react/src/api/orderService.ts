@@ -1084,10 +1084,20 @@ export const orderService = {
       credentials: 'include',
     })
     if (response.status === 422) {
-      throw new Error('This order has no customs data — there is no commercial invoice to print.')
+      // BUG-028 — tag the error so LabelActions can distinguish the
+      // benign "domestic order" 422 from a real failure.
+      const err: Error & { status?: number } = new Error(
+        'This order has no customs data — there is no commercial invoice to print.',
+      )
+      err.status = 422
+      throw err
     }
     if (!response.ok) {
-      throw new Error(`Commercial invoice PDF is unavailable (HTTP ${response.status}) — restart the backend if it was just updated.`)
+      const err: Error & { status?: number } = new Error(
+        `Commercial invoice PDF is unavailable (HTTP ${response.status}) — restart the backend if it was just updated.`,
+      )
+      err.status = response.status
+      throw err
     }
     return response.blob()
   },
