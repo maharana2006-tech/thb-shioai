@@ -1742,10 +1742,15 @@ public class UpsConnector implements CarrierConnector {
         } catch (org.springframework.web.client.RestClientResponseException ex) {
             log.warn("UPS pickup rejected (HTTP {}): {}",
                     ex.getStatusCode().value(), ex.getResponseBodyAsString());
+            // BUG-022 — surface the carrier's reason + code via the shared
+            // formatUpsError helper (same as AVS at line ~1313). Pre-fix the
+            // toast read "UPS pickup rejected: HTTP 401" with the actual
+            // 250002 'Invalid Authentication Information' trapped only in the
+            // Carrier API Log row's response body.
             return new PickupResult("UPS", null, request.pickupDate(),
                     request.pickupWindowStart(), request.pickupWindowEnd(),
                     "ERROR",
-                    "UPS pickup rejected: HTTP " + ex.getStatusCode().value(),
+                    formatUpsError("UPS pickup", ex.getStatusCode().value(), ex.getResponseBodyAsString()),
                     ex.getResponseBodyAsString());
         } catch (Exception ex) {
             log.warn("UPS pickup call failed: {}", ex.getMessage());
