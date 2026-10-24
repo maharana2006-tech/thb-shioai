@@ -213,7 +213,13 @@ public class OrderServiceImpl implements OrderService {
         }
 
         int page = Math.max(paginationRequest.getPage(), 0);
-        int size = Math.min(Math.max(paginationRequest.getSize(), 1), 100);
+        // BUG-010 — defense-in-depth: the controller already clamps via
+        // PaginationDefaults.clamp()/clampExport(); mirror those bounds
+        // here so an in-process caller can't bypass. 1000 matches the
+        // export ceiling; normal UI calls stay inside the 100 bound at
+        // the controller.
+        int size = Math.min(Math.max(paginationRequest.getSize(), 1),
+                com.multiship.backend.common.PaginationDefaults.EXPORT_MAX_SIZE);
         String sortBy = paginationRequest.getSortBy() != null ? paginationRequest.getSortBy() : "orderNo";
         String sortDirection = paginationRequest.getSortDirection() != null ? paginationRequest.getSortDirection() : "ASC";
 
