@@ -391,6 +391,7 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
                 (SELECT s2.carrier FROM shipping_service s2
                   WHERE UPPER(s2.service_code) = UPPER(b.shipvia_cd) LIMIT 1))) = :carrier)
           AND (:isReturn = '' OR UPPER(COALESCE(b.is_return, 'N')) = :isReturn)
+          AND (:intl = '' OR UPPER(COALESCE(b.intl_yn, 'N')) = :intl)
           AND (:resolution = ''
                OR (:resolution = 'READY' AND """ + RESOLUTION_READY_SQL + """
                )
@@ -492,6 +493,7 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("channel") String channel,
             @Param("carrier") String carrier,
             @Param("isReturn") String isReturn,
+            @Param("intl") String intl,
             @Param("offset") int offset,
             @Param("limit") int limit,
             @Param("sortBy") String sortBy,
@@ -518,7 +520,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("source") String source,
             @Param("channel") String channel,
             @Param("carrier") String carrier,
-            @Param("isReturn") String isReturn
+            @Param("isReturn") String isReturn,
+            @Param("intl") String intl
     );
 
     /**
@@ -550,7 +553,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("source") String source,
             @Param("channel") String channel,
             @Param("carrier") String carrier,
-            @Param("isReturn") String isReturn
+            @Param("isReturn") String isReturn,
+            @Param("intl") String intl
     );
 
     /**
@@ -584,7 +588,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("source") String source,
             @Param("channel") String channel,
             @Param("carrier") String carrier,
-            @Param("isReturn") String isReturn
+            @Param("isReturn") String isReturn,
+            @Param("intl") String intl
     );
 
     /** Tab counts for the Labels work queue, computed in one pass. */
