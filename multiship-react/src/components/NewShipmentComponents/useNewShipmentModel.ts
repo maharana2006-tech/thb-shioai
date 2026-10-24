@@ -2521,7 +2521,10 @@ export function useNewShipmentModel() {
   const flattenErrors = (node: unknown, path = ''): string[] => {
     if (!node) return []
     if (typeof node === 'string') {
-      const where = fieldLabelFor(path)
+      // BUG-041 — in return mode the UI blocks are "Return from" / "Return
+      // to", not "Ship from" / "Ship to". Pass isReturn so the toast names
+      // the block the operator is actually looking at.
+      const where = fieldLabelFor(path, { isReturn })
       return [where && !/^Box \d+:/.test(node) ? `${where}: ${node.charAt(0).toLowerCase()}${node.slice(1)}` : node]
     }
     if (Array.isArray(node)) return node.flatMap((n, i) => flattenErrors(n, `${path}[${i}]`))
