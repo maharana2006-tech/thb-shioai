@@ -80,12 +80,15 @@ function payload(overrides: Record<string, unknown> = {}) {
     data: {
       generatedAt: '2026-09-16T15:32:00Z',
       queue: {
-        depth: 42,
-        processing: 5,
+        queuedDepth: 42,
+        processingCount: 5,
         estimatedWaitSeconds: 45 * 60,
-        totalPerHourCap: 55,
+        configuredHourlyCap: 55,
         tenantCode: null,
-        perTenantDepth: { ACME: 30, GLOBEX: 8 },
+        perTenantDepth: [
+          { tenantCode: 'ACME', queuedDepth: 30 },
+          { tenantCode: 'GLOBEX', queuedDepth: 8 },
+        ],
       },
       quota: {
         hourlyCap: 55,

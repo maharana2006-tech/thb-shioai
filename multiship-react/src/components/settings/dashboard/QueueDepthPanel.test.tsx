@@ -26,10 +26,10 @@ function metrics(
   overrides: Partial<UspsLabelQueueMetrics> = {},
 ): UspsLabelQueueMetrics {
   return {
-    depth: 42,
-    processing: 5,
+    queuedDepth: 42,
+    processingCount: 5,
     estimatedWaitSeconds: 45 * 60,
-    totalPerHourCap: 55,
+    configuredHourlyCap: 55,
     tenantCode: null,
     perTenantDepth: null,
     ...overrides,
@@ -51,7 +51,7 @@ describe('QueueDepthPanel — populated', () => {
   })
 
   it('singularises the "item pending" label at depth=1', () => {
-    render(<QueueDepthPanel metrics={metrics({ depth: 1 })} />)
+    render(<QueueDepthPanel metrics={metrics({ queuedDepth: 1 })} />)
     // "1" is in a <span>, "item pending" is in the following text
     // node — textContent collapses whitespace between them, so we
     // pattern-match with a flexible space and confirm the singular
@@ -63,7 +63,7 @@ describe('QueueDepthPanel — populated', () => {
   })
 
   it('pluralises the "items pending" label at depth=2', () => {
-    render(<QueueDepthPanel metrics={metrics({ depth: 2 })} />)
+    render(<QueueDepthPanel metrics={metrics({ queuedDepth: 2 })} />)
     const panel = screen.getByTestId('queue-depth-panel')
     expect(panel.textContent).toMatch(/2\s*items pending/)
   })
@@ -72,16 +72,16 @@ describe('QueueDepthPanel — populated', () => {
     render(
       <QueueDepthPanel
         metrics={metrics({
-          perTenantDepth: {
-            ACME: 30,
-            GLOBEX: 8,
-            INITECH: 3,
-            OSCORP: 1,
-            SOYLENT: 0, // filtered
-            UMBRELLA: 20,
-            WAYNE: 12,
-            STARK: 4,
-          },
+          perTenantDepth: [
+            { tenantCode: 'ACME', queuedDepth: 30 },
+            { tenantCode: 'GLOBEX', queuedDepth: 8 },
+            { tenantCode: 'INITECH', queuedDepth: 3 },
+            { tenantCode: 'OSCORP', queuedDepth: 1 },
+            { tenantCode: 'SOYLENT', queuedDepth: 0 }, // filtered
+            { tenantCode: 'UMBRELLA', queuedDepth: 20 },
+            { tenantCode: 'WAYNE', queuedDepth: 12 },
+            { tenantCode: 'STARK', queuedDepth: 4 },
+          ],
         })}
       />,
     )
@@ -149,7 +149,7 @@ describe('QueueDepthPanel — empty state', () => {
   it('shows the depth=0 tenants empty hint copy', () => {
     render(
       <QueueDepthPanel
-        metrics={metrics({ depth: 0, perTenantDepth: {} })}
+        metrics={metrics({ queuedDepth: 0, perTenantDepth: [] })}
       />,
     )
     expect(
