@@ -217,6 +217,15 @@ public class OrderServiceImpl implements OrderService {
         String sortBy = paginationRequest.getSortBy() != null ? paginationRequest.getSortBy() : "orderNo";
         String sortDirection = paginationRequest.getSortDirection() != null ? paginationRequest.getSortDirection() : "ASC";
 
+        // BUG-012 — escape %, _, \ so a literal '%' typed into search
+        // doesn't match every row. Applied right before the repo call
+        // so the routed-prefix branch above sees the un-escaped text.
+        keywordFilter = escapeLike(keywordFilter);
+        customerFilter = escapeLike(customerFilter);
+        cityFilter = escapeLike(cityFilter);
+        orderNoFilter = escapeLike(orderNoFilter);
+        trackingFilter = escapeLike(trackingFilter);
+
         List<Object[]> results = orderRepository.findOrdersUnified(
                 statusFilter, tenantFilter, keywordFilter, resolutionFilter,
                 customerFilter, cityFilter, orderNoFilter, trackingFilter,
@@ -315,6 +324,13 @@ public class OrderServiceImpl implements OrderService {
                     .build();
         }
 
+        // BUG-012 — escape SQL LIKE wildcards; see listOrders.
+        keywordFilter = escapeLike(keywordFilter);
+        customerFilter = escapeLike(customerFilter);
+        cityFilter = escapeLike(cityFilter);
+        orderNoFilter = escapeLike(orderNoFilter);
+        trackingFilter = escapeLike(trackingFilter);
+
         java.util.List<Integer> ids = orderRepository.findOrderNosUnified(
                 statusFilter, tenantFilter, keywordFilter, resolutionFilter,
                 customerFilter, cityFilter, orderNoFilter, trackingFilter,
@@ -375,6 +391,13 @@ public class OrderServiceImpl implements OrderService {
                     .timestamp(LocalDateTime.now())
                     .build();
         }
+
+        // BUG-012 — escape SQL LIKE wildcards; see listOrders.
+        keywordFilter = escapeLike(keywordFilter);
+        customerFilter = escapeLike(customerFilter);
+        cityFilter = escapeLike(cityFilter);
+        orderNoFilter = escapeLike(orderNoFilter);
+        trackingFilter = escapeLike(trackingFilter);
 
         List<Object[]> rows = orderRepository.findDistinctBatchesUnified(
                 statusFilter, tenantFilter, keywordFilter, resolutionFilter,
@@ -553,6 +576,20 @@ public class OrderServiceImpl implements OrderService {
 
     private String normalizeFilter(String value) {
         return value != null ? value.trim().toUpperCase(Locale.ROOT) : "";
+    }
+
+    /**
+     * BUG-012 — escape SQL LIKE wildcards (`\`, `%`, `_`) in filter
+     * strings so a literal '%' or '_' typed in search doesn't match
+     * every row. Pairs with {@code ESCAPE '\\'} on each LIKE in
+     * {@code UNIFIED_FILTER_SQL}. Same shape as the existing helper
+     * in {@code AuditLogRepositoryCustomImpl} / {@code ClientServiceImpl}.
+     */
+    private static String escapeLike(String value) {
+        if (value == null || value.isEmpty()) return value == null ? "" : value;
+        return value.replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_");
     }
 
     private long toLong(Object value) {
