@@ -989,10 +989,18 @@ public class DhlConnector implements CarrierConnector {
         } catch (org.springframework.web.client.RestClientResponseException ex) {
             log.warn("DHL pickup rejected (HTTP {}): {}",
                     ex.getStatusCode().value(), ex.getResponseBodyAsString());
+            // BUG-022 — surface the carrier's reason (RFC-7807-ish
+            // {title, detail}) on the toast. No existing DHL helper, so
+            // inline the parse here. Falls back to the plain status when
+            // the body isn't JSON. Mirrors the UPS/FedEx/Stamps fix.
+            String reason = firstDhlErrorMessage(ex.getResponseBodyAsString());
+            String message = StringUtils.hasText(reason)
+                    ? "DHL pickup rejected (HTTP " + ex.getStatusCode().value() + "): " + reason
+                    : "DHL pickup rejected: HTTP " + ex.getStatusCode().value();
             return new PickupResult("DHL", null, request.pickupDate(),
                     request.pickupWindowStart(), request.pickupWindowEnd(),
                     "ERROR",
-                    "DHL pickup rejected: HTTP " + ex.getStatusCode().value(),
+                    message,
                     ex.getResponseBodyAsString());
         } catch (Exception ex) {
             log.warn("DHL pickup call failed: {}", ex.getMessage());
@@ -1113,6 +1121,32 @@ public class DhlConnector implements CarrierConnector {
      * Parse a DHL pickup response. Success = a non-empty
      * {@code dispatchConfirmationNumbers[]}. Package-visible for tests.
      */
+    /** BUG-022 — pull a human-readable reason out of a DHL error payload
+     *  for the pickup/schedule toast. DHL's error bodies follow an
+     *  RFC-7807-ish shape (title / detail / additionalDetails), with a
+     *  fallback {@code message} property on some older endpoints. Returns
+     *  "" when the body isn't recognisable JSON so the caller can fall
+     *  through to the plain-status message. */
+    private String firstDhlErrorMessage(String body) {
+        if (!StringUtils.hasText(body)) return "";
+        try {
+            JsonNode root = objectMapper.readTree(body);
+            // Prefer `detail` (specific), then `title` (general), then `message`.
+            for (String field : new String[]{"detail", "title", "message"}) {
+                JsonNode v = root.path(field);
+                if (v != null && v.isTextual() && !v.asText().isBlank()) return v.asText();
+            }
+            // DHL batches multiple errors under `additionalDetails` sometimes.
+            JsonNode extra = root.path("additionalDetails");
+            if (extra.isArray() && extra.size() > 0 && extra.get(0).isTextual()) {
+                return extra.get(0).asText();
+            }
+        } catch (Exception ignored) {
+            // Fall through
+        }
+        return body.length() > 200 ? body.substring(0, 200) + "…" : body;
+    }
+
     PickupResult parseDhlPickupResponse(PickupRequest req, String response) {
         try {
             com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(
