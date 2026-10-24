@@ -490,11 +490,11 @@ function UspsQueueWarningBanner() {
 
   if (metrics == null) return null
   const shouldWarn =
-    metrics.depth > QUEUE_WARN_DEPTH
+    metrics.queuedDepth > QUEUE_WARN_DEPTH
     || metrics.estimatedWaitSeconds > QUEUE_WARN_WAIT_SEC
   if (!shouldWarn) return null
 
-  const perHourCap = metrics.totalPerHourCap ?? 60
+  const perHourCap = metrics.configuredHourlyCap ?? 60
   return (
     <div
       role="alert"
@@ -511,7 +511,7 @@ function UspsQueueWarningBanner() {
             USPS is rate-limited to {perHourCap} labels/hour.
           </p>
           <p className="mt-0.5">
-            {metrics.depth} label{metrics.depth === 1 ? '' : 's'} already queued;
+            {metrics.queuedDepth} label{metrics.queuedDepth === 1 ? '' : 's'} already queued;
             new USPS orders in this batch will start printing in about{' '}
             <span className="tabular-nums font-semibold">
               {formatQueueDuration(metrics.estimatedWaitSeconds)}

@@ -89,7 +89,7 @@ vi.mock('../hooks/useEventStream', () => ({
 }))
 
 const getMetricsMock = vi.fn().mockResolvedValue({
-  data: { depth: 0, processing: 0, estimatedWaitSeconds: 0, totalPerHourCap: 55, tenantCode: null },
+  data: { queuedDepth: 0, processingCount: 0, estimatedWaitSeconds: 0, configuredHourlyCap: 55, tenantCode: null },
 })
 vi.mock('../api/uspsLabelQueueService', () => ({
   uspsLabelQueueService: {

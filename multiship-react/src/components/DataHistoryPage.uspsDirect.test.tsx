@@ -106,10 +106,10 @@ vi.mock('../hooks/useEventStream', () => ({
 // BulkLabelQueueBadge's service — depth=0 default so pill is silent.
 const getMetricsMock = vi.fn().mockResolvedValue({
   data: {
-    depth: 0,
-    processing: 0,
+    queuedDepth: 0,
+    processingCount: 0,
     estimatedWaitSeconds: 0,
-    totalPerHourCap: 55,
+    configuredHourlyCap: 55,
     tenantCode: null,
   },
 })
@@ -337,10 +337,10 @@ beforeEach(() => {
   getHistory.mockResolvedValue({ data: null })
   getMetricsMock.mockResolvedValue({
     data: {
-      depth: 0,
-      processing: 0,
+      queuedDepth: 0,
+      processingCount: 0,
       estimatedWaitSeconds: 0,
-      totalPerHourCap: 55,
+      configuredHourlyCap: 55,
       tenantCode: null,
     },
   })
@@ -378,10 +378,10 @@ describe('DataHistoryPage — BulkLabelQueueBadge mount (audit U2)', () => {
   it('renders the pill itself when metrics report non-zero depth', async () => {
     getMetricsMock.mockResolvedValue({
       data: {
-        depth: 7,
-        processing: 2,
+        queuedDepth: 7,
+        processingCount: 2,
         estimatedWaitSeconds: 300,
-        totalPerHourCap: 55,
+        configuredHourlyCap: 55,
         tenantCode: null,
       },
     })
