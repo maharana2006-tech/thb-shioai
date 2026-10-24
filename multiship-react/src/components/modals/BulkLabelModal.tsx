@@ -62,6 +62,40 @@ const QUEUE_WARN_WAIT_SEC = 3600
  *  the rate limiter fully kicks in). */
 const QUEUE_WARN_DEPTH = 50
 
+/**
+ * BUG-037 — the modal used to lose every piece of its state on close
+ * (parent sets `open=false`, we unmount, job pointer is gone). An
+ * operator who clicked X during a run couldn't come back to download
+ * the ZIP without re-submitting. Store the last job id in localStorage
+ * keyed by a stable signature over the order numbers; re-mount
+ * hydrates from the server if the signature matches, so reopening the
+ * modal picks up where it was.
+ *
+ * ponytail: localStorage not sessionStorage so an accidental reload
+ * also restores. One-slot cache — the last run wins; parallel bulk
+ * sessions aren't a real workflow here.
+ */
+const LAST_JOB_KEY = 'bulk-label-modal:last-job-v1'
+const lastJobKey = (orderNumbers: number[]): string => {
+  // Signature = sorted order #s joined. Doesn't need to be
+  // cryptographically unique — rough de-duping is enough so a
+  // different selection doesn't accidentally resume someone else's job.
+  return [...orderNumbers].sort((a, b) => a - b).join(',')
+}
+function readLastJobForSignature(sig: string): number | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(LAST_JOB_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { signature?: string; jobId?: number }
+    return parsed.signature === sig && typeof parsed.jobId === 'number' ? parsed.jobId : null
+  } catch { return null }
+}
+function writeLastJob(sig: string, jobId: number): void {
+  if (typeof window === 'undefined') return
+  try { window.localStorage.setItem(LAST_JOB_KEY, JSON.stringify({ signature: sig, jobId })) } catch { /* storage disabled */ }
+}
+
 export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModalProps) {
   const [job, setJob] = useState<BulkLabelJob | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -73,6 +107,12 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
   // restore to the trigger on close.
   const dialogRef = useRef<HTMLDivElement>(null)
   useFocusTrap(true, dialogRef)
+
+  // BUG-037 — pre-filled job id from the last run on the same order
+  // set. Stable across remounts; cleared when the operator submits a
+  // genuinely new batch (writeLastJob overrides the slot).
+  const sigRef = useRef<string>(lastJobKey(orderNumbers))
+  useEffect(() => { sigRef.current = lastJobKey(orderNumbers) }, [orderNumbers])
 
   const downloadZip = async (jobId: number) => {
     if (downloading) return
@@ -107,6 +147,9 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
       const created = response.data
       if (!created) throw new Error(response.message ?? 'Submit failed.')
       setJob(created)
+      // BUG-037 — park the id so a close + reopen on the same orders
+      // resumes without re-submit.
+      writeLastJob(sigRef.current, created.id)
       startPolling(created.id)
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Bulk-label submit failed.'
@@ -290,6 +333,27 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
     // eslint-disable-next-line react-hooks/exhaustive-deps -- clearPoll + startPolling are stable helpers over refs; only SSE status + job id should toggle the poll on/off
   }, [sseStatus, activeJobId])
 
+  // BUG-037 — on mount, if we recorded a job for this exact order
+  // selection last time, fetch its status. If still running the
+  // polling resumes; if terminal, we show the Download / final toast
+  // state. Runs once per mount; the server is the source of truth so
+  // a stale id simply returns 404 and we quietly drop it.
+  useEffect(() => {
+    if (job) return // Operator just submitted — don't clobber local state.
+    const prior = readLastJobForSignature(sigRef.current)
+    if (prior == null) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const r = await bulkLabelService.status(prior)
+        if (cancelled || !r.data) return
+        setJob(r.data)
+      } catch { /* stale id; silent drop */ }
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fires once on mount for the initial order selection; subsequent submits write their own slot.
+  }, [])
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
@@ -342,7 +406,8 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
               <FiPackage className="h-3 w-3" /> Bulk labels
             </p>
             <h3 className="mt-1 text-[15px] font-semibold text-slate-950">
-              Generate {orderNumbers.length} labels
+              {/* BUG-038 — "Generate 1 labels" was ugly English. */}
+              Generate {orderNumbers.length} label{orderNumbers.length === 1 ? '' : 's'}
             </h3>
             <p className="mt-1 text-[11.5px] text-slate-500">
               Runs in the background — you can close this modal and come back later to download.
@@ -382,6 +447,11 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
               onDownloadAllLabels={
                 job.downloadable ? () => void downloadZip(job.id) : undefined
               }
+              // BUG-038 — bulk-labels can submit any carrier; silently
+              // hide the card when the hook settles with no data so
+              // non-USPS single-order submissions don't see an
+              // irrelevant "No MPS progress found" box.
+              hideWhenEmpty
             />
           ) : null}
 
@@ -389,7 +459,8 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
             <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-[12.5px] text-slate-700">
               <p className="font-semibold">Ready to submit</p>
               <p className="mt-1">
-                {orderNumbers.length} orders will run in parallel (bounded so carriers aren&rsquo;t rate-limited).
+                {/* BUG-038 — plural fix on the body copy too. */}
+                {orderNumbers.length} {orderNumbers.length === 1 ? 'order' : 'orders'} will run in parallel (bounded so carriers aren&rsquo;t rate-limited).
                 Successful labels will be zipped for download; failed orders will show inline.
               </p>
             </div>
