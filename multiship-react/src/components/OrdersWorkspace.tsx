@@ -2,7 +2,7 @@ import { relativeTime } from '../utils/relativeTime'
 import { lazyWithRetry } from '../utils/lazyWithRetry'
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import type { SortingState } from '@tanstack/react-table'
 import { notify } from '../utils/notify'
 // Espresso/cream button tokens — shared across the app (see components/ui/buttons).
@@ -117,15 +117,25 @@ export default function OrdersWorkspace() {
   const navigate = useNavigate()
   const { role: sessionRole } = useAppSession()
   const location = useLocation()
+  // BUG-014 — tab / search / sort / page sync to the URL so the back
+  // button, bookmarks and Share-this-view links all work. Keep it
+  // narrow: the five keys named by the audit, not every column filter.
+  // Each tracked key owns a short slug (v / q / sort / dir / page) and
+  // writes only when the state actually diverges from the URL.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const urlView = (() => {
+    const v = searchParams.get('v')
+    return v && v in VIEW_QUERY ? (v as View) : 'all'
+  })()
 
   const [stats, setStats] = useState<QueueStats | null>(null)
   const [rows, setRows] = useState<Order[]>([])
   const [totalPages, setTotalPages] = useState(1)
   const [loading, setLoading] = useState(true)
 
-  const [view, setView] = useState<View>('all')
-  const [query, setQuery] = useState('')
-  const [debouncedQuery, setDebouncedQuery] = useState('')
+  const [view, setView] = useState<View>(urlView)
+  const [query, setQuery] = useState(searchParams.get('q') ?? '')
+  const [debouncedQuery, setDebouncedQuery] = useState(searchParams.get('q') ?? '')
   const [clientFilter, setClientFilter] = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
@@ -138,7 +148,14 @@ export default function OrdersWorkspace() {
   const [clientCodes, setClientCodes] = useState<string[]>([])
   // Sprint 51 migration — sort is owned by the shared AdvancedDataTable now.
   // sortBy / sortDirection remain the fetch-effect inputs (derived below).
-  const [sorting, setSorting] = useState<SortingState>([{ id: 'orderNo', desc: true }])
+  // BUG-014 — seed from ?sort=&dir= so a bookmarked sort survives reload.
+  const initialSorting: SortingState = (() => {
+    const s = searchParams.get('sort')
+    const d = searchParams.get('dir')
+    if (!s) return [{ id: 'orderNo', desc: true }]
+    return [{ id: s, desc: d !== 'ASC' }]
+  })()
+  const [sorting, setSorting] = useState<SortingState>(initialSorting)
   const sortBy = sorting[0]?.id ?? 'orderNo'
   const sortDirection: 'ASC' | 'DESC' = sorting[0]?.desc ? 'DESC' : 'ASC'
   const [showFilters, setShowFilters] = useState(false)
@@ -154,7 +171,11 @@ export default function OrdersWorkspace() {
    * opened the panel yet (lazy fetch).
    */
   const [batchesForPicker, setBatchesForPicker] = useState<Array<{ batchId: number; count: number }>>([])
-  const [page, setPage] = useState(1)
+  // BUG-014 — seed from ?page=&size=.
+  const [page, setPage] = useState(() => {
+    const p = Number(searchParams.get('page'))
+    return Number.isFinite(p) && p > 0 ? p : 1
+  })
   const [pageSize, setPageSize] = useState(10)
   const [reloadToken, setReloadToken] = useState(0)
   /**
@@ -206,21 +227,52 @@ export default function OrdersWorkspace() {
   // Sprint 40 — CSV / XLSX import modal.
   const [importOpen, setImportOpen] = useState(false)
 
-  // The header's global search lands here as /orders?q=…
+  // The header's global search lands here as /orders?q=… and the
+  // dashboard tiles deep-link via ?view=…. Fires only when the URL's
+  // value actually diverges from current state so the write-back
+  // effect below (its own setSearchParams calls) doesn't re-trigger
+  // the read-back and clear selection on every keystroke.
   useEffect(() => {
     const params = new URLSearchParams(location.search)
-    const q = params.get('q')
-    if (q) {
+    const q = params.get('q') ?? ''
+    if (q && q !== query) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- sync workspace state from URL query params on nav; user-driven navigation trigger, not derivable at render
       setQuery(q)
       setView('all')
     }
     // Dashboard deep-links land on a specific pipeline tab (?view=ready…).
-    const v = params.get('view')
-    if (v && v in VIEW_QUERY) {
+    // Accept both ?view= (legacy) and ?v= (BUG-014 short slug).
+    const v = params.get('v') ?? params.get('view')
+    if (v && v in VIEW_QUERY && v !== view) {
       setView(v as View)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `query`/`view` intentionally excluded; this effect reconciles from URL changes, not from state changes.
   }, [location.search])
+
+  // BUG-014 — write tab / search / sort / page to the URL whenever
+  // they change, so the back button, bookmarks and Share-this-view
+  // links round-trip. replace: true avoids one browser-history entry
+  // per keystroke (debounced query is the write source).
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams)
+    // Only persist non-default values so the URL stays tidy. If the
+    // caller returns to the default state the param is removed.
+    if (view !== 'all') next.set('v', view); else next.delete('v')
+    if (debouncedQuery) next.set('q', debouncedQuery); else next.delete('q')
+    if (sortBy !== 'orderNo' || sortDirection !== 'DESC') {
+      next.set('sort', sortBy)
+      next.set('dir', sortDirection)
+    } else {
+      next.delete('sort'); next.delete('dir')
+    }
+    if (page !== 1) next.set('page', String(page)); else next.delete('page')
+    // Only write when something actually changed — otherwise we loop
+    // (setSearchParams → location.search → setSearchParams).
+    const cur = searchParams.toString()
+    const nxt = next.toString()
+    if (cur !== nxt) setSearchParams(next, { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- searchParams excluded; it's the OUTPUT target, including it loops.
+  }, [view, debouncedQuery, sortBy, sortDirection, page])
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedQuery(query.trim()), 350)
