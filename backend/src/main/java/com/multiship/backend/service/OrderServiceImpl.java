@@ -759,6 +759,12 @@ public class OrderServiceImpl implements OrderService {
                 .shipFromResolved(shipFrom.resolved())
                 .intlYn(entity.getIntlYn())
                 .isReturn(entity.getIsReturn())
+                // BUG-034 — surface the stored Reason + RMA so the Reissue-
+                // return / Fix-return prefill in the FE can rehydrate the
+                // required Reason picklist (otherwise the operator has to
+                // retype them on every retry).
+                .returnReason(entity.getReturnReason())
+                .rmaNumber(entity.getRmaNumber())
                 // PR #543 — expose source + wmsExternalId so the FE label
                 // facsimile can derive PO (MAN{n} for manual/bulk,
                 // wmsExternalId for WMS, else orderNo bare).

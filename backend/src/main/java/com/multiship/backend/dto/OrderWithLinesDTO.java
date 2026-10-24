@@ -69,6 +69,14 @@ public class OrderWithLinesDTO {
     private String intlYn;
     /** 'Y' when this is a reverse/return label. */
     private String isReturn;
+    /** BUG-034 — Returns F9 Order.return_reason surfaced on the DTO so
+     *  the Reissue-return / Fix-return prefill in the FE can restore the
+     *  required Reason picklist from a previously saved order.
+     *  Null for outbound shipments. */
+    private String returnReason;
+    /** BUG-034 — Returns F9 Order.rma_number surfaced on the DTO. See
+     *  {@link #returnReason}. */
+    private String rmaNumber;
     /** PR #543 — order source (`MANUAL | BULK | WMS | API | ERP`). Drives
      *  the PO field on the JSX label facsimile. Null on legacy rows —
      *  FE facsimile falls through to orderNo bare. */
