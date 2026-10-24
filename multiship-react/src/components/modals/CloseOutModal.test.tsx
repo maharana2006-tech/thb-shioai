@@ -62,4 +62,16 @@ describe('CloseOutModal', () => {
     await userEvent.click(screen.getByRole('button', { name: /Close out selected/ }))
     expect(await screen.findByText(/Couldn't reach the Multiship server — nothing was booked/)).toBeTruthy()
   })
+
+  // BUG-017 — the Close whole day button used to open the irreversible
+  // confirm with a bare "? " in the date slot when the input was empty.
+  it("disables Close whole day + Close out selected when the date is blank (BUG-017)", async () => {
+    await open()
+    const dateInput = screen.getByLabelText(/Close date/) as HTMLInputElement
+    await userEvent.clear(dateInput)
+    expect(dateInput.value).toBe('')
+    expect(screen.getByText(/Pick a date before closing/)).toBeTruthy()
+    expect((screen.getByRole('button', { name: /Close whole day/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: /Close out selected/ }) as HTMLButtonElement).disabled).toBe(true)
+  })
 })
