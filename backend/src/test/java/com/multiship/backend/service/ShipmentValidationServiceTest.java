@@ -1516,6 +1516,48 @@ class ShipmentValidationServiceTest {
     }
 
     @Test
+    void anUnknownOriginalOrderNoOnAReturnIsAnError() {
+        // BUG-040 — pre-fix, the backend silently dropped a stale typed
+        // Return of # to null so Validate + Generate "succeeded" but the
+        // return had no link. Now it's an error at /validate.
+        com.multiship.backend.repository.OrderRepository orders =
+                mock(com.multiship.backend.repository.OrderRepository.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "orderRepository", orders);
+        when(orders.findByOrderNo(999999)).thenReturn(Optional.empty());
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setIsReturn(true);
+        req.setOriginalOrderNo(999999);
+        stubServiceAndPreset();
+        assertTrue(errorsOf(req).stream().anyMatch(m -> m.contains(
+                "Return of #999999 doesn't match an order on this tenant")), errorsOf(req).toString());
+    }
+
+    @Test
+    void aValidOriginalOrderNoIsFine() {
+        com.multiship.backend.repository.OrderRepository orders =
+                mock(com.multiship.backend.repository.OrderRepository.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "orderRepository", orders);
+        com.multiship.backend.model.Order outbound = new com.multiship.backend.model.Order();
+        outbound.setOrderNo(100100);
+        when(orders.findByOrderNo(100100)).thenReturn(Optional.of(outbound));
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setIsReturn(true);
+        req.setOriginalOrderNo(100100);
+        stubServiceAndPreset();
+        assertTrue(errorsOf(req).stream().noneMatch(m -> m.contains("Return of #")), errorsOf(req).toString());
+    }
+
+    @Test
+    void aBlankOriginalOrderNoSkipsTheCheck() {
+        // No repo stub needed — the guard short-circuits on null.
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setIsReturn(true);
+        req.setOriginalOrderNo(null);
+        stubServiceAndPreset();
+        assertTrue(errorsOf(req).stream().noneMatch(m -> m.contains("Return of #")), errorsOf(req).toString());
+    }
+
+    @Test
     void pastTheClientsCutoffIsAWarning() {
         when(resolutionService.isPastCutoff(org.mockito.ArgumentMatchers.eq("ACME"), any())).thenReturn(true);
         ManualShipmentRequest req = fullDomesticRequest();
