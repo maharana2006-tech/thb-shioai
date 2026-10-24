@@ -7316,10 +7316,25 @@ public class OrderImportServiceImpl implements OrderImportService {
     }
 
     @Override
+    @org.springframework.transaction.annotation.Transactional
     public ApiResponse<StagingUploadDTO> saveStaging(Long id, String requestedBy, boolean includeErrors,
                                                      boolean allowDuplicate) {
-        ImportStagingUpload up = findStaging(id, requestedBy);
+        // BUG-046 — pessimistic lock on the staging-upload row so concurrent
+        // POST /staging/{id}/save requests serialise. Three simultaneous
+        // calls previously minted three ImportBatch rows (one per call) and
+        // the extras couldn't be generated. The lock holds until this
+        // @Transactional commits; the loser then re-reads via
+        // {@code findByUploadIdOrderByRowNoAsc} below and trips the
+        // existing "Everything in this upload is already saved" guard at
+        // line ~7351 with a 422 instead of inserting a duplicate.
+        if (stagingUploadRepository == null || id == null) {
+            return stagingFailure(HttpStatus.NOT_FOUND, "Upload not found — it may have expired or been discarded.");
+        }
+        ImportStagingUpload up = stagingUploadRepository.findByIdForUpdate(id).orElse(null);
         if (up == null) return stagingFailure(HttpStatus.NOT_FOUND, "Upload not found — it may have expired or been discarded.");
+        if (!canAccessStaging(up, requestedBy)) {
+            throw new org.springframework.security.access.AccessDeniedException("This upload belongs to another user.");
+        }
         List<ImportStagingRow> ents = stagingRowRepository.findByUploadIdOrderByRowNoAsc(up.getId());
         List<OrderImportRowDTO> rows = readStagingRows(ents);
         requireMatch(firstClientCode(rows));
