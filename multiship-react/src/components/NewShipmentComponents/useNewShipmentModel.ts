@@ -1120,7 +1120,19 @@ export function useNewShipmentModel() {
           accountNumber: details.data.carrierAccount?.accountNumber ?? null,
         }
         setFixError(byId?.data?.errorDetails?.errorMessage ?? null)
-        setFixVoided((byId?.data?.labelDetails?.status ?? '').toUpperCase() === 'VOIDED')
+        const voided = (byId?.data?.labelDetails?.status ?? '').toUpperCase() === 'VOIDED'
+        setFixVoided(voided)
+        // BUG-035 — if the operator browser-Back'd into a fix URL for
+        // an order that's now GENERATED (common path: Fix &
+        // regenerate succeeds → navigate to /label/N → operator hits
+        // Back), there's nothing to fix. Redirect to the label page
+        // with replace so Back/Back doesn't bounce back here. Voided
+        // orders stay in fix-mode because that's the Reissue flow.
+        const orderStatus = (byId?.data?.orderDetails?.status ?? '').toUpperCase()
+        if (orderStatus === 'GENERATED' && !voided) {
+          navigate(`/label/${fixOrderNo}`, { replace: true })
+          return
+        }
         const ch = (o.orderChannel ?? '').toUpperCase()
         setFixChannel(ch === 'D2C' || ch === 'B2B' ? ch : null)
         // Older D2C orders stored "DTC batch 98.00 / tote 2".
@@ -2568,7 +2580,13 @@ export function useNewShipmentModel() {
         return
       }
       notify.success(res.message || `Shipment split into ${res.data?.orderNo ? 'multiple' : 'N'} labels.`)
-      navigate(orderNo ? `/label/${orderNo}` : '/orders')
+      // BUG-035 — in fix-mode, replace the fix URL so browser Back
+      // doesn't reopen "Fixing failed order #N" for an order that's now
+      // GENERATED (Validate then correctly flags the order's own
+      // reference as "already shipped on #N", which looks like a
+      // self-conflict to the operator).
+      navigate(orderNo ? `/label/${orderNo}` : '/orders',
+          fixOrderNo ? { replace: true } : undefined)
     } catch (e) {
       settlePendingAttempt(e)
       const raw = e instanceof ApiError
@@ -2784,7 +2802,9 @@ export function useNewShipmentModel() {
           : `${rest.length} queued shipments remaining — loaded the next one.`)
         return
       }
-      navigate(orderNo ? `/label/${orderNo}` : '/orders')
+      // BUG-035 — see sibling resubmitWithSplit branch above.
+      navigate(orderNo ? `/label/${orderNo}` : '/orders',
+          fixOrderNo ? { replace: true } : undefined)
     } catch (e) {
       // A reload mid-purchase aborts the request; only a server answer
       // settles the attempt, otherwise the next mount looks it up.
