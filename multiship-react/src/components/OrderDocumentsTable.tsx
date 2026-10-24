@@ -168,8 +168,8 @@ export default function OrderDocumentsTable() {
       cell: ({ row }) => (
         <span className="flex flex-col">
           <span className="font-semibold text-[#1f150c]">{row.original.recipientName ?? '—'}</span>
-          {row.original.customerReferenceId ? (
-            <span className="font-mono text-[10.5px] text-[#8a7a5a]">{row.original.customerReferenceId}</span>
+          {row.original.custNo ? (
+            <span className="font-mono text-[10.5px] text-[#8a7a5a]">{row.original.custNo}</span>
           ) : null}
         </span>
       ),
@@ -362,7 +362,7 @@ export default function OrderDocumentsTable() {
             </div>
             <div className="space-y-2.5 px-5 py-4 text-[12px]">
               {[
-                ['Client', statementRow.customerReferenceId ?? '—'],
+                ['Client', statementRow.custNo ?? '—'],
                 ['Recipient', statementRow.recipientName ?? '—'],
                 ['Carrier / Tracking', `${statementRow.carrier ?? '—'} · ${statementRow.trackingNumber ?? '—'}`],
                 ['Billed to account', statementRow.accountNumber ?? '—'],
