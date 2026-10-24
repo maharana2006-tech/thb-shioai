@@ -799,6 +799,10 @@ export interface OrderListParams {
   carrier?: string
   /** Returns F3 — 'Y' = returns only, 'N' = shipments only, empty = all. */
   isReturn?: 'Y' | 'N' | ''
+  /** BUG-001 — intl tri-state: 'Y' = international only, 'N' = domestic only,
+   *  empty = all. Dashboard's "International pending" tile deep-links as
+   *  /orders?status=PENDING&intl=Y. Matched against label_batch.intl_yn. */
+  intl?: 'Y' | 'N' | ''
 }
 
 /** Tab counts for the Labels work queue. */
