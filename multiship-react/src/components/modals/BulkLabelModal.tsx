@@ -134,7 +134,11 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
         clearPoll()
         if (next.status === 'COMPLETED') {
           notify.success(
-            `Bulk labels done — ${next.successfulCount}/${next.totalCount} generated.`,
+            // BUG-036 — add a skipped-count tail so an all-already-labelled
+            // batch no longer reports "0/0 generated" with no explanation.
+            `Bulk labels done — ${next.successfulCount}/${next.totalCount} generated${
+              next.skippedCount ? ` · ${next.skippedCount} skipped (already labelled)` : ''
+            }.`,
           )
         } else if (next.status === 'CANCELLED') {
           notify.info(
@@ -175,7 +179,9 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
         const next = response.data
         if (next) {
           setJob(next)
-          const done = next.successfulCount + next.failedCount
+          // BUG-036 — include skippedCount so progress reaches 100% when
+          // the only "non-fresh-label" rows are already-labelled skips.
+          const done = next.successfulCount + next.failedCount + next.skippedCount
           if (done !== lastDone) {
             delayMs = MIN_DELAY
             lastDone = done
@@ -186,7 +192,11 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
             clearPoll()
             if (next.status === 'COMPLETED') {
               notify.success(
-                `Bulk labels done — ${next.successfulCount}/${next.totalCount} generated.`,
+                // BUG-036 — add a skipped-count tail so an all-already-labelled
+            // batch no longer reports "0/0 generated" with no explanation.
+            `Bulk labels done — ${next.successfulCount}/${next.totalCount} generated${
+              next.skippedCount ? ` · ${next.skippedCount} skipped (already labelled)` : ''
+            }.`,
               )
             } else if (next.status === 'CANCELLED') {
               notify.info(
@@ -300,7 +310,9 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
 
   const progress = job
     ? job.totalCount > 0
-      ? Math.round(((job.successfulCount + job.failedCount) / job.totalCount) * 100)
+      // BUG-036 — count skips in the "done" denominator so a batch of
+      // all-already-labelled orders reaches 100% instead of stalling.
+      ? Math.round(((job.successfulCount + job.failedCount + job.skippedCount) / job.totalCount) * 100)
       : 0
     : 0
 
