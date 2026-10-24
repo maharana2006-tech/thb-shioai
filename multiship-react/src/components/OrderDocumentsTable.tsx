@@ -214,6 +214,28 @@ export default function OrderDocumentsTable() {
       meta: { exportValue: (r: OrderDocumentRow) => r.generatedAt ?? '' },
     },
     {
+      // BUG-050 — pre-fix the CSV export had no Status column, so a totals-
+      // from-file calculation counted voided rows at full billed amount
+      // although the screen showed them struck-through. The on-screen
+      // Voided badge on the Order column scans at a glance; this column
+      // is the exportable truth that a spreadsheet can filter / sum on.
+      id: 'status',
+      header: 'Status',
+      enableSorting: false,
+      size: 80,
+      cell: ({ row }) => (
+        row.original.voided ? (
+          <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-600">VOIDED</span>
+        ) : (
+          <span className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-700">LIVE</span>
+        )
+      ),
+      meta: {
+        headerLabel: 'Status',
+        exportValue: (r: OrderDocumentRow) => r.voided ? 'VOIDED' : 'LIVE',
+      },
+    },
+    {
       id: 'billed',
       header: 'Billed',
       size: 100,
@@ -226,7 +248,15 @@ export default function OrderDocumentsTable() {
           )}
         </span>
       ),
-      meta: { exportValue: (r: OrderDocumentRow) => r.billableAmount ?? '' },
+      meta: {
+        // BUG-050 — voided rows export as "0" so a SUM() across the Billed
+        // column matches what the screen shows (struck-through = charge
+        // reversed). Pre-fix the exporter emitted the original billable
+        // and no status column, so operator-side spreadsheets totalled
+        // charges the system had already reversed.
+        exportValue: (r: OrderDocumentRow) =>
+          r.voided ? '0' : (r.billableAmount ?? ''),
+      },
     },
     {
       id: 'documents',
