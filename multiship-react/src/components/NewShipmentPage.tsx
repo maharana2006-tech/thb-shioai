@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import MpsProgressCard from './orders/MpsProgressCard'
 import { notify } from '../utils/notify'
 import { FiZap, FiArrowRight, FiArrowLeft, FiTruck, FiPackage, FiRotateCcw, FiCheckCircle, FiAlertTriangle, FiX } from 'react-icons/fi'
@@ -43,6 +44,12 @@ export type { ExtraPackage, NewShipmentItemRow }
 
 export default function NewShipmentPage() {
   const m = useNewShipmentModel()
+  // BUG-040 — inline error for "Return of #" when the typed order
+  // doesn't resolve. Lives here (not in the model) because it's a
+  // field-local UX concern — the operator sees the error on blur
+  // and clears it by editing the field. On submit, the BE validator
+  // is the authoritative belt-and-suspenders.
+  const [originalOrderNoError, setOriginalOrderNoError] = useState<string | null>(null)
   const {
     acceptWizardPayload, accountNumber, activeParties, carrier, carrierValidating, checklistOpen, clientCode, clientHasNoOwnCarriers, customFieldValues, destCountry, dgBlock, dgWizardOpen, dtcBatch, dtcLine, dtcLineId, editorSeed, fixError, fixLoading, fixOrderNo, fixVoided, incoterms, isInternational, isReturn, items, landedCostOpen, landedCostRequest, leaveForm, loading, mode, navigate, noCarriersAtAll, originalOrderNo, overrideEditorOpen, queuedInfo, recipient, residentialConflict, resubmitWithSplit, returnEmailMissing, returnPickupRequested, returnReason, returnType, reviewBusy, reviewShipmentAi, reviewWarnings, rmaNumber, sender, serviceId, setChecklistOpen, setCustomFieldValues, setDgBlock, setDgWizardOpen, setLandedCostOpen, setOriginalOrderNo, setOverride, setOverrideEditorOpen, setPendingSplitPayload, setReturnPickupRequested, setReturnReason, setReturnType, setReviewWarnings, setRmaNumber, setSender, setSplitPrompt, setToast, setWizardOpen, shipmentValidationResult, splitPrompt, submit, submitAttempted, submitting, switchMode, toast, validateShipment, validatedAt, validationGate, validationStale, weight, wizardOpen, wizardPayload,
   } = m
@@ -267,24 +274,42 @@ export default function NewShipmentPage() {
                       />
                     </label>
                     {/* Returns F12 — original order no this is a return of.
-                        Server validates existence; a typo lands as NULL. */}
-                    <label className="inline-flex cursor-text items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11.5px] font-semibold text-[#5a4526] shadow-sm">
+                        Server validates existence; a typo surfaces inline
+                        on blur (BUG-040). */}
+                    <label className={`inline-flex cursor-text items-center gap-1.5 rounded-xl border bg-white px-2.5 py-1 text-[11.5px] font-semibold shadow-sm ${
+                      originalOrderNoError
+                        ? 'border-rose-300 text-rose-800'
+                        : 'border-[#e3d9c4] text-[#5a4526]'
+                    }`}>
                       <span className="whitespace-nowrap">Return of #</span>
                       <input
                         type="number"
                         value={originalOrderNo}
-                        onChange={(e) => setOriginalOrderNo(e.target.value)}
+                        onChange={(e) => {
+                          setOriginalOrderNo(e.target.value)
+                          if (originalOrderNoError) setOriginalOrderNoError(null)
+                        }}
                         // R2-BUG-017 — fetch the original order on blur and
                         // backfill the customer block (sender in return mode)
                         // from its recipient. Operator typed the number; we
-                        // save them the retype.
+                        // save them the retype. BUG-040 — on 404, show inline
+                        // red error instead of silently dropping the digit;
+                        // operator must fix it before Validate / Generate.
                         onBlur={async (e) => {
                           const v = e.target.value.trim()
-                          if (!v || !Number.isFinite(Number(v))) return
+                          if (!v) { setOriginalOrderNoError(null); return }
+                          if (!Number.isFinite(Number(v)) || Number(v) <= 0) {
+                            setOriginalOrderNoError('Enter a valid order #.')
+                            return
+                          }
                           try {
                             const res = await orderService.getOrderWithLines(Number(v))
                             const o = res.data?.order
-                            if (!o) return
+                            if (!o) {
+                              setOriginalOrderNoError(`Order #${v} wasn't found. Fix the number or clear this field.`)
+                              return
+                            }
+                            setOriginalOrderNoError(null)
                             setSender((cur) => ({
                               ...cur,
                               name:         o.shipName ?? cur.name,
@@ -298,16 +323,21 @@ export default function NewShipmentPage() {
                               phone:        o.phone ?? cur.phone,
                             }))
                           } catch {
-                            // 404 or network: silently leave fields empty for
-                            // the operator to type. No toast — a stale typed
-                            // digit shouldn't bark.
+                            setOriginalOrderNoError(`Order #${v} wasn't found. Fix the number or clear this field.`)
                           }
                         }}
                         placeholder="optional"
                         min={1}
+                        aria-invalid={originalOrderNoError ? true : undefined}
+                        aria-describedby={originalOrderNoError ? 'original-order-no-error' : undefined}
                         className="w-24 border-0 bg-transparent p-0 text-[11.5px] font-semibold text-[#1f150c] placeholder:font-normal placeholder:text-[#a08f6c] focus:outline-none focus:ring-0"
                       />
                     </label>
+                    {originalOrderNoError ? (
+                      <span id="original-order-no-error" className="basis-full text-[11px] font-medium text-rose-700">
+                        {originalOrderNoError}
+                      </span>
+                    ) : null}
                     {/* Returns F11 — canonical reason picklist. Codes must
                         match CarrierServiceImpl.RETURN_REASON_CODES. */}
                     {/* BUG-067 — reason is required on return submit now
@@ -588,7 +618,7 @@ export default function NewShipmentPage() {
               <button
                 type="button"
                 onClick={() => void submit()}
-                disabled={submitting || noCarriersAtAll || residentialConflict || returnEmailMissing || !!validationGate}
+                disabled={submitting || noCarriersAtAll || residentialConflict || returnEmailMissing || !!validationGate || !!originalOrderNoError}
                 title={validationGate ? `${validationGate} Generate label unlocks after a successful check.` : (residentialConflict
                   ? 'FedEx Home Delivery requires the recipient to be marked as residential. Tick the checkbox on the recipient block, or pick a different service.'
                   : returnEmailMissing
