@@ -5857,7 +5857,15 @@ public class OrderImportServiceImpl implements OrderImportService {
         for (int i = 0; i < s.length(); i++) {
             char c = s.charAt(i);
             if (c <= 0x1F || c == 0x7F) continue;
-            if (c == '<' || c == '>' || c == '\\' || c == '|' || c == '`') continue;
+            // BUG-053 — preserve `<` and `>`. The previous strip was defensive
+            // XSS prevention, but React auto-escapes on render and JPA /
+            // Jackson store these as plain text safely; stripping them on
+            // import silently corrupted names like "Smith <Jr.>" with no
+            // operator feedback. Carriers that reject the chars will surface
+            // their own error at label time where the operator can act.
+            // `\`, `|`, `` ` `` stay stripped — they're less-common on real
+            // names and more likely to be stray export artefacts.
+            if (c == '\\' || c == '|' || c == '`') continue;
             sb.append(c);
         }
         String out = sb.toString().trim();
