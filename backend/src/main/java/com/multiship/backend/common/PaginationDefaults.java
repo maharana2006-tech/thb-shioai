@@ -26,6 +26,16 @@ public final class PaginationDefaults {
     /** Hard upper bound: any request for more is capped here. */
     public static final int MAX_SIZE = 100;
 
+    /**
+     * BUG-010 — bulk-export path cap. A one-off CSV export is a single
+     * operator action, not concurrent user load, so the DB-safety 100
+     * is pessimistic there — 342 serial requests for 34k orders was
+     * the symptom. Opt-in: callers set {@code export=true} on
+     * {@code /orders} to let the server return up to this many rows
+     * per page.
+     */
+    public static final int EXPORT_MAX_SIZE = 1000;
+
     /** String form for @RequestParam(defaultValue = ...) — the annotation
      *  requires a compile-time constant string. Kept in sync with DEFAULT_SIZE. */
     public static final String DEFAULT_SIZE_STR = "25";
@@ -42,5 +52,12 @@ public final class PaginationDefaults {
     public static int clamp(int size) {
         if (size <= 0) return DEFAULT_SIZE;
         return Math.min(size, MAX_SIZE);
+    }
+
+    /** BUG-010 — same semantics as {@link #clamp(int)} but with the
+     *  bulk-export ceiling of {@link #EXPORT_MAX_SIZE}. */
+    public static int clampExport(int size) {
+        if (size <= 0) return DEFAULT_SIZE;
+        return Math.min(size, EXPORT_MAX_SIZE);
     }
 }

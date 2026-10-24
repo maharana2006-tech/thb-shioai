@@ -253,7 +253,12 @@ public class OrderController {
             @Parameter(description = "Carrier: UPS | FEDEX | USPS | DHL") @RequestParam(required = false) String carrier,
             @Parameter(description = "Returns F3 — Y = returns only, N = shipments only, blank = all")
             @RequestParam(required = false) String isReturn,
-            @Parameter(description = "Attach the cascade's account pick (accountResolution) to each row") @RequestParam(defaultValue = "false") boolean includeResolution) {
+            @Parameter(description = "Attach the cascade's account pick (accountResolution) to each row") @RequestParam(defaultValue = "false") boolean includeResolution,
+            @Parameter(description = "BUG-010 — opt-in bulk-export path. Raises the per-page row cap from "
+                    + com.multiship.backend.common.PaginationDefaults.MAX_SIZE + " to "
+                    + com.multiship.backend.common.PaginationDefaults.EXPORT_MAX_SIZE
+                    + " for a single operator-triggered CSV dump. Normal UI calls omit this flag.")
+            @RequestParam(defaultValue = "false") boolean export) {
 
         if (!isValidSortBy(sortBy)) {
             sortBy = "orderNo";
@@ -266,7 +271,11 @@ public class OrderController {
                 .page(page)
                 // Sprint 51 AC-L1 — cap at PaginationDefaults.MAX_SIZE so a
                 // pathological ?size=100000 can't nuke the query.
-                .size(com.multiship.backend.common.PaginationDefaults.clamp(size))
+                // BUG-010 — export=true raises the ceiling to EXPORT_MAX_SIZE
+                // (1000) so the CSV loop doesn't need ~340 serial requests.
+                .size(export
+                        ? com.multiship.backend.common.PaginationDefaults.clampExport(size)
+                        : com.multiship.backend.common.PaginationDefaults.clamp(size))
                 .sortBy(sortBy)
                 .sortDirection(sortDirection)
                 .build();
