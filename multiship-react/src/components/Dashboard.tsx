@@ -20,6 +20,7 @@ import {
   FiZap,
 } from 'react-icons/fi'
 import { dashboardService, type DashboardData } from '../api/dashboardService'
+import { notify } from '../utils/notify'
 import { isAbortError } from '../api/apiClient'
 import { useAppSession } from '../hooks/useAppSession'
 import { canManageCarriers, normalizeRole } from '../utils/roles'
@@ -87,8 +88,13 @@ const initials = (name?: string | null) =>
     .map((p) => p[0]?.toUpperCase() ?? '')
     .join('') || '?'
 
-/** Tiny inline area sparkline — no chart library, stays in the design system. */
-function Sparkline({ points }: { points: number[] }) {
+/** Tiny inline area sparkline — no chart library, stays in the design system.
+ *
+ *  BUG-006 — each point now carries a native `<title>` for a hover
+ *  tooltip ("Mon Nov 3 · 42 labels") so operators can read the trend
+ *  without a popover. SVG `<title>` is the native-platform tooltip; a
+ *  JS popover would be overkill. */
+function Sparkline({ points, labels }: { points: number[]; labels?: string[] }) {
   const w = 260
   const h = 64
   const max = Math.max(1, ...points)
@@ -106,6 +112,11 @@ function Sparkline({ points }: { points: number[] }) {
       </defs>
       <path d={area} fill="url(#sparkFill)" />
       <path d={line} fill="none" stroke="#412d15" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      {xy.map(([x, y], i) => (
+        <circle key={i} cx={x} cy={y} r={6} fill="transparent" style={{ pointerEvents: 'all' }}>
+          <title>{labels?.[i] ? `${labels[i]} · ${points[i]} label${points[i] === 1 ? '' : 's'}` : `${points[i]}`}</title>
+        </circle>
+      ))}
       {xy.length ? (
         <circle cx={xy[xy.length - 1][0]} cy={xy[xy.length - 1][1]} r="3.5" fill="#1f150c" stroke="#fff" strokeWidth="1.5" />
       ) : null}
@@ -267,10 +278,17 @@ export default function Dashboard() {
         ok: health.customsGapLanes.length === 0,
         okText: 'Every international lane has a customs profile',
         warnText: `${health.customsGapLanes.length} lane${health.customsGapLanes.length === 1 ? '' : 's'} missing customs profiles`,
-        detail: health.customsGapLanes
-          .slice(0, 3)
-          .map((l) => `${l.client} → ${countryName(l.country)}`)
-          .join(' · '),
+        detail: (() => {
+          // BUG-006 — "+N more" suffix when there are extra lanes
+          // beyond the three the detail string previews. Prior UX
+          // silently hid them, so operators thought they'd fixed
+          // everything after addressing the visible three.
+          const shown = health.customsGapLanes.slice(0, 3)
+                .map((l) => `${l.client} → ${countryName(l.country)}`)
+                .join(' · ')
+          const extra = Math.max(0, health.customsGapLanes.length - 3)
+          return extra > 0 ? `${shown} · +${extra} more` : shown
+        })(),
         // Fix #309 — reference the settingsPaths registry so a route
         // rename lands here automatically. Prior hardcoded strings would
         // silently break if e.g. shipping-catalog split back into two
@@ -730,7 +748,12 @@ export default function Dashboard() {
             Labels · last 7 days
           </h3>
           <div className="mt-3">
-            <Sparkline points={(data?.trend ?? []).map((t) => t.count)} />
+            <Sparkline
+              points={(data?.trend ?? []).map((t) => t.count)}
+              labels={(data?.trend ?? []).map((t) =>
+                new Date(t.date + 'T00:00:00').toLocaleDateString('en-US',
+                  { weekday: 'short', month: 'short', day: 'numeric' }))}
+            />
           </div>
           <div className="mt-1 flex justify-between text-[10px] font-semibold uppercase tracking-wide text-slate-400">
             {(data?.trend ?? []).map((t) => (
@@ -751,7 +774,12 @@ export default function Dashboard() {
             {splitEntries.length ? (
               splitEntries.map(([carrier, count]) => {
                 const av = CARRIER_AVATAR[carrier] ?? { bg: 'bg-slate-600', mono: carrier.slice(0, 3) }
-                const pct = splitTotal ? Math.round((count / splitTotal) * 100) : 0
+                const rawPct = splitTotal ? (count / splitTotal) * 100 : 0
+                const pct = Math.round(rawPct)
+                // BUG-006 — a nonzero carrier that rounds to 0 would
+                // display "0%" and look identical to a dormant one.
+                // Signal "very small but present" with "<1%".
+                const pctDisplay = count > 0 && pct === 0 ? '<1%' : `${pct}%`
                 return (
                   <li key={carrier} className="flex items-center gap-2.5">
                     <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${av.bg} text-[9px] font-black tracking-wide text-white shadow-sm`}>
@@ -761,7 +789,7 @@ export default function Dashboard() {
                       <div className="flex items-baseline justify-between">
                         <span className="text-[12px] font-semibold text-slate-800">{carrier}</span>
                         <span className="text-[11.5px] tabular-nums text-slate-500">
-                          {count} · {pct}%
+                          {count} · {pctDisplay}
                         </span>
                       </div>
                       <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100">
@@ -838,6 +866,13 @@ export default function Dashboard() {
                         // number to the clipboard without navigation.
                         e.stopPropagation()
                         void navigator.clipboard.writeText(l.trackingNumber!)
+                          // BUG-006 — silent copy left operators
+                          // unsure whether the click did anything.
+                          .then(() => notify.success(`Copied ${l.trackingNumber}`))
+                          .catch(() => notify.info({
+                            title: "Can't copy",
+                            body: 'Clipboard access is blocked — check browser permissions.',
+                          }))
                       }}
                       aria-label={`Copy tracking number ${l.trackingNumber}`}
                       title="Copy tracking number"
