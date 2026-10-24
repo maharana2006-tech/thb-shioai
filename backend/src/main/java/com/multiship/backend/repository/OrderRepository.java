@@ -473,7 +473,12 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             CASE WHEN :sortBy = 'status' AND :sortDirection = 'ASC' THEN COALESCE(t.status, 'PENDING') END ASC,
             CASE WHEN :sortBy = 'status' AND :sortDirection = 'DESC' THEN COALESCE(t.status, 'PENDING') END DESC,
             CASE WHEN :sortBy = 'createdDate' AND :sortDirection = 'ASC' THEN b.created_date END ASC,
-            CASE WHEN :sortBy = 'createdDate' AND :sortDirection = 'DESC' THEN b.created_date END DESC
+            CASE WHEN :sortBy = 'createdDate' AND :sortDirection = 'DESC' THEN b.created_date END DESC,
+            -- BUG-008 tie-breaker: every primary sort column above except
+            -- orderNo has duplicates, so Postgres is free to shuffle rows
+            -- within a tie between fetches, which repeated / hid rows
+            -- across pages. order_no is unique → stable pagination.
+            b.order_no DESC
         OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
     """, nativeQuery = true)
     List<Object[]> findOrdersUnified(
