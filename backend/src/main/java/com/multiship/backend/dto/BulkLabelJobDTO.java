@@ -24,6 +24,17 @@ public class BulkLabelJobDTO {
     private int totalCount;
     private int successfulCount;
     private int failedCount;
+    /**
+     * BUG-036 — orders the worker touched but didn't buy a new label for
+     * (ALREADY_LABELED today; the DTO leaves room for other skip codes).
+     * Derived off {@code failureDetailsJson} at response-time —
+     * no new DB column. Pre-fix these were silently added to
+     * {@code successfulCount}, so a batch of all-already-labelled orders
+     * reported "1/1 generated" and offered a 22-byte empty ZIP. Now the
+     * toast says "0 generated · N skipped" and the download button is
+     * hidden when {@code successfulCount == 0}.
+     */
+    private int skippedCount;
     private String failureMessage;
     /**
      * Bulk MED — structured per-order failures for FE table-rendering.
