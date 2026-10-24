@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { notify } from '../../utils/notify'
+import { registerUnsavedWorkGuard } from '../../utils/unsavedWorkGuard'
 import { ApiError } from '../../api/apiClient'
 import {
   orderService,
@@ -2624,7 +2625,17 @@ export function useNewShipmentModel() {
     if (!formHasWork || submitting) return
     const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
     window.addEventListener('beforeunload', warn)
-    return () => window.removeEventListener('beforeunload', warn)
+    // BUG-030 — sidebar / topbar nav uses navigate() (not <Link>) so the
+    // browser's beforeunload prompt never fires. Register an async guard
+    // the layout chrome checks before any navigate() call.
+    registerUnsavedWorkGuard(() => notify.confirm(
+      "This shipment hasn't been created yet. Leave and lose what you've entered?",
+      { title: 'Leave this shipment?', confirmLabel: 'Leave', cancelLabel: 'Stay' },
+    ))
+    return () => {
+      window.removeEventListener('beforeunload', warn)
+      registerUnsavedWorkGuard(null)
+    }
   }, [formHasWork, submitting])
 
   // BUG-014: the sticky Validate/Generate footer is ~96 px above the viewport
