@@ -22,6 +22,7 @@ import {
 import { dashboardService, type DashboardData } from '../api/dashboardService'
 import { isAbortError } from '../api/apiClient'
 import { useAppSession } from '../hooks/useAppSession'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { canManageCarriers, normalizeRole } from '../utils/roles'
 import { countryName } from '../utils/countries'
 import { settingsPaths } from '../routes/workspaceRoutes'
@@ -119,6 +120,10 @@ function Sparkline({ points }: { points: number[] }) {
  * (ADMIN) · Row 4 activity. Self-refreshes — it's a queue board.
  */
 export default function Dashboard() {
+  // BUG-007 — set the browser tab title + announce a landmark heading
+  // for screen readers. Pre-fix the tab read "multiship-react" (Vite
+  // boilerplate) and the page had no <h1>.
+  useDocumentTitle('Dashboard')
   const navigate = useNavigate()
   const { username, role } = useAppSession()
   // Fix F3 — use the shared role helper so a future role rename or
@@ -399,6 +404,11 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-4 pb-16">
+      {/* BUG-007 — screen-reader landmark. The visible greeting below
+          is design-styled as an <h2>; a dedicated <h1> gives assistive
+          tech an unambiguous "you are on the Dashboard" cue without
+          disturbing the visual composition. */}
+      <h1 className="sr-only">Dashboard</h1>
       {/* ===== greeting header ===== */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
