@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import {
   FiAlertTriangle,
   FiCheckCircle,
@@ -32,7 +32,9 @@ import {
  */
 export interface DangerousGoodsWizardProps {
   value: DangerousGoodsBlock | null
-  onChange: (next: DangerousGoodsBlock) => void
+  /** BUG-031 — accepts null so Cancel can roll back to "not attached"
+   *  when the operator opened the modal with no prior hazmat. */
+  onChange: (next: DangerousGoodsBlock | null) => void
   onComplete: (payload: DangerousGoodsBlock) => void
   onCancel: () => void
 }
@@ -81,6 +83,22 @@ export default function DangerousGoodsWizard({
 }: DangerousGoodsWizardProps) {
   const current = value ?? blankBlock()
 
+  // BUG-031 — every keystroke in the wizard patches the parent's
+  // dangerousGoods block via onChange, so a mid-typing Cancel used
+  // to leave the parent with "Hazmat attached · 1 commodity" from
+  // an incomplete declaration. Snapshot the inbound value at mount
+  // and replay it on cancel so Cancel is a true undo.
+  // Null snapshot captured faithfully — "wasn't attached" is the
+  // state Cancel must restore to.
+  const snapshotRef = useRef<DangerousGoodsBlock | null>(value)
+  const handleCancel = () => {
+    // Replay only when the state diverged — avoids a redundant
+    // onChange(null → null) when the operator opened + bounced
+    // the modal without typing.
+    if (snapshotRef.current !== value) onChange(snapshotRef.current)
+    onCancel()
+  }
+
   const errors = useMemo(() => validate(current), [current])
   const canSave = errors.length === 0
 
@@ -108,7 +126,7 @@ export default function DangerousGoodsWizard({
       aria-modal="true"
       aria-label="Dangerous goods declaration"
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4"
-      onClick={onCancel}
+      onClick={handleCancel}
     >
       <div
         className="flex h-[min(760px,92vh)] w-full max-w-[820px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]"
@@ -129,7 +147,7 @@ export default function DangerousGoodsWizard({
           </div>
           <button
             type="button"
-            onClick={onCancel}
+            onClick={handleCancel}
             aria-label="Close"
             className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50"
           >
@@ -288,7 +306,7 @@ export default function DangerousGoodsWizard({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={onCancel}
+              onClick={handleCancel}
               className="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-700 hover:bg-slate-50"
             >
               Cancel
