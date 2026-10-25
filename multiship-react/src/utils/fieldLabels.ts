@@ -17,11 +17,19 @@ const ITEM: Record<string, string> = {
   quantity: 'quantity', unitValue: 'unit value',
 }
 
-/** "recipient.name" → "Ship to name"; "items[1].hsCode" → "Item 2 HS code"; unknown → null. */
-export function fieldLabelFor(path: string): string | null {
+/** "recipient.name" → "Ship to name"; "items[1].hsCode" → "Item 2 HS code"; unknown → null.
+ *
+ *  BUG-041 — in return mode the two address blocks are "Return from · customer"
+ *  and "Return to · your address", not "Ship from" / "Ship to", so a toast
+ *  that reads "Ship from name" leaves the operator hunting the wrong block.
+ *  Pass `opts.isReturn = true` to flip the sender / recipient labels. */
+export function fieldLabelFor(path: string, opts?: { isReturn?: boolean }): string | null {
   const addr = /^(sender|recipient)\.(\w+)$/.exec(path)
   if (addr) {
-    const block = addr[1] === 'sender' ? 'Ship from' : 'Ship to'
+    const isSender = addr[1] === 'sender'
+    const block = opts?.isReturn
+      ? (isSender ? 'Return from' : 'Return to')
+      : (isSender ? 'Ship from' : 'Ship to')
     return ADDRESS[addr[2]] ? `${block} ${ADDRESS[addr[2]]}` : block
   }
   const item = /^items\[(\d+)\]\.(\w+)$/.exec(path)

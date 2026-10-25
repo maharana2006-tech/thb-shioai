@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { notify } from '../../utils/notify'
+import { registerUnsavedWorkGuard } from '../../utils/unsavedWorkGuard'
 import { ApiError } from '../../api/apiClient'
 import {
   orderService,
@@ -137,10 +138,19 @@ export function useNewShipmentModel() {
   // Fix-a-failed-order mode: /orders/new?fixOrder=900046 pre-fills this form
   // with the failed order's data + carrier error, and submitting regenerates
   // that same order in place instead of creating a new one.
-  const fixOrderNo = (() => {
+  const urlFixOrderNo = (() => {
     const n = Number(searchParams.get('fixOrder'))
     return Number.isInteger(n) && n > 0 ? n : null
   })()
+  // BUG-033 — when the first submit creates an ERROR order (carrier
+  // rejects before the label mints), the server returns the message
+  // "(saved as order N)" and we auto-flip into fix-mode for that N.
+  // The next click of Generate then regenerates the saved order
+  // instead of creating a sibling ERROR row every time. Kept out of
+  // the URL on purpose so the prefill effect at line ~1021 doesn't
+  // re-fetch + clobber what the operator already has in-form.
+  const [impliedFixOrderNo, setImpliedFixOrderNo] = useState<number | null>(null)
+  const fixOrderNo = urlFixOrderNo ?? impliedFixOrderNo
   // Phase 3b — wire-relevant fields live in one reducer; the setters keep
   // React's setState contract so every handler below is unchanged.
   const { form, setters: formSetters } = useManualShipment({ isReturnPath })
@@ -1018,21 +1028,26 @@ export function useNewShipmentModel() {
   // clobber them.
   const pendingFixRef = useRef<{ serviceCode?: string | null; accountNumber?: string | null } | null>(null)
   useEffect(() => {
-    if (!fixOrderNo) return
+    // BUG-033 — bind to urlFixOrderNo (the operator landed here with
+    // ?fixOrder=N), NOT the OR'd fixOrderNo. If this effect also fired
+    // after impliedFixOrderNo was set from a failed submit, it would
+    // re-fetch the just-created ERROR order and clobber everything
+    // the operator currently has typed in-form.
+    if (!urlFixOrderNo) return
     let cancelled = false
     ;(async () => {
       try {
         const [details, byId, customs, cfValues] = await Promise.all([
-          orderService.getOrderWithLines(fixOrderNo),
-          orderService.getOrderById(fixOrderNo).catch(() => null),
-          customsService.getCustoms(fixOrderNo).catch(() => null),
+          orderService.getOrderWithLines(urlFixOrderNo),
+          orderService.getOrderById(urlFixOrderNo).catch(() => null),
+          customsService.getCustoms(urlFixOrderNo).catch(() => null),
           // R2-BUG-008 run-5 residual — carry the stored custom-field
           // values across to the reissue form. Pre-fix this was never
           // fetched, so a required field (qa_1018e_dept = "Dept-42")
           // showed as blank and blocked Generate until the operator
           // retyped. 404 / null degrades gracefully to no prefill —
           // same as the other optional-fetch siblings above.
-          customFieldService.values(fixOrderNo).catch(() => null),
+          customFieldService.values(urlFixOrderNo).catch(() => null),
         ])
         if (cancelled) return
         const o = details.data.order
@@ -1045,7 +1060,11 @@ export function useNewShipmentModel() {
         const bareNo = !!o.shipName && /^\d+$/.test(o.shipName.trim()) && !!o.shipAttn?.trim()
         setRecipient({
           name: (bareNo ? o.shipAttn : o.shipName) ?? '', company: bareNo ? '' : o.shipAttn ?? '', phone: o.phone ?? '', email: '',
-          addressLine1: o.shipAddr1 ?? '', addressLine2: '', city: o.shiptoCity ?? '',
+          // BUG-034 — Order.location persists the recipient's Address line 2
+          // (manual/API path). Pre-fix this was hard-coded to '', so Fix &
+          // regenerate / Reissue label sent an empty line 2 back and wiped
+          // the stored suite/apt from the order + the printed label.
+          addressLine1: o.shipAddr1 ?? '', addressLine2: o.shipAddr2 ?? '', city: o.shiptoCity ?? '',
           state: o.shiptoState ?? '', postalCode: o.shiptoZip ?? '', countryCode: recipCountry,
           phoneCountryCode: dialCodeFor(recipCountry) || '',
         })
@@ -1115,12 +1134,30 @@ export function useNewShipmentModel() {
         if (cfValues && Object.keys(cfValues).length > 0) {
           setCustomFieldValues(cfValues)
         }
+        // BUG-034 — return-flow Reason + RMA# live on Order.return_reason /
+        // Order.rma_number (columns since Returns F9). Pre-fix the Reissue
+        // return form opened with both blank, so the operator had to retype
+        // a required field and risked losing the RMA on a second save.
+        if (o.returnReason) setReturnReason(o.returnReason)
+        if (o.rmaNumber) setRmaNumber(o.rmaNumber)
         pendingFixRef.current = {
           serviceCode: o.shipviaCd,
           accountNumber: details.data.carrierAccount?.accountNumber ?? null,
         }
         setFixError(byId?.data?.errorDetails?.errorMessage ?? null)
-        setFixVoided((byId?.data?.labelDetails?.status ?? '').toUpperCase() === 'VOIDED')
+        const voided = (byId?.data?.labelDetails?.status ?? '').toUpperCase() === 'VOIDED'
+        setFixVoided(voided)
+        // BUG-035 — if the operator browser-Back'd into a fix URL for
+        // an order that's now GENERATED (common path: Fix &
+        // regenerate succeeds → navigate to /label/N → operator hits
+        // Back), there's nothing to fix. Redirect to the label page
+        // with replace so Back/Back doesn't bounce back here. Voided
+        // orders stay in fix-mode because that's the Reissue flow.
+        const orderStatus = (byId?.data?.orderDetails?.status ?? '').toUpperCase()
+        if (orderStatus === 'GENERATED' && !voided) {
+          navigate(`/label/${fixOrderNo}`, { replace: true })
+          return
+        }
         const ch = (o.orderChannel ?? '').toUpperCase()
         setFixChannel(ch === 'D2C' || ch === 'B2B' ? ch : null)
         // Older D2C orders stored "DTC batch 98.00 / tote 2".
@@ -1128,13 +1165,13 @@ export function useNewShipmentModel() {
           setReference(byId.data.orderDetails.refOrderNumber.replace(/^(DTC batch \d+)\.0+(?=\s|$)/, '$1'))
         }
       } catch (err) {
-        if (!cancelled) notify.apiError(err, `Could not load order ${fixOrderNo} to fix.`)
+        if (!cancelled) notify.apiError(err, `Could not load order ${urlFixOrderNo} to fix.`)
       } finally {
         if (!cancelled) setFixLoading(false)
       }
     })()
     return () => { cancelled = true }
-  }, [fixOrderNo, setAesCitation, setCarrier, setClientCode, setCurrency, setCustomFieldValues, setDeclaredValue, setDimUnit, setExportDeclarationReference, setFixChannel, setFtrExemption, setHeight, setIncoterms, setItems, setLength, setReasonForExport, setRecipient, setReference, setSender, setWeight, setWeightUnit, setWidth])
+  }, [urlFixOrderNo, setAesCitation, setCarrier, setClientCode, setCurrency, setCustomFieldValues, setDeclaredValue, setDimUnit, setExportDeclarationReference, setFixChannel, setFtrExemption, setHeight, setIncoterms, setItems, setLength, setReasonForExport, setRecipient, setReference, setReturnReason, setRmaNumber, setSender, setWeight, setWeightUnit, setWidth])
 
   // Apply the stashed service/account once the carrier's catalog is loaded.
   useEffect(() => {
@@ -2496,7 +2533,19 @@ export function useNewShipmentModel() {
         widthIn: Number(width) || undefined,
         heightIn: Number(height) || undefined,
         packageCode: pkgName,
-        incoterm: incoterms,
+        // BUG-026 — incoterm is a customs concept; sending it on a
+        // domestic shipment (fromCountry === toCountry) makes the model
+        // think the parcel is dutiable and fire a HIGH "missing importer
+        // of record" warning on a US→US parcel. The sticky-save
+        // (ms:lastIncoterms at line 2003) was leaking the last intl
+        // value onto every subsequent domestic shipment too.
+        incoterm: isInternational ? (incoterms || undefined) : undefined,
+        // BUG-026 (b) — flag that an importer is resolved (operator
+        // override OR per-client profile) so the model doesn't fire
+        // "importer of record missing" on a shipment where the
+        // operator already picked one. Pre-fix this field was never
+        // set, so the BE prompt saw "no importer" on every intl ship.
+        importerProvided: isInternational ? !!vImp : undefined,
         items: isInternational
           ? items
               .filter((it) => it.description.trim())
@@ -2521,7 +2570,10 @@ export function useNewShipmentModel() {
   const flattenErrors = (node: unknown, path = ''): string[] => {
     if (!node) return []
     if (typeof node === 'string') {
-      const where = fieldLabelFor(path)
+      // BUG-041 — in return mode the UI blocks are "Return from" / "Return
+      // to", not "Ship from" / "Ship to". Pass isReturn so the toast names
+      // the block the operator is actually looking at.
+      const where = fieldLabelFor(path, { isReturn })
       return [where && !/^Box \d+:/.test(node) ? `${where}: ${node.charAt(0).toLowerCase()}${node.slice(1)}` : node]
     }
     if (Array.isArray(node)) return node.flatMap((n, i) => flattenErrors(n, `${path}[${i}]`))
@@ -2568,7 +2620,13 @@ export function useNewShipmentModel() {
         return
       }
       notify.success(res.message || `Shipment split into ${res.data?.orderNo ? 'multiple' : 'N'} labels.`)
-      navigate(orderNo ? `/label/${orderNo}` : '/orders')
+      // BUG-035 — in fix-mode, replace the fix URL so browser Back
+      // doesn't reopen "Fixing failed order #N" for an order that's now
+      // GENERATED (Validate then correctly flags the order's own
+      // reference as "already shipped on #N", which looks like a
+      // self-conflict to the operator).
+      navigate(orderNo ? `/label/${orderNo}` : '/orders',
+          fixOrderNo ? { replace: true } : undefined)
     } catch (e) {
       settlePendingAttempt(e)
       const raw = e instanceof ApiError
@@ -2624,7 +2682,17 @@ export function useNewShipmentModel() {
     if (!formHasWork || submitting) return
     const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
     window.addEventListener('beforeunload', warn)
-    return () => window.removeEventListener('beforeunload', warn)
+    // BUG-030 — sidebar / topbar nav uses navigate() (not <Link>) so the
+    // browser's beforeunload prompt never fires. Register an async guard
+    // the layout chrome checks before any navigate() call.
+    registerUnsavedWorkGuard(() => notify.confirm(
+      "This shipment hasn't been created yet. Leave and lose what you've entered?",
+      { title: 'Leave this shipment?', confirmLabel: 'Leave', cancelLabel: 'Stay' },
+    ))
+    return () => {
+      window.removeEventListener('beforeunload', warn)
+      registerUnsavedWorkGuard(null)
+    }
   }, [formHasWork, submitting])
 
   // BUG-014: the sticky Validate/Generate footer is ~96 px above the viewport
@@ -2784,7 +2852,9 @@ export function useNewShipmentModel() {
           : `${rest.length} queued shipments remaining — loaded the next one.`)
         return
       }
-      navigate(orderNo ? `/label/${orderNo}` : '/orders')
+      // BUG-035 — see sibling resubmitWithSplit branch above.
+      navigate(orderNo ? `/label/${orderNo}` : '/orders',
+          fixOrderNo ? { replace: true } : undefined)
     } catch (e) {
       // A reload mid-purchase aborts the request; only a server answer
       // settles the attempt, otherwise the next mount looks it up.
@@ -2835,7 +2905,22 @@ export function useNewShipmentModel() {
         // and keep the payload in the console for debugging. Preserve the
         // "(saved as order N)" locator so the operator can find the row.
         console.debug('[manual-label] carrier rejection:', raw)
-        const savedAs = raw.match(/\(saved as order \d+\)/)?.[0]
+        const savedAsMatch = raw.match(/\(saved as order (\d+)\)/)
+        const savedAs = savedAsMatch?.[0]
+        // BUG-033 — when the server minted an ERROR order to carry the
+        // operator's typed data (so the row shows up in Orders > Failed
+        // for later triage), auto-flip the FE into fix-mode for that
+        // order. The NEXT Generate click then regenerates in place
+        // (POST /shipments/{N}/attempts) instead of creating sibling
+        // ERROR rows one per retry. Only triggers when we're not
+        // already in fix-mode via the URL — defence against a bad
+        // regex ever shadowing the operator's intent.
+        if (savedAsMatch && !urlFixOrderNo) {
+          const savedOrderNo = Number(savedAsMatch[1])
+          if (Number.isInteger(savedOrderNo) && savedOrderNo > 0) {
+            setImpliedFixOrderNo(savedOrderNo)
+          }
+        }
         notify.error({
           title: 'The carrier rejected this shipment',
           body: summarizeCarrierError(raw) + (savedAs ? ` ${savedAs}` : ''),

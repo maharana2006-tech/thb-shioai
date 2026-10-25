@@ -81,12 +81,18 @@ public class LabelArtifactService {
                         p.getTrackingNumber(), p.getTrackingUrl(), p.getCreatedAt()))
                 .toList();
 
+        // BUG-049 — once an order is voided, state must read VOIDED on
+        // the Label API so the FE stops offering Download/Print on it
+        // and GET /orders/{n} agrees with GET /labels/{n}.
+        boolean voided = tracking.map(t -> "VOIDED".equalsIgnoreCase(t.getStatus())).orElse(false);
+        String state = voided ? "VOIDED" : (pkgs.isEmpty() ? "PENDING" : "GENERATED");
+        // BUG-028 — flag an order as having customs data so the FE can
+        // gate the Commercial-invoice button on international orders.
         boolean hasCustoms = orderCustomsRepository != null
                 && orderCustomsRepository.findByOrderNoIgnoreCase(String.valueOf(orderNo)).isPresent();
-
         return Optional.of(new LabelArtifactDTO(
                 orderNo,
-                pkgs.isEmpty() ? "PENDING" : "GENERATED",
+                state,
                 carrier,
                 environment,
                 tracking.map(OrderTracking::getLabelGeneratedAt).orElse(null),
@@ -94,14 +100,30 @@ public class LabelArtifactService {
                 hasCustoms));
     }
 
+    /**
+     * BUG-049 — true when the order's tracking row has been voided.
+     * Public so {@link LabelPrintableService} and any other label-byte
+     * caller can short-circuit before returning the stored bytes; the
+     * stored label stays on disk (audit) but no new copy ships out of
+     * the download or print paths once the carrier has reversed it.
+     */
+    public boolean isVoided(Integer orderNo) {
+        if (orderNo == null) return false;
+        return orderTrackingRepository.findByOrderNo(orderNo)
+                .map(t -> "VOIDED".equalsIgnoreCase(t.getStatus()))
+                .orElse(false);
+    }
+
     public Optional<LabelPackage> pkg(Integer orderNo, Integer seq) {
         if (orderNo == null || seq == null || seq < 1) return Optional.empty();
+        if (isVoided(orderNo)) return Optional.empty();
         return labelPackageRepository.findByOrderNoAndSequenceNumber(orderNo, seq);
     }
 
     /** Every package row for the order, in sequence order. */
     public List<LabelPackage> packages(Integer orderNo) {
         if (orderNo == null) return List.of();
+        if (isVoided(orderNo)) return List.of();
         return labelPackageRepository.findByOrderNoOrderBySequenceNumberAsc(orderNo);
     }
 
@@ -118,6 +140,7 @@ public class LabelArtifactService {
     /** All packages' ZPL blocks concatenated with a newline — thermal
      *  printers spool consecutive {@code ^XA…^XZ} blocks in order. */
     public Optional<byte[]> zplAll(Integer orderNo) {
+        if (isVoided(orderNo)) return Optional.empty();
         List<LabelPackage> pkgs = labelPackageRepository.findByOrderNoOrderBySequenceNumberAsc(orderNo);
         StringBuilder out = new StringBuilder();
         boolean any = false;

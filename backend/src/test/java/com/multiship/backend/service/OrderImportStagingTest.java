@@ -63,6 +63,10 @@ class OrderImportStagingTest {
             return u;
         });
         when(upRepo.findById(anyLong())).thenAnswer(inv -> Optional.ofNullable(uploads.get((Long) inv.getArgument(0))));
+        // BUG-046 — saveStaging now acquires a pessimistic lock on the
+        // staging-upload row via findByIdForUpdate before reading rows.
+        // Mock mirrors findById so the test's in-memory map answers both.
+        when(upRepo.findByIdForUpdate(anyLong())).thenAnswer(inv -> Optional.ofNullable(uploads.get((Long) inv.getArgument(0))));
         when(upRepo.findFirstByContentHashAndStatusOrderByIdDesc(any(), any())).thenAnswer(inv -> uploads.values().stream()
                 .filter(u -> java.util.Objects.equals(u.getContentHash(), inv.getArgument(0)) && inv.getArgument(1).equals(u.getStatus()))
                 .max(Comparator.comparingLong(ImportStagingUpload::getId)));

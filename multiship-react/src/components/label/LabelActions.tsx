@@ -122,10 +122,26 @@ export function LabelActions({ artifact, activeSeq }: { artifact: LabelArtifact;
   const h2 = 'mb-2 font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-[#b6a684]'
   const pkgHint = total > 1 ? `pkg ${activeSeq}` : null
 
+  // BUG-049 — once an order is voided the stored label is kept for
+  // audit, but the Print / Copy ZPL / Download .zpl / Download PDF
+  // actions must not surface: the voided bytes can't ship. The backend
+  // also 404s each of these endpoints when tracking.status=VOIDED, so
+  // this is defence in depth. A reissue flips state back to GENERATED
+  // and the actions reappear on the regenerated label.
+  const voided = artifact.state === 'VOIDED'
+
   return (
     <>
       <section className="rounded-2xl border border-[#e3d9c4] bg-white px-4 py-3" aria-label="Label actions">
         <h2 className={h2}>Actions</h2>
+        {voided ? (
+          <p data-testid="label-voided-notice"
+             className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[12.5px] text-amber-900">
+            This label was voided. The stored copy is kept for audit;
+            Print / Download / Copy ZPL are off. Reissue the label to
+            print again.
+          </p>
+        ) : (
         <div className="grid gap-2">
           <button
             type="button"
@@ -154,6 +170,7 @@ export function LabelActions({ artifact, activeSeq }: { artifact: LabelArtifact;
             {hint(total > 1 ? `${total} pages` : '.pdf')}
           </button>
         </div>
+        )}
 
         {fallbackZpl !== null && (
           <div className="mt-3">
