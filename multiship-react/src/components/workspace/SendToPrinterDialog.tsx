@@ -35,6 +35,18 @@ export default function SendToPrinterDialog({
     return () => { alive = false }
   }, [])
 
+  // BUG-018 — Esc closes the dialog. Backdrop click + X button already
+  // worked; this brings parity with the other modals (Close out day,
+  // Void labels, Split shipment). While sending, Esc is ignored so a
+  // partially-committed print isn't abandoned mid-flight.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !sending) onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose, sending])
+
   const choices = (printers ?? []).filter((p) => docType === 'LABEL' || p.format !== 'ZPL')
   // A printer picked for labels may not print invoices; fall back to client routing.
   const target = destination !== 'client' && choices.some((p) => String(p.id) === destination) ? destination : 'client'

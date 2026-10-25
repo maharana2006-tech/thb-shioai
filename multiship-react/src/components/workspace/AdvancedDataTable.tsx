@@ -42,6 +42,8 @@ import {
   FiChevronUp,
   FiChevronLeft,
   FiChevronRight,
+  FiChevronsLeft,
+  FiChevronsRight,
   FiColumns,
   FiDownload,
   FiRotateCcw,
@@ -374,6 +376,11 @@ export default function AdvancedDataTable<T extends RowData>({
   const [internalSorting, setInternalSorting] = useState<SortingState>([])
   const [internalPageIndex, setInternalPageIndex] = useState(0)
   const [internalPageSize, setInternalPageSize] = useState(initialPageSize)
+  // BUG-011 — Export used to re-fire on rapid double-clicks because the
+  // button carried no disabled state during the (potentially long)
+  // handleExport call. Track it here so the toolbar button is
+  // self-contained — every parent that passes `onExport` benefits.
+  const [exporting, setExporting] = useState(false)
   // In manual mode, the parent owns sort + pagination; in default mode we
   // keep our own state so existing pages don't have to change anything.
   const sorting = manualSorting && sortingProp ? sortingProp : internalSorting
@@ -561,23 +568,44 @@ export default function AdvancedDataTable<T extends RowData>({
   const totalRows = totalRowCount ?? table.getPreFilteredRowModel().rows.length
   const visibleColumnCount = table.getVisibleLeafColumns().length
 
-  const runExport = () => {
-    // Server-side export: the parent fetches every filtered row and downloads it.
-    if (onExport) {
-      // BUG-038 — snapshot the visible leaf columns so the server-side
-      // export call can filter the CSV to match what's on screen.
-      const visibleIds = table.getVisibleLeafColumns().map((c) => c.id)
-      void onExport(visibleIds)
-      return
+  const runExport = async () => {
+    // BUG-011 — short-circuit a double-click while the previous export
+    // is still running. Pre-fix clicking twice fired two full export
+    // loops in parallel.
+    if (exporting) return
+    setExporting(true)
+    try {
+      // Server-side export: the parent fetches every filtered row and downloads it.
+      if (onExport) {
+        // BUG-038 — snapshot the visible leaf columns so the server-side
+        // export call can filter the CSV to match what's on screen.
+        const visibleIds = table.getVisibleLeafColumns().map((c) => c.id)
+        await onExport(visibleIds)
+        return
+      }
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+      downloadCsv(`${csvFilename || tableKey}-${stamp}.csv`, exportRowValues(table))
+    } finally {
+      setExporting(false)
     }
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-    downloadCsv(`${csvFilename || tableKey}-${stamp}.csv`, exportRowValues(table))
   }
 
   const resetLayout = () => {
     clearLayout(tableKey)
     setColumnOrder(defaultOrder)
-    setColumnVisibility(defaultVisibility)
+    // BUG-009 — pre-fix Reset wrote `defaultVisibility`, which is
+    // derived from `initialHiddenColumns`. On the Orders list those
+    // auto-hide via data heuristics (e.g. "every row has null
+    // batchId → hide the Batch column"), so Reset snapped the Batch
+    // column back to false even when the operator had deliberately
+    // enabled it. Operator read it as "Reset hid my column".
+    //
+    // Reset means "undo my layout tweaks" → every column visible.
+    // The initial-hidden heuristic still applies on first mount
+    // (persisted layout null → defaultVisibility seeds state) but
+    // Reset is an explicit "show me everything" moment. The operator
+    // can re-hide via the Columns menu.
+    setColumnVisibility({})
     setColumnSizing({})
     // BUG-074 — Reset layout used to clear pinning to { start:[], end:[] }
     // which unpinned the row-actions column (meta.pinnedByDefault='end')
@@ -943,12 +971,18 @@ export default function AdvancedDataTable<T extends RowData>({
 
         <button
           type="button"
-          onClick={runExport}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
-          title="Export the current view as CSV — visible columns, filtered rows"
+          onClick={() => { void runExport() }}
+          disabled={exporting}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-50"
+          title={exporting
+            ? 'Export running — hang on while the server collects every row'
+            : 'Export the current view as CSV — visible columns, filtered rows'}
+          aria-busy={exporting ? true : undefined}
         >
-          <FiDownload className="h-3.5 w-3.5" />
-          Export
+          {exporting
+            ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#5a4526]" />
+            : <FiDownload className="h-3.5 w-3.5" />}
+          {exporting ? 'Exporting…' : 'Export'}
         </button>
 
         {toolbarActions}
@@ -968,6 +1002,19 @@ export default function AdvancedDataTable<T extends RowData>({
             ))}
           </select>
           <div className="flex items-center gap-1">
+            {/* BUG-016 — First / Last pager alongside the existing
+                Prev / Next. On a 30-page result set the operator used
+                to click Next 29 times to reach the end; now one click. */}
+            <button
+              type="button"
+              onClick={() => table.setPageIndex(0)}
+              disabled={!table.getCanPreviousPage()}
+              aria-label="First page"
+              title="First page"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#5a4526] transition hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <FiChevronsLeft className="h-3.5 w-3.5" />
+            </button>
             <button
               type="button"
               onClick={() => table.previousPage()}
@@ -988,6 +1035,16 @@ export default function AdvancedDataTable<T extends RowData>({
               className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#5a4526] transition hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40"
             >
               <FiChevronRight className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => table.setPageIndex(Math.max(0, pageCount - 1))}
+              disabled={!table.getCanNextPage()}
+              aria-label="Last page"
+              title="Last page"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#5a4526] transition hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <FiChevronsRight className="h-3.5 w-3.5" />
             </button>
           </div>
         </div>

@@ -143,6 +143,15 @@ public class ShipmentAiService {
     }
 
     // ── Shipment (top): pre-ship sanity review ──────────────────────────────────
+    // BUG-026 — the prompt previously flagged "missing importer of record"
+    // whenever an Incoterm was in the snapshot, regardless of route. The
+    // FE sticky-saved the operator's last Incoterm into localStorage and
+    // sent it on every subsequent request including domestic ones, so a
+    // US→US parcel fired a HIGH importer-missing warning. The FE now
+    // omits Incoterm when fromCountry == toCountry; this prompt wording
+    // adds a belt-and-braces "ignore customs checks for domestic
+    // shipments" instruction so a stray Incoterm doesn't trip the model
+    // when the International line clearly says "no".
     private static final String REVIEW_PROMPT = """
         You are a shipping QA reviewer. Given a shipment snapshot, list concrete
         problems that would cause a customs hold, a rejected label, or an overpay.
@@ -151,7 +160,15 @@ public class ShipmentAiService {
         Incoterm — DAP delivers duty-unpaid and DDP duty-paid, both still need an
         importer of record), zero/blank declared values, and incoterm/route
         mismatches. When flagging a missing importer, phrase it for the actual
-        Incoterm in the snapshot, not a hard-coded "DDP". Return ONLY JSON:
+        Incoterm in the snapshot, not a hard-coded "DDP".
+
+        IMPORTANT — domestic shipments: when the "International" line reads
+        "no" (fromCountry == toCountry), DO NOT flag missing importer of
+        record, missing HS code, missing customs value, or Incoterm issues.
+        Customs checks only apply to international lanes. Ignore any
+        Incoterm value present on a domestic snapshot; treat it as noise.
+
+        Return ONLY JSON:
         { "warnings": [ { "severity": "high|medium|low", "field": "short field name",
           "message": "one clear sentence" } ] }
         Return an empty array if nothing is wrong. Do not invent issues; only flag
@@ -169,10 +186,17 @@ public class ShipmentAiService {
         sb.append("Dimensions (in) L×W×H: ").append(orQ(req.getLengthIn())).append(" × ")
                 .append(orQ(req.getWidthIn())).append(" × ").append(orQ(req.getHeightIn())).append('\n');
         sb.append("Package: ").append(orQ(req.getPackageCode())).append('\n');
-        sb.append("Incoterm: ").append(orQ(req.getIncoterm())).append('\n');
-        sb.append("Importer of record provided: ").append(Boolean.TRUE.equals(req.getImporterProvided()) ? "yes" : "no").append('\n');
         boolean intl = req.getFromCountry() != null && req.getToCountry() != null
                 && !req.getFromCountry().trim().equalsIgnoreCase(req.getToCountry().trim());
+        // BUG-026 — strip customs context from the prompt on domestic
+        // shipments so a sticky Incoterm leaking through from a prior
+        // intl shipment can't trip the importer-missing check even if
+        // the FE regresses the omit-on-domestic guard.
+        if (intl) {
+            sb.append("Incoterm: ").append(orQ(req.getIncoterm())).append('\n');
+            sb.append("Importer of record provided: ")
+                    .append(Boolean.TRUE.equals(req.getImporterProvided()) ? "yes" : "no").append('\n');
+        }
         sb.append("International: ").append(intl ? "yes" : "no").append('\n');
         sb.append("Items:\n");
         if (req.getItems() == null || req.getItems().isEmpty()) {

@@ -130,7 +130,20 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
     else invalidLines.push(line)
   }
 
-  const canSubmit = Boolean(form.carrierCode && parsedTracking.length > 0)
+  // BUG-017 — the date <input> can be blank (operator cleared it) or an
+  // invalid partial like "2026-0" / "99999-01-01". Guard both submit
+  // paths — pre-fix the confirm rendered "? " in the date slot and
+  // sent an unparseable string downstream.
+  const dateValid = Boolean(
+    form.closeDate
+      && /^\d{4}-\d{2}-\d{2}$/.test(form.closeDate)
+      && !Number.isNaN(new Date(form.closeDate).getTime()),
+  )
+  const canSubmit = Boolean(form.carrierCode && parsedTracking.length > 0 && dateValid)
+  const closeDatePretty = dateValid
+    ? new Date(`${form.closeDate}T00:00:00`).toLocaleDateString(undefined,
+        { year: 'numeric', month: 'short', day: 'numeric' })
+    : null
 
   const notifyResult = (d: ManifestResponse | null, wholeDay: boolean) => {
     if (d?.status === 'MANIFESTED') {
@@ -170,11 +183,12 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
   // carrier (the backend gathers the day's open labels) rather than only the
   // typed/selected trackings. Same POST /manifests/close-day path.
   const submitWholeDay = async () => {
-    if (!form.carrierCode) return
+    if (!form.carrierCode || !dateValid) return
     // BUG-012 — this closes EVERY open label for the carrier/date across all
     // clients and can't be undone, so make the operator confirm first.
+    // BUG-017 — show the parsed/formatted date in the confirm, never "? ".
     const ok = await notify.confirm(
-      `Close every open ${form.carrierCode} label for ${form.closeDate}? ` +
+      `Close every open ${form.carrierCode} label for ${closeDatePretty}? ` +
       `This manifests all clients' open shipments for that day and can't be undone.`)
     if (!ok) return
     setSubmitting(true)
@@ -260,7 +274,14 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
               <Field label="Close date">
                 <input type="date" className={inputCls}
                        value={form.closeDate ?? ''}
+                       min="2020-01-01" max="2099-12-31"
+                       aria-invalid={!dateValid ? true : undefined}
                        onChange={(e) => update({ closeDate: e.target.value })} />
+                {!dateValid ? (
+                  <p className="mt-1 text-[10.5px] font-semibold text-rose-700">
+                    Pick a date before closing — the manifest needs one.
+                  </p>
+                ) : null}
               </Field>
             </div>
           </Section>
@@ -332,9 +353,11 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
 
         {/* footer */}
         <div className="flex items-center justify-between gap-2 border-t border-[#eee6d6] px-5 py-3">
-          <button type="button" disabled={!form.carrierCode || submitting}
+          <button type="button" disabled={!form.carrierCode || !dateValid || submitting}
                   onClick={() => void submitWholeDay()}
-                  title={`Close every open ${form.carrierCode} label for ${form.closeDate} (ignores the list above)`}
+                  title={dateValid
+                    ? `Close every open ${form.carrierCode} label for ${closeDatePretty} (ignores the list above)`
+                    : 'Pick a close date first.'}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-[#cdbf9f] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0] disabled:opacity-40">
             <FiCalendar className="h-3.5 w-3.5" />
             Close whole day

@@ -354,22 +354,29 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
     /** The order's client is unregistered (or inactive) — generation prompts to add the client. */
     String RESOLUTION_CLIENT_MISSING_SQL = "(NOT " + OCD_ANY_SQL + " AND NOT " + CLIENT_OK_SQL + ")";
 
+    // BUG-012 — ESCAPE '\\' on every LIKE so a literal '%' or '_' typed
+    // into search doesn't act as a wildcard. OrderServiceImpl escapes
+    // the five LIKE-bound params (:keyword, :customer, :city,
+    // :orderNoLike, :tracking) via escapeLike() before binding; the
+    // ESCAPE clauses here are what makes those escapes take effect.
+    // Pairs with the convention established in
+    // AuditLogRepositoryCustomImpl + ClientRepository.
     String UNIFIED_FILTER_SQL = """
         WHERE (:status = '' OR COALESCE(t.status, 'PENDING') = :status OR (:status = 'ERROR' AND t.status = 'FAILED'))
           AND (:tenantId = '' OR UPPER(COALESCE(b.tenant_id, b.cust_no)) = :tenantId)
           AND (:keyword = ''
-               OR CAST(b.order_no AS TEXT) LIKE CONCAT('%', :keyword, '%')
-               OR CAST(COALESCE(b.batch_id, 0) AS TEXT) LIKE CONCAT('%', :keyword, '%')
-               OR LOWER(b.shipto_city) LIKE LOWER(CONCAT('%', :keyword, '%'))
-               OR LOWER(b.cust_no) LIKE LOWER(CONCAT('%', :keyword, '%'))
-               OR LOWER(COALESCE(t.tracking_number, '')) LIKE LOWER(CONCAT('%', :keyword, '%'))
-               OR LOWER(COALESCE(b.customer_ref, '')) LIKE LOWER(CONCAT('%', :keyword, '%')))
-          AND (:customer = '' OR LOWER(COALESCE(b.tenant_id, b.cust_no)) LIKE LOWER(CONCAT('%', :customer, '%')))
+               OR CAST(b.order_no AS TEXT) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\'
+               OR CAST(COALESCE(b.batch_id, 0) AS TEXT) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\'
+               OR LOWER(b.shipto_city) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\'
+               OR LOWER(b.cust_no) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\'
+               OR LOWER(COALESCE(t.tracking_number, '')) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\'
+               OR LOWER(COALESCE(b.customer_ref, '')) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\')
+          AND (:customer = '' OR LOWER(COALESCE(b.tenant_id, b.cust_no)) LIKE LOWER(CONCAT('%', :customer, '%')) ESCAPE '\\')
           AND (:city = ''
-               OR LOWER(b.shipto_city) LIKE LOWER(CONCAT('%', :city, '%'))
-               OR LOWER(COALESCE(b.shipto_state, '')) LIKE LOWER(CONCAT('%', :city, '%')))
-          AND (:orderNoLike = '' OR CAST(b.order_no AS TEXT) LIKE CONCAT('%', :orderNoLike, '%'))
-          AND (:tracking = '' OR LOWER(COALESCE(t.tracking_number, '')) LIKE LOWER(CONCAT('%', :tracking, '%')))
+               OR LOWER(b.shipto_city) LIKE LOWER(CONCAT('%', :city, '%')) ESCAPE '\\'
+               OR LOWER(COALESCE(b.shipto_state, '')) LIKE LOWER(CONCAT('%', :city, '%')) ESCAPE '\\')
+          AND (:orderNoLike = '' OR CAST(b.order_no AS TEXT) LIKE CONCAT('%', :orderNoLike, '%') ESCAPE '\\')
+          AND (:tracking = '' OR LOWER(COALESCE(t.tracking_number, '')) LIKE LOWER(CONCAT('%', :tracking, '%')) ESCAPE '\\')
           AND (:batchIdEq = '' OR CAST(COALESCE(b.batch_id, 0) AS TEXT) = :batchIdEq)
           AND (:createdFrom = '' OR b.created_date >= TO_DATE(NULLIF(:createdFrom, ''), 'YYYY-MM-DD'))
           AND (:createdTo = '' OR b.created_date <= TO_DATE(NULLIF(:createdTo, ''), 'YYYY-MM-DD'))
@@ -474,7 +481,12 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             CASE WHEN :sortBy = 'status' AND :sortDirection = 'ASC' THEN COALESCE(t.status, 'PENDING') END ASC,
             CASE WHEN :sortBy = 'status' AND :sortDirection = 'DESC' THEN COALESCE(t.status, 'PENDING') END DESC,
             CASE WHEN :sortBy = 'createdDate' AND :sortDirection = 'ASC' THEN b.created_date END ASC,
-            CASE WHEN :sortBy = 'createdDate' AND :sortDirection = 'DESC' THEN b.created_date END DESC
+            CASE WHEN :sortBy = 'createdDate' AND :sortDirection = 'DESC' THEN b.created_date END DESC,
+            -- BUG-008 tie-breaker: every primary sort column above except
+            -- orderNo has duplicates, so Postgres is free to shuffle rows
+            -- within a tie between fetches, which repeated / hid rows
+            -- across pages. order_no is unique → stable pagination.
+            b.order_no DESC
         OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
     """, nativeQuery = true)
     List<Object[]> findOrdersUnified(

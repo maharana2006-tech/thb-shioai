@@ -70,8 +70,15 @@ public class CarrierApiLoggingInterceptor implements ClientHttpRequestIntercepto
             int status = response.getStatusCode().value();
             String responseBody = redact(readBodySafely(response));
             long latency = System.currentTimeMillis() - start;
+            // BUG-022 — populate errorMessage on non-2xx so the Carrier
+            // API Log row's structured error field is searchable and
+            // dashboards don't have to pattern-match the response body.
+            // The response body is kept whole on responseBody; this is
+            // a short summary (CarrierApiLogService clamps to ERR_MAX
+            // anyway, so an over-long body gets truncated to a prefix).
+            String errorMessage = status >= 400 ? responseBody : null;
             logService.record(carrier, method, url, requestBody, responseBody,
-                    status, (int) latency, null, orderNo, tracking, requestId);
+                    status, (int) latency, errorMessage, orderNo, tracking, requestId);
             return response;
         } catch (IOException | RuntimeException ex) {
             long latency = System.currentTimeMillis() - start;

@@ -530,4 +530,96 @@ class OrderServiceImplTest {
         assertEquals(15L, all);
     }
 
+    /* -------- BUG-012: SQL LIKE wildcard escape -------- */
+
+    /**
+     * BUG-012 (QA 2026-10-23) — a literal {@code '%'} typed into search
+     * previously matched every row (34,133 orders), and {@code 'QA_'}
+     * matched {@code 'QA-'} because the underscore acts as any-single-
+     * char. Service now escapes {@code \ % _} before binding; the SQL
+     * carries {@code ESCAPE '\\'} on every LIKE so the escape takes effect.
+     */
+    @Test
+    void searchKeywordEscapesPercentAndUnderscore() {
+        OrderListFilters f = emptyFilters();
+        f.setSearch("QA_20261020-%");
+
+        service.listOrders(f, false, page(0, 20));
+
+        ArgumentCaptor<String> keyword = ArgumentCaptor.forClass(String.class);
+        verify(orderRepository).findOrdersUnified(
+                anyString(), anyString(), keyword.capture(), anyString(),
+                anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyInt(), anyInt(), anyString(), anyString());
+        assertEquals("QA\\_20261020-\\%", keyword.getValue(),
+                "literal % and _ must be backslash-escaped before binding to :keyword");
+    }
+
+    @Test
+    void customerFilterEscapesLikeWildcards() {
+        OrderListFilters f = emptyFilters();
+        f.setCustomer("MK%L");
+
+        service.listOrders(f, false, page(0, 20));
+
+        ArgumentCaptor<String> customer = ArgumentCaptor.forClass(String.class);
+        verify(orderRepository).findOrdersUnified(
+                anyString(), anyString(), anyString(), anyString(),
+                customer.capture(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyInt(), anyInt(), anyString(), anyString());
+        assertEquals("MK\\%L", customer.getValue());
+    }
+
+    @Test
+    void existingBackslashInKeywordIsDoubled() {
+        // A legitimate backslash in a reference ("QA\\INT") must become
+        // "QA\\\\INT" on the wire so Postgres unescapes it back to the
+        // original single backslash under ESCAPE '\\'.
+        OrderListFilters f = emptyFilters();
+        f.setSearch("QA\\INT");
+
+        service.listOrders(f, false, page(0, 20));
+
+        ArgumentCaptor<String> keyword = ArgumentCaptor.forClass(String.class);
+        verify(orderRepository).findOrdersUnified(
+                anyString(), anyString(), keyword.capture(), anyString(),
+                anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyInt(), anyInt(), anyString(), anyString());
+        assertEquals("QA\\\\INT", keyword.getValue());
+    }
+
+    @Test
+    void plainKeywordLeftUntouched() {
+        OrderListFilters f = emptyFilters();
+        f.setSearch("Austin");
+
+        service.listOrders(f, false, page(0, 20));
+
+        ArgumentCaptor<String> keyword = ArgumentCaptor.forClass(String.class);
+        verify(orderRepository).findOrdersUnified(
+                anyString(), anyString(), keyword.capture(), anyString(),
+                anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyInt(), anyInt(), anyString(), anyString());
+        assertEquals("Austin", keyword.getValue());
+    }
+
+    @Test
+    void emptyKeywordPassesThroughAsEmptyString() {
+        // The service's "no filter" sentinel is "" — the SQL branches
+        // skip the LIKE when :keyword = ''. escapeLike must preserve
+        // that sentinel.
+        OrderListFilters f = emptyFilters(); // no search set
+
+        service.listOrders(f, false, page(0, 20));
+
+        verify(orderRepository).findOrdersUnified(
+                anyString(), anyString(), eq(""), anyString(),
+                anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyInt(), anyInt(), anyString(), anyString());
+    }
 }

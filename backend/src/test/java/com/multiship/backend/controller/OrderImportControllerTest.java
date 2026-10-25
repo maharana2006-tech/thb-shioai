@@ -430,9 +430,55 @@ class OrderImportControllerTest {
         assertTrue(disposition.contains("import-batch-" + slug + "-"));
         assertTrue(disposition.endsWith(".csv\""));
         String body = response.getContentAsString();
-        assertTrue(body.startsWith("rowNumber,orderRef,clientCode,"), "header first");
-        assertTrue(body.contains("1,ORD-001,ACME,"), "row 1");
-        assertTrue(body.contains("2,ORD-002,ACME,"), "row 2");
+        // BUG-048 — header now carries the four post-generation columns
+        // (orderNo / status / tracking / errors) alongside the imported
+        // fields, so an operator can reconcile a batch after generation.
+        assertTrue(body.startsWith("rowNumber,orderNo,status,tracking,orderRef,clientCode,"),
+                "header starts with the generation + imported columns, found: "
+                        + body.substring(0, Math.min(100, body.length())));
+        // Row data: generation slots empty when the row hasn't shipped yet
+        // (1,,,,ORD-001,ACME,...); orderRef + clientCode still present.
+        assertTrue(body.contains("1,,,,ORD-001,ACME,"), "row 1");
+        assertTrue(body.contains("2,,,,ORD-002,ACME,"), "row 2");
+    }
+
+    @Test
+    void historyRowsExport_writesGeneratedColumnsForShippedRows() throws Exception {
+        // BUG-048 — after Generate labels: orderNo / status / tracking /
+        // errors columns populate so the operator can reconcile which
+        // rows shipped and which failed.
+        String slug = slugFor(42L);
+        OrderImportRowDTO shipped = new OrderImportRowDTO();
+        shipped.setRowNumber(1);
+        shipped.setOrderRef("ORD-100");
+        shipped.setClientCode("ACME");
+        shipped.setGeneratedOrderNo(900100);
+        shipped.setGeneratedStatus("GENERATED");
+        shipped.setGeneratedTrackingNumber("1Z999AA10123456784");
+        OrderImportRowDTO failed = new OrderImportRowDTO();
+        failed.setRowNumber(2);
+        failed.setOrderRef("ORD-101");
+        failed.setClientCode("ACME");
+        failed.setGeneratedStatus("FAILED");
+        failed.setErrors(List.of("recipient postal code is required",
+                "declared value is required"));
+        com.multiship.backend.dto.ImportBatchRowsPageDTO page =
+                com.multiship.backend.dto.ImportBatchRowsPageDTO.builder()
+                        .rows(List.of(shipped, failed))
+                        .total(2L).all(2L).attention(1L).pending(0L).clientCodes(List.of("ACME"))
+                        .build();
+        when(orderImportService.historyRows(eq(42L), any(), any(), any(), eq(0), anyInt()))
+                .thenReturn(page);
+
+        var response = new org.springframework.mock.web.MockHttpServletResponse();
+        controller.historyRowsExport(slug, "all", null, response);
+
+        String body = response.getContentAsString();
+        assertTrue(body.contains("1,900100,GENERATED,1Z999AA10123456784,ORD-100,ACME,"),
+                "shipped row carries generated columns, body=" + body);
+        // Errors joined with " | "; CSV-quoted because the field contains spaces + pipes.
+        assertTrue(body.contains("recipient postal code is required | declared value is required"),
+                "failed row's errors joined, body=" + body);
     }
 
     @Test

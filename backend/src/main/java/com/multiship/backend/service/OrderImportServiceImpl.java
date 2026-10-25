@@ -1972,6 +1972,104 @@ public class OrderImportServiceImpl implements OrderImportService {
         }
     }
 
+    /**
+     * BUG-044 (QA 2026-10-23) — pre-fix, a 36-character recipient name
+     * passed Upload &amp; validate and Validate-all, then failed at
+     * Generate with "Name exceeds the 35-character carrier limit".
+     * The 35-char ceiling is the lower bound across UPS / FedEx / DHL
+     * (UPS caps at 35 → carrier error 120201; FedEx and DHL are 35-45);
+     * {@link ShipmentValidationService#checkCarrierLengthLimits}
+     * enforces it on the per-shipment Validate path for manual
+     * shipments. Mirror the same checks on the bulk-import row so
+     * the operator sees "fix this cell" at Validate-all time instead
+     * of after half the batch has been labelled.
+     *
+     * <p>Fields checked: {@code recipientName}, {@code recipientCompany},
+     * {@code addressLine1}, {@code addressLine2}, {@code reference}.
+     * Sender fields are owned by the warehouse / client defaults, not
+     * the row, so they're covered by the manual-shipment path's own
+     * validator.
+     *
+     * <p>Reproduces the same message shape ShipmentValidationService
+     * emits so a reviewer tracing a complaint sees the identical text
+     * whichever flow surfaced it.
+     */
+    private void flagRowFieldLengths(List<OrderImportRowDTO> rows) {
+        if (rows == null) return;
+        for (OrderImportRowDTO r : rows) {
+            if ("GENERATED".equalsIgnoreCase(r.getGeneratedStatus())) continue;
+            flagLength(r, r.getRecipientName(), "Name");
+            flagLength(r, r.getRecipientCompany(), "Company");
+            flagLength(r, r.getAddressLine1(), "Address line 1");
+            flagLength(r, r.getAddressLine2(), "Address line 2");
+            flagLength(r, r.getReference(), "Reference");
+        }
+    }
+
+    /** BUG-044 — one-field length check; mirrors ShipmentValidationService.CARRIER_FIELD_MAX. */
+    private static final int BULK_ROW_FIELD_MAX = 35;
+
+    private static void flagLength(OrderImportRowDTO row, String value, String label) {
+        if (value == null) return;
+        if (value.length() > BULK_ROW_FIELD_MAX) {
+            addError(row, label + " exceeds the " + BULK_ROW_FIELD_MAX
+                    + "-character carrier limit (currently " + value.length() + ").");
+        }
+    }
+
+    /**
+     * BUG-045 (QA 2026-10-23) — pre-fix, two rows sharing one customer
+     * reference (the file's {@code reference} column, aka {@code GROUP_ID}
+     * on the client-layout CSV) passed Upload &amp; validate and
+     * Validate-all, then one row failed at Generate with
+     * "This reference is already in use on a GENERATED label" after the
+     * other row had already purchased a label. The DB unique-reference
+     * constraint fires per-shipment, so two different shipments collide
+     * at label time; the operator discovers the clash with only one
+     * fixable path (edit the file + re-upload) and the Bulk Mailer
+     * silently reports the batch as partially generated.
+     *
+     * <p>Rule (operator decision 2026-10-24): a non-blank
+     * {@code reference} may only appear on rows of ONE shipment group.
+     * If two distinct order groups ({@link #groupKeyOf}, i.e. orderRef)
+     * share one reference, both groups are errored — the operator must
+     * fix the file before Save. Rows sharing orderRef AND reference stay
+     * valid (they're line items of one shipment, which the existing
+     * validateBusinessRules enforces).
+     *
+     * <p>Rows with blank {@code reference} are ignored here: each falls
+     * back to its own {@code orderRef} downstream (one shipment, one
+     * reference, no clash). Already-generated rows are also ignored —
+     * a re-validate of a saved batch mustn't error on its own history.
+     */
+    private void flagWithinImportDuplicateReferences(List<OrderImportRowDTO> rows) {
+        if (rows == null || rows.size() < 2) return;
+        Map<String, java.util.Set<String>> groupsByRef = new LinkedHashMap<>();
+        Map<String, List<OrderImportRowDTO>> rowsByRef = new LinkedHashMap<>();
+        for (OrderImportRowDTO r : rows) {
+            if (!StringUtils.hasText(r.getReference())) continue;
+            if ("GENERATED".equalsIgnoreCase(r.getGeneratedStatus())) continue;
+            String refKey = r.getReference().trim().toUpperCase(Locale.ROOT);
+            String groupKey = groupKeyOf(r);
+            groupsByRef.computeIfAbsent(refKey, k -> new java.util.LinkedHashSet<>()).add(groupKey);
+            rowsByRef.computeIfAbsent(refKey, k -> new ArrayList<>()).add(r);
+        }
+        for (var entry : groupsByRef.entrySet()) {
+            if (entry.getValue().size() < 2) continue;
+            String ref = rowsByRef.get(entry.getKey()).get(0).getReference().trim();
+            String rowNos = rowsByRef.get(entry.getKey()).stream()
+                    .map(OrderImportRowDTO::getRowNumber)
+                    .filter(java.util.Objects::nonNull)
+                    .sorted()
+                    .map(String::valueOf)
+                    .collect(java.util.stream.Collectors.joining(", "));
+            String msg = "reference " + ref + " is used on multiple shipments in this file (rows "
+                    + rowNos + ") — only one shipment can own a reference. "
+                    + "Edit the file so each shipment uses a unique reference.";
+            for (OrderImportRowDTO r : rowsByRef.get(entry.getKey())) addError(r, msg);
+        }
+    }
+
     public void flagOrderRefsAlreadyGenerated(List<OrderImportRowDTO> rows) {
         if (importBatchRepository == null || rows == null || rows.isEmpty()) return;
         Map<String, List<OrderImportRowDTO>> byRef = new LinkedHashMap<>();
@@ -2611,6 +2709,8 @@ public class OrderImportServiceImpl implements OrderImportService {
         validateBusinessRules(rows);
         validateCustomFields(rows);
         validateInternationalItems(rows);
+        flagRowFieldLengths(rows);
+        flagWithinImportDuplicateReferences(rows);
         return success(buildPreview(rows), rows.size() + " row(s) validated.");
     }
 
@@ -5857,7 +5957,15 @@ public class OrderImportServiceImpl implements OrderImportService {
         for (int i = 0; i < s.length(); i++) {
             char c = s.charAt(i);
             if (c <= 0x1F || c == 0x7F) continue;
-            if (c == '<' || c == '>' || c == '\\' || c == '|' || c == '`') continue;
+            // BUG-053 — preserve `<` and `>`. The previous strip was defensive
+            // XSS prevention, but React auto-escapes on render and JPA /
+            // Jackson store these as plain text safely; stripping them on
+            // import silently corrupted names like "Smith <Jr.>" with no
+            // operator feedback. Carriers that reject the chars will surface
+            // their own error at label time where the operator can act.
+            // `\`, `|`, `` ` `` stay stripped — they're less-common on real
+            // names and more likely to be stray export artefacts.
+            if (c == '\\' || c == '|' || c == '`') continue;
             sb.append(c);
         }
         String out = sb.toString().trim();
@@ -7316,10 +7424,25 @@ public class OrderImportServiceImpl implements OrderImportService {
     }
 
     @Override
+    @org.springframework.transaction.annotation.Transactional
     public ApiResponse<StagingUploadDTO> saveStaging(Long id, String requestedBy, boolean includeErrors,
                                                      boolean allowDuplicate) {
-        ImportStagingUpload up = findStaging(id, requestedBy);
+        // BUG-046 — pessimistic lock on the staging-upload row so concurrent
+        // POST /staging/{id}/save requests serialise. Three simultaneous
+        // calls previously minted three ImportBatch rows (one per call) and
+        // the extras couldn't be generated. The lock holds until this
+        // @Transactional commits; the loser then re-reads via
+        // {@code findByUploadIdOrderByRowNoAsc} below and trips the
+        // existing "Everything in this upload is already saved" guard at
+        // line ~7351 with a 422 instead of inserting a duplicate.
+        if (stagingUploadRepository == null || id == null) {
+            return stagingFailure(HttpStatus.NOT_FOUND, "Upload not found — it may have expired or been discarded.");
+        }
+        ImportStagingUpload up = stagingUploadRepository.findByIdForUpdate(id).orElse(null);
         if (up == null) return stagingFailure(HttpStatus.NOT_FOUND, "Upload not found — it may have expired or been discarded.");
+        if (!canAccessStaging(up, requestedBy)) {
+            throw new org.springframework.security.access.AccessDeniedException("This upload belongs to another user.");
+        }
         List<ImportStagingRow> ents = stagingRowRepository.findByUploadIdOrderByRowNoAsc(up.getId());
         List<OrderImportRowDTO> rows = readStagingRows(ents);
         requireMatch(firstClientCode(rows));
