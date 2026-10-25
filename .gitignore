@@ -99,3 +99,6 @@ docs/audits/multiship-qa-2026-10-18-run4-testcases.xlsx
 docs/audits/multiship-qa-2026-10-18-run5-db-checks.sql
 docs/audits/multiship-qa-2026-10-18-run5-report.md
 docs/audits/multiship-qa-2026-10-18-run5-testcases.xlsx
+docs/audits/multiship_Test_Report_*.html
+docs/audits/multiship_rootcause_*.md
+docs/audits/multiship_slim_working.html
