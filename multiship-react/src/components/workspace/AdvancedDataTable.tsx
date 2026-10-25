@@ -42,6 +42,8 @@ import {
   FiChevronUp,
   FiChevronLeft,
   FiChevronRight,
+  FiChevronsLeft,
+  FiChevronsRight,
   FiColumns,
   FiDownload,
   FiRotateCcw,
@@ -1000,6 +1002,19 @@ export default function AdvancedDataTable<T extends RowData>({
             ))}
           </select>
           <div className="flex items-center gap-1">
+            {/* BUG-016 — First / Last pager alongside the existing
+                Prev / Next. On a 30-page result set the operator used
+                to click Next 29 times to reach the end; now one click. */}
+            <button
+              type="button"
+              onClick={() => table.setPageIndex(0)}
+              disabled={!table.getCanPreviousPage()}
+              aria-label="First page"
+              title="First page"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#5a4526] transition hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <FiChevronsLeft className="h-3.5 w-3.5" />
+            </button>
             <button
               type="button"
               onClick={() => table.previousPage()}
@@ -1020,6 +1035,16 @@ export default function AdvancedDataTable<T extends RowData>({
               className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#5a4526] transition hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40"
             >
               <FiChevronRight className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => table.setPageIndex(Math.max(0, pageCount - 1))}
+              disabled={!table.getCanNextPage()}
+              aria-label="Last page"
+              title="Last page"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#5a4526] transition hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <FiChevronsRight className="h-3.5 w-3.5" />
             </button>
           </div>
         </div>

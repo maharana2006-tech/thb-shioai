@@ -1648,6 +1648,10 @@ export default function OrdersWorkspace() {
       },
       meta: {
         headerLabel: 'Order #',
+        // BUG-016 — the Order # is the row's identity; hiding it leaves
+        // every row visually equal and operators lose their place. Pin
+        // it alongside Select / Actions in the hard-visible set.
+        hideable: false,
         exportValue: (o: Order) => o.orderDetails.orderNo,
       },
     })
