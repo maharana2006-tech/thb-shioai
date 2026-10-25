@@ -96,7 +96,15 @@ export function LabelActions({ artifact, activeSeq }: { artifact: LabelArtifact;
       const blob = await orderService.getCommercialInvoicePdf(orderNo)
       window.open(URL.createObjectURL(blob), '_blank', 'noopener')
     } catch (err) {
-      void notify.apiError(err, 'This order has no commercial invoice — it is international-only.')
+      // BUG-028 — 422 means "no customs data" (domestic). Treat it as a
+      // benign info toast rather than the red "Something went wrong"
+      // apiError produces. 404 and the rest keep the error styling.
+      const status = (err as { status?: number } | null)?.status
+      if (status === 422) {
+        notify.info('This order has no commercial invoice — only international shipments do.')
+      } else {
+        void notify.apiError(err, "Couldn't fetch the commercial invoice.")
+      }
     } finally {
       setBusy(null)
     }
@@ -201,11 +209,18 @@ export function LabelActions({ artifact, activeSeq }: { artifact: LabelArtifact;
               Track on carrier site
             </button>
           )}
-          <button type="button" onClick={() => void openInvoice()} disabled={busy !== null} className={btn}>
-            <FiFileText className={icon} />
-            {busy === 'invoice' ? 'Fetching…' : 'Commercial invoice'}
-            {hint('international')}
-          </button>
+          {/* BUG-028 — only international orders have a commercial invoice;
+              the flag is sourced from order_customs on the server. Pre-fix
+              the button appeared on every label page and a domestic click
+              returned 422 which the generic apiError handler rendered as
+              a red "Something went wrong" toast. */}
+          {artifact.hasCommercialInvoice ? (
+            <button type="button" onClick={() => void openInvoice()} disabled={busy !== null} className={btn}>
+              <FiFileText className={icon} />
+              {busy === 'invoice' ? 'Fetching…' : 'Commercial invoice'}
+              {hint('international')}
+            </button>
+          ) : null}
         </div>
       </section>
 
