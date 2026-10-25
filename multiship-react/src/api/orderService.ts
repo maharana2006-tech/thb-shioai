@@ -212,6 +212,12 @@ export interface OrderWithLines {
   shipFromResolved?: boolean | null
   /** 'Y'|'N' — cross-border classification recorded at label time. */
   intlYn?: string | null
+  /** BUG-034 — Returns F9 Order.return_reason, mirrored on OrderWithLines
+   *  so the Reissue-return / Fix-return prefill restores the required
+   *  Reason picklist. Null on outbound shipments. */
+  returnReason?: string | null
+  /** BUG-034 — Returns F9 Order.rma_number. See `returnReason`. */
+  rmaNumber?: string | null
   /** Sprint 29 — multi-package count column on the order (1 for legacy single-box). */
   packageCount?: number | null
   /** Sprint 29 — per-package rows (tracking / weight / dims) when this is a multi-package shipment. */

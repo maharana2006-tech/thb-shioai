@@ -2017,6 +2017,59 @@ public class OrderImportServiceImpl implements OrderImportService {
         }
     }
 
+    /**
+     * BUG-045 (QA 2026-10-23) — pre-fix, two rows sharing one customer
+     * reference (the file's {@code reference} column, aka {@code GROUP_ID}
+     * on the client-layout CSV) passed Upload &amp; validate and
+     * Validate-all, then one row failed at Generate with
+     * "This reference is already in use on a GENERATED label" after the
+     * other row had already purchased a label. The DB unique-reference
+     * constraint fires per-shipment, so two different shipments collide
+     * at label time; the operator discovers the clash with only one
+     * fixable path (edit the file + re-upload) and the Bulk Mailer
+     * silently reports the batch as partially generated.
+     *
+     * <p>Rule (operator decision 2026-10-24): a non-blank
+     * {@code reference} may only appear on rows of ONE shipment group.
+     * If two distinct order groups ({@link #groupKeyOf}, i.e. orderRef)
+     * share one reference, both groups are errored — the operator must
+     * fix the file before Save. Rows sharing orderRef AND reference stay
+     * valid (they're line items of one shipment, which the existing
+     * validateBusinessRules enforces).
+     *
+     * <p>Rows with blank {@code reference} are ignored here: each falls
+     * back to its own {@code orderRef} downstream (one shipment, one
+     * reference, no clash). Already-generated rows are also ignored —
+     * a re-validate of a saved batch mustn't error on its own history.
+     */
+    private void flagWithinImportDuplicateReferences(List<OrderImportRowDTO> rows) {
+        if (rows == null || rows.size() < 2) return;
+        Map<String, java.util.Set<String>> groupsByRef = new LinkedHashMap<>();
+        Map<String, List<OrderImportRowDTO>> rowsByRef = new LinkedHashMap<>();
+        for (OrderImportRowDTO r : rows) {
+            if (!StringUtils.hasText(r.getReference())) continue;
+            if ("GENERATED".equalsIgnoreCase(r.getGeneratedStatus())) continue;
+            String refKey = r.getReference().trim().toUpperCase(Locale.ROOT);
+            String groupKey = groupKeyOf(r);
+            groupsByRef.computeIfAbsent(refKey, k -> new java.util.LinkedHashSet<>()).add(groupKey);
+            rowsByRef.computeIfAbsent(refKey, k -> new ArrayList<>()).add(r);
+        }
+        for (var entry : groupsByRef.entrySet()) {
+            if (entry.getValue().size() < 2) continue;
+            String ref = rowsByRef.get(entry.getKey()).get(0).getReference().trim();
+            String rowNos = rowsByRef.get(entry.getKey()).stream()
+                    .map(OrderImportRowDTO::getRowNumber)
+                    .filter(java.util.Objects::nonNull)
+                    .sorted()
+                    .map(String::valueOf)
+                    .collect(java.util.stream.Collectors.joining(", "));
+            String msg = "reference " + ref + " is used on multiple shipments in this file (rows "
+                    + rowNos + ") — only one shipment can own a reference. "
+                    + "Edit the file so each shipment uses a unique reference.";
+            for (OrderImportRowDTO r : rowsByRef.get(entry.getKey())) addError(r, msg);
+        }
+    }
+
     public void flagOrderRefsAlreadyGenerated(List<OrderImportRowDTO> rows) {
         if (importBatchRepository == null || rows == null || rows.isEmpty()) return;
         Map<String, List<OrderImportRowDTO>> byRef = new LinkedHashMap<>();
@@ -2657,6 +2710,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         validateCustomFields(rows);
         validateInternationalItems(rows);
         flagRowFieldLengths(rows);
+        flagWithinImportDuplicateReferences(rows);
         return success(buildPreview(rows), rows.size() + " row(s) validated.");
     }
 

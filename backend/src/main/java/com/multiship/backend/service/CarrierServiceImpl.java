@@ -2798,6 +2798,17 @@ public class CarrierServiceImpl implements CarrierService {
                     errOrder.setIsError(true);
                     errOrder.setIsManual("Y");
                     errOrder.setIsReturn(Boolean.TRUE.equals(req.getIsReturn()) ? "Y" : "N");
+                    // BUG-034 — persist Returns F9 Reason + RMA on the ERROR
+                    // row too, so the Reissue-return / Fix-return prefill can
+                    // restore the required Reason picklist on retry. Pre-fix
+                    // these were skipped on the error branch, so the operator
+                    // had to retype them on every Fix & regenerate.
+                    if (StringUtils.hasText(req.getReturnReason())) {
+                        errOrder.setReturnReason(req.getReturnReason());
+                    }
+                    if (StringUtils.hasText(req.getRmaNumber())) {
+                        errOrder.setRmaNumber(req.getRmaNumber());
+                    }
                     // A retried BULK/API order keeps its source (see the success path).
                     errOrder.setSource(firstNonBlank(errOrder.getSource(), req.getSource(), "MANUAL"));
                     errOrder.setOrderChannel(resolveOrderChannel(req, to));

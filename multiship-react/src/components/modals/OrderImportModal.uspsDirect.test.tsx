@@ -77,10 +77,10 @@ vi.mock('../../hooks/useFocusTrap', () => ({
 // badge is silent; individual tests override to show the pill.
 const getMetricsMock = vi.fn().mockResolvedValue({
   data: {
-    depth: 0,
-    processing: 0,
+    queuedDepth: 0,
+    processingCount: 0,
     estimatedWaitSeconds: 0,
-    totalPerHourCap: 55,
+    configuredHourlyCap: 55,
     tenantCode: null,
   },
 })
@@ -203,10 +203,10 @@ beforeEach(() => {
   listStaging.mockResolvedValue({ data: [] })
   getMetricsMock.mockResolvedValue({
     data: {
-      depth: 0,
-      processing: 0,
+      queuedDepth: 0,
+      processingCount: 0,
       estimatedWaitSeconds: 0,
-      totalPerHourCap: 55,
+      configuredHourlyCap: 55,
       tenantCode: null,
     },
   })
@@ -257,10 +257,10 @@ describe('OrderImportModal — BulkLabelQueueBadge mount (audit U2)', () => {
     // Non-zero depth so the pill isn't hidden.
     getMetricsMock.mockResolvedValue({
       data: {
-        depth: 5,
-        processing: 1,
+        queuedDepth: 5,
+        processingCount: 1,
         estimatedWaitSeconds: 60,
-        totalPerHourCap: 55,
+        configuredHourlyCap: 55,
         tenantCode: null,
       },
     })

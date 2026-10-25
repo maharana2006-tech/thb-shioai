@@ -1045,7 +1045,11 @@ export function useNewShipmentModel() {
         const bareNo = !!o.shipName && /^\d+$/.test(o.shipName.trim()) && !!o.shipAttn?.trim()
         setRecipient({
           name: (bareNo ? o.shipAttn : o.shipName) ?? '', company: bareNo ? '' : o.shipAttn ?? '', phone: o.phone ?? '', email: '',
-          addressLine1: o.shipAddr1 ?? '', addressLine2: '', city: o.shiptoCity ?? '',
+          // BUG-034 — Order.location persists the recipient's Address line 2
+          // (manual/API path). Pre-fix this was hard-coded to '', so Fix &
+          // regenerate / Reissue label sent an empty line 2 back and wiped
+          // the stored suite/apt from the order + the printed label.
+          addressLine1: o.shipAddr1 ?? '', addressLine2: o.shipAddr2 ?? '', city: o.shiptoCity ?? '',
           state: o.shiptoState ?? '', postalCode: o.shiptoZip ?? '', countryCode: recipCountry,
           phoneCountryCode: dialCodeFor(recipCountry) || '',
         })
@@ -1115,6 +1119,12 @@ export function useNewShipmentModel() {
         if (cfValues && Object.keys(cfValues).length > 0) {
           setCustomFieldValues(cfValues)
         }
+        // BUG-034 — return-flow Reason + RMA# live on Order.return_reason /
+        // Order.rma_number (columns since Returns F9). Pre-fix the Reissue
+        // return form opened with both blank, so the operator had to retype
+        // a required field and risked losing the RMA on a second save.
+        if (o.returnReason) setReturnReason(o.returnReason)
+        if (o.rmaNumber) setRmaNumber(o.rmaNumber)
         pendingFixRef.current = {
           serviceCode: o.shipviaCd,
           accountNumber: details.data.carrierAccount?.accountNumber ?? null,
@@ -1134,7 +1144,7 @@ export function useNewShipmentModel() {
       }
     })()
     return () => { cancelled = true }
-  }, [fixOrderNo, setAesCitation, setCarrier, setClientCode, setCurrency, setCustomFieldValues, setDeclaredValue, setDimUnit, setExportDeclarationReference, setFixChannel, setFtrExemption, setHeight, setIncoterms, setItems, setLength, setReasonForExport, setRecipient, setReference, setSender, setWeight, setWeightUnit, setWidth])
+  }, [fixOrderNo, setAesCitation, setCarrier, setClientCode, setCurrency, setCustomFieldValues, setDeclaredValue, setDimUnit, setExportDeclarationReference, setFixChannel, setFtrExemption, setHeight, setIncoterms, setItems, setLength, setReasonForExport, setRecipient, setReference, setReturnReason, setRmaNumber, setSender, setWeight, setWeightUnit, setWidth])
 
   // Apply the stashed service/account once the carrier's catalog is loaded.
   useEffect(() => {
