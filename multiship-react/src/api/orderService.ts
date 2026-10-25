@@ -826,7 +826,12 @@ export interface QueueStats {
 /** One row of the unified Documents table (GET /orders/documents). */
 export interface OrderDocumentRow {
   orderNo: number
-  customerReferenceId: string | null
+  /** BUG-052 — the server resolves this as `tenantId || custNo` so it
+   *  populates for both modern (tenantId-based) and legacy orders. The
+   *  wire key is `custNo` (DocumentRow record component name on the BE);
+   *  prior FE field name `customerReferenceId` didn't match the wire
+   *  shape so Billing statement showed "—". */
+  custNo: string | null
   recipientName: string | null
   city: string | null
   countryCode: string | null
