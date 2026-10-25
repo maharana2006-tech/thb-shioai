@@ -6,6 +6,7 @@ import { orderService, type DocumentFacets, type DocumentsQuery, type OrderDocum
 import { labelService } from '../api/labelService'
 import { notify } from '../utils/notify'
 import { useLatestRequest } from '../hooks/useLatestRequest'
+import { downloadCsv } from '../utils/csv'
 import AdvancedDataTable, { type ColumnDef } from './workspace/AdvancedDataTable'
 import {
   Check, CountBadge, DateRangeField, FilterChips, FilterPopover, OPTION, OPTION_ON, rangeLabel,
@@ -132,6 +133,80 @@ export default function OrderDocumentsTable() {
       setBusyKey(null)
     }
   }, [])
+
+  // BUG-051 — pre-fix Export CSV covered only the current page because
+  // AdvancedDataTable's default exporter uses the `data` prop, which
+  // under manualPagination is one page's worth. Mirror the Orders
+  // Export loop: page the same filtered query in chunks until the
+  // server runs out or we hit the cap.
+  //
+  // ponytail: 50k row cap; client-side loop blocks the UI on massive
+  // sets. Upgrade path = dedicated streaming /orders/documents/export.
+  const EXPORT_PAGE_SIZE = 200 // matches OrderDocumentSummaryService.MAX_PAGE_SIZE
+  const EXPORT_ROW_CAP = 50_000
+  const handleExport = useCallback(async (visibleColumnIds?: string[]) => {
+    notify.info('Preparing CSV export…')
+    const collected: OrderDocumentRow[] = []
+    let capped = false
+    try {
+      let pageIdx = 0
+      while (true) {
+        const res = await orderService.pageDocuments({ ...query, page: pageIdx, size: EXPORT_PAGE_SIZE })
+        const batch = res.data?.content ?? []
+        collected.push(...batch)
+        if (collected.length >= EXPORT_ROW_CAP) { capped = true; break }
+        // DocumentsPage carries totalElements but no `last` flag; stop
+        // when the server returned less than one full page OR we've
+        // collected everything.
+        const total = res.data?.totalElements ?? 0
+        if (batch.length < EXPORT_PAGE_SIZE || collected.length >= total) break
+        pageIdx += 1
+      }
+    } catch (e) {
+      notify.apiError(e, 'Failed to export documents.')
+      return
+    }
+
+    if (capped) {
+      notify.info({
+        title: `CSV capped at ${EXPORT_ROW_CAP.toLocaleString()} rows`,
+        body: 'Narrow the filter and export again to capture the rest.',
+      })
+    }
+
+    const rowsOut = capped ? collected.slice(0, EXPORT_ROW_CAP) : collected
+
+    // Column selection mirrors AdvancedDataTable.exportRowValues:
+    //  - skip columns with meta.exportable === false
+    //  - include every visibleColumnId
+    //  - plus any hidden column with meta.exportAlways === true
+    const visibleSet = new Set(visibleColumnIds ?? [])
+    type ColMeta = { exportable?: boolean; exportAlways?: boolean; exportValue?: (r: OrderDocumentRow) => unknown; headerLabel?: string }
+    const chosen = columns.filter((col) => {
+      const meta = col.meta as ColMeta | undefined
+      if (meta?.exportable === false) return false
+      const id = col.id as string | undefined
+      if (!id) return false
+      if (visibleSet.size === 0) return true
+      return visibleSet.has(id) || meta?.exportAlways === true
+    })
+    const header = chosen.map((col) => {
+      const meta = col.meta as ColMeta | undefined
+      if (meta?.headerLabel) return meta.headerLabel
+      return typeof col.header === 'string' ? col.header : (col.id as string)
+    })
+    const matrix: string[][] = [header]
+    for (const r of rowsOut) {
+      matrix.push(chosen.map((col) => {
+        const meta = col.meta as ColMeta | undefined
+        if (meta?.exportValue) return String(meta.exportValue(r) ?? '')
+        return ''
+      }))
+    }
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    downloadCsv(`shipment-documents-${stamp}.csv`, matrix)
+    notify.success(`Exported ${rowsOut.length.toLocaleString()} row(s).`)
+  }, [query, columns])
 
   // ── Filters ──
   const activeCount = (filters.status !== 'ANY' ? 1 : 0) + (filters.carrier ? 1 : 0)
@@ -352,6 +427,7 @@ export default function OrderDocumentsTable() {
         onSortingChange={(next) => setSorting(next.length ? next : [{ id: 'generated', desc: true }])}
         getRowId={(r) => String(r.orderNo)}
         csvFilename="shipment-documents"
+        onExport={handleExport}
         caption={`${pageInfo.total} labelled order${pageInfo.total === 1 ? '' : 's'} · tracking, label, invoice & statement for each`}
         emptyState={
           <div className="px-5 py-10 text-center">
