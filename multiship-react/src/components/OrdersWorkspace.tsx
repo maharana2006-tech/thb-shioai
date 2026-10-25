@@ -1165,7 +1165,14 @@ export default function OrdersWorkspace() {
       const res = await orderService.printDocuments(orderNos, docType)
       printPdfBlob(res.blob)
       const what = docType === 'LABEL' ? 'label' : 'commercial invoice'
-      const why = docType === 'LABEL' ? 'no label yet' : 'no invoice — domestic or no customs data'
+      // BUG-019 — "no label yet" was misleading: pre-"label-package
+      // change" UPS orders have the label stored but with format=UNKNOWN
+      // on the label_package row so /labels/{n}/pdf 404s. The order DOES
+      // have a label; the renderer just can't produce a PDF from it.
+      // Umbrella wording covers both actually-missing and format-unknown
+      // without claiming either specifically. The sniff-and-upgrade in
+      // LabelArtifactService self-heals most of these on view.
+      const why = docType === 'LABEL' ? 'no printable label' : 'no invoice — domestic or no customs data'
       notify.success(
         `Opening ${res.included} ${what}${res.included === 1 ? '' : 's'} in the print dialog`
           + (res.skipped > 0 ? ` · ${res.skipped} skipped (${why})` : '') + '.',

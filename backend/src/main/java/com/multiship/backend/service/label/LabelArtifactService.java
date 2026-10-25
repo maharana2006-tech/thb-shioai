@@ -169,6 +169,17 @@ public class LabelArtifactService {
         byte[] stored = decodeStored(p.getLabelFilePath());
         if (stored == null || stored.length == 0) return Optional.empty();
         String format = p.getFormat() == null ? "" : p.getFormat().trim().toUpperCase(Locale.ROOT);
+        // BUG-019 / BUG-024 — pre-"label-package change" UPS orders have
+        // format=UNKNOWN on their label_package row even though the
+        // stored bytes are legit ZPL / GIF / PNG / PDF. Sniff the magic
+        // and dispatch via the known-format branch so artifact endpoints
+        // start resolving. Avoids a Flyway backfill: rows the operator
+        // actually views self-heal implicitly, legacy rows stay as-is.
+        if (!"ZPL".equals(format) && !"GIF".equals(format)
+                && !"PNG".equals(format) && !"PDF".equals(format)) {
+            String sniffed = sniffFormat(stored);
+            if (sniffed != null) format = sniffed;
+        }
         switch (format) {
             case "ZPL" -> {
                 String text = new String(stored, StandardCharsets.ISO_8859_1);
@@ -191,6 +202,52 @@ public class LabelArtifactService {
             }
             default -> { return Optional.empty(); }
         }
+    }
+
+    /** BUG-019 / BUG-024 — magic-byte format detection for legacy rows
+     *  whose {@code format} column is {@code UNKNOWN}. Mirrors
+     *  {@link com.multiship.backend.service.LabelArtifactResolver#sniffFormat},
+     *  which can't be called directly from here (its scope is the live
+     *  resolver). Returns null when nothing matches. */
+    static String sniffFormat(byte[] bytes) {
+        if (bytes == null || bytes.length == 0) return null;
+        int i = 0;
+        while (i < bytes.length && (bytes[i] == '\n' || bytes[i] == '\r'
+                || bytes[i] == ' ' || bytes[i] == '\t')) i++;
+        if (startsWithAt(bytes, MAGIC_ZPL, i)) return "ZPL";
+        if (startsWithAt(bytes, MAGIC_PDF, i)) return "PDF";
+        if (startsWithAt(bytes, MAGIC_GIF, i)) return "GIF";
+        if (startsWithAt(bytes, MAGIC_PNG, i)) return "PNG";
+        // USPS writer prepends `^FX … ^FS` before `^XA`; scan the whole
+        // buffer. PDF/GIF/PNG magic can only occur at byte 0 so once we
+        // reach here only ZPL is possible.
+        if (indexOf(bytes, MAGIC_ZPL) >= 0) return "ZPL";
+        return null;
+    }
+
+    private static final byte[] MAGIC_ZPL = { '^', 'X', 'A' };
+    private static final byte[] MAGIC_PDF = { '%', 'P', 'D', 'F', '-' };
+    private static final byte[] MAGIC_GIF = { 'G', 'I', 'F', '8' };
+    private static final byte[] MAGIC_PNG = { (byte) 0x89, 'P', 'N', 'G' };
+
+    private static boolean startsWithAt(byte[] haystack, byte[] needle, int offset) {
+        if (haystack.length - offset < needle.length) return false;
+        for (int j = 0; j < needle.length; j++) {
+            if (haystack[offset + j] != needle[j]) return false;
+        }
+        return true;
+    }
+
+    private static int indexOf(byte[] haystack, byte[] needle) {
+        int limit = haystack.length - needle.length;
+        outer:
+        for (int i = 0; i <= limit; i++) {
+            for (int j = 0; j < needle.length; j++) {
+                if (haystack[i + j] != needle[j]) continue outer;
+            }
+            return i;
+        }
+        return -1;
     }
 
     /** Raw {@code ^XA} text is stored as-is; everything else is base64. A
