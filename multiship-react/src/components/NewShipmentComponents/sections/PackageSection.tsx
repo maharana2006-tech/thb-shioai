@@ -20,6 +20,11 @@ export function PackageSection({ m }: { m: NewShipmentModel }) {
               wrapHeader
               badge={
                 <div className="flex flex-1 flex-wrap items-center justify-end gap-2">
+                  {/* BUG-032 — Suggest draws its recommendation from the
+                      customs items list, which only exists on international
+                      shipments. On domestic the button was visible but
+                      guaranteed to 422 ("Add at least one item"); hide it. */}
+                  {isInternational ? (
                   <button
                     type="button"
                     onClick={() => void suggestPackagingAi()}
@@ -34,6 +39,7 @@ export function PackageSection({ m }: { m: NewShipmentModel }) {
                     )}
                     Suggest
                   </button>
+                  ) : null}
 
                   {/* Weight + dims unit toggles grouped in one compact pill */}
                   <div className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-1.5 py-1">
