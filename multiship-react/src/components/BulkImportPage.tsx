@@ -53,10 +53,20 @@ export default function BulkImportPage() {
         </div>
       ) : null}
 
-      <OrderImportModal inline onImported={(batchId, batchSlug) => {
-        setSavedBatchId(batchId)
-        setSavedBatchSlug(batchSlug)
-      }} />
+      <OrderImportModal
+        inline
+        onImported={(batchId, batchSlug) => {
+          setSavedBatchId(batchId)
+          setSavedBatchSlug(batchSlug)
+        }}
+        // BUG-058 — "Import another file" resets the wizard; drop the
+        // previous import's success banner so it doesn't claim a save
+        // the new upload hasn't done yet.
+        onStartOver={() => {
+          setSavedBatchId(null)
+          setSavedBatchSlug(null)
+        }}
+      />
     </div>
   )
 }
