@@ -2183,7 +2183,12 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
                       ? 'Locked while labels are generating — editing opens again when the run finishes.'
                       : !canWrite
                         ? 'Read-only view.'
-                        : 'Click a field cell to edit; it saves and re-validates on blur. Columns shows every imported field.'}
+                        /* BUG-047 — the previous hint promised inline cell
+                           edit, but no editor is wired on this grid. Edits
+                           still work from the row-level drawer (BUG-016
+                           flow) and the import wizard's grid. Drop the
+                           false promise; keep the Columns pointer. */
+                        : 'Shows every imported field — use Columns to toggle the ones you need.'}
                 </p>
               }
             />
