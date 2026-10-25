@@ -805,6 +805,10 @@ export interface OrderListParams {
   carrier?: string
   /** Returns F3 — 'Y' = returns only, 'N' = shipments only, empty = all. */
   isReturn?: 'Y' | 'N' | ''
+  /** BUG-010 — opt-in bulk-export path. Server raises per-page row cap
+   *  from 100 to 1000 (EXPORT_MAX_SIZE) so the CSV loop needs ~10×
+   *  fewer requests. UI pagination must omit this. */
+  export?: boolean
 }
 
 /** Tab counts for the Labels work queue. */

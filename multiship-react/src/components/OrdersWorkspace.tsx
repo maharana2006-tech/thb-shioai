@@ -2028,6 +2028,11 @@ export default function OrdersWorkspace() {
           ...baseParams,
           page: pageIdx,
           size: EXPORT_PAGE_SIZE,
+          // BUG-010 — opt into the server's bulk-export per-page cap
+          // (EXPORT_MAX_SIZE=1000). Without this the server clamps to
+          // 100 and a 34k order dump = 342 serial requests. With it:
+          // ~34 requests.
+          export: true,
         })
         const batch = response.data?.content ?? []
         collected.push(...batch)
@@ -2038,6 +2043,12 @@ export default function OrdersWorkspace() {
         }
         if (last || batch.length === 0) break
         pageIdx += 1
+        // BUG-010 — periodic progress tick so the operator knows the
+        // export is live on big dumps. Every 5 pages → ~5000 rows.
+        if (pageIdx % 5 === 0) {
+          const total = response.data?.totalElements ?? collected.length
+          notify.info(`Exporting… ${collected.length.toLocaleString()} of ${total.toLocaleString()} rows`)
+        }
       }
     } catch (e) {
       notify.apiError(e, 'Failed to export orders.')
