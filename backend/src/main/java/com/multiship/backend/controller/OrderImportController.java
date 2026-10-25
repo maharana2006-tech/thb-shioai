@@ -419,13 +419,20 @@ public class OrderImportController {
         response.setHeader("Content-Disposition", "attachment; filename=\"" + filename + "\"");
 
         java.io.PrintWriter out = response.getWriter();
-        out.println("rowNumber,orderRef,clientCode,billTo,warehouseCode,"
+        // BUG-048 — pre-fix the export carried only the imported fields,
+        // so an operator couldn't reconcile a batch after generation.
+        // Added the four post-generation columns the UI already shows:
+        // orderNo / status / tracking / errors.
+        out.println("rowNumber,orderNo,status,tracking,orderRef,clientCode,billTo,warehouseCode,"
                 + "recipientName,recipientCompany,recipientPhone,recipientEmail,"
                 + "addressLine1,addressLine2,city,state,postalCode,countryCode,"
                 + "carrierCode,accountNumber,serviceType,shipViaCode,packageType,"
-                + "weight,weightUnit,length,width,height,dimUnit");
+                + "weight,weightUnit,length,width,height,dimUnit,errors");
         for (OrderImportRowDTO r : page.getRows()) {
             out.print(r.getRowNumber()); out.print(',');
+            out.print(r.getGeneratedOrderNo() == null ? "" : r.getGeneratedOrderNo()); out.print(',');
+            out.print(csv(r.getGeneratedStatus())); out.print(',');
+            out.print(csv(r.getGeneratedTrackingNumber())); out.print(',');
             out.print(csv(r.getOrderRef())); out.print(',');
             out.print(csv(r.getClientCode())); out.print(',');
             out.print(csv(r.getBillTo())); out.print(',');
@@ -450,7 +457,11 @@ public class OrderImportController {
             out.print(r.getLength() == null ? "" : r.getLength()); out.print(',');
             out.print(r.getWidth() == null ? "" : r.getWidth()); out.print(',');
             out.print(r.getHeight() == null ? "" : r.getHeight()); out.print(',');
-            out.println(csv(r.getDimUnit()));
+            out.print(csv(r.getDimUnit())); out.print(',');
+            // errors is a List<String>; join with " | " (same shape the
+            // FE batch-rows export uses so a round-trip is lossless).
+            out.println(csv(r.getErrors() == null || r.getErrors().isEmpty()
+                    ? null : String.join(" | ", r.getErrors())));
         }
         if (page.getTotal() > EXPORT_ROW_CAP) {
             out.println();
