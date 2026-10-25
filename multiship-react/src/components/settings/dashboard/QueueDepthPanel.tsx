@@ -1,5 +1,8 @@
 import { FiLayers } from 'react-icons/fi'
-import type { UspsLabelQueueMetrics } from '../../../api/uspsLabelQueueService'
+import type {
+  UspsLabelQueueMetrics,
+  UspsLabelQueueTenantDepth,
+} from '../../../api/uspsLabelQueueService'
 import { formatQueueDuration } from '../../orders/uspsQueueFormat'
 
 /**
@@ -100,10 +103,10 @@ export default function QueueDepthPanel({
               data-testid="queue-depth-count"
               className="text-[36px] font-bold tabular-nums leading-none text-slate-800"
             >
-              {metrics.depth.toLocaleString()}
+              {metrics.queuedDepth.toLocaleString()}
             </span>
             <span className="text-[13px] font-medium text-slate-500">
-              item{metrics.depth === 1 ? '' : 's'} pending
+              item{metrics.queuedDepth === 1 ? '' : 's'} pending
             </span>
           </div>
 
@@ -116,7 +119,7 @@ export default function QueueDepthPanel({
                 data-testid="queue-depth-processing"
                 className="mt-0.5 text-[16px] font-semibold tabular-nums text-slate-700"
               >
-                {metrics.processing.toLocaleString()}
+                {metrics.processingCount.toLocaleString()}
               </dd>
             </div>
             <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
@@ -141,7 +144,7 @@ export default function QueueDepthPanel({
                 data-testid="queue-depth-tenants-empty"
                 className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-[12px] text-slate-500"
               >
-                {metrics.depth > 0
+                {metrics.queuedDepth > 0
                   ? 'Per-tenant breakdown unavailable.'
                   : 'No pending requests.'}
               </p>
@@ -171,17 +174,18 @@ export default function QueueDepthPanel({
 }
 
 /**
- * Sort the tenant → depth map descending and keep the top
- * {@link #MAX_TENANT_ROWS}. Returns an empty array when the map is
+ * Sort the tenant depth list descending and keep the top
+ * {@link #MAX_TENANT_ROWS}. Returns an empty array when the list is
  * missing, empty, or every value is 0. Zero-depth tenants are filtered
  * out so the ranking doesn't show tenants that finished processing.
  */
 function deriveTopTenants(
-  perTenantDepth: Record<string, number> | null,
+  perTenantDepth: UspsLabelQueueTenantDepth[] | null | undefined,
 ): Array<[string, number]> {
   if (!perTenantDepth) return []
-  const entries = Object.entries(perTenantDepth)
-    .filter(([, depth]) => depth > 0)
-    .sort((a, b) => b[1] - a[1])
-  return entries.slice(0, MAX_TENANT_ROWS)
+  return perTenantDepth
+    .filter((t) => t.queuedDepth > 0)
+    .sort((a, b) => b.queuedDepth - a.queuedDepth)
+    .slice(0, MAX_TENANT_ROWS)
+    .map((t) => [t.tenantCode, t.queuedDepth])
 }

@@ -130,26 +130,81 @@ public class TenantSettingsController {
     }
 
     @Operation(summary = "Bulk upsert the 8 shipper.* keys for this tenant. "
-            + "Blank strings delete the override (falls back to platform default).")
+            + "Blank strings delete the override (falls back to platform default). "
+            + "An all-empty body clears every override. Otherwise every REQUIRED_KEY "
+            + "must be populated — a half-configured tenant is refused with 422.")
     @PutMapping("/shipper-defaults")
     public ResponseEntity<ApiResponse<java.util.Map<String, ShipperDefaultsService.FieldValue>>> putShipperDefaults(
             @PathVariable String tenantCode,
             @RequestBody java.util.Map<String, String> body,
             Authentication auth) {
         scope.requireTenantMatch(tenantCode);
+        validateShipperDefaultsBody(body);
         String actor = auth != null ? auth.getName() : null;
         for (String key : ShipperDefaultsService.ALL_KEYS) {
             String v = body == null ? null : body.get(key);
             if (v == null || v.isBlank()) {
                 settings.deleteSetting(tenantCode, key);
             } else {
-                settings.putSetting(tenantCode, key, v.trim(), actor);
+                // BUG-027 — normalise country to upper-case ISO-2 so stored
+                // values stay canonical regardless of operator typing.
+                String normalised = ShipperDefaultsService.KEY_COUNTRY_CODE.equals(key)
+                        ? v.trim().toUpperCase(java.util.Locale.ROOT)
+                        : v.trim();
+                settings.putSetting(tenantCode, key, normalised, actor);
             }
         }
         return ResponseEntity.ok(ApiResponse.<java.util.Map<String, ShipperDefaultsService.FieldValue>>builder()
                 .status("SUCCESS").code(200).timestamp(LocalDateTime.now())
                 .data(shipperDefaults.currentValues(tenantCode))
                 .build());
+    }
+
+    /** ISO-3166-1 alpha-2: exactly two ASCII letters. */
+    private static final java.util.regex.Pattern ISO2_COUNTRY =
+            java.util.regex.Pattern.compile("^[A-Za-z]{2}$");
+
+    /**
+     * BUG-027 (QA 2026-10-23) — pre-fix the shipper-defaults save endpoint
+     * accepted an all-empty body, a name-only body, and country code
+     * "USA" (3 letters), all returning 200 with the stored-as-typed
+     * values. The incomplete tenants silently failed at shipping time
+     * instead; the ISO-2 field accepted anything.
+     *
+     * <p>Rules:
+     * <ol>
+     *   <li>All-empty body → OK (clear every override; a legitimate
+     *       "revert to platform defaults" flow).</li>
+     *   <li>Otherwise every {@link ShipperDefaultsService#REQUIRED_KEYS}
+     *       field must be populated — refuse half-configured tenants.</li>
+     *   <li>Country code, if present, must be 2 ASCII letters.</li>
+     * </ol>
+     */
+    static void validateShipperDefaultsBody(java.util.Map<String, String> body) {
+        java.util.Map<String, String> source = body == null ? java.util.Map.of() : body;
+        java.util.List<String> missing = new java.util.ArrayList<>();
+        int populatedRequired = 0;
+        for (String key : ShipperDefaultsService.REQUIRED_KEYS) {
+            String v = source.get(key);
+            if (v == null || v.isBlank()) {
+                missing.add(key);
+            } else {
+                populatedRequired++;
+            }
+        }
+        if (populatedRequired > 0 && !missing.isEmpty()) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY,
+                    "Set every required ship-from field together, or clear all. Missing: "
+                            + String.join(", ", missing));
+        }
+        String country = source.get(ShipperDefaultsService.KEY_COUNTRY_CODE);
+        if (country != null && !country.isBlank() && !ISO2_COUNTRY.matcher(country.trim()).matches()) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY,
+                    "Country code must be the 2-letter ISO code (e.g. US, GB, DE); got '"
+                            + country.trim() + "'.");
+        }
     }
 
     @Operation(summary = "Set enabled shipping channels for this tenant. "

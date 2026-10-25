@@ -1008,6 +1008,24 @@ public class StampsConnector implements CarrierConnector {
                             + request.getReferenceNumber() + "). Set the "
                             + "recipient's country on the Order before generating a label.");
         }
+        // BUG-029 — SERA refuses a shipment whose to_address or from_address
+        // has neither a name nor a company (6619396 / 4522242). Fail at the
+        // boundary with the field named so the operator can fix it before
+        // the carrier hop; same shape as the recipient-country guard above.
+        if (!StringUtils.hasText(request.getRecipientName())
+                && !StringUtils.hasText(request.getRecipientCompany())) {
+            throw new IllegalArgumentException(
+                    "USPS shipment needs a recipient name or company (order "
+                            + request.getReferenceNumber() + "). Fill the "
+                            + "'Ship to' name or company before generating a label.");
+        }
+        if (!StringUtils.hasText(request.getShipperName())
+                && !StringUtils.hasText(request.getShipperCompany())) {
+            throw new IllegalArgumentException(
+                    "USPS shipment needs a sender name or company (order "
+                            + request.getReferenceNumber() + "). Fill the "
+                            + "'Ship from' name or company before generating a label.");
+        }
         String baseUrl = seraApiBaseUrl(environment);
         java.util.List<com.multiship.backend.dto.PackageDetailDTO> packages = request.effectivePackages();
         java.util.List<ShipmentResult> perPackage = new java.util.ArrayList<>();
@@ -1424,15 +1442,21 @@ public class StampsConnector implements CarrierConnector {
                                                   String country, String phone, String email,
                                                   String residentialIndicator) {
         Map<String, Object> a = new LinkedHashMap<>();
-        // BUG-001 — SERA validates "fullname" when the `name` field is
-        // provided: "If provided, fullname must contain at least 2
-        // alphabetic characters, followed by a space, followed by at
-        // least another 2 alphabetic characters." (error 6619409). A
-        // client-default sender like "MKL" (3 chars, no space) tripped
-        // this and sent order #<N> to ERROR after save. Omit the field
-        // when it doesn't match the rule, so SERA falls back to
-        // company_name as the entity identity.
-        if (StringUtils.hasText(name) && isSeraValidFullname(name)) a.put("name", name);
+        // BUG-029 (QA 2026-10-24) — send the name verbatim whenever present.
+        // Pre-fix an anchored prefix regex ([A-Za-z]{2,}\s+[A-Za-z]{2,}.*)
+        // silently dropped names like "Pat Q. Tester", "José Álvarez",
+        // "O'Brien", "Anne-Marie Smith" and single-word names (Madonna,
+        // Cher), forcing SERA to 400 with 6619396 / 4522242 whenever the
+        // company_name field was also blank. QA's 34-call Carrier API Log
+        // audit (Appendix A of the test report) proved: /sera/v1/labels
+        // accepts every variant the app currently sends through, and
+        // /sera/v1/rates was already shipping names raw with 28/28 200s —
+        // the two builders disagreed with the carrier as the referee.
+        // The hard guard against "name AND company both blank" lives in
+        // createShipmentSera's pre-flight (the same place the recipient
+        // country check lives) so an operator-visible failure fires BEFORE
+        // the carrier hop, not after.
+        if (StringUtils.hasText(name)) a.put("name", name);
         if (StringUtils.hasText(company)) a.put("company_name", company);
         if (StringUtils.hasText(line1)) a.put("address_line1", line1);
         if (StringUtils.hasText(line2)) a.put("address_line2", line2);
@@ -3331,11 +3355,15 @@ public class StampsConnector implements CarrierConnector {
 
     /** Field-level equality for the SERA matched_address echo. Case-
      *  insensitive + trim-tolerant on the comparable fields; nulls equal. */
-    /** BUG-001 — SERA 6619409 fullname rule: "If provided, fullname must
-     *  contain at least 2 alphabetic characters, followed by a space,
-     *  followed by at least another 2 alphabetic characters." Used by
-     *  both buildSeraAddress (wire) and ShipmentValidationService
-     *  (pre-flight) so the two agree. */
+    /** BUG-029 (QA 2026-10-24) — the SERA /labels endpoint does NOT enforce
+     *  this prefix rule (34 Carrier-API-Log calls, 10/10 variants accepted
+     *  verbatim), so {@link #buildSeraAddress} no longer gates on it.
+     *  This predicate is retained for the SERA /pickups wire only
+     *  (see {@link #padToSeraFullname}), where the fullname field IS
+     *  required and the pad-with-"Pickup" fallback keeps short names like
+     *  "MKL" valid. If you're reaching for this from a label path, use
+     *  {@code StringUtils.hasText(name)} instead and let the connector
+     *  boundary guard catch the name-AND-company-blank case. */
     public static boolean isSeraValidFullname(String name) {
         if (name == null) return false;
         return name.trim().matches("[A-Za-z]{2,}\\s+[A-Za-z]{2,}.*");
