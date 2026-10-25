@@ -1489,7 +1489,10 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
             />
           )
         },
-        meta: { headerLabel: 'Tick', exportValue: () => '' },
+        // BUG-054 — the tick column is screen-only; dropping it from CSV
+        // was previously done by exporting ''. Now excluded entirely so
+        // the operator doesn't see an empty "Tick" column at all.
+        meta: { headerLabel: 'Tick', exportable: false },
       },
       {
         id: 'labelBatch',
@@ -1510,7 +1513,9 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
             <span className="text-[10.5px] text-[#b6a684]" title="A batch number is allotted when the import is saved">No batch yet</span>
           )
         },
-        meta: { headerLabel: 'Batch', exportValue: (b: ImportBatchSummary) => b.labelBatchId == null ? '' : String(b.labelBatchId) },
+        // BUG-054 — header is unambiguous in CSV ("Batch" clashed with
+        // "Import #" shown as a sub-line in the File cell).
+        meta: { headerLabel: 'Label batch #', exportValue: (b: ImportBatchSummary) => b.labelBatchId == null ? '' : String(b.labelBatchId) },
       },
       {
         id: 'file',
@@ -1554,7 +1559,11 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
             </span>
           )
         },
-        meta: { headerLabel: 'File' },
+        // BUG-054 — the cell shows "Import #N" as a sub-line but it was
+        // missing from the export. Prefix the filename with the import #
+        // so operators can reconcile a CSV row back to its import.
+        meta: { headerLabel: 'File', exportValue: (b: ImportBatchSummary) =>
+          `#${b.id}${b.fileName ? ' · ' + b.fileName : ''}` },
       },
       {
         id: 'created',
@@ -1579,7 +1588,14 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
             </span>
           )
         },
-        meta: { headerLabel: 'Date', exportValue: (b: ImportBatchSummary) => b.createdAt ?? '' },
+        // BUG-054 — pre-fix emitted the raw ISO (no timezone, no local
+        // formatting). Export the same locale-formatted string the UI
+        // shows so an operator in US-Central doesn't read a UTC time.
+        meta: { headerLabel: 'Date', exportValue: (b: ImportBatchSummary) => {
+          if (!b.createdAt) return ''
+          const d = new Date(b.createdAt)
+          return Number.isNaN(d.getTime()) ? b.createdAt : d.toLocaleString()
+        } },
       },
       {
         id: 'status',
@@ -1588,7 +1604,10 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
         size: 160,
         accessorFn: (b) => b.status ?? '',
         cell: ({ row }) => renderStatusCell(row.original),
-        meta: { headerLabel: 'Status' },
+        // BUG-054 — pre-fix emitted the raw enum (INITIATE / IN_PROGRESS /
+        // PARTIAL_COMPLETE / COMPLETE / …). Use the same humanized label
+        // the badge shows ("Saved · not generated", "In progress", …).
+        meta: { headerLabel: 'Status', exportValue: (b: ImportBatchSummary) => statusMeta(b.status).label },
       },
       {
         id: 'rows',
