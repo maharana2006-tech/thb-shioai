@@ -397,6 +397,15 @@ export default function OrdersWorkspace() {
 
   // Rows for the active view — server-side filter + search + sort + pagination.
   useEffect(() => {
+    // BUG-013 — AbortController cancels an in-flight listOrders when
+    // the next filter / search / page tick fires. Pre-fix a late
+    // response from an earlier filter state could paint the wrong
+    // list over the current one (QA observed once on an UPS filter
+    // chain), and every intermediate request (keystroke, filter chip
+    // flip) consumed server capacity for a result the user never saw.
+    // The old `cancelled` flag only skipped the state write; it never
+    // closed the TCP connection.
+    const controller = new AbortController()
     let cancelled = false
     const spec = VIEW_QUERY[view]
     // eslint-disable-next-line react-hooks/set-state-in-effect -- flip loading spinner before async paginated order-list fetch
@@ -437,14 +446,14 @@ export default function OrdersWorkspace() {
       includeResolution: view !== 'generated',
     }
     orderService
-      .listOrders(params)
+      .listOrders(params, { signal: controller.signal })
       .then((response) => {
         if (cancelled) return
         setRows(response.data?.content ?? [])
         setTotalPages(Math.max(response.data?.totalPages ?? 1, 1))
       })
       .catch((error) => {
-        if (cancelled) return
+        if (cancelled || isAbortError(error)) return
         notify.apiError(error, 'Failed to load orders.')
         setRows([])
       })
@@ -454,6 +463,7 @@ export default function OrdersWorkspace() {
 
     return () => {
       cancelled = true
+      controller.abort()
     }
   }, [view, page, pageSize, debouncedQuery, clientFilter, dateFrom, dateTo, sourceFilter, channelFilter, carrierFilter, isReturnFilter, sortBy, sortDirection, debouncedFilters, reloadToken])
 
