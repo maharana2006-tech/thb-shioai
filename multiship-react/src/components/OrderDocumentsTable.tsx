@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { SortingState } from '@tanstack/react-table'
 import { FiCalendar, FiDownload, FiFileText, FiLoader, FiRefreshCw, FiSlash, FiTruck, FiX } from 'react-icons/fi'
@@ -144,6 +144,11 @@ export default function OrderDocumentsTable() {
   // sets. Upgrade path = dedicated streaming /orders/documents/export.
   const EXPORT_PAGE_SIZE = 200 // matches OrderDocumentSummaryService.MAX_PAGE_SIZE
   const EXPORT_ROW_CAP = 50_000
+  // Forward-ref to columns (declared below). tsc -b's strict scope
+  // analysis rejects reading `columns` lexically before its const
+  // declaration; the ref dodges the hoisting restriction without a
+  // code reshuffle. columnsRef.current is set by an effect below.
+  const columnsRef = useRef<ColumnDef<OrderDocumentRow, unknown>[]>([])
   const handleExport = useCallback(async (visibleColumnIds?: string[]) => {
     notify.info('Preparing CSV export…')
     const collected: OrderDocumentRow[] = []
@@ -182,7 +187,7 @@ export default function OrderDocumentsTable() {
     //  - plus any hidden column with meta.exportAlways === true
     const visibleSet = new Set(visibleColumnIds ?? [])
     type ColMeta = { exportable?: boolean; exportAlways?: boolean; exportValue?: (r: OrderDocumentRow) => unknown; headerLabel?: string }
-    const chosen = columns.filter((col) => {
+    const chosen = columnsRef.current.filter((col) => {
       const meta = col.meta as ColMeta | undefined
       if (meta?.exportable === false) return false
       const id = col.id as string | undefined
@@ -206,7 +211,8 @@ export default function OrderDocumentsTable() {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-')
     downloadCsv(`shipment-documents-${stamp}.csv`, matrix)
     notify.success(`Exported ${rowsOut.length.toLocaleString()} row(s).`)
-  }, [query, columns])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- columnsRef is a ref; columns changes don't need to re-create the callback.
+  }, [query])
 
   // ── Filters ──
   const activeCount = (filters.status !== 'ANY' ? 1 : 0) + (filters.carrier ? 1 : 0)
@@ -378,6 +384,9 @@ export default function OrderDocumentsTable() {
       meta: { exportValue: (r: OrderDocumentRow) => r.hasInvoice ? 'label, zpl, invoice, statement' : 'label, zpl, statement' },
     },
   ], [busyKey, download])
+  // Sync the forward-ref so handleExport can read the current column
+  // defs at call time without a lexical-scope violation.
+  columnsRef.current = columns
 
   const chips: FilterChip[] = []
   if (filters.status !== 'ANY') chips.push({ key: 'status', label: 'Status', value: filters.status === 'LIVE' ? 'Live' : 'Voided', clear: () => setFilters((f) => ({ ...f, status: 'ANY' })) })
