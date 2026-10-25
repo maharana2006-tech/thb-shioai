@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import MpsProgressCard from './orders/MpsProgressCard'
 import { notify } from '../utils/notify'
 import { FiZap, FiArrowRight, FiArrowLeft, FiTruck, FiPackage, FiRotateCcw, FiCheckCircle, FiAlertTriangle, FiX } from 'react-icons/fi'
@@ -44,11 +44,18 @@ export type { ExtraPackage, NewShipmentItemRow }
 
 export default function NewShipmentPage() {
   const m = useNewShipmentModel()
+  // BUG-042 — tab title: "New return · Multiship" / "Fix order
+  // #900046 · Multiship" / "New shipment · Multiship".
+  const pageTitle = m.fixOrderNo != null
+    ? `Fix order #${m.fixOrderNo}`
+    : m.isReturn ? 'New return' : 'New shipment'
+  useEffect(() => {
+    const prev = document.title
+    document.title = `${pageTitle} · Multiship`
+    return () => { document.title = prev }
+  }, [pageTitle])
   // BUG-040 — inline error for "Return of #" when the typed order
-  // doesn't resolve. Lives here (not in the model) because it's a
-  // field-local UX concern — the operator sees the error on blur
-  // and clears it by editing the field. On submit, the BE validator
-  // is the authoritative belt-and-suspenders.
+  // doesn't resolve. Field-local UX concern — operator sees on blur.
   const [originalOrderNoError, setOriginalOrderNoError] = useState<string | null>(null)
   const {
     acceptWizardPayload, accountNumber, activeParties, carrier, carrierValidating, checklistOpen, clientCode, clientHasNoOwnCarriers, customFieldValues, destCountry, dgBlock, dgWizardOpen, dtcBatch, dtcLine, dtcLineId, editorSeed, fixError, fixLoading, fixOrderNo, fixVoided, incoterms, isInternational, isReturn, items, landedCostOpen, landedCostRequest, leaveForm, loading, mode, navigate, noCarriersAtAll, originalOrderNo, overrideEditorOpen, queuedInfo, recipient, residentialConflict, resubmitWithSplit, returnEmailMissing, returnPickupRequested, returnReason, returnType, reviewBusy, reviewShipmentAi, reviewWarnings, rmaNumber, sender, serviceId, setChecklistOpen, setCustomFieldValues, setDgBlock, setDgWizardOpen, setLandedCostOpen, setOriginalOrderNo, setOverride, setOverrideEditorOpen, setPendingSplitPayload, setReturnPickupRequested, setReturnReason, setReturnType, setReviewWarnings, setRmaNumber, setSender, setSplitPrompt, setToast, setWizardOpen, shipmentValidationResult, splitPrompt, submit, submitAttempted, submitting, switchMode, toast, validateShipment, validatedAt, validationGate, validationStale, weight, wizardOpen, wizardPayload,
@@ -285,6 +292,15 @@ export default function NewShipmentPage() {
                       <input
                         type="number"
                         value={originalOrderNo}
+                        inputMode="numeric"
+                        // BUG-042 — <input type="number"> accepts "e",
+                        // "+", "-", "." which make no sense for an
+                        // order number. Block at keydown.
+                        onKeyDown={(e) => {
+                          if (['e', 'E', '+', '-', '.'].includes(e.key)) e.preventDefault()
+                        }}
+                        // BUG-040 — clear the inline error on any edit;
+                        // operator's new typing supersedes the stale 404.
                         onChange={(e) => {
                           setOriginalOrderNo(e.target.value)
                           if (originalOrderNoError) setOriginalOrderNoError(null)
@@ -634,7 +650,15 @@ export default function NewShipmentPage() {
                 ) : (
                   <>
                     <FiZap className="h-3.5 w-3.5" />
-                    {fixOrderNo ? (fixVoided ? 'Regenerate label' : 'Fix & regenerate') : isReturn ? 'Generate return label' : 'Generate label'}
+                    {/* BUG-042 — in return+Email mode the carrier
+                        emails the label to the customer; the
+                        operator isn't pulling a printable file.
+                        Rephrase the CTA to match the actual action. */}
+                    {fixOrderNo
+                      ? (fixVoided ? 'Regenerate label' : 'Fix & regenerate')
+                      : isReturn
+                        ? (returnType === 'EMAIL' ? 'Email return label' : 'Generate return label')
+                        : 'Generate label'}
                     <FiArrowRight className="h-3.5 w-3.5" />
                   </>
                 )}

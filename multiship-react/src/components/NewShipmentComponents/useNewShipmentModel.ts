@@ -1681,6 +1681,15 @@ export function useNewShipmentModel() {
     // force-pick guard — don't overwrite with a hardcoded 'SALE'.
     if (next === 'RETURN') setReasonForExport('RETURN')
     setMode(next)
+    // BUG-042 — keep the URL in sync so a reload or Share link lands
+    // on the same mode the operator was in. Deep-link path for
+    // RETURN is /orders/new/return; shipment is /orders/new. Replace
+    // (not push) so Back doesn't trap the operator in a mode cycle.
+    const nextPath = next === 'RETURN' ? '/orders/new/return' : '/orders/new'
+    if (location.pathname !== nextPath) {
+      // Preserve any ?fixOrder=… or other params the operator arrived with.
+      navigate({ pathname: nextPath, search: location.search }, { replace: true })
+    }
   }
 
   // Sender-fallback for NDS-defaulted phone / notify-email: once the
@@ -2707,10 +2716,20 @@ export function useNewShipmentModel() {
   }, [])
 
   const leaveForm = async () => {
-    if (formHasWork && !(await notify.confirm(
-      "This shipment hasn't been created yet. Leave and lose what you've entered?",
-      { title: 'Leave this shipment?', confirmLabel: 'Leave', cancelLabel: 'Stay' },
-    ))) return
+    // BUG-042 — context-aware copy. "This shipment hasn't been
+    // created yet" is confusing on Reissue (the order WAS created
+    // and is being regenerated) and off on returns (operator thinks
+    // of it as "the return label").
+    const noun = fixOrderNo ? 'reissue' : (mode === 'RETURN' ? 'return label' : 'shipment')
+    const copy = fixOrderNo
+      ? `Reissue for order #${fixOrderNo} hasn't been submitted yet. Leave and lose your edits?`
+      : `This ${noun} hasn't been created yet. Leave and lose what you've entered?`
+    const title = fixOrderNo
+      ? 'Leave this reissue?'
+      : mode === 'RETURN' ? 'Leave this return?' : 'Leave this shipment?'
+    if (formHasWork && !(await notify.confirm(copy, {
+      title, confirmLabel: 'Leave', cancelLabel: 'Stay',
+    }))) return
     navigate('/orders')
   }
   const formSnapshotRef = useRef('')
