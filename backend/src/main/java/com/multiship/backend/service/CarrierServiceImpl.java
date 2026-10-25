@@ -4730,13 +4730,20 @@ public class CarrierServiceImpl implements CarrierService {
         return RETURN_REASON_CODES.contains(v) ? v : null;
     }
 
-    /** Returns F12 — drop invalid outbound-order references to null:
-     *  blank, self-linkage, or no matching row. Analytics / UI treats
-     *  null as "untracked"; a stale typed value never 400s. */
+    /** Returns F12 — resolve the outbound-order reference. Blank + self-
+     *  linkage silently drop to null (never meaningful operationally).
+     *  BUG-040 — a non-existent typed order# now 400s instead of
+     *  silent-drop so a mistyped number can't produce an unlinked
+     *  return. The validator catches it first at /validate; this is
+     *  belt-and-suspenders for direct-generate callers. */
     private Integer canonOriginalOrderNo(Integer raw, Integer selfOrderNo) {
         if (raw == null || raw <= 0) return null;
         if (selfOrderNo != null && raw.equals(selfOrderNo)) return null;
-        return orderRepository.findByOrderNo(raw).isPresent() ? raw : null;
+        if (orderRepository.findByOrderNo(raw).isEmpty()) {
+            throw new IllegalArgumentException(
+                    "Return of #" + raw + " doesn't match an order on this tenant.");
+        }
+        return raw;
     }
 
     /** Shared for packages_json round-trip. Reuse instead of allocating per call. */

@@ -286,6 +286,7 @@ public class ShipmentValidationService {
         labelTimeChecks(req, service, preset, warehouseId, errors, warnings, skipped);
         checkPoBoxAndMilitary(req, service, errors);
         checkDuplicateReference(req, errors); // BUG-006 — fail, not warn
+        checkOriginalOrderNoExists(req, errors); // BUG-040
         checkUspsNameOrCompany(req, errors);  // BUG-029 (QA 2026-10-24)
         checkCutoff(req, warnings);
         checkInsuranceCost(req, service, warnings);
@@ -1788,6 +1789,22 @@ public class ShipmentValidationService {
                         + (o.getCreatedDate() != null ? " (" + o.getCreatedDate() + ")" : "")
                         + (StringUtils.hasText(o.getTrack()) ? ", tracking " + o.getTrack() : "")
                         + ". Use a different reference or void the existing label first.", "reference")));
+    }
+
+    /** BUG-040 — a typed {@code originalOrderNo} that doesn't exist is a
+     *  FAIL. Pre-fix the backend silently dropped stale typed values to
+     *  null so Validate+Generate "succeeded" but the return was unlinked.
+     *  Only runs when the field was filled; blank is still fine. */
+    private void checkOriginalOrderNoExists(ManualShipmentRequest req, List<ValidationIssue> errors) {
+        if (orderRepository == null) return;
+        Integer n = req.getOriginalOrderNo();
+        if (n == null || n <= 0) return;
+        if (orderRepository.findByOrderNo(n).isEmpty()) {
+            errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                    "Return of #" + n + " doesn't match an order on this tenant. "
+                            + "Fix the number or clear the field.",
+                    "originalOrderNo"));
+        }
     }
 
     /** Past the client's daily cutoff, the label counts as the next business day's. */
