@@ -253,6 +253,8 @@ public class OrderController {
             @Parameter(description = "Carrier: UPS | FEDEX | USPS | DHL") @RequestParam(required = false) String carrier,
             @Parameter(description = "Returns F3 — Y = returns only, N = shipments only, blank = all")
             @RequestParam(required = false) String isReturn,
+            @Parameter(description = "BUG-001 — intl tri-state: Y = international only, N = domestic only, blank = all")
+            @RequestParam(required = false) String intl,
             @Parameter(description = "Attach the cascade's account pick (accountResolution) to each row") @RequestParam(defaultValue = "false") boolean includeResolution,
             @Parameter(description = "BUG-010 — opt-in bulk-export path. Raises the per-page row cap from "
                     + com.multiship.backend.common.PaginationDefaults.MAX_SIZE + " to "
@@ -316,6 +318,7 @@ public class OrderController {
                 .channel(channel)
                 .carrier(carrier)
                 .isReturn(isReturn)
+                .intl(intl)
                 .build();
 
         ApiResponse<PageResponseDTO<OrderResponseDTO>> response =

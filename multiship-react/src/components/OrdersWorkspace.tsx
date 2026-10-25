@@ -145,6 +145,13 @@ export default function OrdersWorkspace() {
   const [carrierFilter, setCarrierFilter] = useState('')
   // Returns F3 — is-return tri-state: '' = all, 'Y' = returns only, 'N' = shipments only.
   const [isReturnFilter, setIsReturnFilter] = useState<'' | 'Y' | 'N'>('')
+  // BUG-001 — intl tri-state. Dashboard's "International pending"
+  // tile deep-links as /orders?status=PENDING&intl=Y so the operator
+  // lands on the Pending subset that produced the tile's count.
+  const [intlFilter, setIntlFilter] = useState<'' | 'Y' | 'N'>(() => {
+    const v = new URLSearchParams(window.location.search).get('intl')
+    return v === 'Y' || v === 'N' ? v : ''
+  })
   const [clientCodes, setClientCodes] = useState<string[]>([])
   // Sprint 51 migration — sort is owned by the shared AdvancedDataTable now.
   // sortBy / sortDirection remain the fetch-effect inputs (derived below).
@@ -339,6 +346,7 @@ export default function OrdersWorkspace() {
           channel: channelFilter || undefined,
           carrier: carrierFilter || undefined,
           isReturn: isReturnFilter || undefined,
+          intl: intlFilter || undefined,
         })
         if (!cancelled) setBatchesForPicker(res.data ?? [])
       } catch {
@@ -491,6 +499,7 @@ export default function OrdersWorkspace() {
       channel: channelFilter || undefined,
       carrier: carrierFilter || undefined,
       isReturn: isReturnFilter || undefined,
+      intl: intlFilter || undefined,
       page: page - 1,
       size: pageSize,
       sortBy,

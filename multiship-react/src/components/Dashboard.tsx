@@ -416,7 +416,11 @@ export default function Dashboard() {
       sub: 'customs auto-resolved',
       icon: <FiGlobe className="h-4 w-4" />,
       tone: 'border-violet-200 bg-violet-50 text-violet-600',
-      to: '/orders?view=all',
+      // BUG-001 — intlPending now filters the existing Pending set
+      // instead of dumping on view=all with no filter. intl=Y maps to
+      // label_batch.intl_yn='Y' server-side. status=PENDING scopes
+      // the queue; Orders list reads both params on mount.
+      to: '/orders?status=PENDING&intl=Y',
     },
   ]
 
