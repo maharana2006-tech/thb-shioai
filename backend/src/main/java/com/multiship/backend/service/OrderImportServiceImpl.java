@@ -1973,6 +1973,51 @@ public class OrderImportServiceImpl implements OrderImportService {
     }
 
     /**
+     * BUG-044 (QA 2026-10-23) — pre-fix, a 36-character recipient name
+     * passed Upload &amp; validate and Validate-all, then failed at
+     * Generate with "Name exceeds the 35-character carrier limit".
+     * The 35-char ceiling is the lower bound across UPS / FedEx / DHL
+     * (UPS caps at 35 → carrier error 120201; FedEx and DHL are 35-45);
+     * {@link ShipmentValidationService#checkCarrierLengthLimits}
+     * enforces it on the per-shipment Validate path for manual
+     * shipments. Mirror the same checks on the bulk-import row so
+     * the operator sees "fix this cell" at Validate-all time instead
+     * of after half the batch has been labelled.
+     *
+     * <p>Fields checked: {@code recipientName}, {@code recipientCompany},
+     * {@code addressLine1}, {@code addressLine2}, {@code reference}.
+     * Sender fields are owned by the warehouse / client defaults, not
+     * the row, so they're covered by the manual-shipment path's own
+     * validator.
+     *
+     * <p>Reproduces the same message shape ShipmentValidationService
+     * emits so a reviewer tracing a complaint sees the identical text
+     * whichever flow surfaced it.
+     */
+    private void flagRowFieldLengths(List<OrderImportRowDTO> rows) {
+        if (rows == null) return;
+        for (OrderImportRowDTO r : rows) {
+            if ("GENERATED".equalsIgnoreCase(r.getGeneratedStatus())) continue;
+            flagLength(r, r.getRecipientName(), "Name");
+            flagLength(r, r.getRecipientCompany(), "Company");
+            flagLength(r, r.getAddressLine1(), "Address line 1");
+            flagLength(r, r.getAddressLine2(), "Address line 2");
+            flagLength(r, r.getReference(), "Reference");
+        }
+    }
+
+    /** BUG-044 — one-field length check; mirrors ShipmentValidationService.CARRIER_FIELD_MAX. */
+    private static final int BULK_ROW_FIELD_MAX = 35;
+
+    private static void flagLength(OrderImportRowDTO row, String value, String label) {
+        if (value == null) return;
+        if (value.length() > BULK_ROW_FIELD_MAX) {
+            addError(row, label + " exceeds the " + BULK_ROW_FIELD_MAX
+                    + "-character carrier limit (currently " + value.length() + ").");
+        }
+    }
+
+    /**
      * BUG-045 (QA 2026-10-23) — pre-fix, two rows sharing one customer
      * reference (the file's {@code reference} column, aka {@code GROUP_ID}
      * on the client-layout CSV) passed Upload &amp; validate and
@@ -2664,6 +2709,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         validateBusinessRules(rows);
         validateCustomFields(rows);
         validateInternationalItems(rows);
+        flagRowFieldLengths(rows);
         flagWithinImportDuplicateReferences(rows);
         return success(buildPreview(rows), rows.size() + " row(s) validated.");
     }
