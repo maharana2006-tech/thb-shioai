@@ -286,6 +286,8 @@ public class ShipmentValidationService {
         labelTimeChecks(req, service, preset, warehouseId, errors, warnings, skipped);
         checkPoBoxAndMilitary(req, service, errors);
         checkDuplicateReference(req, errors); // BUG-006 — fail, not warn
+        checkOriginalOrderNoExists(req, errors); // BUG-040
+        checkUspsNameOrCompany(req, errors);  // BUG-029 (QA 2026-10-24)
         checkCutoff(req, warnings);
         checkInsuranceCost(req, service, warnings);
 
@@ -1098,35 +1100,53 @@ public class ShipmentValidationService {
         return u;
     }
 
-    private void checkIntlRequiredFields(ManualShipmentRequest req,
-                                         String recipientCountry,
+    /**
+     * BUG-029 (QA 2026-10-24) — USPS SERA refuses any shipment whose
+     * {@code to_address} or {@code from_address} has neither a {@code name}
+     * nor a {@code company_name} (error 6619396 for the recipient,
+     * 4522242 for the sender). Pre-fix only USPS intl flows checked
+     * this, and only on the sender; domestic USPS and every recipient
+     * went straight to the carrier and the operator saw a cryptic
+     * carrier 400 after an ERROR order had already been saved.
+     *
+     * <p>Scope: every USPS shipment (intl + domestic), both sides.
+     * The equivalent hard guard lives at
+     * {@link com.multiship.backend.service.carriers.StampsConnector#createShipmentSera}
+     * so a direct connector caller (webhook, API consumer) can't bypass
+     * this validator and still send a nameless+companyless address.
+     */
+    private void checkUspsNameOrCompany(ManualShipmentRequest req,
                                          List<ValidationIssue> errors) {
-        // BUG-001 — USPS SERA validates sender_info.name for international
-        // shipments and rejects single-token names like "MKL" (the client's
-        // company name typed into the Full name field). Pre-flight guard
-        // so the operator sees "needs a full name" BEFORE the label hop
-        // instead of a cryptic carrier reject after order #<N> is saved
-        // as ERROR. Scoped to USPS international + where no company name
-        // supplies the entity identity.
-        if ("USPS".equalsIgnoreCase(req.getCarrierCode())
-                && req.getSender() != null) {
-            String senderName = req.getSender().getName() == null ? ""
+        if (!"USPS".equalsIgnoreCase(req.getCarrierCode())) return;
+        if (req.getSender() != null) {
+            String name = req.getSender().getName() == null ? ""
                     : req.getSender().getName().trim();
-            String senderCompany = req.getSender().getCompany() == null ? ""
+            String company = req.getSender().getCompany() == null ? ""
                     : req.getSender().getCompany().trim();
-            // USPS accepts either a SERA-valid personal name OR a company
-            // name as the sender identity. Match the exact SERA rule so
-            // pre-flight and connector agree.
-            boolean nameLooksLikeFull = com.multiship.backend.service.carriers
-                    .StampsConnector.isSeraValidFullname(senderName);
-            if (!nameLooksLikeFull && senderCompany.isBlank()) {
+            if (name.isEmpty() && company.isEmpty()) {
                 errors.add(issue(ErrorCode.VALIDATION_ERROR,
-                        "USPS international needs a sender full name (first + last) "
-                                + "or a company name. Current ship-from name '"
-                                + senderName + "' is a single token with no company set.",
+                        "USPS needs a sender name or company. Fill the "
+                                + "'Ship from' name or company before generating a label.",
                         "sender.name"));
             }
         }
+        if (req.getRecipient() != null) {
+            String name = req.getRecipient().getName() == null ? ""
+                    : req.getRecipient().getName().trim();
+            String company = req.getRecipient().getCompany() == null ? ""
+                    : req.getRecipient().getCompany().trim();
+            if (name.isEmpty() && company.isEmpty()) {
+                errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                        "USPS needs a recipient name or company. Fill the "
+                                + "'Ship to' name or company before generating a label.",
+                        "recipient.name"));
+            }
+        }
+    }
+
+    private void checkIntlRequiredFields(ManualShipmentRequest req,
+                                         String recipientCountry,
+                                         List<ValidationIssue> errors) {
         // Currency + incoterms — resolvable via precedence, else error.
         if (resolveCustomsCurrency(req) == null) {
             errors.add(issue(ErrorCode.VALIDATION_ERROR,
@@ -1769,6 +1789,22 @@ public class ShipmentValidationService {
                         + (o.getCreatedDate() != null ? " (" + o.getCreatedDate() + ")" : "")
                         + (StringUtils.hasText(o.getTrack()) ? ", tracking " + o.getTrack() : "")
                         + ". Use a different reference or void the existing label first.", "reference")));
+    }
+
+    /** BUG-040 — a typed {@code originalOrderNo} that doesn't exist is a
+     *  FAIL. Pre-fix the backend silently dropped stale typed values to
+     *  null so Validate+Generate "succeeded" but the return was unlinked.
+     *  Only runs when the field was filled; blank is still fine. */
+    private void checkOriginalOrderNoExists(ManualShipmentRequest req, List<ValidationIssue> errors) {
+        if (orderRepository == null) return;
+        Integer n = req.getOriginalOrderNo();
+        if (n == null || n <= 0) return;
+        if (orderRepository.findByOrderNo(n).isEmpty()) {
+            errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                    "Return of #" + n + " doesn't match an order on this tenant. "
+                            + "Fix the number or clear the field.",
+                    "originalOrderNo"));
+        }
     }
 
     /** Past the client's daily cutoff, the label counts as the next business day's. */

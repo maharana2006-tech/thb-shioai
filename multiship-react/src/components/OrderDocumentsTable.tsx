@@ -6,6 +6,7 @@ import { orderService, type DocumentFacets, type DocumentsQuery, type OrderDocum
 import { labelService } from '../api/labelService'
 import { notify } from '../utils/notify'
 import { useLatestRequest } from '../hooks/useLatestRequest'
+import { downloadCsv } from '../utils/csv'
 import AdvancedDataTable, { type ColumnDef } from './workspace/AdvancedDataTable'
 import {
   Check, CountBadge, DateRangeField, FilterChips, FilterPopover, OPTION, OPTION_ON, rangeLabel,
@@ -133,6 +134,80 @@ export default function OrderDocumentsTable() {
     }
   }, [])
 
+  // BUG-051 — pre-fix Export CSV covered only the current page because
+  // AdvancedDataTable's default exporter uses the `data` prop, which
+  // under manualPagination is one page's worth. Mirror the Orders
+  // Export loop: page the same filtered query in chunks until the
+  // server runs out or we hit the cap.
+  //
+  // ponytail: 50k row cap; client-side loop blocks the UI on massive
+  // sets. Upgrade path = dedicated streaming /orders/documents/export.
+  const EXPORT_PAGE_SIZE = 200 // matches OrderDocumentSummaryService.MAX_PAGE_SIZE
+  const EXPORT_ROW_CAP = 50_000
+  const handleExport = useCallback(async (visibleColumnIds?: string[]) => {
+    notify.info('Preparing CSV export…')
+    const collected: OrderDocumentRow[] = []
+    let capped = false
+    try {
+      let pageIdx = 0
+      while (true) {
+        const res = await orderService.pageDocuments({ ...query, page: pageIdx, size: EXPORT_PAGE_SIZE })
+        const batch = res.data?.content ?? []
+        collected.push(...batch)
+        if (collected.length >= EXPORT_ROW_CAP) { capped = true; break }
+        // DocumentsPage carries totalElements but no `last` flag; stop
+        // when the server returned less than one full page OR we've
+        // collected everything.
+        const total = res.data?.totalElements ?? 0
+        if (batch.length < EXPORT_PAGE_SIZE || collected.length >= total) break
+        pageIdx += 1
+      }
+    } catch (e) {
+      notify.apiError(e, 'Failed to export documents.')
+      return
+    }
+
+    if (capped) {
+      notify.info({
+        title: `CSV capped at ${EXPORT_ROW_CAP.toLocaleString()} rows`,
+        body: 'Narrow the filter and export again to capture the rest.',
+      })
+    }
+
+    const rowsOut = capped ? collected.slice(0, EXPORT_ROW_CAP) : collected
+
+    // Column selection mirrors AdvancedDataTable.exportRowValues:
+    //  - skip columns with meta.exportable === false
+    //  - include every visibleColumnId
+    //  - plus any hidden column with meta.exportAlways === true
+    const visibleSet = new Set(visibleColumnIds ?? [])
+    type ColMeta = { exportable?: boolean; exportAlways?: boolean; exportValue?: (r: OrderDocumentRow) => unknown; headerLabel?: string }
+    const chosen = columns.filter((col) => {
+      const meta = col.meta as ColMeta | undefined
+      if (meta?.exportable === false) return false
+      const id = col.id as string | undefined
+      if (!id) return false
+      if (visibleSet.size === 0) return true
+      return visibleSet.has(id) || meta?.exportAlways === true
+    })
+    const header = chosen.map((col) => {
+      const meta = col.meta as ColMeta | undefined
+      if (meta?.headerLabel) return meta.headerLabel
+      return typeof col.header === 'string' ? col.header : (col.id as string)
+    })
+    const matrix: string[][] = [header]
+    for (const r of rowsOut) {
+      matrix.push(chosen.map((col) => {
+        const meta = col.meta as ColMeta | undefined
+        if (meta?.exportValue) return String(meta.exportValue(r) ?? '')
+        return ''
+      }))
+    }
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    downloadCsv(`shipment-documents-${stamp}.csv`, matrix)
+    notify.success(`Exported ${rowsOut.length.toLocaleString()} row(s).`)
+  }, [query, columns])
+
   // ── Filters ──
   const activeCount = (filters.status !== 'ANY' ? 1 : 0) + (filters.carrier ? 1 : 0)
     + (filters.invoice !== 'ANY' ? 1 : 0) + (filters.from || filters.to ? 1 : 0)
@@ -168,8 +243,8 @@ export default function OrderDocumentsTable() {
       cell: ({ row }) => (
         <span className="flex flex-col">
           <span className="font-semibold text-[#1f150c]">{row.original.recipientName ?? '—'}</span>
-          {row.original.customerReferenceId ? (
-            <span className="font-mono text-[10.5px] text-[#8a7a5a]">{row.original.customerReferenceId}</span>
+          {row.original.custNo ? (
+            <span className="font-mono text-[10.5px] text-[#8a7a5a]">{row.original.custNo}</span>
           ) : null}
         </span>
       ),
@@ -214,6 +289,28 @@ export default function OrderDocumentsTable() {
       meta: { exportValue: (r: OrderDocumentRow) => r.generatedAt ?? '' },
     },
     {
+      // BUG-050 — pre-fix the CSV export had no Status column, so a totals-
+      // from-file calculation counted voided rows at full billed amount
+      // although the screen showed them struck-through. The on-screen
+      // Voided badge on the Order column scans at a glance; this column
+      // is the exportable truth that a spreadsheet can filter / sum on.
+      id: 'status',
+      header: 'Status',
+      enableSorting: false,
+      size: 80,
+      cell: ({ row }) => (
+        row.original.voided ? (
+          <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-600">VOIDED</span>
+        ) : (
+          <span className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-700">LIVE</span>
+        )
+      ),
+      meta: {
+        headerLabel: 'Status',
+        exportValue: (r: OrderDocumentRow) => r.voided ? 'VOIDED' : 'LIVE',
+      },
+    },
+    {
       id: 'billed',
       header: 'Billed',
       size: 100,
@@ -226,7 +323,15 @@ export default function OrderDocumentsTable() {
           )}
         </span>
       ),
-      meta: { exportValue: (r: OrderDocumentRow) => r.billableAmount ?? '' },
+      meta: {
+        // BUG-050 — voided rows export as "0" so a SUM() across the Billed
+        // column matches what the screen shows (struck-through = charge
+        // reversed). Pre-fix the exporter emitted the original billable
+        // and no status column, so operator-side spreadsheets totalled
+        // charges the system had already reversed.
+        exportValue: (r: OrderDocumentRow) =>
+          r.voided ? '0' : (r.billableAmount ?? ''),
+      },
     },
     {
       id: 'documents',
@@ -238,14 +343,24 @@ export default function OrderDocumentsTable() {
         const spin = <FiLoader className="h-3 w-3 animate-spin" />
         return (
           <span className="flex items-center gap-1 whitespace-nowrap">
+            {/* BUG-049 — label PDF + ZPL downloads are hidden on voided
+                rows; the stored bytes stay for audit but the backend
+                also 404s these endpoints. Statement + Commercial
+                invoice remain available (billing audit, customs
+                record). A reissue flips voided=false and both buttons
+                reappear. */}
+            {!r.voided && (
             <button type="button" onClick={() => void download(`label-${r.orderNo}`, () => orderService.getLabelPdf(r.orderNo), `label-${r.orderNo}.pdf`, 'Label PDF download failed.')}
               disabled={busyKey === `label-${r.orderNo}`} className={DOC_BTN} title="Download the 4x6 shipping label as PDF">
               {busyKey === `label-${r.orderNo}` ? spin : <FiDownload className="h-3 w-3 text-[#412d15]" />} Label
             </button>
+            )}
+            {!r.voided && (
             <button type="button" onClick={() => void download(`zpl-${r.orderNo}`, async () => new Blob([await labelService.allZpl(r.orderNo)], { type: 'text/plain' }), `label-${r.orderNo}.zpl`, 'ZPL download failed.')}
               disabled={busyKey === `zpl-${r.orderNo}`} className={DOC_BTN} title="Raw ZPL for thermal printers">
               {busyKey === `zpl-${r.orderNo}` ? spin : <FiDownload className="h-3 w-3 text-[#412d15]" />} ZPL
             </button>
+            )}
             {r.hasInvoice ? (
               <button type="button" onClick={() => void download(`inv-${r.orderNo}`, () => orderService.getCommercialInvoicePdf(r.orderNo), `commercial-invoice-${r.orderNo}.pdf`, 'Commercial invoice download failed.')}
                 disabled={busyKey === `inv-${r.orderNo}`} className={DOC_BTN} title="Commercial invoice PDF (customs document)">
@@ -312,6 +427,7 @@ export default function OrderDocumentsTable() {
         onSortingChange={(next) => setSorting(next.length ? next : [{ id: 'generated', desc: true }])}
         getRowId={(r) => String(r.orderNo)}
         csvFilename="shipment-documents"
+        onExport={handleExport}
         caption={`${pageInfo.total} labelled order${pageInfo.total === 1 ? '' : 's'} · tracking, label, invoice & statement for each`}
         emptyState={
           <div className="px-5 py-10 text-center">
@@ -362,7 +478,7 @@ export default function OrderDocumentsTable() {
             </div>
             <div className="space-y-2.5 px-5 py-4 text-[12px]">
               {[
-                ['Client', statementRow.customerReferenceId ?? '—'],
+                ['Client', statementRow.custNo ?? '—'],
                 ['Recipient', statementRow.recipientName ?? '—'],
                 ['Carrier / Tracking', `${statementRow.carrier ?? '—'} · ${statementRow.trackingNumber ?? '—'}`],
                 ['Billed to account', statementRow.accountNumber ?? '—'],

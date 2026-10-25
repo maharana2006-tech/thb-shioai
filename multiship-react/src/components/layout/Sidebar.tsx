@@ -6,6 +6,7 @@ import { authService } from '../../api/authService'
 import { clearAuthSession, useAppSession } from '../../hooks/useAppSession'
 import { getNavItemsForRole, resolveWorkspaceRouteKey } from '../../routes/workspaceRoutes'
 import { normalizeRole } from '../../utils/roles'
+import { canLeaveUnsavedWork } from '../../utils/unsavedWorkGuard'
 import { navIcons } from './navIcons'
 import { useFocusTrap } from '../../hooks/useFocusTrap'
 
@@ -97,8 +98,18 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
     .map((part) => part[0]?.toUpperCase() ?? '')
     .join('')
 
+  // BUG-030 — sidebar nav bypasses react-router's beforeunload / in-page
+  // leaveForm guard. Route every navigate() through this gate so an
+  // unsaved New shipment form prompts before destroying work.
+  const navSafe = async (to: string) => {
+    if (!(await canLeaveUnsavedWork())) return
+    navigate(to)
+  }
+
   const handleLogout = async () => {
     if (loggingOut) return
+    // Logout is just as destructive as nav — check the unsaved guard too.
+    if (!(await canLeaveUnsavedWork())) return
     setLoggingOut(true)
     try {
       await authService.logout()
@@ -173,7 +184,7 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
       {/* brand — the depot at the top of the route */}
       <button
         type="button"
-        onClick={() => navigate(normalizedRole === 'TENANT' ? '/orders' : '/dashboard')}
+        onClick={() => { void navSafe(normalizedRole === 'TENANT' ? '/orders' : '/dashboard') }}
         className="flex h-16 shrink-0 items-center gap-3 pl-3.5 pr-3"
       >
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#e1dcc9] shadow-[0_8px_20px_rgba(0,0,0,0.35)]">
@@ -215,7 +226,7 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
               <button
                 key={item.key}
                 type="button"
-                onClick={() => navigate(item.to)}
+                onClick={() => { void navSafe(item.to) }}
                 aria-current={active ? 'page' : undefined}
                 title={item.label}
                 className="relative flex w-full items-center gap-3 rounded-lg px-1 py-1 text-left transition hover:bg-white/[0.05]"
@@ -297,7 +308,7 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
         <div className="flex items-center gap-3 rounded-lg px-1.5 py-1.5">
           <button
             type="button"
-            onClick={() => navigate('/profile')}
+            onClick={() => { void navSafe('/profile') }}
             title="My profile"
             aria-label="My profile"
             className="flex min-w-0 flex-1 items-center gap-3 rounded-lg text-left transition hover:bg-white/5"

@@ -17,7 +17,11 @@ public record LabelArtifactDTO(
         /** SANDBOX | PRODUCTION, from the account the order shipped under. */
         String environment,
         LocalDateTime generatedAt,
-        List<PackageArtifact> packages) {
+        List<PackageArtifact> packages,
+        /** BUG-028 — true when the order has {@code order_customs} data and a
+         *  commercial invoice would render. Lets the FE hide the button on
+         *  domestic rather than offer it only to 422 on click. */
+        boolean hasCommercialInvoice) {
 
     public record PackageArtifact(
             Integer seq,

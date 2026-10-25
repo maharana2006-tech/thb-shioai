@@ -96,7 +96,15 @@ export function LabelActions({ artifact, activeSeq }: { artifact: LabelArtifact;
       const blob = await orderService.getCommercialInvoicePdf(orderNo)
       window.open(URL.createObjectURL(blob), '_blank', 'noopener')
     } catch (err) {
-      void notify.apiError(err, 'This order has no commercial invoice — it is international-only.')
+      // BUG-028 — 422 means "no customs data" (domestic). Treat it as a
+      // benign info toast rather than the red "Something went wrong"
+      // apiError produces. 404 and the rest keep the error styling.
+      const status = (err as { status?: number } | null)?.status
+      if (status === 422) {
+        notify.info('This order has no commercial invoice — only international shipments do.')
+      } else {
+        void notify.apiError(err, "Couldn't fetch the commercial invoice.")
+      }
     } finally {
       setBusy(null)
     }
@@ -114,10 +122,26 @@ export function LabelActions({ artifact, activeSeq }: { artifact: LabelArtifact;
   const h2 = 'mb-2 font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-[#b6a684]'
   const pkgHint = total > 1 ? `pkg ${activeSeq}` : null
 
+  // BUG-049 — once an order is voided the stored label is kept for
+  // audit, but the Print / Copy ZPL / Download .zpl / Download PDF
+  // actions must not surface: the voided bytes can't ship. The backend
+  // also 404s each of these endpoints when tracking.status=VOIDED, so
+  // this is defence in depth. A reissue flips state back to GENERATED
+  // and the actions reappear on the regenerated label.
+  const voided = artifact.state === 'VOIDED'
+
   return (
     <>
       <section className="rounded-2xl border border-[#e3d9c4] bg-white px-4 py-3" aria-label="Label actions">
         <h2 className={h2}>Actions</h2>
+        {voided ? (
+          <p data-testid="label-voided-notice"
+             className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[12.5px] text-amber-900">
+            This label was voided. The stored copy is kept for audit;
+            Print / Download / Copy ZPL are off. Reissue the label to
+            print again.
+          </p>
+        ) : (
         <div className="grid gap-2">
           <button
             type="button"
@@ -146,6 +170,7 @@ export function LabelActions({ artifact, activeSeq }: { artifact: LabelArtifact;
             {hint(total > 1 ? `${total} pages` : '.pdf')}
           </button>
         </div>
+        )}
 
         {fallbackZpl !== null && (
           <div className="mt-3">
@@ -184,11 +209,18 @@ export function LabelActions({ artifact, activeSeq }: { artifact: LabelArtifact;
               Track on carrier site
             </button>
           )}
-          <button type="button" onClick={() => void openInvoice()} disabled={busy !== null} className={btn}>
-            <FiFileText className={icon} />
-            {busy === 'invoice' ? 'Fetching…' : 'Commercial invoice'}
-            {hint('international')}
-          </button>
+          {/* BUG-028 — only international orders have a commercial invoice;
+              the flag is sourced from order_customs on the server. Pre-fix
+              the button appeared on every label page and a domestic click
+              returned 422 which the generic apiError handler rendered as
+              a red "Something went wrong" toast. */}
+          {artifact.hasCommercialInvoice ? (
+            <button type="button" onClick={() => void openInvoice()} disabled={busy !== null} className={btn}>
+              <FiFileText className={icon} />
+              {busy === 'invoice' ? 'Fetching…' : 'Commercial invoice'}
+              {hint('international')}
+            </button>
+          ) : null}
         </div>
       </section>
 

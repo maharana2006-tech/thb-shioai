@@ -1821,10 +1821,20 @@ public class FedExConnector implements CarrierConnector {
         } catch (org.springframework.web.client.RestClientResponseException ex) {
             log.warn("FedEx pickup rejected (HTTP {}): {}",
                     ex.getStatusCode().value(), ex.getResponseBodyAsString());
+            // BUG-022 — surface the carrier's reason via the existing
+            // firstFedExErrorMessage helper (same as the ship-call path at
+            // ~line 937). Pre-fix the toast read "FedEx pickup rejected:
+            // HTTP 400" with the actual GROUND.SERVICES.UNAVAILABLE /
+            // UNABLE.TO.PICKUP code+message trapped only in the Carrier
+            // API Log row's response body.
+            String reason = firstFedExErrorMessage(ex.getResponseBodyAsString());
+            String message = StringUtils.hasText(reason)
+                    ? "FedEx pickup rejected (HTTP " + ex.getStatusCode().value() + "): " + reason
+                    : "FedEx pickup rejected: HTTP " + ex.getStatusCode().value();
             return new PickupResult("FEDEX", null, request.pickupDate(),
                     request.pickupWindowStart(), request.pickupWindowEnd(),
                     "ERROR",
-                    "FedEx pickup rejected: HTTP " + ex.getStatusCode().value(),
+                    message,
                     ex.getResponseBodyAsString());
         } catch (Exception ex) {
             log.warn("FedEx pickup call failed: {}", ex.getMessage());

@@ -56,6 +56,7 @@ function artifact(overrides: Partial<LabelArtifact> = {}): LabelArtifact {
     environment: 'SANDBOX',
     generatedAt: '2026-10-22T11:19:39',
     packages: [{ seq: 1, format: 'ZPL', source: 'CARRIER_NATIVE', tracking: '1Z999AA10123456784', trackingUrl: null, generatedAt: null }],
+    hasCommercialInvoice: false,
     ...overrides,
   }
 }

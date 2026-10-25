@@ -10,7 +10,11 @@ import type { ApiResponse } from './orderService'
 export type LabelFormat = 'ZPL' | 'PDF' | 'GIF' | 'PNG' | 'UNKNOWN'
 /** CARRIER_NATIVE = real thermal markup; CARRIER_RASTER = an image the ZPL endpoint wraps in ^GFA. */
 export type LabelSource = 'CARRIER_NATIVE' | 'CARRIER_RASTER' | 'UNKNOWN'
-export type LabelState = 'GENERATED' | 'PENDING'
+/** BUG-049 — VOIDED added so the FE can short-circuit Download/Print on
+ *  a voided label. The stored bytes stay on disk (audit); the backend
+ *  returns 404 on download endpoints and the FE hides the actions.
+ *  A reissue flips state back to GENERATED. */
+export type LabelState = 'GENERATED' | 'PENDING' | 'VOIDED'
 
 export interface PackageArtifact {
   seq: number
@@ -30,6 +34,10 @@ export interface LabelArtifact {
   environment: string | null
   generatedAt: string | null
   packages: PackageArtifact[]
+  /** BUG-028 — true when the order has customs data and the commercial
+   *  invoice PDF would render. Hides the Commercial invoice button on
+   *  domestic orders rather than offer it only to 422 on click. */
+  hasCommercialInvoice: boolean
 }
 
 async function text(url: string, what: string): Promise<string> {

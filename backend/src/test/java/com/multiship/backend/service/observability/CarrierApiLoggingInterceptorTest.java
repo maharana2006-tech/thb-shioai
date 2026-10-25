@@ -104,6 +104,54 @@ class CarrierApiLoggingInterceptorTest {
         verify(svc, never()).record(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
+    /**
+     * BUG-022 (QA 2026-10-23) — pre-fix, the Carrier API Log row's
+     * {@code errorMessage} column was NULL for every failed call
+     * (164/164 in the latest 1,200-row sample). Operators had to open
+     * each row to read the response body for the carrier's reason. On
+     * a non-2xx response, errorMessage is now populated with the
+     * response body so support can filter / dashboard on it; the full
+     * body still lives on {@code responseBody}.
+     */
+    @Test
+    void nonTwoHundredResponseRecordsErrorMessage() throws IOException {
+        CarrierApiLogService svc = mock(CarrierApiLogService.class);
+        CarrierApiLoggingInterceptor interceptor = new CarrierApiLoggingInterceptor(svc, true);
+
+        MockClientHttpRequest req = new MockClientHttpRequest(HttpMethod.POST,
+                URI.create("https://onlinetools.ups.com/api/pickupcreation/v1/pickup"));
+        String errBody = "{\"response\":{\"errors\":[{\"code\":\"250002\",\"message\":\"Invalid Authentication Information.\"}]}}";
+        ClientHttpRequestExecution exec = (r, b) -> okResponse(401, errBody);
+
+        ClientHttpResponse resp = interceptor.intercept(req, new byte[0], exec);
+        assertEquals(401, resp.getStatusCode().value());
+
+        ArgumentCaptor<String> errCaptor = ArgumentCaptor.forClass(String.class);
+        verify(svc).record(eq("UPS"), eq("POST"), any(), any(),
+                eq(errBody),           // responseBody carries the full payload
+                eq(401), any(Integer.class),
+                errCaptor.capture(),    // errorMessage now populated
+                eq(null), eq(null), eq(null));
+        assertEquals(errBody, errCaptor.getValue(),
+                "non-2xx responses must populate errorMessage with the response body");
+    }
+
+    @Test
+    void twoHundredResponseLeavesErrorMessageNull() throws IOException {
+        // BUG-022 — defence against regressing success calls into
+        // false-positive errors. 2xx stays null; only >= 400 populates.
+        CarrierApiLogService svc = mock(CarrierApiLogService.class);
+        CarrierApiLoggingInterceptor interceptor = new CarrierApiLoggingInterceptor(svc, true);
+        MockClientHttpRequest req = new MockClientHttpRequest(HttpMethod.POST,
+                URI.create("https://apis.fedex.com/pickup/v1/pickups"));
+        ClientHttpRequestExecution exec = (r, b) -> okResponse(201, "{\"ok\":true}");
+
+        interceptor.intercept(req, new byte[0], exec);
+        verify(svc).record(eq("FEDEX"), eq("POST"), any(), any(),
+                eq("{\"ok\":true}"), eq(201), any(Integer.class),
+                eq(null), eq(null), eq(null), eq(null));
+    }
+
     private static ClientHttpResponse okResponse(int status, String body) {
         MockClientHttpResponse resp = new MockClientHttpResponse(
                 body.getBytes(StandardCharsets.UTF_8), status);

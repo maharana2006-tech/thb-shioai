@@ -253,20 +253,49 @@ public class OrderController {
             @Parameter(description = "Carrier: UPS | FEDEX | USPS | DHL") @RequestParam(required = false) String carrier,
             @Parameter(description = "Returns F3 — Y = returns only, N = shipments only, blank = all")
             @RequestParam(required = false) String isReturn,
-            @Parameter(description = "Attach the cascade's account pick (accountResolution) to each row") @RequestParam(defaultValue = "false") boolean includeResolution) {
+            @Parameter(description = "Attach the cascade's account pick (accountResolution) to each row") @RequestParam(defaultValue = "false") boolean includeResolution,
+            @Parameter(description = "BUG-010 — opt-in bulk-export path. Raises the per-page row cap from "
+                    + com.multiship.backend.common.PaginationDefaults.MAX_SIZE + " to "
+                    + com.multiship.backend.common.PaginationDefaults.EXPORT_MAX_SIZE
+                    + " for a single operator-triggered CSV dump. Normal UI calls omit this flag.")
+            @RequestParam(defaultValue = "false") boolean export) {
 
+        // BUG-016 — pre-fix the API silently rewrote any unknown
+        // {@code sortBy} to "orderNo" and any unknown direction to
+        // "ASC", so integrators who sent a typo got a confusing
+        // different sort than they asked for. 400 them instead with
+        // the valid set in the message. Internal UI only sends
+        // column ids that match this allowlist.
         if (!isValidSortBy(sortBy)) {
-            sortBy = "orderNo";
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST,
+                    "Unknown sortBy '" + sortBy + "'. Valid: orderNo, customer, "
+                            + "generatedAt, tracking, city, weight, status, createdDate.");
         }
         if (!isValidSortDirection(sortDirection)) {
-            sortDirection = "ASC";
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST,
+                    "Unknown sortDirection '" + sortDirection + "'. Valid: ASC, DESC.");
+        }
+        // BUG-016 — same deal for the batch filter: pre-fix the
+        // service's digits-only sanitiser silently stripped letters
+        // and still filtered on whatever digits remained. Reject
+        // non-numeric input up-front with a clear error.
+        if (batch != null && !batch.isBlank() && !batch.matches("\\d+")) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST,
+                    "Unknown batch '" + batch + "'. Expected a positive integer id.");
         }
 
         PaginationRequestDTO paginationRequest = PaginationRequestDTO.builder()
                 .page(page)
                 // Sprint 51 AC-L1 — cap at PaginationDefaults.MAX_SIZE so a
                 // pathological ?size=100000 can't nuke the query.
-                .size(com.multiship.backend.common.PaginationDefaults.clamp(size))
+                // BUG-010 — export=true raises the ceiling to EXPORT_MAX_SIZE
+                // (1000) so the CSV loop doesn't need ~340 serial requests.
+                .size(export
+                        ? com.multiship.backend.common.PaginationDefaults.clampExport(size)
+                        : com.multiship.backend.common.PaginationDefaults.clamp(size))
                 .sortBy(sortBy)
                 .sortDirection(sortDirection)
                 .build();
