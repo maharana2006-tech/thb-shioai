@@ -1012,9 +1012,22 @@ export default function OrdersWorkspace() {
     const text = selected.join('\n')
     try {
       await navigator.clipboard.writeText(text)
-      notify.info(`${selected.length} order number(s) copied to clipboard.`)
+      // BUG-020 — real title (not the generic "Heads up"), real plural
+      // (not "number(s)"), and a thousands separator for selections
+      // bigger than four digits.
+      const n = selected.length
+      const formatted = new Intl.NumberFormat().format(n)
+      notify.info({
+        title: n === 1 ? 'Order number copied' : 'Order numbers copied',
+        body: n === 1
+          ? '1 order number copied to clipboard.'
+          : `${formatted} order numbers copied to clipboard.`,
+      })
     } catch {
-      notify.info('Clipboard access blocked — check browser permissions.')
+      notify.info({
+        title: "Can't copy",
+        body: 'Clipboard access is blocked — check browser permissions.',
+      })
     }
   }, [materialisedSelection])
 
