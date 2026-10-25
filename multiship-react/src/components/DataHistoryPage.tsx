@@ -695,8 +695,13 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
   const confirmThenGenerate = async (b: ImportBatchSummary, isRetry: boolean) => {
     const n = b.savedRows ?? 0
     const verb = isRetry ? 'Retry labels' : 'Generate labels'
+    // BUG-056 — pre-fix read "buys real labels … can't be undone". That
+    // misled sandbox operators (sandbox doesn't buy real postage) AND
+    // was wrong about reversibility (any generated label can be voided
+    // from the Labels tab). Env-neutral wording that names the reverse
+    // path works for both sandbox + production.
     const ok = await notify.confirm(
-      `${verb} for ${n} row${n === 1 ? '' : 's'}? This buys real labels from the carrier and can't be undone.`,
+      `${verb} for ${n} row${n === 1 ? '' : 's'}? This dispatches ${n === 1 ? 'it' : 'them'} to the carrier — if you need to reverse, void the label${n === 1 ? '' : 's'} from the Labels tab.`,
       { title: verb, confirmLabel: verb, cancelLabel: 'Not now', danger: !isRetry },
     )
     if (!ok) return
