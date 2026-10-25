@@ -50,8 +50,10 @@ export default function StateZonesPage() {
 
   const onDelete = async (row: StateZone) => {
     const ok = await notify.confirm(
-      `Delete ${row.countryCode}/${row.stateCode} → ${row.zoneId}?`,
-      'This row no longer drives offsets for carrier timestamps. Pickups from this state fall back to naive local wall-clock.',
+      `Delete ${row.countryCode}/${row.stateCode} → ${row.zoneId}?\n\n`
+        + 'This row no longer drives offsets for carrier timestamps. '
+        + 'Pickups from this state fall back to naive local wall-clock.',
+      { danger: true, confirmLabel: 'Delete', cancelLabel: 'Keep' },
     )
     if (!ok) return
     try {

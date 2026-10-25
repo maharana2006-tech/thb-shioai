@@ -148,7 +148,11 @@ export default function OrdersWorkspace() {
   // BUG-001 — intl tri-state. Dashboard's "International pending"
   // tile deep-links as /orders?status=PENDING&intl=Y so the operator
   // lands on the Pending subset that produced the tile's count.
-  const [intlFilter, setIntlFilter] = useState<'' | 'Y' | 'N'>(() => {
+  // Read-only for now — the Dashboard tile seeds this on mount; no
+  // in-page UI toggle yet, so the setter stays absent until a filter
+  // chip for intl ships. (Prefixing with _ keeps tsc's unused-local
+  // check happy without losing the state tuple shape.)
+  const [intlFilter] = useState<'' | 'Y' | 'N'>(() => {
     const v = new URLSearchParams(window.location.search).get('intl')
     return v === 'Y' || v === 'N' ? v : ''
   })
