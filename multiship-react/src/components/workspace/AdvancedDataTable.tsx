@@ -1049,6 +1049,19 @@ export default function AdvancedDataTable<T extends RowData>({
                                   header.column.getToggleSortingHandler()?.(e)
                                 }}
                                 onPointerDown={(e) => e.stopPropagation()}
+                                // BUG-016 — on-screen headers can be short ("Dest",
+                                // "Gen") to fit narrow columns, but the Columns menu
+                                // uses `meta.headerLabel` (the full name). Hovering
+                                // the short header now reveals the full name so
+                                // operators don't have to open the Columns menu to
+                                // decode an abbreviation.
+                                title={(() => {
+                                  const meta = header.column.columnDef.meta as { headerLabel?: string } | undefined
+                                  const label = meta?.headerLabel
+                                  const raw = header.column.columnDef.header
+                                  const short = typeof raw === 'string' ? raw : undefined
+                                  return label && short && label !== short ? label : undefined
+                                })()}
                               >
                                 {flexRender(header.column.columnDef.header, header.getContext())}
                                 {canSort ? (
