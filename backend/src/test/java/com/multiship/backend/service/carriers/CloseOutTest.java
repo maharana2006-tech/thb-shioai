@@ -76,8 +76,11 @@ class CloseOutTest {
     void emptyTrackingListReturnsErrorEverywhereWithRealToken() {
         // Real token, no tracking → validation error surfaces from the
         // connector, not from the service layer.
+        // R2-BUG-003 (run-4) — UPS closeOutDay is pinned to NOT_SUPPORTED
+        // regardless of input because UPS has no end-of-day resource in
+        // its REST catalog; empty-tracking validation lives on FedEx + Stamps.
         String tok = "REAL-TOKEN";
-        assertEquals("ERROR",
+        assertEquals("NOT_SUPPORTED",
                 new UpsConnector(new CarrierProperties(), new ObjectMapper())
                         .closeOutDay(emptyTrackingRequest(), tok, null).status());
         assertEquals("ERROR",

@@ -32,7 +32,7 @@ class OrderControllerListValidationTest {
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
                 () -> controller.listOrders(0, 25, "customerName" /* typo */, "ASC",
                         null, null, null, null, null, null, null, null, null, null, null,
-                        null, null, null, null, false));
+                        null, null, null, null, null /* intl */, false, false /* export */));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
         assertTrue(ex.getReason() != null && ex.getReason().contains("Unknown sortBy"),
                 "message names the field, got: " + ex.getReason());
@@ -43,7 +43,7 @@ class OrderControllerListValidationTest {
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
                 () -> controller.listOrders(0, 25, "orderNo", "ascending" /* not ASC/DESC */,
                         null, null, null, null, null, null, null, null, null, null, null,
-                        null, null, null, null, false));
+                        null, null, null, null, null /* intl */, false, false /* export */));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
         assertTrue(ex.getReason() != null && ex.getReason().contains("Unknown sortDirection"));
     }
@@ -54,7 +54,7 @@ class OrderControllerListValidationTest {
                 () -> controller.listOrders(0, 25, "orderNo", "ASC",
                         null, null, null, null, null, null, null, null,
                         "batch-14" /* letters, not a valid id */,
-                        null, null, null, null, null, null, false));
+                        null, null, null, null, null, null, null /* intl */, false, false /* export */));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
         assertTrue(ex.getReason() != null && ex.getReason().contains("Unknown batch"),
                 "message names the field, got: " + ex.getReason());
@@ -69,7 +69,7 @@ class OrderControllerListValidationTest {
                 () -> controller.listOrders(0, 25, "orderNo", "ASC",
                         null, null, null, null, null, null, null, null,
                         "" /* blank */,
-                        null, null, null, null, null, null, false));
+                        null, null, null, null, null, null, null /* intl */, false, false /* export */));
         // Should NOT be a 400 ResponseStatusException from our validators.
         assertTrue(!(ex instanceof ResponseStatusException rse
                         && rse.getStatusCode() == HttpStatus.BAD_REQUEST

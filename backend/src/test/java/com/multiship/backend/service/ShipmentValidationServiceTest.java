@@ -1499,7 +1499,10 @@ class ShipmentValidationServiceTest {
     }
 
     @Test
-    void aReferenceThatAlreadyShippedIsAWarning() {
+    void aReferenceThatAlreadyShippedIsAnError() {
+        // BUG-006 — promoted from WARN to FAIL at /validate so operators
+        // can't buy a second paid label under the same reference. Mirrors
+        // the 409 CONFLICT the /manual-label endpoint returns.
         com.multiship.backend.repository.OrderRepository orders = mock(com.multiship.backend.repository.OrderRepository.class);
         org.springframework.test.util.ReflectionTestUtils.setField(service, "orderRepository", orders);
         com.multiship.backend.model.Order shipped = new com.multiship.backend.model.Order();
@@ -1510,9 +1513,8 @@ class ShipmentValidationServiceTest {
         req.setClientCode("ACME");
         req.setReference("PO-7781");
         stubServiceAndPreset();
-        ShipmentValidationResult r = service.validate(req).getData();
-        assertTrue(r.getLocalWarnings().stream().anyMatch(w -> w.getMessage().startsWith(
-                "Reference PO-7781 already shipped on order #905958, tracking 794600000001")), r.getLocalWarnings().toString());
+        assertTrue(errorsOf(req).stream().anyMatch(m -> m.startsWith(
+                "Reference PO-7781 already shipped on order #905958")), errorsOf(req).toString());
     }
 
     @Test

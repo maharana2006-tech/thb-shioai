@@ -170,15 +170,19 @@ class OrderServiceImplTest {
     /* -------- pagination clamping -------- */
 
     @Test
-    void pageSizeAbove100IsClampedTo100() {
-        service.listOrders(emptyFilters(), false, page(0, 500));
+    void pageSizeAboveExportMaxIsClampedToExportMax() {
+        // BUG-010 — the service clamp mirrors PaginationDefaults.EXPORT_MAX_SIZE
+        // (1000) as defense-in-depth; the controller clamps normal UI calls to
+        // 100 one layer up. In-process callers (export path) can request up to
+        // 1000. A size of 1500 must come back as 1000.
+        service.listOrders(emptyFilters(), false, page(0, 1500));
         ArgumentCaptor<Integer> limitCap = ArgumentCaptor.forClass(Integer.class);
         verify(orderRepository).findOrdersUnified(
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyInt(), limitCap.capture(), anyString(), anyString());
-        assertEquals(100, limitCap.getValue());
+        assertEquals(com.multiship.backend.common.PaginationDefaults.EXPORT_MAX_SIZE, limitCap.getValue());
     }
 
     @Test
@@ -551,7 +555,7 @@ class OrderServiceImplTest {
                 anyString(), anyString(), keyword.capture(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-                anyInt(), anyInt(), anyString(), anyString());
+                anyString(), anyInt(), anyInt(), anyString(), anyString());
         assertEquals("QA\\_20261020-\\%", keyword.getValue(),
                 "literal % and _ must be backslash-escaped before binding to :keyword");
     }
@@ -568,7 +572,7 @@ class OrderServiceImplTest {
                 anyString(), anyString(), anyString(), anyString(),
                 customer.capture(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-                anyInt(), anyInt(), anyString(), anyString());
+                anyString(), anyInt(), anyInt(), anyString(), anyString());
         assertEquals("MK\\%L", customer.getValue());
     }
 
@@ -587,7 +591,7 @@ class OrderServiceImplTest {
                 anyString(), anyString(), keyword.capture(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-                anyInt(), anyInt(), anyString(), anyString());
+                anyString(), anyInt(), anyInt(), anyString(), anyString());
         assertEquals("QA\\\\INT", keyword.getValue());
     }
 
@@ -603,7 +607,7 @@ class OrderServiceImplTest {
                 anyString(), anyString(), keyword.capture(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-                anyInt(), anyInt(), anyString(), anyString());
+                anyString(), anyInt(), anyInt(), anyString(), anyString());
         assertEquals("Austin", keyword.getValue());
     }
 
@@ -620,6 +624,6 @@ class OrderServiceImplTest {
                 anyString(), anyString(), eq(""), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-                anyInt(), anyInt(), anyString(), anyString());
+                anyString(), anyInt(), anyInt(), anyString(), anyString());
     }
 }
