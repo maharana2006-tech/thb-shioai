@@ -2506,7 +2506,19 @@ export function useNewShipmentModel() {
         widthIn: Number(width) || undefined,
         heightIn: Number(height) || undefined,
         packageCode: pkgName,
-        incoterm: incoterms,
+        // BUG-026 — incoterm is a customs concept; sending it on a
+        // domestic shipment (fromCountry === toCountry) makes the model
+        // think the parcel is dutiable and fire a HIGH "missing importer
+        // of record" warning on a US→US parcel. The sticky-save
+        // (ms:lastIncoterms at line 2003) was leaking the last intl
+        // value onto every subsequent domestic shipment too.
+        incoterm: isInternational ? (incoterms || undefined) : undefined,
+        // BUG-026 (b) — flag that an importer is resolved (operator
+        // override OR per-client profile) so the model doesn't fire
+        // "importer of record missing" on a shipment where the
+        // operator already picked one. Pre-fix this field was never
+        // set, so the BE prompt saw "no importer" on every intl ship.
+        importerProvided: isInternational ? !!vImp : undefined,
         items: isInternational
           ? items
               .filter((it) => it.description.trim())
