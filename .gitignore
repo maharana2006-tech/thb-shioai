@@ -92,3 +92,10 @@ multiship_db_*.sql
 # Office lock/temp files
 ~$*
 graphify-out/
+# QA run artifacts — kept local, not tracked
+docs/audits/multiship-qa-2026-10-18-run4-db-checks.sql
+docs/audits/multiship-qa-2026-10-18-run4-report.md
+docs/audits/multiship-qa-2026-10-18-run4-testcases.xlsx
+docs/audits/multiship-qa-2026-10-18-run5-db-checks.sql
+docs/audits/multiship-qa-2026-10-18-run5-report.md
+docs/audits/multiship-qa-2026-10-18-run5-testcases.xlsx
