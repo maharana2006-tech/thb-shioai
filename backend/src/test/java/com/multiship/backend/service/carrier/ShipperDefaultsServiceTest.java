@@ -128,6 +128,104 @@ class ShipperDefaultsServiceTest {
         assertEquals("IN", out.getCountryCode());
     }
 
+    /* -------- BUG-025 sender-aware strict-mode -------- */
+
+    /**
+     * BUG-025 (QA 2026-10-23) — a request that carries a complete sender
+     * block never falls back to the platform default, so the strict-mode
+     * throw at that point is a false positive. The new helper lets the
+     * CarrierServiceImpl caller skip the strict check when the sender
+     * covers every REQUIRED_KEYS field.
+     */
+    @Test
+    void senderCoversRequiredFields_trueWhenEveryRequiredFieldPresent() {
+        com.multiship.backend.dto.ManualShipmentRequest.Address from =
+                new com.multiship.backend.dto.ManualShipmentRequest.Address();
+        from.setName("Acme Warehouse");
+        from.setPhone("5551234567");
+        from.setAddressLine1("1 Warehouse Way");
+        from.setCity("Louisville");
+        from.setState("KY");
+        from.setPostalCode("40209");
+        from.setCountryCode("US");
+        assertTrue(ShipperDefaultsService.senderCoversRequiredFields(from));
+    }
+
+    @Test
+    void senderCoversRequiredFields_addressLine2IsOptional() {
+        // REQUIRED_KEYS deliberately excludes addressLine2 (many addresses
+        // legitimately have none). Confirm the helper agrees.
+        com.multiship.backend.dto.ManualShipmentRequest.Address from =
+                new com.multiship.backend.dto.ManualShipmentRequest.Address();
+        from.setName("Acme");
+        from.setPhone("1");
+        from.setAddressLine1("1 Way");
+        // addressLine2 left null — must still count as covered.
+        from.setCity("c");
+        from.setState("s");
+        from.setPostalCode("p");
+        from.setCountryCode("US");
+        assertTrue(ShipperDefaultsService.senderCoversRequiredFields(from));
+    }
+
+    @Test
+    void senderCoversRequiredFields_falseWhenAnyRequiredFieldMissing() {
+        com.multiship.backend.dto.ManualShipmentRequest.Address from =
+                new com.multiship.backend.dto.ManualShipmentRequest.Address();
+        from.setName("Acme");
+        from.setPhone("1");
+        from.setAddressLine1("1 Way");
+        from.setCity("c");
+        from.setState("s");
+        from.setPostalCode("p");
+        // countryCode missing
+        assertFalse(ShipperDefaultsService.senderCoversRequiredFields(from));
+    }
+
+    @Test
+    void senderCoversRequiredFields_falseWhenFieldBlank() {
+        com.multiship.backend.dto.ManualShipmentRequest.Address from =
+                new com.multiship.backend.dto.ManualShipmentRequest.Address();
+        from.setName("Acme");
+        from.setPhone("   ");  // whitespace-only ≠ populated
+        from.setAddressLine1("1 Way");
+        from.setCity("c");
+        from.setState("s");
+        from.setPostalCode("p");
+        from.setCountryCode("US");
+        assertFalse(ShipperDefaultsService.senderCoversRequiredFields(from));
+    }
+
+    @Test
+    void senderCoversRequiredFields_falseWhenNull() {
+        assertFalse(ShipperDefaultsService.senderCoversRequiredFields(null));
+    }
+
+    @Test
+    void strictModeSkippedWhenCallerPassesEnforceStrictFalse() {
+        // The sender-aware fix wires this via `resolveFor(code, !senderCovers)`.
+        // Pin the two-arg contract so the regression surface is "the second
+        // arg actually suppresses the strict check".
+        props.getShipper().setStrictMode(true);
+        when(tenantSettings.getSetting(eq("ACME"), anyString())).thenReturn(Optional.empty());
+
+        var out = svc.resolveFor("ACME", false);  // enforceStrict=false
+        assertNotNull(out);
+        // Platform values flow through unchanged — no exception.
+        assertEquals("IN", out.getCountryCode());
+    }
+
+    @Test
+    void strictModeStillFiresWhenCallerPassesEnforceStrictTrueAndTenantHasNoOverride() {
+        // Defence against accidental always-skip: enforceStrict=true path
+        // still throws when the tenant is unconfigured.
+        props.getShipper().setStrictMode(true);
+        when(tenantSettings.getSetting(eq("ACME"), anyString())).thenReturn(Optional.empty());
+
+        assertThrows(ShipperDefaultsMissingException.class,
+                () -> svc.resolveFor("ACME", true));
+    }
+
     @Test
     void currentValuesFlagsOverridesForFe() {
         when(tenantSettings.getSetting("ACME", ShipperDefaultsService.KEY_COUNTRY_CODE))

@@ -214,6 +214,28 @@ export default function OrderDocumentsTable() {
       meta: { exportValue: (r: OrderDocumentRow) => r.generatedAt ?? '' },
     },
     {
+      // BUG-050 — pre-fix the CSV export had no Status column, so a totals-
+      // from-file calculation counted voided rows at full billed amount
+      // although the screen showed them struck-through. The on-screen
+      // Voided badge on the Order column scans at a glance; this column
+      // is the exportable truth that a spreadsheet can filter / sum on.
+      id: 'status',
+      header: 'Status',
+      enableSorting: false,
+      size: 80,
+      cell: ({ row }) => (
+        row.original.voided ? (
+          <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-600">VOIDED</span>
+        ) : (
+          <span className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-700">LIVE</span>
+        )
+      ),
+      meta: {
+        headerLabel: 'Status',
+        exportValue: (r: OrderDocumentRow) => r.voided ? 'VOIDED' : 'LIVE',
+      },
+    },
+    {
       id: 'billed',
       header: 'Billed',
       size: 100,
@@ -226,7 +248,15 @@ export default function OrderDocumentsTable() {
           )}
         </span>
       ),
-      meta: { exportValue: (r: OrderDocumentRow) => r.billableAmount ?? '' },
+      meta: {
+        // BUG-050 — voided rows export as "0" so a SUM() across the Billed
+        // column matches what the screen shows (struck-through = charge
+        // reversed). Pre-fix the exporter emitted the original billable
+        // and no status column, so operator-side spreadsheets totalled
+        // charges the system had already reversed.
+        exportValue: (r: OrderDocumentRow) =>
+          r.voided ? '0' : (r.billableAmount ?? ''),
+      },
     },
     {
       id: 'documents',
@@ -238,14 +268,24 @@ export default function OrderDocumentsTable() {
         const spin = <FiLoader className="h-3 w-3 animate-spin" />
         return (
           <span className="flex items-center gap-1 whitespace-nowrap">
+            {/* BUG-049 — label PDF + ZPL downloads are hidden on voided
+                rows; the stored bytes stay for audit but the backend
+                also 404s these endpoints. Statement + Commercial
+                invoice remain available (billing audit, customs
+                record). A reissue flips voided=false and both buttons
+                reappear. */}
+            {!r.voided && (
             <button type="button" onClick={() => void download(`label-${r.orderNo}`, () => orderService.getLabelPdf(r.orderNo), `label-${r.orderNo}.pdf`, 'Label PDF download failed.')}
               disabled={busyKey === `label-${r.orderNo}`} className={DOC_BTN} title="Download the 4x6 shipping label as PDF">
               {busyKey === `label-${r.orderNo}` ? spin : <FiDownload className="h-3 w-3 text-[#412d15]" />} Label
             </button>
+            )}
+            {!r.voided && (
             <button type="button" onClick={() => void download(`zpl-${r.orderNo}`, async () => new Blob([await labelService.allZpl(r.orderNo)], { type: 'text/plain' }), `label-${r.orderNo}.zpl`, 'ZPL download failed.')}
               disabled={busyKey === `zpl-${r.orderNo}`} className={DOC_BTN} title="Raw ZPL for thermal printers">
               {busyKey === `zpl-${r.orderNo}` ? spin : <FiDownload className="h-3 w-3 text-[#412d15]" />} ZPL
             </button>
+            )}
             {r.hasInvoice ? (
               <button type="button" onClick={() => void download(`inv-${r.orderNo}`, () => orderService.getCommercialInvoicePdf(r.orderNo), `commercial-invoice-${r.orderNo}.pdf`, 'Commercial invoice download failed.')}
                 disabled={busyKey === `inv-${r.orderNo}`} className={DOC_BTN} title="Commercial invoice PDF (customs document)">

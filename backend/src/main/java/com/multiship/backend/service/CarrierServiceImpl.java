@@ -2227,9 +2227,17 @@ public class CarrierServiceImpl implements CarrierService {
         // on top of the platform carrier.shipper.* defaults. When neither the
         // request sender nor the tenant have set countryCode, we still fall
         // back to the platform default (dev bootability).
+        //
+        // BUG-025 — strict mode is for "no override AND no sender in the
+        // request"; a request that carries a complete sender block never
+        // reaches the platform-default fallback, so the strict throw there
+        // is a false positive. Skip the strict check when the operator-
+        // typed sender already covers every REQUIRED_KEYS field.
+        boolean senderCovers = com.multiship.backend.service.carrier
+                .ShipperDefaultsService.senderCoversRequiredFields(from);
         CarrierProperties.ShipperDefaults dflt;
         try {
-            dflt = shipperDefaults.resolveFor(req.getClientCode());
+            dflt = shipperDefaults.resolveFor(req.getClientCode(), !senderCovers);
         } catch (ShipmentResolutionException e) {
             // Phase 1 — strict shipper mode is a 422 naming the field, not a 500.
             return toResolutionFailure(e);
@@ -2798,6 +2806,17 @@ public class CarrierServiceImpl implements CarrierService {
                     errOrder.setIsError(true);
                     errOrder.setIsManual("Y");
                     errOrder.setIsReturn(Boolean.TRUE.equals(req.getIsReturn()) ? "Y" : "N");
+                    // BUG-034 — persist Returns F9 Reason + RMA on the ERROR
+                    // row too, so the Reissue-return / Fix-return prefill can
+                    // restore the required Reason picklist on retry. Pre-fix
+                    // these were skipped on the error branch, so the operator
+                    // had to retype them on every Fix & regenerate.
+                    if (StringUtils.hasText(req.getReturnReason())) {
+                        errOrder.setReturnReason(req.getReturnReason());
+                    }
+                    if (StringUtils.hasText(req.getRmaNumber())) {
+                        errOrder.setRmaNumber(req.getRmaNumber());
+                    }
                     // A retried BULK/API order keeps its source (see the success path).
                     errOrder.setSource(firstNonBlank(errOrder.getSource(), req.getSource(), "MANUAL"));
                     errOrder.setOrderChannel(resolveOrderChannel(req, to));
@@ -4839,7 +4858,14 @@ public class CarrierServiceImpl implements CarrierService {
             CarrierAccountRef account,
             Integer orderNoForPo) {
         // C1 — tenant-scoped shipper defaults (see the shipperDefaults dep).
-        CarrierProperties.ShipperDefaults dflt = shipperDefaults.resolveFor(req.getClientCode());
+        // BUG-025 — same rationale as generateManualLabel: skip strict mode
+        // when the request sender already carries every required field so
+        // the strict throw doesn't block Validate on a form that provided a
+        // complete ship-from. See ShipperDefaultsService.senderCoversRequiredFields.
+        boolean senderCovers = com.multiship.backend.service.carrier
+                .ShipperDefaultsService.senderCoversRequiredFields(from);
+        CarrierProperties.ShipperDefaults dflt = shipperDefaults.resolveFor(
+                req.getClientCode(), !senderCovers);
         // PR #543 — PO / DEPT for label printing. Manual shipments always
         // resolve here via `generateManualLabel` with req.source in
         // {null, MANUAL} → prefix MAN{orderNo}. Non-manual sources

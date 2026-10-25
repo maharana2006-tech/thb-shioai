@@ -55,6 +55,36 @@ public class ShipperDefaultsService {
             KEY_NAME, KEY_PHONE, KEY_ADDRESS_LINE1,
             KEY_CITY, KEY_STATE, KEY_POSTAL_CODE, KEY_COUNTRY_CODE);
 
+    /**
+     * BUG-025 — true when the request's sender block already covers every
+     * {@link #REQUIRED_KEYS} field so the platform-default fallback would
+     * never fire. The strict-mode guard is meant to catch "no override
+     * AND no sender in the request"; when the sender IS complete, strict
+     * mode is a false positive. Callers pass this to
+     * {@link #resolveFor(String, boolean)} as {@code !senderCovers} so an
+     * operator who typed a full ship-from on New Shipment can validate /
+     * generate without configuring {@code /settings/system} first.
+     *
+     * <p>Package-visible rather than public — only CarrierServiceImpl +
+     * ShipmentValidationService need this; keeping it narrow forces a
+     * second pair of eyes if a new caller wants to opt out of strict mode.
+     */
+    public static boolean senderCoversRequiredFields(
+            com.multiship.backend.dto.ManualShipmentRequest.Address from) {
+        if (from == null) return false;
+        return hasText(from.getName())
+                && hasText(from.getPhone())
+                && hasText(from.getAddressLine1())
+                && hasText(from.getCity())
+                && hasText(from.getState())
+                && hasText(from.getPostalCode())
+                && hasText(from.getCountryCode());
+    }
+
+    private static boolean hasText(String s) {
+        return s != null && !s.trim().isEmpty();
+    }
+
     private final CarrierProperties carrierProperties;
     private final TenantSettingsService tenantSettings;
 

@@ -1059,7 +1059,11 @@ export function useNewShipmentModel() {
         const bareNo = !!o.shipName && /^\d+$/.test(o.shipName.trim()) && !!o.shipAttn?.trim()
         setRecipient({
           name: (bareNo ? o.shipAttn : o.shipName) ?? '', company: bareNo ? '' : o.shipAttn ?? '', phone: o.phone ?? '', email: '',
-          addressLine1: o.shipAddr1 ?? '', addressLine2: '', city: o.shiptoCity ?? '',
+          // BUG-034 — Order.location persists the recipient's Address line 2
+          // (manual/API path). Pre-fix this was hard-coded to '', so Fix &
+          // regenerate / Reissue label sent an empty line 2 back and wiped
+          // the stored suite/apt from the order + the printed label.
+          addressLine1: o.shipAddr1 ?? '', addressLine2: o.shipAddr2 ?? '', city: o.shiptoCity ?? '',
           state: o.shiptoState ?? '', postalCode: o.shiptoZip ?? '', countryCode: recipCountry,
           phoneCountryCode: dialCodeFor(recipCountry) || '',
         })
@@ -1129,6 +1133,12 @@ export function useNewShipmentModel() {
         if (cfValues && Object.keys(cfValues).length > 0) {
           setCustomFieldValues(cfValues)
         }
+        // BUG-034 — return-flow Reason + RMA# live on Order.return_reason /
+        // Order.rma_number (columns since Returns F9). Pre-fix the Reissue
+        // return form opened with both blank, so the operator had to retype
+        // a required field and risked losing the RMA on a second save.
+        if (o.returnReason) setReturnReason(o.returnReason)
+        if (o.rmaNumber) setRmaNumber(o.rmaNumber)
         pendingFixRef.current = {
           serviceCode: o.shipviaCd,
           accountNumber: details.data.carrierAccount?.accountNumber ?? null,
@@ -1148,7 +1158,7 @@ export function useNewShipmentModel() {
       }
     })()
     return () => { cancelled = true }
-  }, [urlFixOrderNo, setAesCitation, setCarrier, setClientCode, setCurrency, setCustomFieldValues, setDeclaredValue, setDimUnit, setExportDeclarationReference, setFixChannel, setFtrExemption, setHeight, setIncoterms, setItems, setLength, setReasonForExport, setRecipient, setReference, setSender, setWeight, setWeightUnit, setWidth])
+  }, [urlFixOrderNo, setAesCitation, setCarrier, setClientCode, setCurrency, setCustomFieldValues, setDeclaredValue, setDimUnit, setExportDeclarationReference, setFixChannel, setFtrExemption, setHeight, setIncoterms, setItems, setLength, setReasonForExport, setRecipient, setReference, setReturnReason, setRmaNumber, setSender, setWeight, setWeightUnit, setWidth])
 
   // Apply the stashed service/account once the carrier's catalog is loaded.
   useEffect(() => {
@@ -2510,7 +2520,19 @@ export function useNewShipmentModel() {
         widthIn: Number(width) || undefined,
         heightIn: Number(height) || undefined,
         packageCode: pkgName,
-        incoterm: incoterms,
+        // BUG-026 — incoterm is a customs concept; sending it on a
+        // domestic shipment (fromCountry === toCountry) makes the model
+        // think the parcel is dutiable and fire a HIGH "missing importer
+        // of record" warning on a US→US parcel. The sticky-save
+        // (ms:lastIncoterms at line 2003) was leaking the last intl
+        // value onto every subsequent domestic shipment too.
+        incoterm: isInternational ? (incoterms || undefined) : undefined,
+        // BUG-026 (b) — flag that an importer is resolved (operator
+        // override OR per-client profile) so the model doesn't fire
+        // "importer of record missing" on a shipment where the
+        // operator already picked one. Pre-fix this field was never
+        // set, so the BE prompt saw "no importer" on every intl ship.
+        importerProvided: isInternational ? !!vImp : undefined,
         items: isInternational
           ? items
               .filter((it) => it.description.trim())
