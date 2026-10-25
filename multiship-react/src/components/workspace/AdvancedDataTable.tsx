@@ -591,7 +591,19 @@ export default function AdvancedDataTable<T extends RowData>({
   const resetLayout = () => {
     clearLayout(tableKey)
     setColumnOrder(defaultOrder)
-    setColumnVisibility(defaultVisibility)
+    // BUG-009 — pre-fix Reset wrote `defaultVisibility`, which is
+    // derived from `initialHiddenColumns`. On the Orders list those
+    // auto-hide via data heuristics (e.g. "every row has null
+    // batchId → hide the Batch column"), so Reset snapped the Batch
+    // column back to false even when the operator had deliberately
+    // enabled it. Operator read it as "Reset hid my column".
+    //
+    // Reset means "undo my layout tweaks" → every column visible.
+    // The initial-hidden heuristic still applies on first mount
+    // (persisted layout null → defaultVisibility seeds state) but
+    // Reset is an explicit "show me everything" moment. The operator
+    // can re-hide via the Columns menu.
+    setColumnVisibility({})
     setColumnSizing({})
     // BUG-074 — Reset layout used to clear pinning to { start:[], end:[] }
     // which unpinned the row-actions column (meta.pinnedByDefault='end')
