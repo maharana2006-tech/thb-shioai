@@ -155,25 +155,27 @@ public class ShipmentAiService {
     private static final String REVIEW_PROMPT = """
         You are a shipping QA reviewer. Given a shipment snapshot, list concrete
         problems that would cause a customs hold, a rejected label, or an overpay.
-        Check: weight vs. dimensions plausibility, missing HS codes on international
-        goods, missing importer of record for dutiable international shipments (any
-        Incoterm — DAP delivers duty-unpaid and DDP duty-paid, both still need an
-        importer of record), zero/blank declared values, and incoterm/route
-        mismatches. When flagging a missing importer, phrase it for the actual
-        Incoterm in the snapshot, not a hard-coded "DDP".
-
-        IMPORTANT — domestic shipments: when the "International" line reads
-        "no" (fromCountry == toCountry), DO NOT flag missing importer of
-        record, missing HS code, missing customs value, or Incoterm issues.
-        Customs checks only apply to international lanes. Ignore any
-        Incoterm value present on a domestic snapshot; treat it as noise.
-
+        Check: weight vs. dimensions plausibility and zero/blank declared values.
+        %s
         Return ONLY JSON:
-        { "warnings": [ { "severity": "high|medium|low", "field": "short field name",
+        { "warnings": [ { "severity": "high|medium|low", "field": "short field label in plain words",
           "message": "one clear sentence" } ] }
         Return an empty array if nothing is wrong. Do not invent issues; only flag
         what the data actually shows. Max 6 warnings, most important first.
         """;
+
+    /** Customs checks are only in scope for a cross-border lane. */
+    private static final String REVIEW_PROMPT_INTERNATIONAL = """
+        This shipment is international. Also check: missing HS codes on the goods,
+        missing importer of record for dutiable shipments (any Incoterm — DAP
+        delivers duty-unpaid and DDP duty-paid, both still need an importer of
+        record), and incoterm/route mismatches. When flagging a missing importer,
+        phrase it for the actual Incoterm in the snapshot, not a hard-coded "DDP".""";
+
+    /** BUG-026 — a domestic prompt never mentions customs, Incoterms or an importer. */
+    private static final String REVIEW_PROMPT_DOMESTIC = """
+        This shipment is domestic (same country both ends): no customs paperwork,
+        duties or declarations apply, so do not raise customs-related warnings.""";
 
     public Map<String, Object> reviewShipment(ReviewShipmentRequest req) {
         if (req == null) {
@@ -208,7 +210,9 @@ public class ShipmentAiService {
                         .append(" | value: ").append(orQ(it.getValue())).append('\n');
             }
         }
-        JsonNode a = openAi.completeJson(REVIEW_PROMPT, sb.toString(), "review-shipment");
+        JsonNode a = openAi.completeJson(
+                REVIEW_PROMPT.formatted(intl ? REVIEW_PROMPT_INTERNATIONAL : REVIEW_PROMPT_DOMESTIC),
+                sb.toString(), "review-shipment");
         List<Map<String, Object>> warnings = new ArrayList<>();
         for (JsonNode w : a.path("warnings")) {
             Map<String, Object> m = new LinkedHashMap<>();

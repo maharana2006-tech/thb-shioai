@@ -45,13 +45,14 @@ public class BulkBatchController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @RequestParam(required = false) String createdBy,
             @RequestParam(required = false) String labelBatch,
+            @RequestParam(required = false) Long importId,
             @RequestParam(required = false) Integer minSaved,
             @RequestParam(defaultValue = "created") String sort,
             @RequestParam(defaultValue = "DESC") String dir,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size) {
         Page<ImportBatchDTO> result = queryService.list(new Query(parseView(view), status, q, from, to, createdBy,
-                labelBatch, minSaved, sort, "ASC".equalsIgnoreCase(dir)), page, size);
+                labelBatch, importId, minSaved, sort, "ASC".equalsIgnoreCase(dir)), page, size);
         return ResponseEntity.ok(ApiResponse.<Page<ImportBatchDTO>>builder()
                 .status("success").code(200)
                 .message(result.getTotalElements() + " batch(es).")

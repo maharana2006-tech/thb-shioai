@@ -1324,7 +1324,7 @@ public class UpsConnector implements CarrierConnector {
                 if ("250002".equals(code)) {
                     sb.append(" — the OAuth token was issued but UPS did not accept it for this endpoint. "
                             + "Most common cause: the developer app that owns these credentials is not "
-                            + "subscribed to the required product (Address Validation Street Level for AVS). "
+                            + "subscribed to the product this call needs (" + opName + "). "
                             + "Enable it on the UPS Developer Portal, or use credentials from an app that already has it.");
                 } else if ("10401".equals(code)) {
                     sb.append(" — sandbox credentials called against production host (or vice versa). "

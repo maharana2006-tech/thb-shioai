@@ -47,8 +47,10 @@ public class BulkBatchQueryService {
             String createdBy,
             /** HAS · NONE — has a label batch yet — or one label batch number. */
             String labelBatch,
+            /** BUG-056 — one import (the number the operator sees everywhere). */
+            Long importId,
             Integer minSaved,
-            /** created · fileName · savedRows · status · labelBatch */
+            /** created · id · fileName · savedRows · status · labelBatch */
             String sort,
             boolean asc) { }
 
@@ -61,8 +63,10 @@ public class BulkBatchQueryService {
             long completedThisWeek,
             Map<String, Long> statusCounts,
             List<String> creators,
-            /** Label batch numbers in this view, newest first — the "Batch" filter's choices. */
-            List<Integer> labelBatches) { }
+            /** Label batch numbers in this view, newest first. */
+            List<Integer> labelBatches,
+            /** BUG-056 — import numbers in this view, newest first — the "Import" filter's choices. */
+            List<Long> importIds) { }
 
     static final List<String> STATUSES =
             List.of("DRAFT", "INITIATE", "IN_PROGRESS", "PARTIAL_COMPLETE", "COMPLETE", "FAILED", "CANCELLED");
@@ -181,7 +185,7 @@ public class BulkBatchQueryService {
         byStatus.put("ALL", total);
         return new Summary(total, asLong(t.get("ready")), byStatus.getOrDefault("IN_PROGRESS", 0L),
                 asLong(t.get("needsFixes")), asLong(t.get("doneThisWeek")),
-                byStatus, creators(base), labelBatches(base));
+                byStatus, creators(base), labelBatches(base), importIds(base));
     }
 
     private static long asLong(Object v) {
@@ -292,6 +296,14 @@ public class BulkBatchQueryService {
         return entityManager.createQuery(cq).getResultList();
     }
 
+    private List<Long> importIds(Specification<ImportBatch> where) {
+        CriteriaBuilder cb = entityManager.getCriteriaBuilder();
+        jakarta.persistence.criteria.CriteriaQuery<Long> cq = cb.createQuery(Long.class);
+        Root<ImportBatch> root = cq.from(ImportBatch.class);
+        cq.select(root.get("id")).where(where.toPredicate(root, cq, cb)).orderBy(cb.desc(root.get("id")));
+        return entityManager.createQuery(cq).getResultList();
+    }
+
     // ─── Specifications ───────────────────────────────────────────────────
 
     /** The view (live file / live API / Trash) and the caller's client. */
@@ -349,6 +361,7 @@ public class BulkBatchQueryService {
             if (f.labelBatch() != null && f.labelBatch().trim().matches("\\d{1,9}")) {
                 p.add(cb.equal(root.get("labelBatchId"), Integer.parseInt(f.labelBatch().trim())));
             }
+            if (f.importId() != null) p.add(cb.equal(root.get("id"), f.importId()));
             if (f.minSaved() != null) p.add(cb.greaterThanOrEqualTo(root.get("savedRows"), f.minSaved()));
             return cb.and(p.toArray(Predicate[]::new));
         };
@@ -365,6 +378,7 @@ public class BulkBatchQueryService {
             if (query != null && !Long.class.equals(query.getResultType()) && !long.class.equals(query.getResultType())) {
                 String key = f.sort() == null ? "created" : f.sort();
                 Expression<?> by = switch (key) {
+                    case "id" -> root.get("id");
                     case "fileName" -> cb.lower(cb.coalesce(root.get("fileName"), ""));
                     case "savedRows" -> root.get("totalRows");
                     case "labelBatch" -> cb.coalesce(root.<Integer>get("labelBatchId"), -1);

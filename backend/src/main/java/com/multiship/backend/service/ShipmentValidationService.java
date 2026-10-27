@@ -397,8 +397,10 @@ public class ShipmentValidationService {
             } catch (com.multiship.backend.service.carrier.ShipperDefaultsMissingException e) {
                 // Phase 1 — strict shipper mode is a local error the operator
                 // can fix, reported on the sender block, not a 500.
-                errors.add(ValidationIssue.builder().code(e.getErrorCode().name())
-                        .field("sender").message(e.getMessage()).build());
+                // BUG-025 — strict mode only fires when the form's Ship from
+                // block leaves a required field blank, so name THAT field in
+                // plain words instead of the tenant-settings key list.
+                errors.addAll(shipFromGaps(req.getSender(), e, errors));
             }
         }
         // A login failure reads as one, whichever carrier said it and however
@@ -2352,6 +2354,55 @@ public class ShipmentValidationService {
                     label + " exceeds the " + CARRIER_FIELD_MAX + "-character carrier limit (currently "
                             + value.length() + ").", field));
         }
+    }
+
+    /** BUG-025 — tenant-settings key → sender form field, in the operator's words. */
+    private static final java.util.Map<String, String> SHIP_FROM_LABELS = java.util.Map.of(
+            "name", "name", "phone", "phone", "addressLine1", "address line 1", "city", "city",
+            "state", "state/province", "postalCode", "postal code", "countryCode", "country");
+
+    /**
+     * BUG-025 — one issue per required Ship from field the form left blank
+     * (field {@code sender.<name>} so the form marks it). Fields the form
+     * already filled are covered by the request and need no default, so
+     * they are not reported; nor are fields another check already flagged.
+     */
+    private List<ValidationIssue> shipFromGaps(ManualShipmentRequest.Address from,
+                                               com.multiship.backend.service.carrier.ShipperDefaultsMissingException e,
+                                               List<ValidationIssue> existing) {
+        String where = " Fill it in, or save a ship-from address for client " + e.getTenantCode()
+                + " under Settings → System → Ship-from defaults.";
+        List<ValidationIssue> out = new ArrayList<>();
+        if (from == null) {
+            out.add(issue(e.getErrorCode(), "Ship from address is required." + where, "sender"));
+            return out;
+        }
+        Set<String> flagged = new java.util.HashSet<>();
+        for (ValidationIssue i : existing) if (i.getField() != null) flagged.add(i.getField());
+        for (String key : e.getMissingKeys()) {
+            String name = key.startsWith("shipper.") ? key.substring("shipper.".length()) : key;
+            String label = SHIP_FROM_LABELS.get(name);
+            String field = "sender." + name;
+            if (label == null || StringUtils.hasText(senderField(from, name)) || flagged.contains(field)) continue;
+            out.add(issue(e.getErrorCode(), "Ship from " + label + " is required." + where, field));
+        }
+        if (out.isEmpty()) {
+            out.add(issue(e.getErrorCode(), "Ship from address is incomplete." + where, "sender"));
+        }
+        return out;
+    }
+
+    private static String senderField(ManualShipmentRequest.Address a, String name) {
+        return switch (name) {
+            case "name" -> a.getName();
+            case "phone" -> a.getPhone();
+            case "addressLine1" -> a.getAddressLine1();
+            case "city" -> a.getCity();
+            case "state" -> a.getState();
+            case "postalCode" -> a.getPostalCode();
+            case "countryCode" -> a.getCountryCode();
+            default -> null;
+        };
     }
 
     private ValidationIssue issue(ErrorCode code, String message, String field) {

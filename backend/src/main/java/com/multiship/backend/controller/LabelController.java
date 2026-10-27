@@ -8,6 +8,7 @@ import com.multiship.backend.service.label.LabelPrintableService;
 import com.multiship.backend.service.label.LabelRenderService;
 import io.swagger.v3.oas.annotations.Operation;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -39,6 +40,17 @@ public class LabelController {
      *  carrier returned, not native thermal markup. */
     static final String SOURCE_HEADER = "X-Label-Source";
 
+    /** BUG-049 — a voided label is refused with a reason, not a bare 404:
+     *  the carrier has reversed it and a copy put on a parcel will not scan. */
+    static String voidedMessage(Integer orderNo) {
+        return "Label for order " + orderNo + " was voided; download and print are disabled.";
+    }
+
+    private static <T> ResponseEntity<T> gone(Integer orderNo, java.util.function.Function<String, T> body) {
+        return ResponseEntity.status(HttpStatus.GONE).contentType(MediaType.TEXT_PLAIN)
+                .body(body.apply(voidedMessage(orderNo)));
+    }
+
     private final LabelArtifactService artifacts;
     private final LabelRenderService render;
     private final LabelPrintableService printable;
@@ -65,6 +77,7 @@ public class LabelController {
     @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
     @GetMapping(value = "/{orderNo}/packages/{seq}/zpl", produces = MediaType.TEXT_PLAIN_VALUE)
     public ResponseEntity<String> packageZpl(@PathVariable Integer orderNo, @PathVariable Integer seq) {
+        if (artifacts.isVoided(orderNo)) return gone(orderNo, m -> m);
         Optional<LabelPackage> pkg = artifacts.pkg(orderNo, seq);
         if (pkg.isEmpty()) return ResponseEntity.notFound().build();
         Optional<byte[]> zpl = artifacts.zpl(orderNo, seq);
@@ -81,6 +94,7 @@ public class LabelController {
     @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
     @GetMapping(value = "/{orderNo}/zpl", produces = MediaType.TEXT_PLAIN_VALUE)
     public ResponseEntity<String> allZpl(@PathVariable Integer orderNo) {
+        if (artifacts.isVoided(orderNo)) return gone(orderNo, m -> m);
         return artifacts.zplAll(orderNo)
                 .map(z -> ResponseEntity.ok()
                         .header(HttpHeaders.ETAG, LabelRenderService.etag(z))
@@ -93,6 +107,7 @@ public class LabelController {
     @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
     @RequestMapping(value = "/{orderNo}/packages/{seq}/preview.png", method = RequestMethod.HEAD)
     public ResponseEntity<Void> previewHead(@PathVariable Integer orderNo, @PathVariable Integer seq) {
+        if (artifacts.isVoided(orderNo)) return ResponseEntity.status(HttpStatus.GONE).build();
         return artifacts.zpl(orderNo, seq).isPresent()
                 ? ResponseEntity.ok().header(HttpHeaders.CONTENT_TYPE, MediaType.IMAGE_PNG_VALUE).build()
                 : ResponseEntity.notFound().build();
@@ -102,6 +117,7 @@ public class LabelController {
     @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
     @GetMapping(value = "/{orderNo}/packages/{seq}/preview.png", produces = MediaType.IMAGE_PNG_VALUE)
     public ResponseEntity<byte[]> previewPng(@PathVariable Integer orderNo, @PathVariable Integer seq) {
+        if (artifacts.isVoided(orderNo)) return gone(orderNo, m -> m.getBytes(StandardCharsets.UTF_8));
         Optional<LabelPackage> pkg = artifacts.pkg(orderNo, seq);
         if (pkg.isEmpty()) return ResponseEntity.notFound().build();
         Optional<byte[]> zpl = artifacts.zpl(orderNo, seq);
@@ -123,6 +139,7 @@ public class LabelController {
     @GetMapping(value = "/{orderNo}/pdf", produces = MediaType.APPLICATION_PDF_VALUE)
     public ResponseEntity<byte[]> pdf(@PathVariable Integer orderNo,
                                       @RequestParam(name = "seq", required = false) Integer seq) {
+        if (artifacts.isVoided(orderNo)) return gone(orderNo, m -> m.getBytes(StandardCharsets.UTF_8));
         if (seq != null && artifacts.pkg(orderNo, seq).isEmpty()) return ResponseEntity.notFound().build();
         String name = seq != null ? "label-" + orderNo + "-pkg" + seq + ".pdf" : "label-" + orderNo + ".pdf";
         return printable.pdf(orderNo, seq)

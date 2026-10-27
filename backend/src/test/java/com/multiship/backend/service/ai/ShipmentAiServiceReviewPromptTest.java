@@ -77,6 +77,34 @@ class ShipmentAiServiceReviewPromptTest {
     }
 
     @Test
+    void domesticShipment_systemPromptNeverMentionsCustoms() {
+        // BUG-026 (R3) — the instructions themselves must not put DAP /
+        // importer-of-record ideas in front of the model on a US→US parcel.
+        svc.reviewShipment(req("US", "US", "DAP"));
+
+        ArgumentCaptor<String> system = ArgumentCaptor.forClass(String.class);
+        verify(openAi).completeJson(system.capture(), anyString(), anyString());
+        String prompt = system.getValue().toLowerCase();
+
+        assertFalse(prompt.contains("importer"), system.getValue());
+        assertFalse(prompt.contains("incoterm"), system.getValue());
+        assertFalse(prompt.contains("dap"), system.getValue());
+        assertFalse(prompt.contains("hs code"), system.getValue());
+        assertTrue(prompt.contains("domestic"), system.getValue());
+    }
+
+    @Test
+    void internationalShipment_systemPromptKeepsCustomsChecks() {
+        svc.reviewShipment(req("US", "CA", "DAP"));
+
+        ArgumentCaptor<String> system = ArgumentCaptor.forClass(String.class);
+        verify(openAi).completeJson(system.capture(), anyString(), anyString());
+
+        assertTrue(system.getValue().contains("importer of record"), system.getValue());
+        assertTrue(system.getValue().contains("HS codes"), system.getValue());
+    }
+
+    @Test
     void internationalShipment_stillIncludesIncotermAndImporterLines() {
         // Belt-and-braces: the strip-on-domestic rule must NOT reach
         // intl shipments. Customs context is required for the model to

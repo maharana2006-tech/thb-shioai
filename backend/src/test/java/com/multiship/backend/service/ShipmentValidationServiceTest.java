@@ -1262,10 +1262,13 @@ class ShipmentValidationServiceTest {
                 any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
-    /** Strict shipper mode is reported on the sender block, not thrown as a 500. */
+    /** BUG-025 — strict shipper mode names the blank Ship from field in plain
+     *  words (not the tenant-settings keys), and only the fields the form
+     *  left blank; it is never a 500. */
     @Test
     void strictShipperModeIsALocalErrorOnTheSender() {
         ManualShipmentRequest req = fullDomesticRequest();
+        req.getSender().setPhone(null);
         req.setAccountId(42L);
         stubServiceAndPreset();
         com.multiship.backend.model.CarrierAccountRef picked = com.multiship.backend.model.CarrierAccountRef.builder()
@@ -1279,14 +1282,19 @@ class ShipmentValidationServiceTest {
         when(connector.getAccessToken("cid", "sec", "PICKED1", "SANDBOX")).thenReturn("tok");
         when(carrierService.buildManualShipmentRequestDto(any(), any(), any(), any(), any(), any(), any(),
                 any(), any(), any(), any(), any(), any()))
-                .thenThrow(new com.multiship.backend.service.carrier.ShipperDefaultsMissingException("ACME", List.of("shipper.name", "shipper.city")));
+                .thenThrow(new com.multiship.backend.service.carrier.ShipperDefaultsMissingException("ACME",
+                        com.multiship.backend.service.carrier.ShipperDefaultsService.REQUIRED_KEYS));
 
         ShipmentValidationResult r = service.validate(req).getData();
 
         assertEquals("FAIL", r.getOverall());
-        assertTrue(r.getLocalErrors().stream().anyMatch(e -> "sender".equals(e.getField())
-                && "SHIPPER_DEFAULTS_MISSING".equals(e.getCode())
-                && e.getMessage().contains("shipper.name")), r.getLocalErrors().toString());
+        List<ShipmentValidationResult.ValidationIssue> strict = r.getLocalErrors().stream()
+                .filter(e -> "SHIPPER_DEFAULTS_MISSING".equals(e.getCode())).toList();
+        assertEquals(1, strict.size(), r.getLocalErrors().toString());
+        assertEquals("sender.phone", strict.get(0).getField());
+        assertTrue(strict.get(0).getMessage().startsWith("Ship from phone is required."), strict.get(0).getMessage());
+        assertTrue(r.getLocalErrors().stream().noneMatch(e -> e.getMessage().contains("shipper.")),
+                "no internal setting keys in the message: " + r.getLocalErrors());
     }
 
     // ─── Checks Generate label runs before buying ───────────────────────

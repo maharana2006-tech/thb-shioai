@@ -34,6 +34,7 @@ class WebhookSubscriptionAdminControllerTest {
     private WebhookUrlValidator urlValidator;
     private ExternalWebhookDispatcher dispatcher;
     private WebhookSubscriptionAdminController controller;
+    private com.multiship.backend.repository.ApiKeyRepository apiKeyRepo;
 
     @BeforeEach
     void setUp() {
@@ -49,7 +50,39 @@ class WebhookSubscriptionAdminControllerTest {
                 .thenAnswer(inv -> "enc(" + inv.getArgument(0) + ")");
         com.multiship.backend.service.external.WebhookSecretCipher secretCipher =
                 new com.multiship.backend.service.external.WebhookSecretCipher(crypto);
-        controller = new WebhookSubscriptionAdminController(repo, urlValidator, dispatcher, secretCipher);
+        // BUG-172 — key 1 is active unless a test says otherwise.
+        apiKeyRepo = mock(com.multiship.backend.repository.ApiKeyRepository.class);
+        when(apiKeyRepo.findById(org.mockito.ArgumentMatchers.anyLong())).thenReturn(Optional.of(
+                com.multiship.backend.model.ApiKey.builder().id(1L).name("live key").active(true).build()));
+        controller = new WebhookSubscriptionAdminController(repo, urlValidator, dispatcher, secretCipher, apiKeyRepo);
+    }
+
+    @Test
+    void save_revokedKeyIsRefusedOnTheApiKeyIdField() {
+        // BUG-172 — a subscription could be saved (201, then 200) on a revoked key.
+        when(apiKeyRepo.findById(15L)).thenReturn(Optional.of(com.multiship.backend.model.ApiKey.builder()
+                .id(15L).name("ZZ revoke test").active(false).revokedAt(java.time.LocalDateTime.now()).build()));
+        ExternalWebhookSubscriptionDTO body = ExternalWebhookSubscriptionDTO.builder()
+                .apiKeyId(15L).event(EventType.LABEL_GENERATED)
+                .url("https://api.partner.example/hook").secret("a-long-enough-secret-value").active(false).build();
+        com.multiship.backend.exception.FieldValidationException ex = org.junit.jupiter.api.Assertions.assertThrows(
+                com.multiship.backend.exception.FieldValidationException.class, () -> controller.save(body));
+        assertEquals("apiKeyId", ex.getField());
+        assertEquals(422, ex.getStatus().value());
+        verify(repo, never()).save(any());
+    }
+
+    @Test
+    void save_unknownKeyIsRefusedOnTheApiKeyIdField() {
+        // BUG-172 — subscription id 2 pointed at key #999999, which does not exist.
+        when(apiKeyRepo.findById(999999L)).thenReturn(Optional.empty());
+        ExternalWebhookSubscriptionDTO body = ExternalWebhookSubscriptionDTO.builder()
+                .apiKeyId(999999L).event(EventType.LABEL_GENERATED)
+                .url("https://api.partner.example/hook").secret("a-long-enough-secret-value").active(true).build();
+        com.multiship.backend.exception.FieldValidationException ex = org.junit.jupiter.api.Assertions.assertThrows(
+                com.multiship.backend.exception.FieldValidationException.class, () -> controller.save(body));
+        assertEquals("apiKeyId", ex.getField());
+        verify(repo, never()).save(any());
     }
 
     @Test

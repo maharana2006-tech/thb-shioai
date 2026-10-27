@@ -48,6 +48,9 @@ public class WebhookSubscriptionAdminController {
     /** Audit R2 #336 — envelope-encrypt the HMAC secret on save so DB
      *  dumps don't leak every tenant's signing key. */
     private final com.multiship.backend.service.external.WebhookSecretCipher secretCipher;
+    /** BUG-172 — a subscription on a revoked or unknown key is a dead row that the
+     *  editor had to warn about; refuse it at the API instead. */
+    private final com.multiship.backend.repository.ApiKeyRepository apiKeyRepository;
     /** BUG-157 — audit trail for writes that used to leave none. Optional so hand-built tests stay constructible. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.service.AuditService audit;
@@ -78,6 +81,15 @@ public class WebhookSubscriptionAdminController {
         if (body.getSecret().trim().length() < MIN_SECRET_LENGTH) {
             throw new com.multiship.backend.exception.FieldValidationException("secret",
                     "The HMAC secret must be at least " + MIN_SECRET_LENGTH + " characters.");
+        }
+        com.multiship.backend.model.ApiKey key = apiKeyRepository.findById(body.getApiKeyId()).orElse(null);
+        if (key == null) {
+            throw new com.multiship.backend.exception.FieldValidationException("apiKeyId",
+                    "API key #" + body.getApiKeyId() + " does not exist.");
+        }
+        if (!key.isActive()) {
+            throw new com.multiship.backend.exception.FieldValidationException("apiKeyId",
+                    "API key \"" + key.getName() + "\" is revoked — pick an active key.");
         }
         // Sprint 51 T3 finding #7 — same SSRF guard as the v2 external
         // save path. Applied even for admin callers.

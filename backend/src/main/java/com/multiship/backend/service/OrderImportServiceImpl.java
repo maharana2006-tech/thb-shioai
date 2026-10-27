@@ -2117,8 +2117,10 @@ public class OrderImportServiceImpl implements OrderImportService {
         try {
             Map<String, List<OrderImportRowDTO>> byKey = new LinkedHashMap<>();
             for (OrderImportRowDTO r : rows) {
-                if (!StringUtils.hasText(r.getOrderRef())) continue;
-                String key = StringUtils.hasText(r.getReference()) ? r.getReference().trim() : r.getOrderRef().trim();
+                // BUG-045 — a row with a reference but no orderRef is a shipment too.
+                String key = StringUtils.hasText(r.getReference()) ? r.getReference().trim()
+                        : StringUtils.hasText(r.getOrderRef()) ? r.getOrderRef().trim() : null;
+                if (key == null) continue;
                 byKey.computeIfAbsent(key.toUpperCase(Locale.ROOT), k -> new ArrayList<>()).add(r);
             }
             if (byKey.isEmpty()) return;
@@ -2127,8 +2129,9 @@ public class OrderImportServiceImpl implements OrderImportService {
             for (Object[] hit : hits) {
                 Object orderNo = hit[0];
                 String ref = hit[1] == null ? null : String.valueOf(hit[1]);
+                String custNo = hit.length > 2 && hit[2] != null ? String.valueOf(hit[2]) : null;
                 if (!StringUtils.hasText(ref)) continue;
-                List<OrderImportRowDTO> mine = byKey.remove(ref.trim().toUpperCase(Locale.ROOT));
+                List<OrderImportRowDTO> mine = byKey.get(ref.trim().toUpperCase(Locale.ROOT));
                 if (mine == null) continue;
                 // The rows' own order is not a duplicate of itself: a labelled row
                 // re-validated (an edit, Validate all) matched its own live order.
@@ -2137,6 +2140,16 @@ public class OrderImportServiceImpl implements OrderImportService {
                 String msg = "reference " + ref.trim() + " already has a labelled order (#" + orderNo
                         + ") — generating again creates a duplicate shipment";
                 for (OrderImportRowDTO m : mine) {
+                    // BUG-045 — the file's reference becomes the order's customer_ref,
+                    // UNIQUE per client across GENERATED labels (V175): the carrier call
+                    // would be refused at Generate, so refuse the row now, before Save.
+                    if (StringUtils.hasText(m.getReference())
+                            && (custNo == null || custNo.equalsIgnoreCase(String.valueOf(m.getClientCode()).trim()))) {
+                        String err = "reference " + ref.trim() + " is already in use on a GENERATED label (order #" + orderNo
+                                + ") — use a different reference or void that label first.";
+                        if (m.getErrors() == null || !m.getErrors().contains(err)) addError(m, err);
+                        continue;
+                    }
                     boolean already = m.getWarnings() != null && m.getWarnings().stream().anyMatch(w -> w.contains("already generated as order") || w.contains("already has a labelled order"));
                     if (!already) addWarning(m, msg);
                 }
@@ -2192,8 +2205,12 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (byRef.isEmpty()) return;
         try {
             // One order per reference: a GENERATED one wins, else the latest.
+            // BUG-043 — a VOIDED order is never a candidate: its reference is
+            // free again, so the row must mint a fresh order rather than be
+            // attached to (and regenerated in place on) its voided twin.
             Map<String, Object[]> best = new LinkedHashMap<>();
             for (Object[] o : importBatchRepository.findOrdersInLabelBatchByCustomerRefIn(labelBatchId, byRef.keySet())) {
+                if ("VOIDED".equalsIgnoreCase(String.valueOf(o[2]))) continue;
                 String ref = String.valueOf(o[1]).trim().toUpperCase(Locale.ROOT);
                 Object[] cur = best.get(ref);
                 boolean gen = "GENERATED".equalsIgnoreCase(String.valueOf(o[2]));
@@ -2354,6 +2371,10 @@ public class OrderImportServiceImpl implements OrderImportService {
      */
     void validateBusinessRules(List<OrderImportRowDTO> rows) {
         flagOrderRefsAlreadyGenerated(rows);
+        // BUG-045 — here, not only in validate(): the staging upload and
+        // Validate-all pipelines skipped the within-file check, so two
+        // shipments sharing a reference stayed "Ready" until Generate.
+        flagWithinImportDuplicateReferences(rows);
         if (rows.isEmpty() || shippingServiceRepository == null) return;
 
         // --- snapshot the rule tables once ---
@@ -2712,7 +2733,6 @@ public class OrderImportServiceImpl implements OrderImportService {
         validateCustomFields(rows);
         validateInternationalItems(rows);
         flagRowFieldLengths(rows);
-        flagWithinImportDuplicateReferences(rows);
         return success(buildPreview(rows), rows.size() + " row(s) validated.");
     }
 
@@ -5563,28 +5583,29 @@ public class OrderImportServiceImpl implements OrderImportService {
      * "<client ship-via code>" placeholder; carrierCode is left blank
      * because the mapping rule picks it.
      */
+    // BUG-058 — sample rows are marked EXAMPLE in the name and references so they are not imported by mistake.
     static List<Map<String, String>> sampleRows(String clientCode, String shipViaCode) {
         String svc = shipViaCode == null || shipViaCode.isBlank() ? "<client ship-via code>" : shipViaCode;
         return List.of(
-                sampleRow("orderRef", "SAMPLE-1001", "clientCode", clientCode, "billTo", "SENDER",
-                        "recipientName", "Jordan Lee", "recipientPhone", "2125550101",
+                sampleRow("orderRef", "EXAMPLE-1001", "clientCode", clientCode, "billTo", "SENDER",
+                        "recipientName", "EXAMPLE ROW - Jordan Lee", "recipientPhone", "2125550101",
                         "recipientEmail", "jordan.lee@example.com",
                         "addressLine1", "1600 Amphitheatre Pkwy", "city", "Mountain View", "state", "CA",
                         "postalCode", "94043", "countryCode", "US",
                         "serviceType", svc,
                         "weight", "2.5", "weightUnit", "LB", "length", "12", "width", "10", "height", "8", "dimUnit", "IN",
-                        "currency", "USD", "reference", "SAMPLE-1001"),
-                sampleRow("orderRef", "SAMPLE-1002", "clientCode", clientCode, "billTo", "SENDER",
-                        "recipientName", "Ava Chen", "recipientCompany", "Chen & Co Ltd",
+                        "currency", "USD", "reference", "EXAMPLE-1001"),
+                sampleRow("orderRef", "EXAMPLE-1002", "clientCode", clientCode, "billTo", "SENDER",
+                        "recipientName", "EXAMPLE ROW - Ava Chen", "recipientCompany", "Chen & Co Ltd",
                         "recipientPhone", "442071234567", "recipientEmail", "ava.chen@example.co.uk",
                         "addressLine1", "221B Baker Street", "city", "London",
                         "postalCode", "NW1 6XE", "countryCode", "GB",
                         "serviceType", svc,
                         "weight", "3.2", "weightUnit", "LB", "length", "14", "width", "12", "height", "10", "dimUnit", "IN",
-                        "currency", "USD", "incoterms", "DAP", "reference", "SAMPLE-1002",
+                        "currency", "USD", "incoterms", "DAP", "reference", "EXAMPLE-1002",
                         "itemDescription", "Silk lining natural", "itemSku", "SKU-100", "itemQuantity", "2",
                         "itemUnitValue", "45.00", "hsCode", "5007.20.00", "countryOfOrigin", "IT"),
-                sampleRow("orderRef", "SAMPLE-1002",
+                sampleRow("orderRef", "EXAMPLE-1002",
                         "itemDescription", "Cotton scarf", "itemSku", "SKU-101", "itemQuantity", "3",
                         "itemUnitValue", "12.00", "hsCode", "6214.90.00", "countryOfOrigin", "IN"));
     }
