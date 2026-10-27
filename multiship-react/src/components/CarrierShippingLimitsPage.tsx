@@ -7,6 +7,7 @@ import {
   type CarrierShippingLimitPayload,
 } from '../api/carrierShippingLimitService'
 import { notify } from '../utils/notify'
+import { serverFieldError } from '../utils/serverFieldErrors'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import IconButton from './ui/IconButton'
@@ -136,6 +137,7 @@ export default function CarrierShippingLimitsPage() {
           className="min-w-[220px] flex-1 rounded-md border border-slate-300 px-2 py-1.5 text-[13px] outline-none focus:border-slate-500"
         />
         <select
+          aria-label="Filter by scope"
           value={filterScope}
           onChange={(e) => setFilterScope(e.target.value)}
           className="rounded-md border border-slate-300 px-2 py-1.5 text-[13px] outline-none focus:border-slate-500"
@@ -206,6 +208,7 @@ export default function CarrierShippingLimitsPage() {
                   <button
                     onClick={() => setEditing(r)}
                     className="mr-1 rounded-md border border-slate-300 px-2 py-1 text-[12px] hover:bg-slate-50"
+                    aria-label={`Edit ${r.carrierCode} ${r.serviceCode ?? 'default'} limit`}
                     title="Edit row"
                   >
                     <FiEdit2 className="inline h-3.5 w-3.5" /> Edit
@@ -217,6 +220,7 @@ export default function CarrierShippingLimitsPage() {
                         ? 'border border-red-300 text-red-700 hover:bg-red-50'
                         : 'border border-emerald-300 text-emerald-700 hover:bg-emerald-50'
                     }`}
+                    aria-label={`${r.active ? 'Deactivate' : 'Activate'} ${r.carrierCode} ${r.serviceCode ?? 'default'} limit`}
                     title={r.active ? 'Deactivate row' : 'Activate row'}
                   >
                     {r.active ? 'Deactivate' : 'Activate'}
@@ -306,6 +310,11 @@ function CarrierShippingLimitEditorDialog({ row, onClose, onSaved }: EditorProps
   )
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+  const clearErr = (k: string) => setFieldErrors((cur) => (cur[k] ? {} : cur))
+  const fieldErr = (k: string) => fieldErrors[k]
+    ? <p role="alert" className="mt-1 text-[11.5px] text-rose-700">{fieldErrors[k]}</p>
+    : null
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !saving) onClose() }
@@ -401,7 +410,10 @@ function CarrierShippingLimitEditorDialog({ row, onClose, onSaved }: EditorProps
       }
       onSaved()
     } catch (e) {
-      notify.apiError(e, row ? 'Failed to update row.' : 'Failed to create row.')
+      const fe = serverFieldError(e)
+      if (fe && fe.field in payload) setFieldErrors({ [fe.field]: fe.message })
+      else if (fe) setError(fe.message)
+      else notify.apiError(e, row ? 'Failed to update row.' : 'Failed to create row.')
     } finally {
       setSaving(false)
     }
@@ -428,46 +440,54 @@ function CarrierShippingLimitEditorDialog({ row, onClose, onSaved }: EditorProps
             <span className="mb-1 block text-[12.5px] font-medium text-slate-700">Carrier code *</span>
             <input
               value={carrierCode}
-              onChange={(e) => setCarrierCode(e.target.value)}
+              onChange={(e) => { setCarrierCode(e.target.value); clearErr('carrierCode') }}
               placeholder="UPS"
               maxLength={32}
               className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-[13px] outline-none focus:border-slate-500"
+              aria-invalid={fieldErrors.carrierCode ? true : undefined}
             />
+            {fieldErr('carrierCode')}
           </label>
           <label className="block">
             <span className="mb-1 block text-[12.5px] font-medium text-slate-700">Service code (blank = carrier default)</span>
             <input
               value={serviceCode}
-              onChange={(e) => setServiceCode(e.target.value)}
+              onChange={(e) => { setServiceCode(e.target.value); clearErr('serviceCode') }}
               placeholder="UPS_GROUND"
               maxLength={60}
               className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-[13px] outline-none focus:border-slate-500"
+              aria-invalid={fieldErrors.serviceCode ? true : undefined}
             />
+            {fieldErr('serviceCode')}
           </label>
 
           <label className="block">
             <span className="mb-1 block text-[12.5px] font-medium text-slate-700">Scope *</span>
             <select
               value={scope}
-              onChange={(e) => setScope(e.target.value as 'BOTH' | 'DOMESTIC' | 'INTERNATIONAL')}
+              onChange={(e) => { setScope(e.target.value as 'BOTH' | 'DOMESTIC' | 'INTERNATIONAL'); clearErr('scope') }}
               className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-[13px] outline-none focus:border-slate-500"
+              aria-invalid={fieldErrors.scope ? true : undefined}
             >
               <option value="DOMESTIC">DOMESTIC</option>
               <option value="INTERNATIONAL">INTERNATIONAL</option>
               <option value="BOTH">BOTH</option>
             </select>
+            {fieldErr('scope')}
           </label>
           <label className="block">
             <span className="mb-1 block text-[12.5px] font-medium text-slate-700">Direction (blank = matches any)</span>
             <select
               value={direction}
-              onChange={(e) => setDirection(e.target.value as 'FORWARD' | 'RETURN' | '')}
+              onChange={(e) => { setDirection(e.target.value as 'FORWARD' | 'RETURN' | ''); clearErr('direction') }}
               className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-[13px] outline-none focus:border-slate-500"
+              aria-invalid={fieldErrors.direction ? true : undefined}
             >
               <option value="">— any —</option>
               <option value="FORWARD">FORWARD</option>
               <option value="RETURN">RETURN</option>
             </select>
+            {fieldErr('direction')}
           </label>
 
           <label className="block">
@@ -475,19 +495,23 @@ function CarrierShippingLimitEditorDialog({ row, onClose, onSaved }: EditorProps
             <input
               type="number" min={1} max={9999} step={1}
               value={maxPackages}
-              onChange={(e) => setMaxPackages(e.target.value)}
+              onChange={(e) => { setMaxPackages(e.target.value); clearErr('maxPackages') }}
               className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-[13px] outline-none focus:border-slate-500"
+              aria-invalid={fieldErrors.maxPackages ? true : undefined}
             />
+            {fieldErr('maxPackages')}
           </label>
           <label className="block">
             <span className="mb-1 block text-[12.5px] font-medium text-slate-700">Max commodities (1..9999)</span>
             <input
               type="number" min={1} max={9999} step={1}
               value={maxCommodities}
-              onChange={(e) => setMaxCommodities(e.target.value)}
+              onChange={(e) => { setMaxCommodities(e.target.value); clearErr('maxCommodities') }}
               placeholder="blank = 999 fallback"
               className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-[13px] outline-none focus:border-slate-500"
+              aria-invalid={fieldErrors.maxCommodities ? true : undefined}
             />
+            {fieldErr('maxCommodities')}
           </label>
 
           <label className="block">
@@ -495,27 +519,31 @@ function CarrierShippingLimitEditorDialog({ row, onClose, onSaved }: EditorProps
             <input
               type="number" min={0} step={0.01}
               value={maxTotalWeightLb}
-              onChange={(e) => setMaxTotalWeightLb(e.target.value)}
+              onChange={(e) => { setMaxTotalWeightLb(e.target.value); clearErr('maxTotalWeightLb') }}
               placeholder="blank = no cap"
               className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-[13px] outline-none focus:border-slate-500"
+              aria-invalid={fieldErrors.maxTotalWeightLb ? true : undefined}
             />
+            {fieldErr('maxTotalWeightLb')}
           </label>
           <label className="block">
             <span className="mb-1 block text-[12.5px] font-medium text-slate-700">Free declared value ($)</span>
             <input
               type="number" min={0} step={0.01}
               value={freeDeclaredValue}
-              onChange={(e) => setFreeDeclaredValue(e.target.value)}
+              onChange={(e) => { setFreeDeclaredValue(e.target.value); clearErr('freeDeclaredValue') }}
               placeholder="blank = no free tier"
               className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-[13px] outline-none focus:border-slate-500"
+              aria-invalid={fieldErrors.freeDeclaredValue ? true : undefined}
             />
+            {fieldErr('freeDeclaredValue')}
           </label>
 
           <label className="col-span-2 flex items-center gap-2">
             <input
               type="checkbox"
               checked={active}
-              onChange={(e) => setActive(e.target.checked)}
+              onChange={(e) => { setActive(e.target.checked); clearErr('active') }}
             />
             <span className="text-[12.5px] font-medium text-slate-700">Active</span>
           </label>
@@ -530,20 +558,24 @@ function CarrierShippingLimitEditorDialog({ row, onClose, onSaved }: EditorProps
             <input
               type="datetime-local"
               value={effectiveUntil}
-              onChange={(e) => setEffectiveUntil(e.target.value)}
+              onChange={(e) => { setEffectiveUntil(e.target.value); clearErr('effectiveUntil') }}
               className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-[13px] outline-none focus:border-slate-500"
+              aria-invalid={fieldErrors.effectiveUntil ? true : undefined}
             />
+            {fieldErr('effectiveUntil')}
           </label>
 
           <label className="col-span-2 block">
             <span className="mb-1 block text-[12.5px] font-medium text-slate-700">Notes (max 500)</span>
             <textarea
               value={notes}
-              onChange={(e) => setNotes(e.target.value)}
+              onChange={(e) => { setNotes(e.target.value); clearErr('notes') }}
               rows={2}
               maxLength={500}
               className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-[13px] outline-none focus:border-slate-500"
+              aria-invalid={fieldErrors.notes ? true : undefined}
             />
+            {fieldErr('notes')}
           </label>
         </div>
 

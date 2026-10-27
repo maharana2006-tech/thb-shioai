@@ -10,6 +10,7 @@ import {
   type OrderWithLinesPayload,
 } from '../../api/orderService'
 import { customsService, type OrderCustoms } from '../../api/customsService'
+import { customFieldService, type CustomFieldDefinition } from '../../api/customFieldService'
 import { formatCarrierName } from '../../utils/carrierUtils'
 import { countryName } from '../../utils/countries'
 import { ftrExemptionLabel, SHIPPING_PURPOSES } from '../../utils/customsOptions'
@@ -219,6 +220,8 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
                 <CustomsSection customs={customs} order={order} />
               ) : null}
 
+              <CustomFieldsSection orderNo={orderNo} tenantId={order.custNo ?? null} />
+
               {order.orderLines?.length ? <OrderLinesSection order={order} /> : null}
 
               {!order.orderLines?.length && !customs?.items?.length ? (
@@ -379,6 +382,36 @@ function Shipment({ order, account }: { order: OrderWithLines; account: OrderWit
         ['Declared value', money(order.declaredValue)],
         ['Goods', clean(order.goodsDesc)],
       ]} />
+    </Card>
+  )
+}
+
+/**
+ * BUG-121 — values saved with the order (Settings → Custom fields) were
+ * stored but shown nowhere. Labels come from the tenant's definitions;
+ * a value whose definition is gone still shows under its key.
+ */
+function CustomFieldsSection({ orderNo, tenantId }: { orderNo: number; tenantId: string | null }) {
+  const [rows, setRows] = useState<[string, ReactNode, boolean?][] | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    Promise.all([
+      customFieldService.values(orderNo),
+      customFieldService.applicable(tenantId).catch(() => [] as CustomFieldDefinition[]),
+    ]).then(([values, defs]) => {
+      if (cancelled) return
+      const labelOf = new Map(defs.map((d) => [d.fieldKey, d.label]))
+      const out: [string, ReactNode, boolean?][] = Object.entries(values)
+        .filter(([, v]) => v != null && String(v).trim() !== '')
+        .map(([k, v]) => [labelOf.get(k) ?? k, String(v)])
+      setRows(out)
+    }).catch(() => { if (!cancelled) setRows([]) })
+    return () => { cancelled = true }
+  }, [orderNo, tenantId])
+  if (!rows || rows.length === 0) return null
+  return (
+    <Card icon={<FiTag className="h-3.5 w-3.5" />} title="Custom fields">
+      <Rows rows={rows} />
     </Card>
   )
 }

@@ -1,5 +1,6 @@
 import { relativeTime } from '../utils/relativeTime'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useModalDismiss } from '../hooks/useModalDismiss'
 import {
   FiActivity, FiAlertTriangle, FiCheckCircle, FiClock, FiEdit2, FiPrinter, FiRadio, FiTrash2, FiX,
 } from 'react-icons/fi'
@@ -102,19 +103,19 @@ export default function PrinterDetailsPanel({
     return () => { cancelled = true; window.clearInterval(tid) }
   }, [printer.id])
 
-  // Close on Esc + click-outside.
+  const requestClose = useModalDismiss(true, ref, onClose)
+  // Close on click-outside. Ignored while the discard prompt is up, or the
+  // click on its buttons would open a second prompt.
+  const closing = useRef(false)
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     const onClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
+      if (closing.current || !ref.current || ref.current.contains(e.target as Node)) return
+      closing.current = true
+      void requestClose().finally(() => { closing.current = false })
     }
-    document.addEventListener('keydown', onKey)
     document.addEventListener('mousedown', onClick)
-    return () => {
-      document.removeEventListener('keydown', onKey)
-      document.removeEventListener('mousedown', onClick)
-    }
-  }, [onClose])
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [requestClose])
 
   // Group assignments touching this printer by docType, with the
   // "Default" client rendered as an explicit tag rather than "null".
@@ -160,7 +161,7 @@ export default function PrinterDetailsPanel({
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => void requestClose()}
             aria-label="Close"
             className="rounded-md p-1 text-slate-500 hover:bg-slate-100"
           >

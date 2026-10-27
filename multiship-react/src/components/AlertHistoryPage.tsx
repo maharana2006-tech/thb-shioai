@@ -25,15 +25,20 @@ export default function AlertHistoryPageView() {
   const [tenantCode, setTenantCode] = useState('')
   const [orderNo, setOrderNo] = useState('')
   const [pageIndex, setPageIndex] = useState(0)
+  // BUG-163 — only a whole order number reaches the server; anything else is
+  // explained under the box instead of a raw parameter error.
+  const orderNoError = orderNo.trim() && !/^\d{1,18}$/.test(orderNo.trim())
+    ? 'Order number must be a whole number.'
+    : null
 
   const load = useCallback(async () => {
+    if (orderNoError) return
     setLoading(true)
     try {
-      const parsedOrderNo = orderNo.trim() ? Number(orderNo.trim()) : ''
       setPage(await alertHistoryService.list({
         source: source.trim() || undefined,
         tenantCode: tenantCode.trim() || undefined,
-        orderNo: Number.isFinite(parsedOrderNo) ? parsedOrderNo : undefined,
+        orderNo: orderNo.trim() ? Number(orderNo.trim()) : undefined,
         page: pageIndex,
         size: PAGE_SIZE,
       }))
@@ -42,7 +47,7 @@ export default function AlertHistoryPageView() {
     } finally {
       setLoading(false)
     }
-  }, [source, tenantCode, orderNo, pageIndex])
+  }, [source, tenantCode, orderNo, orderNoError, pageIndex])
 
   useEffect(() => { void load() }, [load])
   useEffect(() => {
@@ -73,7 +78,9 @@ export default function AlertHistoryPageView() {
             Order no.
             <input value={orderNo} onChange={(e) => { setOrderNo(e.target.value); setPageIndex(0) }}
                    placeholder="12345" inputMode="numeric"
-                   className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-1.5 text-[13px]" />
+                   aria-invalid={orderNoError ? true : undefined}
+                   className={`mt-1 block w-full rounded-lg border px-3 py-1.5 text-[13px] ${orderNoError ? 'border-rose-400' : 'border-slate-300'}`} />
+            {orderNoError ? <span className="mt-1 block text-[11.5px] font-normal text-rose-700">{orderNoError}</span> : null}
           </label>
         </div>
         <div className="mt-2 text-[11px] text-slate-500">
@@ -110,6 +117,11 @@ export default function AlertHistoryPageView() {
                       text in title for the correlation-id case. */}
                   <td className="px-3 py-2 text-slate-700" title={row.reason ?? ''}>
                     {row.reason ? summarizeCarrierError(row.reason) : '—'}
+                    {/* BUG-165 — the summary hides what an admin acts on (label id,
+                        "Manual void required."); keep the stored text underneath. */}
+                    {row.reason && summarizeCarrierError(row.reason) !== row.reason ? (
+                      <p className="mt-1 whitespace-pre-wrap break-words font-mono text-[11px] text-slate-500">{row.reason}</p>
+                    ) : null}
                   </td>
                 </tr>
               ))}

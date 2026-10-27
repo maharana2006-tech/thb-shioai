@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useOutletContext } from 'react-router-dom'
+import { Link, useOutletContext } from 'react-router-dom'
 import { FiCheck, FiEdit2, FiPlus, FiTrash2, FiX } from 'react-icons/fi'
 import { notify } from '../utils/notify'
 import {
@@ -315,11 +315,11 @@ export default function CodeMapsPage({ initialClientFilter, embedded = false }: 
             } : {}),
           }
     if (tab !== 'DEST_COUNTRY' && 'targetId' in payload && !Number.isFinite(payload.targetId)) {
-      notify.error('Pick a target before saving.')
+      notify.invalid('Pick a target before saving.')
       return
     }
     if (tab === 'DEST_COUNTRY' && 'iso2' in payload && !payload.iso2) {
-      notify.error('Enter an ISO-2 country before saving.')
+      notify.invalid('Enter an ISO-2 country before saving.')
       return
     }
     setEditSaving(true)
@@ -394,9 +394,9 @@ export default function CodeMapsPage({ initialClientFilter, embedded = false }: 
               <span className="text-slate-400">·</span>
               <span className="text-slate-500">translate ERP strings on intake, then resolve to a carrier service</span>
               <span className="mx-1 text-slate-300">→</span>
-              <a href="/settings/routing-rules" className="rounded border border-slate-200 bg-white px-2 py-0.5 font-semibold text-slate-600 hover:bg-slate-50">
+              <Link to="/settings/routing-rules" className="rounded border border-slate-200 bg-white px-2 py-0.5 font-semibold text-slate-600 hover:bg-slate-50">
                 Routing Rules
-              </a>
+              </Link>
             </nav>
           </div>
           <div className="min-w-[220px]">

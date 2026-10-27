@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode, useRef } from 'react'
+import { useModalDismiss } from '../hooks/useModalDismiss'
 import { useOutletContext } from 'react-router-dom'
 import { notify } from '../utils/notify'
 import { FiDownloadCloud, FiEdit3, FiGlobe, FiPlus, FiStar, FiTrash2, FiTruck, FiUsers, FiX } from 'react-icons/fi'
@@ -199,11 +200,11 @@ export default function PackagesPage({ active = true, origin: originProp, onOrig
       return
     }
     if (editing.kind === 'CUSTOM' && (!editing.length || !editing.width || !editing.height)) {
-      notify.error('A custom box needs length, width and height.')
+      notify.invalid('A custom box needs length, width and height.')
       return
     }
     if (editing.kind === 'CARRIER' && !editing.carrierPackageCode?.trim()) {
-      notify.error("Carrier packaging needs the carrier's package code.")
+      notify.invalid("Carrier packaging needs the carrier's package code.")
       return
     }
     // BUG-092 — tare > max weight is physically impossible (an empty
@@ -328,6 +329,8 @@ export default function PackagesPage({ active = true, origin: originProp, onOrig
     }
     setEditing(null)
   }
+  const editorDialogRef = useRef<HTMLDivElement>(null)
+  useModalDismiss(!!editing, editorDialogRef, closeEditor, { confirmDiscard: false })
 
   const num = (v: string) => (v === '' ? null : Number(v))
 
@@ -669,6 +672,7 @@ export default function PackagesPage({ active = true, origin: originProp, onOrig
                       <button
                         type="button"
                         onClick={() => void makeDefault(p)}
+                        aria-label={`Make default: ${p.name}`}
                         className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-600 transition hover:border-amber-300 hover:text-amber-700"
                       >
                         <FiStar className="h-3 w-3" /> Make default
@@ -677,6 +681,7 @@ export default function PackagesPage({ active = true, origin: originProp, onOrig
                     <button
                       type="button"
                       onClick={() => setEditing({ ...p })}
+                      aria-label={`Edit ${p.name}`}
                       className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
                     >
                       <FiEdit3 className="h-3 w-3" /> Edit
@@ -700,7 +705,9 @@ export default function PackagesPage({ active = true, origin: originProp, onOrig
         ) : null}
       </section>
 
-      {visiblePresets.length > pageSize ? (
+      {/* BUG-085 — keep the pager once the list is longer than the smallest page
+          size, so a larger page size can always be changed back. */}
+      {visiblePresets.length > 10 || totalPages > 1 ? (
         <TablePagination
           page={safePage}
           pageSize={pageSize}
@@ -715,7 +722,7 @@ export default function PackagesPage({ active = true, origin: originProp, onOrig
 
       {/* add/edit modal */}
       {editing ? (
-        <div
+        <div ref={editorDialogRef}
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm"
           role="dialog"
           aria-modal="true"

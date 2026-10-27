@@ -53,6 +53,7 @@ export default function AdminUsersPage() {
   // with 51+ users. Now operator can page through OR increase size.
   const [page, setPage] = useState(0)
   const [size, setSize] = useState(50)
+  const [total, setTotal] = useState(0)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -70,7 +71,8 @@ export default function AdminUsersPage() {
         // page on a transient 500; just surface an empty list.
         adminInviteService.list().catch(() => ({ data: [] as InviteMintResponse[] })),
       ])
-      setUsers(userRes.data ?? [])
+      setUsers(userRes.data?.content ?? [])
+      setTotal(userRes.data?.totalElements ?? 0)
       setAudit(auditRes.data ?? [])
       setInvites((inviteRes.data ?? []).filter((i) => !i.consumedAt))
     } catch (e) {
@@ -171,7 +173,7 @@ export default function AdminUsersPage() {
    *  email. Confirm first so an accidental click doesn't spam a user. */
   const sendResetLink = async (user: AdminUser) => {
     if (!user.email) {
-      notify.error(`${user.username} has no email on file — assign one first.`)
+      notify.invalid(`${user.username} has no email on file — assign one first.`)
       return
     }
     const ok = await notify.confirm(
@@ -271,6 +273,7 @@ export default function AdminUsersPage() {
           className="min-w-[220px] flex-1 rounded-md border border-slate-300 px-2 py-1.5 text-[13px] outline-none focus:border-slate-500"
         />
         <select
+          aria-label="Filter by role"
           value={roleFilter}
           onChange={(e) => setRoleFilter(e.target.value)}
           className="rounded-md border border-slate-300 px-2 py-1.5 text-[13px] outline-none focus:border-slate-500"
@@ -351,6 +354,7 @@ export default function AdminUsersPage() {
                 <td className="px-3 py-2 text-right">
                   <button
                     onClick={() => setAuditFor(u)}
+                    aria-label={`History for ${u.username}`}
                     title="View this user's audit trail"
                     className="mr-2 rounded-md border border-slate-300 px-2 py-1 text-[12px] hover:bg-slate-50"
                   >
@@ -411,6 +415,7 @@ export default function AdminUsersPage() {
                       the row and the admin is self-reactivating (edge case). */}
                   <button
                     onClick={() => toggleActive(u)}
+                    aria-label={`${u.deactivatedAt ? 'Reactivate' : 'Deactivate'} ${u.username}`}
                     disabled={Boolean(isSelf) && !u.deactivatedAt}
                     title={isSelf && !u.deactivatedAt
                       ? "You can't deactivate your own account — ask another admin."
@@ -437,7 +442,7 @@ export default function AdminUsersPage() {
           <span className="tabular-nums">
             {users.length === 0
               ? 'No rows'
-              : `Showing ${users.length} row${users.length === 1 ? '' : 's'} · page ${page + 1}${users.length === size ? ' (more may exist)' : ''}`}
+              : `Showing ${page * size + 1}–${page * size + users.length} of ${total} · page ${page + 1} / ${Math.max(1, Math.ceil(total / size))}`}
           </span>
           <div className="flex items-center gap-2">
             <label className="flex items-center gap-1.5">
@@ -464,7 +469,7 @@ export default function AdminUsersPage() {
             <button
               type="button"
               onClick={() => setPage((p) => p + 1)}
-              disabled={users.length < size || loading}
+              disabled={(page + 1) * size >= total || loading}
               className="rounded-md border border-slate-300 px-2 py-1 text-[12px] hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
             >
               Next
@@ -510,10 +515,12 @@ export default function AdminUsersPage() {
                         void load()
                       } catch (e) { notify.apiError(e, 'Failed to resend invite.') }
                     }}
+                    aria-label={`Resend invite for ${inv.email}`}
                     className="rounded-md border border-slate-300 px-2 py-1 text-[11.5px] hover:bg-slate-50"
                   >Resend</button>
                   <button
                     type="button"
+                    aria-label={`Revoke invite for ${inv.email}`}
                     onClick={async () => {
                       const ok = await notify.confirm(
                         `Revoke the invite for ${inv.email}? The accept link stops working immediately.`,
@@ -608,11 +615,11 @@ function InviteUserDialog({
   // Pre-fix the dialog opened but focus stayed on the Invite button
   // behind, Tab walked into the page behind, Escape did nothing.
   const dialogRef = useRef<HTMLDivElement>(null)
-  useModalDismiss(true, dialogRef, onClose)
+  const requestClose = useModalDismiss(true, dialogRef, onClose)
 
   const submit = async () => {
     if (!email.trim() || !clientCode.trim()) {
-      notify.error('Email and client are required.')
+      notify.invalid('Email and client are required.')
       return
     }
     setMinting(true)
@@ -646,7 +653,7 @@ function InviteUserDialog({
           <h3 className="text-[15px] font-semibold text-slate-950">Invite user</h3>
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => void requestClose()}
             aria-label="Close"
             className="rounded p-1 text-slate-500 hover:bg-slate-100"
           >
@@ -713,7 +720,7 @@ function InviteUserDialog({
               </select>
             </label>
             <div className="flex justify-end gap-2 pt-1">
-              <button type="button" onClick={onClose} disabled={minting}
+              <button type="button" onClick={() => void requestClose()} disabled={minting}
                       className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:bg-slate-50">
                 Cancel
               </button>

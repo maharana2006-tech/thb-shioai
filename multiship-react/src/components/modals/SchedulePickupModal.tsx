@@ -67,7 +67,7 @@ type FieldKey =
 export default function SchedulePickupModal({ onClose, defaults }: SchedulePickupModalProps) {
   // A11y audit — focus trap + Escape-to-close + focus restoration.
   const dialogRef = useRef<HTMLDivElement>(null)
-  useModalDismiss(true, dialogRef, onClose)
+  const requestClose = useModalDismiss(true, dialogRef, onClose)
   useLiftToasts() // BUG-005 — keep toasts clear of the footer buttons
   // R2-BUG-002 run-5 §9 — "switching the carrier resets the pickup
   // date to today" (seen twice). `today` was recomputed every render,
@@ -291,7 +291,7 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => void requestClose()}
             aria-label="Close"
             className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#6b5c42] transition hover:bg-[#faf7f0]"
           >
@@ -324,6 +324,12 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
                     <option key={c.clientCode} value={c.clientCode}>{c.clientCode} — {c.name}</option>
                   ))}
                 </select>
+                {/* BUG-097 — "All clients" read as a broken-credentials error; say what it needs. */}
+                {!form.customerNo ? (
+                  <p className="mt-1 text-[10.5px] text-slate-500">
+                    Pickups are booked on the client's carrier account. Pick the client; the platform option only works when the house account has live credentials.
+                  </p>
+                ) : null}
               </Field>
             </div>
 
@@ -466,7 +472,8 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
                              className={`${inputCls()} min-w-0 flex-1`}
                              value={form.defaultHeight ?? ''}
                              onChange={(e) => update({ defaultHeight: e.target.value ? Number(e.target.value) : undefined })} />
-                      <select className="w-16 shrink-0 rounded-lg border border-[#e3d9c4] bg-white px-1.5 py-1.5 text-[12.5px] text-[#1f150c] outline-none focus:border-[#412d15] focus:ring-1 focus:ring-[#412d15]"
+                      <select aria-label="Dimension unit"
+                              className="w-16 shrink-0 rounded-lg border border-[#e3d9c4] bg-white px-1.5 py-1.5 text-[12.5px] text-[#1f150c] outline-none focus:border-[#412d15] focus:ring-1 focus:ring-[#412d15]"
                               value={form.dimUnit ?? 'CM'}
                               onChange={(e) => update({ dimUnit: e.target.value as 'CM' | 'IN' })}>
                         <option value="CM">CM</option>
@@ -502,7 +509,7 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
         </div>
 
         <div className="flex items-center justify-end gap-2 border-t border-[#eee6d6] px-5 py-3">
-          <button type="button" onClick={onClose}
+          <button type="button" onClick={() => void requestClose()}
                   className="inline-flex items-center rounded-lg border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#412d15] hover:bg-[#faf7f0]">
             Cancel
           </button>

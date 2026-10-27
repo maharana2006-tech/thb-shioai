@@ -231,6 +231,30 @@ textarea {
   }
 }
 
+/* BUG-196 — touch targets. Phones and tablets get larger hit areas; the
+   desktop density is untouched. Switches keep their look and grow an
+   invisible halo instead. */
+@media (pointer: coarse) {
+  input[type="checkbox"],
+  input[type="radio"] {
+    min-width: 22px;
+    min-height: 22px;
+  }
+  input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="range"]),
+  select,
+  th button {
+    min-height: 32px;
+  }
+  [role="switch"] {
+    position: relative;
+  }
+  [role="switch"]::after {
+    content: "";
+    position: absolute;
+    inset: -8px;
+  }
+}
+
 /* ===== Printing label documents (4x6 label / Letter invoice) ===== */
 @media print {
   header,

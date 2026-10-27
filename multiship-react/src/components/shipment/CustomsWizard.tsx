@@ -651,10 +651,11 @@ function DutiesStep({
 
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="mb-1 block text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-400">
+          <label htmlFor="customs-reason-for-export" className="mb-1 block text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-400">
             Reason for export
           </label>
           <select
+            id="customs-reason-for-export"
             value={value.reasonForExport ?? ''}
             onChange={(e) => onPatch({ reasonForExport: e.target.value })}
             className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[12.5px]"
@@ -668,10 +669,11 @@ function DutiesStep({
           </select>
         </div>
         <div>
-          <label className="mb-1 block text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-400">
+          <label htmlFor="customs-currency" className="mb-1 block text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-400">
             Invoice currency
           </label>
           <select
+            id="customs-currency"
             value={value.currency ?? 'USD'}
             onChange={(e) => onPatch({ currency: e.target.value })}
             className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[12.5px]"
@@ -684,10 +686,11 @@ function DutiesStep({
           </select>
         </div>
         <div>
-          <label className="mb-1 block text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-400">
+          <label htmlFor="customs-weight-unit" className="mb-1 block text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-400">
             Weight unit
           </label>
           <select
+            id="customs-weight-unit"
             value={value.weightUnit ?? 'LB'}
             onChange={(e) => onPatch({ weightUnit: e.target.value })}
             className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[12.5px]"
@@ -720,10 +723,11 @@ function DutiesStep({
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="mb-1 block text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-500">
+              <label htmlFor="customs-ftr-exemption" className="mb-1 block text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-500">
                 FTR exemption
               </label>
               <select
+                id="customs-ftr-exemption"
                 value={value.ftrExemption ?? ''}
                 onChange={(e) => onPatch({ ftrExemption: e.target.value || undefined,
                                           // Mutually exclusive — picking an exemption clears the ITN.

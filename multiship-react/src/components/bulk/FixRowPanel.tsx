@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useModalDismiss } from '../../hooks/useModalDismiss'
 import { FiAlertTriangle, FiX } from 'react-icons/fi'
 import type { OrderImportRow } from '../../api/orderImportService'
 import { shippingConfigService, type ShipViaCode } from '../../api/shippingConfigService'
@@ -57,11 +58,8 @@ export default function FixRowPanel({
     setDraft(initial)
   }
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  const dialogRef = useRef<HTMLElement>(null)
+  const requestClose = useModalDismiss(true, dialogRef, onClose)
 
   const client = (row.clientCode ?? '').trim().toUpperCase() || null
   const [codes, setCodes] = useState<ShipViaCode[] | null>(null)
@@ -142,8 +140,9 @@ export default function FixRowPanel({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-[#1f150c]/35" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex justify-end bg-[#1f150c]/35" onClick={() => void requestClose()}>
       <aside
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label={`Fix row ${row.rowNumber}`}
@@ -157,7 +156,7 @@ export default function FixRowPanel({
               {[row.orderRef && `Order ${row.orderRef}`, client, row.recipientName].filter(Boolean).join(' · ')}
             </p>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close" className="rounded-lg p-1.5 text-[#5a4526] hover:bg-[#f4eede]">
+          <button type="button" onClick={() => void requestClose()} aria-label="Close" className="rounded-lg p-1.5 text-[#5a4526] hover:bg-[#f4eede]">
             <FiX className="h-4 w-4" />
           </button>
         </header>
@@ -200,7 +199,7 @@ export default function FixRowPanel({
         </div>
 
         <footer className="flex items-center justify-end gap-2 border-t border-[#e3d9c4] bg-white px-4 py-3">
-          <button type="button" onClick={onClose} className="rounded-lg border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]">
+          <button type="button" onClick={() => void requestClose()} className="rounded-lg border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]">
             Cancel
           </button>
           <button type="button" onClick={save} disabled={!dirty || saving}

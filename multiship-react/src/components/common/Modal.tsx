@@ -8,6 +8,7 @@
  */
 import { useEffect, useRef, type ReactNode } from 'react'
 import { FiX } from 'react-icons/fi'
+import { useFocusTrap } from '../../hooks/useFocusTrap'
 
 export interface ModalProps {
   open: boolean
@@ -42,6 +43,8 @@ export default function Modal({
   dismissOnBackdrop = true,
 }: ModalProps) {
   const cardRef = useRef<HTMLDivElement>(null)
+  // BUG-084 — hold focus inside the dialog and return it to the opener on close.
+  useFocusTrap(open, cardRef)
 
   // ESC to close + body scroll lock while open.
   useEffect(() => {

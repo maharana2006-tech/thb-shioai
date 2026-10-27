@@ -32,6 +32,8 @@ export interface RoutingRule {
   targetWarehouseId?: number | null
   blockReason?: string | null
 
+  /** Optimistic-lock token; echoed back on edit so a stale form gets a 409. */
+  version?: number | null
   createdAt?: string | null
   updatedAt?: string | null
 }
@@ -80,8 +82,11 @@ export const routingRuleService = {
     return resp.data ?? []
   },
 
+  /** BUG-086 — an existing rule is updated in place (PUT); only a new one is POSTed. */
   save: (clientCode: string, rule: RoutingRule) =>
-    apiClient.post<ApiResponse<RoutingRule>>(base(clientCode), rule),
+    rule.id != null
+      ? apiClient.put<ApiResponse<RoutingRule>>(`${base(clientCode)}/${rule.id}`, rule)
+      : apiClient.post<ApiResponse<RoutingRule>>(base(clientCode), rule),
 
   remove: (clientCode: string, ruleId: number) =>
     apiClient.delete<ApiResponse<void>>(`${base(clientCode)}/${ruleId}`),

@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useModalDismiss } from '../../hooks/useModalDismiss'
 import { FiAlertTriangle, FiCheckCircle, FiSend, FiX } from 'react-icons/fi'
 import { notify } from '../../utils/notify'
 import { notifyPrinterProblem, printerService, type PrintDocType, type Printer, type SendToPrinterResult } from '../../api/printerService'
@@ -35,17 +36,10 @@ export default function SendToPrinterDialog({
     return () => { alive = false }
   }, [])
 
-  // BUG-018 — Esc closes the dialog. Backdrop click + X button already
-  // worked; this brings parity with the other modals (Close out day,
-  // Void labels, Split shipment). While sending, Esc is ignored so a
-  // partially-committed print isn't abandoned mid-flight.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !sending) onClose()
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onClose, sending])
+  // BUG-018 — while sending, dismissal is ignored so a partially-committed
+  // print isn't abandoned mid-flight.
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const requestClose = useModalDismiss(true, dialogRef, () => { if (!sending) onClose() })
 
   const choices = (printers ?? []).filter((p) => docType === 'LABEL' || p.format !== 'ZPL')
   // A printer picked for labels may not print invoices; fall back to client routing.
@@ -78,14 +72,14 @@ export default function SendToPrinterDialog({
   )
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>
-      <div role="dialog" aria-modal="true" aria-label="Send to printer"
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={() => void requestClose()}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Send to printer"
         className="w-full max-w-[520px] rounded-2xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-[#efe7d6] px-5 py-3">
           <h3 className="text-[15px] font-semibold text-slate-900">
             Send {orderNumbers.length.toLocaleString()} order{orderNumbers.length === 1 ? '' : 's'} to printer
           </h3>
-          <button type="button" onClick={onClose} aria-label="Close" className="rounded-md p-1 text-slate-500 hover:bg-slate-100">
+          <button type="button" onClick={() => void requestClose()} aria-label="Close" className="rounded-md p-1 text-slate-500 hover:bg-slate-100">
             <FiX className="h-4 w-4" />
           </button>
         </div>
@@ -132,7 +126,7 @@ export default function SendToPrinterDialog({
         </div>
 
         <div className="flex justify-end gap-2 border-t border-[#efe7d6] px-5 py-3">
-          <button type="button" onClick={onClose}
+          <button type="button" onClick={result ? onClose : () => void requestClose()}
             className="rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]">
             {result ? 'Done' : 'Cancel'}
           </button>

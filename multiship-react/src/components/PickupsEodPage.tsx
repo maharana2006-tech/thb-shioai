@@ -287,20 +287,20 @@ export default function PickupsEodPage() {
         {/* End-of-day close */}
         <Card icon={<FiCheckSquare className="h-3.5 w-3.5" />} title="End-of-day close">
           <div className="grid grid-cols-2 gap-3">
-            <div>
+            <label className="block">
               <span className={label}>Carrier</span>
               <select className={input} value={closeCarrier} onChange={(e) => setCloseCarrier(e.target.value)}>
                 {closeCarriers.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
-            </div>
+            </label>
             <div>
               <span className={label}>Close date</span>
               <input type="date" className={input} value={closeDate} onChange={(e) => setCloseDate(e.target.value)} />
             </div>
-            <div>
+            <label className="block">
               <span className={label}>Client</span>
               <select className={input} value={closeClient} onChange={(e) => setCloseClient(e.target.value)}>{clientOptions}</select>
-            </div>
+            </label>
             <div>
               <span className={label}>Warehouse code (optional)</span>
               <input className={input} value={closeWarehouse} placeholder="All warehouses"
@@ -411,26 +411,26 @@ export default function PickupsEodPage() {
               className="flex flex-col" bodyClassName="flex flex-1 flex-col">
           <GroupLabel>Carrier &amp; schedule</GroupLabel>
           <div className="grid grid-cols-2 gap-3">
-            <div>
+            <label className="block">
               <span className={label}>Carrier</span>
               <select className={input} value={pickup.carrierCode} onChange={(e) => setP('carrierCode')(e.target.value)}>
                 {pickupCarriers.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
-            </div>
-            <div>
+            </label>
+            <label className="block">
               <span className={label}>Client</span>
               <select className={input} value={pickup.customerNo ?? ''} onChange={(e) => setP('customerNo')(e.target.value)}>{clientOptions}</select>
-            </div>
+            </label>
             <div>
               <span className={label}><FiCalendar className="mr-1 inline h-3 w-3" />Pickup date</span>
               <input type="date" className={input} value={pickup.pickupDate} onChange={(e) => setP('pickupDate')(e.target.value)} />
             </div>
-            <div>
+            <label className="block">
               <span className={label}>Service</span>
               <select className={input} value={pickup.pickupServiceType} onChange={(e) => setP('pickupServiceType')(e.target.value)}>
                 {SERVICE_TYPES.map((s) => <option key={s} value={s}>{s}</option>)}
               </select>
-            </div>
+            </label>
             <div>
               <span className={label}><FiClock className="mr-1 inline h-3 w-3" />Window from</span>
               <input type="time" className={input} value={pickup.pickupWindowStart} onChange={(e) => setP('pickupWindowStart')(e.target.value)} />

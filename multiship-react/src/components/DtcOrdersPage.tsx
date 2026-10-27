@@ -12,6 +12,8 @@ import { confirmBatchGenerate } from '../utils/dtcConfirm'
 import { useAppSession } from '../hooks/useAppSession'
 import { normalizeRole } from '../utils/roles'
 import { notify } from '../utils/notify'
+import { downloadCsv } from '../utils/csv'
+import { columnsToCsvMatrix, fetchAllPages } from '../utils/exportAll'
 import { dtcBatchPath, settingsPaths } from '../routes/workspaceRoutes'
 import DtcBatchActions from './dtc/DtcBatchActions'
 import SendToPrinterDialog from './workspace/SendToPrinterDialog'
@@ -82,7 +84,12 @@ export default function DtcOrdersPage() {
         setShowFilters(false)
       }
     }
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setShowFilters(false) }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      setShowFilters(false)
+      // BUG-200 — focus returns to the Filters button.
+      filterPanelRef.current?.querySelector<HTMLElement>('[aria-expanded="true"]')?.focus()
+    }
     document.addEventListener('mousedown', onClickOutside)
     document.addEventListener('keydown', onKey)
     return () => {
@@ -208,11 +215,15 @@ export default function DtcOrdersPage() {
       id: 'batchStatus', header: 'Batch Status', enableSorting: false, size: 115,
       cell: ({ row }) => <StatusBadge tone={batchStatusOf(row.original) === 'COMPLETE' ? 'green' : 'amber'}
         label={batchStatusOf(row.original)} />,
+      // BUG-067 — rendered cells carry nothing into the CSV; name the value.
+      meta: { exportValue: (b: DtcBatchStats) => batchStatusOf(b) },
     },
-    { id: 'orderOption', header: 'Order Option', enableSorting: false, size: 105, cell: () => 'New Order' },
+    { id: 'orderOption', header: 'Order Option', enableSorting: false, size: 105, cell: () => 'New Order',
+      meta: { exportValue: () => 'New Order' } },
     {
       id: 'lastSyncedAt', header: 'Created', accessorKey: 'lastSyncedAt', enableSorting: false, size: 150,
       cell: ({ row }) => formatDateTime(row.original.lastSyncedAt),
+      meta: { exportValue: (b: DtcBatchStats) => formatDateTime(b.lastSyncedAt) },
     },
     { id: 'firstTote', header: 'Start Id', accessorKey: 'firstTote', enableSorting: false, size: 85,
       cell: ({ row }) => row.original.firstTote ?? '—' },
@@ -224,6 +235,7 @@ export default function DtcOrdersPage() {
         const s = labelStatusOf(row.original)
         return <StatusBadge tone={s === 'GENERATED' ? 'green' : s === 'PARTIAL' ? 'sky' : 'slate'} label={s} />
       },
+      meta: { exportValue: (b: DtcBatchStats) => labelStatusOf(b) },
     },
     {
       // Right-aligned so the column's slack sits before the buttons, not after them.
@@ -402,6 +414,15 @@ export default function DtcOrdersPage() {
           tableKey="d2c-batches-v2"
           columns={columns}
           data={data?.content ?? []}
+          onExport={async (visibleIds) => {
+            // BUG-067 — all pages under the current filters; the Actions column has no export value.
+            const all = await fetchAllPages<DtcBatchStats>((page, size) => dtcService.batches({
+              page, size, tenantId, shipDate, q: debouncedQ, labelStatus, batchStatus, createdFrom, createdTo,
+            }).then((r) => r.data))
+            downloadCsv(`d2c-batches-${new Date().toISOString().slice(0, 10)}.csv`, columnsToCsvMatrix(
+              columns.filter((c) => c.id !== 'actions'), all, visibleIds))
+            notify.success(`Exported ${all.length.toLocaleString()} batch(es).`)
+          }}
           filterToggle={filters}
           search={{
             value: q,

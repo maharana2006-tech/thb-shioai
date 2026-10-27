@@ -62,7 +62,7 @@ export default function ClientOwnedPackagesPanel({ clientCode }: { clientCode: s
       return
     }
     if (editing.kind === 'CUSTOM' && (!editing.length || !editing.width || !editing.height)) {
-      notify.error('A custom box needs length, width and height.')
+      notify.invalid('A custom box needs length, width and height.')
       return
     }
     setSaving(true)

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { FiEdit3, FiPlus, FiTrash2, FiX, FiZap } from 'react-icons/fi'
 import { notify } from '../utils/notify'
+import { serverFieldError } from '../utils/serverFieldErrors'
 import { apiKeyService, type ApiKey } from '../api/apiKeyService'
 import {
   webhookSubscriptionService,
@@ -147,9 +148,9 @@ export default function WebhookSubscriptionsPage() {
                 <td className="px-4 py-2 text-right">
                   {canWrite ? (
                     <div className="inline-flex gap-1">
-                      <button title="Edit" onClick={() => setEditing({ ...s })}
+                      <button title="Edit" aria-label={`Edit ${s.url}`} onClick={() => setEditing({ ...s })}
                         className="rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-800"><FiEdit3 /></button>
-                      <button title="Delete" onClick={() => del(s)}
+                      <button title="Delete" aria-label={`Delete ${s.url}`} onClick={() => del(s)}
                         className="rounded p-1 text-rose-500 hover:bg-rose-50"><FiTrash2 /></button>
                     </div>
                   ) : (
@@ -188,14 +189,21 @@ function SubscriptionEditor({
   const idPrefix = useId()
   const idFor = useCallback((k: string) => `${idPrefix}-${k}`, [idPrefix])
 
-  const set = <K extends keyof WebhookSubscription>(k: K, v: WebhookSubscription[K]) =>
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+  const set = <K extends keyof WebhookSubscription>(k: K, v: WebhookSubscription[K]) => {
     setDraft((d) => ({ ...d, [k]: v }))
+    setFieldErrors((cur) => (cur[k] ? {} : cur))
+  }
+  const fieldErr = (k: string) => fieldErrors[k]
+    ? <p role="alert" className="mt-1 text-[11.5px] text-rose-700">{fieldErrors[k]}</p>
+    : null
 
   const save = async () => {
-    if (!draft.apiKeyId) { notify.error('Pick an API key.'); return }
-    if (!draft.url.trim()) { notify.error('URL is required.'); return }
-    if (!draft.secret.trim() || draft.secret.startsWith('•')) {
-      notify.error('Enter a plaintext HMAC secret.'); return
+    if (!draft.apiKeyId) { notify.invalid('Pick an API key.'); return }
+    if (!draft.url.trim()) { notify.invalid('URL is required.'); return }
+    const secret = draft.secret ?? ''
+    if (!secret.trim() || secret.startsWith('•')) {
+      notify.invalid('Enter a plaintext HMAC secret.'); return
     }
     setSaving(true)
     try {
@@ -203,7 +211,9 @@ function SubscriptionEditor({
       notify.success('Subscription saved.')
       onSaved()
     } catch (err) {
-      notify.apiError(err, 'Save failed.')
+      const fe = serverFieldError(err)
+      if (fe) setFieldErrors({ [['apiKeyId', 'event', 'url', 'secret', 'active'].includes(fe.field) ? fe.field : '_form']: fe.message })
+      else notify.apiError(err, 'Save failed.')
     } finally {
       setSaving(false)
     }
@@ -224,12 +234,22 @@ function SubscriptionEditor({
         </div>
 
         <div className="max-h-[70vh] space-y-3 overflow-y-auto px-6 py-5">
+          {fieldErr('_form')}
           <div>
             <label htmlFor={idFor('apiKey')} className={fieldLabel}>API key</label>
             <Select id={idFor('apiKey')} value={String(draft.apiKeyId)} onChange={(e) => set('apiKeyId', Number(e.target.value))}>
               <option value="0">— pick an API key —</option>
-              {keys.map((k) => <option key={k.id} value={k.id}>{k.name} ({k.clientCode})</option>)}
+              {keys
+                // BUG-172 — a revoked key can't receive events; keep only the
+                // subscription's own key selectable when it is already revoked.
+                .filter((k) => (k.active && !k.revokedAt) || k.id === draft.apiKeyId)
+                .map((k) => (
+                  <option key={k.id} value={k.id}>
+                    {k.name} ({k.clientCode}){k.revokedAt ? ' — revoked' : ''}
+                  </option>
+                ))}
             </Select>
+            {fieldErr('apiKeyId')}
           </div>
           <div>
             <label htmlFor={idFor('event')} className={fieldLabel}>Event</label>
@@ -237,18 +257,23 @@ function SubscriptionEditor({
               {EVENTS.map((e) => <option key={e.value} value={e.value}>{e.label}</option>)}
             </Select>
             {eventDetail ? <p className="mt-1 text-[11px] text-slate-500">{eventDetail.hint}</p> : null}
+            {fieldErr('event')}
           </div>
           <div>
             <label htmlFor={idFor('url')} className={fieldLabel}>URL</label>
             <input id={idFor('url')} value={draft.url} onChange={(e) => set('url', e.target.value)} className={inputCls}
+              aria-invalid={fieldErrors.url ? true : undefined}
               placeholder="https://api.partner.example/multiship-webhooks" />
+            {fieldErr('url')}
           </div>
           <div>
             <label htmlFor={idFor('secret')} className={fieldLabel}>HMAC secret</label>
-            <input id={idFor('secret')} value={draft.secret.startsWith('•') ? '' : draft.secret}
+            <input id={idFor('secret')} value={(draft.secret ?? '').startsWith('•') ? '' : (draft.secret ?? '')}
               onChange={(e) => set('secret', e.target.value)}
-              placeholder={draft.secret.startsWith('•') ? 'Enter a NEW secret to rotate' : 'shared with the receiver'}
+              placeholder={(draft.secret ?? '').startsWith('•') ? 'Enter a NEW secret to rotate' : 'shared with the receiver (16+ characters)'}
+              aria-invalid={fieldErrors.secret ? true : undefined}
               className={`${inputCls} font-mono`} />
+            {fieldErr('secret')}
             <p className="mt-1 text-[11px] text-slate-500">
               Used to sign delivered payloads via HMAC-SHA256 on the <code>X-Multiship-Signature</code> header.
             </p>
@@ -257,6 +282,7 @@ function SubscriptionEditor({
             <input type="checkbox" checked={draft.active !== false} onChange={(e) => set('active', e.target.checked)} />
             Active
           </label>
+          {fieldErr('active')}
           <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-[11.5px] text-slate-600">
             <FiZap className="mr-1 inline text-amber-500" />
             Delivery pattern: RestClient POST with <code>Content-Type: application/json</code>,{' '}

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { canLeaveUnsavedWork } from '../../utils/unsavedWorkGuard'
 import {
   FiArrowRight,
   FiBox,
@@ -200,7 +201,9 @@ export default function UniversalSearch() {
     return () => clearTimeout(t)
   }, [term, runSearch])
 
-  const go = (hit: SearchHit) => {
+  // BUG-063 — a search result must not silently discard a half-filled form.
+  const go = async (hit: SearchHit) => {
+    if (!(await canLeaveUnsavedWork())) return
     navigate(hit.to)
     setTerm('')
     setHits([])
@@ -219,13 +222,16 @@ export default function UniversalSearch() {
     } else if (event.key === 'Enter') {
       event.preventDefault()
       if (hits[active]) {
-        go(hits[active])
+        void go(hits[active])
       } else if (term.trim()) {
         // No hit yet (fast scan, results still in flight) — fall back to the
         // orders list filtered by the raw scan so nothing is lost.
-        navigate(`${workspacePaths.orders}?q=${encodeURIComponent(term.trim())}`)
-        setTerm('')
-        setOpen(false)
+        void canLeaveUnsavedWork().then((ok) => {
+          if (!ok) return
+          navigate(`${workspacePaths.orders}?q=${encodeURIComponent(term.trim())}`)
+          setTerm('')
+          setOpen(false)
+        })
       }
     } else if (event.key === 'Escape') {
       setOpen(false)
@@ -289,7 +295,7 @@ export default function UniversalSearch() {
                     key={hit.id}
                     type="button"
                     onMouseEnter={() => setActive(index)}
-                    onClick={() => go(hit)}
+                    onClick={() => void go(hit)}
                     className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left transition ${
                       index === active ? 'bg-[#faf7f0]' : 'hover:bg-[#faf7f0]/70'
                     }`}

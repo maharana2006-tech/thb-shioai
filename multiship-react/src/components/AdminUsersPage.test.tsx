@@ -132,7 +132,7 @@ function renderPage(Page: ComponentType) {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  list.mockResolvedValue({ data: oneAdmin })
+  list.mockResolvedValue(page(oneAdmin))
   recentAudit.mockResolvedValue({ data: [] })
   deactivate.mockResolvedValue({ data: {} })
   reactivate.mockResolvedValue({ data: {} })
@@ -149,6 +149,9 @@ afterEach(() => {
 // ==================================================================
 // Load + render
 // ==================================================================
+
+// BUG-078 — the users list is paged with a total.
+const page = <T,>(rows: T[]) => ({ data: { content: rows, totalElements: rows.length, totalPages: 1, pageNumber: 0, pageSize: 50 } })
 
 describe('AdminUsersPage — load + render', () => {
   it('renders each user row from the API response', async () => {
@@ -172,7 +175,7 @@ describe('AdminUsersPage — load + render', () => {
   })
 
   it('empty list → "No users." state', async () => {
-    list.mockResolvedValueOnce({ data: [] })
+    list.mockResolvedValueOnce(page([]))
     const Page = await loadPage()
     renderPage(Page)
 
@@ -201,7 +204,7 @@ describe('AdminUsersPage — self-edit guard (audit 3.1)', () => {
 
   it('deactivating a NON-self user does NOT show the self-edit confirm', async () => {
     // Add a second admin so the last-admin guard doesn't fire.
-    list.mockResolvedValue({ data: twoAdmins })
+    list.mockResolvedValue(page(twoAdmins))
     const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('reason')
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
 
@@ -210,7 +213,7 @@ describe('AdminUsersPage — self-edit guard (audit 3.1)', () => {
     await waitFor(() => expect(screen.getByText('op1@acme')).toBeInTheDocument())
 
     const opRow = screen.getByText('op1@acme').closest('tr')!
-    await userEvent.click(within(opRow).getByRole('button', { name: /^Deactivate$/i }))
+    await userEvent.click(within(opRow).getByRole('button', { name: /^Deactivate /i }))
 
     // No self-edit confirm.
     expect(confirmSpy).not.toHaveBeenCalled()
@@ -227,14 +230,14 @@ describe('AdminUsersPage — self-edit guard (audit 3.1)', () => {
   // deactivate themselves. One assertion covers both the "fires confirm"
   // and "reject-skip" cases that targeted the old prompt flow.
   it('self row Deactivate button is disabled with a hint tooltip', async () => {
-    list.mockResolvedValue({ data: twoAdmins })
+    list.mockResolvedValue(page(twoAdmins))
 
     const Page = await loadPage()
     renderPage(Page)
     await waitFor(() => expect(screen.getByText('admin@acme')).toBeInTheDocument())
 
     const selfRow = screen.getByText('admin@acme').closest('tr')!
-    const btn = within(selfRow).getByRole('button', { name: /^Deactivate$/i }) as HTMLButtonElement
+    const btn = within(selfRow).getByRole('button', { name: /^Deactivate /i }) as HTMLButtonElement
     expect(btn.disabled).toBe(true)
     expect(btn.title).toMatch(/can't deactivate your own account/i)
     // Clicking a disabled button must not fire the deactivate call.
@@ -262,7 +265,7 @@ describe('AdminUsersPage — last-admin protection (audit 1.3)', () => {
     await waitFor(() => expect(screen.getByText('admin@acme')).toBeInTheDocument())
 
     const adminRow = screen.getByText('admin@acme').closest('tr')!
-    await userEvent.click(within(adminRow).getByRole('button', { name: /^Deactivate$/i }))
+    await userEvent.click(within(adminRow).getByRole('button', { name: /^Deactivate /i }))
 
     await waitFor(() => expect(notifyError).toHaveBeenCalled())
     const msg = String(notifyError.mock.calls[0]?.[0] ?? '')
@@ -277,7 +280,7 @@ describe('AdminUsersPage — last-admin protection (audit 1.3)', () => {
   })
 
   it('with TWO active admins, deactivating one is ALLOWED', async () => {
-    list.mockResolvedValue({ data: twoAdmins })
+    list.mockResolvedValue(page(twoAdmins))
     mockUsername = 'someone-else@acme'  // not self, so self-guard doesn't fire
     const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('reason')
 
@@ -286,7 +289,7 @@ describe('AdminUsersPage — last-admin protection (audit 1.3)', () => {
     await waitFor(() => expect(screen.getByText('admin@acme')).toBeInTheDocument())
 
     const adminRow = screen.getByText('admin@acme').closest('tr')!
-    await userEvent.click(within(adminRow).getByRole('button', { name: /^Deactivate$/i }))
+    await userEvent.click(within(adminRow).getByRole('button', { name: /^Deactivate /i }))
 
     await waitFor(() => expect(promptSpy).toHaveBeenCalled())
     await waitFor(() => expect(deactivate).toHaveBeenCalledWith(100, 'reason'))
@@ -302,13 +305,11 @@ describe('AdminUsersPage — last-admin protection (audit 1.3)', () => {
     // BUG-051 added a self-guard that disables the self row; use a non-self
     // currentUsername so the last-admin guard is the one being exercised.
     mockUsername = 'someone-else@acme'
-    list.mockResolvedValue({
-      data: [
+    list.mockResolvedValue(page([
         user({ id: 100, username: 'admin@acme', role: 'ADMIN', clientCode: null }),
         user({ id: 200, username: 'admin2@acme', role: 'ADMIN', clientCode: null,
                deactivatedAt: '2026-01-01T00:00:00' }),
-      ],
-    })
+      ]))
     const promptSpy = vi.spyOn(window, 'prompt')
 
     const Page = await loadPage()
@@ -316,7 +317,7 @@ describe('AdminUsersPage — last-admin protection (audit 1.3)', () => {
     await waitFor(() => expect(screen.getByText('admin@acme')).toBeInTheDocument())
 
     const adminRow = screen.getByText('admin@acme').closest('tr')!
-    await userEvent.click(within(adminRow).getByRole('button', { name: /^Deactivate$/i }))
+    await userEvent.click(within(adminRow).getByRole('button', { name: /^Deactivate /i }))
 
     await waitFor(() => expect(notifyError).toHaveBeenCalled())
     expect(promptSpy).not.toHaveBeenCalled()
@@ -332,13 +333,11 @@ describe('AdminUsersPage — last-admin protection (audit 1.3)', () => {
 
 describe('AdminUsersPage — reactivate path', () => {
   it('reactivating a deactivated user immediately calls the API (no confirm)', async () => {
-    list.mockResolvedValue({
-      data: [
+    list.mockResolvedValue(page([
         user({ id: 100, username: 'admin@acme', role: 'ADMIN', clientCode: null }),
         user({ id: 300, username: 'deactivated@acme', role: 'USER',
                deactivatedAt: '2026-01-01T00:00:00' }),
-      ],
-    })
+      ]))
     const confirmSpy = vi.spyOn(window, 'confirm')
 
     const Page = await loadPage()
@@ -346,7 +345,7 @@ describe('AdminUsersPage — reactivate path', () => {
     await waitFor(() => expect(screen.getByText('deactivated@acme')).toBeInTheDocument())
 
     const row = screen.getByText('deactivated@acme').closest('tr')!
-    await userEvent.click(within(row).getByRole('button', { name: /^Reactivate$/i }))
+    await userEvent.click(within(row).getByRole('button', { name: /^Reactivate /i }))
 
     await waitFor(() => expect(reactivate).toHaveBeenCalledWith(300))
     expect(confirmSpy).not.toHaveBeenCalled()

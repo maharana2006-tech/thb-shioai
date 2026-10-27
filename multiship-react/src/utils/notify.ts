@@ -113,6 +113,10 @@ export const notify = {
   error(opts: OptionsOrString): Promise<void> {
     return toast('error', opts)
   },
+  /** A form rule the operator can fix — titled so it never reads as a crash. */
+  invalid(body: string): Promise<void> {
+    return toast('error', { title: 'Check the form for errors', body })
+  },
   /**
    * Sprint 50 PR J — one-shot error handler for ApiClient rejections.
    *

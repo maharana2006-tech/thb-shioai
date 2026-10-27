@@ -20,6 +20,7 @@ export default function TablePagination({
       <div className={`flex items-center gap-3 text-slate-600 ${compact ? 'text-[13px]' : 'text-sm'}`}>
         <span>Rows per page</span>
         <select
+          aria-label="Rows per page"
           value={pageSize}
           onChange={(event) => onPageSizeChange(Number(event.target.value))}
           className={`rounded-2xl border border-slate-200 bg-white outline-none transition focus:border-sky-600 focus:ring-4 focus:ring-sky-100 ${compact ? 'px-2.5 py-1 text-[13px]' : 'px-3 py-1.5'}`}

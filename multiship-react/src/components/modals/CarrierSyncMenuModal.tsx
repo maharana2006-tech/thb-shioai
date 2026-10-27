@@ -41,7 +41,7 @@ export default function CarrierSyncMenuModal({
   onConfirm,
 }: CarrierSyncMenuModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
-  useModalDismiss(true, dialogRef, onClose)
+  const requestClose = useModalDismiss(true, dialogRef, onClose)
   useFocusTrap(true, dialogRef)
 
   const [accounts, setAccounts] = useState<SyncEligibleAccount[]>([])
@@ -117,7 +117,7 @@ export default function CarrierSyncMenuModal({
           </p>
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => void requestClose()}
             aria-label="Close"
             className="rounded p-1 text-[#e1dcc9] transition hover:bg-white/10"
           >
@@ -170,6 +170,7 @@ export default function CarrierSyncMenuModal({
               </div>
             ) : (
               <select
+                aria-label={`${carrierName} account`}
                 value={effectivePickedId ?? ''}
                 onChange={(e) => setPickedId(Number(e.target.value))}
                 className="w-full rounded-lg border border-[#e3d9c4] bg-white px-3 py-2 text-[12px] font-medium text-[#412d15]"
@@ -187,7 +188,7 @@ export default function CarrierSyncMenuModal({
         <div className="flex items-center justify-end gap-2 border-t border-[#eee6d6] bg-[#faf7f0] px-5 py-3">
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => void requestClose()}
             className="inline-flex items-center rounded-lg border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#412d15] hover:bg-[#faf7f0]"
           >
             Cancel

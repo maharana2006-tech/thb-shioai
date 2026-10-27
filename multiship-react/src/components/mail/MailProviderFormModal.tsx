@@ -10,6 +10,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import Modal, { ModalActions } from '../common/Modal'
 import { notify } from '../../utils/notify'
+import { serverFieldError } from '../../utils/serverFieldErrors'
 import type {
   MailKindDescriptor,
   MailProviderSummary,
@@ -45,6 +46,11 @@ export default function MailProviderFormModal({
   const [presetId, setPresetId] = useState<string>('custom')
   const [config, setConfig] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+  const clearErr = (k: string) => setFieldErrors((cur) => (cur[k] ? {} : cur))
+  const fieldErr = (k: string) => fieldErrors[k]
+    ? <p role="alert" className="mt-1 text-[11.5px] font-normal text-rose-700">{fieldErrors[k]}</p>
+    : null
 
   // Reset the form each time the modal is opened.
   useEffect(() => {
@@ -62,6 +68,7 @@ export default function MailProviderFormModal({
       setPresetId('custom')
     }
     setSaving(false)
+    setFieldErrors({})
   }, [open, initial, kinds])
 
   const kindDescriptor = useMemo(
@@ -86,7 +93,7 @@ export default function MailProviderFormModal({
 
   const save = async () => {
     if (!kind || !displayName.trim()) {
-      notify.error('Kind and display name are required.')
+      notify.invalid('Kind and display name are required.')
       return
     }
     // Never resend the redacted marker back to the server.
@@ -104,8 +111,13 @@ export default function MailProviderFormModal({
         config: cleanConfig,
       })
       onClose()
-    } catch {
+    } catch (e) {
       // onSubmit surfaces its own toast; keep modal open so user can fix.
+      const fe = serverFieldError(e)
+      if (fe) {
+        const key = fe.field.replace(/^config\./, '')
+        setFieldErrors({ [key === 'kind' || key === 'displayName' || key in config ? key : '_form']: fe.message })
+      }
     } finally {
       setSaving(false)
     }
@@ -132,6 +144,8 @@ export default function MailProviderFormModal({
       }
     >
       <div className="space-y-4">
+        {fieldErr('_form')}
+        {fieldErr('kind')}
         {/* Kind + display name */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="text-[12px] font-semibold text-[#5a4526]">
@@ -142,6 +156,7 @@ export default function MailProviderFormModal({
                 setKind(e.target.value)
                 setConfig({})  // kinds have different config schemas
                 setPresetId('custom')
+                setFieldErrors({})
               }}
               disabled={isEdit}
               className="mt-1 block w-full rounded-lg border border-[#e3d9c4] bg-white px-3 py-2 text-[13px] text-[#1f150c] disabled:bg-[#faf7f0]"
@@ -158,10 +173,12 @@ export default function MailProviderFormModal({
             Display name
             <input
               value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
+              onChange={(e) => { setDisplayName(e.target.value); clearErr('displayName') }}
               placeholder="e.g. Company Gmail"
+              aria-invalid={fieldErrors.displayName ? true : undefined}
               className="mt-1 block w-full rounded-lg border border-[#e3d9c4] px-3 py-2 text-[13px] text-[#1f150c]"
             />
+            {fieldErr('displayName')}
           </label>
         </div>
 
@@ -202,7 +219,8 @@ export default function MailProviderFormModal({
                 keyName={key}
                 isSecret={false}
                 value={config[key] ?? ''}
-                onChange={(v) => setConfig({ ...config, [key]: v })}
+                error={fieldErrors[key]}
+                onChange={(v) => { setConfig({ ...config, [key]: v }); clearErr(key) }}
               />
             ))}
             {kindDescriptor.secretKeys.map((key) => (
@@ -211,7 +229,8 @@ export default function MailProviderFormModal({
                 keyName={key}
                 isSecret={true}
                 value={config[key] ?? ''}
-                onChange={(v) => setConfig({ ...config, [key]: v })}
+                error={fieldErrors[key]}
+                onChange={(v) => { setConfig({ ...config, [key]: v }); clearErr(key) }}
               />
             ))}
           </fieldset>
@@ -225,11 +244,13 @@ function ConfigInput({
   keyName,
   isSecret,
   value,
+  error,
   onChange,
 }: {
   keyName: string
   isSecret: boolean
   value: string
+  error?: string
   onChange: (v: string) => void
 }) {
   return (
@@ -253,8 +274,10 @@ function ConfigInput({
         autoComplete="new-password"
         data-lpignore="true"
         data-1p-ignore="true"
+        aria-invalid={error ? true : undefined}
         className="rounded-lg border border-[#e3d9c4] px-3 py-1.5 font-mono text-[12px] text-[#1f150c]"
       />
+      {error ? <p role="alert" className="col-start-2 text-[11.5px] text-rose-700">{error}</p> : null}
     </label>
   )
 }

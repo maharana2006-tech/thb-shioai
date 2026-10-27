@@ -5,10 +5,12 @@
  * reload so FedEx pickups pick up the change without a restart.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useModalDismiss } from '../hooks/useModalDismiss'
 import { useOutletContext } from 'react-router-dom'
 import { FiEdit3, FiPlus, FiTrash2 } from 'react-icons/fi'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import { notify } from '../utils/notify'
+import { serverFieldError } from '../utils/serverFieldErrors'
 import { stateZoneService, type StateZone } from '../api/stateZoneService'
 
 type EditorState =
@@ -123,6 +125,7 @@ export default function StateZonesPage() {
                     <button
                       type="button"
                       onClick={() => setEditor({ mode: 'edit', row })}
+                      aria-label={`Edit ${row.stateCode}`}
                       className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
                     >
                       <FiEdit3 className="h-3 w-3" /> Edit
@@ -130,6 +133,7 @@ export default function StateZonesPage() {
                     <button
                       type="button"
                       onClick={() => void onDelete(row)}
+                      aria-label={`Delete ${row.stateCode}`}
                       className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-50"
                     >
                       <FiTrash2 className="h-3 w-3" /> Delete
@@ -161,12 +165,19 @@ function StateZoneEditor({
   onClose: () => void
   onSaved: () => void
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const requestClose = useModalDismiss(true, dialogRef, onClose)
   const isEdit = initial !== null
   const [countryCode, setCountryCode] = useState(initial?.countryCode ?? 'US')
   const [stateCode, setStateCode] = useState(initial?.stateCode ?? '')
   const [zoneId, setZoneId] = useState(initial?.zoneId ?? '')
   const [displayName, setDisplayName] = useState(initial?.displayName ?? '')
   const [saving, setSaving] = useState(false)
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+  const clearErr = (k: string) => setFieldErrors((cur) => (cur[k] ? {} : cur))
+  const fieldErr = (k: string) => fieldErrors[k]
+    ? <p role="alert" className="mt-1 text-[11.5px] font-normal text-rose-700">{fieldErrors[k]}</p>
+    : null
   const firstInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => { firstInputRef.current?.focus() }, [])
@@ -189,14 +200,16 @@ function StateZoneEditor({
       notify.success(`${isEdit ? 'Updated' : 'Added'} ${countryCode.trim().toUpperCase()}/${stateCode.trim().toUpperCase()}.`)
       onSaved()
     } catch (err) {
-      notify.apiError(err, 'Save failed.')
+      const fe = serverFieldError(err)
+      if (fe) setFieldErrors({ [['countryCode', 'stateCode', 'zoneId', 'displayName'].includes(fe.field) ? fe.field : '_form']: fe.message })
+      else notify.apiError(err, 'Save failed.')
     } finally {
       setSaving(false)
     }
   }
 
   return (
-    <div
+    <div ref={dialogRef}
       role="dialog"
       aria-modal="true"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
@@ -210,51 +223,60 @@ function StateZoneEditor({
           Zone id must be a valid IANA zone (e.g. <code>America/New_York</code>).
           Server validates on save.
         </p>
+        {fieldErr('_form')}
         <div className="mt-4 grid grid-cols-2 gap-3">
           <label className="text-[11px] font-semibold text-slate-700">
             Country code
             <input
               ref={firstInputRef}
               value={countryCode}
-              onChange={(e) => setCountryCode(e.target.value.toUpperCase())}
+              onChange={(e) => { setCountryCode(e.target.value.toUpperCase()); clearErr('countryCode') }}
               maxLength={2}
               readOnly={isEdit}
+              aria-invalid={fieldErrors.countryCode ? true : undefined}
               className={`mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-[13px] uppercase ${isEdit ? 'bg-slate-50 text-slate-500' : ''}`}
             />
+            {fieldErr('countryCode')}
           </label>
           <label className="text-[11px] font-semibold text-slate-700">
             State code
             <input
               value={stateCode}
-              onChange={(e) => setStateCode(e.target.value.toUpperCase())}
+              onChange={(e) => { setStateCode(e.target.value.toUpperCase()); clearErr('stateCode') }}
               maxLength={10}
               readOnly={isEdit}
+              aria-invalid={fieldErrors.stateCode ? true : undefined}
               className={`mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-[13px] uppercase ${isEdit ? 'bg-slate-50 text-slate-500' : ''}`}
             />
+            {fieldErr('stateCode')}
           </label>
         </div>
         <label className="mt-3 block text-[11px] font-semibold text-slate-700">
           IANA zone id
           <input
             value={zoneId}
-            onChange={(e) => setZoneId(e.target.value)}
+            onChange={(e) => { setZoneId(e.target.value); clearErr('zoneId') }}
             placeholder="America/New_York"
+            aria-invalid={fieldErrors.zoneId ? true : undefined}
             className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-[13px]"
           />
+          {fieldErr('zoneId')}
         </label>
         <label className="mt-3 block text-[11px] font-semibold text-slate-700">
           Display name (optional)
           <input
             value={displayName}
-            onChange={(e) => setDisplayName(e.target.value)}
+            onChange={(e) => { setDisplayName(e.target.value); clearErr('displayName') }}
             placeholder="Michigan"
+            aria-invalid={fieldErrors.displayName ? true : undefined}
             className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-[13px]"
           />
+          {fieldErr('displayName')}
         </label>
         <div className="mt-5 flex items-center justify-end gap-2">
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => void requestClose()}
             className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-[13px] font-semibold text-slate-600 hover:bg-slate-50"
           >
             Cancel

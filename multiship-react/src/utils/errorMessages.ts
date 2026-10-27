@@ -183,6 +183,9 @@ const errorTitles: Readonly<Record<string, string>> = {
   // non-shipment forms (e.g. Invite user bad-email). Generic phrasing
   // works for every form that uses VALIDATION_ERROR.
   VALIDATION_ERROR: 'Check the form for errors',
+  UNPROCESSABLE_CONTENT: 'Check the form for errors',
+  VALIDATION_FAILED: 'Check the form for errors',
+  BAD_REQUEST: 'Check the form for errors',
   IMPORT_BATCH_STATE: 'Not available for this import',
   MALFORMED_REQUEST: 'Request not understood',
 }

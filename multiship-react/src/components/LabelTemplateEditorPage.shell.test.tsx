@@ -54,9 +54,10 @@ vi.mock('../utils/notify', () => ({
     error: (...args: unknown[]) => notifyErrorMock(...args),
     success: vi.fn(),
     info: vi.fn(),
-    confirm: vi.fn().mockResolvedValue(true),
+    confirm: (...args: unknown[]) => notifyConfirmMock(...args),
   },
 }))
+const notifyConfirmMock = vi.fn()
 
 let mockRole: 'ADMIN' | 'USER' | 'TENANT' = 'ADMIN'
 vi.mock('../hooks/useAppSession', () => ({
@@ -104,8 +105,9 @@ beforeEach(() => {
   vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
     throw new Error('un-mocked fetch forbidden in unit tests')
   })
-  ;[getByIdMock, listClientsMock, notifyApiErrorMock, notifyErrorMock, navigateMock]
+  ;[getByIdMock, listClientsMock, notifyApiErrorMock, notifyErrorMock, navigateMock, notifyConfirmMock]
     .forEach((m) => m.mockReset())
+  notifyConfirmMock.mockResolvedValue(true)
   listClientsMock.mockResolvedValue({ data: { content: [] } })
 })
 
@@ -196,6 +198,27 @@ describe('LabelTemplateEditorPage — Back button', () => {
     })
 
     expect(navigateMock).toHaveBeenCalledWith('/settings/templates')
+    expect(notifyConfirmMock).not.toHaveBeenCalled()
+  })
+
+  // BUG-120 — edits ask before Back drops them; "Stay" keeps the editor.
+  it('with unsaved edits Back asks first and Stay keeps the page', async () => {
+    notifyConfirmMock.mockResolvedValueOnce(false)
+    const Page = await loadPage()
+    renderAt(Page, '/settings/templates/new')
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: /New template/i })).toBeInTheDocument(),
+    )
+    await userEvent.type(screen.getByLabelText(/Header line/i), 'Packing list')
+
+    await act(async () => {
+      await userEvent.click(screen.getByTitle(/Back to templates/i))
+    })
+    expect(notifyConfirmMock).toHaveBeenCalledWith(
+      expect.stringMatching(/unsaved changes/),
+      expect.objectContaining({ title: 'Leave template editor?' }),
+    )
+    expect(navigateMock).not.toHaveBeenCalled()
   })
 })
 

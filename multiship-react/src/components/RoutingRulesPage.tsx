@@ -10,6 +10,7 @@ import {
   FiX,
 } from 'react-icons/fi'
 import { notify } from '../utils/notify'
+import { serverFieldError } from '../utils/serverFieldErrors'
 import { clientService, type Client } from '../api/clientService'
 import {
   routingRuleService,
@@ -285,11 +286,11 @@ export default function RoutingRulesPage() {
                     <td className="px-4 py-2 text-right">
                       <div className="inline-flex items-center gap-1">
                         <button type="button" onClick={() => setEditing({ ...r })}
-                          className="rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-800" title="Edit">
+                          className="rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-800" aria-label={`Edit ${r.name}`} title="Edit">
                           <FiEdit3 />
                         </button>
                         <button type="button" onClick={() => delRule(r)}
-                          className="rounded p-1 text-rose-500 hover:bg-rose-50" title="Delete">
+                          className="rounded p-1 text-rose-500 hover:bg-rose-50" aria-label={`Delete ${r.name}`} title="Delete">
                           <FiTrash2 />
                         </button>
                       </div>
@@ -347,8 +348,14 @@ function RuleEditorModal({
   const idPrefix = useId()
   const idFor = useCallback((k: string) => `${idPrefix}-${k}`, [idPrefix])
 
-  const set = <K extends keyof RoutingRule>(k: K, v: RoutingRule[K]) =>
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+  const fieldErr = (k: string) => fieldErrors[k]
+    ? <p role="alert" className="mt-1 text-[11.5px] text-rose-700">{fieldErrors[k]}</p>
+    : null
+  const set = <K extends keyof RoutingRule>(k: K, v: RoutingRule[K]) => {
     setDraft((d) => ({ ...d, [k]: v }))
+    setFieldErrors((cur) => (cur[k] ? {} : cur))
+  }
   const setNum = <K extends keyof RoutingRule>(k: K) => (v: string) =>
     set(k, (v === '' ? null : Number(v)) as RoutingRule[K])
   const setStr = <K extends keyof RoutingRule>(k: K) => (v: string) =>
@@ -356,15 +363,15 @@ function RuleEditorModal({
 
   const save = async () => {
     if (!draft.name.trim()) {
-      notify.error('Name is required.')
+      notify.invalid('Name is required.')
       return
     }
     if (draft.actionType === 'REROUTE' && !draft.targetServiceId && !draft.targetWarehouseId) {
-      notify.error('REROUTE rules need a target service, warehouse, or both.')
+      notify.invalid('REROUTE rules need a target service, warehouse, or both.')
       return
     }
     if (draft.actionType === 'BLOCK' && !draft.blockReason?.trim()) {
-      notify.error('BLOCK rules need a reason.')
+      notify.invalid('BLOCK rules need a reason.')
       return
     }
     setSaving(true)
@@ -373,7 +380,14 @@ function RuleEditorModal({
       notify.success('Rule saved.')
       onSaved()
     } catch (err) {
-      notify.apiError(err, 'Failed to save rule.')
+      const fe = serverFieldError(err)
+      if (fe) {
+        const key = ({ minWeight: 'minWeightLb', maxWeight: 'maxWeightLb' } as Record<string, string>)[fe.field] ?? fe.field
+        const inline = ['name', 'priority', 'minWeightLb', 'maxWeightLb', 'minDeclaredValue', 'maxDeclaredValue', 'destCountries', 'destRegions', 'blockReason']
+        setFieldErrors({ [inline.includes(key) ? key : '_form']: fe.message })
+      } else {
+        notify.apiError(err, 'Failed to save rule.')
+      }
     } finally {
       setSaving(false)
     }
@@ -391,17 +405,21 @@ function RuleEditorModal({
         </div>
 
         <div className="max-h-[70vh] space-y-4 overflow-y-auto px-6 py-5">
+          {fieldErr('_form')}
           {/* Basics */}
           <div className="grid grid-cols-4 gap-3">
             <div className="col-span-2">
               <label htmlFor={idFor('name')} className={fieldLabel}>Name</label>
               <input id={idFor('name')} type="text" value={draft.name} onChange={(e) => set('name', e.target.value)}
+                aria-invalid={fieldErrors.name ? true : undefined}
                 placeholder="EU over 5kg — DHL" className={inputCls} />
+              {fieldErr('name')}
             </div>
             <div>
               <label htmlFor={idFor('priority')} className={fieldLabel}>Priority</label>
-              <input id={idFor('priority')} type="number" min={0} value={draft.priority}
+              <input id={idFor('priority')} type="number" min={0} value={draft.priority} aria-invalid={fieldErrors.priority ? true : undefined}
                 onChange={(e) => set('priority', Number(e.target.value))} className={inputCls} />
+              {fieldErr('priority')}
               <p className="mt-1 text-[10.5px] text-slate-400">Lower = earlier</p>
             </div>
             <div className="pt-6">
@@ -420,30 +438,36 @@ function RuleEditorModal({
               <div>
                 <span className={fieldLabel}>Weight range (LB)</span>
                 <div className="flex gap-2">
-                  <input type="number" step="0.1" placeholder="min" aria-label="Weight range min (LB)" value={draft.minWeightLb ?? ''}
+                  <input type="number" step="0.1" placeholder="min" aria-label="Weight range min (LB)" value={draft.minWeightLb ?? ''} aria-invalid={fieldErrors.minWeightLb ? true : undefined}
                     onChange={(e) => setNum('minWeightLb')(e.target.value)} className={inputCls} />
-                  <input type="number" step="0.1" placeholder="max" aria-label="Weight range max (LB)" value={draft.maxWeightLb ?? ''}
+                  <input type="number" step="0.1" placeholder="max" aria-label="Weight range max (LB)" value={draft.maxWeightLb ?? ''} aria-invalid={fieldErrors.maxWeightLb ? true : undefined}
                     onChange={(e) => setNum('maxWeightLb')(e.target.value)} className={inputCls} />
                 </div>
+                {fieldErr('minWeightLb')}
+                {fieldErr('maxWeightLb')}
               </div>
               <div>
                 <span className={fieldLabel}>Declared value range</span>
                 <div className="flex gap-2">
-                  <input type="number" step="0.01" placeholder="min" aria-label="Declared value range min" value={draft.minDeclaredValue ?? ''}
+                  <input type="number" step="0.01" placeholder="min" aria-label="Declared value range min" value={draft.minDeclaredValue ?? ''} aria-invalid={fieldErrors.minDeclaredValue ? true : undefined}
                     onChange={(e) => setNum('minDeclaredValue')(e.target.value)} className={inputCls} />
-                  <input type="number" step="0.01" placeholder="max" aria-label="Declared value range max" value={draft.maxDeclaredValue ?? ''}
+                  <input type="number" step="0.01" placeholder="max" aria-label="Declared value range max" value={draft.maxDeclaredValue ?? ''} aria-invalid={fieldErrors.maxDeclaredValue ? true : undefined}
                     onChange={(e) => setNum('maxDeclaredValue')(e.target.value)} className={inputCls} />
                 </div>
+                {fieldErr('minDeclaredValue')}
+                {fieldErr('maxDeclaredValue')}
               </div>
               <div>
                 <label htmlFor={idFor('destCountries')} className={fieldLabel}>Destination countries (CSV of ISO-2)</label>
-                <input id={idFor('destCountries')} type="text" placeholder="DE, FR, IT" value={draft.destCountries ?? ''}
+                <input id={idFor('destCountries')} type="text" placeholder="DE, FR, IT" value={draft.destCountries ?? ''} aria-invalid={fieldErrors.destCountries ? true : undefined}
                   onChange={(e) => setStr('destCountries')(e.target.value.toUpperCase())} className={inputCls} />
+                {fieldErr('destCountries')}
               </div>
               <div>
                 <label htmlFor={idFor('destRegions')} className={fieldLabel}>Destination regions (CSV)</label>
-                <input id={idFor('destRegions')} type="text" placeholder="Europe, Asia" value={draft.destRegions ?? ''}
+                <input id={idFor('destRegions')} type="text" placeholder="Europe, Asia" value={draft.destRegions ?? ''} aria-invalid={fieldErrors.destRegions ? true : undefined}
                   onChange={(e) => setStr('destRegions')(e.target.value)} className={inputCls} />
+                {fieldErr('destRegions')}
                 <p className="mt-1 text-[10.5px] text-slate-400">
                   Available: {REGIONS.join(', ')}
                 </p>
@@ -539,9 +563,10 @@ function RuleEditorModal({
             ) : (
               <div>
                 <label htmlFor={idFor('blockReason')} className={fieldLabel}>Block reason (shown to operator)</label>
-                <input id={idFor('blockReason')} type="text" value={draft.blockReason ?? ''}
+                <input id={idFor('blockReason')} type="text" value={draft.blockReason ?? ''} aria-invalid={fieldErrors.blockReason ? true : undefined}
                   onChange={(e) => set('blockReason', e.target.value)}
                   placeholder="e.g. Weight over carrier maximum" className={inputCls} />
+                {fieldErr('blockReason')}
               </div>
             )}
           </section>

@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { screen, waitFor, within, act, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '../test/renderWithProviders'
+import { ApiError } from '../api/apiClient'
 
 /**
  * Sprint 53 /settings/carriers page-tests (slice: FE-limits).
@@ -243,7 +244,7 @@ describe('CarrierShippingLimitsPage — row actions', () => {
     await waitFor(() => expect(screen.getByText('FEDEX')).toBeTruthy())
 
     const fedexRow = screen.getByText('FEDEX').closest('tr')!
-    await userEvent.click(within(fedexRow).getByRole('button', { name: /^Activate$/i }))
+    await userEvent.click(within(fedexRow).getByRole('button', { name: /^Activate /i }))
 
     await waitFor(() => expect(setActiveMock).toHaveBeenCalledTimes(1))
     expect(setActiveMock.mock.calls[0][1]).toBe(true)
@@ -436,5 +437,29 @@ describe('CarrierShippingLimitsPage — editor dialog', () => {
     expect(apiErrorMock.mock.calls[0][1]).toBe('Failed to update row.')
     // Dialog remains open for the operator to retry.
     expect(screen.getByRole('dialog')).toBeTruthy()
+  })
+
+  it('BUG-194: edit save reject with a field error → message under the Carrier code input, no toast', async () => {
+    updateMock.mockRejectedValueOnce(new ApiError('Validation failed', 422, {
+      errors: { field: 'carrierCode', code: 'VALIDATION_ERROR', message: 'Carrier code is already in use.' },
+    }))
+    const Page = await loadPage()
+    renderWithProviders(<Page />)
+    await waitFor(() => expect(screen.getByText('UPS')).toBeTruthy())
+
+    const upsRow = screen.getByText('UPS').closest('tr')!
+    await userEvent.click(within(upsRow).getByRole('button', { name: /Edit/i }))
+    await userEvent.click(screen.getByRole('button', { name: /^Save$/i }))
+
+    const msg = await screen.findByText('Carrier code is already in use.')
+    const dialog = screen.getByRole('dialog')
+    const carrierInput = within(dialog).getAllByRole('textbox')[0] as HTMLInputElement
+    expect(carrierInput.getAttribute('aria-invalid')).toBe('true')
+    expect(carrierInput.closest('label')).toContainElement(msg)
+    expect(apiErrorMock).not.toHaveBeenCalled()
+
+    // Editing the field clears the inline error.
+    fireEvent.change(carrierInput, { target: { value: 'DHL' } })
+    expect(screen.queryByText('Carrier code is already in use.')).toBeNull()
   })
 })

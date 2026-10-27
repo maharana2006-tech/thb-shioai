@@ -39,8 +39,14 @@ export function useFocusTrap<T extends HTMLElement>(
       const target = focusables[0] ?? container
       // requestAnimationFrame lets the DOM paint the dialog before we
       // measure / focus — avoids "cannot focus a hidden element" on
-      // portals that reveal via transition.
-      requestAnimationFrame(() => target.focus?.())
+      // portals that reveal via transition. Skip when focus already
+      // landed inside the dialog (the user clicked a field before the
+      // frame fired) so we never yank it away mid-typing.
+      requestAnimationFrame(() => {
+        const active = document.activeElement
+        if (active && active !== document.body && container.contains(active)) return
+        target.focus?.()
+      })
     }
 
     const handleKeydown = (e: KeyboardEvent) => {

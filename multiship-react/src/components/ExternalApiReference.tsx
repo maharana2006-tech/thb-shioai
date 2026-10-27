@@ -383,7 +383,7 @@ function TryIt({ ep, apiKey }: { ep: Endpoint; apiKey: string }) {
   const hasBody = ep.method === 'POST' && ep.request !== undefined
 
   const send = async () => {
-    if (!apiKey.trim()) return notify.error('Enter your API key at the top first.')
+    if (!apiKey.trim()) return notify.invalid('Enter your API key at the top first.')
     for (const name of params) {
       if (!pathValues[name]?.trim()) return notify.error(`Fill in "${name}".`)
     }
@@ -392,7 +392,7 @@ function TryIt({ ep, apiKey }: { ep: Endpoint; apiKey: string }) {
       try {
         JSON.parse(body || '{}')
       } catch {
-        return notify.error('Request body is not valid JSON.')
+        return notify.invalid('Request body is not valid JSON.')
       }
       payload = body
     }

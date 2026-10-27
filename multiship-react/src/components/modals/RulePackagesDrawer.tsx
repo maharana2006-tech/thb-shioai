@@ -73,7 +73,7 @@ export default function RulePackagesDrawer({
 }) {
   // A11y audit — focus trap + Escape-to-close + focus restoration.
   const dialogRef = useRef<HTMLElement>(null)
-  useModalDismiss(true, dialogRef, onClose)
+  const requestClose = useModalDismiss(true, dialogRef, onClose)
   const [presets, setPresets] = useState<PackagePreset[]>([])
   const [selected, setSelected] = useState<Set<number>>(new Set(initialPresetIds))
   const [loading, setLoading] = useState(true)
@@ -272,7 +272,7 @@ export default function RulePackagesDrawer({
 
   return (
     <>
-      <div className="fixed inset-0 z-[55] bg-slate-950/50 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
+      <div className="fixed inset-0 z-[55] bg-slate-950/50 backdrop-blur-sm" onClick={() => void requestClose()} aria-hidden="true" />
       <aside
         ref={dialogRef}
         role="dialog"
@@ -301,7 +301,7 @@ export default function RulePackagesDrawer({
           <button
             type="button"
             aria-label="Close"
-            onClick={onClose}
+            onClick={() => void requestClose()}
             className="rounded-xl border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50"
           >
             <FiX className="h-4 w-4" />
@@ -421,7 +421,7 @@ export default function RulePackagesDrawer({
         <footer className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/60 px-5 py-3">
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => void requestClose()}
             className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-[13px] font-semibold text-slate-600 transition hover:bg-slate-100"
           >
             Cancel

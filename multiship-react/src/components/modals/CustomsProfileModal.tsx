@@ -40,6 +40,7 @@ import RegionCountryPicker from '../workspace/RegionCountryPicker'
 // BUG-125 — shared with NewShipmentPage so every currency the client profile
 // can declare is also pickable on the order form.
 import { CURRENCY_ALLOWLIST } from '../../utils/money'
+import { serverFieldError } from '../../utils/serverFieldErrors'
 const CUSTOMS_CURRENCIES = CURRENCY_ALLOWLIST
 
 /**
@@ -280,8 +281,11 @@ export default function CustomsProfileModal({
 
   const knownProfiles = existingProfiles.length ? existingProfiles : fetchedProfiles
 
-  const set = (key: keyof CustomsProfile) => (e: { target: { value: string } }) =>
+  const [serverErrors, setServerErrors] = useState<Record<string, string>>({})
+  const set = (key: keyof CustomsProfile) => (e: { target: { value: string } }) => {
     setForm((cur) => ({ ...cur, [key]: e.target.value }))
+    setServerErrors((cur) => (cur[key] ? {} : cur))
+  }
 
   // ── Inline per-field validation (importer + broker input fields) ──────────
   const [touched, setTouched] = useState<Record<string, boolean>>({})
@@ -343,7 +347,7 @@ export default function CustomsProfileModal({
     }
     return out
   }, [form, ownBroker])
-  const err = (k: string): string | null => (touched[k] ? fieldErrors[k] : null)
+  const err = (k: string): string | null => serverErrors[k] ?? (touched[k] ? fieldErrors[k] : null)
   const hasFieldErrors = Object.values(fieldErrors).some(Boolean)
   const touchAllFields = () =>
     setTouched(Object.keys(fieldErrors).reduce((m, k) => ({ ...m, [k]: true }), {}))
@@ -480,7 +484,9 @@ export default function CustomsProfileModal({
       onSaved?.()
       onClose()
     } catch (e) {
-      notify.apiError(e, 'Failed to save the profile.')
+      const fe = serverFieldError(e)
+      if (fe) setServerErrors({ [fe.field in fieldErrors ? fe.field : '_form']: fe.message })
+      else notify.apiError(e, 'Failed to save the profile.')
     } finally {
       setSaving(false)
     }
@@ -581,6 +587,9 @@ export default function CustomsProfileModal({
         <div className={asPage
           ? 'grid grid-cols-1 gap-4 lg:grid-cols-2 lg:items-start'
           : 'flex-1 space-y-3.5 overflow-y-auto bg-[#faf7f0]/50 px-5 py-4'}>
+          {serverErrors._form ? (
+            <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50/60 px-3 py-2 text-[11.5px] text-rose-800 lg:col-span-2">{serverErrors._form}</p>
+          ) : null}
           {/* 1 — Client & destinations */}
           <Section
             step="1"

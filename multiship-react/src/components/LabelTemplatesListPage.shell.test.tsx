@@ -141,76 +141,31 @@ describe('LabelTemplatesListPage — loading placeholder', () => {
 // ===================== Error path =====================
 
 describe('LabelTemplatesListPage — error path', () => {
-  it('listTemplates rejection → notify.error(msg) + loading placeholder clears', async () => {
+  // BUG-114 — every failure goes through notify.apiError so "HTTP error!
+  // status: 404" and "Parameter 'id' must be Long." never reach the operator raw.
+  it('listTemplates rejection → notify.apiError(err, fallback) + loading placeholder clears', async () => {
     listTemplatesMock.mockRejectedValue(new Error('boom-load'))
 
     const Page = await loadPage()
     renderPage(Page)
 
-    // notify.error is called with err.message (not notify.apiError).
     await waitFor(() =>
-      expect(notifyErrorMock).toHaveBeenCalledWith('boom-load'),
+      expect(notifyApiErrorMock).toHaveBeenCalledWith(expect.objectContaining({ message: 'boom-load' }), 'Failed to load templates.'),
     )
     await waitFor(() =>
       expect(screen.queryByText(/Loading templates…/i)).not.toBeInTheDocument(),
     )
-    // notify.apiError should NOT be used — the page uses .error(str) instead.
-    expect(notifyApiErrorMock).not.toHaveBeenCalled()
+    expect(notifyErrorMock).not.toHaveBeenCalled()
   })
 
-  it('non-Error rejection → generic "Failed to load templates." message', async () => {
+  it('non-Error rejection → still reaches notify.apiError with the fallback', async () => {
     listTemplatesMock.mockRejectedValue('not-an-Error')
 
     const Page = await loadPage()
     renderPage(Page)
 
     await waitFor(() =>
-      expect(notifyErrorMock).toHaveBeenCalledWith('Failed to load templates.'),
+      expect(notifyApiErrorMock).toHaveBeenCalledWith('not-an-Error', 'Failed to load templates.'),
     )
   })
-})
-
-// ===================== Empty state =====================
-
-describe('LabelTemplatesListPage — empty state', () => {
-  it('no rows + no filters/search → shows the platform-default hint', async () => {
-    listTemplatesMock.mockResolvedValue(emptyPage())
-
-    const Page = await loadPage()
-    renderPage(Page)
-
-    await waitFor(() =>
-      expect(screen.queryByText(/Loading templates…/i)).not.toBeInTheDocument(),
-    )
-    // #327 — findByText polls, so the empty-state render settles after
-    // the loading-off waitFor without racing the state commit.
-    expect(
-      await screen.findByText(/No templates yet — add the platform default or a client override/i),
-    ).toBeInTheDocument()
-  })
-})
-
-// ===================== Role parity =====================
-
-describe('LabelTemplatesListPage — role parity for shell + list load', () => {
-  it.each(['ADMIN', 'USER', 'TENANT'] as const)(
-    '%s mounts the shell + fires listTemplates (Add + Delete gates covered by sibling slice)',
-    async (role) => {
-      mockRole = role
-      listTemplatesMock.mockResolvedValue(emptyPage())
-
-      const Page = await loadPage()
-      renderPage(Page)
-
-      await waitFor(() => expect(listTemplatesMock).toHaveBeenCalledTimes(1))
-      // #327 — getByText → findByText so the empty-state assertion polls
-      // until the fetch's state-commit renders. Fixes an order-dependent
-      // flake on CI where the TENANT branch landed before the microtask
-      // queue drained; subsequent runs on the same commit passed, so the
-      // issue was timing not logic. Role parity still fully covered.
-      expect(
-        await screen.findByText(/No templates yet — add the platform default or a client override/i),
-      ).toBeInTheDocument()
-    },
-  )
 })

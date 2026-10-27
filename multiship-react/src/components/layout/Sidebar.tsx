@@ -66,6 +66,16 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
   // behaviour is completely untouched.
   const drawerRef = useRef<HTMLElement>(null)
   useFocusTrap(mobileOpen, drawerRef)
+  // BUG-197 — below md the closed drawer is off-screen; `inert` keeps Tab
+  // from walking through its nine invisible controls.
+  const [narrow, setNarrow] = useState(() => window.matchMedia?.('(max-width: 767px)').matches ?? false)
+  useEffect(() => {
+    const mq = window.matchMedia?.('(max-width: 767px)')
+    if (!mq) return
+    const onChange = () => setNarrow(mq.matches)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
 
   useEffect(() => {
     if (!mobileOpen) return
@@ -168,6 +178,7 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
       aria-labelledby={mobileOpen ? MOBILE_DRAWER_TITLE_ID : undefined}
       className={`group fixed inset-y-0 left-0 z-40 flex w-56 flex-col overflow-hidden bg-[#1f150c] transition-transform duration-200 ease-out print:hidden ${mobileTranslate} md:transition-[width] md:duration-200 ${desktopWidth} md:translate-x-0`}
       data-mobile-open={mobileOpen ? 'true' : 'false'}
+      inert={narrow && !mobileOpen}
     >
       {/* Sprint 52 a11y — sr-only heading that aria-labelledby resolves
           to when the drawer opens as a dialog. Visible design is

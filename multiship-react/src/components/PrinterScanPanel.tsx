@@ -1,4 +1,5 @@
 import { relativeTime } from '../utils/relativeTime'
+import { useModalDismiss } from '../hooks/useModalDismiss'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   FiCheckCircle, FiChevronDown, FiChevronRight, FiClock, FiCopy, FiDownload, FiKey,
@@ -503,6 +504,8 @@ export default function PrinterScanPanel({
  * to step 1, no key persisted in state past the close.
  */
 function EnrollModal({ tenantCode, onClose }: { tenantCode: string; onClose: () => void }) {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const requestClose = useModalDismiss(true, dialogRef, onClose)
   const [agentId, setAgentId] = useState('')
   const [hostname, setHostname] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -541,7 +544,7 @@ function EnrollModal({ tenantCode, onClose }: { tenantCode: string; onClose: () 
   }
 
   return (
-    <div
+    <div ref={dialogRef}
       role="dialog"
       aria-modal="true"
       aria-labelledby="printer-scan-enroll-heading"
@@ -619,7 +622,7 @@ function EnrollModal({ tenantCode, onClose }: { tenantCode: string; onClose: () 
             <div className="mt-5 flex justify-end gap-2">
               <button
                 type="button"
-                onClick={onClose}
+                onClick={() => void requestClose()}
                 className="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-1.5 text-[13px] font-semibold text-slate-700 hover:bg-slate-50"
               >
                 Cancel

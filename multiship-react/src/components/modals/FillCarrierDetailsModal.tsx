@@ -49,7 +49,7 @@ export default function FillCarrierDetailsModal({
 }: FillCarrierDetailsModalProps) {
   // A11y audit — focus trap + Escape-to-close + focus restoration.
   const dialogRef = useRef<HTMLDivElement>(null)
-  useModalDismiss(true, dialogRef, onClose)
+  const requestClose = useModalDismiss(true, dialogRef, onClose)
   const [accountNumber, setAccountNumber] = useState(resolution.accountNumber || '')
   const [carrierCode, setCarrierCode] = useState(resolution.carrierCode || 'UPS')
   const [accountName, setAccountName] = useState(resolution.accountName || '')
@@ -64,7 +64,7 @@ export default function FillCarrierDetailsModal({
 
   const handleSaveAndGenerate = async () => {
     if (!accountNumber.trim() || !clientId.trim() || !clientSecret.trim()) {
-      notify.error('Account number, client ID, and client secret are required.')
+      notify.invalid('Account number, client ID, and client secret are required.')
       return
     }
 
@@ -96,7 +96,7 @@ export default function FillCarrierDetailsModal({
       role="dialog"
       aria-modal="true"
       aria-label={`Complete carrier details for order ${orderNo}`}
-      onClick={onClose}
+      onClick={() => void requestClose()}
     >
       <div
         ref={dialogRef}
@@ -120,7 +120,7 @@ export default function FillCarrierDetailsModal({
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => void requestClose()}
             className="rounded-xl border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50"
             aria-label="Close"
           >

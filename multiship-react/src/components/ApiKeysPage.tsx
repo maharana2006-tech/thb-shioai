@@ -1,7 +1,9 @@
 import { relativeTime } from '../utils/relativeTime'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useModalDismiss } from '../hooks/useModalDismiss'
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { notify } from '../utils/notify'
+import { serverFieldError } from '../utils/serverFieldErrors'
 import {
   FiAlertTriangle,
   FiCheck,
@@ -96,6 +98,12 @@ export default function ApiKeysPage() {
   /** Audit A1 — key pending rotate confirmation + in-flight guard. */
   const [rotating, setRotating] = useState<ApiKey | null>(null)
   const [rotateBusy, setRotateBusy] = useState(false)
+  const issueDialogRef = useRef<HTMLDivElement>(null)
+  const requestIssueClose = useModalDismiss(issueOpen, issueDialogRef, () => setIssueOpen(false))
+  const rotateDialogRef = useRef<HTMLDivElement>(null)
+  const requestRotateClose = useModalDismiss(!!rotating, rotateDialogRef, () => setRotating(null))
+  const revokeDialogRef = useRef<HTMLDivElement>(null)
+  const requestRevokeClose = useModalDismiss(!!revoking, revokeDialogRef, () => setRevoking(null))
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -135,8 +143,14 @@ export default function ApiKeysPage() {
 
   const activeCount = useMemo(() => keys.filter((k) => k.active).length, [keys])
 
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+  const clearErr = (k: string) => setFieldErrors((cur) => (cur[k] ? {} : cur))
+  const fieldErr = (k: string) => fieldErrors[k]
+    ? <p role="alert" className="mt-1 text-[11.5px] text-rose-700">{fieldErrors[k]}</p>
+    : null
   const openIssue = () => {
     setForm(emptyForm)
+    setFieldErrors({})
     // R2-BUG-019 — reset to least-privilege blank state on every open
     // so a prior wide selection can't leak into a fresh dialog.
     setScopes(new Set<string>())
@@ -147,24 +161,24 @@ export default function ApiKeysPage() {
 
   const submitIssue = async () => {
     if (!form.name.trim()) {
-      notify.error('A key name is required.')
+      notify.invalid('A key name is required.')
       return
     }
     // Audit R2 #338 — require at least one scope; a zero-scope key
     // would authenticate but reject every real call, which is a footgun
     // rather than a useful state.
     if (scopes.size === 0) {
-      notify.error('Pick at least one scope — a key with no scopes can’t call anything.')
+      notify.invalid('Pick at least one scope — a key with no scopes can’t call anything.')
       return
     }
     // R2-BUG-019 — require an explicit client-scope choice; no silent
     // fallback to all-clients.
     if (scopeMode === null) {
-      notify.error('Pick a client scope — "All clients" or "One client".')
+      notify.invalid('Pick a client scope — "All clients" or "One client".')
       return
     }
     if (scopeMode === 'ONE' && !pickedClientCode.trim()) {
-      notify.error('Pick a client for a single-client key, or switch to "All clients".')
+      notify.invalid('Pick a client for a single-client key, or switch to "All clients".')
       return
     }
     setIssuing(true)
@@ -186,7 +200,9 @@ export default function ApiKeysPage() {
       setIssued(res.data ?? null)
       void load()
     } catch (e) {
-      notify.apiError(e, 'Failed to issue the API key.')
+      const fe = serverFieldError(e)
+      if (fe) setFieldErrors({ [fe.field === 'name' || fe.field === 'clientCode' ? fe.field : '_form']: fe.message })
+      else notify.apiError(e, 'Failed to issue the API key.')
     } finally {
       setIssuing(false)
     }
@@ -405,6 +421,7 @@ export default function ApiKeysPage() {
                           <button
                             type="button"
                             onClick={() => setRotating(k)}
+                            aria-label={`Rotate ${k.name}`}
                             disabled={!!k.lastRotatedAt}
                             title={k.lastRotatedAt
                               ? 'Already inside the 24h rotation grace window'
@@ -417,6 +434,7 @@ export default function ApiKeysPage() {
                           <button
                             type="button"
                             onClick={() => setRevoking(k)}
+                            aria-label={`Revoke ${k.name}`}
                             className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[10.5px] font-bold text-rose-600 transition hover:bg-rose-100"
                           >
                             <FiSlash className="h-3 w-3" />
@@ -435,12 +453,12 @@ export default function ApiKeysPage() {
 
       {/* issue modal */}
       {issueOpen ? (
-        <div
+        <div ref={issueDialogRef}
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm"
           role="dialog"
           aria-modal="true"
           aria-labelledby="apikeys-issue-modal-heading"
-          onClick={() => setIssueOpen(false)}
+          onClick={() => void requestIssueClose()}
         >
           <div
             className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_30px_80px_rgba(15,23,42,0.35)]"
@@ -458,7 +476,7 @@ export default function ApiKeysPage() {
               </h3>
               <button
                 type="button"
-                onClick={() => setIssueOpen(false)}
+                onClick={() => void requestIssueClose()}
                 className="rounded-xl border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50"
                 aria-label="Close"
               >
@@ -472,15 +490,18 @@ export default function ApiKeysPage() {
             </p>
 
             <div className="mt-4 space-y-3">
+              {fieldErr('_form')}
               <label className="block">
                 <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Key name</span>
                 <input
                   type="text"
                   value={form.name}
-                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                  onChange={(e) => { setForm((f) => ({ ...f, name: e.target.value })); clearErr('name') }}
                   placeholder="e.g. ACME WMS integration"
+                  aria-invalid={fieldErrors.name ? true : undefined}
                   className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-[13px] text-slate-900 outline-none transition focus:border-slate-400"
                 />
+                {fieldErr('name')}
               </label>
 
               {/* Audit A6 (#339) — key scope. "All clients" (prior behaviour,
@@ -519,8 +540,10 @@ export default function ApiKeysPage() {
                 </div>
                 {scopeMode === 'ONE' ? (
                   <select
+                    aria-label="Client"
                     value={pickedClientCode}
-                    onChange={(e) => setPickedClientCode(e.target.value)}
+                    onChange={(e) => { setPickedClientCode(e.target.value); clearErr('clientCode') }}
+                    aria-invalid={fieldErrors.clientCode ? true : undefined}
                     className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-[13px] text-slate-900 outline-none focus:border-slate-400"
                   >
                     <option value="">— pick a client —</option>
@@ -620,7 +643,7 @@ export default function ApiKeysPage() {
             <div className="mt-4 flex items-center justify-end gap-2 border-t border-slate-100 pt-4">
               <button
                 type="button"
-                onClick={() => setIssueOpen(false)}
+                onClick={() => void requestIssueClose()}
                 className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-[13px] font-semibold text-slate-600 transition hover:bg-slate-50"
               >
                 Cancel
@@ -732,11 +755,11 @@ export default function ApiKeysPage() {
 
       {/* Audit A1 — rotate confirmation */}
       {rotating ? (
-        <div
+        <div ref={rotateDialogRef}
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm"
           role="dialog"
           aria-modal="true"
-          onClick={() => setRotating(null)}
+          onClick={() => void requestRotateClose()}
         >
           <div
             className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_30px_80px_rgba(15,23,42,0.35)]"
@@ -756,7 +779,7 @@ export default function ApiKeysPage() {
             <div className="mt-4 flex items-center justify-end gap-2 border-t border-slate-100 pt-4">
               <button
                 type="button"
-                onClick={() => setRotating(null)}
+                onClick={() => void requestRotateClose()}
                 className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-[13px] font-semibold text-slate-600 transition hover:bg-slate-50"
               >
                 Cancel
@@ -776,11 +799,11 @@ export default function ApiKeysPage() {
 
       {/* revoke confirmation */}
       {revoking ? (
-        <div
+        <div ref={revokeDialogRef}
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm"
           role="dialog"
           aria-modal="true"
-          onClick={() => setRevoking(null)}
+          onClick={() => void requestRevokeClose()}
         >
           <div
             className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_30px_80px_rgba(15,23,42,0.35)]"
@@ -799,7 +822,7 @@ export default function ApiKeysPage() {
             <div className="mt-4 flex items-center justify-end gap-2 border-t border-slate-100 pt-4">
               <button
                 type="button"
-                onClick={() => setRevoking(null)}
+                onClick={() => void requestRevokeClose()}
                 className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-[13px] font-semibold text-slate-600 transition hover:bg-slate-50"
               >
                 Cancel

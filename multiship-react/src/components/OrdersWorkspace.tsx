@@ -1,6 +1,7 @@
 import { relativeTime } from '../utils/relativeTime'
 import { lazyWithRetry } from '../utils/lazyWithRetry'
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useModalDismiss } from '../hooks/useModalDismiss'
 import { createPortal } from 'react-dom'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import type { SortingState } from '@tanstack/react-table'
@@ -301,16 +302,12 @@ export default function OrdersWorkspace() {
     const onDocClick = (e: MouseEvent) => {
       if (!filtersRef.current?.contains(e.target as Node)) setShowFilters(false)
     }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setShowFilters(false)
-    }
     document.addEventListener('mousedown', onDocClick)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDocClick)
-      document.removeEventListener('keydown', onKey)
-    }
+    return () => document.removeEventListener('mousedown', onDocClick)
   }, [showFilters])
+  const filtersDialogRef = useRef<HTMLDivElement>(null)
+  // Filters apply live, so closing discards nothing: no prompt.
+  const closeFilters = useModalDismiss(showFilters, filtersDialogRef, () => setShowFilters(false), { confirmDiscard: false })
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- snap paging back to 1 on filter/view change; user-input-driven, not derivable at render
@@ -545,13 +542,8 @@ export default function OrdersWorkspace() {
    *  tracking number, irreversibility, and the refund caveat. */
   const [confirmVoid, setConfirmVoid] = useState<{ orderNo: number; trackingNumber: string; packages?: number } | null>(null)
 
-  // Escape closes the void confirmation (parity with every other modal).
-  useEffect(() => {
-    if (!confirmVoid) return
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setConfirmVoid(null) }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [confirmVoid])
+  const voidDialogRef = useRef<HTMLDivElement>(null)
+  const requestVoidClose = useModalDismiss(!!confirmVoid, voidDialogRef, () => setConfirmVoid(null))
 
   const handleVoid = async (orderNo: number, trackingNumber: string | null, packages?: number | null) => {
     if (!trackingNumber) return
@@ -1118,6 +1110,25 @@ export default function OrdersWorkspace() {
   const [sendToPrinterOpen, setSendToPrinterOpen] = useState(false)
   const [printMenuOpen, setPrintMenuOpen] = useState(false)
   const [printMenuAnchor, setPrintMenuAnchor] = useState<{ top: number; left: number; width: number } | null>(null)
+  const printMenuBtnRef = useRef<HTMLButtonElement>(null)
+  const printMenuRef = useRef<HTMLDivElement>(null)
+  // BUG-199 — the menu is a portal at the end of the body, so move focus into
+  // it on open and walk the items with the arrow keys; Escape hands focus back.
+  const printMenuItems = () =>
+    Array.from(printMenuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)') ?? [])
+  useEffect(() => {
+    if (!printMenuOpen) return
+    printMenuItems()[0]?.focus()
+  }, [printMenuOpen])
+  const onPrintMenuKey = (e: React.KeyboardEvent) => {
+    const items = printMenuItems()
+    if (!items.length) return
+    const i = items.indexOf(document.activeElement as HTMLElement)
+    if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length].focus() }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus() }
+    else if (e.key === 'Home') { e.preventDefault(); items[0].focus() }
+    else if (e.key === 'End') { e.preventDefault(); items[items.length - 1].focus() }
+  }
   // Printing needs labelled orders: the All orders and Archive tabs (not Ready).
   const printableView = view === 'all' || view === 'generated'
   // While the bottom action bar shows, lift the toast stack above it so a
@@ -1153,7 +1164,11 @@ export default function OrdersWorkspace() {
     if (!printMenuOpen) return
     // The menu is pinned to where the button was; close it rather than let it drift.
     const close = () => setPrintMenuOpen(false)
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close() }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      close()
+      printMenuBtnRef.current?.focus()
+    }
     window.addEventListener('resize', close)
     window.addEventListener('scroll', close, true)
     window.addEventListener('keydown', onKey)
@@ -2227,6 +2242,7 @@ export default function OrdersWorkspace() {
             </button>
             <div>
               <button type="button"
+                      ref={printMenuBtnRef}
                       onClick={(e) => {
                         // The toolbar scrolls sideways (overflow), which would clip an
                         // absolutely-placed menu — anchor a fixed menu to the button instead.
@@ -2247,6 +2263,8 @@ export default function OrdersWorkspace() {
                 <>
                   <div className="fixed inset-0 z-[60]" onClick={() => setPrintMenuOpen(false)} />
                   <div role="menu"
+                    ref={printMenuRef}
+                    onKeyDown={onPrintMenuKey}
                     style={{ top: printMenuAnchor.top, left: printMenuAnchor.left, width: printMenuAnchor.width }}
                     className="fixed z-[61] overflow-hidden rounded-xl border border-[#e3d9c4] bg-white py-1 text-left shadow-[0_18px_50px_rgba(15,23,42,0.18)]">
                     {selectedCount === 0 || !printableView ? (
@@ -2553,6 +2571,7 @@ export default function OrdersWorkspace() {
                 {/* Advanced filter popover — anchored to this container. */}
                 {showFilters ? (
                   <div
+                    ref={filtersDialogRef}
                     role="dialog"
                     aria-label="Advanced filters"
                     className="absolute right-0 top-full z-30 mt-1.5 w-[min(36rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-[#e3d9c4] bg-[#faf7f0] shadow-[0_20px_60px_rgba(31,21,12,0.18)]"
@@ -2580,7 +2599,7 @@ export default function OrdersWorkspace() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => setShowFilters(false)}
+                          onClick={() => void closeFilters()}
                           aria-label="Close filters"
                           className="rounded-lg p-1 text-[#6b5c42] transition hover:bg-[#f0e9d8] hover:text-[#1f150c]"
                         >
@@ -2825,7 +2844,7 @@ export default function OrdersWorkspace() {
                       </span>
                       <button
                         type="button"
-                        onClick={() => setShowFilters(false)}
+                        onClick={() => void closeFilters()}
                         className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-3.5 py-1.5 text-[11.5px] font-semibold text-[#f4eede] transition hover:bg-[#412d15]"
                       >
                         Done
@@ -3041,11 +3060,12 @@ export default function OrdersWorkspace() {
         {/* Void confirmation — in-app modal (see handleVoid). */}
         {confirmVoid ? (
           <div
+            ref={voidDialogRef}
             role="dialog"
             aria-modal="true"
             aria-label={`Void order ${confirmVoid.orderNo}`}
             className="fixed inset-0 z-50 flex items-center justify-center bg-[#1f150c]/45 p-4 backdrop-blur-[1px]"
-            onClick={() => setConfirmVoid(null)}
+            onClick={() => void requestVoidClose()}
           >
             <div
               className="w-full max-w-[430px] overflow-hidden rounded-2xl border border-rose-200 bg-white shadow-2xl"
@@ -3081,7 +3101,7 @@ export default function OrdersWorkspace() {
               <div className="flex items-center justify-end gap-2 border-t border-[#eee6d6] bg-[#faf7f0] px-5 py-3">
                 <button
                   type="button"
-                  onClick={() => setConfirmVoid(null)}
+                  onClick={() => void requestVoidClose()}
                   className="rounded-xl border border-[#e3d9c4] bg-white px-3.5 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
                 >
                   Keep the label
@@ -3104,7 +3124,15 @@ export default function OrdersWorkspace() {
         ) : null}
 
         {pickupOpen ? (
-          <SchedulePickupModal onClose={() => setPickupOpen(false)} />
+          <SchedulePickupModal
+            onClose={() => setPickupOpen(false)}
+            // BUG-097 — when every selected order belongs to one client, book on that client's account.
+            defaults={(() => {
+              const codes = new Set(rows.filter((r) => selectedOrderNos.includes(r.orderDetails.orderNo))
+                .map((r) => r.orderDetails.customerCode).filter((c): c is string => !!c))
+              return codes.size === 1 ? { customerNo: [...codes][0] } : undefined
+            })()}
+          />
         ) : null}
 
         {closeOutOpen ? (

@@ -16,7 +16,6 @@ import {
 } from 'react-icons/fi'
 import { createPortal } from 'react-dom'
 import type { SortingState } from '@tanstack/react-table'
-import { ApiError } from '../api/apiClient'
 import {
   labelTemplateService,
   type LabelTemplate,
@@ -135,8 +134,7 @@ export default function LabelTemplatesListPage() {
       })
       .catch((err: unknown) => {
         if (cancelled) return
-        const msg = err instanceof Error ? err.message : 'Failed to load templates.'
-        notify.error(msg)
+        notify.apiError(err, 'Failed to load templates.')
         setRows([])
       })
       .finally(() => {
@@ -163,7 +161,7 @@ export default function LabelTemplatesListPage() {
 
   const handleDelete = async (t: LabelTemplate) => {
     if (!admin) {
-      notify.error('Only admins can delete templates.')
+      notify.invalid('Only admins can delete templates.')
       return
     }
     if (t.id == null) return
@@ -179,10 +177,7 @@ export default function LabelTemplatesListPage() {
       notify.success('Template deleted.')
       setReloadToken((n) => n + 1)
     } catch (err: unknown) {
-      const msg = err instanceof ApiError
-        ? err.payload?.message ?? err.message
-        : err instanceof Error ? err.message : 'Delete failed.'
-      notify.error(msg)
+      notify.apiError(err, 'Delete failed.')
     } finally {
       setBusyId(null)
     }
@@ -372,7 +367,7 @@ export default function LabelTemplatesListPage() {
   const runPreview = async () => {
     const orderNo = previewOrderNo.trim()
     if (!orderNo) {
-      notify.error('Enter an order number to preview.')
+      notify.invalid('Enter an order number to preview.')
       return
     }
     if (previewing) return
@@ -390,8 +385,7 @@ export default function LabelTemplatesListPage() {
         return objectUrl
       })
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Preview failed.'
-      notify.error(msg)
+      notify.apiError(err, 'Preview failed.')
     } finally {
       setPreviewing(false)
     }

@@ -143,6 +143,7 @@ export function ImporterBrokerStep({
                 <button
                   type="button"
                   onClick={() => setModal({ mode: 'edit', profile: p })}
+                  aria-label={`Edit ${p.importerName || 'unnamed importer'}`}
                   className="inline-flex h-7 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 text-[10.5px] font-semibold text-slate-600 transition hover:bg-slate-50"
                 >
                   Edit

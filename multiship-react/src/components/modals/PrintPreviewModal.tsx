@@ -36,7 +36,7 @@ export default function PrintPreviewModal({ blob, kind, orderNo, onClose }: Prin
   const [pageCount, setPageCount] = useState(0)
   const [printing, setPrinting] = useState(false)
   useFocusTrap(true, dialogRef)
-  useModalDismiss(true, dialogRef, onClose)
+  const requestClose = useModalDismiss(true, dialogRef, onClose)
   const paper = PAPER[kind]
 
   const print = () => {
@@ -94,7 +94,7 @@ export default function PrintPreviewModal({ blob, kind, orderNo, onClose }: Prin
       role="dialog"
       aria-modal="true"
       aria-label={`Print ${paper.title.toLowerCase()} for order ${orderNo}`}
-      onClick={onClose}
+      onClick={() => void requestClose()}
     >
       <div
         ref={dialogRef}
@@ -115,7 +115,7 @@ export default function PrintPreviewModal({ blob, kind, orderNo, onClose }: Prin
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => void requestClose()}
             className="rounded-lg border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50"
             aria-label="Close"
           >
@@ -138,7 +138,7 @@ export default function PrintPreviewModal({ blob, kind, orderNo, onClose }: Prin
         <div className="flex items-center justify-end gap-2 border-t border-slate-100 px-5 py-3">
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => void requestClose()}
             className="inline-flex items-center rounded-xl border border-[#e3d9c4] bg-white px-3.5 py-2 text-[13px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
           >
             Close

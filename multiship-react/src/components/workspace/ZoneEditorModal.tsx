@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useRef } from 'react'
+import { useModalDismiss } from '../../hooks/useModalDismiss'
 import { FiGlobe, FiHome, FiX } from 'react-icons/fi'
 import { COUNTRIES, countryName } from '../../utils/countries'
 import RegionCountryPicker from './RegionCountryPicker'
@@ -47,6 +48,8 @@ export default function ZoneEditorModal({
   saveLabel = 'Save zone',
   domesticCountry,
 }: ZoneEditorModalProps) {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const requestClose = useModalDismiss(true, dialogRef, onClose)
   const providedDomestic = domesticCountry ? domesticCountry.toUpperCase() : null
 
   // When there's no client-provided domestic, the user picks one inline. We
@@ -101,11 +104,11 @@ export default function ZoneEditorModal({
   const domesticName = countryName(effectiveDomestic)
 
   return (
-    <div
+    <div ref={dialogRef}
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
-      onClick={onClose}
+      onClick={() => void requestClose()}
     >
       <div
         className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_30px_80px_rgba(15,23,42,0.35)]"
@@ -120,7 +123,7 @@ export default function ZoneEditorModal({
           </h3>
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => void requestClose()}
             className="rounded-xl border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50"
             aria-label="Close"
           >
@@ -241,7 +244,7 @@ export default function ZoneEditorModal({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={onClose}
+              onClick={() => void requestClose()}
               className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-[13px] font-semibold text-slate-600 transition hover:bg-slate-50"
             >
               Cancel

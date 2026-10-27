@@ -804,6 +804,7 @@ function LinesTable({
                   </td>
                   <td className="py-1.5 pr-2">
                     <select
+                      aria-label={`Warehouse for ${line.itemNo || line.description || `line ${line.key}`}`}
                       value={line.warehouseCode ?? ''}
                       onChange={(e) =>
                         patch(line.key, { warehouseCode: e.target.value || null })

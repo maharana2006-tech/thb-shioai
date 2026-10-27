@@ -4,6 +4,8 @@ import { render, screen, waitFor, cleanup, within } from '@testing-library/react
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Outlet, Route, Routes } from 'react-router-dom'
 import type { ConnectionDetail, ConnectionSummary, ConnectorSummary } from '../api/externalSystemsService'
+import { ApiError } from '../api/apiClient'
+import { notify } from '../utils/notify'
 
 /**
  * V89 — writeback flags coverage for /settings/external-systems.
@@ -195,5 +197,23 @@ describe('ExternalSystemsPage — V89 writeback flags', () => {
       writebackFreight: false,
     }))
   })
-})
 
+  it('BUG-194: save reject with a field error → message under the Name input, no toast', async () => {
+    const user = userEvent.setup()
+    updateMock.mockRejectedValueOnce(new ApiError('Validation failed', 422, {
+      errors: { field: 'name', code: 'VALIDATION_ERROR', message: 'Name is already in use.' },
+    }))
+    await renderPage()
+
+    await waitFor(() => expect(screen.getByText('nds-default')).toBeInTheDocument())
+    await user.click(screen.getByTitle('Edit'))
+    const drawer = await screen.findByRole('dialog')
+    await user.click(within(drawer).getByRole('button', { name: /^Save$/i }))
+
+    const msg = await within(drawer).findByText('Name is already in use.')
+    const nameInput = within(drawer).getByPlaceholderText('e.g. nds-default')
+    expect(nameInput).toHaveAttribute('aria-invalid', 'true')
+    expect(nameInput.closest('label')).toContainElement(msg)
+    expect(notify.apiError).not.toHaveBeenCalled()
+  })
+})

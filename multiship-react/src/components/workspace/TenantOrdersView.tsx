@@ -185,6 +185,7 @@ export default function TenantOrdersView() {
               <button
                 type="button"
                 onClick={() => setDetailsOrderNo(order.orderDetails.orderNo)}
+                aria-label={`Details for order ${order.orderDetails.orderNo}`}
                 className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
               >
                 <FiFileText className="h-3 w-3" />

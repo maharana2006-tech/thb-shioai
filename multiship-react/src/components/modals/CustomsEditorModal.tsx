@@ -42,7 +42,7 @@ const money = (v: number | null | undefined) => (typeof v === 'number' ? `$${v.t
 export default function CustomsEditorModal({ orderNo, onClose }: CustomsEditorModalProps) {
   // A11y audit — focus trap + Escape-to-close + focus restoration.
   const dialogRef = useRef<HTMLElement>(null)
-  useModalDismiss(true, dialogRef, onClose)
+  const requestClose = useModalDismiss(true, dialogRef, onClose)
   const [loading, setLoading] = useState(true)
   const [country, setCountry] = useState('')
   const [clientCode, setClientCode] = useState('')
@@ -92,7 +92,7 @@ export default function CustomsEditorModal({ orderNo, onClose }: CustomsEditorMo
         className="fixed inset-0 z-[60] bg-slate-950/45 backdrop-blur-sm"
         onClick={(e) => {
           e.stopPropagation()
-          onClose()
+          void requestClose()
         }}
         aria-hidden="true"
       />
@@ -114,7 +114,7 @@ export default function CustomsEditorModal({ orderNo, onClose }: CustomsEditorMo
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => void requestClose()}
             className="rounded-xl border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50"
             aria-label="Close"
           >
@@ -273,7 +273,7 @@ export default function CustomsEditorModal({ orderNo, onClose }: CustomsEditorMo
         <div className="border-t border-slate-100 px-5 py-4">
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => void requestClose()}
             className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
           >
             Close

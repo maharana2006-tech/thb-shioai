@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useModalDismiss } from '../../hooks/useModalDismiss'
 import { FiX } from 'react-icons/fi'
 import { orderService } from '../../api/orderService'
 import { printPdfBlob } from '../../utils/printPdf'
@@ -36,24 +37,22 @@ export default function LabelPreviewModal({ orderNo, onClose }: { orderNo: numbe
     }
   }, [orderNo])
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const requestClose = useModalDismiss(true, dialogRef, onClose)
 
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-modal="true"
       aria-label={`Label of order ${orderNo}`}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-      onClick={onClose}
+      onClick={() => void requestClose()}
     >
       <div className="relative w-full max-w-4xl rounded-lg bg-white shadow-lg" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-[#e3d9c4] px-6 py-4">
           <h2 className="text-lg font-semibold text-[#1f150c]">Order #{orderNo} - Label Preview</h2>
-          <button type="button" onClick={onClose} className="rounded-full p-1 text-[#6b5c42] hover:bg-[#f2ecdf]" title="Close" aria-label="Close">
+          <button type="button" onClick={() => void requestClose()} className="rounded-full p-1 text-[#6b5c42] hover:bg-[#f2ecdf]" title="Close" aria-label="Close">
             <FiX className="h-5 w-5" />
           </button>
         </div>
@@ -84,7 +83,7 @@ export default function LabelPreviewModal({ orderNo, onClose }: { orderNo: numbe
           </button>
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => void requestClose()}
             className="inline-flex items-center gap-1 rounded-lg bg-[#1f150c] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#412d15]"
           >
             Close

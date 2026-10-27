@@ -18,7 +18,7 @@ export default function PasteItemsModal({ onImport, onClose }: PasteItemsModalPr
   const dialogRef = useRef<HTMLDivElement>(null)
   const [text, setText] = useState('')
   useFocusTrap(true, dialogRef)
-  useModalDismiss(true, dialogRef, onClose)
+  const requestClose = useModalDismiss(true, dialogRef, onClose)
   const parsed = useMemo(() => parsePastedItems(text), [text])
 
   return (
@@ -27,7 +27,7 @@ export default function PasteItemsModal({ onImport, onClose }: PasteItemsModalPr
       role="dialog"
       aria-modal="true"
       aria-label="Paste commodity lines from a spreadsheet"
-      onClick={onClose}
+      onClick={() => void requestClose()}
     >
       <div
         ref={dialogRef}
@@ -44,7 +44,7 @@ export default function PasteItemsModal({ onImport, onClose }: PasteItemsModalPr
               Trailing columns may be left out; a header row is ignored.
             </p>
           </div>
-          <button type="button" onClick={onClose} className="rounded-lg border border-slate-200 bg-white p-2 text-slate-500 hover:bg-slate-50" aria-label="Close">
+          <button type="button" onClick={() => void requestClose()} className="rounded-lg border border-slate-200 bg-white p-2 text-slate-500 hover:bg-slate-50" aria-label="Close">
             <FiX className="h-4 w-4" />
           </button>
         </div>
@@ -84,7 +84,7 @@ export default function PasteItemsModal({ onImport, onClose }: PasteItemsModalPr
             {parsed.skipped ? ` · ${parsed.skipped} skipped (no description)` : ''}
           </p>
           <div className="flex gap-2">
-            <button type="button" onClick={onClose} className="rounded-xl border border-[#e3d9c4] bg-white px-3.5 py-2 text-[13px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]">Cancel</button>
+            <button type="button" onClick={() => void requestClose()} className="rounded-xl border border-[#e3d9c4] bg-white px-3.5 py-2 text-[13px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]">Cancel</button>
             <button
               type="button"
               disabled={!parsed.rows.length}

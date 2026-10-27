@@ -143,7 +143,7 @@ export default function SystemSettingsPage() {
   const save = async (key: string) => {
     const value = (inputs[key] ?? '').trim()
     if (!value) {
-      notify.error('Enter a value to save.')
+      notify.invalid('Enter a value to save.')
       return
     }
     setSavingKey(key)

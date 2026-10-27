@@ -3,6 +3,7 @@ import { render, screen, cleanup, waitFor, act, fireEvent } from '@testing-libra
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, Outlet } from 'react-router-dom'
 import type { ComponentType } from 'react'
+import { ApiError } from '../api/apiClient'
 
 /**
  * Sprint 53 page-tests — CustomFieldsPage · definition-actions slice.
@@ -55,6 +56,8 @@ vi.mock('../utils/notify', () => ({
   notify: {
     success: (...args: unknown[]) => notifySuccessMock(...args),
     error: (...args: unknown[]) => notifyErrorMock(...args),
+    // notify.invalid is the titled form of error; tests treat them alike.
+    invalid: (...args: unknown[]) => notifyErrorMock(...args),
     apiError: (...args: unknown[]) => notifyApiErrorMock(...args),
     info: vi.fn(),
     confirm: (...args: unknown[]) => notifyConfirmMock(...args),
@@ -71,7 +74,10 @@ vi.mock('../hooks/useAppSession', () => ({
 }))
 
 vi.mock('../api/apiClient', () => ({
-  ApiError: class ApiError extends Error {},
+  ApiError: class ApiError extends Error {
+    payload: unknown
+    constructor(message: string, _status?: number, payload?: unknown) { super(message); this.payload = payload }
+  },
   isAbortError: () => false,
   apiClient: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn(), patch: vi.fn() },
 }))
@@ -356,5 +362,32 @@ describe('CustomFieldsPage — editor save flow', () => {
     )
     // Modal stays open.
     expect(screen.getByRole('heading', { name: /New custom field/i })).toBeInTheDocument()
+  })
+
+  it('BUG-194: save reject with a field error → message under the Key input, no toast', async () => {
+    listMock.mockResolvedValue([])
+    saveMock.mockRejectedValue(new ApiError('Validation failed', 422, {
+      errors: { field: 'fieldKey', code: 'VALIDATION_ERROR', message: 'Key is already in use.' },
+    }))
+    const Page = await loadPage()
+    renderPage(Page)
+    await waitFor(() => expect(screen.getByRole('button', { name: /New field/i })).toBeInTheDocument())
+    await act(async () => { await userEvent.click(screen.getByRole('button', { name: /New field/i })) })
+
+    const keyInput = await screen.findByPlaceholderText(/po_number/i)
+    fireEvent.change(keyInput, { target: { value: 'notes' } })
+    fireEvent.change(screen.getByPlaceholderText(/PO Number/i), { target: { value: 'Notes' } })
+    await act(async () => {
+      await userEvent.click(screen.getByRole('button', { name: /Save/i }))
+    })
+
+    const msg = await screen.findByText('Key is already in use.')
+    expect(keyInput).toHaveAttribute('aria-invalid', 'true')
+    expect(keyInput.parentElement).toContainElement(msg)
+    expect(notifyApiErrorMock).not.toHaveBeenCalled()
+    expect(screen.getByRole('heading', { name: /New custom field/i })).toBeInTheDocument()
+
+    fireEvent.change(keyInput, { target: { value: 'notes2' } })
+    expect(screen.queryByText('Key is already in use.')).not.toBeInTheDocument()
   })
 })

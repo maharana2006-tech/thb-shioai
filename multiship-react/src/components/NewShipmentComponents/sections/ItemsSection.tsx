@@ -303,6 +303,7 @@ const NewShipmentItemsRow = memo(function NewShipmentItemsRow({
           {amount > 0 ? amount.toFixed(2) : '—'}
         </div>
         <select
+          aria-label={`Package for item ${index + 1}`}
           className={inputCls}
           value={it.boxSeq}
           onChange={(e) => patch({ boxSeq: e.target.value })}

@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
+import { useModalDismiss } from '../../hooks/useModalDismiss'
 import {
   FiAlertTriangle,
   FiCheckCircle,
@@ -81,6 +82,7 @@ export default function DangerousGoodsWizard({
   onComplete,
   onCancel,
 }: DangerousGoodsWizardProps) {
+  const dialogRef = useRef<HTMLDivElement>(null)
   const current = value ?? blankBlock()
 
   // BUG-031 — every keystroke in the wizard patches the parent's
@@ -98,6 +100,7 @@ export default function DangerousGoodsWizard({
     if (snapshotRef.current !== value) onChange(snapshotRef.current)
     onCancel()
   }
+  const requestClose = useModalDismiss(true, dialogRef, handleCancel)
 
   const errors = useMemo(() => validate(current), [current])
   const canSave = errors.length === 0
@@ -121,12 +124,12 @@ export default function DangerousGoodsWizard({
     })
 
   return (
-    <div
+    <div ref={dialogRef}
       role="dialog"
       aria-modal="true"
       aria-label="Dangerous goods declaration"
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4"
-      onClick={handleCancel}
+      onClick={() => void requestClose()}
     >
       <div
         className="flex h-[min(760px,92vh)] w-full max-w-[820px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]"
@@ -147,7 +150,7 @@ export default function DangerousGoodsWizard({
           </div>
           <button
             type="button"
-            onClick={handleCancel}
+            onClick={() => void requestClose()}
             aria-label="Close"
             className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50"
           >
@@ -306,7 +309,7 @@ export default function DangerousGoodsWizard({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={handleCancel}
+              onClick={() => void requestClose()}
               className="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-700 hover:bg-slate-50"
             >
               Cancel

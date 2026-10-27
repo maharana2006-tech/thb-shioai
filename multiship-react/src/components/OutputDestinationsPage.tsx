@@ -4,6 +4,7 @@ import { useModalDismiss } from '../hooks/useModalDismiss'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import { FiCheck, FiEdit2, FiPlus, FiRadio, FiSlash, FiTrash2, FiUpload, FiX } from 'react-icons/fi'
 import { notify } from '../utils/notify'
+import { serverFieldError } from '../utils/serverFieldErrors'
 import {
   outputDestinationService,
   type DestinationType,
@@ -220,6 +221,7 @@ export default function OutputDestinationsPage() {
                     <td className="px-3 py-2 text-right">
                       <button
                         onClick={() => onTest(row)}
+                        aria-label={`Test ${row.docType} ${row.destinationType} destination for ${row.clientCode}`}
                         title="Send a small test payload through this destination"
                         className="mr-2 rounded-md border border-slate-300 px-2 py-1 text-[12px] hover:bg-slate-50"
                       >
@@ -227,6 +229,7 @@ export default function OutputDestinationsPage() {
                       </button>
                       <button
                         onClick={() => setEditing(row)}
+                        aria-label={`Edit ${row.docType} ${row.destinationType} destination for ${row.clientCode}`}
                         title="Edit"
                         className="mr-2 rounded-md border border-slate-300 px-2 py-1 text-[12px] hover:bg-slate-50"
                       >
@@ -234,6 +237,7 @@ export default function OutputDestinationsPage() {
                       </button>
                       <button
                         onClick={() => onDelete(row)}
+                        aria-label={`Delete ${row.docType} ${row.destinationType} destination for ${row.clientCode}`}
                         title="Delete"
                         className="rounded-md border border-red-300 px-2 py-1 text-[12px] text-red-700 hover:bg-red-50"
                       >
@@ -284,7 +288,7 @@ function DestinationEditorDialog({
 }) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const titleId = useId()
-  useModalDismiss(true, dialogRef, onClose)
+  const requestClose = useModalDismiss(true, dialogRef, onClose)
   const [clientCode, setClientCode] = useState(existing?.clientCode ?? '')
   const [docType, setDocType] = useState<DocType>(existing?.docType ?? 'LABEL')
   const [destinationType, setDestinationType] = useState<DestinationType>(
@@ -336,6 +340,12 @@ function DestinationEditorDialog({
   )
 
   const [saving, setSaving] = useState(false)
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+  const clearErr = (k: string) => setFieldErrors((cur) => (cur[k] ? {} : cur))
+  const fieldErr = (k: string) => fieldErrors[k]
+    ? <p role="alert" className="mt-1 text-[11.5px] font-normal text-rose-700">{fieldErrors[k]}</p>
+    : null
+  const FIELD_KEYS = ['clientCode', 'docType', 'destinationType', 'path', 'host', 'port', 'username', 'authType', 'remoteDir', 'protocol', 'queueName', 'notes']
 
   const buildPayload = (): OutputDestinationUpsertPayload => {
     const extras: Partial<OutputDestinationUpsertPayload> = {}
@@ -391,14 +401,20 @@ function DestinationEditorDialog({
       }
       onSaved()
     } catch (e) {
-      notify.apiError(e, 'Failed to save destination.')
+      const fe = serverFieldError(e)
+      if (fe) {
+        const key = fe.field.replace(/^config\./, '')
+        setFieldErrors({ [FIELD_KEYS.includes(key) ? key : '_form']: fe.message })
+      } else {
+        notify.apiError(e, 'Failed to save destination.')
+      }
     } finally {
       setSaving(false)
     }
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={() => void requestClose()}>
       <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         className="w-full max-w-2xl rounded-xl border border-slate-200 bg-white p-4 shadow-xl">
@@ -407,7 +423,7 @@ function DestinationEditorDialog({
             {existing ? `Edit destination ${existing.id}` : 'New output destination'}
           </h3>
           <IconButton
-            onClick={onClose}
+            onClick={() => void requestClose()}
             label="Close"
             icon={<FiX className="h-4 w-4" />}
             className="rounded p-1 text-slate-500 hover:bg-slate-100"
@@ -415,36 +431,42 @@ function DestinationEditorDialog({
         </header>
 
         <div className="space-y-3">
+          {fieldErr('_form')}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="block text-[12.5px] font-semibold text-slate-700">
               Client code
               <input
                 type="text"
                 value={clientCode}
-                onChange={(e) => setClientCode(e.target.value)}
+                onChange={(e) => { setClientCode(e.target.value); clearErr('clientCode') }}
                 placeholder="ACME"
                 className="mt-1 block w-full rounded-md border border-slate-300 px-2 py-1.5 font-mono text-[13px]"
+                aria-invalid={fieldErrors.clientCode ? true : undefined}
               />
+              {fieldErr('clientCode')}
             </label>
             <label className="block text-[12.5px] font-semibold text-slate-700">
               Doc type
               <select
                 value={docType}
-                onChange={(e) => setDocType(e.target.value as DocType)}
+                onChange={(e) => { setDocType(e.target.value as DocType); clearErr('docType') }}
                 className="mt-1 block w-full rounded-md border border-slate-300 px-2 py-1.5 text-[13px]"
+                aria-invalid={fieldErrors.docType ? true : undefined}
               >
                 {/* BUG-110 R6 — show the humanised doc-type names;
                     the wire codes are kept as the <option> values. */}
                 <option value="LABEL">Label</option>
                 <option value="COMMERCIAL_INVOICE">Commercial invoice</option>
               </select>
+              {fieldErr('docType')}
             </label>
             <label className="block text-[12.5px] font-semibold text-slate-700">
               Destination type
               <select
                 value={destinationType}
-                onChange={(e) => setDestinationType(e.target.value as DestinationType)}
+                onChange={(e) => { setDestinationType(e.target.value as DestinationType); clearErr('destinationType') }}
                 className="mt-1 block w-full rounded-md border border-slate-300 px-2 py-1.5 text-[13px]"
+                aria-invalid={fieldErrors.destinationType ? true : undefined}
               >
                 {/* BUG-110 R6 — humanised destination-type names. */}
                 <option value="LOCAL_FS">Local folder</option>
@@ -455,6 +477,7 @@ function DestinationEditorDialog({
                   <option value="PRINTER">PRINTER (retired — use Settings → Printers)</option>
                 ) : null}
               </select>
+              {fieldErr('destinationType')}
             </label>
             <label className="flex items-center gap-2 pt-6 text-[12.5px] font-semibold text-slate-700">
               <input
@@ -472,10 +495,12 @@ function DestinationEditorDialog({
               <input
                 type="text"
                 value={localFsPath}
-                onChange={(e) => setLocalFsPath(e.target.value)}
+                onChange={(e) => { setLocalFsPath(e.target.value); clearErr('path') }}
                 placeholder="/var/labels/acme"
                 className="mt-1 block w-full rounded-md border border-slate-300 px-2 py-1.5 font-mono text-[13px]"
+                aria-invalid={fieldErrors.path ? true : undefined}
               />
+              {fieldErr('path')}
             </label>
           )}
 
@@ -487,40 +512,48 @@ function DestinationEditorDialog({
                   <input
                     type="text"
                     value={sftpHost}
-                    onChange={(e) => setSftpHost(e.target.value)}
+                    onChange={(e) => { setSftpHost(e.target.value); clearErr('host') }}
                     placeholder="sftp.example.com"
                     className="mt-1 block w-full rounded-md border border-slate-300 px-2 py-1.5 font-mono text-[13px]"
+                    aria-invalid={fieldErrors.host ? true : undefined}
                   />
+                  {fieldErr('host')}
                 </label>
                 <label className="block text-[12.5px] font-semibold text-slate-700">
                   Port
                   <input
                     type="number"
                     value={sftpPort}
-                    onChange={(e) => setSftpPort(e.target.value)}
+                    onChange={(e) => { setSftpPort(e.target.value); clearErr('port') }}
                     placeholder="22"
                     className="mt-1 block w-full rounded-md border border-slate-300 px-2 py-1.5 text-[13px]"
+                    aria-invalid={fieldErrors.port ? true : undefined}
                   />
+                  {fieldErr('port')}
                 </label>
                 <label className="block text-[12.5px] font-semibold text-slate-700">
                   Username
                   <input
                     type="text"
                     value={sftpUsername}
-                    onChange={(e) => setSftpUsername(e.target.value)}
+                    onChange={(e) => { setSftpUsername(e.target.value); clearErr('username') }}
                     className="mt-1 block w-full rounded-md border border-slate-300 px-2 py-1.5 font-mono text-[13px]"
+                    aria-invalid={fieldErrors.username ? true : undefined}
                   />
+                  {fieldErr('username')}
                 </label>
                 <label className="block text-[12.5px] font-semibold text-slate-700">
                   Auth type
                   <select
                     value={sftpAuthType}
-                    onChange={(e) => setSftpAuthType(e.target.value)}
+                    onChange={(e) => { setSftpAuthType(e.target.value); clearErr('authType') }}
                     className="mt-1 block w-full rounded-md border border-slate-300 px-2 py-1.5 text-[13px]"
+                    aria-invalid={fieldErrors.authType ? true : undefined}
                   >
                     <option value="PASSWORD">PASSWORD</option>
                     <option value="KEY">KEY</option>
                   </select>
+                  {fieldErr('authType')}
                 </label>
               </div>
               {sftpAuthType === 'PASSWORD' ? (
@@ -573,9 +606,11 @@ function DestinationEditorDialog({
                 <input
                   type="text"
                   value={sftpRemoteDir}
-                  onChange={(e) => setSftpRemoteDir(e.target.value)}
+                  onChange={(e) => { setSftpRemoteDir(e.target.value); clearErr('remoteDir') }}
                   className="mt-1 block w-full rounded-md border border-slate-300 px-2 py-1.5 font-mono text-[13px]"
+                  aria-invalid={fieldErrors.remoteDir ? true : undefined}
                 />
+                {fieldErr('remoteDir')}
               </label>
               {/* Audit O2 — known_hosts pinning. Backend enables strict
                   host-key checking when this is set. Highly recommended
@@ -608,42 +643,50 @@ function DestinationEditorDialog({
                   <input
                     type="text"
                     value={printerHost}
-                    onChange={(e) => setPrinterHost(e.target.value)}
+                    onChange={(e) => { setPrinterHost(e.target.value); clearErr('host') }}
                     placeholder="192.168.1.50"
                     className="mt-1 block w-full rounded-md border border-slate-300 px-2 py-1.5 font-mono text-[13px]"
+                    aria-invalid={fieldErrors.host ? true : undefined}
                   />
+                  {fieldErr('host')}
                 </label>
                 <label className="block text-[12.5px] font-semibold text-slate-700">
                   Port
                   <input
                     type="number"
                     value={printerPort}
-                    onChange={(e) => setPrinterPort(e.target.value)}
+                    onChange={(e) => { setPrinterPort(e.target.value); clearErr('port') }}
                     placeholder={printerProtocol === 'IPP' ? '631' : '9100'}
                     className="mt-1 block w-full rounded-md border border-slate-300 px-2 py-1.5 text-[13px]"
+                    aria-invalid={fieldErrors.port ? true : undefined}
                   />
+                  {fieldErr('port')}
                 </label>
                 <label className="block text-[12.5px] font-semibold text-slate-700">
                   Protocol
                   <select
                     value={printerProtocol}
-                    onChange={(e) => setPrinterProtocol(e.target.value)}
+                    onChange={(e) => { setPrinterProtocol(e.target.value); clearErr('protocol') }}
                     className="mt-1 block w-full rounded-md border border-slate-300 px-2 py-1.5 text-[13px]"
+                    aria-invalid={fieldErrors.protocol ? true : undefined}
                   >
                     <option value="RAW_9100">RAW_9100 (Zebra ZPL)</option>
                     <option value="IPP">IPP (laser PDF)</option>
                   </select>
+                  {fieldErr('protocol')}
                 </label>
                 <label className="block text-[12.5px] font-semibold text-slate-700">
                   Queue name (IPP)
                   <input
                     type="text"
                     value={printerQueue}
-                    onChange={(e) => setPrinterQueue(e.target.value)}
+                    onChange={(e) => { setPrinterQueue(e.target.value); clearErr('queueName') }}
                     placeholder="Zebra_Front_Desk"
                     disabled={printerProtocol !== 'IPP'}
                     className="mt-1 block w-full rounded-md border border-slate-300 px-2 py-1.5 font-mono text-[13px] disabled:bg-slate-100"
+                    aria-invalid={fieldErrors.queueName ? true : undefined}
                   />
+                  {fieldErr('queueName')}
                 </label>
               </div>
             </div>
@@ -654,15 +697,17 @@ function DestinationEditorDialog({
             <input
               type="text"
               value={notes}
-              onChange={(e) => setNotes(e.target.value)}
+              onChange={(e) => { setNotes(e.target.value); clearErr('notes') }}
               className="mt-1 block w-full rounded-md border border-slate-300 px-2 py-1.5 text-[13px]"
+              aria-invalid={fieldErrors.notes ? true : undefined}
             />
+            {fieldErr('notes')}
           </label>
         </div>
 
         <div className="mt-4 flex justify-end gap-2">
           <button
-            onClick={onClose}
+            onClick={() => void requestClose()}
             disabled={saving}
             className="rounded-md border border-slate-300 px-3 py-1.5 text-[13px] hover:bg-slate-50"
           >

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useModalDismiss } from '../hooks/useModalDismiss'
 import { useNavigate, useOutletContext } from 'react-router-dom'
 import { notify } from '../utils/notify'
 import {
@@ -82,16 +83,12 @@ export default function ClientsPage() {
     const onDocClick = (e: MouseEvent) => {
       if (!filtersRef.current?.contains(e.target as Node)) setShowFilters(false)
     }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setShowFilters(false)
-    }
     document.addEventListener('mousedown', onDocClick)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDocClick)
-      document.removeEventListener('keydown', onKey)
-    }
+    return () => document.removeEventListener('mousedown', onDocClick)
   }, [showFilters])
+  const filtersDialogRef = useRef<HTMLDivElement>(null)
+  // Filters apply live, so closing discards nothing: no prompt.
+  const closeFilters = useModalDismiss(showFilters, filtersDialogRef, () => setShowFilters(false), { confirmDiscard: false })
 
   // Server params derived from state: sort → sortBy + sortDirection.
   const sortBy = sorting[0]?.id ?? 'code'
@@ -515,6 +512,7 @@ export default function ClientsPage() {
                 </button>
                 {showFilters ? (
                   <div
+                    ref={filtersDialogRef}
                     role="dialog"
                     aria-modal="true"
                     aria-label="Filter clients"
@@ -591,7 +589,7 @@ export default function ClientsPage() {
                       ) : null}
                       <button
                         type="button"
-                        onClick={() => setShowFilters(false)}
+                        onClick={() => void closeFilters()}
                         className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[11.5px] font-semibold text-white transition hover:bg-[#412d15]"
                       >
                         Done

@@ -1,5 +1,6 @@
 import { relativeTime } from '../utils/relativeTime'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useModalDismiss } from '../hooks/useModalDismiss'
 import { useNavigate, useOutletContext, useSearchParams } from 'react-router-dom'
 import { settingsPaths } from '../routes/workspaceRoutes'
 import { notify } from '../utils/notify'
@@ -291,18 +292,16 @@ export default function CarrierConnections({
     const onDocClick = (e: MouseEvent) => {
       if (!filtersRef.current?.contains(e.target as Node)) setShowFilters(false)
     }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setShowFilters(false)
-    }
     document.addEventListener('mousedown', onDocClick)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDocClick)
-      document.removeEventListener('keydown', onKey)
-    }
+    return () => document.removeEventListener('mousedown', onDocClick)
   }, [showFilters])
+  const filtersDialogRef = useRef<HTMLDivElement>(null)
+  // Filters apply live, so closing discards nothing: no prompt.
+  const closeFilters = useModalDismiss(showFilters, filtersDialogRef, () => setShowFilters(false), { confirmDiscard: false })
 
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const drawerDialogRef = useRef<HTMLElement>(null)
+  const requestDrawerClose = useModalDismiss(drawerOpen, drawerDialogRef, () => setDrawerOpen(false))
   const [drawer, setDrawer] = useState<DrawerState>(emptyDrawer)
   // One-shot signal: which drawer input to focus when the drawer opens next.
   // Ref (not state) so setting it doesn't cascade a re-render, and reading it
@@ -719,7 +718,7 @@ export default function CarrierConnections({
   const runDrawerCheck = async () => {
     const credentialTerms = credentialLabelsFor(drawer.carrierCode)
     if (!drawer.clientId.trim() || !drawer.clientSecret.trim()) {
-      notify.error(`Enter the ${credentialTerms.idShort} and ${credentialTerms.secretShort} first.`)
+      notify.invalid(`Enter the ${credentialTerms.idShort} and ${credentialTerms.secretShort} first.`)
       return
     }
     setDrawerCheck({ state: 'checking' })
@@ -829,7 +828,7 @@ export default function CarrierConnections({
 
     if (Object.keys(errs).length > 0) {
       setDrawerErrors(errs)
-      notify.error('Please fix the highlighted fields before saving.')
+      notify.invalid('Please fix the highlighted fields before saving.')
       return
     }
     setDrawerErrors({})
@@ -1318,6 +1317,7 @@ export default function CarrierConnections({
                 </button>
                 {showFilters ? (
                   <div
+                    ref={filtersDialogRef}
                     role="dialog"
                     aria-label="Filter accounts"
                     className="absolute left-0 top-full z-30 mt-1.5 w-72 rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_20px_60px_rgba(15,23,42,0.15)]"
@@ -1399,7 +1399,7 @@ export default function CarrierConnections({
                       ) : null}
                       <button
                         type="button"
-                        onClick={() => setShowFilters(false)}
+                        onClick={() => void closeFilters()}
                         className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[11.5px] font-semibold text-white transition hover:bg-[#412d15]"
                       >
                         Done
@@ -1436,8 +1436,9 @@ export default function CarrierConnections({
       {/* ===== add / edit drawer ===== */}
       {drawerOpen ? (
         <>
-          <div className="fixed inset-0 z-40 bg-slate-950/45" onClick={() => setDrawerOpen(false)} aria-hidden="true" />
+          <div className="fixed inset-0 z-40 bg-slate-950/45" onClick={() => void requestDrawerClose()} aria-hidden="true" />
           <aside
+            ref={drawerDialogRef}
             role="dialog"
             aria-modal="true"
             aria-label={drawer.editingId ? 'Update carrier account' : 'Add carrier account'}
@@ -1452,7 +1453,7 @@ export default function CarrierConnections({
               </div>
               <button
                 type="button"
-                onClick={() => setDrawerOpen(false)}
+                onClick={() => void requestDrawerClose()}
                 aria-label="Close"
                 className="rounded-xl border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50"
               >
@@ -2312,7 +2313,7 @@ export default function CarrierConnections({
             <div className="flex gap-2 border-t border-slate-100 px-5 py-4">
               <button
                 type="button"
-                onClick={() => setDrawerOpen(false)}
+                onClick={() => void requestDrawerClose()}
                 className="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-[13px] font-semibold text-slate-600 transition hover:bg-slate-50"
               >
                 Cancel

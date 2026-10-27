@@ -174,7 +174,7 @@ function AccountCard({ profile, onUpdated }: { profile: Profile | null; onUpdate
     const file = e.target.files?.[0]
     e.target.value = '' // let the same file be re-picked later
     if (!file || avatarBusy) return
-    if (file.size > MAX_SOURCE_BYTES) { void notify.error('Pick an image under 8 MB.'); return }
+    if (file.size > MAX_SOURCE_BYTES) { void notify.invalid('Pick an image under 8 MB.'); return }
     setAvatarBusy(true)
     try {
       onUpdated(await profileService.updateAvatar(await fileToAvatarDataUrl(file)))
@@ -287,7 +287,7 @@ function PreferencesCard({ profile, onNavigate }: { profile: Profile | null; onN
   const showNotifications = profile != null && profile.role !== 'TENANT'
   return (
     <Card icon={FiTruck} title="Shipping preferences"
-      action={<button type="button" className={LINK} onClick={() => onNavigate('/settings/carrier-accounts')}>
+      action={<button type="button" className={LINK} onClick={() => onNavigate('/settings/carriers')}>
         Manage<FiExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
       </button>}>
       <div className="grid gap-5 sm:grid-cols-2">

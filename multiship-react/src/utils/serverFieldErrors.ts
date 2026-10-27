@@ -20,3 +20,14 @@ export function fieldErrorsFromIssues(issues: ServerIssue[] | null | undefined):
   }
   return out
 }
+
+/** BUG-194 — single-field server error ({ field, code, message }) carried in `ApiError.payload.errors`. */
+export function serverFieldError(err: unknown): { field: string; message: string } | null {
+  const errors = (err as { payload?: { errors?: unknown } } | null)?.payload?.errors
+  if (!errors || typeof errors !== 'object' || Array.isArray(errors)) return null
+  const { field, message } = errors as { field?: unknown; message?: unknown }
+  if (typeof field !== 'string' || typeof message !== 'string') return null
+  const f = field.trim()
+  const m = message.trim()
+  return f && m ? { field: f, message: m } : null
+}

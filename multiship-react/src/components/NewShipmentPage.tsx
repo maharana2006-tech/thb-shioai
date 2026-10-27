@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
+import { useModalDismiss } from '../hooks/useModalDismiss'
 import MpsProgressCard from './orders/MpsProgressCard'
 import { notify } from '../utils/notify'
 import { FiZap, FiArrowRight, FiArrowLeft, FiTruck, FiPackage, FiRotateCcw, FiCheckCircle, FiAlertTriangle, FiX } from 'react-icons/fi'
@@ -60,6 +61,8 @@ export default function NewShipmentPage() {
   const {
     acceptWizardPayload, accountNumber, activeParties, carrier, carrierValidating, checklistOpen, clientCode, clientHasNoOwnCarriers, customFieldValues, destCountry, dgBlock, dgWizardOpen, dtcBatch, dtcLine, dtcLineId, editorSeed, fixError, fixLoading, fixOrderNo, fixVoided, incoterms, isInternational, isReturn, items, landedCostOpen, landedCostRequest, leaveForm, loading, mode, navigate, noCarriersAtAll, originalOrderNo, overrideEditorOpen, queuedInfo, recipient, residentialConflict, resubmitWithSplit, returnEmailMissing, returnPickupRequested, returnReason, returnType, reviewBusy, reviewShipmentAi, reviewWarnings, rmaNumber, sender, serviceId, setChecklistOpen, setCustomFieldValues, setDgBlock, setDgWizardOpen, setLandedCostOpen, setOriginalOrderNo, setOverride, setOverrideEditorOpen, setPendingSplitPayload, setReturnPickupRequested, setReturnReason, setReturnType, setReviewWarnings, setRmaNumber, setSender, setSplitPrompt, setToast, setWizardOpen, shipmentValidationResult, splitPrompt, submit, submitAttempted, submitting, switchMode, toast, validateShipment, validatedAt, validationGate, validationStale, weight, wizardOpen, wizardPayload,
   } = m
+  const wizardDialogRef = useRef<HTMLDivElement>(null)
+  const requestClose = useModalDismiss(wizardOpen, wizardDialogRef, () => setWizardOpen(false))
   return (
     <div className="pb-6">
       {/* Validation toast — non-blocking; auto-dismisses. */}
@@ -719,7 +722,7 @@ export default function NewShipmentPage() {
           keyboard trap; the parent form stays mounted so state is preserved
           if the user cancels. */}
       {wizardOpen ? (
-        <div
+        <div ref={wizardDialogRef}
           role="dialog"
           aria-modal="true"
           aria-label="Customs declaration wizard"
@@ -737,7 +740,7 @@ export default function NewShipmentPage() {
                 // to the inline form because the user might cancel.
               }}
               onComplete={acceptWizardPayload}
-              onCancel={() => setWizardOpen(false)}
+              onCancel={() => void requestClose()}
             />
           </div>
         </div>

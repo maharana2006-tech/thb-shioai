@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { FiChevronDown, FiChevronUp, FiEdit3, FiPlus, FiSave, FiTrash2, FiX } from 'react-icons/fi'
 import { notify } from '../utils/notify'
+import { serverFieldError } from '../utils/serverFieldErrors'
 import { clientService, type Client } from '../api/clientService'
 import {
   customFieldService,
@@ -173,6 +174,7 @@ export default function CustomFieldsPage() {
                         disabled={i === 0}
                         onClick={() => move(d, -1)}
                         className="text-slate-400 hover:text-slate-700 disabled:opacity-30"
+                        aria-label={`Move ${d.fieldKey} up`}
                         title="Move up"
                       >
                         <FiChevronUp />
@@ -182,6 +184,7 @@ export default function CustomFieldsPage() {
                         disabled={i === defs.length - 1}
                         onClick={() => move(d, 1)}
                         className="text-slate-400 hover:text-slate-700 disabled:opacity-30"
+                        aria-label={`Move ${d.fieldKey} down`}
                         title="Move down"
                       >
                         <FiChevronDown />
@@ -211,6 +214,7 @@ export default function CustomFieldsPage() {
                         type="button"
                         onClick={() => setEditing({ ...d })}
                         className="rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+                        aria-label={`Edit ${d.fieldKey}`}
                         title="Edit"
                       >
                         <FiEdit3 />
@@ -219,6 +223,7 @@ export default function CustomFieldsPage() {
                         type="button"
                         onClick={() => del(d)}
                         className="rounded p-1 text-rose-500 hover:bg-rose-50"
+                        aria-label={`Delete ${d.fieldKey}`}
                         title="Delete"
                       >
                         <FiTrash2 />
@@ -260,7 +265,7 @@ function CustomFieldEditorModal({
   const firstInputRef = useRef<HTMLInputElement>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
   const titleId = useId()
-  useModalDismiss(true, dialogRef, onClose)
+  const requestClose = useModalDismiss(true, dialogRef, onClose)
   // A11y audit A1 — see idPrefix pattern in ReportsPage / RoutingRulesPage.
   const idPrefix = useId()
   const idFor = useCallback((k: string) => `${idPrefix}-${k}`, [idPrefix])
@@ -269,16 +274,22 @@ function CustomFieldEditorModal({
     firstInputRef.current?.focus()
   }, [])
 
-  const update = <K extends keyof CustomFieldDefinition>(k: K, v: CustomFieldDefinition[K]) =>
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+  const update = <K extends keyof CustomFieldDefinition>(k: K, v: CustomFieldDefinition[K]) => {
     setDraft((d) => ({ ...d, [k]: v }))
+    setFieldErrors((cur) => (cur[k] ? {} : cur))
+  }
+  const fieldErr = (k: string) => fieldErrors[k]
+    ? <p role="alert" className="mt-1 text-[11.5px] text-rose-700">{fieldErrors[k]}</p>
+    : null
 
   const save = async () => {
     if (!draft.fieldKey?.trim() || !draft.label?.trim()) {
-      notify.error('Key and label are both required.')
+      notify.invalid('Key and label are both required.')
       return
     }
     if (draft.fieldType === 'SELECT' && !draft.selectOptions?.trim()) {
-      notify.error('SELECT fields need comma-separated options.')
+      notify.invalid('SELECT fields need comma-separated options.')
       return
     }
     setSaving(true)
@@ -287,14 +298,16 @@ function CustomFieldEditorModal({
       notify.success('Definition saved.')
       onSaved()
     } catch (err) {
-      notify.apiError(err, 'Failed to save.')
+      const fe = serverFieldError(err)
+      if (fe) setFieldErrors({ [['fieldKey', 'label', 'fieldType', 'position', 'selectOptions'].includes(fe.field) ? fe.field : '_form']: fe.message })
+      else notify.apiError(err, 'Failed to save.')
     } finally {
       setSaving(false)
     }
   }
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40" onClick={onClose}>
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40" onClick={() => void requestClose()}>
       <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId}
         onClick={(e) => e.stopPropagation()}
         className="w-full max-w-md rounded-2xl bg-white p-5 shadow-lg">
@@ -302,11 +315,12 @@ function CustomFieldEditorModal({
           <h3 id={titleId} className="text-base font-semibold text-slate-900">
             {draft.id ? 'Edit custom field' : 'New custom field'}
           </h3>
-          <button type="button" onClick={onClose} aria-label="Close" className="text-slate-400 hover:text-slate-800">
+          <button type="button" onClick={() => void requestClose()} aria-label="Close" className="text-slate-400 hover:text-slate-800">
             <FiX />
           </button>
         </div>
 
+        {fieldErr('_form')}
         <div className="mb-3 grid grid-cols-2 gap-3">
           <div>
             <label htmlFor={idFor('fieldKey')} className={label}>Key</label>
@@ -328,7 +342,9 @@ function CustomFieldEditorModal({
               placeholder="po_number"
               className={input}
               maxLength={60}
+              aria-invalid={fieldErrors.fieldKey ? true : undefined}
             />
+            {fieldErr('fieldKey')}
             <p className="mt-1 text-[11px] text-slate-400">snake_case. Immutable once orders reference it.</p>
           </div>
           <div>
@@ -340,7 +356,9 @@ function CustomFieldEditorModal({
               onChange={(e) => update('label', e.target.value)}
               placeholder="PO Number"
               className={input}
+              aria-invalid={fieldErrors.label ? true : undefined}
             />
+            {fieldErr('label')}
           </div>
         </div>
 
@@ -357,6 +375,7 @@ function CustomFieldEditorModal({
               <option value="DATE">Date (YYYY-MM-DD)</option>
               <option value="SELECT">Select</option>
             </Select>
+            {fieldErr('fieldType')}
           </div>
           <div>
             <label htmlFor={idFor('position')} className={label}>Position</label>
@@ -367,7 +386,9 @@ function CustomFieldEditorModal({
               value={draft.position ?? 100}
               onChange={(e) => update('position', Number(e.target.value))}
               className={input}
+              aria-invalid={fieldErrors.position ? true : undefined}
             />
+            {fieldErr('position')}
           </div>
         </div>
 
@@ -381,7 +402,9 @@ function CustomFieldEditorModal({
               onChange={(e) => update('selectOptions', e.target.value)}
               placeholder="S, M, L, XL"
               className={input}
+              aria-invalid={fieldErrors.selectOptions ? true : undefined}
             />
+            {fieldErr('selectOptions')}
           </div>
         ) : null}
 
@@ -407,7 +430,7 @@ function CustomFieldEditorModal({
         <div className="flex items-center justify-end gap-2">
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => void requestClose()}
             className="rounded-md border border-slate-200 px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:bg-slate-50"
           >
             Cancel

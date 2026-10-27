@@ -18,6 +18,9 @@ import {
 } from 'react-icons/fi'
 import type { ReactNode } from 'react'
 import { notify } from '../utils/notify'
+import { serverFieldError } from '../utils/serverFieldErrors'
+import { useUnsavedWorkGuard } from '../hooks/useUnsavedWorkGuard'
+import { canLeaveUnsavedWork } from '../utils/unsavedWorkGuard'
 import { clientService, type Client } from '../api/clientService'
 import { labelTemplateService, type LabelTemplate } from '../api/labelTemplateService'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
@@ -27,11 +30,20 @@ import { useAppSession } from '../hooks/useAppSession'
 import { normalizeRole } from '../utils/roles'
 
 const PLATFORM_DEFAULT_VALUE = '__PLATFORM__'
-const DEFAULT_HEADER = 'PACKING SLIP'
 const DEFAULT_COLOR = '#1f150c'
 /** Template types the editor can create/edit. Wire values match the backend
- *  {@code label_templates.template_type} enum; unique per (tenant, type). */
-const TEMPLATE_TYPES = ['SHIPPING_LABEL', 'PACKING_SLIP', 'COMMERCIAL_INVOICE', 'RETURN_COVER']
+ *  {@code label_templates.template_type} enum; unique per (tenant, type).
+ *  BUG-112 — the document type drives the default header, the preview
+ *  band and the help text; SHIPPING_LABEL was never rendered by the
+ *  backend and is no longer offered. */
+const TEMPLATE_TYPES = ['PACKING_SLIP', 'COMMERCIAL_INVOICE', 'RETURN_COVER']
+const DEFAULT_HEADERS: Record<string, string> = {
+  PACKING_SLIP: 'PACKING SLIP',
+  COMMERCIAL_INVOICE: 'COMMERCIAL INVOICE',
+  RETURN_COVER: 'RETURN COVER SHEET',
+}
+const defaultHeaderFor = (type: string): string => DEFAULT_HEADERS[type] ?? 'PACKING SLIP'
+const DEFAULT_HEADER = DEFAULT_HEADERS.PACKING_SLIP
 
 /**
  * Editor for a single label template. Two entry points:
@@ -57,6 +69,8 @@ export default function LabelTemplateEditorPage() {
   const [tenantId, setTenantId] = useState<string>(PLATFORM_DEFAULT_VALUE)
   const [templateType, setTemplateType] = useState('PACKING_SLIP')
   const [template, setTemplate] = useState<LabelTemplate>(blankTemplate())
+  // BUG-120 — what the server (or a fresh blank) last gave us; dirty = differs.
+  const [savedJson, setSavedJson] = useState(() => JSON.stringify(blankTemplate()))
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [reloadToken, setReloadToken] = useState(0)
@@ -92,7 +106,9 @@ export default function LabelTemplateEditorPage() {
   // from a blank template scoped to whatever tenant/type the operator picks.
   const loadTemplate = useCallback(async () => {
     if (!isEdit || editingId == null) {
-      setTemplate(blankTemplate(effectiveTenantId, templateType))
+      const blank = blankTemplate(effectiveTenantId, templateType)
+      setTemplate(blank)
+      setSavedJson(JSON.stringify(blank))
       return
     }
     setLoading(true)
@@ -101,6 +117,7 @@ export default function LabelTemplateEditorPage() {
       const t = resp.data
       if (!t) throw new Error('Template not found.')
       setTemplate(t)
+      setSavedJson(JSON.stringify(t))
       // In edit mode, tenant + type are dictated by the row.
       setTenantId(t.tenantId ?? PLATFORM_DEFAULT_VALUE)
       setTemplateType(t.templateType ?? 'PACKING_SLIP')
@@ -124,12 +141,28 @@ export default function LabelTemplateEditorPage() {
   useEffect(() => {
     if (isEdit) return
     // eslint-disable-next-line react-hooks/set-state-in-effect -- re-scope create-mode template when tenant/type picker changes; depends on prior form state, not derivable at render
-    setTemplate((prev) => ({
-      ...prev,
+    // BUG-112 — the header follows the type unless the operator typed their own.
+    const retitle = (t: LabelTemplate): LabelTemplate => ({
+      ...t,
       tenantId: effectiveTenantId,
       templateType,
-    }))
+      headerText: !t.headerText || t.headerText === defaultHeaderFor(t.templateType ?? 'PACKING_SLIP')
+        ? defaultHeaderFor(templateType)
+        : t.headerText,
+    })
+    setTemplate(retitle)
+    setSavedJson((prev) => JSON.stringify(retitle(JSON.parse(prev) as LabelTemplate)))
   }, [effectiveTenantId, templateType, isEdit])
+
+  const isDirty = JSON.stringify(template) !== savedJson
+  useUnsavedWorkGuard(
+    isDirty && !saving,
+    "This template has unsaved changes. Leave and lose what you've edited?",
+    'Leave template editor?',
+  )
+  const backToList = async () => {
+    if (await canLeaveUnsavedWork()) navigate('/settings/templates')
+  }
 
   const refresh = useCallback(() => setReloadToken((t) => t + 1), [])
   useEffect(() => {
@@ -138,8 +171,14 @@ export default function LabelTemplateEditorPage() {
   }, [registerRefresh, refresh])
 
   // ===== handlers =====
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+  const clearErr = (k: string) => setFieldErrors((cur) => (cur[k] ? {} : cur))
+  const fieldErr = (k: string) => fieldErrors[k]
+    ? <p role="alert" className="mt-1 text-[11.5px] text-rose-700">{fieldErrors[k]}</p>
+    : null
   const updateField = <K extends keyof LabelTemplate>(key: K, value: LabelTemplate[K]) => {
     setTemplate((t) => ({ ...t, [key]: value }))
+    clearErr(key)
   }
 
   const handleLogo = async (file: File | null) => {
@@ -155,7 +194,7 @@ export default function LabelTemplateEditorPage() {
       return
     }
     if (file.size > 200 * 1024) {
-      notify.error('Logo must be under 200 KB. Try compressing the image.')
+      notify.invalid('Logo must be under 200 KB. Try compressing the image.')
       return
     }
     const dataUrl = await readAsDataUrl(file)
@@ -195,7 +234,10 @@ export default function LabelTemplateEditorPage() {
         templateType,
       }
       const resp = await labelTemplateService.save(payload)
-      if (resp.data) setTemplate(resp.data)
+      if (resp.data) {
+        setTemplate(resp.data)
+        setSavedJson(JSON.stringify(resp.data))
+      }
       notify.success('Template saved.')
       // On create → navigate to the new row's edit URL so the operator
       // stays in-context and can keep tweaking.
@@ -203,7 +245,9 @@ export default function LabelTemplateEditorPage() {
         navigate(`/settings/templates/${resp.data.id}`, { replace: true })
       }
     } catch (err) {
-      notify.apiError(err, 'Failed to save template.')
+      const fe = serverFieldError(err)
+      if (fe) setFieldErrors({ [['tenantId', 'templateType', 'primaryColor', 'headerText', 'footerText'].includes(fe.field) ? fe.field : '_form']: fe.message })
+      else notify.apiError(err, 'Failed to save template.')
     } finally {
       setSaving(false)
     }
@@ -212,7 +256,7 @@ export default function LabelTemplateEditorPage() {
   const remove = async () => {
     if (!template.id) return
     if (!admin) {
-      notify.error('Only admins can delete templates.')
+      notify.invalid('Only admins can delete templates.')
       return
     }
     const label = effectiveTenantId ? effectiveTenantId : 'Platform default'
@@ -251,7 +295,7 @@ export default function LabelTemplateEditorPage() {
         <div className="flex items-center gap-3">
           <button
             type="button"
-            onClick={() => navigate('/settings/templates')}
+            onClick={() => void backToList()}
             title="Back to templates"
             className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-[#e3d9c4] bg-white text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
           >
@@ -304,6 +348,9 @@ export default function LabelTemplateEditorPage() {
               {humanType(templateType)}
             </span>
           </div>
+          {fieldErrors._form ? (
+            <p role="alert" className="mx-3 mt-3 rounded-lg border border-rose-200 bg-rose-50/60 px-3 py-2 text-[11.5px] text-rose-700">{fieldErrors._form}</p>
+          ) : null}
 
           {/* ── Scope panel ─────────────────────────────────────────────── */}
           <Panel id="scope" icon={<FiTag className="h-3.5 w-3.5" />} title="Scope"
@@ -315,8 +362,9 @@ export default function LabelTemplateEditorPage() {
               <FieldCell label="Applies to" disabled={isEdit} chevron>
                 <select
                   value={tenantId}
-                  onChange={(e) => setTenantId(e.target.value || PLATFORM_DEFAULT_VALUE)}
+                  onChange={(e) => { setTenantId(e.target.value || PLATFORM_DEFAULT_VALUE); clearErr('tenantId') }}
                   disabled={isEdit}
+                  aria-invalid={fieldErrors.tenantId ? true : undefined}
                   className={cellSelect}
                 >
                   {clientOptions.map((opt) => (
@@ -324,11 +372,13 @@ export default function LabelTemplateEditorPage() {
                   ))}
                 </select>
               </FieldCell>
+              {fieldErr('tenantId')}
               <FieldCell label="Document type" disabled={isEdit} chevron>
                 <select
                   value={templateType}
-                  onChange={(e) => setTemplateType(e.target.value)}
+                  onChange={(e) => { setTemplateType(e.target.value); clearErr('templateType') }}
                   disabled={isEdit}
+                  aria-invalid={fieldErrors.templateType ? true : undefined}
                   className={cellSelect}
                 >
                   {TEMPLATE_TYPES.map((t) => (
@@ -336,6 +386,7 @@ export default function LabelTemplateEditorPage() {
                   ))}
                 </select>
               </FieldCell>
+              {fieldErr('templateType')}
             </div>
 
             <p className={fieldHint}>
@@ -434,9 +485,11 @@ export default function LabelTemplateEditorPage() {
                     pattern="^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$"
                     maxLength={7}
                     placeholder={DEFAULT_COLOR}
+                    aria-invalid={fieldErrors.primaryColor ? true : undefined}
                     className="w-full bg-transparent font-mono text-[12px] font-semibold uppercase text-[#1f150c] outline-none"
                   />
                 </FieldCell>
+                {fieldErr('primaryColor')}
               </div>
               <div className="ml-auto flex items-center gap-1.5">
                 {COLOR_PRESETS.map((c) => (
@@ -464,10 +517,12 @@ export default function LabelTemplateEditorPage() {
                 maxLength={200}
                 value={template.headerText || ''}
                 onChange={(e) => updateField('headerText', e.target.value)}
-                placeholder={DEFAULT_HEADER}
+                placeholder={defaultHeaderFor(templateType)}
+                aria-invalid={fieldErrors.headerText ? true : undefined}
                 className="w-full bg-transparent text-[12.5px] font-semibold text-[#1f150c] outline-none placeholder:font-normal placeholder:text-[#b6a684]"
               />
             </FieldCell>
+            {fieldErr('headerText')}
             <FieldCell label="Footer note" aside={<span className="normal-case tracking-normal text-[#cdbf9f]">{(template.footerText || '').length}/500</span>}>
               <textarea
                 rows={3}
@@ -475,9 +530,11 @@ export default function LabelTemplateEditorPage() {
                 value={template.footerText || ''}
                 onChange={(e) => updateField('footerText', e.target.value)}
                 placeholder={'Thanks for your order!\nReturns accepted within 30 days.'}
+                aria-invalid={fieldErrors.footerText ? true : undefined}
                 className="w-full resize-none bg-transparent text-[12px] leading-4 text-[#3f3527] outline-none placeholder:text-[#b6a684]"
               />
             </FieldCell>
+            {fieldErr('footerText')}
 
             <div className="my-1 border-t border-[#eee6d6]" />
 
@@ -552,6 +609,7 @@ export default function LabelTemplateEditorPage() {
             footer={template.footerText}
             showItems={template.showItems !== false}
             typeLabel={humanType(templateType)}
+            defaultHeader={defaultHeaderFor(templateType)}
           />
 
           {/* Scope explainer */}
@@ -644,9 +702,10 @@ function FieldCell({ label, disabled, chevron, aside, children }: {
   aside?: ReactNode
   children: ReactNode
 }) {
+  // A real <label> so the field inside has an accessible name (BUG-142).
   return (
-    <div
-      className={`relative rounded-lg border px-2.5 pb-1.5 pt-1 transition ${
+    <label
+      className={`relative block rounded-lg border px-2.5 pb-1.5 pt-1 transition ${
         disabled
           ? 'border-[#eee6d6] bg-[#faf7f0]/40'
           : 'border-[#e3d9c4] bg-[#faf7f0]/60 focus-within:border-[#cdbf9f] focus-within:bg-white focus-within:ring-2 focus-within:ring-[#f0e9d8]'
@@ -659,7 +718,7 @@ function FieldCell({ label, disabled, chevron, aside, children }: {
       {chevron ? (
         <FiChevronDown className="pointer-events-none absolute bottom-2 right-2 h-3 w-3 text-[#6b5c42]" />
       ) : null}
-    </div>
+    </label>
   )
 }
 
@@ -668,13 +727,14 @@ const cellSelect =
   'w-full cursor-pointer appearance-none truncate bg-transparent pr-4 text-[12px] font-semibold text-[#1f150c] outline-none disabled:cursor-not-allowed disabled:opacity-70'
 
 /** A live, paper-like packing-slip preview that reflects the current branding. */
-function TemplatePreview({ logo, color, header, footer, showItems, typeLabel }: {
+function TemplatePreview({ logo, color, header, footer, showItems, typeLabel, defaultHeader = DEFAULT_HEADER }: {
   logo?: string | null
   color: string
   header?: string | null
   footer?: string | null
   showItems: boolean
   typeLabel: string
+  defaultHeader?: string
 }) {
   const c = color || DEFAULT_COLOR
   const logoSrc = logo ? (logo.startsWith('data:') ? logo : `data:image/png;base64,${logo}`) : null
@@ -691,7 +751,7 @@ function TemplatePreview({ logo, color, header, footer, showItems, typeLabel }: 
         <div className="mx-auto max-w-[300px] overflow-hidden rounded-md border border-[#e3d9c4] bg-white text-[8px] leading-tight text-[#3f3527] shadow-md">
           {/* header band */}
           <div className="flex items-center justify-between gap-2 px-3 py-2.5 text-white" style={{ backgroundColor: c }}>
-            <span className="truncate text-[11px] font-extrabold tracking-wide">{(header || DEFAULT_HEADER).toUpperCase()}</span>
+            <span className="truncate text-[11px] font-extrabold tracking-wide">{(header || defaultHeader).toUpperCase()}</span>
             {logoSrc ? <img src={logoSrc} alt="" className="h-5 max-w-[70px] shrink-0 object-contain" /> : null}
           </div>
           <div className="space-y-2.5 p-3">
@@ -759,7 +819,7 @@ function blankTemplate(
     templateType,
     logoBase64: null,
     primaryColor: DEFAULT_COLOR,
-    headerText: DEFAULT_HEADER,
+    headerText: defaultHeaderFor(templateType),
     footerText: '',
     showItems: true,
   }

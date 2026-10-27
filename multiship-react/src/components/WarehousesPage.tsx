@@ -15,6 +15,8 @@ import {
   FiX,
 } from 'react-icons/fi'
 import { notify } from '../utils/notify'
+import { downloadCsv } from '../utils/csv'
+import { columnsToCsvMatrix, fetchAllPages } from '../utils/exportAll'
 import { warehouseService, type Warehouse } from '../api/warehouseService'
 import { countryName } from '../utils/countries'
 import AttachClientsModal from './modals/AttachClientsModal'
@@ -321,6 +323,15 @@ export default function WarehousesPage() {
             tableKey="warehouses"
             columns={columns}
             data={rows}
+            onExport={async (visibleIds) => {
+              // BUG-076 — every page with the current filters, not just the one on screen.
+              const all = await fetchAllPages<Warehouse>((page, size) => warehouseService.listWarehouses({
+                search: debouncedSearch || undefined, ownerType: ownerFilter || undefined,
+                active: activeFilter || undefined, sortBy, sortDirection, page, size,
+              }).then((r) => r.data))
+              downloadCsv(`warehouses-${new Date().toISOString().slice(0, 10)}.csv`, columnsToCsvMatrix(columns, all, visibleIds))
+              notify.success(`Exported ${all.length.toLocaleString()} warehouse(s).`)
+            }}
             manualPagination
             manualSorting
             pageIndex={pageIndex}

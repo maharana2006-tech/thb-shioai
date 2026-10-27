@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useModalDismiss } from '../../hooks/useModalDismiss'
 import { FiAlertCircle, FiCheckCircle, FiPackage, FiX } from 'react-icons/fi'
 import {
   landedCostService,
@@ -50,21 +51,17 @@ export default function LandedCostModal({ request, onClose }: LandedCostModalPro
     }
   }, [request])
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const requestClose = useModalDismiss(true, dialogRef, onClose)
 
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-modal="true"
       aria-label="Landed cost estimate"
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4"
-      onClick={onClose}
+      onClick={() => void requestClose()}
     >
       <div
         className="flex h-[min(620px,90vh)] w-full max-w-[560px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]"
@@ -89,7 +86,7 @@ export default function LandedCostModal({ request, onClose }: LandedCostModalPro
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => void requestClose()}
             aria-label="Close"
             className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50"
           >

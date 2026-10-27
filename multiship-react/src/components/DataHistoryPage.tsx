@@ -41,6 +41,7 @@ const OrderDetailsModal = lazyWithRetry(() => import('./modals/OrderDetailsModal
 const TrackingTimelineModal = lazyWithRetry(() => import('./tracking/TrackingTimelineModal'))
 import { hasCommercialInvoice, type LabelCounts } from '../utils/batchLabels'
 import { downloadCsv } from '../utils/csv'
+import { columnsToCsvMatrix, fetchAllPages } from '../utils/exportAll'
 import { printPdfBlob } from '../utils/printPdf'
 import { formatDuration, relativeTime } from '../utils/relativeTime'
 import { orderService, type Order } from '../api/orderService'
@@ -1218,6 +1219,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
                     type="button"
                     onClick={() => void restoreBatch(b.id, b.fileName)}
                     disabled={trashBusyId === b.id}
+                    aria-label={`Restore import #${b.id}`}
                     title="Restore this import from Trash"
                     className="inline-flex items-center gap-1.5 rounded-xl border border-[#412d15] bg-white px-3 py-2 text-[12px] font-semibold text-[#412d15] transition hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-50"
                   >
@@ -1267,6 +1269,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
                         <FiHome className="h-3.5 w-3.5 shrink-0" />
                         <span className="hidden sm:inline text-[9.5px] uppercase tracking-[0.08em] text-[#b6a684]">Bills to</span>
                         <select
+                          aria-label={`Bills to for import #${b.id}`}
                           value={platform ? 'PLATFORM' : 'AUTO'}
                           disabled={busy || st === 'IN_PROGRESS' || billingSavingId === b.id}
                           onChange={(e) => void setBilling(b.id, e.target.value as 'AUTO' | 'PLATFORM')}
@@ -2540,6 +2543,15 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
             tableKey={viewTrash ? 'order-intake-imports-trash-v8' : isApiTab ? 'bulk-api-batches-v6' : 'order-intake-imports-v8'}
             columns={dhColumns}
             data={batches}
+            csvFilename="import-history"
+            onExport={async (visibleIds) => {
+              // BUG-066 — every page, and the import number the rows link back to.
+              const all = await fetchAllPages<ImportBatchSummary>((page, size) =>
+                bulkService.listBatches({ view: listView, ...listQuery, page, size }).then((r) => r.data))
+              downloadCsv(`import-history-${new Date().toISOString().slice(0, 10)}.csv`, columnsToCsvMatrix(
+                dhColumns, all, visibleIds, [{ header: 'Import #', value: (b) => b.id }]))
+              notify.success(`Exported ${all.length.toLocaleString()} import(s).`)
+            }}
             search={{ value: filters.search, onChange: filters.setSearch, placeholder: 'Search file name, batch #, or user…' }}
             filterToggle={<>
               <select

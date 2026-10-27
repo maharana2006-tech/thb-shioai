@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { notify } from '../../utils/notify'
-import { registerUnsavedWorkGuard } from '../../utils/unsavedWorkGuard'
+import { useUnsavedWorkGuard } from '../../hooks/useUnsavedWorkGuard'
 import { ApiError } from '../../api/apiClient'
 import {
   orderService,
@@ -177,6 +177,7 @@ export function useNewShipmentModel() {
   const dtcTenant = searchParams.get('tenant') ?? ''
   const [dtcLine, setDtcLine] = useState<DtcOrder | null>(null)
   const dtcAppliedRef = useRef(false)
+  const dtcClientLoadRef = useRef<string | null>(null)
 
   const [accounts, setAccounts] = useState<CarrierAccountRef[]>([])
   const [services, setServices] = useState<ShippingServiceItem[]>([])
@@ -1451,11 +1452,20 @@ export function useNewShipmentModel() {
   // and default carrier come through applyClient like a normal pick.
   useEffect(() => {
     if (!dtcLine || !clients.length || dtcAppliedRef.current) return
-    dtcAppliedRef.current = true
     const o = dtcLine
-     
-    if (clients.some((c) => c.clientCode === o.tenantId)) applyClient(o.tenantId)
-    else setClientCode(o.tenantId)
+    if (!clients.some((c) => c.clientCode === o.tenantId)) {
+      // BUG-069 — the line's tenant is not in the picker's list (scope,
+      // paging, inactive); load it, add it, and let this effect run again
+      // so ship-from and carrier come through applyClient like a pick.
+      if (dtcClientLoadRef.current === o.tenantId) return
+      dtcClientLoadRef.current = o.tenantId
+      clientService.getClient(o.tenantId)
+        .then((r) => { if (r.data) setClients((cur) => [...cur, r.data as Client]) })
+        .catch(() => { dtcAppliedRef.current = true; setClientCode(o.tenantId) })
+      return
+    }
+    dtcAppliedRef.current = true
+    applyClient(o.tenantId)
     const country = (o.shipToCountryCode || 'US').toUpperCase()
     setRecipient({
       name: o.shipName ?? '', company: o.shipAttn ?? '', phone: o.phone ?? '', email: o.email ?? '',
@@ -2464,7 +2474,7 @@ export function useNewShipmentModel() {
   /** Package & weight — recommend a package + weight from the item list. */
   const suggestPackagingAi = async () => {
     const usable = items.filter((it) => it.description.trim())
-    if (!usable.length) return notify.error('Add at least one item description first.')
+    if (!usable.length) return notify.invalid('Add at least one item description first.')
     setPkgBusy(true)
     try {
       const r = await aiService.suggestPackaging(
@@ -2496,7 +2506,7 @@ export function useNewShipmentModel() {
 
   /** Account & service — recommend a service + incoterm for the route. */
   const recommendServiceAi = async () => {
-    if (!recipient.countryCode) return notify.error('Set the ship-to country first.')
+    if (!recipient.countryCode) return notify.invalid('Set the ship-to country first.')
     setSvcBusy(true)
     try {
       const r = await aiService.recommendService({
@@ -2687,22 +2697,13 @@ export function useNewShipmentModel() {
   // the browser's own "Leave site?" prompt.
   const formHasWork = !!(recipient.name?.trim() || recipient.addressLine1?.trim() || reference.trim()
     || items.some((it) => it.description.trim()) || extraPackages.length > 0)
-  useEffect(() => {
-    if (!formHasWork || submitting) return
-    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
-    window.addEventListener('beforeunload', warn)
-    // BUG-030 — sidebar / topbar nav uses navigate() (not <Link>) so the
-    // browser's beforeunload prompt never fires. Register an async guard
-    // the layout chrome checks before any navigate() call.
-    registerUnsavedWorkGuard(() => notify.confirm(
-      "This shipment hasn't been created yet. Leave and lose what you've entered?",
-      { title: 'Leave this shipment?', confirmLabel: 'Leave', cancelLabel: 'Stay' },
-    ))
-    return () => {
-      window.removeEventListener('beforeunload', warn)
-      registerUnsavedWorkGuard(null)
-    }
-  }, [formHasWork, submitting])
+  // BUG-030 / BUG-063 — sidebar, settings nav, global search and the
+  // browser Back button all ask before destroying work.
+  useUnsavedWorkGuard(
+    formHasWork && !submitting,
+    "This shipment hasn't been created yet. Leave and lose what you've entered?",
+    'Leave this shipment?',
+  )
 
   // BUG-014: the sticky Validate/Generate footer is ~96 px above the viewport
   // bottom; the default toast position (bottom-4 = 1rem) sits directly over

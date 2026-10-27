@@ -398,7 +398,8 @@ export default function Dashboard() {
       sub: `${ready} ready to generate`,
       icon: <FiClock className="h-4 w-4" />,
       tone: 'border-sky-200 bg-sky-50 text-sky-700',
-      to: '/orders?view=all',
+      // BUG-001 — the tile counts PENDING orders, so open exactly that set.
+      to: '/orders?status=PENDING',
     },
     {
       label: 'Exceptions',

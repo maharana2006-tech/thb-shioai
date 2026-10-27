@@ -344,9 +344,9 @@ function Schedules({ clients }: { clients: Client[] }) {
                 <td className="px-4 py-2 text-[11.5px] text-slate-500">{s.nextRunAt ? new Date(s.nextRunAt).toLocaleString() : '—'}</td>
                 <td className="px-4 py-2 text-right">
                   <div className="inline-flex gap-1">
-                    <button title="Run now" onClick={() => runNow(s)} className="rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-800"><FiPlay /></button>
-                    <button title="Edit" onClick={() => setEditing({ ...s })} className="rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-800"><FiEdit3 /></button>
-                    <button title="Delete" onClick={() => del(s)} className="rounded p-1 text-rose-500 hover:bg-rose-50"><FiTrash2 /></button>
+                    <button title="Run now" aria-label={`Run now: ${s.name}`} onClick={() => runNow(s)} className="rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-800"><FiPlay /></button>
+                    <button title="Edit" aria-label={`Edit ${s.name}`} onClick={() => setEditing({ ...s })} className="rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-800"><FiEdit3 /></button>
+                    <button title="Delete" aria-label={`Delete ${s.name}`} onClick={() => del(s)} className="rounded p-1 text-rose-500 hover:bg-rose-50"><FiTrash2 /></button>
                   </div>
                 </td>
               </tr>
@@ -432,15 +432,15 @@ function ScheduleEditor({
 
   const save = async () => {
     if (!draft.name.trim()) {
-      notify.error('Name is required.')
+      notify.invalid('Name is required.')
       return
     }
     if (draft.deliveryType === 'EMAIL' && !draft.deliveryEmail?.trim()) {
-      notify.error('EMAIL delivery needs a recipient.')
+      notify.invalid('EMAIL delivery needs a recipient.')
       return
     }
     if (draft.deliveryType === 'WEBHOOK' && !draft.deliveryWebhookUrl?.trim()) {
-      notify.error('WEBHOOK delivery needs a URL.')
+      notify.invalid('WEBHOOK delivery needs a URL.')
       return
     }
     setSaving(true)

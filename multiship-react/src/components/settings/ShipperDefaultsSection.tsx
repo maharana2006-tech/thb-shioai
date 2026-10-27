@@ -99,7 +99,7 @@ export default function ShipperDefaultsSection() {
 
   const save = async () => {
     if (!tenantCode.trim()) {
-      notify.error('Pick a tenant first.')
+      notify.invalid('Pick a tenant first.')
       return
     }
     setSaving(true)

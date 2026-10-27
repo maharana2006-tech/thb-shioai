@@ -305,7 +305,9 @@ function SortableHeader<T extends RowData>({
     >
       <div className="flex items-center gap-1">
         {/* Drag grip — the whole label acts as the drag handle. */}
-        <span {...attributes} {...listeners} className={`flex-1 cursor-grab active:cursor-grabbing ${
+        {/* BUG-198 — the grip is pointer-only; keyboard users sort with the
+            header button and reorder from the Columns menu. */}
+        <span {...attributes} {...listeners} tabIndex={-1} className={`flex-1 cursor-grab active:cursor-grabbing ${
           (header.column.columnDef.meta as { align?: 'right' } | undefined)?.align === 'right' ? 'text-right' : ''}`}>
           {children}
         </span>
@@ -1091,13 +1093,17 @@ export default function AdvancedDataTable<T extends RowData>({
                     {group.headers.map((header) => {
                       const canSort = header.column.getCanSort()
                       const sortDir = header.column.getIsSorted()
+                      // BUG-198 — a sortable heading is a real button so Enter /
+                      // Space sort it; the drag grip is no longer a tab stop.
+                      const Label = canSort ? 'button' : 'span'
                       return (
                         <SortableHeader key={header.id} header={header} density={density}>
                           {header.isPlaceholder
                             ? null
                             : (
-                              <span
-                                className={`${(header.column.columnDef.meta as { align?: string } | undefined)?.align === 'right' ? 'flex w-full justify-end' : 'inline-flex'} items-center gap-1 ${canSort ? 'cursor-pointer' : ''}`}
+                              <Label
+                                type={canSort ? 'button' : undefined}
+                                className={`${(header.column.columnDef.meta as { align?: string } | undefined)?.align === 'right' ? 'flex w-full justify-end' : 'inline-flex'} items-center gap-1 ${canSort ? 'cursor-pointer font-inherit text-inherit' : ''}`}
                                 onClick={(e) => {
                                   // Sort on click but don't trip the drag listener
                                   // when the user's actually clicking to sort.
@@ -1106,6 +1112,9 @@ export default function AdvancedDataTable<T extends RowData>({
                                   header.column.getToggleSortingHandler()?.(e)
                                 }}
                                 onPointerDown={(e) => e.stopPropagation()}
+                                // The dnd-kit grip around this label treats Enter / Space
+                                // as "start dragging" and swallows the click; keep them here.
+                                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation() }}
                                 // BUG-016 — on-screen headers can be short ("Dest",
                                 // "Gen") to fit narrow columns, but the Columns menu
                                 // uses `meta.headerLabel` (the full name). Hovering
@@ -1130,7 +1139,7 @@ export default function AdvancedDataTable<T extends RowData>({
                                     <FiChevronDown className="h-3 w-3 text-[#dcd4c4]" />
                                   )
                                 ) : null}
-                              </span>
+                              </Label>
                             )}
                         </SortableHeader>
                       )

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useModalDismiss } from '../hooks/useModalDismiss'
 import { Link } from 'react-router-dom'
 import type { SortingState } from '@tanstack/react-table'
 import { FiCalendar, FiDownload, FiFileText, FiLoader, FiRefreshCw, FiSlash, FiTruck, FiX } from 'react-icons/fi'
@@ -68,6 +69,8 @@ export default function OrderDocumentsTable() {
   // ── The query: search, filters, sort, page ──
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
+  const statementDialogRef = useRef<HTMLDivElement>(null)
+  const requestClose = useModalDismiss(!!statementRow, statementDialogRef, () => setStatementRow(null))
   useEffect(() => {
     const t = window.setTimeout(() => setDebouncedSearch(search.trim()), 300)
     return () => window.clearTimeout(t)
@@ -460,12 +463,12 @@ export default function OrderDocumentsTable() {
 
       {/* ── Billing-statement modal ── */}
       {statementRow ? (
-        <div
+        <div ref={statementDialogRef}
           role="dialog"
           aria-modal="true"
           aria-label={`Billing statement for order ${statementRow.orderNo}`}
           className="fixed inset-0 z-50 flex items-center justify-center bg-[#1f150c]/45 p-4"
-          onClick={() => setStatementRow(null)}
+          onClick={() => void requestClose()}
         >
           <div
             className="w-full max-w-[420px] overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-2xl"
@@ -478,7 +481,7 @@ export default function OrderDocumentsTable() {
               </div>
               <button
                 type="button"
-                onClick={() => setStatementRow(null)}
+                onClick={() => void requestClose()}
                 aria-label="Close"
                 className="rounded-lg border border-[#e3d9c4] bg-white p-1.5 text-[#6b5c42] transition hover:bg-[#faf7f0]"
               >

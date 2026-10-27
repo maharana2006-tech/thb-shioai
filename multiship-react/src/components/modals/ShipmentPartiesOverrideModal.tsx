@@ -62,7 +62,7 @@ export default function ShipmentPartiesOverrideModal({
   const sb = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) => setBrk((p) => ({ ...p, [k]: e.target.value }))
   // A11y audit — dialog semantics (was missing entirely), focus trap, Escape.
   const dialogRef = useRef<HTMLDivElement>(null)
-  useModalDismiss(true, dialogRef, onClose)
+  const requestClose = useModalDismiss(true, dialogRef, onClose)
 
   return (
     <div
@@ -70,7 +70,7 @@ export default function ShipmentPartiesOverrideModal({
       role="dialog"
       aria-modal="true"
       aria-labelledby="parties-override-title"
-      onClick={onClose}
+      onClick={() => void requestClose()}
     >
       <div
         ref={dialogRef}
@@ -84,7 +84,7 @@ export default function ShipmentPartiesOverrideModal({
             </p>
             <h2 id="parties-override-title" className="mt-0.5 text-lg font-semibold">Importer & broker override</h2>
           </div>
-          <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-[#b6a684] transition hover:bg-white/10 hover:text-white" aria-label="Close">
+          <button type="button" onClick={() => void requestClose()} className="rounded-lg p-1.5 text-[#b6a684] transition hover:bg-white/10 hover:text-white" aria-label="Close">
             <FiX className="h-5 w-5" />
           </button>
         </div>
@@ -186,7 +186,7 @@ export default function ShipmentPartiesOverrideModal({
         <div className="flex items-center justify-end gap-2 border-t border-[#e3d9c4] bg-[#faf7f0] px-6 py-3.5">
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => void requestClose()}
             className="rounded-xl border border-[#e3d9c4] bg-white px-3.5 py-2 text-[12.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-white"
           >
             Cancel

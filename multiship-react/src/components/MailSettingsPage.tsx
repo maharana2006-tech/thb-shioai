@@ -13,6 +13,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useOutletContext } from 'react-router-dom'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import { notify } from '../utils/notify'
+import { serverFieldError } from '../utils/serverFieldErrors'
 import { fmtServerTs } from '../utils/relativeTime'
 import {
   mailProviderService,
@@ -93,7 +94,7 @@ export default function MailSettingsPage() {
       notify.success(payload.id ? 'Provider updated.' : 'Provider added.')
       await load()
     } catch (err) {
-      notify.apiError(err, 'Failed to save provider.')
+      if (!serverFieldError(err)) notify.apiError(err, 'Failed to save provider.')
       throw err
     }
   }
@@ -121,7 +122,7 @@ export default function MailSettingsPage() {
 
   const runTestSend = async () => {
     if (!testTo.trim()) {
-      notify.error('Recipient email required.')
+      notify.invalid('Recipient email required.')
       return
     }
     setTesting(true)
@@ -218,6 +219,7 @@ export default function MailSettingsPage() {
                       <button
                         type="button"
                         onClick={() => openEditModal(p)}
+                        aria-label={`Edit ${p.displayName}`}
                         className="rounded border border-[#e3d9c4] px-2 py-1 text-[12px] text-[#5a4526] hover:bg-[#faf7f0]"
                       >
                         Edit
@@ -226,6 +228,7 @@ export default function MailSettingsPage() {
                         <button
                           type="button"
                           onClick={() => void activate(p.id)}
+                          aria-label={`Activate ${p.displayName}`}
                           className="rounded border border-emerald-300 px-2 py-1 text-[12px] text-emerald-700 hover:bg-emerald-50"
                         >
                           Activate
@@ -234,6 +237,7 @@ export default function MailSettingsPage() {
                       <button
                         type="button"
                         onClick={() => void remove(p.id)}
+                        aria-label={`Delete ${p.displayName}`}
                         className="rounded border border-rose-300 px-2 py-1 text-[12px] text-rose-700 hover:bg-rose-50"
                       >
                         Delete
@@ -290,6 +294,7 @@ export default function MailSettingsPage() {
                     onClick={() =>
                       navigate(`/settings/notification-templates?key=${encodeURIComponent(t.templateKey)}`)
                     }
+                    aria-label={`Edit ${t.templateKey}`}
                     className="rounded border border-[#e3d9c4] px-2 py-1 text-[11.5px] text-[#5a4526] hover:bg-[#faf7f0]"
                   >
                     Edit

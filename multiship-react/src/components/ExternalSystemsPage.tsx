@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
+import { useModalDismiss } from '../hooks/useModalDismiss'
 import { useOutletContext } from 'react-router-dom'
 import { formatDateTime } from '../utils/formatDateTime'
 import {
@@ -17,6 +18,7 @@ import {
   FiZap,
 } from 'react-icons/fi'
 import { notify } from '../utils/notify'
+import { serverFieldError } from '../utils/serverFieldErrors'
 import {
   externalSystemsService,
   type ClientLoginOverrideRow,
@@ -218,6 +220,7 @@ export default function ExternalSystemsPage() {
                         <button
                           type="button"
                           onClick={() => setTesting({ conn: row })}
+                          aria-label={`Test ${row.name}`}
                           title="Dial the connection"
                           className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11.5px] font-semibold text-slate-700 hover:bg-slate-50"
                         >
@@ -237,6 +240,7 @@ export default function ExternalSystemsPage() {
                                 notify.apiError(e, 'Could not change default writeback target.')
                               }
                             }}
+                            aria-label={`Make default: ${row.name}`}
                             title="X1 — flip this row to the default writeback target (atomic swap)"
                             className="inline-flex items-center gap-1 whitespace-nowrap rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11.5px] font-semibold text-slate-700 hover:bg-emerald-50 hover:text-emerald-800"
                           >
@@ -254,6 +258,7 @@ export default function ExternalSystemsPage() {
                             }
                           }}
                           className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                          aria-label={`Edit ${row.name}`}
                           title="Edit"
                         >
                           <FiEdit2 className="h-3.5 w-3.5" />
@@ -262,6 +267,7 @@ export default function ExternalSystemsPage() {
                           type="button"
                           onClick={() => void del(row)}
                           className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-transparent text-slate-400 hover:border-rose-100 hover:text-rose-600"
+                          aria-label={`Delete ${row.name}`}
                           title="Delete"
                         >
                           <FiTrash2 className="h-3.5 w-3.5" />
@@ -345,6 +351,8 @@ function EditDrawer({
   onClose: () => void
   onSaved: () => Promise<void>
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const requestClose = useModalDismiss(true, dialogRef, onClose)
   const isNew = initial === null
   const [name, setName] = useState<string>(initial?.name ?? '')
   const [systemType, setSystemType] = useState<string>(
@@ -382,14 +390,16 @@ function EditDrawer({
     try { JSON.parse(configJson); return null }
     catch (e) { return (e as Error).message }
   }, [configJson])
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+  const clearErr = (k: string) => setFieldErrors((cur) => (cur[k] ? {} : cur))
 
   const save = async () => {
     if (parseError) {
-      notify.error(`configJson is invalid: ${parseError}`)
+      notify.invalid(`configJson is invalid: ${parseError}`)
       return
     }
     if (!name.trim() || !systemType.trim()) {
-      notify.error('Name + system type are required.')
+      notify.invalid('Name + system type are required.')
       return
     }
     setSaving(true)
@@ -422,15 +432,17 @@ function EditDrawer({
       }
       await onSaved()
     } catch (e) {
-      notify.apiError(e, 'Save failed.')
+      const fe = serverFieldError(e)
+      if (fe) setFieldErrors({ [['name', 'systemType', 'environment', 'configJson'].includes(fe.field) ? fe.field : '_form']: fe.message })
+      else notify.apiError(e, 'Save failed.')
     } finally {
       setSaving(false)
     }
   }
 
   return (
-    <div className="fixed inset-0 z-40 flex" role="dialog" aria-label="Edit external-system connection">
-      <div className="flex-1 bg-slate-950/40" onClick={onClose} />
+    <div className="fixed inset-0 z-40 flex" ref={dialogRef} role="dialog" aria-label="Edit external-system connection">
+      <div className="flex-1 bg-slate-950/40" onClick={() => void requestClose()} />
       <div className="flex w-[560px] max-w-full flex-col border-l border-slate-200 bg-white shadow-xl">
         <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
           <h3 className="text-[15px] font-semibold text-slate-950">
@@ -438,7 +450,7 @@ function EditDrawer({
           </h3>
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => void requestClose()}
             className="rounded-lg p-1 text-slate-500 hover:bg-slate-100"
             aria-label="Close drawer"
           >
@@ -471,14 +483,15 @@ function EditDrawer({
         <div className="flex-1 overflow-y-auto p-4">
           {tab === 'main' || isNew ? (
             <MainTab
-              name={name} setName={setName}
-              systemType={systemType} setSystemType={setSystemType}
+              name={name} setName={(v) => { setName(v); clearErr('name') }}
+              systemType={systemType} setSystemType={(v) => { setSystemType(v); clearErr('systemType') }}
               active={active} setActive={setActive}
-              configJson={configJson} setConfigJson={setConfigJson}
+              configJson={configJson} setConfigJson={(v) => { setConfigJson(v); clearErr('configJson') }}
               parseError={parseError}
+              fieldErrors={fieldErrors}
               connectors={connectors}
               isNew={isNew}
-              environment={environment} setEnvironment={setEnvironment}
+              environment={environment} setEnvironment={(v) => { setEnvironment(v); clearErr('environment') }}
               useDev={useDev} setUseDev={setUseDev}
             />
           ) : tab === 'writeback' ? (
@@ -512,7 +525,7 @@ function EditDrawer({
           <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
             <button
               type="button"
-              onClick={onClose}
+              onClick={() => void requestClose()}
               className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:bg-slate-50"
             >
               Cancel
@@ -536,7 +549,7 @@ function EditDrawer({
 
 function MainTab({
   name, setName, systemType, setSystemType, active, setActive,
-  configJson, setConfigJson, parseError, connectors, isNew,
+  configJson, setConfigJson, parseError, fieldErrors, connectors, isNew,
   environment, setEnvironment, useDev, setUseDev,
 }: {
   name: string; setName: (v: string) => void
@@ -544,13 +557,18 @@ function MainTab({
   active: boolean; setActive: (v: boolean) => void
   configJson: string; setConfigJson: (v: string) => void
   parseError: string | null
+  fieldErrors: Record<string, string>
   connectors: ConnectorSummary[]
   isNew: boolean
   environment: 'PROD' | 'DEV'; setEnvironment: (v: 'PROD' | 'DEV') => void
   useDev: boolean; setUseDev: (v: boolean) => void
 }) {
+  const fieldErr = (k: string) => fieldErrors[k]
+    ? <p role="alert" className="mt-1 text-[11.5px] font-normal text-rose-700">{fieldErrors[k]}</p>
+    : null
   return (
     <div className="space-y-3">
+      {fieldErr('_form')}
       <label className="block">
         <span className="mb-1 block text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Name</span>
         <input
@@ -558,8 +576,10 @@ function MainTab({
           onChange={(e) => setName(e.target.value)}
           disabled={!isNew}
           placeholder="e.g. nds-default"
+          aria-invalid={fieldErrors.name ? true : undefined}
           className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-[13px] disabled:bg-slate-50 disabled:text-slate-500 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
         />
+        {fieldErr('name')}
         {!isNew ? (
           <span className="mt-1 block text-[10.5px] text-slate-400">
             Name is immutable after create.
@@ -571,6 +591,7 @@ function MainTab({
         <select
           value={systemType}
           onChange={(e) => setSystemType(e.target.value)}
+          aria-invalid={fieldErrors.systemType ? true : undefined}
           className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-[13px] focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
         >
           {/* BUG-061 R6 — hide the Java config class name; keep only the
@@ -581,6 +602,7 @@ function MainTab({
             </option>
           ))}
         </select>
+        {fieldErr('systemType')}
       </label>
       <label className="flex items-center gap-2">
         <input
@@ -605,11 +627,13 @@ function MainTab({
           value={environment}
           onChange={(e) => setEnvironment(e.target.value as 'PROD' | 'DEV')}
           disabled={!isNew}
+          aria-invalid={fieldErrors.environment ? true : undefined}
           className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-[13px] disabled:bg-slate-50 disabled:text-slate-500 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
         >
           <option value="PROD">PROD — production config</option>
           <option value="DEV">DEV — development / staging config</option>
         </select>
+        {fieldErr('environment')}
         <span className="mt-1 block text-[10.5px] text-slate-400">
           {isNew
             ? 'Two rows per name allowed: PROD + DEV. Toggle "Use DEV" on the PROD row to make the resolver hand DEV back to consumers.'
@@ -642,10 +666,12 @@ function MainTab({
           value={configJson}
           onChange={(e) => setConfigJson(e.target.value)}
           spellCheck={false}
+          aria-invalid={fieldErrors.configJson ? true : undefined}
           className={`w-full resize-y rounded-lg border bg-white px-3 py-2 font-mono text-[12px] focus:outline-none focus:ring-2 ${
             parseError ? 'border-rose-300 focus:ring-rose-200' : 'border-slate-300 focus:ring-slate-200'
           }`}
         />
+        {fieldErr('configJson')}
         <span className="mt-1 block text-[10.5px] text-slate-400">
           Shape depends on the connector — e.g. NDS_ORACLE expects host/port/serviceName/serverMode/productionUsername/clientCodePattern/pool params.
           Passwords go in the Secrets tab, not here.
@@ -862,7 +888,7 @@ function RoutedTenantsSection({ connectionId }: { connectionId: number }) {
 
   const add = async () => {
     const code = adding.trim().toUpperCase()
-    if (!code) { notify.error('Enter a client code.'); return }
+    if (!code) { notify.invalid('Enter a client code.'); return }
     if (routed.includes(code)) { notify.info(`${code} is already routed here.`); return }
     setBusy(true)
     try {
@@ -938,6 +964,7 @@ function RoutedTenantsSection({ connectionId }: { connectionId: number }) {
               <button
                 type="button"
                 onClick={() => void remove(code)}
+                aria-label={`Remove ${code}`}
                 disabled={busy}
                 className="text-[12px] font-semibold text-rose-600 hover:underline disabled:cursor-not-allowed disabled:opacity-40"
               >
@@ -961,7 +988,7 @@ function SecretsTab({ id, secretKeys }: { id: number; secretKeys: string[] }) {
   const [saving, setSaving] = useState(false)
 
   const save = async () => {
-    if (!key.trim()) { notify.error('Secret key required.'); return }
+    if (!key.trim()) { notify.invalid('Secret key required.'); return }
     if (!plaintext.trim()) { notify.error('Type the new secret value, or use Delete secret to clear it.'); return }
     setSaving(true)
     try {
@@ -979,7 +1006,7 @@ function SecretsTab({ id, secretKeys }: { id: number; secretKeys: string[] }) {
   // silently; operator must opt in via Delete + confirm. Matches the
   // Deactivate warehouse / Delete client pattern.
   const deleteSecret = async () => {
-    if (!key.trim()) { notify.error('Pick a secret key first.'); return }
+    if (!key.trim()) { notify.invalid('Pick a secret key first.'); return }
     const ok = await notify.confirm(
       `Delete the stored secret "${key.trim()}"?\n\n`
         + 'Any connector using this secret will fall back to the connector default (or fail if no default exists).',
@@ -1081,7 +1108,7 @@ function OverridesTab({ id }: { id: number }) {
 
   const add = async () => {
     if (!clientCode.trim() || !username.trim() || !password) {
-      notify.error('Client code, username, and password all required.')
+      notify.invalid('Client code, username, and password all required.')
       return
     }
     setSaving(true)
@@ -1146,6 +1173,7 @@ function OverridesTab({ id }: { id: number }) {
                     type="button"
                     onClick={() => void del(r)}
                     className="inline-flex h-6 w-6 items-center justify-center rounded text-slate-400 hover:text-rose-600"
+                    aria-label={`Delete credentials for ${r.clientCode}`}
                     title="Delete"
                   >
                     <FiTrash2 className="h-3 w-3" />
@@ -1200,6 +1228,8 @@ function OverridesTab({ id }: { id: number }) {
 // ─────────────────────────── Test drawer ────────────────────────────
 
 function TestDrawer({ conn, onClose }: { conn: ConnectionSummary; onClose: () => void }) {
+  const testDialogRef = useRef<HTMLDivElement>(null)
+  const requestClose = useModalDismiss(true, testDialogRef, onClose)
   const [profile, setProfile] = useState<'PRODUCTION' | 'CLIENT'>('PRODUCTION')
   const [clientCode, setClientCode] = useState('')
   const [testing, setTesting] = useState(false)
@@ -1233,8 +1263,8 @@ function TestDrawer({ conn, onClose }: { conn: ConnectionSummary; onClose: () =>
   }
 
   return (
-    <div className="fixed inset-0 z-40 flex" role="dialog" aria-label="Test connection">
-      <div className="flex-1 bg-slate-950/40" onClick={onClose} />
+    <div className="fixed inset-0 z-40 flex" ref={testDialogRef} role="dialog" aria-label="Test connection">
+      <div className="flex-1 bg-slate-950/40" onClick={() => void requestClose()} />
       <div className="flex w-[480px] max-w-full flex-col border-l border-slate-200 bg-white shadow-xl">
         <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
           <h3 className="text-[15px] font-semibold text-slate-950">
@@ -1242,7 +1272,7 @@ function TestDrawer({ conn, onClose }: { conn: ConnectionSummary; onClose: () =>
           </h3>
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => void requestClose()}
             className="rounded-lg p-1 text-slate-500 hover:bg-slate-100"
             aria-label="Close drawer"
           >

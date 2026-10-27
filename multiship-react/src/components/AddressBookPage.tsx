@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useModalDismiss } from '../hooks/useModalDismiss'
 import { FiBookmark, FiEdit2, FiPlus, FiSearch, FiTrash2, FiX } from 'react-icons/fi'
 import { notify } from '../utils/notify'
 import { useAppSession } from '../hooks/useAppSession'
@@ -20,6 +21,7 @@ import {
   validateZip,
 } from '../utils/clientValidation'
 import { STATE_CODE_SETS } from '../utils/stateCodes'
+import { serverFieldError } from '../utils/serverFieldErrors'
 
 const PAGE_SIZE = 25
 
@@ -234,6 +236,8 @@ function AddressEditor({ entry, clients, defaultOwner, onClose, onSaved }: {
   onClose: () => void
   onSaved: () => Promise<void>
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const requestClose = useModalDismiss(true, dialogRef, onClose)
   const [form, setForm] = useState<Form>(() => entry
     ? { ...entry }
     : {
@@ -304,7 +308,9 @@ function AddressEditor({ entry, clients, defaultOwner, onClose, onSaved }: {
       }
       await onSaved()
     } catch (e) {
-      notify.apiError(e, 'Could not save the address.')
+      const fe = serverFieldError(e)
+      if (fe) setErrors({ [fe.field in form ? fe.field : '_form']: fe.message })
+      else notify.apiError(e, 'Could not save the address.')
     } finally {
       setSaving(false)
     }
@@ -317,22 +323,23 @@ function AddressEditor({ entry, clients, defaultOwner, onClose, onSaved }: {
     <label className={span}>
       <span className={labelCls}>{label}</span>
       <input className={input(errors[k as string])} value={(form[k] as string | null | undefined) ?? ''}
-        placeholder={placeholder} onChange={(e) => set(k, e.target.value as Form[typeof k])} />
+        aria-invalid={errors[k as string] ? true : undefined} placeholder={placeholder} onChange={(e) => set(k, e.target.value as Form[typeof k])} />
       {err(k as string)}
     </label>
   )
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>
-      <div role="dialog" aria-modal="true" aria-label={entry ? `Edit ${entry.name}` : 'Add address'}
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={() => void requestClose()}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label={entry ? `Edit ${entry.name}` : 'Add address'}
         className="max-h-[90vh] w-full max-w-[600px] overflow-y-auto rounded-xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
           <h3 className="text-[15px] font-semibold text-slate-900">{entry ? `Edit ${entry.name}` : 'Add address'}</h3>
-          <button type="button" onClick={onClose} aria-label="Close" className="rounded-md p-1 text-slate-500 hover:bg-slate-100">
+          <button type="button" onClick={() => void requestClose()} aria-label="Close" className="rounded-md p-1 text-slate-500 hover:bg-slate-100">
             <FiX className="h-4 w-4" />
           </button>
         </div>
         <div className="grid grid-cols-2 gap-3 px-5 py-4">
+          {errors._form ? <p role="alert" className="col-span-2 rounded-md border border-rose-200 bg-rose-50/60 px-3 py-2 text-[11.5px] text-rose-800">{errors._form}</p> : null}
           <label className="col-span-2">
             <span className={labelCls}>Belongs to</span>
             <select className={input()} value={form.ownerCustomerNo ?? ''}
@@ -367,7 +374,7 @@ function AddressEditor({ entry, clients, defaultOwner, onClose, onSaved }: {
           </label>
         </div>
         <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-3">
-          <button type="button" onClick={onClose}
+          <button type="button" onClick={() => void requestClose()}
             className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-[13px] font-semibold text-slate-700 hover:bg-slate-50">
             Cancel
           </button>

@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
+import { useModalDismiss } from '../../hooks/useModalDismiss'
 import type { SplitRequiredPayload, SplitStrategy } from '../../api/orderService'
 
 /**
@@ -19,10 +20,12 @@ export function SplitShipmentModal({
   onPick: (strategy: SplitStrategy) => void
   onCancel: () => void
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const requestClose = useModalDismiss(true, dialogRef, onCancel)
   const [pending, setPending] = useState<SplitStrategy | null>(null)
 
   return (
-    <div
+    <div ref={dialogRef}
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4"
       role="dialog"
       aria-modal="true"
@@ -79,7 +82,7 @@ export function SplitShipmentModal({
         <div className="mt-6 flex justify-end gap-2">
           <button
             type="button"
-            onClick={onCancel}
+            onClick={() => void requestClose()}
             disabled={pending !== null}
             className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           >

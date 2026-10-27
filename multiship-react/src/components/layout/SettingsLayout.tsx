@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import type { IconType } from 'react-icons'
 import {
@@ -10,6 +10,7 @@ import {
 import { getSettingsGroupsForRole, settingsNavItems, workspacePaths } from '../../routes/workspaceRoutes'
 import { useAppSession } from '../../hooks/useAppSession'
 import { normalizeRole } from '../../utils/roles'
+import { canLeaveUnsavedWork } from '../../utils/unsavedWorkGuard'
 
 /** One icon per settings page, by settingsNavItems key. */
 const COMPACT_KEY = 'multiship_settings_menu_compact'
@@ -26,6 +27,7 @@ const PAGE_ICONS: Record<string, IconType> = {
   mail: FiMail, 'notification-templates': FiMessageSquare, 'my-subscriptions': FiBell,
   'external-systems': FiLink, system: FiSettings, 'carrier-error-messages': FiAlertTriangle,
   'audit-log': FiActivity, 'carrier-api-log': FiTerminal, 'notification-delivery-log': FiInbox,
+  'routing-rules': FiRepeat, reports: FiFileText, 'webhook-subscriptions': FiRefreshCw, 'usps-direct': FiTruck,
   'writeback-journal': FiRepeat, 'alerts-history': FiAlertCircle, 'returns-analytics': FiCornerUpLeft,
 }
 
@@ -48,6 +50,25 @@ export default function SettingsLayout() {
   const location = useLocation()
   const navigate = useNavigate()
   const groups = getSettingsGroupsForRole(normalizeRole(role))
+  // BUG-073 / BUG-120 — a dirty editor asks before the settings menu leaves it.
+  const navSafe = async (to: string) => {
+    if (await canLeaveUnsavedWork()) navigate(to)
+  }
+  // BUG-201 — a keyboard user browses the narrow-screen select with the
+  // arrow keys; only Enter (or leaving the select) opens the chosen page.
+  const [pendingPage, setPendingPage] = useState<string | null>(null)
+  const arrowedRef = useRef(false)
+  const commitPending = () => {
+    if (pendingPage == null) return
+    const to = pendingPage
+    setPendingPage(null)
+    void navSafe(to)
+  }
+  const guardLink = (to: string) => (e: MouseEvent<HTMLAnchorElement>) => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+    e.preventDefault()
+    void navSafe(to)
+  }
   const [query, setQuery] = useState('')
   // Icons-only menu (~60px) for wide tables; remembered per browser.
   const [compact, setCompact] = useState(readCompact)
@@ -156,7 +177,7 @@ export default function SettingsLayout() {
           )}
 
           {!q ? (
-            <NavLink to={workspacePaths.settings} end aria-current={onOverview ? 'page' : undefined} title={compact ? 'All settings' : undefined} className={itemClass(onOverview)}>
+            <NavLink to={workspacePaths.settings} end onClick={guardLink(workspacePaths.settings)} aria-current={onOverview ? 'page' : undefined} title={compact ? 'All settings' : undefined} className={itemClass(onOverview)}>
               <FiGrid className={iconClass(onOverview)} aria-hidden="true" />
               <span className={compact ? 'sr-only' : ''}>All settings</span>
             </NavLink>
@@ -169,7 +190,7 @@ export default function SettingsLayout() {
                 const active = isActive(p.to)
                 const Icon = PAGE_ICONS[p.key] ?? FiCircle
                 return (
-                  <NavLink key={p.key} to={p.to} aria-current={active ? 'page' : undefined} title={compact ? p.label : undefined} className={itemClass(active)}>
+                  <NavLink key={p.key} to={p.to} onClick={guardLink(p.to)} aria-current={active ? 'page' : undefined} title={compact ? p.label : undefined} className={itemClass(active)}>
                     <Icon className={iconClass(active)} aria-hidden="true" />
                     <span className={compact ? 'sr-only' : 'truncate'}>{p.label}</span>
                   </NavLink>
@@ -188,8 +209,16 @@ export default function SettingsLayout() {
         <label className="mb-3 block lg:hidden">
           <span className="sr-only">Settings page</span>
           <select
-            value={onOverview ? workspacePaths.settings : activeItem?.to ?? ''}
-            onChange={(e) => navigate(e.target.value)}
+            value={pendingPage ?? (onOverview ? workspacePaths.settings : activeItem?.to ?? '')}
+            onKeyDown={(e) => {
+              arrowedRef.current = e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'Home' || e.key === 'End'
+              if (e.key === 'Enter') commitPending()
+            }}
+            onBlur={commitPending}
+            onChange={(e) => {
+              if (arrowedRef.current) setPendingPage(e.target.value)
+              else void navSafe(e.target.value)
+            }}
             className="h-10 w-full rounded-xl border border-[#e3d9c4] bg-white px-3 text-[13.5px] font-semibold text-[#1f150c]"
           >
             <option value={workspacePaths.settings}>All settings</option>

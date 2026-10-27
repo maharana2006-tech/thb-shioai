@@ -298,6 +298,7 @@ export default function AppRoutes() {
               <Route path={apiBatchesPath} element={<DataHistoryPage apiBatches />} />
               <Route path={`${apiBatchesPath}/:batchId`} element={<DataHistoryPage apiBatches />} />
               {/* D2C History — Dtcal-style batch summary + HstDetails-style shipment history. */}
+              <Route path="/d2c" element={<Navigate to={workspacePaths.d2c} replace />} />
               <Route path={workspacePaths.d2c} element={<DtcOrdersPage />} />
               <Route path={`${workspacePaths.d2c}/:batchId`} element={<DtcBatchDetailPage />} />
               {/* Labels & Invoices — its own page, opened from Bulk Mailer (was the Documents tab). */}

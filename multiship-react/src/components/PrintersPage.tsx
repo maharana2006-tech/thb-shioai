@@ -6,6 +6,7 @@ import {
   FiPrinter, FiRadio, FiSearch, FiSquare, FiTag, FiTrash2, FiWifi, FiX,
 } from 'react-icons/fi'
 import { notify } from '../utils/notify'
+import { serverFieldError } from '../utils/serverFieldErrors'
 import { useModalDismiss } from '../hooks/useModalDismiss'
 import { clientService, type Client } from '../api/clientService'
 import AssignmentMatrix from './AssignmentMatrix'
@@ -109,7 +110,7 @@ export default function PrintersPage() {
   // PR-Printer-R5 — search over name + host + location; multi-select
   // driving the sticky bulk-action bar (Test N / Deactivate N / Delete N).
   const [search, setSearch] = useState('')
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+  const [pickedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [bulkOp, setBulkOp] = useState<'test' | 'deactivate' | 'delete' | null>(null)
   // PR-Printer-P1.7 — tenant selector for the LAN scan panel. Reads the
   // already-loaded client list (this page is ADMIN-only via /printers'
@@ -128,25 +129,15 @@ export default function PrintersPage() {
       printerService.listAssignments(),
       loadAllClients(),
       printerService.listDistinctPrinterTags().catch(() => ({ data: [] as string[] })),
+      // BUG-130 — one request for every printer's tags instead of one per printer.
+      printerService.listAllPrinterTags().catch(() => ({ data: {} as Record<string, string[]> })),
     ])
-      .then(([p, a, c, tRes]) => {
-        const printers = p.data ?? []
-        setPrinters(printers)
+      .then(([p, a, c, tRes, allTags]) => {
+        setPrinters(p.data ?? [])
         setAssignments(a.data ?? [])
         setClients(c)
         setDistinctTags(tRes.data ?? [])
-        // R8b — fetch each printer's tags in parallel. N small
-        // requests is simpler than a batch endpoint (which the
-        // backend service supports via tagsByPrinterId but doesn't
-        // expose over REST yet). Fine for tenants with dozens, not
-        // hundreds, of printers.
-        return Promise.all(
-          printers.map((pr) =>
-            printerService.listPrinterTags(pr.id)
-              .then((r) => [pr.id, (r.data ?? []).map((t) => t.tag)] as [number, string[]])
-              .catch(() => [pr.id, [] as string[]] as [number, string[]]),
-          ),
-        ).then((entries) => setTagsByPrinter(new Map(entries)))
+        setTagsByPrinter(new Map(Object.entries(allTags.data ?? {}).map(([id, tags]) => [Number(id), tags])))
       })
       .catch((e) => notifyPrinterProblem('Printers did not load', e, 'Could not load printers. Refresh to try again.'))
       .finally(() => setLoading(false))
@@ -339,6 +330,10 @@ export default function PrintersPage() {
         || tags.some((t) => t.toLowerCase().includes(q))
     })
   }, [printers, search, tagsByPrinter])
+
+  // BUG-126 — a printer the search hides is not "selected": the counter and
+  // the bulk actions only ever see rows that are on screen.
+  const selectedIds = new Set(filteredPrinters.filter((p) => pickedIds.has(p.id)).map((p) => p.id))
 
   const allFilteredSelected = filteredPrinters.length > 0
     && filteredPrinters.every((p) => selectedIds.has(p.id))
@@ -873,7 +868,7 @@ function PrinterEditor({
   // BUG-123 R7 — add Escape-to-close + focus trap + focus restoration.
   // Pre-fix the Add printer dialog left focus on the Add button behind.
   const dialogRef = useRef<HTMLDivElement>(null)
-  useModalDismiss(true, dialogRef, onClose)
+  const requestClose = useModalDismiss(true, dialogRef, onClose)
   const [form, setForm] = useState<PrinterInput>(() => printer
     ? {
         name: printer.name, location: printer.location, connection: printer.connection, host: printer.host,
@@ -971,13 +966,15 @@ function PrinterEditor({
       await onSaved()
     } catch (e) {
       // Show the server's reason next to the field it is about.
-      const message = e instanceof Error && e.message ? e.message : 'Could not save the printer.'
+      const fe = serverFieldError(e)
+      const message = fe?.message ?? (e instanceof Error && e.message ? e.message : 'Could not save the printer.')
       const lower = message.toLowerCase()
       // BUG-114 — the pre-fix order checked 'name' first, so 'hostname'
       // / 'IP address or hostname' routed to the name field (which is
       // what QA saw: the address error turned the Name box red). Check
       // the specific terms before the generic 'name' substring.
-      if (lower.includes('hostname') || lower.includes('ip address') || lower.includes('host')) setErrors({ host: message })
+      if (fe) setErrors(fe.field === 'name' || fe.field === 'host' || fe.field === 'port' ? { [fe.field]: message } : { form: message })
+      else if (lower.includes('hostname') || lower.includes('ip address') || lower.includes('host')) setErrors({ host: message })
       else if (lower.includes('port')) setErrors({ port: message })
       else if (lower.includes('name')) setErrors({ name: message })
       else setErrors({ form: message })
@@ -997,13 +994,13 @@ function PrinterEditor({
   const labelCls = 'mb-1 block text-[11.5px] font-semibold uppercase tracking-wide text-slate-500'
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={() => void requestClose()}>
       <div ref={dialogRef}
         className="w-full max-w-[560px] rounded-xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}
         role="dialog" aria-modal="true" aria-label={printer ? `Edit ${printer.name}` : 'Add printer'}>
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
           <h3 className="text-[15px] font-semibold text-slate-900">{printer ? `Edit ${printer.name}` : 'Add printer'}</h3>
-          <button type="button" onClick={onClose} aria-label="Close" className="rounded-md p-1 text-slate-500 hover:bg-slate-100">
+          <button type="button" onClick={() => void requestClose()} aria-label="Close" className="rounded-md p-1 text-slate-500 hover:bg-slate-100">
             <FiX className="h-4 w-4" />
           </button>
         </div>
@@ -1107,7 +1104,7 @@ function PrinterEditor({
           ) : null}
         </div>
         <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-3">
-          <button type="button" onClick={onClose} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-[13px] font-semibold text-slate-700 hover:bg-slate-50">
+          <button type="button" onClick={() => void requestClose()} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-[13px] font-semibold text-slate-700 hover:bg-slate-50">
             Cancel
           </button>
           <button type="button" onClick={() => void save()} disabled={saving}

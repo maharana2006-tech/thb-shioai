@@ -59,7 +59,7 @@ const pillCls = (active: boolean) =>
 export default function CloseOutModal({ onClose, trackingNumbers, defaults }: CloseOutModalProps) {
   // A11y audit — focus trap + Escape-to-close + focus restoration.
   const dialogRef = useRef<HTMLDivElement>(null)
-  useModalDismiss(true, dialogRef, onClose)
+  const requestClose = useModalDismiss(true, dialogRef, onClose)
   useLiftToasts() // BUG-005 — keep toasts clear of the footer buttons
   const today = localDateIso()
   const [form, setForm] = useState<ManifestRequest>({
@@ -245,7 +245,7 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => void requestClose()}
             aria-label="Close"
             className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#6b5c42] transition hover:bg-[#faf7f0]"
           >
@@ -363,7 +363,7 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
             Close whole day
           </button>
           <div className="flex items-center gap-2">
-            <button type="button" onClick={onClose}
+            <button type="button" onClick={() => void requestClose()}
                     className="inline-flex items-center rounded-lg border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#412d15] hover:bg-[#faf7f0]">
               Cancel
             </button>

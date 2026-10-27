@@ -40,6 +40,13 @@ const ENTITY_TYPE_LABELS: Record<string, string> = {
   IMPORT_BATCH: 'Import batch',
   LABEL: 'Label',
   USER: 'User',
+  // BUG-157 — six writes that now leave a trail.
+  API_KEY: 'API key',
+  EMAIL_TEMPLATE: 'Email template',
+  STATE_ZONE: 'State zone',
+  CARRIER_LIMIT: 'Carrier limit',
+  WEBHOOK_SUBSCRIPTION: 'Webhook subscription',
+  SCHEDULED_REPORT: 'Scheduled export',
 }
 const ACTION_LABELS: Record<string, string> = {
   LABEL_GENERATED: 'Label generated',
@@ -72,6 +79,13 @@ function humaniseAction(v: string | null | undefined): string {
  * action / entity key / date range. Row-level expand shows the
  * changes JSON pretty-printed.
  */
+/** datetime-local value (operator's zone) → ISO-8601 UTC, or undefined when blank. */
+const toUtcIso = (local: string): string | undefined => {
+  if (!local) return undefined
+  const d = new Date(local)
+  return Number.isNaN(d.getTime()) ? undefined : d.toISOString()
+}
+
 export default function AuditLogPage() {
   const { registerRefresh } = useOutletContext<SettingsOutletContext>()
   // Audit B6 (#357) — Export CSV button only renders for ADMIN; endpoint
@@ -159,8 +173,10 @@ export default function AuditLogPage() {
         category: category || undefined,
         orderNo: orderNoFilter.trim() !== '' && !Number.isNaN(Number(orderNoFilter))
           ? Number(orderNoFilter) : undefined,
-        since: since || undefined,
-        until: until || undefined,
+        // BUG-156 — the boxes hold the operator's local time; send it with its
+        // zone so the server compares instants instead of wall-clock strings.
+        since: toUtcIso(since),
+        until: toUtcIso(until),
         sort: sortParam,
         page: pageIndex,
         size: pageSize,
@@ -228,6 +244,8 @@ export default function AuditLogPage() {
         id: 'createdAt',
         accessorFn: (r) => r.createdAt,
         header: 'When',
+        // BUG-158 — exports carry the UTC stamp, same column as the server CSV.
+        meta: { headerLabel: 'When (UTC)', exportValue: (r: AuditLogEntry) => new Date(r.createdAt).toISOString() },
         cell: ({ row }) => (
           <span className="text-[11.5px] text-slate-600">
             {formatDateTime(row.original.createdAt)}
@@ -321,6 +339,23 @@ export default function AuditLogPage() {
           )
         },
       },
+      // BUG-158 — hidden on screen, always in the CSV, so "Export" and
+      // "Export all" produce the same 13 columns (see AuditLogController).
+      ...([
+        ['id', 'ID', (r: AuditLogEntry) => r.id],
+        ['entityId', 'Entity ID', (r: AuditLogEntry) => r.entityId ?? ''],
+        ['clientCode', 'Client', (r: AuditLogEntry) => r.clientCode ?? ''],
+        ['category', 'Category', (r: AuditLogEntry) => r.category],
+        ['severity', 'Severity', (r: AuditLogEntry) => r.severity],
+        ['changes', 'Changes', (r: AuditLogEntry) => r.changes ?? ''],
+      ] as const).map(([id, header, value]) => ({
+        id,
+        accessorFn: value,
+        header,
+        enableSorting: false,
+        meta: { exportAlways: true },
+        cell: ({ row }: { row: { original: AuditLogEntry } }) => <span className="text-[11.5px] text-slate-600">{String(value(row.original) ?? '')}</span>,
+      })),
     ],
     [expanded],
   )
@@ -369,6 +404,7 @@ export default function AuditLogPage() {
           <AdvancedDataTable<AuditLogEntry>
             tableKey="audit-log"
             columns={columns}
+            initialHiddenColumns={['id', 'entityId', 'clientCode', 'category', 'severity', 'changes']}
             data={rows}
             manualPagination
             manualSorting
@@ -475,6 +511,12 @@ export default function AuditLogPage() {
                           IMPORT_BATCH — add it so the filter matches
                           every entity type the backend produces. */}
                       <option value="IMPORT_BATCH">Import batch</option>
+                      <option value="API_KEY">API key</option>
+                      <option value="EMAIL_TEMPLATE">Email template</option>
+                      <option value="STATE_ZONE">State zone</option>
+                      <option value="CARRIER_LIMIT">Carrier limit</option>
+                      <option value="WEBHOOK_SUBSCRIPTION">Webhook subscription</option>
+                      <option value="SCHEDULED_REPORT">Scheduled export</option>
                     </Select>
                     <label className="mb-1 mt-3 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
                       Action

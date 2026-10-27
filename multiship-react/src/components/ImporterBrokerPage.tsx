@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useModalDismiss } from '../hooks/useModalDismiss'
 import { useNavigate, useOutletContext } from 'react-router-dom'
 import { notify } from '../utils/notify'
 import {
@@ -116,16 +117,12 @@ export default function ImporterBrokerPage() {
     const onDocClick = (e: MouseEvent) => {
       if (!filtersRef.current?.contains(e.target as Node)) setShowFilters(false)
     }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setShowFilters(false)
-    }
     document.addEventListener('mousedown', onDocClick)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDocClick)
-      document.removeEventListener('keydown', onKey)
-    }
+    return () => document.removeEventListener('mousedown', onDocClick)
   }, [showFilters])
+  const filtersDialogRef = useRef<HTMLDivElement>(null)
+  // Filters apply live, so closing discards nothing: no prompt.
+  const closeFilters = useModalDismiss(showFilters, filtersDialogRef, () => setShowFilters(false), { confirmDiscard: false })
 
   // Fetch clients once for the Client filter dropdown.
   useEffect(() => {
@@ -477,6 +474,7 @@ export default function ImporterBrokerPage() {
                 </button>
                 {showFilters ? (
                   <div
+                    ref={filtersDialogRef}
                     role="dialog"
                     aria-label="Filter profiles"
                     className="absolute left-0 top-full z-30 mt-1.5 w-72 rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_20px_60px_rgba(15,23,42,0.15)]"
@@ -547,7 +545,7 @@ export default function ImporterBrokerPage() {
                       ) : null}
                       <button
                         type="button"
-                        onClick={() => setShowFilters(false)}
+                        onClick={() => void closeFilters()}
                         className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[11.5px] font-semibold text-white transition hover:bg-[#412d15]"
                       >
                         Done
