@@ -55,11 +55,61 @@ public class CutoffAdminController {
         return ok(ruleRepo.findAll());
     }
 
+    /** Carriers a cutoff rule may name (BUG-094: made-up codes were saved verbatim). */
+    private static final List<String> KNOWN_CARRIERS = List.of("UPS", "FEDEX", "USPS", "DHL", "STAMPS");
+
+    /**
+     * BUG-094 — source and carrier must be real codes (null still means "any");
+     * BUG-092 — one rule per (source, carrier, warehouse), or two active rules compete.
+     */
+    private void validateRuleKey(String source, String carrier, Long warehouseId, Long selfId) {
+        if (source != null && !SEED_SOURCES.contains(source.trim().toUpperCase())) {
+            throw new com.multiship.backend.exception.FieldValidationException("source", "Source must be one of " + String.join(", ", SEED_SOURCES) + ", or blank for any.");
+        }
+        if (carrier != null && !KNOWN_CARRIERS.contains(carrier.trim().toUpperCase())) {
+            throw new com.multiship.backend.exception.FieldValidationException("carrierCode", "Carrier must be one of " + String.join(", ", KNOWN_CARRIERS) + ", or blank for any.");
+        }
+        for (CutoffRule other : ruleRepo.findAll()) {
+            if (selfId != null && selfId.equals(other.getId())) continue;
+            if (sameKey(other.getSource(), source) && sameKey(other.getCarrierCode(), carrier)
+                    && java.util.Objects.equals(other.getWarehouseId(), warehouseId)) {
+                throw new com.multiship.backend.exception.FieldValidationException("carrierCode",
+                        "A cutoff rule for this source, carrier and warehouse already exists (rule " + other.getId() + "). Edit that rule instead.",
+                        org.springframework.http.HttpStatus.CONFLICT);
+            }
+        }
+    }
+
+    private static boolean sameKey(String a, String b) {
+        String x = a == null ? "" : a.trim().toUpperCase();
+        String y = b == null ? "" : b.trim().toUpperCase();
+        return x.equals(y);
+    }
+
+    /**
+     * BUG-093 — PUT used to bind straight onto the entity, whose field
+     * initialiser sets cutoffTime to 20:00 when the JSON omits it, so a
+     * toggle of "active" silently reset the time. A patch body has no
+     * defaults: absent means "keep".
+     */
+    @lombok.Data
+    public static class CutoffRulePatch {
+        private String source;
+        private String carrierCode;
+        private Long warehouseId;
+        private LocalTime cutoffTime;
+        private String timezone;
+        private Boolean active;
+    }
+
     @PostMapping("/rules")
     public ResponseEntity<ApiResponse<CutoffRule>> createRule(@RequestBody CutoffRule req, Authentication auth) {
         req.setId(null);
         req.setUpdatedBy(actor(auth));
         if (req.getCutoffTime() == null) req.setCutoffTime(DEFAULT_CUTOFF);
+        validateRuleKey(req.getSource(), req.getCarrierCode(), req.getWarehouseId(), null);
+        if (req.getSource() != null) req.setSource(req.getSource().trim().toUpperCase());
+        if (req.getCarrierCode() != null) req.setCarrierCode(req.getCarrierCode().trim().toUpperCase());
         // BUG-099 R6: pre-validate FK so the operator sees the actual
         // offending field name instead of the GlobalExceptionHandler's
         // generic "references something that doesn't exist". The FE dropdown
@@ -87,12 +137,16 @@ public class CutoffAdminController {
 
     @PutMapping("/rules/{id}")
     public ResponseEntity<ApiResponse<CutoffRule>> updateRule(@PathVariable Long id,
-                                                               @RequestBody CutoffRule req,
+                                                               @RequestBody CutoffRulePatch req,
                                                                Authentication auth) {
         CutoffRule existing = ruleRepo.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Rule " + id + " not found."));
-        if (req.getSource() != null) existing.setSource(req.getSource());
-        if (req.getCarrierCode() != null) existing.setCarrierCode(req.getCarrierCode());
+        String nextSource = req.getSource() != null ? req.getSource() : existing.getSource();
+        String nextCarrier = req.getCarrierCode() != null ? req.getCarrierCode() : existing.getCarrierCode();
+        Long nextWarehouse = req.getWarehouseId() != null ? req.getWarehouseId() : existing.getWarehouseId();
+        validateRuleKey(nextSource, nextCarrier, nextWarehouse, id);
+        if (req.getSource() != null) existing.setSource(req.getSource().trim().toUpperCase());
+        if (req.getCarrierCode() != null) existing.setCarrierCode(req.getCarrierCode().trim().toUpperCase());
         if (req.getWarehouseId() != null) existing.setWarehouseId(req.getWarehouseId());
         if (req.getCutoffTime() != null) existing.setCutoffTime(req.getCutoffTime());
         if (req.getTimezone() != null) {

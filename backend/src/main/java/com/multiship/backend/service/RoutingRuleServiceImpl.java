@@ -1,5 +1,7 @@
 package com.multiship.backend.service;
 
+import com.multiship.backend.exception.FieldValidationException;
+
 import com.multiship.backend.dto.RoutingEvaluationRequest;
 import com.multiship.backend.dto.RoutingEvaluationResult;
 import com.multiship.backend.dto.RoutingEvaluationResult.TraceEntry;
@@ -115,11 +117,31 @@ public class RoutingRuleServiceImpl implements RoutingRuleService {
             rule.setTargetWarehouseId(null);
             rule.setTargetServiceId(null);
         }
+        validateRanges(rule);
         LocalDateTime now = LocalDateTime.now();
         boolean isCreate = rule.getId() == null;
-        if (isCreate) rule.setCreatedAt(now);
-        rule.setUpdatedAt(now);
-        RoutingRule saved = ruleRepo.save(rule);
+        RoutingRule target = rule;
+        if (!isCreate) {
+            // BUG-086 — the DTO used to arrive with an id and no version, so
+            // Hibernate treated the edit as a new row and the insert collided
+            // on the primary key (a generic 400). Load the row, apply the
+            // editable fields, keep created_at and the lock version.
+            RoutingRule existing = ruleRepo.findById(rule.getId()).orElseThrow(() ->
+                    new FieldValidationException("id", "Routing rule " + rule.getId() + " no longer exists."));
+            if (!existing.getClientCode().equalsIgnoreCase(rule.getClientCode())) {
+                throw new IllegalArgumentException(
+                        "rule " + rule.getId() + " does not belong to client " + rule.getClientCode());
+            }
+            if (rule.getVersion() != null && !rule.getVersion().equals(existing.getVersion())) {
+                throw new org.springframework.orm.ObjectOptimisticLockingFailureException(RoutingRule.class, rule.getId());
+            }
+            copyEditable(rule, existing);
+            target = existing;
+        } else {
+            rule.setCreatedAt(now);
+        }
+        target.setUpdatedAt(now);
+        RoutingRule saved = ruleRepo.save(target);
         if (audit != null) {
             audit.record(isCreate ? AuditService.CREATE : AuditService.UPDATE,
                     AuditService.ROUTING_RULE, saved.getId(),
@@ -127,6 +149,55 @@ public class RoutingRuleServiceImpl implements RoutingRuleService {
                     isCreate ? "Routing rule created." : "Routing rule updated.");
         }
         return saved;
+    }
+
+    private static void copyEditable(RoutingRule from, RoutingRule to) {
+        to.setName(from.getName());
+        to.setPriority(from.getPriority());
+        to.setActive(from.getActive());
+        to.setMinWeightLb(from.getMinWeightLb());
+        to.setMaxWeightLb(from.getMaxWeightLb());
+        to.setDestCountries(from.getDestCountries());
+        to.setDestRegions(from.getDestRegions());
+        to.setMatchCarrier(from.getMatchCarrier());
+        to.setMatchServiceId(from.getMatchServiceId());
+        to.setMinDeclaredValue(from.getMinDeclaredValue());
+        to.setMaxDeclaredValue(from.getMaxDeclaredValue());
+        to.setMatchOrderSource(from.getMatchOrderSource());
+        to.setMatchWarehouseId(from.getMatchWarehouseId());
+        to.setActionType(from.getActionType());
+        to.setTargetServiceId(from.getTargetServiceId());
+        to.setTargetWarehouseId(from.getTargetWarehouseId());
+        to.setBlockReason(from.getBlockReason());
+    }
+
+    private static final java.util.regex.Pattern ISO2 = java.util.regex.Pattern.compile("[A-Z]{2}");
+
+    /** BUG-087 — a range whose minimum exceeds its maximum, or a country list with
+     *  a token that is not ISO-2, can never match; refuse it naming the field. */
+    static void validateRanges(RoutingRule rule) {
+        if (rule.getMinWeightLb() != null && rule.getMaxWeightLb() != null
+                && rule.getMinWeightLb().compareTo(rule.getMaxWeightLb()) > 0) {
+            throw new FieldValidationException("minWeightLb", "Minimum weight must not exceed the maximum.");
+        }
+        if (rule.getMinDeclaredValue() != null && rule.getMaxDeclaredValue() != null
+                && rule.getMinDeclaredValue().compareTo(rule.getMaxDeclaredValue()) > 0) {
+            throw new FieldValidationException("minDeclaredValue", "Minimum declared value must not exceed the maximum.");
+        }
+        if (rule.getDestCountries() != null) {
+            java.util.List<String> bad = new java.util.ArrayList<>();
+            java.util.List<String> clean = new java.util.ArrayList<>();
+            for (String tok : rule.getDestCountries().split("[,\\s]+")) {
+                if (tok.isBlank()) continue;
+                String code = tok.trim().toUpperCase(java.util.Locale.ROOT);
+                if (ISO2.matcher(code).matches()) clean.add(code); else bad.add(tok.trim());
+            }
+            if (!bad.isEmpty()) {
+                throw new FieldValidationException("destCountries",
+                        "Use two-letter ISO country codes; not recognised: " + String.join(", ", bad));
+            }
+            rule.setDestCountries(clean.isEmpty() ? null : String.join(",", clean));
+        }
     }
 
     @Override

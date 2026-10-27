@@ -38,6 +38,20 @@ class GlobalExceptionHandlerTest {
         assertEquals("Invalid request payload.", summary);
     }
 
+    // BUG-114 / BUG-163 — "Order number must be a whole number." instead of
+    // "Parameter 'orderNo' must be Integer."
+    @Test
+    void typeMismatchWordingNamesTheFieldAndTheKindOfValue() {
+        assertEquals("Order number", GlobalExceptionHandler.parameterWording("orderNo"));
+        assertEquals("Client ID", GlobalExceptionHandler.parameterWording("clientId"));
+        assertEquals("a whole number", GlobalExceptionHandler.expectedValueWording(Integer.class));
+        assertEquals("a whole number", GlobalExceptionHandler.expectedValueWording(Long.class));
+        assertEquals("a number", GlobalExceptionHandler.expectedValueWording(java.math.BigDecimal.class));
+        assertEquals("true or false", GlobalExceptionHandler.expectedValueWording(Boolean.class));
+        assertEquals("a date like 2026-01-31", GlobalExceptionHandler.expectedValueWording(java.time.LocalDate.class));
+        assertEquals("a valid value", GlobalExceptionHandler.expectedValueWording(null));
+    }
+
     @Test
     void singleFieldError_humanisesPathAndAppendsPeriod() {
         FieldError fe = new FieldError("shipmentRequestDTO", "shipment.recipientPhone",

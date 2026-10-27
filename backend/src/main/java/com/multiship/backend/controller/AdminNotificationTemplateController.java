@@ -37,8 +37,15 @@ import java.util.Map;
 @PreAuthorize("hasRole('ADMIN')")
 public class AdminNotificationTemplateController {
 
+    private static final java.util.regex.Pattern TEMPLATE_KEY = java.util.regex.Pattern.compile("[A-Z0-9][A-Z0-9._]{1,99}");
+
+
     private final NotificationTemplateRepository repo;
     private final TemplateRenderer renderer;
+    /** BUG-157 — audit trail for writes that used to leave none. Optional so hand-built tests stay constructible. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.AuditService audit;
+
 
     @Operation(summary = "List all templates.")
     @GetMapping
@@ -65,6 +72,11 @@ public class AdminNotificationTemplateController {
             @PathVariable String key,
             @Valid @RequestBody NotificationTemplateUpsertRequest req,
             Authentication auth) {
+        // BUG-139 — the form allows A-Z, 0-9, dot and underscore; so does the API now.
+        if (key == null || !TEMPLATE_KEY.matcher(key).matches()) {
+            throw new com.multiship.backend.exception.FieldValidationException("templateKey",
+                    "Template keys use capital letters, digits, dots and underscores only (e.g. STAMPS.LOW_FUNDS_ALERT).");
+        }
         NotificationTemplateEntity row = repo.findById(key).orElseGet(() -> {
             NotificationTemplateEntity fresh = new NotificationTemplateEntity();
             fresh.setTemplateKey(key);
@@ -76,13 +88,24 @@ public class AdminNotificationTemplateController {
         row.setOptOutAllowed(req.isOptOutAllowed());
         row.setUpdatedAt(LocalDateTime.now(ZoneOffset.UTC));
         row.setUpdatedBy(auth == null ? "system" : auth.getName());
-        return ok(toDto(repo.save(row)), "Template saved");
+        boolean created = row.getUpdatedAt() == null || repo.findById(key).isEmpty();
+        NotificationTemplateEntity saved = repo.save(row);
+        if (audit != null) {
+            audit.record(created ? com.multiship.backend.service.AuditService.CREATE : com.multiship.backend.service.AuditService.UPDATE,
+                    com.multiship.backend.service.AuditService.EMAIL_TEMPLATE, key, key, saved,
+                    created ? "Email template created." : "Email template updated.");
+        }
+        return ok(toDto(saved), "Template saved");
     }
 
     @Operation(summary = "Delete a template by key. Callers that reference a deleted key will 500 with TEMPLATE_NOT_FOUND — reserve for retired events.")
     @DeleteMapping("/{key}")
     public ResponseEntity<ApiResponse<Void>> delete(@PathVariable String key) {
         repo.deleteById(key);
+        if (audit != null) {
+            audit.record(com.multiship.backend.service.AuditService.DELETE,
+                    com.multiship.backend.service.AuditService.EMAIL_TEMPLATE, key, key, null, "Email template deleted.");
+        }
         return ResponseEntity.ok(ApiResponse.<Void>builder()
                 .status("SUCCESS").code(200)
                 .message("Template deleted")

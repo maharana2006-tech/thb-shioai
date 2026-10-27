@@ -244,6 +244,9 @@ public class SavedRecipientServiceImpl implements SavedRecipientService {
         if (!StringUtils.hasText(r.getCity())) return "city is required.";
         if (!StringUtils.hasText(r.getPostalCode())) return "postalCode is required.";
         if (!StringUtils.hasText(r.getCountryCode())) return "countryCode is required.";
+        // BUG-075 — country, state, postal, phone and email shapes (throws naming the field).
+        AddressFormatValidator.requireWellFormed("", r.getAddressLine1(), r.getCity(), r.getState(),
+                r.getPostalCode(), r.getCountryCode(), r.getPhone(), r.getEmail());
         return null;
     }
 

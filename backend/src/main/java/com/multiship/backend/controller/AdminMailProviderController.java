@@ -70,6 +70,16 @@ public class AdminMailProviderController {
             @Valid @RequestBody MailProviderUpsertRequest req,
             Authentication auth) {
         String actor = actor(auth);
+        // BUG-137 — a provider with only a name can never send; require the kind's keys on create.
+        if (req.getId() == null) {
+            var provider = registry.require(req.getKind());
+            for (String key : provider.requiredConfigKeys()) {
+                String value = req.getConfig() == null ? null : req.getConfig().get(key);
+                if (value == null || value.isBlank()) {
+                    throw new com.multiship.backend.exception.FieldValidationException("config." + key, "The " + req.getKind() + " provider needs " + key + ".");
+                }
+            }
+        }
         MailProviderEntity row = config.upsertProvider(req.getId(), req.getKind(), req.getDisplayName(), actor);
 
         if (req.getConfig() != null) {

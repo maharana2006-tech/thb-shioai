@@ -590,8 +590,8 @@ public class ManifestServiceImpl implements ManifestService {
         String aggregatedMessage = aggregatedStatus.equals("MANIFESTED")
                 ? "Manifested " + totalCount + " tracking(s) across " + results.size() + " fleets."
                 : aggregatedStatus.equals("PARTIAL")
-                    ? successCount + " of " + results.size() + " fleet manifests succeeded — see manifests[]."
-                    : "All " + results.size() + " fleet manifests failed — see manifests[] for detail.";
+                    ? successCount + " of " + results.size() + " fleet manifests succeeded. Open the close-out to see which fleet failed."
+                    : "All " + results.size() + " fleet manifests failed. Open the close-out for each fleet's reason.";
         return ManifestResponseDTO.builder()
                 .carrierCode(carrier)
                 .trackingCount(totalCount)

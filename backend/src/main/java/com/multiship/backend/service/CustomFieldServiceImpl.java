@@ -51,6 +51,11 @@ public class CustomFieldServiceImpl implements CustomFieldService {
     @Autowired(required = false)
     private AuditService audit;
 
+    private static final java.util.regex.Pattern FIELD_KEY = java.util.regex.Pattern.compile("[a-z][a-z0-9_]{1,63}");
+    /** BUG-124 — refuse a client that does not exist. Optional so hand-built tests stay constructible. */
+    @Autowired(required = false)
+    private com.multiship.backend.repository.ClientRepository clientRepository;
+
     @Autowired
     public CustomFieldServiceImpl(CustomFieldDefinitionRepository defRepo,
                                   OrderCustomFieldValueRepository valueRepo) {
@@ -82,6 +87,32 @@ public class CustomFieldServiceImpl implements CustomFieldService {
         d.setTenantId(clamp(d.getTenantId()));
         d.setTenantId(normalise(d.getTenantId()));
         d.setFieldKey(d.getFieldKey().trim());
+        // BUG-124 — the screen's automatic snake_case is not a contract.
+        if (!FIELD_KEY.matcher(d.getFieldKey()).matches()) {
+            throw new com.multiship.backend.exception.FieldValidationException("fieldKey",
+                    "Key must be snake_case: lower-case letters, digits and underscores, starting with a letter (2–64 characters).");
+        }
+        if (d.getTenantId() != null && clientRepository != null
+                && !clientRepository.existsByClientCodeIgnoreCase(d.getTenantId())) {
+            throw new com.multiship.backend.exception.FieldValidationException("tenantId", "Client " + d.getTenantId() + " does not exist.");
+        }
+        // BUG-125 — position is a small ordering number.
+        if (d.getPosition() != null && (d.getPosition() < 0 || d.getPosition() > 999)) {
+            throw new com.multiship.backend.exception.FieldValidationException("position", "Position must be between 0 and 999.");
+        }
+        // BUG-122 — key and type are immutable once an order carries a value.
+        if (d.getId() != null) {
+            defRepo.findById(d.getId()).ifPresent(existing -> {
+                boolean keyChanged = !existing.getFieldKey().equals(d.getFieldKey());
+                boolean typeChanged = d.getFieldType() != null && existing.getFieldType() != d.getFieldType();
+                if ((keyChanged || typeChanged) && valueRepo.existsByFieldKey(existing.getFieldKey())) {
+                    throw new com.multiship.backend.exception.FieldValidationException(keyChanged ? "fieldKey" : "fieldType",
+                            "Orders already carry values for \"" + existing.getFieldKey()
+                                    + "\"; its key and type cannot change. Create a new field instead.",
+                            org.springframework.http.HttpStatus.CONFLICT);
+                }
+            });
+        }
         if (d.getFieldType() == null) d.setFieldType(FieldType.TEXT);
         if (d.getRequired() == null) d.setRequired(false);
         if (d.getPosition() == null) d.setPosition(100);

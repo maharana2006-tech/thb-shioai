@@ -27,6 +27,8 @@ public class AuditLogDTO {
     /** INFO | WARN | ERROR — legacy rows normalize to INFO. */
     private String severity;
     private Integer orderNo;
+    /** BUG-158 — exported alongside the other columns. */
+    private String clientCode;
 
     public static AuditLogDTO from(AuditLog e) {
         return AuditLogDTO.builder()
@@ -42,6 +44,7 @@ public class AuditLogDTO {
                 .category(e.getCategory() == null ? "ACTIVITY" : e.getCategory())
                 .severity(e.getSeverity() == null ? "INFO" : e.getSeverity())
                 .orderNo(e.getOrderNo())
+                .clientCode(e.getClientCode())
                 .build();
     }
 }

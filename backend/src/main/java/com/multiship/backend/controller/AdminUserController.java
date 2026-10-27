@@ -4,6 +4,7 @@ import com.multiship.backend.dto.AdminUserAssignClientRequest;
 import com.multiship.backend.dto.AdminUserAuditDTO;
 import com.multiship.backend.dto.AdminUserDTO;
 import com.multiship.backend.dto.ApiResponse;
+import com.multiship.backend.dto.PageResponseDTO;
 import com.multiship.backend.dto.ErrorCode;
 import com.multiship.backend.service.AdminUserService;
 import com.multiship.backend.service.AdminUserService.MutationOutcome;
@@ -56,7 +57,7 @@ public class AdminUserController {
                     + "Sprint 51 BP-L4: paginated (default 50 / max 100 per page); pre-BP-L4 the "
                     + "endpoint fetched every row and filtered in-JVM.")
     @GetMapping
-    public ResponseEntity<ApiResponse<List<AdminUserDTO>>> list(
+    public ResponseEntity<ApiResponse<PageResponseDTO<AdminUserDTO>>> list(
             @RequestParam(required = false) String search,
             @RequestParam(required = false) String role,
             @RequestParam(required = false) String clientCode,
@@ -64,10 +65,12 @@ public class AdminUserController {
             @RequestParam(required = false, defaultValue = "0") int page,
             @RequestParam(required = false, defaultValue = "50") int size) {
         List<AdminUserDTO> data = adminUserService.list(search, role, clientCode, activeOnly, page, size);
-        return ResponseEntity.ok(ApiResponse.<List<AdminUserDTO>>builder()
+        // BUG-078 — the pager needs the total, not "(more may exist)".
+        long total = adminUserService.count(search, role, clientCode, activeOnly);
+        return ResponseEntity.ok(ApiResponse.<PageResponseDTO<AdminUserDTO>>builder()
                 .status("SUCCESS").code(200).timestamp(LocalDateTime.now())
-                .message(data.size() + " user(s).")
-                .data(data).build());
+                .message(total + " user(s).")
+                .data(PageResponseDTO.of(data, Math.max(page, 0), Math.max(size, 1), total)).build());
     }
 
     @Operation(summary = "Assign / clear a user's clientCode",

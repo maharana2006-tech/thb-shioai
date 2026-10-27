@@ -31,6 +31,10 @@ import java.util.List;
 @RequiredArgsConstructor
 public class WebhookSubscriptionAdminController {
 
+    /** BUG-173 — a one-character HMAC secret is no secret. */
+    static final int MIN_SECRET_LENGTH = 16;
+
+
     private final ExternalWebhookSubscriptionRepository subscriptionRepo;
     /** Sprint 51 T3 finding #7 — SSRF guard. Admin path is more privileged
      *  (can save subs on any api_key) so a hostile admin is out of scope,
@@ -44,6 +48,10 @@ public class WebhookSubscriptionAdminController {
     /** Audit R2 #336 — envelope-encrypt the HMAC secret on save so DB
      *  dumps don't leak every tenant's signing key. */
     private final com.multiship.backend.service.external.WebhookSecretCipher secretCipher;
+    /** BUG-157 — audit trail for writes that used to leave none. Optional so hand-built tests stay constructible. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.AuditService audit;
+
 
     @Operation(summary = "List subscriptions by apiKeyId (or all when omitted)")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
@@ -67,12 +75,17 @@ public class WebhookSubscriptionAdminController {
         if (body.getEvent() == null)     return bad("event is required");
         if (body.getUrl() == null || body.getUrl().isBlank()) return bad("url is required");
         if (body.getSecret() == null || body.getSecret().isBlank()) return bad("secret is required");
+        if (body.getSecret().trim().length() < MIN_SECRET_LENGTH) {
+            throw new com.multiship.backend.exception.FieldValidationException("secret",
+                    "The HMAC secret must be at least " + MIN_SECRET_LENGTH + " characters.");
+        }
         // Sprint 51 T3 finding #7 — same SSRF guard as the v2 external
         // save path. Applied even for admin callers.
         try {
             urlValidator.validate(body.getUrl());
         } catch (WebhookUrlValidator.WebhookUrlRejectedException ex) {
-            return bad(ex.getMessage());
+            // BUG-194 — name the field so the editor marks the URL box.
+            throw new com.multiship.backend.exception.FieldValidationException("url", ex.getMessage());
         }
 
         ExternalWebhookSubscription entity;
@@ -109,6 +122,14 @@ public class WebhookSubscriptionAdminController {
         ExternalWebhookSubscription saved;
         try {
             saved = subscriptionRepo.save(entity);
+            if (audit != null) {
+                // Never the secret: id, key, event, url and active only.
+                audit.record(body.getId() == null ? com.multiship.backend.service.AuditService.CREATE : com.multiship.backend.service.AuditService.UPDATE,
+                        com.multiship.backend.service.AuditService.WEBHOOK_SUBSCRIPTION, saved.getId(), String.valueOf(saved.getUrl()),
+                        java.util.Map.of("apiKeyId", String.valueOf(saved.getApiKeyId()), "event", String.valueOf(saved.getEvent()),
+                                "url", String.valueOf(saved.getUrl()), "active", String.valueOf(saved.getActive())),
+                        body.getId() == null ? "Webhook subscription created." : "Webhook subscription updated.");
+            }
         } catch (org.springframework.dao.DataIntegrityViolationException ex) {
             // Audit W5 (#334) — UNIQUE(api_key_id, event, url) collision.
             // Pre-fix, nothing stopped two rows at the same triple and the
@@ -152,6 +173,10 @@ public class WebhookSubscriptionAdminController {
         ExternalWebhookSubscription entity = subscriptionRepo.findById(id).orElse(null);
         if (entity == null) return notFound();
         subscriptionRepo.delete(entity);
+        if (audit != null) {
+            audit.record(com.multiship.backend.service.AuditService.DELETE,
+                    com.multiship.backend.service.AuditService.WEBHOOK_SUBSCRIPTION, id, String.valueOf(id), null, "Webhook subscription deleted.");
+        }
         dispatcher.invalidateSubscriptionCache();
         return ok(null);
     }

@@ -74,6 +74,39 @@ class CarrierLimitAdminServiceTest {
     // ===== get =====
 
     @Test
+    void create_duplicateActiveKey_isA409OnTheCarrierField() {
+        // BUG-089 — the unique key includes effective_from, so duplicates slipped in.
+        com.multiship.backend.model.CarrierShippingLimit other = com.multiship.backend.model.CarrierShippingLimit.builder()
+                .id(3L).carrierCode("UPS").serviceCode(null).scope("DOMESTIC").direction("OUTBOUND").active(true).build();
+        when(repository.findAll()).thenReturn(java.util.List.of(other));
+        com.multiship.backend.dto.CarrierShippingLimitRequest req = new com.multiship.backend.dto.CarrierShippingLimitRequest();
+        req.setCarrierCode("ups");
+        req.setScope("domestic");
+        req.setDirection("outbound");
+        com.multiship.backend.exception.FieldValidationException ex = org.junit.jupiter.api.Assertions.assertThrows(com.multiship.backend.exception.FieldValidationException.class, () -> service.create(req));
+        assertEquals("carrierCode", ex.getField());
+        assertEquals(409, ex.getStatus().value());
+    }
+
+    @Test
+    void create_writesAnAuditRow() {
+        // BUG-157 — carrier limits used to be saved with no trace.
+        AuditService audit = mock(AuditService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "audit", audit);
+        when(repository.save(any())).thenAnswer(inv -> {
+            com.multiship.backend.model.CarrierShippingLimit e = inv.getArgument(0);
+            e.setId(5L);
+            return e;
+        });
+        com.multiship.backend.dto.CarrierShippingLimitRequest req = new com.multiship.backend.dto.CarrierShippingLimitRequest();
+        req.setCarrierCode("UPS");
+        req.setServiceCode("GROUND");
+        service.create(req);
+        verify(audit).record(org.mockito.ArgumentMatchers.eq("CREATE"), org.mockito.ArgumentMatchers.eq("CARRIER_LIMIT"),
+                org.mockito.ArgumentMatchers.eq(5L), any(), any(), any());
+    }
+
+    @Test
     void get_present_returnsResponse() {
         when(repository.findById(1L)).thenReturn(Optional.of(fixture()));
 

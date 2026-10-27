@@ -129,6 +129,19 @@ class OrderImportStagingTest {
         return service.stageUpload(name, new ByteArrayInputStream(content.getBytes(StandardCharsets.UTF_8)), false, "alice");
     }
 
+    // BUG-044 — a 36-character recipient name is refused at upload, not after half the batch is labelled.
+    @Test
+    void aRecipientNameOver35CharactersIsFlaggedAtUpload() {
+        Map<String, String> longName = order("L-1", "10001");
+        longName.put("recipientName", "QA Repro Longname 1234567890 abcdefg"); // 36 chars
+        ApiResponse<StagingUploadDTO> staged = stage("orders.csv", csv(List.of(longName, order("OK-1", "10001"))));
+        assertEquals("success", staged.getStatus(), staged.getMessage());
+        StagingUploadDTO s = staged.getData();
+        assertEquals(1, s.getInvalidOrders());
+        String text = new String(service.stagingErrorFile(s.getId(), "csv", "alice").bytes(), StandardCharsets.UTF_8);
+        assertTrue(text.contains("Name exceeds the 35-character carrier limit (currently 36)"), text);
+    }
+
     @Test
     void onlyFullyValidOrdersReachImportHistory_andErrorsCanBeFixedAndSavedLater() throws Exception {
         Map<String, String> itemLine = new LinkedHashMap<>();

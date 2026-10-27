@@ -42,6 +42,10 @@ public class ScheduledReportController {
     private final ScheduledReportRepository scheduleRepo;
     private final GeneratedReportRepository generatedRepo;
     private final ScheduledReportRunner runner;
+    /** BUG-157 — audit trail for writes that used to leave none. Optional so hand-built tests stay constructible. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.AuditService audit;
+
     /** Sprint 50 Tier 0.5 PR G — tenant clamp on schedule / generated
      *  rows so a scoped USER can't read, write, or trigger a foreign
      *  tenant's schedule. Operators pass through unchanged. */
@@ -133,6 +137,11 @@ public class ScheduledReportController {
         }
         s.setUpdatedAt(now);
         ScheduledReport saved = scheduleRepo.save(s);
+        if (audit != null) {
+            audit.record(body.getId() == null ? com.multiship.backend.service.AuditService.CREATE : com.multiship.backend.service.AuditService.UPDATE,
+                    com.multiship.backend.service.AuditService.SCHEDULED_REPORT, saved.getId(), String.valueOf(saved.getName()), saved,
+                    body.getId() == null ? "Scheduled export created." : "Scheduled export updated.");
+        }
         HttpStatus code = body.getId() == null ? HttpStatus.CREATED : HttpStatus.OK;
         return ResponseEntity.status(code).body(ApiResponse.<ScheduledReportDTO>builder()
                 .status("success").code(code.value()).message("Schedule saved")
@@ -166,6 +175,10 @@ public class ScheduledReportController {
         // can still be deleted from the admin console.
         tenantScope.requireTenantMatch(existing.getTenantId());
         scheduleRepo.delete(existing);
+        if (audit != null) {
+            audit.record(com.multiship.backend.service.AuditService.DELETE,
+                    com.multiship.backend.service.AuditService.SCHEDULED_REPORT, id, String.valueOf(existing.getName()), null, "Scheduled export deleted.");
+        }
         return ok(null, "Schedule deleted");
     }
 

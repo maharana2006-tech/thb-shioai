@@ -40,6 +40,10 @@ import java.util.List;
 public class StateZoneAdminController {
 
     private final StateZoneService service;
+    /** BUG-157 — audit trail for writes that used to leave none. Optional so hand-built tests stay constructible. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.AuditService audit;
+
 
     @Operation(summary = "List every (country, state) → zone row.")
     @GetMapping
@@ -57,11 +61,20 @@ public class StateZoneAdminController {
             @Valid @RequestBody UpsertBody body,
             @AuthenticationPrincipal UserDetails caller) {
         try {
+            boolean existed = service.exists(countryCode, stateCode);
             StateZoneEntity saved = service.upsert(countryCode, stateCode,
                     body.getZoneId(), body.getDisplayName(),
                     caller != null ? caller.getUsername() : null);
+            if (audit != null) {
+                audit.record(com.multiship.backend.service.AuditService.UPDATE,
+                        com.multiship.backend.service.AuditService.STATE_ZONE, countryCode + "/" + stateCode,
+                        countryCode + "/" + stateCode, toDto(saved), "State zone saved.");
+            }
             return ResponseEntity.ok(ApiResponse.<StateZoneDTO>builder()
                     .status("SUCCESS").code(200).data(toDto(saved))
+                    .message(existed
+                            ? "Updated the existing zone for " + countryCode.toUpperCase() + "/" + stateCode.toUpperCase() + "."
+                            : "State zone added.")
                     .timestamp(LocalDateTime.now()).build());
         } catch (IllegalArgumentException ex) {
             return ResponseEntity.status(422).body(ApiResponse.<StateZoneDTO>builder()
@@ -76,6 +89,11 @@ public class StateZoneAdminController {
             @PathVariable String countryCode,
             @PathVariable String stateCode) {
         service.delete(countryCode, stateCode);
+        if (audit != null) {
+            audit.record(com.multiship.backend.service.AuditService.DELETE,
+                    com.multiship.backend.service.AuditService.STATE_ZONE, countryCode + "/" + stateCode,
+                    countryCode + "/" + stateCode, null, "State zone deleted.");
+        }
         return ResponseEntity.ok(ApiResponse.<Void>builder()
                 .status("SUCCESS").code(200).timestamp(LocalDateTime.now()).build());
     }

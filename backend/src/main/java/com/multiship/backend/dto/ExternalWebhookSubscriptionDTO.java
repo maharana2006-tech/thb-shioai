@@ -28,7 +28,10 @@ public class ExternalWebhookSubscriptionDTO {
         return ExternalWebhookSubscriptionDTO.builder()
                 .id(s.getId()).apiKeyId(s.getApiKeyId()).event(s.getEvent())
                 .url(s.getUrl())
-                .secret(maskSecret && s.getSecret() != null ? "••••••" : s.getSecret())
+                // BUG-171 — never null: the editor treats the value as a string. A
+                // stored secret is masked on read; no secret reads as empty.
+                // An envelope-encrypted secret counts as "set" too (BUG-171 follow-up).
+                .secret(s.getSecret() == null && s.getSecretEncrypted() == null ? "" : (maskSecret ? "••••••" : (s.getSecret() == null ? "••••••" : s.getSecret())))
                 .active(s.getActive())
                 .createdAt(s.getCreatedAt()).updatedAt(s.getUpdatedAt())
                 .build();

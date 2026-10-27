@@ -53,6 +53,49 @@ class WebhookSubscriptionAdminControllerTest {
     }
 
     @Test
+    void save_shortSecretIsRefusedOnTheSecretField() {
+        // BUG-173 — a one-character HMAC secret is no secret.
+        ExternalWebhookSubscriptionDTO body = ExternalWebhookSubscriptionDTO.builder()
+                .apiKeyId(1L).event(ExternalWebhookSubscription.EventType.LABEL_GENERATED)
+                .url("https://api.partner.example/hook").secret("x").active(true).build();
+        com.multiship.backend.exception.FieldValidationException ex = org.junit.jupiter.api.Assertions.assertThrows(
+                com.multiship.backend.exception.FieldValidationException.class, () -> controller.save(body));
+        org.junit.jupiter.api.Assertions.assertEquals("secret", ex.getField());
+    }
+
+    @Test
+    void save_writesAnAuditRowWithoutTheSecret() {
+        // BUG-157 — subscriptions used to be created with no trace of who did it.
+        com.multiship.backend.service.AuditService audit = mock(com.multiship.backend.service.AuditService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(controller, "audit", audit);
+        ExternalWebhookSubscriptionDTO body = ExternalWebhookSubscriptionDTO.builder()
+                .apiKeyId(1L).event(ExternalWebhookSubscription.EventType.LABEL_GENERATED)
+                .url("https://api.partner.example/hook").secret("a-long-enough-secret-value").active(true).build();
+        when(repo.save(any(ExternalWebhookSubscription.class))).thenAnswer(inv -> {
+            ExternalWebhookSubscription e = inv.getArgument(0);
+            e.setId(9L);
+            return e;
+        });
+        controller.save(body);
+        org.mockito.ArgumentCaptor<Object> payload = org.mockito.ArgumentCaptor.forClass(Object.class);
+        verify(audit).record(org.mockito.ArgumentMatchers.eq("CREATE"), org.mockito.ArgumentMatchers.eq("WEBHOOK_SUBSCRIPTION"),
+                org.mockito.ArgumentMatchers.eq(9L), any(), payload.capture(), any());
+        org.junit.jupiter.api.Assertions.assertFalse(String.valueOf(payload.getValue()).contains("a-long-enough-secret-value"));
+    }
+
+    @Test
+    void read_neverSendsANullSecret() {
+        // BUG-171 — the editor crashed on secret == null for every stored subscription.
+        ExternalWebhookSubscription noSecret = new ExternalWebhookSubscription();
+        noSecret.setId(3L);
+        org.junit.jupiter.api.Assertions.assertEquals("", ExternalWebhookSubscriptionDTO.from(noSecret, true).getSecret());
+        ExternalWebhookSubscription withSecret = new ExternalWebhookSubscription();
+        withSecret.setId(4L);
+        withSecret.setSecret("stored-cipher-text");
+        org.junit.jupiter.api.Assertions.assertEquals("••••••", ExternalWebhookSubscriptionDTO.from(withSecret, true).getSecret());
+    }
+
+    @Test
     void delete_missingId_returns404_andDoesNotInvalidateCache() {
         when(repo.findById(99L)).thenReturn(Optional.empty());
 
@@ -83,7 +126,7 @@ class WebhookSubscriptionAdminControllerTest {
     void save_create_invalidatesCache() {
         ExternalWebhookSubscriptionDTO body = ExternalWebhookSubscriptionDTO.builder()
                 .apiKeyId(42L).event(EventType.LABEL_GENERATED)
-                .url("https://partner.example/hook").secret("s3cr3t").active(true).build();
+                .url("https://partner.example/hook").secret("s3cr3t-xxxxxxxxxxxxxxxx").active(true).build();
         when(repo.save(any(ExternalWebhookSubscription.class)))
                 .thenAnswer(inv -> { ((ExternalWebhookSubscription) inv.getArgument(0)).setId(1L); return inv.getArgument(0); });
 
@@ -103,7 +146,7 @@ class WebhookSubscriptionAdminControllerTest {
         // a generic 500.
         ExternalWebhookSubscriptionDTO body = ExternalWebhookSubscriptionDTO.builder()
                 .apiKeyId(42L).event(EventType.LABEL_GENERATED)
-                .url("https://partner.example/hook").secret("s3cr3t").active(true).build();
+                .url("https://partner.example/hook").secret("s3cr3t-xxxxxxxxxxxxxxxx").active(true).build();
         when(repo.save(any(ExternalWebhookSubscription.class)))
                 .thenThrow(new org.springframework.dao.DataIntegrityViolationException(
                         "could not execute statement",
@@ -126,7 +169,7 @@ class WebhookSubscriptionAdminControllerTest {
         // them all would mask real bugs behind a bogus 409.
         ExternalWebhookSubscriptionDTO body = ExternalWebhookSubscriptionDTO.builder()
                 .apiKeyId(42L).event(EventType.LABEL_GENERATED)
-                .url("https://partner.example/hook").secret("s3cr3t").active(true).build();
+                .url("https://partner.example/hook").secret("s3cr3t-xxxxxxxxxxxxxxxx").active(true).build();
         when(repo.save(any(ExternalWebhookSubscription.class)))
                 .thenThrow(new org.springframework.dao.DataIntegrityViolationException(
                         "could not execute statement",

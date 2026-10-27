@@ -12,6 +12,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.stream.Stream;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.Locale;
+import jakarta.persistence.criteria.Predicate;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
+import com.multiship.backend.model.RateShopHistory;
 
 import java.io.OutputStream;
 import java.io.PrintWriter;
@@ -67,95 +74,20 @@ public class ReportServiceImpl implements ReportService {
     @Override
     @Transactional(readOnly = true, timeout = 300)
     public void streamOrdersCsv(ReportFilters f, OutputStream out) {
-        // Sprint 50 Tier 0.5 PR E - clamp f.customerNo BEFORE the SQL bind
-        // so a scoped USER exports only their own tenant's rows.
         clampCustomerNo(f);
-        StringBuilder sql = new StringBuilder("""
-            SELECT o.order_no, o.cust_no, o.tenant_id, o.created_date,
-                   t.tracking_number, t.status,
-                   t.carrier_amount, t.billable_amount, t.markup_currency,
-                   o.shipto_country_cd, o.weight, o.ship_via
-            FROM label_batch o
-            LEFT JOIN order_tracking t ON t.order_no = o.order_no
-            WHERE 1=1
-        """);
-        // Filters
-        if (f.getFrom() != null) sql.append(" AND o.created_date >= :fromDate");
-        if (f.getTo() != null)   sql.append(" AND o.created_date <= :toDate");
-        if (f.getCustomerNo() != null) sql.append(" AND (o.tenant_id = :customerNo OR o.cust_no = :customerNo)");
-        if (f.getCarrier() != null) sql.append(" AND UPPER(o.ship_via) LIKE UPPER(:carrier)");
-        if (f.getStatus() != null) sql.append(" AND UPPER(t.status) = UPPER(:status)");
-        if (f.getDestCountry() != null) sql.append(" AND UPPER(o.shipto_country_cd) = UPPER(:destCountry)");
-        if (f.getMinWeightLb() != null) sql.append(" AND o.weight >= :minWeight");
-        if (f.getMaxWeightLb() != null) sql.append(" AND o.weight <= :maxWeight");
-        sql.append(" ORDER BY o.created_date DESC, o.order_no DESC");
-
-        Query q = em.createNativeQuery(sql.toString());
+        Query q = ReportSql.orders(f).query(em);
         q.setHint(HibernateHints.HINT_FETCH_SIZE, 200);
-        bindFilters(q, f);
-
-        try (PrintWriter w = new PrintWriter(out);
-             Stream<?> stream = q.getResultStream()) {
-            w.println("orderNo,customerNo,tenantId,shipDate,trackingNumber,status,carrierAmount,billableAmount,currency,destCountry,weight,shipVia");
-            int[] rowCount = {0};
-            stream.forEach(row -> {
-                Object[] r = typedRow(row, 12);
-                w.println(csv(r[0]) + "," + csv(r[1]) + "," + csv(r[2]) + "," + csv(r[3]) + ","
-                        + csv(r[4]) + "," + csv(r[5]) + "," + csv(r[6]) + "," + csv(r[7]) + ","
-                        + csv(r[8]) + "," + csv(r[9]) + "," + csv(r[10]) + "," + csv(r[11]));
-                if (++rowCount[0] % STREAM_FLUSH_INTERVAL == 0) {
-                    w.flush();
-                    em.clear();  // keep L1 cache bounded across the export
-                }
-            });
-            w.flush();
-        }
+        writeRows(q, out, 12,
+                "orderNo,customerNo,tenantId,shipDate,trackingNumber,status,carrierAmount,billableAmount,currency,destCountry,weight,shipVia");
     }
-
-    // ===== Tracking events =====
 
     @Override
     @Transactional(readOnly = true, timeout = 300)
     public void streamTrackingCsv(ReportFilters f, OutputStream out) {
-        // Sprint 50 Tier 0.5 PR E - clamp f.customerNo BEFORE the SQL bind
-        // so a scoped USER exports only their own tenant's rows.
         clampCustomerNo(f);
-        // We use OrderTracking snapshots (there isn't a per-event history
-        // table on the platform yet) and pair with the order for client
-        // context.
-        StringBuilder sql = new StringBuilder("""
-            SELECT t.order_no, t.tracking_number, t.status, t.created_at, t.updated_at,
-                   o.cust_no, o.tenant_id, o.shipto_country_cd
-            FROM order_tracking t
-            LEFT JOIN label_batch o ON o.order_no = t.order_no
-            WHERE 1=1
-        """);
-        if (f.getFrom() != null) sql.append(" AND t.updated_at >= :fromDate");
-        if (f.getTo() != null)   sql.append(" AND t.updated_at <= :toDate");
-        if (f.getCustomerNo() != null) sql.append(" AND (o.tenant_id = :customerNo OR o.cust_no = :customerNo)");
-        if (f.getStatus() != null) sql.append(" AND UPPER(t.status) = UPPER(:status)");
-        if (f.getDestCountry() != null) sql.append(" AND UPPER(o.shipto_country_cd) = UPPER(:destCountry)");
-        sql.append(" ORDER BY t.updated_at DESC");
-
-        Query q = em.createNativeQuery(sql.toString());
+        Query q = ReportSql.tracking(f).query(em);
         q.setHint(HibernateHints.HINT_FETCH_SIZE, 200);
-        bindFilters(q, f);
-
-        try (PrintWriter w = new PrintWriter(out);
-             Stream<?> stream = q.getResultStream()) {
-            w.println("orderNo,trackingNumber,status,createdAt,updatedAt,customerNo,tenantId,destCountry");
-            int[] rowCount = {0};
-            stream.forEach(row -> {
-                Object[] r = typedRow(row, 8);
-                w.println(csv(r[0]) + "," + csv(r[1]) + "," + csv(r[2]) + "," + csv(r[3]) + ","
-                        + csv(r[4]) + "," + csv(r[5]) + "," + csv(r[6]) + "," + csv(r[7]));
-                if (++rowCount[0] % STREAM_FLUSH_INTERVAL == 0) {
-                    w.flush();
-                    em.clear();
-                }
-            });
-            w.flush();
-        }
+        writeRows(q, out, 8, "orderNo,trackingNumber,status,createdAt,updatedAt,customerNo,tenantId,destCountry");
     }
 
     // ===== Rate-shop history =====
@@ -166,15 +98,27 @@ public class ReportServiceImpl implements ReportService {
         // Sprint 50 Tier 0.5 PR E - clamp f.customerNo for consistency
         // with the other CSV exports; a scoped USER sees only their own.
         clampCustomerNo(f);
-        var rows = rateShopHistoryRepository.reportRows(
-                f.getCustomerNo(), f.getFrom(), f.getTo());
+        // BUG-166 — the old JPQL used "(:x IS NULL OR col = :x)" for every
+        // filter; Postgres cannot type a bind that is only ever compared to
+        // NULL and answered "could not determine data type of parameter".
+        // Build only the predicates that are present instead.
+        Specification<RateShopHistory> spec = (root, cq, cb) -> {
+            List<Predicate> p = new ArrayList<>();
+            if (f.getCustomerNo() != null) p.add(cb.equal(root.get("customerNo"), f.getCustomerNo()));
+            if (f.getFrom() != null) p.add(cb.greaterThanOrEqualTo(root.get("createdAt"), f.getFrom()));
+            if (f.getTo() != null) p.add(cb.lessThanOrEqualTo(root.get("createdAt"), f.getTo()));
+            if (f.getDestCountry() != null) {
+                p.add(cb.equal(cb.upper(root.get("destCountry")), f.getDestCountry().toUpperCase(Locale.ROOT)));
+            }
+            return cb.and(p.toArray(new Predicate[0]));
+        };
+        List<RateShopHistory> rows = rateShopHistoryRepository.findAll(spec, Sort.by("createdAt").ascending());
         try (PrintWriter w = new PrintWriter(out)) {
             w.println("id,createdAt,customerNo,destCountry,weight,weightUnit,"
                     + "carriersQueried,carriersReturned,"
                     + "cheapestCarrier,cheapestService,cheapestAmount,cheapestCurrency,"
                     + "pickedCarrier,pickedService,pickedAmount,savingsAmount");
             for (var r : rows) {
-                if (f.getDestCountry() != null && !f.getDestCountry().equalsIgnoreCase(r.getDestCountry())) continue;
                 w.println(csv(r.getId()) + "," + csv(r.getCreatedAt()) + ","
                         + csv(r.getCustomerNo()) + "," + csv(r.getDestCountry()) + ","
                         + csv(r.getWeight()) + "," + csv(r.getWeightUnit()) + ","
@@ -193,40 +137,45 @@ public class ReportServiceImpl implements ReportService {
     @Override
     @Transactional(readOnly = true)
     public void streamBillingCsv(ReportFilters f, OutputStream out) {
-        // Sprint 50 Tier 0.5 PR E - clamp f.customerNo so a scoped USER
-        // sees only their own tenant's billing rollup.
         clampCustomerNo(f);
-        StringBuilder sql = new StringBuilder("""
-            SELECT COALESCE(o.tenant_id, o.cust_no) AS client,
-                   TO_CHAR(o.created_date, 'YYYY-MM') AS ym,
-                   COUNT(*)                     AS labels,
-                   COALESCE(SUM(t.billable_amount), 0) AS spend,
-                   COALESCE(AVG(t.billable_amount), 0) AS avg_spend,
-                   MAX(t.markup_currency)       AS currency
-            FROM label_batch o
-            LEFT JOIN order_tracking t ON t.order_no = o.order_no
-            WHERE t.is_label_generated = true
-        """);
-        if (f.getFrom() != null) sql.append(" AND o.created_date >= :fromDate");
-        if (f.getTo() != null)   sql.append(" AND o.created_date <= :toDate");
-        if (f.getCustomerNo() != null) sql.append(" AND (o.tenant_id = :customerNo OR o.cust_no = :customerNo)");
-        sql.append(" GROUP BY client, ym ORDER BY client, ym DESC");
-
-        Query q = em.createNativeQuery(sql.toString());
-        bindFilters(q, f);
-
-        try (PrintWriter w = new PrintWriter(out)) {
-            w.println("client,yearMonth,labels,totalSpend,avgSpend,currency");
-            for (Object row : q.getResultList()) {
-                Object[] r = typedRow(row, 6);
-                w.println(csv(r[0]) + "," + csv(r[1]) + "," + csv(r[2]) + ","
-                        + csv(r[3]) + "," + csv(r[4]) + "," + csv(r[5]));
-            }
-            w.flush();
-        }
+        Query q = ReportSql.billing(f).query(em);
+        writeRows(q, out, 6, "client,yearMonth,labels,totalSpend,avgSpend,currency");
     }
 
     // ===== helpers =====
+
+    /**
+     * Stream a native query as CSV. The query is executed (first row fetched)
+     * <em>before</em> the header line is written, so a SQL failure surfaces
+     * as the usual JSON error instead of a committed 200 with an empty body
+     * (BUG-166: the old code had already sent the CSV headers when the
+     * query died, and the error handler could not write into text/csv).
+     */
+    private void writeRows(Query q, OutputStream out, int columns, String header) {
+        try (Stream<?> stream = q.getResultStream()) {
+            Iterator<?> rows = stream.iterator();
+            boolean more = rows.hasNext();
+            try (PrintWriter w = new PrintWriter(out)) {
+                w.println(header);
+                int rowCount = 0;
+                while (more) {
+                    Object[] r = typedRow(rows.next(), columns);
+                    StringBuilder line = new StringBuilder();
+                    for (int i = 0; i < columns; i++) {
+                        if (i > 0) line.append(',');
+                        line.append(csv(r[i]));
+                    }
+                    w.println(line);
+                    if (++rowCount % STREAM_FLUSH_INTERVAL == 0) {
+                        w.flush();
+                        em.clear();  // keep L1 cache bounded across the export
+                    }
+                    more = rows.hasNext();
+                }
+                w.flush();
+            }
+        }
+    }
 
     /**
      * Audit-fix #6 — every native-query result row lands as an Object[]
@@ -262,16 +211,6 @@ public class ReportServiceImpl implements ReportService {
         f.setCustomerNo(tenantScope.clampClientCode(f.getCustomerNo()));
     }
 
-    private static void bindFilters(Query q, ReportFilters f) {
-        if (f.getFrom() != null) q.setParameter("fromDate", java.sql.Timestamp.valueOf(f.getFrom()));
-        if (f.getTo() != null)   q.setParameter("toDate", java.sql.Timestamp.valueOf(f.getTo()));
-        if (f.getCustomerNo() != null) q.setParameter("customerNo", f.getCustomerNo());
-        if (f.getCarrier() != null) q.setParameter("carrier", "%" + f.getCarrier() + "%");
-        if (f.getStatus() != null) q.setParameter("status", f.getStatus());
-        if (f.getDestCountry() != null) q.setParameter("destCountry", f.getDestCountry());
-        if (f.getMinWeightLb() != null) q.setParameter("minWeight", f.getMinWeightLb());
-        if (f.getMaxWeightLb() != null) q.setParameter("maxWeight", f.getMaxWeightLb());
-    }
 
     /**
      * CSV-safe stringify: nulls → "", commas / quotes / newlines quoted.

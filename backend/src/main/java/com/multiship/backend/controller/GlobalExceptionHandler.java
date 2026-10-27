@@ -161,13 +161,15 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResponse<Void>> handleTypeMismatch(
             org.springframework.web.method.annotation.MethodArgumentTypeMismatchException ex) {
         log.debug("Type mismatch on {}: {}", ex.getName(), ex.getMessage());
-        String expected = ex.getRequiredType() != null ? ex.getRequiredType().getSimpleName() : "the expected type";
+        // BUG-114 / BUG-163 — operator wording ("Order number must be a whole
+        // number."), not the Java type name.
+        String expected = expectedValueWording(ex.getRequiredType());
         // BUG-070 R7 — populate errors.field so the body matches the normal
         // 404/validation shape; pre-fix this handler returned `errors: null`
         // while the sibling 404 for the same route named the parameter.
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(ApiResponse.<Void>builder()
                 .status("ERROR").code(400)
-                .message("Parameter '" + ex.getName() + "' must be " + expected + ".")
+                .message(parameterWording(ex.getName()) + " must be " + expected + ".")
                 .errorCode(ErrorCode.MALFORMED_REQUEST.name())
                 .errors(ApiResponse.ErrorDetails.builder()
                         .field(ex.getName())
@@ -175,6 +177,28 @@ public class GlobalExceptionHandler {
                         .message("Must be " + expected + ".")
                         .build())
                 .build());
+    }
+
+    /** {@code orderNo} → "Order number", {@code clientCode} → "Client code". */
+    static String parameterWording(String name) {
+        if (name == null || name.isBlank()) return "Parameter";
+        return humaniseFieldName(name).replaceAll("\\bno\\b", "number").replaceAll("\\bid\\b", "ID");
+    }
+
+    static String expectedValueWording(Class<?> type) {
+        if (type == null) return "a valid value";
+        if (type == Integer.class || type == Long.class || type == Short.class
+                || type == int.class || type == long.class || type == short.class
+                || type == java.math.BigInteger.class) return "a whole number";
+        if (type == Double.class || type == Float.class || type == double.class || type == float.class
+                || type == java.math.BigDecimal.class) return "a number";
+        if (type == Boolean.class || type == boolean.class) return "true or false";
+        if (type == java.time.LocalDate.class) return "a date like 2026-01-31";
+        if (type == java.time.LocalDateTime.class || type == java.time.Instant.class
+                || type == java.time.OffsetDateTime.class) return "a date and time like 2026-01-31T09:00:00";
+        if (type == java.util.UUID.class) return "an ID";
+        if (type.isEnum()) return "one of " + java.util.Arrays.toString(type.getEnumConstants());
+        return "a valid value";
     }
 
     /**
@@ -294,6 +318,22 @@ public class GlobalExceptionHandler {
      * "Something went wrong on the server" with a 500. Live updates refusing
      * with 503 when Redis is absent came back as a 500 that way.
      */
+    @ExceptionHandler(com.multiship.backend.exception.FieldValidationException.class)
+    public ResponseEntity<ApiResponse<Void>> handleFieldValidation(
+            com.multiship.backend.exception.FieldValidationException ex) {
+        int code = ex.getStatus().value();
+        return ResponseEntity.status(code).body(ApiResponse.<Void>builder()
+                .status("ERROR").code(code)
+                .message(ex.getMessage())
+                .errorCode(ErrorCode.VALIDATION_ERROR.name())
+                .errors(ApiResponse.ErrorDetails.builder()
+                        .field(ex.getField())
+                        .code(ErrorCode.VALIDATION_ERROR.name())
+                        .message(ex.getMessage())
+                        .build())
+                .build());
+    }
+
     @ExceptionHandler(org.springframework.web.server.ResponseStatusException.class)
     public ResponseEntity<ApiResponse<Void>> handleResponseStatus(
             org.springframework.web.server.ResponseStatusException ex) {

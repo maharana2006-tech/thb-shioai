@@ -357,6 +357,7 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
             return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
                     "Select at least one destination country.");
         }
+        requireWellFormedIdentifiers(countries.iterator().next(), r);
 
         // Load target (update) or start fresh (create).
         ClientCustomsProfile p = null;
@@ -565,5 +566,44 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
     private <T> ApiResponse<T> failure(HttpStatus status, ErrorCode errorCode, String message) {
         return ApiResponse.<T>builder().status("ERROR").code(status.value()).errorCode(errorCode.name())
                 .message(message).timestamp(LocalDateTime.now()).build();
+    }
+
+    private static final Set<String> EU = Set.of("AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU",
+            "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE");
+    private static final java.util.regex.Pattern EORI = java.util.regex.Pattern.compile("[A-Z]{2}[A-Z0-9]{1,15}");
+    private static final java.util.regex.Pattern EU_VAT = java.util.regex.Pattern.compile("[A-Z]{2}[A-Z0-9]{2,12}");
+    private static final java.util.regex.Pattern IOSS = java.util.regex.Pattern.compile("IM\\d{10}");
+    private static final java.util.regex.Pattern GB_EORI = java.util.regex.Pattern.compile("(GB|XI)\\d{12}(\\d{3})?");
+
+    /**
+     * BUG-100 / BUG-101 — the identifiers the destination's customs will
+     * read. The form labels EORI "mandatory" for EU lanes but never
+     * enforced it, and accepted any shape for VAT, EORI and IOSS.
+     */
+    static void requireWellFormedIdentifiers(String firstCountry, ClientCustomsProfileDTO r) {
+        String country = firstCountry == null ? "" : firstCountry.trim().toUpperCase(Locale.ROOT);
+        String eori = up(r.getImporterEori());
+        String vat = up(r.getImporterTaxId());
+        String ioss = up(r.getImporterIoss());
+        if (EU.contains(country)) {
+            if (eori.isEmpty()) {
+                throw new com.multiship.backend.exception.FieldValidationException("importerEori", "EORI is mandatory for an EU destination (e.g. DE1234567890123).");
+            }
+            if (!EORI.matcher(eori).matches()) {
+                throw new com.multiship.backend.exception.FieldValidationException("importerEori", "EORI is a 2-letter country code followed by up to 15 letters or digits.");
+            }
+            if (!vat.isEmpty() && !EU_VAT.matcher(vat).matches()) {
+                throw new com.multiship.backend.exception.FieldValidationException("importerTaxId", "EU VAT numbers start with the 2-letter country code, e.g. DE123456789.");
+            }
+            if (!ioss.isEmpty() && !IOSS.matcher(ioss).matches()) {
+                throw new com.multiship.backend.exception.FieldValidationException("importerIoss", "IOSS numbers look like IM1234567890 (IM + 10 digits).");
+            }
+        } else if ("GB".equals(country) && !eori.isEmpty() && !GB_EORI.matcher(eori).matches()) {
+            throw new com.multiship.backend.exception.FieldValidationException("importerEori", "UK EORI numbers look like GB123456789000 (GB + 12 or 15 digits).");
+        }
+    }
+
+    private static String up(String v) {
+        return v == null ? "" : v.replaceAll("[\\s.-]", "").toUpperCase(Locale.ROOT);
     }
 }

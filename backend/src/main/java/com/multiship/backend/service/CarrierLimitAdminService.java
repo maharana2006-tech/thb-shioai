@@ -1,5 +1,6 @@
 package com.multiship.backend.service;
 
+
 import com.multiship.backend.dto.CarrierShippingLimitRequest;
 import com.multiship.backend.dto.CarrierShippingLimitResponse;
 import com.multiship.backend.dto.PageResponseDTO;
@@ -38,6 +39,10 @@ public class CarrierLimitAdminService {
 
     private final CarrierShippingLimitRepository repository;
     private final CarrierLimitService resolverService;
+    /** BUG-157 — audit trail for writes that used to leave none. Optional so hand-built tests stay constructible. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.AuditService audit;
+
 
     @Transactional(readOnly = true)
     public PageResponseDTO<CarrierShippingLimitResponse> list(int page, int size) {
@@ -62,8 +67,35 @@ public class CarrierLimitAdminService {
         return repository.findById(id).map(CarrierShippingLimitResponse::from);
     }
 
+    /**
+     * BUG-089 — the table's unique key includes effective_from, which is
+     * stamped with "now" on every create, so two rules for the same
+     * (carrier, service, scope, direction) could coexist and compete at
+     * resolution time. Refuse the second one on the carrier field.
+     */
+    private void requireUniqueKey(String carrier, String service, String scope, String direction, Long selfId) {
+        for (CarrierShippingLimit other : repository.findAll()) {
+            if (selfId != null && selfId.equals(other.getId())) continue;
+            if (!Boolean.TRUE.equals(other.getActive())) continue;
+            if (eq(other.getCarrierCode(), carrier) && eq(other.getServiceCode(), service)
+                    && eq(other.getScope(), scope) && eq(other.getDirection(), direction)) {
+                throw new com.multiship.backend.exception.FieldValidationException("carrierCode",
+                        "An active limit for " + carrier + (service == null ? "" : " / " + service) + " (" + scope
+                                + (direction == null ? "" : ", " + direction) + ") already exists (limit " + other.getId()
+                                + "). Edit that limit instead.",
+                        org.springframework.http.HttpStatus.CONFLICT);
+            }
+        }
+    }
+
+    private static boolean eq(String a, String b) {
+        return (a == null ? "" : a.trim().toUpperCase(Locale.ROOT)).equals(b == null ? "" : b.trim().toUpperCase(Locale.ROOT));
+    }
+
     @Transactional
     public CarrierShippingLimitResponse create(CarrierShippingLimitRequest req) {
+        requireUniqueKey(normalizeCarrier(req.getCarrierCode()), blankToNull(req.getServiceCode()),
+                normalizeUpper(req.getScope()), normalizeUpper(req.getDirection()), null);
         CarrierShippingLimit entity = CarrierShippingLimit.builder()
                 .carrierCode(normalizeCarrier(req.getCarrierCode()))
                 .serviceCode(blankToNull(req.getServiceCode()))
@@ -80,6 +112,7 @@ public class CarrierLimitAdminService {
                 .notes(blankToNull(req.getNotes()))
                 .build();
         CarrierShippingLimit saved = repository.save(entity);
+        recordAudit(AuditService.CREATE, saved, "Carrier limit created.");
         resolverService.invalidateCache();
         log.info("carrier_shipping_limit CREATED id={} carrier={} service={} scope={} direction={}",
                 saved.getId(), saved.getCarrierCode(), saved.getServiceCode(),
@@ -90,6 +123,8 @@ public class CarrierLimitAdminService {
     @Transactional
     public Optional<CarrierShippingLimitResponse> update(Long id, CarrierShippingLimitRequest req) {
         return repository.findById(id).map(existing -> {
+            requireUniqueKey(normalizeCarrier(req.getCarrierCode()), blankToNull(req.getServiceCode()),
+                    normalizeUpper(req.getScope()), normalizeUpper(req.getDirection()), id);
             existing.setCarrierCode(normalizeCarrier(req.getCarrierCode()));
             existing.setServiceCode(blankToNull(req.getServiceCode()));
             existing.setScope(normalizeUpper(req.getScope()));
@@ -105,6 +140,7 @@ public class CarrierLimitAdminService {
             existing.setEffectiveUntil(req.getEffectiveUntil());
             existing.setNotes(blankToNull(req.getNotes()));
             CarrierShippingLimit saved = repository.save(existing);
+            recordAudit(AuditService.UPDATE, saved, "Carrier limit updated.");
             resolverService.invalidateCache();
             log.info("carrier_shipping_limit UPDATED id={}", saved.getId());
             return CarrierShippingLimitResponse.from(saved);
@@ -140,9 +176,16 @@ public class CarrierLimitAdminService {
     public boolean delete(Long id) {
         if (!repository.existsById(id)) return false;
         repository.deleteById(id);
+        if (audit != null) audit.record(AuditService.DELETE, AuditService.CARRIER_LIMIT, id, String.valueOf(id), null, "Carrier limit deleted.");
         resolverService.invalidateCache();
         log.info("carrier_shipping_limit DELETED id={}", id);
         return true;
+    }
+
+    private void recordAudit(String action, CarrierShippingLimit saved, String notes) {
+        if (audit == null) return;
+        audit.record(action, AuditService.CARRIER_LIMIT, saved.getId(),
+                saved.getCarrierCode() + "/" + saved.getServiceCode(), saved, notes);
     }
 
     private static String normalizeCarrier(String raw) {

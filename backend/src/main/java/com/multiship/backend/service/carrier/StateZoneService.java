@@ -83,6 +83,16 @@ public class StateZoneService {
                 .toList();
     }
 
+    private static final java.util.Set<String> ISO_COUNTRIES = java.util.Set.of(Locale.getISOCountries());
+
+    /** BUG-107 — lets the controller say "updated" instead of silently replacing a row. */
+    public boolean exists(String countryCode, String stateCode) {
+        if (countryCode == null || stateCode == null) return false;
+        return repo.existsById(StateZoneEntity.StateZoneId.builder()
+                .countryCode(countryCode.trim().toUpperCase(Locale.ROOT))
+                .stateCode(stateCode.trim().toUpperCase(Locale.ROOT)).build());
+    }
+
     /**
      * Admin CRUD — insert-or-update one (country, state) row. Validates
      * {@code zoneId} parses as an IANA zone before persisting (so a
@@ -96,6 +106,14 @@ public class StateZoneService {
         String country = requireNonBlank(countryCode, "countryCode").toUpperCase(Locale.ROOT);
         String state = requireNonBlank(stateCode, "stateCode").toUpperCase(Locale.ROOT);
         String zone = requireNonBlank(zoneId, "zoneId").trim();
+        // BUG-108 — a country that is not ISO-2 makes a row no shipment ever matches.
+        if (!ISO_COUNTRIES.contains(country)) {
+            throw new com.multiship.backend.exception.FieldValidationException("countryCode", "Use a two-letter ISO country code such as US or CA.");
+        }
+        // BUG-107 — a blank name used to wipe the stored one silently.
+        if (displayName == null || displayName.isBlank()) {
+            throw new com.multiship.backend.exception.FieldValidationException("displayName", "Give the state or region a name.");
+        }
         try {
             ZoneId.of(zone);
         } catch (DateTimeException ex) {

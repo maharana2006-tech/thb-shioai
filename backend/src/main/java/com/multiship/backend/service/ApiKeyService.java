@@ -87,6 +87,10 @@ public class ApiKeyService {
      * passes through since clampClientCode treats operators as pass-through.
      */
     private final TenantScopeEnforcer tenantScope;
+    /** BUG-157 — audit trail for writes that used to leave none. Optional so hand-built tests stay constructible. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.AuditService audit;
+
 
     /** The token to hand back to the caller, paired with the persisted record. */
     public record IssuedKey(ApiKey record, String plaintextToken) {}
@@ -149,6 +153,13 @@ public class ApiKeyService {
                 .expiresAt(expiresAt)
                 .build();
         apiKeyRepository.save(key);
+        if (audit != null) {
+            // The token itself is never written anywhere but the response.
+            audit.record(AuditService.CREATE, AuditService.API_KEY, key.getId(), key.getName(),
+                    java.util.Map.of("name", String.valueOf(key.getName()), "clientCode", String.valueOf(key.getClientCode()),
+                            "environment", String.valueOf(key.getEnvironment()), "scopes", String.valueOf(key.getScopes())),
+                    "API key issued.");
+        }
         return new IssuedKey(key, token);
     }
 
@@ -281,6 +292,9 @@ public class ApiKeyService {
             key.setActive(false);
             key.setRevokedAt(LocalDateTime.now());
             apiKeyRepository.save(key);
+            if (audit != null) {
+                audit.record(AuditService.UPDATE, AuditService.API_KEY, key.getId(), key.getName(), null, "API key revoked.");
+            }
             return true;
         }).orElse(false);
     }

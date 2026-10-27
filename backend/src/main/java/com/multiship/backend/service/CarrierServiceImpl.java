@@ -1616,15 +1616,10 @@ public class CarrierServiceImpl implements CarrierService {
                         .map(com.multiship.backend.model.Client::effectiveReturnAddress)
                         .filter(a -> a != null && a.hasValue())
                         .ifPresent(addr -> {
-                            if (StringUtils.hasText(addr.getName())) recipientToClamp.setName(addr.getName());
-                            if (StringUtils.hasText(addr.getLine1())) recipientToClamp.setAddressLine1(addr.getLine1());
-                            if (StringUtils.hasText(addr.getLine2())) recipientToClamp.setAddressLine2(addr.getLine2());
-                            if (StringUtils.hasText(addr.getCity())) recipientToClamp.setCity(addr.getCity());
-                            if (StringUtils.hasText(addr.getState())) recipientToClamp.setState(addr.getState());
-                            if (StringUtils.hasText(addr.getZip())) recipientToClamp.setPostalCode(addr.getZip());
-                            if (StringUtils.hasText(addr.getCountry())) recipientToClamp.setCountryCode(addr.getCountry());
-                            if (StringUtils.hasText(addr.getPhone())) recipientToClamp.setPhone(addr.getPhone());
-                            log.info("RETURN mode: recipient clamped to {}'s effective return address",
+                            // BUG-039 — the operator's typed "Return to" block wins; the
+                            // configured address only fills what was left blank.
+                            fillReturnToBlanks(recipientToClamp, addr);
+                            log.info("RETURN mode: recipient blanks filled from {}'s effective return address",
                                     clientCodeForReturn);
                         });
             }
@@ -3896,6 +3891,19 @@ public class CarrierServiceImpl implements CarrierService {
 
     /** BUG-136 R7 sibling guard — same address on both sides of a return
      *  label. Case-insensitive on text; ZIP compared on the 5-digit base. */
+    /** BUG-039 — typed values win; the client's return address only fills blanks. */
+    static void fillReturnToBlanks(com.multiship.backend.dto.ManualShipmentRequest.Address to,
+                                   com.multiship.backend.model.Address addr) {
+        if (!StringUtils.hasText(to.getName()) && StringUtils.hasText(addr.getName())) to.setName(addr.getName());
+        if (!StringUtils.hasText(to.getAddressLine1()) && StringUtils.hasText(addr.getLine1())) to.setAddressLine1(addr.getLine1());
+        if (!StringUtils.hasText(to.getAddressLine2()) && StringUtils.hasText(addr.getLine2())) to.setAddressLine2(addr.getLine2());
+        if (!StringUtils.hasText(to.getCity()) && StringUtils.hasText(addr.getCity())) to.setCity(addr.getCity());
+        if (!StringUtils.hasText(to.getState()) && StringUtils.hasText(addr.getState())) to.setState(addr.getState());
+        if (!StringUtils.hasText(to.getPostalCode()) && StringUtils.hasText(addr.getZip())) to.setPostalCode(addr.getZip());
+        if (!StringUtils.hasText(to.getCountryCode()) && StringUtils.hasText(addr.getCountry())) to.setCountryCode(addr.getCountry());
+        if (!StringUtils.hasText(to.getPhone()) && StringUtils.hasText(addr.getPhone())) to.setPhone(addr.getPhone());
+    }
+
     private static boolean addressesSameForReturn(
             com.multiship.backend.dto.ManualShipmentRequest.Address a,
             com.multiship.backend.dto.ManualShipmentRequest.Address b) {

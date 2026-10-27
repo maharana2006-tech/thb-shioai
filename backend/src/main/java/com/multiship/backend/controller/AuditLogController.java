@@ -87,6 +87,10 @@ public class AuditLogController {
         try {
             sinceTs = parseOrDefault(since, LocalDateTime.of(1970, 1, 1, 0, 0), "since");
             untilTs = parseOrDefault(until, LocalDateTime.of(9999, 12, 31, 23, 59), "until");
+            if (untilTs.isBefore(sinceTs)) {
+                throw new com.multiship.backend.exception.FieldValidationException("until",
+                        "'until' must be on or after 'since'.", HttpStatus.BAD_REQUEST);
+            }
         } catch (IllegalArgumentException ex) {
             return ResponseEntity.badRequest().body(ApiResponse.<PageResponseDTO<AuditLogDTO>>builder()
                     .status("error").code(HttpStatus.BAD_REQUEST.value())
@@ -125,13 +129,24 @@ public class AuditLogController {
      * translates that into a 400 with the actual reason instead of
      * silently coercing to 1970/9999 (which made the filter box lie).
      */
-    private static LocalDateTime parseOrDefault(String s, LocalDateTime fallback, String paramName) {
+    /**
+     * BUG-156 — the page sends the operator's local time with its offset
+     * (ISO-8601, e.g. {@code 2026-10-25T16:00:00.000Z} or {@code +05:30});
+     * rows are stored in UTC, so compare in UTC. A zone-less value is read as
+     * UTC for callers that still send one.
+     */
+    static LocalDateTime parseOrDefault(String s, LocalDateTime fallback, String paramName) {
         if (s == null || s.isBlank()) return fallback;
+        String v = s.trim();
         try {
-            return LocalDateTime.parse(s.trim());
-        } catch (Exception ex) {
-            throw new IllegalArgumentException(
-                    "'" + paramName + "' must be an ISO-8601 local timestamp (yyyy-MM-ddTHH:mm:ss)");
+            return java.time.OffsetDateTime.parse(v).withOffsetSameInstant(java.time.ZoneOffset.UTC).toLocalDateTime();
+        } catch (Exception offsetless) {
+            try {
+                return LocalDateTime.parse(v);
+            } catch (Exception ex) {
+                throw new IllegalArgumentException(
+                        "'" + paramName + "' must be an ISO-8601 timestamp (2026-10-25T16:00:00Z or 2026-10-25T16:00)");
+            }
         }
     }
 
@@ -142,6 +157,10 @@ public class AuditLogController {
      * to createdAt (rather than reaching the persistence layer with an
      * unmapped column).
      */
+    /** BUG-158 — shared with the Logs page export (AuditLogPage.tsx). */
+    static final String EXPORT_HEADER =
+            "When (UTC),Actor,Action,Order,Type,Entity,Notes,ID,Entity ID,Client,Category,Severity,Changes";
+
     /** Audit B6 (#357) — row cap on the CSV export so a mis-filtered dump
      *  doesn't OOM the service. 100k rows covers the typical compliance
      *  ask ("last quarter") with room to spare; past that, the auditor
@@ -185,8 +204,12 @@ public class AuditLogController {
             return;
         }
 
-        String filename = "audit-" + FILENAME_FMT.format(sinceTs.toLocalDate())
-                + "-to-" + FILENAME_FMT.format(untilTs.toLocalDate()) + ".csv";
+        boolean hasSince = since != null && !since.isBlank();
+        boolean hasUntil = until != null && !until.isBlank();
+        String filename = "audit-"
+                + (hasSince ? FILENAME_FMT.format(sinceTs.toLocalDate()) : "all")
+                + (hasUntil ? "-to-" + FILENAME_FMT.format(untilTs.toLocalDate()) : "")
+                + ".csv";
         response.setContentType("text/csv; charset=utf-8");
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
         response.setHeader("Content-Disposition", "attachment; filename=\"" + filename + "\"");
@@ -196,20 +219,23 @@ public class AuditLogController {
                 PageRequest.of(0, EXPORT_ROW_CAP, Sort.by(Sort.Direction.DESC, "createdAt")));
 
         PrintWriter out = response.getWriter();
-        out.println("id,createdAt,actor,action,entityType,entityId,entityKey,clientCode,category,severity,orderNo,notes,changes");
+        // BUG-158 — same columns and order as the Logs page's own Export, and
+        // the stamp says which zone it is in.
+        out.println(EXPORT_HEADER);
         for (AuditLog r : result.getContent()) {
-            out.print(r.getId()); out.print(',');
-            out.print(csv(r.getCreatedAt())); out.print(',');
+            out.print(csv(r.getCreatedAt() == null ? "" : r.getCreatedAt().atOffset(java.time.ZoneOffset.UTC).toString())); out.print(',');
             out.print(csv(r.getActor())); out.print(',');
             out.print(csv(r.getAction())); out.print(',');
-            out.print(csv(r.getEntityType())); out.print(',');
-            out.print(csv(r.getEntityId())); out.print(',');
-            out.print(csv(r.getEntityKey())); out.print(',');
-            out.print(csv(r.getClientCode())); out.print(',');
-            out.print(csv(r.getCategory())); out.print(',');
-            out.print(csv(r.getSeverity())); out.print(',');
             out.print(r.getOrderNo() == null ? "" : r.getOrderNo()); out.print(',');
+            out.print(csv(r.getEntityType())); out.print(',');
+            out.print(csv(r.getEntityKey())); out.print(',');
             out.print(csv(r.getNotes())); out.print(',');
+            out.print(r.getId()); out.print(',');
+            out.print(csv(r.getEntityId())); out.print(',');
+            out.print(csv(r.getClientCode())); out.print(',');
+            // Legacy rows have no category / severity; the list normalises them the same way.
+            out.print(csv(r.getCategory() == null ? "ACTIVITY" : r.getCategory())); out.print(',');
+            out.print(csv(r.getSeverity() == null ? "INFO" : r.getSeverity())); out.print(',');
             out.println(csv(r.getChanges()));
         }
         if (result.getTotalElements() > EXPORT_ROW_CAP) {

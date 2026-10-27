@@ -103,6 +103,23 @@ class SavedRecipientServiceImplTest {
     /* -------------------------- Validation -------------------------- */
 
     @Test
+    void createRejectsABadZipPhoneOrCountryNamingTheField() {
+        // BUG-075 — the API used to store whatever the browser's rules let through.
+        SavedRecipientDTO badZip = acmeRequest();
+        badZip.setPostalCode("ABCDE");
+        assertEquals("postalCode", org.junit.jupiter.api.Assertions.assertThrows(
+                com.multiship.backend.exception.FieldValidationException.class, () -> service.create(badZip)).getField());
+        SavedRecipientDTO badCountry = acmeRequest();
+        badCountry.setCountryCode("XX");
+        assertEquals("country", org.junit.jupiter.api.Assertions.assertThrows(
+                com.multiship.backend.exception.FieldValidationException.class, () -> service.create(badCountry)).getField());
+        SavedRecipientDTO badPhone = acmeRequest();
+        badPhone.setPhone("12");
+        assertEquals("phone", org.junit.jupiter.api.Assertions.assertThrows(
+                com.multiship.backend.exception.FieldValidationException.class, () -> service.create(badPhone)).getField());
+    }
+
+    @Test
     void createRejectsMissingName() {
         SavedRecipientDTO r = acmeRequest();
         r.setName(null);

@@ -2640,6 +2640,8 @@ public class OrderImportServiceImpl implements OrderImportService {
             validateReferences(rows);
             // Tier 3 — rules from the shipping catalog + limit tables.
             validateBusinessRules(rows);
+            // BUG-044 — the 35-character carrier limits are flagged at upload time too, not only at Validate-all.
+            flagRowFieldLengths(rows);
             validateCustomFields(rows);
             // Sprint 48 — international shipments must carry customs
             // commodity data on at least one row in the group.
@@ -6833,8 +6835,22 @@ public class OrderImportServiceImpl implements OrderImportService {
             // audit consumers can join back to import_batch.
             Long auditAnchor = batchId != null ? batchId.longValue() : null;
             req.setInternalAuditActor(buildImportAuditActor(isBackgroundContext, auditAnchor));
-            ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> resp =
-                    carrierService.generateManualLabel(req, null, existingOrderNo);
+            // BUG-060 — the worker thread has no HTTP request id, so the
+            // carrier log rows of a bulk purchase could never be tagged with
+            // the order and tracking (tagCurrentRequest keys on MDC.requestId).
+            // Give each row its own correlation scope, like BulkLabelServiceImpl.
+            String priorRequestId = org.slf4j.MDC.get(com.multiship.backend.config.MdcCorrelationFilter.MDC_REQUEST_ID);
+            org.slf4j.MDC.put(com.multiship.backend.config.MdcCorrelationFilter.MDC_REQUEST_ID,
+                    "import-" + (batchId == null ? "x" : batchId) + "-" + (existingOrderNo == null ? "new" : existingOrderNo)
+                            + "-" + java.util.UUID.randomUUID().toString().substring(0, 8));
+            ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> resp;
+            try (var ignored = existingOrderNo == null ? null
+                    : com.multiship.backend.service.observability.CarrierCallContext.forOrder(existingOrderNo.longValue())) {
+                resp = carrierService.generateManualLabel(req, null, existingOrderNo);
+            } finally {
+                if (priorRequestId == null) org.slf4j.MDC.remove(com.multiship.backend.config.MdcCorrelationFilter.MDC_REQUEST_ID);
+                else org.slf4j.MDC.put(com.multiship.backend.config.MdcCorrelationFilter.MDC_REQUEST_ID, priorRequestId);
+            }
             com.multiship.backend.dto.LabelGenerationResponse data =
                     resp == null ? null : resp.getData();
             if (resp != null && "success".equalsIgnoreCase(resp.getStatus()) && data != null
@@ -7802,6 +7818,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         validateBusinessRules(rows);
         validateCustomFields(rows);
         validateInternationalItems(rows);
+        flagRowFieldLengths(rows);
         flagAlreadyInImportHistory(rows, saved);
     }
 

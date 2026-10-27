@@ -63,7 +63,10 @@ public class PrinterService {
 
     /** Refused input: the message is shown to the operator as-is. */
     public static class PrinterValidationException extends RuntimeException {
-        public PrinterValidationException(String message) { super(message); }
+        /** BUG-194 — the input the message is about, so the form can mark it; null = whole form. */
+        public final String field;
+        public PrinterValidationException(String message) { this(null, message); }
+        public PrinterValidationException(String field, String message) { super(message); this.field = field; }
     }
 
     public record PrinterInput(String name, String location, String connection, String host, Integer port,
@@ -217,24 +220,48 @@ public class PrinterService {
         }
     }
 
+    /** BUG-127 — a dotted-digit host must be a real IPv4 address (each octet 0–255). */
+    static boolean plausibleHost(String host) {
+        if (!host.matches("[0-9.]+")) return true;  // a hostname
+        String[] octets = host.split("\\.");
+        if (octets.length != 4) return false;
+        for (String o : octets) {
+            if (o.isEmpty() || o.length() > 3) return false;
+            int n = Integer.parseInt(o);
+            if (n > 255) return false;
+        }
+        return true;
+    }
+
     private void apply(Printer p, PrinterInput in) {
         if (in == null) throw new PrinterValidationException("Printer details are required.");
         String name = trim(in.name());
-        if (name.isEmpty()) throw new PrinterValidationException("Give the printer a name.");
-        if (name.length() > 120) throw new PrinterValidationException("Keep the name to 120 characters.");
+        if (name.isEmpty()) throw new PrinterValidationException("name", "Give the printer a name.");
+        if (name.length() > 120) throw new PrinterValidationException("name", "Keep the name to 120 characters.");
+        // BUG-129 — two printers with one name made the Labels / Invoices tabs unreadable.
+        for (Printer other : printers.findAllByOrderByNameAscIdAsc()) {
+            if (other.getName() != null && other.getName().equalsIgnoreCase(name)
+                    && (p.getId() == null || !p.getId().equals(other.getId()))) {
+                throw new PrinterValidationException("name", "A printer named \"" + other.getName() + "\" already exists. Pick a different name.");
+            }
+        }
         String connection = upper(in.connection());
         if (!CONNECTIONS.contains(connection)) {
-            throw new PrinterValidationException("Connection must be RAW_9100 (network port) or IPP.");
+            throw new PrinterValidationException("connection", "Connection must be RAW_9100 (network port) or IPP.");
         }
         String host = trim(in.host());
         if (host.startsWith("http://") || host.startsWith("https://") || host.startsWith("ipp://")) {
-            throw new PrinterValidationException("Enter just the printer's IP address or hostname, without http:// or ipp://.");
+            throw new PrinterValidationException("host", "Enter just the printer's IP address or hostname, without http:// or ipp://.");
         }
-        if (!HOST.matcher(host).matches()) {
-            throw new PrinterValidationException("Enter the printer's IP address or hostname, e.g. 192.168.1.50.");
+        if (host.contains(":")) {
+            // BUG-127 — "192.0.2.30:9100" was stored as the host and listed as :9100:9100.
+            throw new PrinterValidationException("host", "Enter the host without the port; the port has its own box.");
+        }
+        if (!HOST.matcher(host).matches() || !plausibleHost(host)) {
+            throw new PrinterValidationException("host", "Enter the printer's IP address or hostname, e.g. 192.168.1.50.");
         }
         int port = in.port() == null ? ("IPP".equals(connection) ? 631 : 9100) : in.port();
-        if (port < 1 || port > 65535) throw new PrinterValidationException("Port must be between 1 and 65535.");
+        if (port < 1 || port > 65535) throw new PrinterValidationException("port", "Port must be between 1 and 65535.");
         // Never the server itself, the cloud metadata service, or a known
         // non-printer service port — see PrinterAddressGuard.
         var refused = PrinterAddressGuard.refusal(host, port);

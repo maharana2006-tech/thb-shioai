@@ -97,6 +97,23 @@ class WarehouseServiceImplTest {
                 .build();
     }
 
+    /* -------------------------- BUG-075 -------------------------- */
+
+    @Test
+    void createWarehouse_badAddress_isRefusedOnTheField() {
+        when(warehouseRepo.existsByCodeIgnoreCase("WH8")).thenReturn(false);
+        WarehouseUpsertRequest r = req("WH8", "PLATFORM", null);
+        r.setAddress(com.multiship.backend.dto.AddressDTO.builder()
+                .line1("1 Dock Rd").city("Zeeland").state("MI").zip("49464").country("XX").build());
+        assertEquals("address.country", assertThrows(com.multiship.backend.exception.FieldValidationException.class,
+                () -> service.createWarehouse(r)).getField());
+        r.setAddress(com.multiship.backend.dto.AddressDTO.builder()
+                .line1("").city("Zeeland").state("MI").zip("49464").country("US").build());
+        assertEquals("address.line1", assertThrows(com.multiship.backend.exception.FieldValidationException.class,
+                () -> service.createWarehouse(r)).getField());
+        verify(warehouseRepo, never()).save(any());
+    }
+
     /* -------------------------- getWarehouse -------------------------- */
 
     @Test

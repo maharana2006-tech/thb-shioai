@@ -49,6 +49,13 @@ public class AuditService {
     public static final String ORDER = "ORDER";
     public static final String IMPORT_BATCH = "IMPORT_BATCH";
     public static final String AUTH = "AUTH";
+    // BUG-157 — six entity types that previously left no trail.
+    public static final String API_KEY = "API_KEY";
+    public static final String EMAIL_TEMPLATE = "EMAIL_TEMPLATE";
+    public static final String STATE_ZONE = "STATE_ZONE";
+    public static final String CARRIER_LIMIT = "CARRIER_LIMIT";
+    public static final String WEBHOOK_SUBSCRIPTION = "WEBHOOK_SUBSCRIPTION";
+    public static final String SCHEDULED_REPORT = "SCHEDULED_REPORT";
 
     // ---- Log categories (Logs page tabs). NULL rows read as ACTIVITY.
     public static final String CAT_ACTIVITY = "ACTIVITY";

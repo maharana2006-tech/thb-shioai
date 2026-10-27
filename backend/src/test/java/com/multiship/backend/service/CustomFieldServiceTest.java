@@ -61,6 +61,36 @@ class CustomFieldServiceTest {
     // ===== saveDefinition =====
 
     @Test
+    void saveDefinition_refusesBadKeysPositionsAndImmutableChanges() {
+        // BUG-124 / 125 / 122
+        CustomFieldDefinition bad = new CustomFieldDefinition();
+        bad.setFieldKey("Bad Key!");
+        bad.setLabel("PO");
+        assertEquals("fieldKey", assertThrows(com.multiship.backend.exception.FieldValidationException.class, () -> service.saveDefinition(bad)).getField());
+
+        CustomFieldDefinition pos = new CustomFieldDefinition();
+        pos.setFieldKey("po_number");
+        pos.setLabel("PO");
+        pos.setPosition(1000);
+        assertEquals("position", assertThrows(com.multiship.backend.exception.FieldValidationException.class, () -> service.saveDefinition(pos)).getField());
+
+        CustomFieldDefinition stored = new CustomFieldDefinition();
+        stored.setId(26L);
+        stored.setFieldKey("qa_ref");
+        stored.setLabel("QA ref");
+        stored.setFieldType(com.multiship.backend.model.CustomFieldDefinition.FieldType.TEXT);
+        when(defRepo.findById(26L)).thenReturn(java.util.Optional.of(stored));
+        when(valueRepo.existsByFieldKey("qa_ref")).thenReturn(true);
+        CustomFieldDefinition renamed = new CustomFieldDefinition();
+        renamed.setId(26L);
+        renamed.setFieldKey("qa_ref2");
+        renamed.setLabel("QA ref");
+        com.multiship.backend.exception.FieldValidationException ex = assertThrows(com.multiship.backend.exception.FieldValidationException.class, () -> service.saveDefinition(renamed));
+        assertEquals("fieldKey", ex.getField());
+        assertEquals(409, ex.getStatus().value());
+    }
+
+    @Test
     void saveDefinition_requiresKeyAndLabel() {
         CustomFieldDefinition d = new CustomFieldDefinition();
         d.setLabel("PO");

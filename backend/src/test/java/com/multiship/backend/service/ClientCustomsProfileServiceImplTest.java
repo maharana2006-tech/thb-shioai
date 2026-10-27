@@ -153,6 +153,25 @@ class ClientCustomsProfileServiceImplTest {
     }
 
     @Test
+    void euDestinationNeedsAWellFormedEoriAndIoss() {
+        // BUG-100 / 101
+        when(clientRepo.existsByClientCodeIgnoreCase("ACME")).thenReturn(true);
+        ClientCustomsProfileDTO noEori = dtoIn(null, List.of("DE"));
+        assertEquals("importerEori", assertThrows(com.multiship.backend.exception.FieldValidationException.class,
+                () -> service.upsert("ACME", noEori)).getField());
+        ClientCustomsProfileDTO badIoss = dtoIn(null, List.of("DE"));
+        badIoss.setImporterEori("DE1234567890123");
+        badIoss.setImporterIoss("IM1");
+        assertEquals("importerIoss", assertThrows(com.multiship.backend.exception.FieldValidationException.class,
+                () -> service.upsert("ACME", badIoss)).getField());
+        ClientCustomsProfileDTO badVat = dtoIn(null, List.of("FR"));
+        badVat.setImporterEori("FR12345678901");
+        badVat.setImporterTaxId("!!");
+        assertEquals("importerTaxId", assertThrows(com.multiship.backend.exception.FieldValidationException.class,
+                () -> service.upsert("ACME", badVat)).getField());
+    }
+
+    @Test
     void upsertCreate_emptyCountries_returns422() {
         when(clientRepo.existsByClientCodeIgnoreCase("ACME")).thenReturn(true);
 
