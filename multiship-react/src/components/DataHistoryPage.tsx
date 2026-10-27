@@ -228,7 +228,9 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
     from: filters.dateFrom || undefined,
     to: filters.dateTo || undefined,
     createdBy: filters.createdBy || undefined,
-    labelBatch: filters.batchNo || (filters.batchPresence === 'ANY' ? undefined : filters.batchPresence),
+    labelBatch: filters.batchPresence === 'ANY' ? undefined : filters.batchPresence,
+    // BUG-056 — the dropdown picks one import, not one label batch.
+    importId: filters.batchNo || undefined,
     minSaved: filters.minSaved ? Number(filters.minSaved) : undefined,
     sort: filters.sortKey,
     dir: filters.sortDir,
@@ -1498,27 +1500,28 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
         meta: { headerLabel: 'Tick', exportable: false },
       },
       {
-        id: 'labelBatch',
-        header: 'Batch',
+        // BUG-056 — one number leads everywhere: the import #. The label
+        // batch (minted when the import is saved; its orders share it on the
+        // Orders page) is a secondary detail under it.
+        id: 'importNo',
+        header: 'Import #',
         enableSorting: true,
         size: 110,
-        accessorFn: (b) => b.labelBatchId ?? '',
+        accessorFn: (b) => b.id,
         cell: ({ row }) => {
           const b = row.original
-          return b.labelBatchId != null ? (
-            <span
-              title="Batch number — allotted when the import was saved; every label of this import is generated under it, so its orders show together on the Orders page"
-              className="inline-flex items-center gap-1 rounded-full bg-[#412d15] px-2 py-0.5 font-mono text-[10px] font-bold text-[#f4eede]"
-            >
-              <FiZap className="h-2.5 w-2.5" /> {b.labelBatchId}
+          return (
+            <span className="block">
+              <span className="inline-flex items-center gap-1 rounded-full bg-[#412d15] px-2 py-0.5 font-mono text-[10px] font-bold text-[#f4eede]" title={`Import #${b.id}`}>
+                <FiZap className="h-2.5 w-2.5" /> #{b.id}
+              </span>
+              <span className="mt-0.5 block text-[10.5px] text-[#b6a684]" title="Label batch — allotted when the import is saved; every label of this import is generated under it, so its orders show together on the Orders page">
+                {b.labelBatchId != null ? `label batch ${b.labelBatchId}` : 'no label batch yet'}
+              </span>
             </span>
-          ) : (
-            <span className="text-[10.5px] text-[#b6a684]" title="A batch number is allotted when the import is saved">No batch yet</span>
           )
         },
-        // BUG-054 — header is unambiguous in CSV ("Batch" clashed with
-        // "Import #" shown as a sub-line in the File cell).
-        meta: { headerLabel: 'Label batch #', exportValue: (b: ImportBatchSummary) => b.labelBatchId == null ? '' : String(b.labelBatchId) },
+        meta: { headerLabel: 'Import #', exportValue: (b: ImportBatchSummary) => String(b.id) },
       },
       {
         id: 'file',
@@ -1548,8 +1551,6 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
                 ) : null}
               </span>
               <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-[#6b5c42]">
-                <span className="font-mono">Import #{b.id}</span>
-                <span aria-hidden="true">·</span>
                 {b.createdBy ? (
                   <span className="inline-flex items-center gap-1" title={`Imported by ${b.createdBy}`}>
                     <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-[#412d15] text-[8px] font-bold uppercase text-[#f4eede]" aria-hidden="true">
@@ -2549,20 +2550,20 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
               const all = await fetchAllPages<ImportBatchSummary>((page, size) =>
                 bulkService.listBatches({ view: listView, ...listQuery, page, size }).then((r) => r.data))
               downloadCsv(`import-history-${new Date().toISOString().slice(0, 10)}.csv`, columnsToCsvMatrix(
-                dhColumns, all, visibleIds, [{ header: 'Import #', value: (b) => b.id }]))
+                dhColumns, all, visibleIds, [{ header: 'Label batch #', value: (b) => b.labelBatchId ?? '' }]))
               notify.success(`Exported ${all.length.toLocaleString()} import(s).`)
             }}
-            search={{ value: filters.search, onChange: filters.setSearch, placeholder: 'Search file name, batch #, or user…' }}
+            search={{ value: filters.search, onChange: filters.setSearch, placeholder: 'Search file name, import #, or user…' }}
             filterToggle={<>
               <select
-                aria-label="Batch"
-                title="Show one label batch"
+                aria-label="Import"
+                title="Show one import"
                 value={filters.batchNo}
                 onChange={(e) => filters.setBatchNo(e.target.value)}
                 className={`h-[30px] rounded-lg border bg-[#fcfaf5] px-2 text-[12.5px] outline-none focus:border-[#412d15] ${filters.batchNo ? 'border-[#412d15] font-semibold text-[#1f150c]' : 'border-[#e3d9c4] text-slate-700'}`}
               >
-                <option value="">All batches</option>
-                {(summary?.labelBatches ?? []).map((n) => <option key={n} value={String(n)}>Batch {n}</option>)}
+                <option value="">All imports</option>
+                {(summary?.importIds ?? []).map((n) => <option key={n} value={String(n)}>Import #{n}</option>)}
               </select>
               {filterMenu}
             </>}
@@ -2707,7 +2708,7 @@ const BULK_TABS: { key: BulkTab; label: string }[] = [
 ]
 
 /** Import history's sortable columns ↔ the server's sort keys (the Filters menu's Sort). */
-const COLUMN_SORT: Record<string, HistorySortKey> = { labelBatch: 'labelBatch', file: 'fileName', created: 'created', status: 'status', rows: 'savedRows' }
+const COLUMN_SORT: Record<string, HistorySortKey> = { importNo: 'id', file: 'fileName', created: 'created', status: 'status', rows: 'savedRows' }
 const SORT_COLUMN = Object.fromEntries(Object.entries(COLUMN_SORT).map(([col, key]) => [key, col])) as Record<HistorySortKey, string>
 
 /** A row's serviceType error for a ship via code with no carrier service mapped. */

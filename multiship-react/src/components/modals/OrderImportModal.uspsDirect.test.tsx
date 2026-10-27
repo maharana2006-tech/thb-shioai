@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor, cleanup } from '@testing-library/react'
+import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react'
 
 /**
  * PR-G4 — OrderImportModal USPS_DIRECT UX coverage (audit U2 + U4).
@@ -434,5 +434,21 @@ describe('OrderImportModal — banner copy sanity', () => {
     )
     expect(banner.textContent).toMatch(/55 labels\/hour/i)
     expect(banner.textContent).toMatch(/Data History/i)
+  })
+})
+
+// ==================================================================
+// BUG-058 — a non-CSV/XLSX file is named as unsupported, not sent
+// ==================================================================
+
+describe('OrderImportModal — BUG-058 unsupported file type', () => {
+  it('names the supported formats when a .txt is picked and never uploads it', async () => {
+    const Modal = await loadModal()
+    const { container } = render(<Modal inline />)
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [new File(['notes'], 'QA-20261023-BULK-notes.txt', { type: 'text/plain' })] } })
+    expect(await screen.findByText(/"QA-20261023-BULK-notes.txt" isn't a supported format/)).toBeInTheDocument()
+    expect(screen.getByText(/upload a CSV \(\.csv\) or Excel file/)).toBeInTheDocument()
+    expect(stageUpload).not.toHaveBeenCalled()
   })
 })

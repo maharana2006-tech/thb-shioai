@@ -734,3 +734,27 @@ describe('Bulk Mailer — Import history and Trash', () => {
     expect(screen.queryByTestId('batch-row-7')).toBeNull()
   })
 })
+
+// ==================================================================
+// BUG-056 — one number per import: Import # leads, label batch is a detail
+// ==================================================================
+
+describe('Import history — BUG-056 one number per import', () => {
+  it('leads with an Import # column and filters the list by import, not by label batch', async () => {
+    listBatches.mockResolvedValue(pageOf([batchSummary({ id: 34, labelBatchId: 76 })]))
+    bulkSummary.mockResolvedValue(summaryOf({ total: 1, labelBatches: [76], importIds: [34] }))
+    await loadAndRender()
+    expect(await screen.findByTestId('batch-row-34')).toBeInTheDocument()
+    const headers = screen.getByTestId('visible-headers').textContent ?? ''
+    expect(headers).toContain('Import #')
+    expect(headers).not.toContain('|Batch|')
+    const pick = screen.getByRole('combobox', { name: 'Import' })
+    expect(screen.getByRole('option', { name: 'All imports' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'Import #34' })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /Batch 76/ })).toBeNull()
+    await userEvent.selectOptions(pick, '34')
+    await waitFor(() => expect(listBatches).toHaveBeenCalledWith(expect.objectContaining({ importId: '34' })))
+    const last = listBatches.mock.calls.at(-1)?.[0] as { labelBatch?: string }
+    expect(last.labelBatch).toBeUndefined()
+  })
+})

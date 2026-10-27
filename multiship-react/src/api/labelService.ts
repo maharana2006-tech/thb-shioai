@@ -40,10 +40,16 @@ export interface LabelArtifact {
   hasCommercialInvoice: boolean
 }
 
+/** BUG-049 — a 410 carries the server's reason ("Label … was voided"); show it instead of the status code. */
+async function unavailable(response: Response, what: string): Promise<Error> {
+  const reason = response.status === 410 ? (await response.text().catch(() => '')).trim() : ''
+  return new Error(reason || `${what} is unavailable (HTTP ${response.status}).`)
+}
+
 async function text(url: string, what: string): Promise<string> {
   const response = await fetch(url, { credentials: 'include' })
   if (!response.ok) {
-    throw new Error(`${what} is unavailable (HTTP ${response.status}).`)
+    throw await unavailable(response, what)
   }
   return response.text()
 }
@@ -83,7 +89,7 @@ export const labelService = {
   getPdf: async (orderNo: number, seq?: number): Promise<Blob> => {
     const response = await fetch(labelService.pdfUrl(orderNo, seq), { credentials: 'include' })
     if (!response.ok) {
-      throw new Error(`PDF is unavailable (HTTP ${response.status}).`)
+      throw await unavailable(response, 'PDF')
     }
     return response.blob()
   },

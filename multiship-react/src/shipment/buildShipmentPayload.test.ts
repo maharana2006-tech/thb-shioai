@@ -51,6 +51,15 @@ describe('buildShipmentPayload', () => {
     })
   })
 
+  it('domestic route never sends customs-only fields, even with a sticky incoterm (BUG-026)', () => {
+    const p = buildShipmentPayload({
+      ...base, incoterms: 'DAP', reasonForExport: 'SALE', clearanceOption: 'DDU',
+      items: [{ description: 'Widget', sku: '', hsCode: '', countryOfOrigin: 'US', quantity: '1', unitValue: '5', weight: '', boxSeq: '' }] as ShipmentPayloadInputs['items'],
+      override: { importer: { name: 'Imp' }, broker: { name: 'Brk' } },
+    })
+    for (const k of ['incoterms', 'reasonForExport', 'clearanceOption', 'items', 'importer', 'broker']) expect(p).not.toHaveProperty(k)
+  })
+
   it('return mode wires the return block and only the typed extras', () => {
     const p = buildShipmentPayload({ ...base, isReturn: true, returnType: 'EMAIL', returnPickupRequested: true, rmaNumber: ' RMA9 ', originalOrderNo: '900001', returnReason: '' })
     expect(p).toMatchObject({ isReturn: true, returnType: 'EMAIL', returnPickupRequested: true, rmaNumber: 'RMA9', originalOrderNo: 900001 })

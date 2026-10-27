@@ -1063,7 +1063,9 @@ export const orderService = {
       credentials: 'include',
     })
     if (!response.ok) {
-      throw new Error(`Label PDF is unavailable (HTTP ${response.status}) — restart the backend if it was just updated.`)
+      // BUG-049 — a 410 carries the server's reason ("Label … was voided").
+      const reason = response.status === 410 ? (await response.text().catch(() => '')).trim() : ''
+      throw new Error(reason || `Label PDF is unavailable (HTTP ${response.status}) — restart the backend if it was just updated.`)
     }
     return response.blob()
   },

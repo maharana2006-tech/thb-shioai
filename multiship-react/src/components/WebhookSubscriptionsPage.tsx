@@ -84,9 +84,26 @@ export default function WebhookSubscriptionsPage() {
     }
   }
 
-  const keyLabel = (id: number) => {
+  // BUG-172 — a subscription on a revoked or missing key never delivers; say so in the table.
+  const liveKeys = keys.filter((k) => k.active && !k.revokedAt)
+  const keyCell = (id: number) => {
     const k = keys.find((x) => x.id === id)
-    return k ? `${k.name} (${k.clientCode})` : `#${id}`
+    const problem = !k ? 'key missing' : !k.active || k.revokedAt ? 'key revoked' : null
+    return (
+      <>
+        {k ? `${k.name} (${k.clientCode})` : `#${id}`}
+        {problem ? (
+          <span
+            role="img"
+            aria-label={problem}
+            title={k ? `This API key was revoked${k.revokedAt ? ` on ${new Date(k.revokedAt).toLocaleDateString()}` : ''} — events are not delivered. Pick an active key.` : `No API key with id ${id} exists — events are not delivered.`}
+            className="ml-1.5 inline-flex items-center rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-[0.08em] text-rose-700 ring-1 ring-rose-100"
+          >
+            {problem}
+          </span>
+        ) : null}
+      </>
+    )
   }
 
   return (
@@ -103,13 +120,13 @@ export default function WebhookSubscriptionsPage() {
           <button
             type="button"
             onClick={() => setEditing({
-              apiKeyId: keys[0]?.id ?? 0,
+              apiKeyId: liveKeys[0]?.id ?? 0,
               event: 'LABEL_GENERATED',
               url: '',
               secret: '',
               active: true,
             })}
-            disabled={keys.length === 0}
+            disabled={liveKeys.length === 0}
             className="inline-flex items-center gap-1.5 rounded-md bg-[#1f150c] px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-black disabled:opacity-50"
           >
             <FiPlus /> New subscription
@@ -139,7 +156,7 @@ export default function WebhookSubscriptionsPage() {
             ) : subs.map((s) => (
               <tr key={s.id} className="hover:bg-slate-50 align-top">
                 <td className="px-4 py-2"><span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-bold text-slate-700">{s.event}</span></td>
-                <td className="px-4 py-2 text-slate-800">{keyLabel(s.apiKeyId)}</td>
+                <td className="px-4 py-2 text-slate-800">{keyCell(s.apiKeyId)}</td>
                 <td className="px-4 py-2 font-mono text-[11.5px] text-slate-700">{s.url}</td>
                 <td className="px-4 py-2 font-mono text-[11.5px] text-slate-400">{s.secret}</td>
                 <td className="px-4 py-2 text-[11.5px]">

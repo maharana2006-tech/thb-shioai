@@ -17,8 +17,10 @@ export interface BulkBatchQuery {
   /** HAS · NONE — has a label batch yet. */
   /** HAS · NONE, or one label batch number. */
   labelBatch?: 'HAS' | 'NONE' | string
+  /** BUG-056 — one import number (the Import # shown everywhere). */
+  importId?: number | string
   minSaved?: number
-  sort?: 'created' | 'fileName' | 'savedRows' | 'status' | 'labelBatch'
+  sort?: 'created' | 'id' | 'fileName' | 'savedRows' | 'status' | 'labelBatch'
   dir?: 'ASC' | 'DESC'
   /** 0-based */
   page?: number
@@ -44,6 +46,8 @@ export interface BulkSummary {
   creators: string[]
   /** Label batch numbers in the view, newest first. */
   labelBatches?: number[]
+  /** BUG-056 — import numbers in the view, newest first: the Import filter's choices. */
+  importIds?: number[]
 }
 
 /** The query string, leaving blank filters out. */
