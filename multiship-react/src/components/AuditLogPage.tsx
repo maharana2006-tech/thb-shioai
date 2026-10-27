@@ -643,6 +643,12 @@ const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/
 function display(v: unknown): string {
   if (v == null || v === '') return '—'
   if (typeof v === 'string') return ISO.test(v) ? formatDateTime(v) : v
+  // Jackson writes LocalDateTime as [y, m, d, h, min, s, nanos]; show it as a time.
+  if (Array.isArray(v) && v.length >= 3 && v.length <= 7 && v.every((n) => Number.isInteger(n))) {
+    const [y, m, d, h = 0, min = 0, sec = 0] = v as number[]
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return formatDateTime(`${y}-${pad(m)}-${pad(d)}T${pad(h)}:${pad(min)}:${pad(sec)}`)
+  }
   if (typeof v === 'object') return JSON.stringify(v)
   return String(v)
 }
