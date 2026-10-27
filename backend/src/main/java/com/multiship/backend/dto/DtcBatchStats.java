@@ -35,6 +35,8 @@ public record DtcBatchStats(
         if (totalLines == null || totalLines == 0) return "NONE";
         if (generatedCount + queuedCount >= totalLines) return "GENERATED";
         if (generatedCount + queuedCount + failedCount == 0) return "PENDING";
+        // BUG-068 — no label exists at all; PARTIAL would read as "some do".
+        if (generatedCount + queuedCount == 0) return "FAILED";
         return "PARTIAL";
     }
 }

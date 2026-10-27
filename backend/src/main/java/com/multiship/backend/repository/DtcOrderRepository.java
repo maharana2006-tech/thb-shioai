@@ -150,7 +150,10 @@ public interface DtcOrderRepository extends JpaRepository<DtcOrder, Long> {
                     AND SUM(CASE WHEN d.generatedStatus IN ('GENERATED', 'QUEUED_USPS', 'FAILED') THEN 1 ELSE 0 END) = 0)
                 OR (:labelStatus = 'PARTIAL'
                     AND SUM(CASE WHEN d.generatedStatus IN ('GENERATED', 'QUEUED_USPS') THEN 1 ELSE 0 END) < COUNT(d)
-                    AND SUM(CASE WHEN d.generatedStatus IN ('GENERATED', 'QUEUED_USPS', 'FAILED') THEN 1 ELSE 0 END) > 0))
+                    AND SUM(CASE WHEN d.generatedStatus IN ('GENERATED', 'QUEUED_USPS') THEN 1 ELSE 0 END) > 0)
+                OR (:labelStatus = 'FAILED'
+                    AND SUM(CASE WHEN d.generatedStatus IN ('GENERATED', 'QUEUED_USPS') THEN 1 ELSE 0 END) = 0
+                    AND SUM(CASE WHEN d.generatedStatus = 'FAILED' THEN 1 ELSE 0 END) > 0))
            AND (:batchStatus = ''
                 OR (:batchStatus = 'COMPLETE'
                     AND SUM(CASE WHEN d.generatedStatus IS NULL OR d.generatedStatus IN ('QUEUED_USPS', 'IN_FLIGHT') THEN 1 ELSE 0 END) = 0)

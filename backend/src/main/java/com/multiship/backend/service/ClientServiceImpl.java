@@ -115,7 +115,9 @@ public class ClientServiceImpl implements ClientService {
         });
         cols.put("accounts", c -> csvCell(c.getCarrierAccounts() == null ? "" :
                 c.getCarrierAccounts().stream()
-                        .map(a -> a.getCarrierCode() + ":" + a.getAccountNumber()
+                        // BUG-070 — the grid shows only the carrier; a CSV is forwarded easily,
+                        // so keep at most the last 4 digits of the account number.
+                        .map(a -> a.getCarrierCode() + ":" + maskAccount(a.getAccountNumber())
                                 + (Boolean.TRUE.equals(a.getClientDefault()) ? "*" : ""))
                         .reduce((a, b) -> a + "; " + b)
                         .orElse("")));
@@ -205,6 +207,13 @@ public class ClientServiceImpl implements ClientService {
                 .toList();
 
         return success("Clients retrieved successfully.", PageResponseDTO.of(clients, page, size, total));
+    }
+
+    /** BUG-070 — last 4 characters only (shorter values are fully masked). */
+    static String maskAccount(String account) {
+        if (account == null || account.isBlank()) return "";
+        String a = account.trim();
+        return a.length() <= 4 ? "****" : "****" + a.substring(a.length() - 4);
     }
 
     private String norm(String value) {

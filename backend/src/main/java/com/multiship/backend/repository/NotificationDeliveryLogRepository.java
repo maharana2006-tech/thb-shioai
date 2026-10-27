@@ -20,7 +20,7 @@ public interface NotificationDeliveryLogRepository
      * [[feedback-hibernate-null-string-bytea]].
      */
     @Query("SELECT l FROM NotificationDeliveryLogEntity l "
-            + "WHERE (CAST(:templateKey AS string) IS NULL OR l.templateKey = :templateKey) "
+            + "WHERE (CAST(:templateKey AS string) IS NULL OR UPPER(l.templateKey) LIKE CONCAT('%', UPPER(CAST(:templateKey AS string)), '%')) "
             + "AND (CAST(:status AS string) IS NULL OR l.status = :status) "
             + "AND (CAST(:recipientLike AS string) IS NULL OR LOWER(l.recipient) LIKE LOWER(CAST(:recipientLike AS string)) ESCAPE '\\')")
     Page<NotificationDeliveryLogEntity> search(

@@ -73,6 +73,15 @@ public class AccountRefServiceImpl implements AccountRefService {
 
     private record Usage(long labels, LocalDateTime lastUsed) {}
 
+    /** BUG-079 — Hibernate hands native MAX(timestamp) back as java.time, not java.sql.Timestamp. */
+    static LocalDateTime toLocalDateTime(Object v) {
+        if (v instanceof Timestamp ts) return ts.toLocalDateTime();
+        if (v instanceof LocalDateTime ldt) return ldt;
+        if (v instanceof java.time.OffsetDateTime odt) return odt.toLocalDateTime();
+        if (v instanceof java.time.Instant i) return LocalDateTime.ofInstant(i, java.time.ZoneId.systemDefault());
+        return null;
+    }
+
     @Override
     @Transactional(readOnly = true)
     public ApiResponse<List<CarrierAccountRefDTO>> listAccounts() {
@@ -80,7 +89,7 @@ public class AccountRefServiceImpl implements AccountRefService {
         for (Object[] row : orderTrackingRepository.aggregateUsageByAccount()) {
             String account = (String) row[0];
             long labels = ((Number) row[1]).longValue();
-            LocalDateTime lastUsed = row[2] instanceof Timestamp ts ? ts.toLocalDateTime() : null;
+            LocalDateTime lastUsed = toLocalDateTime(row[2]);
             usageByAccount.put(account.toUpperCase(Locale.ROOT), new Usage(labels, lastUsed));
         }
 

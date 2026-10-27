@@ -73,6 +73,31 @@ class AccountRefServiceImplTest {
         ReflectionTestUtils.setField(service, "tenantScope", tenantScope);
     }
 
+    /** BUG-079 — Hibernate returns native MAX(timestamp) as java.time; the DTO must still get lastUsedAt. */
+    @Test
+    void listAccounts_mapsLastUsedFromJavaTimeRows() {
+        CarrierAccountRef account = accountWithTenant(1L, "ACME");
+        LocalDateTime lastUsed = LocalDateTime.of(2026, 10, 25, 9, 30);
+        when(trackingRepo.aggregateUsageByAccount()).thenReturn(
+                java.util.List.<Object[]>of(new Object[]{"a12345", 25415L, lastUsed}));
+        when(accountRepo.findAllByOrderByIsDefaultDescUpdatedAtDesc()).thenReturn(java.util.List.of(account));
+        when(tenantScope.resolveScope()).thenReturn(java.util.Optional.empty());
+
+        var dto = service.listAccounts().getData().get(0);
+
+        assertEquals(25415L, dto.getLabelsGenerated());
+        assertEquals(lastUsed, dto.getLastUsedAt());
+    }
+
+    @Test
+    void toLocalDateTime_acceptsEveryJdbcShape() {
+        LocalDateTime t = LocalDateTime.of(2026, 1, 2, 3, 4);
+        assertEquals(t, AccountRefServiceImpl.toLocalDateTime(java.sql.Timestamp.valueOf(t)));
+        assertEquals(t, AccountRefServiceImpl.toLocalDateTime(t));
+        assertEquals(t, AccountRefServiceImpl.toLocalDateTime(t.atOffset(java.time.ZoneOffset.UTC)));
+        assertNull(AccountRefServiceImpl.toLocalDateTime(null));
+    }
+
     private CarrierAccountRef accountWithTenant(Long id, String customerNo) {
         CarrierAccountRef account = new CarrierAccountRef();
         account.setId(id);

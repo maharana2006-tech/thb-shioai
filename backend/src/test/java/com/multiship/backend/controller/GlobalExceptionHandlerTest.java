@@ -26,6 +26,17 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  */
 class GlobalExceptionHandlerTest {
 
+    /** BUG-153 — an ExternalApiException thrown outside a controller try/catch keeps its own status. */
+    @Test
+    void externalApiException_rendersItsOwnStatusAndErrorCode() {
+        GlobalExceptionHandler handler = new GlobalExceptionHandler();
+        var resp = handler.handleExternalApi(new com.multiship.backend.service.external.ExternalApiException(
+                401, com.multiship.backend.dto.ErrorCode.UNAUTHORIZED, "This endpoint requires an API key."));
+        assertEquals(401, resp.getStatusCode().value());
+        assertEquals("UNAUTHORIZED", resp.getBody().getErrorCode());
+        assertEquals("This endpoint requires an API key.", resp.getBody().getMessage());
+    }
+
     @Test
     void emptyFieldErrors_returnsGenericFallback() {
         String summary = GlobalExceptionHandler.buildFriendlyValidationSummary(List.of());

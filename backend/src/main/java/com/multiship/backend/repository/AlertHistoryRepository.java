@@ -12,7 +12,7 @@ public interface AlertHistoryRepository extends JpaRepository<AlertHistoryEntity
     /** Filter is optional across all four fields. CAST guards the pgjdbc
      *  bytea-null bug (see feedback_hibernate_null_string_bytea). */
     @Query("SELECT a FROM AlertHistoryEntity a "
-            + "WHERE (CAST(:source AS string) IS NULL OR a.source = :source) "
+            + "WHERE (CAST(:source AS string) IS NULL OR UPPER(a.source) LIKE CONCAT('%', UPPER(CAST(:source AS string)), '%')) "
             + "AND (CAST(:tenantCode AS string) IS NULL OR a.tenantCode = :tenantCode) "
             + "AND (:orderNo IS NULL OR a.targetOrderNo = :orderNo)")
     Page<AlertHistoryEntity> search(

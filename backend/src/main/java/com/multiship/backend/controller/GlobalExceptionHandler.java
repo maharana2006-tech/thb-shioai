@@ -350,6 +350,23 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * BUG-153 — the external controllers throw ExternalApiException from
+     * {@code requireApi(...)} outside their try/catch (e.g. a session caller
+     * without an API key on POST /api/v2/external/rates), which fell through
+     * to the catch-all 500. Render it with its own status + errorCode instead.
+     */
+    @ExceptionHandler(com.multiship.backend.service.external.ExternalApiException.class)
+    public ResponseEntity<ApiResponse<Void>> handleExternalApi(
+            com.multiship.backend.service.external.ExternalApiException ex) {
+        log.debug("External API {} {}: {}", ex.getStatus(), ex.getErrorCode(), ex.getMessage());
+        return ResponseEntity.status(ex.getStatus()).body(ApiResponse.<Void>builder()
+                .status("ERROR").code(ex.getStatus())
+                .message(ex.getMessage())
+                .errorCode(ex.getErrorCode() != null ? ex.getErrorCode().name() : null)
+                .build());
+    }
+
+    /**
      * CarrierConnectionException is a well-defined domain exception (carrier
      * disabled, credentials missing, operator-recoverable auth error). Prior
      * to this handler it was only mapped to 400 by {@code CarrierExceptionHandler}

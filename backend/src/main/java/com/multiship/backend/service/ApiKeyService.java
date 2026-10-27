@@ -2,6 +2,7 @@ package com.multiship.backend.service;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.multiship.backend.config.ApiKeyScope;
 import com.multiship.backend.model.ApiKey;
 import com.multiship.backend.repository.ApiKeyRepository;
 import lombok.RequiredArgsConstructor;
@@ -147,7 +148,7 @@ public class ApiKeyService {
                 .environment(env)
                 .keyPrefix(prefix)
                 .keyHash(passwordEncoder.encode(secret))
-                .scopes(StringUtils.hasText(scopes) ? scopes.trim().replaceAll("[\\s,]+", " ") : DEFAULT_SCOPES)
+                .scopes(StringUtils.hasText(scopes) ? normalizeScopes(scopes) : DEFAULT_SCOPES)
                 .active(true)
                 .createdBy(createdBy)
                 .expiresAt(expiresAt)
@@ -161,6 +162,41 @@ public class ApiKeyService {
                     "API key issued.");
         }
         return new IssuedKey(key, token);
+    }
+
+    /**
+     * BUG-150 — only the {@link ApiKeyScope} vocabulary may be stored on a key;
+     * a typo ("rate") used to be persisted silently and the key simply never
+     * worked. Accepts space- or comma-separated input, case-insensitive.
+     */
+    static String normalizeScopes(String scopes) {
+        java.util.Set<String> known = java.util.Arrays.stream(ApiKeyScope.values())
+                .map(ApiKeyScope::token).collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
+        java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
+        for (String raw : scopes.trim().split("[\\s,]+")) {
+            if (raw.isEmpty()) continue;
+            String token = raw.toLowerCase(java.util.Locale.ROOT);
+            if (!known.contains(token)) {
+                throw new IllegalArgumentException("Unknown API key scope '" + raw
+                        + "'. Allowed scopes: " + String.join(", ", known) + ".");
+            }
+            out.add(token);
+        }
+        if (out.isEmpty()) return DEFAULT_SCOPES;
+        return String.join(" ", out);
+    }
+
+    /** Legacy keys may carry tokens outside the vocabulary; drop them so rotation still works. */
+    private static String knownScopesOnly(String scopes) {
+        if (!StringUtils.hasText(scopes)) return null;
+        java.util.Set<String> known = java.util.Arrays.stream(ApiKeyScope.values())
+                .map(ApiKeyScope::token).collect(java.util.stream.Collectors.toSet());
+        String kept = java.util.Arrays.stream(scopes.trim().split("[\\s,]+"))
+                .map(t -> t.toLowerCase(java.util.Locale.ROOT))
+                .filter(known::contains)
+                .distinct()
+                .collect(java.util.stream.Collectors.joining(" "));
+        return kept.isEmpty() ? null : kept;
     }
 
     /**
@@ -183,7 +219,7 @@ public class ApiKeyService {
 
         // Mint fresh with same client/env/scopes; new 90-day expiry.
         IssuedKey issued = issue(old.getName() + " (rotated)", old.getClientCode(),
-                old.getEnvironment(), old.getScopes(), rotatedBy);
+                old.getEnvironment(), knownScopesOnly(old.getScopes()), rotatedBy);
         issued.record().setRotatedFromId(old.getId());
         apiKeyRepository.save(issued.record());
 

@@ -327,6 +327,18 @@ public class UspsLabelQueueProcessor {
         return hourlyCap <= 0 ? 55L : hourlyCap;
     }
 
+    /** BUG-175 — when the bucket last gained tokens; null until the limiter exists. */
+    public java.time.Instant getQuotaLastReplenishAt() {
+        TokenBucket b = this.limiter;
+        return b == null ? null : java.time.Instant.ofEpochMilli(b.lastCreditMs());
+    }
+
+    /** BUG-175 — seconds until the next token lands; 0 while the bucket is full. */
+    public long getQuotaNextReplenishInSeconds() {
+        TokenBucket b = this.limiter;
+        return b == null ? 0L : (long) Math.ceil(b.nextCreditInMs() / 1000.0);
+    }
+
     // ============================================================
     // Test hooks
     // ============================================================
