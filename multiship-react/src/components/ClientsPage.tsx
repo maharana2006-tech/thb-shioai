@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useModalDismiss } from '../hooks/useModalDismiss'
-import { useNavigate, useOutletContext } from 'react-router-dom'
+import { useNavigate, useOutletContext, useSearchParams } from 'react-router-dom'
 import { notify } from '../utils/notify'
 import {
   FiActivity,
@@ -23,7 +23,7 @@ import { countryName } from '../utils/countries'
 import PortalMenu from './workspace/PortalMenu'
 import CustomsProfileModal from './modals/CustomsProfileModal'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
-import AdvancedDataTable, { type ColumnDef } from './workspace/AdvancedDataTable'
+import AdvancedDataTable, { PHONE_SHEET, type ColumnDef } from './workspace/AdvancedDataTable'
 import Select from './workspace/Select'
 import { useAppSession } from '../hooks/useAppSession'
 import { normalizeRole } from '../utils/roles'
@@ -43,7 +43,9 @@ export default function ClientsPage() {
   const [totalElements, setTotalElements] = useState(0)
   const [totalPages, setTotalPages] = useState(1)
 
-  const [search, setSearch] = useState('')
+  // BUG-179 — a global-search hit lands here with ?q=<code>.
+  const [searchParams] = useSearchParams()
+  const [search, setSearch] = useState(() => searchParams.get('q') ?? '')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [carrierFilter, setCarrierFilter] = useState('')
@@ -516,7 +518,7 @@ export default function ClientsPage() {
                     role="dialog"
                     aria-modal="true"
                     aria-label="Filter clients"
-                    className="absolute left-0 top-full z-30 mt-1.5 w-72 rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_20px_60px_rgba(15,23,42,0.15)]"
+                    className={`absolute left-0 top-full z-30 mt-1.5 w-72 rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_20px_60px_rgba(15,23,42,0.15)]${PHONE_SHEET}`}
                   >
                     <div className="space-y-2.5">
                       <div>

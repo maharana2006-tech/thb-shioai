@@ -203,6 +203,9 @@ function CopiesInput({
     if (!trimmed) { onSave(null); return }
     const n = Number(trimmed)
     if (!Number.isFinite(n) || !Number.isInteger(n)) { setText(value == null ? '' : String(value)); setDirty(false); return }
+    // BUG-131 — an out-of-range number is refused by the parent (toast); put
+    // the saved value back so the grid never shows a number that isn't stored.
+    if (n < 1 || n > 20) { setText(value == null ? '' : String(value)); setDirty(false) }
     onSave(n)
   }
 

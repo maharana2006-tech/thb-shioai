@@ -52,14 +52,20 @@ export default function OutputDestinationsPage() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await outputDestinationService.list(debouncedFilter || undefined)
+      // BUG-132 — the server matches a whole code only; filter here so a
+      // partial code ('QA-1017') still finds its clients.
+      const res = await outputDestinationService.list()
       setRows(res.data ?? [])
     } catch (e) {
       notify.apiError(e, 'Failed to load output destinations.')
     } finally {
       setLoading(false)
     }
-  }, [debouncedFilter])
+  }, [])
+
+  const visibleRows = debouncedFilter
+    ? rows.filter((r) => r.clientCode.toLowerCase().includes(debouncedFilter.toLowerCase()))
+    : rows
 
   useEffect(() => {
     // Data fetch on mount / filter change. load() sets loading + result state.
@@ -75,12 +81,12 @@ export default function OutputDestinationsPage() {
 
   const grouped = useMemo(() => {
     const map: Record<string, OutputDestination[]> = {}
-    for (const r of rows) {
+    for (const r of visibleRows) {
       if (!map[r.clientCode]) map[r.clientCode] = []
       map[r.clientCode].push(r)
     }
     return map
-  }, [rows])
+  }, [visibleRows])
 
   const onDelete = async (row: OutputDestination) => {
     // BUG-158: swap window.confirm for notify.confirm so Delete uses
@@ -183,10 +189,10 @@ export default function OutputDestinationsPage() {
                   Loading...
                 </td>
               </tr>
-            ) : rows.length === 0 ? (
+            ) : visibleRows.length === 0 ? (
               <tr>
                 <td colSpan={6} className="px-3 py-6 text-center text-slate-500">
-                  No destinations configured.
+                  {debouncedFilter ? `No destinations for a client code containing “${debouncedFilter}”.` : 'No destinations configured.'}
                 </td>
               </tr>
             ) : (

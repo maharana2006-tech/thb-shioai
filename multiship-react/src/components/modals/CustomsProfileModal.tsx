@@ -108,7 +108,7 @@ function Field({ label, required, error, children }: { label: string; required?:
       </span>
       {children}
       {error ? (
-        <span className="mt-1 flex items-center gap-1 text-[10.5px] font-semibold text-rose-600">
+        <span data-field-error className="mt-1 flex items-center gap-1 text-[10.5px] font-semibold text-rose-600">
           <span aria-hidden>⚠</span> {error}
         </span>
       ) : null}
@@ -235,6 +235,13 @@ export default function CustomsProfileModal({
   // Sprint 51 T6b — focus trap (modal only; a page must not trap focus).
   const dialogRef = useRef<HTMLDivElement>(null)
   useFocusTrap(!asPage, dialogRef)
+  // BUG-104 — the page's sticky footer sits where toasts land; lift them
+  // (same hook as NewShipmentPage's --toast-bottom).
+  useEffect(() => {
+    if (!asPage) return
+    document.documentElement.style.setProperty('--toast-bottom', '6rem')
+    return () => { document.documentElement.style.removeProperty('--toast-bottom') }
+  }, [asPage])
   const [form, setForm] = useState<CustomsProfile>(() => profile ?? blank())
   const [clientCode, setClientCode] = useState<string>(
     () => (profile?.clientCode ?? lockedClientCode ?? '').toUpperCase()
@@ -457,7 +464,14 @@ export default function CustomsProfileModal({
     const fieldBad = hasFieldErrors
     if (fieldBad) touchAllFields()
     setGateErrors(gates)
-    if (Object.keys(gates).length > 0 || fieldBad) return
+    if (Object.keys(gates).length > 0 || fieldBad) {
+      // BUG-103 — the only error may sit below the fold; bring it into view
+      // once the touched errors have rendered.
+      setTimeout(() => {
+        dialogRef.current?.querySelector('[data-field-error]')?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
+      }, 0)
+      return
+    }
 
     setSaving(true)
     try {
@@ -649,7 +663,7 @@ export default function CustomsProfileModal({
                   territoryConstrained
                 />
                 {gateErrors.destinations ? (
-                  <p className="mt-1.5 flex items-start gap-1 text-[10.5px] font-semibold text-rose-600">
+                  <p data-field-error className="mt-1.5 flex items-start gap-1 text-[10.5px] font-semibold text-rose-600">
                     <span aria-hidden>⚠</span> {gateErrors.destinations}
                   </p>
                 ) : null}

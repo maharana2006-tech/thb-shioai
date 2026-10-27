@@ -173,6 +173,14 @@ describe('CarrierShippingLimitsPage — row rendering', () => {
     expect(screen.getByText(/^Inactive$/)).toBeTruthy()
   })
 
+  it('BUG-090: an active row that ends on a date shows "until <date>"', async () => {
+    listMock.mockResolvedValueOnce({ data: { content: [{ ...seedRows()[0], effectiveUntil: '2026-12-31T10:00:00' }], totalElements: 1, totalPages: 1, pageNumber: 0, pageSize: 50 } })
+    const Page = await loadPage()
+    renderWithProviders(<Page />)
+    await waitFor(() => expect(screen.getByText('UPS')).toBeTruthy())
+    expect(screen.getByText('until 2026-12-31 10:00')).toBeTruthy()
+  })
+
   it('null direction renders as "any"', async () => {
     const Page = await loadPage()
     renderWithProviders(<Page />)

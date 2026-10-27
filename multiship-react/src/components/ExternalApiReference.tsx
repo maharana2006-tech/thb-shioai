@@ -30,17 +30,13 @@ const newIdempotencyKey = () =>
     ? crypto.randomUUID()
     : `try-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 /**
- * Swagger UI lives on the backend origin.
- *
- * Audit A3 — `new URL(BASE_URL)` crashes with TypeError when BASE_URL
- * is relative ('/api/v1' — the dev default per apiClient.ts). This
- * module is lazy-loaded so the crash surfaces as a white-screen the
- * first time an operator navigates to /settings/api-reference. Pass
- * the current window origin as the base so relative BASE_URLs resolve
- * against the SPA's origin (which is the same origin the Vite proxy
- * fronts). Absolute BASE_URLs pass through unchanged.
+ * BUG-151 — Swagger UI is served under the API prefix (springdoc
+ * `swagger-ui.path=/api/swagger-ui.html`) so the same /api route that
+ * fronts BASE_URL (dev proxy or prod reverse proxy) reaches it; the SPA
+ * origin itself only knows the app shell. Relative and absolute
+ * BASE_URLs both work since only the trailing /v1 is dropped.
  */
-const SWAGGER_URL = `${new URL(BASE_URL, typeof window !== 'undefined' ? window.location.origin : 'http://localhost').origin}/swagger-ui.html`
+const SWAGGER_URL = `${BASE_URL.replace(/\/v1\/?$/, '')}/swagger-ui.html`
 
 const METHOD_BADGE: Record<string, string> = {
   GET: 'bg-sky-50 text-sky-700 ring-sky-200',
@@ -620,6 +616,12 @@ export default function ExternalApiReference() {
           <code className="rounded bg-slate-100 px-2 py-0.5 font-mono text-[11px] font-semibold text-slate-700">
             {EXTERNAL_BASE}
           </code>
+        </p>
+        {/* BUG-152 — the API Keys page names /api/v1/external; say how the two relate. */}
+        <p className="text-[11.5px] text-slate-500">
+          <span className="font-mono font-semibold text-slate-600">{EXTERNAL_BASE.replace(/\/v2\//, '/v1/')}</span> is the
+          original surface and still answers with the same key; v2 above is the current one (adds Idempotency-Key replay,
+          pickups, close-out, landed cost and webhooks) — use v2 for new integrations.
         </p>
         <p className="rounded-xl border border-violet-100 bg-violet-50/60 px-3 py-2 text-[11.5px] text-violet-900">
           <span className="font-bold uppercase tracking-wide">Platform-wide (WMS) keys:</span> requests must name the

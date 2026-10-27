@@ -344,7 +344,11 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
             title="Log out"
             className={`shrink-0 rounded-lg p-2 transition hover:bg-rose-600 hover:text-white disabled:opacity-50 ${
               loggingOut ? 'bg-rose-600 text-white' : 'text-slate-400'
-            } ${labelClass}`}
+            } ${labelClass} ${
+              // BUG-177 — on the collapsed rail the faded button overlapped
+              // the avatar and still took clicks; hide it until hover.
+              pinned || mobileOpen ? '' : 'invisible group-hover:visible'
+            }`}
           >
             <FiLogOut className="h-4 w-4" />
           </button>

@@ -324,7 +324,8 @@ export default function ShippingServicesPage({ active = true, origin: originProp
       <section className="grid grid-cols-2 gap-3">
         {[
           { label: `Services from ${origin}`, value: `${enabledCount}/${visibleServices.length}`, unit: 'services', icon: FiSend, tone: 'border-[#412d15]/25 bg-[#412d15]/[0.06] text-[#412d15]' },
-          { label: 'Package links', value: links.length, unit: 'links', icon: FiBox, tone: 'border-emerald-200 bg-emerald-50 text-emerald-600' },
+          // BUG-083 — only the links of this origin's services.
+          { label: 'Package links', value: links.filter((l) => visibleServices.some((s) => s.id === l.serviceId)).length, unit: 'links', icon: FiBox, tone: 'border-emerald-200 bg-emerald-50 text-emerald-600' },
         ].map((c, idx) => (
           <div key={c.label} className="rounded-2xl border border-slate-200 bg-white shadow-sm">
             <div className="flex items-start justify-between gap-2 px-4 pt-3.5">

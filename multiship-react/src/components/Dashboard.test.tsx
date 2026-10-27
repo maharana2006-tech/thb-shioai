@@ -139,6 +139,21 @@ describe('Dashboard — load + render', () => {
     expect(screen.getByText(/^Updated /i)).toBeInTheDocument()
   })
 
+  it('BUG-002: a window focus while the mount load is pending does not start a second load', async () => {
+    let resolveIt: (v: unknown) => void = () => {}
+    dashboardLoad.mockReturnValueOnce(new Promise((r) => { resolveIt = r }))
+    const Page = await loadPage()
+    renderPage(Page)
+    expect(dashboardLoad).toHaveBeenCalledTimes(1)
+
+    await act(async () => { window.dispatchEvent(new Event('focus')) })
+    expect(dashboardLoad).toHaveBeenCalledTimes(1)
+
+    await act(async () => { resolveIt(seed()) })
+    await act(async () => { window.dispatchEvent(new Event('focus')) })
+    expect(dashboardLoad).toHaveBeenCalledTimes(2)
+  })
+
   it('load rejects → "Couldn\'t load" error badge shown', async () => {
     dashboardLoad.mockRejectedValueOnce(new Error('boom'))
     const Page = await loadPage()

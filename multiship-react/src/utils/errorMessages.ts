@@ -185,6 +185,7 @@ const errorTitles: Readonly<Record<string, string>> = {
   VALIDATION_ERROR: 'Check the form for errors',
   UNPROCESSABLE_CONTENT: 'Check the form for errors',
   VALIDATION_FAILED: 'Check the form for errors',
+  OUTPUT_DELIVERY_FAILED: 'Destination test failed',
   BAD_REQUEST: 'Check the form for errors',
   IMPORT_BATCH_STATE: 'Not available for this import',
   MALFORMED_REQUEST: 'Request not understood',

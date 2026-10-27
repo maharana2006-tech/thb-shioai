@@ -1573,7 +1573,7 @@ export default function ClientEditorPage() {
         {/* Summary — final step in create mode. Every section rendered as
             a card with values + validation status; Submit fires the client
             creation cascade. */}
-        {!isEdit && activeStep === 'summary' ? (
+        {activeStep === 'summary' ? (
           <SummaryStep
             form={form}
             selectedShipFromWarehouseId={selectedShipFromWarehouseId}
@@ -1589,6 +1589,11 @@ export default function ClientEditorPage() {
             stepComplete={stepComplete}
             stepBlockers={stepBlockers}
             jumpTo={(k) => setActiveStep(k)}
+            edit={isEdit ? {
+              carrierAccounts: client?.carrierAccounts ?? [],
+              hasBillingMarkup: client?.hasBillingMarkup ?? false,
+              isDirty,
+            } : undefined}
           />
         ) : null}
       </div>
@@ -1634,9 +1639,10 @@ export default function ClientEditorPage() {
             <button
               type="button"
               onClick={() => void onClose()}
+              title="Nothing is saved from here — each step saves from its own form."
               className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-4 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15]"
             >
-              Finish
+              Finish — back to clients
               <FiCheck className="h-3.5 w-3.5" />
             </button>
           ) : (() => {
@@ -1646,6 +1652,11 @@ export default function ClientEditorPage() {
             const nextBlocked = !isEdit && !stepComplete(activeStep)
             const nextBlockers = nextBlocked ? stepBlockers(activeStep) : []
             return (
+              <>
+              {/* BUG-071 — say why Next is off; a tooltip alone was invisible. */}
+              {nextBlockers.length ? (
+                <span role="status" className="max-w-[320px] text-[11px] font-semibold text-rose-700">{nextBlockers[0]}</span>
+              ) : null}
               <button
                 type="button"
                 onClick={goNext}
@@ -1662,6 +1673,7 @@ export default function ClientEditorPage() {
                 Next
                 <FiChevronRight className="h-3.5 w-3.5" />
               </button>
+              </>
             )
           })()}
         </div>

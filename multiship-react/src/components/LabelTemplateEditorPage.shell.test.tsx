@@ -169,6 +169,17 @@ describe('LabelTemplateEditorPage — EDIT mode', () => {
     )
   })
 
+  it('BUG-117: "Applies to" names the owner even when it is not an active client', async () => {
+    listClientsMock.mockResolvedValue({ data: { content: [{ clientCode: 'ACME', name: 'Acme' }] } })
+    getByIdMock.mockResolvedValue(template(15, { tenantId: 'QA-20261020-SETORG-1' }))
+    const Page = await loadPage()
+    renderAt(Page, '/settings/templates/15')
+    await waitFor(() => expect(screen.getByRole('heading', { name: /Edit template #15/i })).toBeInTheDocument())
+    const select = screen.getByRole('combobox', { name: /Applies to/i }) as HTMLSelectElement
+    await waitFor(() => expect(select.value).toBe('QA-20261020-SETORG-1'))
+    expect(select.options[select.selectedIndex].textContent).toMatch(/QA-20261020-SETORG-1 — not an active client/)
+  })
+
   it('load error → notify.apiError + navigate back to /settings/templates', async () => {
     getByIdMock.mockRejectedValue(new Error('boom-load'))
     const Page = await loadPage()

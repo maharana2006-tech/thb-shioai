@@ -281,8 +281,13 @@ export default function LabelTemplateEditorPage() {
         value: c.clientCode,
         label: `${c.clientCode} — ${c.name}`,
       })),
+      // BUG-117 — the list holds active clients only; a template owned by a
+      // deactivated client must still name its owner, not the first option.
+      ...(tenantId !== PLATFORM_DEFAULT_VALUE && !clients.some((c) => c.clientCode === tenantId)
+        ? [{ value: tenantId, label: `${tenantId} — not an active client` }]
+        : []),
     ],
-    [clients],
+    [clients, tenantId],
   )
 
   const primary = template.primaryColor || DEFAULT_COLOR

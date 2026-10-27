@@ -1,6 +1,6 @@
 import { Suspense } from 'react'
 import { lazyWithRetry as lazy } from '../utils/lazyWithRetry'
-import { Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom'
+import { Link, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom'
 
 /** Redirect the legacy `/settings/label-templates/:id` URL to the new
  *  `/settings/templates/:id`, preserving the id. Standalone helper because
@@ -355,10 +355,10 @@ function NotFoundPage() {
               on this card and the label becomes invisible on the dark
               navy button. Pin the color with the Tailwind !important
               prefix so the anchor overrides inherit. */}
-          <a href={workspacePaths.dashboard}
+          <Link to={workspacePaths.dashboard}
              className="rounded-lg bg-slate-900 px-3 py-1.5 text-[12.5px] font-semibold !text-white hover:bg-slate-800">
             Go to Dashboard
-          </a>
+          </Link>
           <button type="button" onClick={() => history.back()}
              className="rounded-lg border border-slate-300 px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:bg-slate-50">
             Back

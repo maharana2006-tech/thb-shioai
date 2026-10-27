@@ -289,7 +289,9 @@ describe('ShippingServicesPage — origin filter', () => {
     const gbSvc = svc(2, 'UPS', 'EXPRESS', { originCountry: 'GB', name: 'UPS Express (GB)' })
     catalogMock.mockResolvedValue({
       services: [usSvc, gbSvc],
-      links: [], rules: [], rulePackages: [], ruleWarehouses: [],
+      // BUG-083 — two links on the US service, one on the GB service.
+      links: [{ serviceId: 1, presetId: 100 }, { serviceId: 1, presetId: 101 }, { serviceId: 2, presetId: 100 }],
+      rules: [], rulePackages: [], ruleWarehouses: [],
       originCountries: ['US', 'GB'],
     })
     listPresetsMock.mockResolvedValue([])
@@ -300,12 +302,16 @@ describe('ShippingServicesPage — origin filter', () => {
     // Default origin US — only US service visible.
     await waitFor(() => expect(screen.getByText('UPS Ground (US)')).toBeInTheDocument())
     expect(screen.queryByText('UPS Express (GB)')).not.toBeInTheDocument()
+    const linksTile = () => screen.getByText('Package links').closest('div.rounded-2xl') as HTMLElement
+    expect(linksTile().textContent).toContain('2')
 
     // Switch origin to GB — client-side filter flips.
     await userEvent.selectOptions(screen.getByRole('combobox'), 'GB')
 
     expect(screen.getByText('UPS Express (GB)')).toBeInTheDocument()
     expect(screen.queryByText('UPS Ground (US)')).not.toBeInTheDocument()
+    expect(linksTile().textContent).toContain('1')
+    expect(linksTile().textContent).not.toContain('3')
     // No new catalog() call — filter is purely client-side.
     expect(catalogMock).toHaveBeenCalledTimes(1)
   })

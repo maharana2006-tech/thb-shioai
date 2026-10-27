@@ -39,8 +39,9 @@ vi.mock('../../api/apiClient', () => ({
 
 vi.mock('../../hooks/useFocusTrap', () => ({ useFocusTrap: vi.fn() }))
 vi.mock('../../hooks/useEventStream', () => ({ useEventStream: () => ({ status: 'closed' }) }))
+const useMpsProgressMock = vi.fn(() => ({ progress: null, loading: false, error: null, refresh: vi.fn() }))
 vi.mock('../../hooks/useMpsProgress', () => ({
-  useMpsProgress: () => ({ progress: null, loading: false, error: null, refresh: vi.fn() }),
+  useMpsProgress: (...a: unknown[]) => useMpsProgressMock(...(a as [])),
 }))
 
 const notifyInfo = vi.fn()
@@ -92,6 +93,38 @@ describe('BulkLabelModal · plural + resume (BUG-037 / BUG-038)', () => {
     // After hydration the submit CTA is gone — the Progress / Download
     // branch takes over.
     expect(screen.queryByRole('button', { name: /Generate 2 labels/ })).toBeNull()
+  })
+
+  it('BUG-062: a finished job without skippedCount shows 100%, not NaN%', async () => {
+    window.localStorage.setItem(
+      'bulk-label-modal:last-job-v1',
+      JSON.stringify({ signature: '934457', jobId: 10 }),
+    )
+    status.mockResolvedValueOnce({
+      data: { id: 10, status: 'COMPLETED', successfulCount: 1, failedCount: 0, totalCount: 1, downloadable: true },
+    })
+    render(<BulkLabelModal onClose={vi.fn()} orderNumbers={[934457]} carrierCode="UPS" />)
+    await waitFor(() => expect(screen.getByText('100%')).toBeInTheDocument())
+    expect(screen.queryByText(/NaN/)).toBeNull()
+    expect(screen.getByRole('button', { name: /Download 1 label \(zip\)/ })).toBeInTheDocument()
+  })
+
+  it('BUG-038: MPS progress is only polled for a single USPS order', async () => {
+    window.localStorage.setItem(
+      'bulk-label-modal:last-job-v1',
+      JSON.stringify({ signature: '934458', jobId: 11 }),
+    )
+    status.mockResolvedValue({
+      data: { id: 11, status: 'COMPLETED', successfulCount: 1, failedCount: 0, totalCount: 1, downloadable: true },
+    })
+    const { unmount } = render(<BulkLabelModal onClose={vi.fn()} orderNumbers={[934458]} carrierCode="FEDEX" />)
+    await waitFor(() => expect(status).toHaveBeenCalledWith(11))
+    expect(useMpsProgressMock.mock.calls.every((c) => (c as unknown[])[0] == null)).toBe(true)
+    unmount()
+
+    useMpsProgressMock.mockClear()
+    render(<BulkLabelModal onClose={vi.fn()} orderNumbers={[934458]} carrierCode="USPS" />)
+    await waitFor(() => expect(useMpsProgressMock.mock.calls.some((c) => (c as unknown[])[0] === 934458)).toBe(true))
   })
 
   it('does NOT resume when the stored signature belongs to a different order set', async () => {

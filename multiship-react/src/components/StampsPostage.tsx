@@ -238,7 +238,7 @@ export function AddFundsForm({ account, onDone }: {
             className="rounded-lg border border-slate-200 px-3 py-1.5 text-[13px] text-slate-700 hover:bg-slate-50">Cancel</button>
           <button type="button" onClick={() => void submit()} aria-busy={busy}
             className="rounded-lg bg-[#1f150c] px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-[#412d15] disabled:opacity-60"
-            disabled={busy || unauth}>
+            disabled={busy || unauth || problem !== null}>
             {busy ? 'Adding…' : amount && !problem ? `Add ${usd(amount)}` : 'Add funds'}
           </button>
         </div>

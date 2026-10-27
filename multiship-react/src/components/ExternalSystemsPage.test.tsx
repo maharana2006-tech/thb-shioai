@@ -131,6 +131,17 @@ afterEach(() => {
 
 // ── Test ──────────────────────────────────────────────────────────
 
+describe('ExternalSystemsPage — BUG-144 type wording', () => {
+  it('names only the types that exist, spelled the same in the header and the table', async () => {
+    await renderPage()
+    await waitFor(() => expect(screen.getByText('nds-default')).toBeInTheDocument())
+    expect(screen.getByText(/Connection types you can add: NDS \(Oracle\)\./)).toBeInTheDocument()
+    expect(screen.getByText('NDS (Oracle)')).toBeInTheDocument()
+    expect(screen.queryByText('NDS_ORACLE')).toBeNull()
+    expect(screen.queryByText(/Oracle WMS, REST, SFTP/)).toBeNull()
+  })
+})
+
 describe('ExternalSystemsPage — V89 writeback flags', () => {
   it('sends the six writeback booleans on save when every checkbox is toggled on', async () => {
     const user = userEvent.setup()

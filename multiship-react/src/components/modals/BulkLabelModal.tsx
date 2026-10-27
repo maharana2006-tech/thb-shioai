@@ -52,6 +52,8 @@ import { useEventStream } from '../../hooks/useEventStream'
 export interface BulkLabelModalProps {
   onClose: () => void
   orderNumbers: number[]
+  /** Carrier of the single selected order — MPS progress is USPS-only. */
+  carrierCode?: string | null
 }
 
 /** Warning threshold: queue tail longer than this seconds surfaces a
@@ -96,7 +98,7 @@ function writeLastJob(sig: string, jobId: number): void {
   try { window.localStorage.setItem(LAST_JOB_KEY, JSON.stringify({ signature: sig, jobId })) } catch { /* storage disabled */ }
 }
 
-export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModalProps) {
+export default function BulkLabelModal({ onClose, orderNumbers, carrierCode }: BulkLabelModalProps) {
   const [job, setJob] = useState<BulkLabelJob | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
@@ -224,7 +226,7 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
           setJob(next)
           // BUG-036 — include skippedCount so progress reaches 100% when
           // the only "non-fresh-label" rows are already-labelled skips.
-          const done = next.successfulCount + next.failedCount + next.skippedCount
+          const done = next.successfulCount + next.failedCount + (next.skippedCount ?? 0)
           if (done !== lastDone) {
             delayMs = MIN_DELAY
             lastDone = done
@@ -376,7 +378,7 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
     ? job.totalCount > 0
       // BUG-036 — count skips in the "done" denominator so a batch of
       // all-already-labelled orders reaches 100% instead of stalling.
-      ? Math.round(((job.successfulCount + job.failedCount + job.skippedCount) / job.totalCount) * 100)
+      ? Math.round(((job.successfulCount + job.failedCount + (job.skippedCount ?? 0)) / job.totalCount) * 100)
       : 0
     : 0
 
@@ -396,7 +398,8 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
    *     per-row parent_order_no on the wire and re-enable this for
    *     mixed batches.
    */
-  const candidateMpsParentOrderNo = orderNumbers.length === 1 ? orderNumbers[0] : null
+  const candidateMpsParentOrderNo =
+    orderNumbers.length === 1 && (carrierCode ?? '').toUpperCase() === 'USPS' ? orderNumbers[0] : null
 
   return (
     <div
@@ -497,7 +500,7 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
               className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-[12px] font-semibold text-emerald-800 hover:bg-emerald-100 disabled:opacity-40"
             >
               <FiDownload className="h-3 w-3" />
-              {downloading ? 'Downloading…' : `Download ${job.successfulCount} labels (zip)`}
+              {downloading ? 'Downloading…' : `Download ${job.successfulCount} label${job.successfulCount === 1 ? '' : 's'} (zip)`}
             </button>
           ) : null}
           {job && (job.status === 'PENDING' || job.status === 'RUNNING') ? (

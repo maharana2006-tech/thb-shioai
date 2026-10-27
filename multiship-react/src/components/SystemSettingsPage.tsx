@@ -128,7 +128,8 @@ export default function SystemSettingsPage() {
     if (!uspsReadiness.platformCreds.clientIdSet) parts.push('USPS platform CLIENT_ID')
     if (!uspsReadiness.platformCreds.clientSecretSet) parts.push('USPS platform CLIENT_SECRET')
     if (uspsReadiness.pendingAccounts.length) {
-      const tenants = uspsReadiness.pendingAccounts.slice(0, 3).map((r) => r.tenantCode).join(', ')
+      // BUG-154 — the platform-level account has no tenant; name it instead of leaving a blank.
+      const tenants = uspsReadiness.pendingAccounts.slice(0, 3).map((r) => r.tenantCode || 'platform account').join(', ')
       const more =
         uspsReadiness.pendingAccounts.length > 3
           ? ` (+${uspsReadiness.pendingAccounts.length - 3} more)`

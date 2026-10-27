@@ -49,7 +49,7 @@ import type { CarrierAccountRef, OrderAccountResolution } from '../api/accountRe
 import AccountScenarioBadge from './workspace/AccountScenarioBadge'
 // PR #555 — inline compact status dot+label supersedes OrderStatusBadge.
 // import OrderStatusBadge from './workspace/OrderStatusBadge'
-import AdvancedDataTable, { type ColumnDef } from './workspace/AdvancedDataTable'
+import AdvancedDataTable, { PHONE_SHEET, type ColumnDef } from './workspace/AdvancedDataTable'
 import SendToPrinterDialog from './workspace/SendToPrinterDialog'
 import { useAppSession } from '../hooks/useAppSession'
 import { normalizeRole } from '../utils/roles'
@@ -2574,7 +2574,7 @@ export default function OrdersWorkspace() {
                     ref={filtersDialogRef}
                     role="dialog"
                     aria-label="Advanced filters"
-                    className="absolute right-0 top-full z-30 mt-1.5 w-[min(36rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-[#e3d9c4] bg-[#faf7f0] shadow-[0_20px_60px_rgba(31,21,12,0.18)]"
+                    className={`absolute right-0 top-full z-30 mt-1.5 w-[min(36rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-[#e3d9c4] bg-[#faf7f0] shadow-[0_20px_60px_rgba(31,21,12,0.18)]${PHONE_SHEET}`}
                   >
                     <div className="flex items-center justify-between gap-3 border-b border-[#e3d9c4] bg-white/70 px-4 py-2.5">
                       <div className="flex items-center gap-2">
@@ -3163,6 +3163,7 @@ export default function OrdersWorkspace() {
           <BulkLabelModal
             onClose={() => setBulkLabelOpen(false)}
             orderNumbers={rows.map((o) => o.orderDetails.orderNo)}
+            carrierCode={rows.length === 1 ? normalizeCarrierCode(rows[0].shippingDetails.shipVia) : null}
           />
         ) : null}
 

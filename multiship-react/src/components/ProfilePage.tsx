@@ -363,6 +363,11 @@ function SecurityCard({ profile, onSignOut }: { profile: Profile | null; onSignO
     <Card icon={FiLock} title="Password">
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_260px]">
         <div className="space-y-4">
+          {/* BUG-185 — password managers pair the saved password with the
+              first text box on the page (the top-bar search) unless the
+              form carries its own username field. */}
+          <input type="text" name="username" autoComplete="username" value={profile?.username ?? ''}
+            readOnly tabIndex={-1} aria-hidden="true" className="hidden" />
           <div>
             <label className={LABEL} htmlFor="pw-old">Current password</label>
             <input id="pw-old" type="password" autoComplete="current-password" className={INPUT}

@@ -194,6 +194,10 @@ export default function CarrierShippingLimitsPage() {
                   {r.active ? (
                     <span className="inline-flex items-center gap-1 text-emerald-700">
                       <FiCheck className="h-3.5 w-3.5" /> Active
+                      {/* BUG-090 — the value is a zone-less local time; show it as typed. */}
+                      {r.effectiveUntil ? (
+                        <span className="text-slate-500">until {r.effectiveUntil.slice(0, 16).replace('T', ' ')}</span>
+                      ) : null}
                     </span>
                   ) : (
                     <span className="inline-flex items-center gap-1 text-red-600">

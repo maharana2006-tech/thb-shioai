@@ -240,6 +240,17 @@ export default function MailProviderFormModal({
   )
 }
 
+/** BUG-136 — plain-words labels for the backend setting keys. */
+const CONFIG_LABELS: Record<string, string> = {
+  from_address: 'From address', fromAddress: 'From address', serverToken: 'Server token', apiKey: 'API key',
+  region: 'AWS region', accessKeyId: 'Access key ID', secretAccessKey: 'Secret access key',
+  host: 'SMTP host', port: 'Port', username: 'Username', password: 'Password',
+}
+// eslint-disable-next-line react-refresh/only-export-components -- page copy helper, tested directly
+export const configLabel = (key: string): string =>
+  CONFIG_LABELS[key]
+  ?? key.replace(/_/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase().replace(/^\w/, (ch) => ch.toUpperCase())
+
 function ConfigInput({
   keyName,
   isSecret,
@@ -255,8 +266,8 @@ function ConfigInput({
 }) {
   return (
     <label className="grid grid-cols-[10rem_1fr] items-center gap-3 text-[12px]">
-      <span className="font-mono text-[#5a4526]">
-        {keyName}
+      <span className="text-[#5a4526]" title={keyName}>
+        {configLabel(keyName)}
         {isSecret && (
           <span className="ml-1 rounded bg-amber-100 px-1 text-[10px] text-amber-800">secret</span>
         )}

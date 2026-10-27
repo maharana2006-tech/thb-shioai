@@ -330,6 +330,24 @@ describe('ClientEditorPage · Identity · edit mode', () => {
     expect(codeInput.readOnly).toBe(true)
   })
 
+  it('BUG-074: the Summary step lists what the client has and labels Finish', async () => {
+    getClient.mockResolvedValueOnce({ data: sampleClient({
+      carrierAccounts: [{ id: 1, accountNumber: 'ACC-1', carrierCode: 'UPS', environment: 'TEST', clientDefault: true }],
+      hasBillingMarkup: false,
+    }) })
+    const Page = await loadPage()
+    renderEdit(Page, 'ACME')
+    await waitFor(() => expect(screen.getByPlaceholderText('MA1885')).toBeTruthy())
+    const user = userEvent.setup()
+    await user.click(screen.getByTestId('step-pill-summary'))
+
+    expect(screen.getByText(/Carrier accounts \(1\)/)).toBeTruthy()
+    expect(screen.getByText(/ACC-1/)).toBeTruthy()
+    expect(screen.getAllByText(/Acme Widgets/).length).toBeGreaterThan(0)
+    expect(screen.getByText(/No billing markup saved/i)).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Finish — back to clients/i })).toBeTruthy()
+  })
+
   it('hydrates every Defaults value from the server response', async () => {
     getClient.mockResolvedValueOnce({
       data: sampleClient({
@@ -383,6 +401,22 @@ describe('ClientEditorPage · Identity · negative', () => {
     })
     const next = screen.getByRole('button', { name: /^Next/i })
     expect((next as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('BUG-071: an invalid e-mail is marked while typing and the footer says why Next is off', async () => {
+    const Page = await loadPage()
+    renderCreate(Page)
+    const user = userEvent.setup()
+
+    await user.type(screen.getByPlaceholderText('MA1885'), 'QA-1')
+    await user.type(screen.getByPlaceholderText('Modern Art Fabrics'), 'QA Client')
+    const emailInput = screen.getByPlaceholderText('contact@client.com')
+    await user.type(emailInput, 'not-an-email')
+    // No blur: the red field + message are visible straight away.
+    expect(screen.getByText(/Enter a valid email address/i)).toBeTruthy()
+    expect(emailInput).toHaveAttribute('aria-invalid', 'true')
+    expect(screen.getByRole('status').textContent).toMatch(/Fix Identity fields/i)
+    expect((screen.getByRole('button', { name: /^Next/i }) as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('invalid clientCode chars (space/!) → validator error surfaces on blur', async () => {

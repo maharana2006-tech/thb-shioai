@@ -112,6 +112,8 @@ export function labelStatusOf(b: Pick<DtcBatchStats, 'totalLines' | 'generatedCo
   if (!b.totalLines) return 'NONE'
   if (b.generatedCount + b.queuedCount >= b.totalLines) return 'GENERATED'
   if (b.generatedCount + b.queuedCount + b.failedCount === 0) return 'PENDING'
+  // BUG-068 — no label exists at all; PARTIAL would read as "some do".
+  if (b.generatedCount + b.queuedCount === 0) return 'FAILED'
   return 'PARTIAL'
 }
 

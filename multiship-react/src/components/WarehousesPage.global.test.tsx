@@ -274,6 +274,27 @@ describe('WarehousesPage · Global · positive', () => {
   }, 15000)
 })
 
+describe('WarehousesPage · BUG-179 ?q= deep link', () => {
+  it('pre-fills the search box and filters the list from ?q=', async () => {
+    listWarehousesMock.mockResolvedValue(pageResponse([sampleWarehouse({ code: 'QA-WH1' })], 1))
+    const Page = await loadPage()
+    render(
+      <MemoryRouter initialEntries={['/settings/warehouses?q=QA-WH1']}>
+        <Routes>
+          <Route element={<Outlet context={{ registerRefresh: vi.fn() }} />}>
+            <Route path="/settings/warehouses" element={<Page />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    )
+    await waitFor(() => expect(screen.getByText('QA-WH1')).toBeTruthy())
+    expect((screen.getByPlaceholderText(/Search code, name, city/i) as HTMLInputElement).value).toBe('QA-WH1')
+    await waitFor(() =>
+      expect(listWarehousesMock).toHaveBeenCalledWith(expect.objectContaining({ search: 'QA-WH1' })),
+    )
+  })
+})
+
 // ============ Role-gating matrix ============
 
 describe('WarehousesPage · role gating', () => {

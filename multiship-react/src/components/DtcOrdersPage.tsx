@@ -325,6 +325,7 @@ export default function DtcOrdersPage() {
             <option value="">Any label status</option>
             <option value="GENERATED">Generated</option>
             <option value="PARTIAL">Partial</option>
+            <option value="FAILED">Failed</option>
             <option value="PENDING">Not started</option>
           </Select>
 

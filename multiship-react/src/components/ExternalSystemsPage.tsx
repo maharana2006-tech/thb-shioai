@@ -39,6 +39,11 @@ import type { SettingsOutletContext } from './layout/SettingsLayout'
  * button in the row); no automatic polling to avoid dialling an
  * Oracle server on page load.
  */
+/** BUG-144 — one spelling of a connection type everywhere on the page. */
+const SYSTEM_TYPE_LABELS: Record<string, string> = { NDS_ORACLE: 'NDS (Oracle)', REST_JSON: 'REST (JSON)', SFTP: 'SFTP' }
+// eslint-disable-next-line react-refresh/only-export-components -- page copy helper, tested directly
+export const systemTypeLabel = (t: string): string => SYSTEM_TYPE_LABELS[t] ?? t.replace(/_/g, ' ')
+
 export default function ExternalSystemsPage() {
   const [rows, setRows] = useState<ConnectionSummary[]>([])
   const [connectors, setConnectors] = useState<ConnectorSummary[]>([])
@@ -108,12 +113,10 @@ export default function ExternalSystemsPage() {
             External systems
           </h2>
           <p className="mt-1 text-[12.5px] text-slate-500">
-            Connections to systems outside Multiship — Oracle WMS, REST, SFTP.
-            Supported types: {connectors.length
-              ? connectors
-                  .map((c) => c.systemType.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (ch) => ch.toUpperCase()))
-                  .join(', ')
-              : '—'}.
+            Connections to systems outside Multiship.
+            Connection types you can add: {connectors.length
+              ? connectors.map((c) => systemTypeLabel(c.systemType)).join(', ')
+              : '—'}. File delivery over SFTP is set up under Output Destinations.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -189,8 +192,8 @@ export default function ExternalSystemsPage() {
                       </div>
                     </td>
                     <td className="px-3 py-2">
-                      <span className="rounded-full bg-slate-100 px-2 py-0.5 font-mono text-[11px] font-semibold text-slate-700">
-                        {row.systemType}
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700" title={row.systemType}>
+                        {systemTypeLabel(row.systemType)}
                       </span>
                     </td>
                     <td className="px-3 py-2">
@@ -598,7 +601,7 @@ function MainTab({
               operator-facing system type. */}
           {connectors.map((c) => (
             <option key={c.systemType} value={c.systemType}>
-              {c.systemType.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (ch) => ch.toUpperCase())}
+              {systemTypeLabel(c.systemType)}
             </option>
           ))}
         </select>

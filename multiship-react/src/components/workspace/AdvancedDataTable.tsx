@@ -327,6 +327,9 @@ function SortableHeader<T extends RowData>({
   )
 }
 
+/** BUG-195 — below `sm` an anchored popover becomes a full-width sheet with its own scroll. */
+export const PHONE_SHEET = ' max-sm:fixed max-sm:inset-x-4 max-sm:top-20 max-sm:w-auto max-sm:max-h-[calc(100vh-6rem)] max-sm:overflow-y-auto'
+
 export default function AdvancedDataTable<T extends RowData>({
   tableKey,
   columns,
@@ -801,8 +804,9 @@ export default function AdvancedDataTable<T extends RowData>({
             }
 
             const hasDraft = draftColumnOrder != null
+            // BUG-195 — on a phone the anchored popover ran off the left edge; open as a sheet.
             return (
-              <div className="absolute right-0 z-20 mt-1.5 w-72 rounded-xl border border-[#e3d9c4] bg-white p-2 shadow-[0_12px_32px_rgba(31,21,12,0.12)]">
+              <div className={`absolute right-0 z-20 mt-1.5 w-72 rounded-xl border border-[#e3d9c4] bg-white p-2 shadow-[0_12px_32px_rgba(31,21,12,0.12)]${PHONE_SHEET}`}>
                 {orderedIds.map((id, idx) => {
                   const col = idToCol.get(id)
                   if (!col) return null
@@ -950,7 +954,7 @@ export default function AdvancedDataTable<T extends RowData>({
             Density
           </button>
           {openMenu === 'density' ? (
-            <div className="absolute right-0 z-20 mt-1.5 w-44 rounded-xl border border-[#e3d9c4] bg-white p-2 shadow-[0_12px_32px_rgba(31,21,12,0.12)]">
+            <div className={`absolute right-0 z-20 mt-1.5 w-44 rounded-xl border border-[#e3d9c4] bg-white p-2 shadow-[0_12px_32px_rgba(31,21,12,0.12)]${PHONE_SHEET}`}>
               {(['compact', 'comfortable'] as const).map((d) => (
                 <button
                   key={d}

@@ -71,6 +71,8 @@ describe('StampsAddFundsDialog', () => {
     await userEvent.type(other, '490')
     expect(screen.getByText("That would go over Stamps.com's $500.00 balance limit. You can add up to $481.60.")).toBeTruthy()
 
+    // BUG-080 — the money button is off while the amount is invalid.
+    expect((screen.getByRole('button', { name: 'Add funds' }) as HTMLButtonElement).disabled).toBe(true)
     await userEvent.click(screen.getByRole('button', { name: 'Add funds' }))
     expect(addFunds).not.toHaveBeenCalled()
   })

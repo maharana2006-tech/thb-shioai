@@ -25,6 +25,7 @@ export default function AlertHistoryPageView() {
   const [tenantCode, setTenantCode] = useState('')
   const [orderNo, setOrderNo] = useState('')
   const [pageIndex, setPageIndex] = useState(0)
+  const [knownSources, setKnownSources] = useState<string[]>([])
   // BUG-163 — only a whole order number reaches the server; anything else is
   // explained under the box instead of a raw parameter error.
   const orderNoError = orderNo.trim() && !/^\d{1,18}$/.test(orderNo.trim())
@@ -35,13 +36,16 @@ export default function AlertHistoryPageView() {
     if (orderNoError) return
     setLoading(true)
     try {
-      setPage(await alertHistoryService.list({
-        source: source.trim() || undefined,
+      const p = await alertHistoryService.list({
+        // BUG-164 — sources are upper-case codes; the server matches exactly.
+        source: source.trim().toUpperCase() || undefined,
         tenantCode: tenantCode.trim() || undefined,
         orderNo: orderNo.trim() ? Number(orderNo.trim()) : undefined,
         page: pageIndex,
         size: PAGE_SIZE,
-      }))
+      })
+      setPage(p)
+      setKnownSources((prev) => Array.from(new Set([...prev, ...p.items.map((r) => r.source).filter(Boolean)])).sort())
     } catch (err) {
       notify.apiError(err, 'Failed to load alert history.')
     } finally {
@@ -65,8 +69,10 @@ export default function AlertHistoryPageView() {
           <label className="text-[12px] font-semibold text-slate-700">
             Source
             <input value={source} onChange={(e) => { setSource(e.target.value); setPageIndex(0) }}
-                   placeholder="USPS_DIRECT"
+                   placeholder="USPS_DIRECT" list="ah-sources"
                    className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-1.5 font-mono text-[12px]" />
+            <datalist id="ah-sources">{knownSources.map((k) => <option key={k} value={k} />)}</datalist>
+            <span className="mt-0.5 block text-[10.5px] font-normal text-slate-400">Whole code; pick one from the list.</span>
           </label>
           <label className="text-[12px] font-semibold text-slate-700">
             Tenant code

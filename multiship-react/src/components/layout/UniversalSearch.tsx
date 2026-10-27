@@ -129,10 +129,15 @@ export default function UniversalSearch() {
 
       // Every source is optional — one failing endpoint must not blank the
       // whole dropdown, so each promise resolves to [] on error.
+      let orderTotal = 0
       const [orders, clients, warehouses] = await Promise.all([
         orderService
-          .listOrders({ page: 0, size: 5, search: q })
-          .then((res) => (Array.isArray(res?.data?.content) ? res.data.content : []) as Order[])
+          // BUG-180 — newest first; ascending showed a client's oldest orders.
+          .listOrders({ page: 0, size: 5, search: q, sortBy: 'orderNo', sortDirection: 'DESC' })
+          .then((res) => {
+            orderTotal = Number(res?.data?.totalElements) || 0
+            return (Array.isArray(res?.data?.content) ? res.data.content : []) as Order[]
+          })
           .catch((): Order[] => []),
         clientService
           .listClients({ page: 0, size: 4, search: q })
@@ -163,6 +168,14 @@ export default function UniversalSearch() {
           to: `${workspacePaths.orders}?q=${encodeURIComponent(String(tracking ?? orderNo))}`,
         })
       }
+      if (orderTotal > orders.length) {
+        next.push({
+          id: 'order-all',
+          kind: 'order',
+          title: `See all ${orderTotal} matching orders`,
+          to: `${workspacePaths.orders}?q=${encodeURIComponent(q)}`,
+        })
+      }
       for (const c of clients) {
         const code = c.clientCode
         if (!code) continue
@@ -171,7 +184,8 @@ export default function UniversalSearch() {
           kind: 'client',
           title: `${code}${c.name ? ` — ${c.name}` : ''}`,
           subtitle: c.status || undefined,
-          to: `/settings/clients?q=${encodeURIComponent(code)}`,
+          // BUG-179 — the clients list ignores ?q=, so open the client itself.
+          to: `/settings/clients/${encodeURIComponent(code)}`,
         })
       }
       for (const w of warehouses) {
@@ -250,7 +264,7 @@ export default function UniversalSearch() {
     return GROUP_ORDER.filter((k) => map.has(k)).map((k) => ({ kind: k, rows: map.get(k)! }))
   }, [hits])
 
-  const showDropdown = open && term.trim().length >= 2
+  const showDropdown = open && term.trim().length >= 1
 
   return (
     <div ref={boxRef} className="relative hidden lg:block">
@@ -265,6 +279,10 @@ export default function UniversalSearch() {
           }}
           onFocus={() => setOpen(true)}
           onKeyDown={onKeyDown}
+          type="search"
+          name="q"
+          autoComplete="off"
+          maxLength={200}
           placeholder="Search orders, clients, warehouses…"
           aria-label="Universal search"
           className="w-full bg-transparent text-[12.5px] text-[#1f150c] outline-none placeholder:text-slate-400"
@@ -282,7 +300,7 @@ export default function UniversalSearch() {
         <div className="absolute right-0 top-[calc(100%+6px)] z-50 max-h-[420px] w-[26rem] overflow-y-auto rounded-xl border border-[#e3d9c4] bg-white p-1.5 shadow-[0_20px_50px_rgba(31,21,12,0.22)]">
           {hits.length === 0 ? (
             <p className="px-3 py-4 text-center text-[11.5px] text-[#6b5c42]">
-              {loading ? 'Searching…' : `No matches for “${term.trim()}”`}
+              {term.trim().length < 2 ? 'Type at least 2 characters' : loading ? 'Searching…' : `No matches for “${term.trim()}”`}
             </p>
           ) : (
             grouped.map(({ kind, rows }) => (

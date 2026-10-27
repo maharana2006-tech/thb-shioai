@@ -350,7 +350,7 @@ export const resolveWorkspaceRouteKey = (pathname: string): WorkspaceRouteKey | 
     return 'dashboard'
   }
 
-  if (pathname === workspacePaths.orders || pathname === '/track-orders' || pathname.startsWith(apiBatchesPath)) {
+  if (pathname === workspacePaths.orders || pathname === '/track-orders' || pathname.startsWith(apiBatchesPath) || pathname.startsWith('/orders/new')) {
     return 'orders'
   }
 

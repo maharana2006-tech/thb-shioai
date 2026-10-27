@@ -247,15 +247,19 @@ export default function Dashboard() {
       load()
       if (!timer.current) timer.current = window.setInterval(load, POLL_MS)
     }
+    // BUG-002 — the window gets a `focus` event right after a hard page
+    // load, which aborted the mount request and sent a second one. A
+    // focus is only a reason to refresh when nothing is already loading.
+    const onFocus = () => { if (!inFlightRef.current) load() }
     document.addEventListener('visibilitychange', onVisibility)
-    window.addEventListener('focus', load)
+    window.addEventListener('focus', onFocus)
 
     return () => {
       mountedRef.current = false
       if (timer.current) window.clearInterval(timer.current)
       if (staleTicker.current) window.clearInterval(staleTicker.current)
       document.removeEventListener('visibilitychange', onVisibility)
-      window.removeEventListener('focus', load)
+      window.removeEventListener('focus', onFocus)
       currentAbortRef.current?.abort()  // don't leak a pending fetch on unmount
     }
   }, [load])

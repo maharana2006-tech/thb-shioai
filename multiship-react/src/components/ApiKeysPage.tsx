@@ -329,7 +329,7 @@ export default function ApiKeysPage() {
               <thead>
                 <tr className="border-b border-slate-200 bg-[#faf9f7]">
                   {['Name', 'Client', 'Token', 'Env', 'Scopes', 'Status', 'Expiry', 'Created', 'Last used', ''].map((h) => (
-                    <th key={h} className="whitespace-nowrap px-4 py-2 text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-400">
+                    <th key={h} className="px-4 py-2 text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-400">
                       {h}
                     </th>
                   ))}
@@ -394,10 +394,13 @@ export default function ApiKeysPage() {
                     </td>
                     <td className="px-4 py-2.5">
                       {(() => {
-                        const t = expiryTone(k.expiresAt)
+                        // BUG-146 — a revoked key has no time left.
+                        const t = k.active
+                          ? expiryTone(k.expiresAt)
+                          : { text: 'revoked', cls: 'bg-slate-100 text-slate-500 ring-slate-200' }
                         return (
                           <span
-                            title={k.expiresAt ?? undefined}
+                            title={(k.active ? k.expiresAt : k.revokedAt) ?? undefined}
                             className={`inline-flex items-center rounded-full px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wide ring-1 ${t.cls}`}
                           >
                             {t.text}
