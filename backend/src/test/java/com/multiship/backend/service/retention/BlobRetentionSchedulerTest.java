@@ -8,6 +8,9 @@ import com.multiship.backend.repository.GeneratedReportRepository;
 import com.multiship.backend.repository.ImportBatchRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.SimpleTransactionStatus;
 
 import java.time.LocalDateTime;
 
@@ -30,6 +33,7 @@ class BlobRetentionSchedulerTest {
     private GeneratedReportRepository generatedReportRepo;
     private ImportBatchRepository importBatchRepo;
     private RetentionProperties props;
+    private PlatformTransactionManager txManager;
     private BlobRetentionScheduler scheduler;
 
     @BeforeEach
@@ -39,8 +43,11 @@ class BlobRetentionSchedulerTest {
         generatedReportRepo = mock(GeneratedReportRepository.class);
         importBatchRepo = mock(ImportBatchRepository.class);
         props = new RetentionProperties();  // defaults per class
+        txManager = mock(PlatformTransactionManager.class);
+        TransactionStatus status = new SimpleTransactionStatus();
+        when(txManager.getTransaction(any())).thenReturn(status);
         scheduler = new BlobRetentionScheduler(
-                webhookDeliveryRepo, auditLogRepo, generatedReportRepo, importBatchRepo, props);
+                webhookDeliveryRepo, auditLogRepo, generatedReportRepo, importBatchRepo, props, txManager);
     }
 
     @Test
@@ -102,6 +109,20 @@ class BlobRetentionSchedulerTest {
 
         verify(importBatchRepo, never()).nullifyRowsJsonOlderThan(any());
         verify(importBatchRepo, never()).deleteRowsOlderThan(any());
+    }
+
+    @Test
+    void eachPhaseRunsInsideItsOwnTransaction() {
+        // Regression guard for the self-invocation bug: @Transactional on
+        // phase() was a no-op because runNightlyRetention invokes it via
+        // a lambda on 'this', bypassing the Spring AOP proxy. Fix uses an
+        // explicit TransactionTemplate, so the mocked tx manager must see
+        // one getTransaction/commit pair per phase that runs. Defaults =
+        // 4 tables × 2 phases = 8 transactions.
+        scheduler.runNightlyRetention();
+
+        verify(txManager, times(8)).getTransaction(any());
+        verify(txManager, times(8)).commit(any());
     }
 
     @Test
