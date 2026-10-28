@@ -272,7 +272,9 @@ export default function Dashboard() {
   const today = data?.today
   const exceptions = today?.exceptionsNow ?? 0
   const ready = queue?.ready ?? 0
-  const delta = (today?.labelsToday ?? 0) - (today?.labelsYesterday ?? 0)
+  // Keep delta null while `today` is loading so Card 1's subtext doesn't
+  // say "level with yesterday" during initial paint (0 - 0 = 0).
+  const delta = today ? today.labelsToday - today.labelsYesterday : null
 
   const pipelineTotal = useMemo(
     () => PIPELINE.reduce((s, p) => s + ((queue?.[p.key as keyof QueueShape] as number) ?? 0), 0),
@@ -385,7 +387,9 @@ export default function Dashboard() {
       label: 'Labels today',
       value: today?.labelsToday ?? '—',
       unit: 'labels',
-      sub: (
+      sub: delta == null ? (
+        <span className="text-slate-400">—</span>
+      ) : (
         <span className={`inline-flex items-center gap-0.5 ${delta > 0 ? 'text-emerald-600' : delta < 0 ? 'text-rose-500' : 'text-slate-400'}`}>
           {delta > 0 ? <FiArrowUpRight className="h-3 w-3" /> : delta < 0 ? <FiArrowDownRight className="h-3 w-3" /> : null}
           {delta === 0 ? 'level with yesterday' : `${delta > 0 ? '+' : ''}${delta} vs yesterday`}
@@ -412,7 +416,11 @@ export default function Dashboard() {
       sub: exceptions === 0 ? 'nothing blocked' : 'need attention',
       icon: <FiAlertTriangle className="h-4 w-4" />,
       tone: exceptions === 0 ? 'border-emerald-200 bg-emerald-50 text-emerald-600' : 'border-amber-300 bg-amber-50 text-amber-600',
-      to: '/orders?view=details',
+      // The count sums 4 pipeline buckets (needsDetails + chooseAccount +
+      // clientMissing + failed). /orders only shows one view at a time, so
+      // routing to view=details lost 3 of the 4 buckets. Scroll to the
+      // pipeline card below where all 4 are broken out + clickable.
+      to: '#label-pipeline',
     },
     {
       label: 'International pending',
@@ -517,7 +525,13 @@ export default function Dashboard() {
           <button
             key={c.label}
             type="button"
-            onClick={() => navigate(c.to)}
+            onClick={() => {
+              if (c.to.startsWith('#')) {
+                document.getElementById(c.to.slice(1))?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+              } else {
+                navigate(c.to)
+              }
+            }}
             className={`${CARD} group text-left transition hover:-translate-y-0.5 hover:border-[#412d15]/30 hover:shadow-md`}
           >
             <div className="flex items-start justify-between gap-2 px-4 pt-3.5">
@@ -552,7 +566,7 @@ export default function Dashboard() {
       </section>
 
       {/* ===== row 2 · the pipeline ===== */}
-      <section className={`${CARD} p-5`}>
+      <section id="label-pipeline" className={`${CARD} scroll-mt-4 p-5`}>
         <div className="mb-3 flex items-center justify-between">
           <h3 className="inline-flex items-center gap-2 text-[13.5px] font-semibold text-slate-950">
             <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-[#412d15]/10 text-[#412d15]">
