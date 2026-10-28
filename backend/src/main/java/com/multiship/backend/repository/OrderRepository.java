@@ -398,7 +398,14 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
                 (SELECT s2.carrier FROM shipping_service s2
                   WHERE UPPER(s2.service_code) = UPPER(b.shipvia_cd) LIMIT 1))) = :carrier)
           AND (:isReturn = '' OR UPPER(COALESCE(b.is_return, 'N')) = :isReturn)
-          AND (:intl = '' OR UPPER(COALESCE(b.intl_yn, 'N')) = :intl)
+          -- BUG-INTL — classify by ship-to country, not the explicit
+          -- b.intl_yn flag. intl_yn is only populated on manual-ingest
+          -- rows (~1.7% of real intl shipments), so filtering by it
+          -- undercounted massively vs the Dashboard which uses the
+          -- same country rule as DashboardService.intlPending.
+          AND (:intl = ''
+               OR (:intl = 'Y' AND b.shipto_country_cd IS NOT NULL AND UPPER(b.shipto_country_cd) <> 'US')
+               OR (:intl = 'N' AND (b.shipto_country_cd IS NULL OR UPPER(b.shipto_country_cd) = 'US')))
           AND (:resolution = ''
                OR (:resolution = 'READY' AND """ + RESOLUTION_READY_SQL + """
                )

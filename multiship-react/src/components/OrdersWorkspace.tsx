@@ -173,8 +173,18 @@ export default function OrdersWorkspace() {
   const [showFilters, setShowFilters] = useState(false)
   const filtersRef = useRef<HTMLDivElement>(null)
   const emptyColumnFilters = { orderNo: '', customer: '', city: '', status: '', tracking: '', batch: '' }
-  const [columnFilters, setColumnFilters] = useState(emptyColumnFilters)
-  const [debouncedFilters, setDebouncedFilters] = useState(emptyColumnFilters)
+  // Dashboard tiles deep-link as /orders?status=PENDING (etc). Seed the
+  // status column filter from the URL so the first server fetch matches
+  // the tile's count. The URL-sync effect below keeps it in sync on
+  // subsequent same-route navigations. VIEW_QUERY[view].status wins
+  // when view != 'all' (see fetch params), so this only applies to the
+  // default 'all' view.
+  const initialColumnFilters = (() => {
+    const status = searchParams.get('status')
+    return status ? { ...emptyColumnFilters, status } : emptyColumnFilters
+  })()
+  const [columnFilters, setColumnFilters] = useState(initialColumnFilters)
+  const [debouncedFilters, setDebouncedFilters] = useState(initialColumnFilters)
   /**
    * Batch-picker dropdown source (2026-09-14). Fetched from
    * /orders/batches whenever the OTHER filter surface changes AND the
@@ -257,6 +267,15 @@ export default function OrdersWorkspace() {
     const v = params.get('v') ?? params.get('view')
     if (v && v in VIEW_QUERY && v !== view) {
       setView(v as View)
+    }
+    // Dashboard "Pending now" / "International pending" tiles pass
+    // ?status=PENDING so the server fetch matches the tile count. Fold
+    // it into the status column filter; the fetch effect reads
+    // debouncedFilters.status when VIEW_QUERY[view].status is unset.
+    const statusParam = params.get('status')
+    if (statusParam) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- sync workspace state from URL query params on nav; user-driven navigation trigger
+      setColumnFilters((prev) => prev.status === statusParam ? prev : { ...prev, status: statusParam })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `query`/`view` intentionally excluded; this effect reconciles from URL changes, not from state changes.
   }, [location.search])

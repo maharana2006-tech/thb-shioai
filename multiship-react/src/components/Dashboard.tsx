@@ -397,7 +397,12 @@ export default function Dashboard() {
       ),
       icon: <FiTag className="h-4 w-4" />,
       tone: 'border-[#412d15]/25 bg-[#412d15]/[0.06] text-[#412d15]',
-      to: '/orders?view=generated',
+      // The count is scoped to `label_generated_at >= CURRENT_DATE` but
+      // the Orders list has no labelGeneratedAt date filter — only
+      // createdFrom/createdTo. Scroll to Row 4 (activity) where the
+      // 7-day sparkline + Recent labels + carrier split answer "what
+      // got generated today" without a count/filter mismatch.
+      to: '#activity',
     },
     {
       label: 'Pending now',
@@ -771,7 +776,7 @@ export default function Dashboard() {
       ) : null}
 
       {/* ===== row 4 · activity ===== */}
-      <section className="grid gap-3 lg:grid-cols-3">
+      <section id="activity" className="scroll-mt-4 grid gap-3 lg:grid-cols-3">
         {/* 7-day trend */}
         <div className={`${CARD} p-5`}>
           <h3 className="inline-flex items-center gap-2 text-[13.5px] font-semibold text-slate-950">
