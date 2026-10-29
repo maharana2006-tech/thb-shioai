@@ -1577,6 +1577,13 @@ public class FedExConnector implements CarrierConnector {
         return out;
     }
 
+    /** 4x6 labelStockType compatible with the given imageType: PAPER_4X6 for
+     *  PDF/PNG (laser), STOCK_4X6 for ZPLII/EPL2/DPL (thermal). */
+    static String defaultLabelStockType(String imageType) {
+        String t = imageType == null ? "" : imageType.trim().toUpperCase(Locale.ROOT);
+        return "PDF".equals(t) || "PNG".equals(t) ? "PAPER_4X6" : "STOCK_4X6";
+    }
+
     /** Normalise the DTO's freeform signatureOption to the FedEx enum
      *  values. Blank / unknown / NONE → null (carrier default). */
     private static String normaliseSignatureOption(String raw) {
@@ -2312,11 +2319,15 @@ public class FedExConnector implements CarrierConnector {
         // REQUESTEDSHIPMENT.LABELSPECIFICATION.REQUIRED. FDX-H3 — resolved
         // per-account (account default → hardcoded PDF/PAPER_4X6, which
         // matches the thermal 4x6 format the other carriers default to).
+        // FedEx rejects PAPER_* stock with thermal image types (and vice
+        // versa) with INVALID.STOCK.TYPE, so the stock fallback follows the
+        // image type.
+        String labelImageType = StringUtils.hasText(request.getLabelImageType())
+                ? request.getLabelImageType() : "ZPLII";
         requestedShipment.put("labelSpecification", Map.of(
-                "imageType", StringUtils.hasText(request.getLabelImageType())
-                        ? request.getLabelImageType() : "ZPLII",
+                "imageType", labelImageType,
                 "labelStockType", StringUtils.hasText(request.getLabelStockType())
-                        ? request.getLabelStockType() : "PAPER_4X6"));
+                        ? request.getLabelStockType() : defaultLabelStockType(labelImageType)));
 
         Map<String, Object> shipper = buildParty(
                 request.getShipperName(),
