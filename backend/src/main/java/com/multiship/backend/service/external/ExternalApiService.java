@@ -231,6 +231,13 @@ public class ExternalApiService {
                     throw new ExternalApiException(422, ErrorCode.VALIDATION_ERROR,
                             "shipMethod '" + req.getShipMethod().trim() + "' is not a " + carrier
                             + " service on this platform — send the carrier's code (UPS 03/08, FEDEX_GROUND…) or a catalog name.");
+                } else {
+                    // No catalog means carrierCode isn't a carrier at all
+                    // (often a shipvia code like "F06"); without this the
+                    // request fell through to "Shipping service is required."
+                    throw new ExternalApiException(422, ErrorCode.VALIDATION_ERROR,
+                            "carrierCode '" + carrier + "' is not a known carrier — send UPS, FEDEX, USPS…, "
+                            + "or omit carrierCode to resolve the carrier from shipMethod.");
                 }
             }
         } else if (translatedShipviaService != null) {
