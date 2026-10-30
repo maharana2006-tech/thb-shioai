@@ -10,7 +10,7 @@ import { STATE_CODE_OPTIONS } from '../../utils/stateCodes'
 const SECTIONS: { title: string; keys: string[] }[] = [
   { title: 'Recipient', keys: ['recipientName', 'recipientCompany', 'recipientPhone', 'recipientEmail'] },
   { title: 'Address', keys: ['addressLine1', 'addressLine2', 'city', 'state', 'postalCode', 'countryCode'] },
-  { title: 'Shipping', keys: ['clientCode', 'billTo', 'warehouseCode', 'carrierCode', 'accountNumber', 'serviceType', 'packageType', 'reference'] },
+  { title: 'Shipping', keys: ['clientCode', 'billTo', 'warehouseCode', 'carrierCode', 'accountNumber', 'thirdPartyPostalCode', 'thirdPartyCountry', 'serviceType', 'packageType', 'reference'] },
   { title: 'Package', keys: ['weight', 'weightUnit', 'length', 'width', 'height', 'dimUnit'] },
   { title: 'Items & customs', keys: ['itemDescription', 'itemSku', 'itemQuantity', 'itemUnitValue', 'currency', 'incoterms', 'hsCode', 'countryOfOrigin'] },
 ]

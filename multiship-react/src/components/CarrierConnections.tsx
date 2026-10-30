@@ -2114,8 +2114,8 @@ export default function CarrierConnections({
                         Third-party billing (default) <span className="ml-1 rounded-full bg-white px-1.5 py-0.5 text-[9px] font-bold text-amber-700">per-shipment override</span>
                       </p>
                       <p className="mt-0.5 text-[10.5px] leading-4 text-amber-900/70">
-                        Account-level default only. The account #, address, or both can be overridden per shipment
-                        (New Shipment form) — this is the fallback when no override is set.
+                        Account-level default for duties and for shipping charges billed to a third party.
+                        New shipment prefills its third-party payer from here; the operator can override it per shipment.
                       </p>
                       <div className="mt-2 grid grid-cols-2 gap-2">
                         <Field label="Third-party account #">

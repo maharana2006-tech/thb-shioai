@@ -26,6 +26,9 @@ export interface OrderImportRow {
   carrierCode?: string | null
   /** Sprint 41 — bill-to carrier account. Optional at import time. */
   accountNumber?: string | null
+  /** Payer's billing postal code and country when billTo is THIRD_PARTY (UPS requires both). */
+  thirdPartyPostalCode?: string | null
+  thirdPartyCountry?: string | null
   serviceType?: string | null
   /** The client's own ship via code from the file (U11, P10…) when a mapping
    *  rule translated it — serviceType then holds the carrier's own code. */

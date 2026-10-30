@@ -63,6 +63,10 @@ export interface ShipmentPayloadInputs {
   incoterms: string
   clearanceOption: string
   dutiesAccount: string
+  billTo: 'SENDER' | 'THIRD_PARTY'
+  thirdPartyAccount: string
+  thirdPartyPostalCode: string
+  thirdPartyCountry: string
   ftrExemption: string
   aesCitation: string
   exportDeclarationReference: string
@@ -81,6 +85,7 @@ export function buildShipmentPayload(inputs: ShipmentPayloadInputs): ManualShipm
     customFieldValues, labelImageType, labelStockType, labelImageFormat, pickupType, extraPackages, isInternational,
     items, reasonForExport, incoterms, clearanceOption, dutiesAccount, ftrExemption, aesCitation,
     exportDeclarationReference, override, ndsQueue, ndsActiveIdx, clients,
+    billTo, thirdPartyAccount, thirdPartyPostalCode, thirdPartyCountry,
   } = inputs
   const active = ndsQueue[ndsActiveIdx]
   const w = Number(weight)
@@ -292,6 +297,14 @@ export function buildShipmentPayload(inputs: ShipmentPayloadInputs): ManualShipm
       ...(exportDeclarationReference ? { exportDeclarationReference } : {}),
     } : {}),
     ...(isInternational && override ? { importer: override.importer, broker: override.broker } : {}),
+    // Shipping charges billed to a third party's carrier account. SENDER is
+    // the backend default, so it is only sent when it is not the default.
+    ...(billTo === 'THIRD_PARTY' && thirdPartyAccount.trim() ? {
+      billTo,
+      thirdPartyAccount: thirdPartyAccount.trim(),
+      ...(thirdPartyPostalCode.trim() ? { thirdPartyPostalCode: thirdPartyPostalCode.trim() } : {}),
+      ...(thirdPartyCountry ? { thirdPartyCountry } : {}),
+    } : {}),
     // B6 — thread the NDS batch id + per-container package rows through
     // to the writeback so NdsShipmentOracleWriter can fan CLIPPER updates
     // across every sibling order in the batch. Only when the shipment

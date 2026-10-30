@@ -155,10 +155,10 @@ export function useNewShipmentModel() {
   // React's setState contract so every handler below is unchanged.
   const { form, setters: formSetters } = useManualShipment({ isReturnPath })
   const {
-    sender, recipient, note, mode, returnType, returnPickupRequested, rmaNumber, returnReason, originalOrderNo, fixChannel, carrier, accountNumber, serviceId, incoterms, clearanceOption, dutiesAccount, packageChoice, length, width, height, dimUnit, weight, weightUnit, declaredValue, reference, clientCode, warehouseCode, ndsQueue, ndsActiveIdx, ndsStdReplacementErpCode, signatureOption, insuredValue, labelImageType, labelStockType, labelImageFormat, pickupType, dgBlock, extraPackages, customFieldValues, items, reasonForExport, currency, ftrExemption, aesCitation, exportDeclarationReference, override,
+    sender, recipient, note, mode, returnType, returnPickupRequested, rmaNumber, returnReason, originalOrderNo, fixChannel, carrier, accountNumber, serviceId, incoterms, clearanceOption, dutiesAccount, billTo, thirdPartyAccount, thirdPartyPostalCode, thirdPartyCountry, packageChoice, length, width, height, dimUnit, weight, weightUnit, declaredValue, reference, clientCode, warehouseCode, ndsQueue, ndsActiveIdx, ndsStdReplacementErpCode, signatureOption, insuredValue, labelImageType, labelStockType, labelImageFormat, pickupType, dgBlock, extraPackages, customFieldValues, items, reasonForExport, currency, ftrExemption, aesCitation, exportDeclarationReference, override,
   } = form
   const {
-    setSender, setRecipient, setNote, setMode, setReturnType, setReturnPickupRequested, setRmaNumber, setReturnReason, setOriginalOrderNo, setFixChannel, setCarrier, setAccountNumber, setServiceId, setIncoterms, setClearanceOption, setDutiesAccount, setPackageChoice, setLength, setWidth, setHeight, setDimUnit, setWeight, setWeightUnit, setDeclaredValue, setReference, setClientCode, setWarehouseCode, setNdsQueue, setNdsActiveIdx, setNdsStdReplacementErpCode, setSignatureOption, setInsuredValue, setLabelImageType, setLabelStockType, setLabelImageFormat, setPickupType, setDgBlock, setExtraPackages, setCustomFieldValues, setItems, setReasonForExport, setCurrency, setFtrExemption, setAesCitation, setExportDeclarationReference, setOverride,
+    setSender, setRecipient, setNote, setMode, setReturnType, setReturnPickupRequested, setRmaNumber, setReturnReason, setOriginalOrderNo, setFixChannel, setCarrier, setAccountNumber, setServiceId, setIncoterms, setClearanceOption, setDutiesAccount, setBillTo, setThirdPartyAccount, setThirdPartyPostalCode, setThirdPartyCountry, setPackageChoice, setLength, setWidth, setHeight, setDimUnit, setWeight, setWeightUnit, setDeclaredValue, setReference, setClientCode, setWarehouseCode, setNdsQueue, setNdsActiveIdx, setNdsStdReplacementErpCode, setSignatureOption, setInsuredValue, setLabelImageType, setLabelStockType, setLabelImageFormat, setPickupType, setDgBlock, setExtraPackages, setCustomFieldValues, setItems, setReasonForExport, setCurrency, setFtrExemption, setAesCitation, setExportDeclarationReference, setOverride,
   } = formSetters
   const [fixError, setFixError] = useState<string | null>(null)
   /** True when the order being reopened is a VOIDED (reissue) rather than a failed one. */
@@ -1206,6 +1206,12 @@ export function useNewShipmentModel() {
    * saved account leaves this null, and the label dropdowns fall back
    * to the "please select" required state.
    */
+  // USPS postage is prepaid — there is no third-party billing, so a carrier
+  // switch to USPS drops the choice back to the shipper account.
+  useEffect(() => {
+    if (canon(carrier) === 'USPS' && billTo !== 'SENDER') setBillTo('SENDER')
+  }, [carrier, billTo, setBillTo])
+
   const matchedAccount = useMemo(() => {
     if (!accountNumber.trim()) return null
     return accounts.find(
@@ -1342,6 +1348,12 @@ export function useNewShipmentModel() {
     // blocks with a targeted toast.
     if (isInternational && !incoterms) missing.push('Incoterms')
     if (isInternational && /THIRD/.test(clearanceOption.toUpperCase()) && !dutiesAccount.trim()) missing.push('Duties payor account')
+    if (billTo === 'THIRD_PARTY') {
+      if (!thirdPartyAccount.trim()) missing.push('Third-party account number')
+      // UPS BillThirdParty needs the payer's billing postal code + country.
+      if (canon(carrier) === 'UPS' && !thirdPartyPostalCode.trim()) missing.push('Third-party postal code')
+      if (canon(carrier) === 'UPS' && !thirdPartyCountry) missing.push('Third-party country')
+    }
     return missing
   }, [carrier, labelImageType, labelStockType, labelImageFormat, isInternational, reasonForExport, incoterms,
       // recipient.countryCode is intentionally omitted — recipientEffectiveCountry
@@ -1349,7 +1361,7 @@ export function useNewShipmentModel() {
       sender.countryCode, recipientEffectiveCountry, currency, declaredValue, ftrExemption, aesCitation,
       // typed fields the list checks — without these the memo kept reporting
       // "Duties payor account" after the operator had typed one
-      clearanceOption, dutiesAccount,
+      clearanceOption, dutiesAccount, billTo, thirdPartyAccount, thirdPartyPostalCode, thirdPartyCountry,
       // PR Y — carrier-preset-without-service guard
       serviceId, packageChoice])
 
@@ -2672,6 +2684,7 @@ export function useNewShipmentModel() {
     customFieldValues, labelImageType, labelStockType, labelImageFormat, pickupType, extraPackages, isInternational,
     items, reasonForExport, incoterms, clearanceOption, dutiesAccount, ftrExemption, aesCitation,
     exportDeclarationReference, override, ndsQueue, ndsActiveIdx, clients,
+    billTo, thirdPartyAccount, thirdPartyPostalCode, thirdPartyCountry,
   })
 
   // Every value the label request is built from — when it differs from the
@@ -2682,6 +2695,7 @@ export function useNewShipmentModel() {
     declaredValue, currency, dgBlock, signatureOption, insuredValue, labelImageType, labelStockType,
     labelImageFormat, pickupType, extraPackages, items, reasonForExport, incoterms, clearanceOption,
     dutiesAccount, ftrExemption, aesCitation, exportDeclarationReference, override,
+    billTo, thirdPartyAccount, thirdPartyPostalCode, thirdPartyCountry,
   ])
   const validationStale = !!shipmentValidationResult && !!validatedRequest && formSnapshot !== validatedRequest
   // Generate label unlocks only after this exact form passed Validate
@@ -2985,5 +2999,6 @@ export function useNewShipmentModel() {
 
   return {
     CURRENCIES, CUSTOM_PKG, acceptWizardPayload, accountNumber, accountsForCarrier, activateQueued, activeParties, addBoxBlockedMessage, addItem, addrErrors, aesCitation, anyShippableCarrier, applyClient, applySavedRecipient, assignAllToBox1, autoItemWeight, blankExtraPackage, bulkAddCount, canAddMoreBoxes, canEstimateLandedCost, carrier, carrierLabelMap, carrierOptions, carrierValidating, checklistOpen, clearFixKey, clearanceOption, clientCarriers, clientCode, clientHasNoOwnCarriers, clientWarehouses, clients, compatiblePresetIdsForService, currency, currentBoxCount, customBoxes, customFieldValues, declaredValue, destAllowed, destCountry, destRules, dgBlock, dgWizardOpen, dimUnit, dtcBatch, dtcLine, dtcLineId, duplicateBox, dutiesAccount, editorSeed, errAt, expandedBoxes, exportDeclarationReference, extraPackages, fixError, fixItemError, fixLoading, fixOrderNo, fixVoided, ftrExemption, height, importPastedItems, importerProfile, incoterms, insuredValue, invoiceTotal, isCustomPkg, isInternational, isRecipientUsTerritory, isReturn, itemErrAt, items, joinParts, labelImageFormat, labelImageType, labelStockType, landedCostOpen, landedCostRequest, leaveForm, loading, maxPiecesContext, mode, navigate, ndsActiveIdx, ndsBanner, ndsLoading, ndsQueue, ndsScan, noCarriersAtAll, note, onRecipientSearchKey, onScanSubmit, originalOrderNo, override, overrideEditorOpen, packageChoice, packagesForCarrier, pasteOpen, patchItem, pickupType, pkgBusy, pkgServiceWarning, platformCarriers, queuedInfo, reasonForExport, recipient, recipientActive, recipientDropdownOpen, recipientEffectiveCountry, recipientNoMatch, recipientSearch, recipientSuggestions, recipientTerritory, recipientTerritoryEarly, recommendServiceAi, reference, removeBox, removeItem, removeQueued, residentialConflict, residentialOrigin, resubmitWithSplit, returnEmailMissing, returnPickupRequested, returnReason, returnType, reviewBusy, reviewShipmentAi, reviewWarnings, rmaNumber, runRecipientSearch, saveRecipientToBook, savingToBook, sender, senderTerritoryEarly, serviceId, services, servicesForCarrier, setAccountNumber, setAesCitation, setBulkAddCount, setCarrier, setChecklistOpen, setClearanceOption, setCurrency, setCustomFieldValues, setDeclaredValue, setDgBlock, setDgWizardOpen, setDimUnit, setDimUnitTouched, setDutiesAccount, setExportDeclarationReference, setExtraPackages, setFtrExemption, setHeight, setIncoterms, setInsuredValue, setLabelImageFormat, setLabelImageType, setLabelStockType, setLandedCostOpen, setLength, setNdsBanner, setNdsScan, setNote, setOriginalOrderNo, setOverride, setOverrideEditorOpen, setPackageChoice, setPasteOpen, setPendingSplitPayload, setPickupType, setPickupTypeTouched, setReasonForExport, setRecipient, setRecipientActive, setRecipientDropdownOpen, setReference, setResidentialOrigin, setReturnPickupRequested, setReturnReason, setReturnType, setReviewWarnings, setRmaNumber, setSender, setServiceId, setSignatureOption, setSplitPrompt, setToast, setWarehouseCode, setWeight, setWeightUnit, setWeightUnitTouched, setWidth, setWizardOpen, shipmentValidationResult, signatureOption, singlePieceOnlyWarning, splitPrompt, spreadItemsAcrossBoxes, submit, submitAttempted, submitting, suggestPackagingAi, svcBusy, switchMode, toast, toggleBox, upsReturnMultiPkgNote, vBrk, vImp, validateShipment, validatedAt, validationGate, validationStale, warehouseCode, weight, weightOverPresetMaxWarning, weightUnit, width, wizardOpen, wizardPayload,
+    billTo, thirdPartyAccount, thirdPartyPostalCode, thirdPartyCountry, setBillTo, setThirdPartyAccount, setThirdPartyPostalCode, setThirdPartyCountry, matchedAccount,
     length, }
 }

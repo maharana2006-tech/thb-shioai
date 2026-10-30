@@ -59,6 +59,11 @@ export interface ShipmentForm {
   incoterms: string
   clearanceOption: string
   dutiesAccount: string
+  /** Who pays the shipping charges. THIRD_PARTY bills the payer account below, not the shipper account. */
+  billTo: 'SENDER' | 'THIRD_PARTY'
+  thirdPartyAccount: string
+  thirdPartyPostalCode: string
+  thirdPartyCountry: string
   packageChoice: string
   length: string
   width: string
@@ -127,6 +132,10 @@ export function initialShipmentForm(opts: { isReturnPath: boolean }): ShipmentFo
     incoterms: readSticky('ms:lastIncoterms', ''),
     clearanceOption: '',
     dutiesAccount: '',
+    billTo: 'SENDER',
+    thirdPartyAccount: '',
+    thirdPartyPostalCode: '',
+    thirdPartyCountry: '',
     packageChoice: '',
     length: '',
     width: '',

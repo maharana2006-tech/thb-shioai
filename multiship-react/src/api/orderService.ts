@@ -164,6 +164,10 @@ export interface OrderWithLines {
   orderNo: number
   orderSuffix: number | null
   orderStatus: string | null
+  /** Who paid the shipping charges: SENDER (default) or THIRD_PARTY. */
+  billTo?: string | null
+  /** The third party's carrier account, masked by the server (****1234). */
+  thirdPartyAccount?: string | null
   /** Display form of the order number (e.g. MAN-prefixed for manual orders). */
   displayOrderNo?: string | null
   custNo?: string | null
@@ -551,6 +555,13 @@ export interface ManualShipmentPayload {
   clearanceOption?: string | null
   /** Payer's carrier account when clearanceOption is THIRD_PARTY. */
   dutiesAccount?: string | null
+  /** Who pays the shipping charges. Omitted = SENDER (the shipper account). */
+  billTo?: 'SENDER' | 'THIRD_PARTY'
+  /** The third party's carrier account that pays the shipping charges. */
+  thirdPartyAccount?: string
+  /** Payer's billing postal code and country (UPS requires both for third-party billing). */
+  thirdPartyPostalCode?: string
+  thirdPartyCountry?: string
   /** Per-shipment importer/broker override (does not touch the client's saved profile). */
   importer?: Record<string, string>
   broker?: Record<string, string>

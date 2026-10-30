@@ -3,6 +3,8 @@ import { FiZap, FiTruck, FiAlertTriangle, FiAlertCircle } from 'react-icons/fi'
 import { canon } from '../../../utils/carrierCanon'
 import { clearanceOptionsForCarrier } from '../../../utils/customsOptions'
 import { isUpsDdpDisallowedForTerritory } from '../../../utils/usTerritoryServices'
+import { accountNumberFormatError } from '../../../validation/carrierAccountValidation'
+import { CountrySelect } from '../CountrySelect'
 import { Field, SectionCard, inputCls } from '../_shared'
 
 
@@ -11,7 +13,36 @@ import type { NewShipmentModel } from '../useNewShipmentModel'
 export function ServiceSection({ m }: { m: NewShipmentModel }) {
   const {
     accountNumber, accountsForCarrier, carrier, clearanceOption, dgBlock, dutiesAccount, errAt, importerProfile, incoterms, isInternational, recipient, recipientTerritory, recipientTerritoryEarly, recommendServiceAi, residentialConflict, residentialOrigin, sender, senderTerritoryEarly, serviceId, services, servicesForCarrier, setAccountNumber, setClearanceOption, setDgBlock, setDgWizardOpen, setDutiesAccount, setIncoterms, setRecipient, setResidentialOrigin, setServiceId, submitAttempted, svcBusy,
+    billTo, thirdPartyAccount, thirdPartyPostalCode, thirdPartyCountry, setBillTo, setThirdPartyAccount, setThirdPartyPostalCode, setThirdPartyCountry, matchedAccount,
   } = m
+  const carrierCode = canon(carrier)
+  const isUsps = carrierCode === 'USPS'
+  const thirdParty = billTo === 'THIRD_PARTY'
+  const thirdPartyAccountError = !thirdParty ? undefined
+    : !thirdPartyAccount.trim() ? (submitAttempted ? 'Enter the third party\'s account number.' : undefined)
+    : accountNumberFormatError(carrierCode, thirdPartyAccount)
+  const billToSegment = (value: 'SENDER' | 'THIRD_PARTY', label: string, disabled = false) => (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={billTo === value}
+      disabled={disabled}
+      onClick={() => {
+        setBillTo(value)
+        // Start from the saved account's third-party defaults (Settings → Carrier accounts).
+        if (value === 'THIRD_PARTY' && !thirdPartyAccount && matchedAccount?.thirdPartyAccount) {
+          setThirdPartyAccount(matchedAccount.thirdPartyAccount)
+          setThirdPartyPostalCode(matchedAccount.thirdPartyPostcode ?? '')
+          setThirdPartyCountry(matchedAccount.thirdPartyCountry ?? '')
+        }
+      }}
+      className={`flex-1 rounded-lg px-3 py-1.5 text-[12.5px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${
+        billTo === value ? 'bg-[#412d15] text-white shadow-sm' : 'text-[#5a4526] hover:bg-[#efe7d4]'
+      }`}
+    >
+      {label}
+    </button>
+  )
 
   return (
 
@@ -42,7 +73,7 @@ export function ServiceSection({ m }: { m: NewShipmentModel }) {
                 }
               >
                 <div className="grid grid-cols-1 gap-3">
-                  <Field label="Account (bill to)" required error={errAt('account')}>
+                  <Field label="Shipper account" required error={errAt('account')}>
                     <input
                       className={inputCls}
                       list="bill-to-accounts"
@@ -59,6 +90,36 @@ export function ServiceSection({ m }: { m: NewShipmentModel }) {
                       ))}
                     </datalist>
                   </Field>
+                  <Field label="Shipping charges billed to"
+                         hint={isUsps ? 'USPS postage is prepaid, so the charges always go to the shipper account.' : undefined}>
+                    <div role="radiogroup" aria-label="Shipping charges billed to"
+                         className="flex gap-1 rounded-xl border border-[#e2d9c3] bg-[#faf7f0] p-1">
+                      {billToSegment('SENDER', 'Sender (shipper account)')}
+                      {billToSegment('THIRD_PARTY', 'Third party', isUsps)}
+                    </div>
+                  </Field>
+                  {thirdParty ? (
+                    <div className="grid grid-cols-1 gap-3 rounded-xl border border-dashed border-[#cdbf9f] bg-white p-3 sm:grid-cols-2">
+                      <Field label="Third-party account number" required className="sm:col-span-2"
+                             hint={`The ${carrierCode || 'carrier'} account that pays the shipping charges. It must allow third-party billing.`}
+                             error={thirdPartyAccountError}>
+                        <input className={inputCls} value={thirdPartyAccount}
+                               onChange={(e) => setThirdPartyAccount(e.target.value)}
+                               placeholder="Payer account number" autoComplete="off" />
+                      </Field>
+                      <Field label="Payer postal code" required={carrierCode === 'UPS'}
+                             hint={carrierCode === 'UPS' ? 'UPS checks it against the account\'s billing address.' : undefined}
+                             error={carrierCode === 'UPS' && submitAttempted && !thirdPartyPostalCode.trim() ? 'Required for UPS third-party billing.' : undefined}>
+                        <input className={inputCls} value={thirdPartyPostalCode}
+                               onChange={(e) => setThirdPartyPostalCode(e.target.value)}
+                               placeholder="Postal code" autoComplete="off" />
+                      </Field>
+                      <Field label="Payer country" required={carrierCode === 'UPS'}
+                             error={carrierCode === 'UPS' && submitAttempted && !thirdPartyCountry ? 'Required for UPS third-party billing.' : undefined}>
+                        <CountrySelect value={thirdPartyCountry} onChange={setThirdPartyCountry} />
+                      </Field>
+                    </div>
+                  ) : null}
                   <Field label="Service level">
                     <div className="flex items-center gap-1.5">
                       <select className={inputCls} value={serviceId} onChange={(e) => {

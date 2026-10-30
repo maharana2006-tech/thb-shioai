@@ -35,7 +35,8 @@ const base: ShipmentPayloadInputs = {
   dgBlock: null, signatureOption: 'NONE', insuredValue: '', customFieldValues: {},
   labelImageType: '', labelStockType: '', labelImageFormat: '', pickupType: 'USE_SCHEDULED_PICKUP',
   extraPackages: [], isInternational: false,
-  items: [], reasonForExport: '', incoterms: '', clearanceOption: '', dutiesAccount: '', ftrExemption: '', aesCitation: '',
+  items: [], reasonForExport: '', incoterms: '', clearanceOption: '', dutiesAccount: '',
+  billTo: 'SENDER', thirdPartyAccount: '', thirdPartyPostalCode: '', thirdPartyCountry: '', ftrExemption: '', aesCitation: '',
   exportDeclarationReference: '', override: null, ndsQueue: [], ndsActiveIdx: 0, clients: [],
 }
 
@@ -109,6 +110,13 @@ describe('buildShipmentPayload', () => {
     expect(p).toMatchObject({ reasonForExport: 'SALE', incoterms: 'DDP', clearanceOption: 'THIRD_PARTY', dutiesAccount: '123', ftrExemption: '30.37(a)', importer: { name: 'Imp' }, broker: { name: 'Brk' } })
     expect(p).not.toHaveProperty('aesCitation')
     expect(buildShipmentPayload({ ...base, isInternational: true, clearanceOption: 'DAP', dutiesAccount: '123' })).not.toHaveProperty('dutiesAccount')
+  })
+
+  it('sends the third-party payer block only when shipping charges are billed to a third party', () => {
+    const p = buildShipmentPayload({ ...base, billTo: 'THIRD_PARTY', thirdPartyAccount: ' 123456789 ', thirdPartyPostalCode: ' 10001 ', thirdPartyCountry: 'US' })
+    expect(p).toMatchObject({ billTo: 'THIRD_PARTY', thirdPartyAccount: '123456789', thirdPartyPostalCode: '10001', thirdPartyCountry: 'US' })
+    expect(buildShipmentPayload({ ...base, billTo: 'SENDER', thirdPartyAccount: '123456789' })).not.toHaveProperty('billTo')
+    expect(buildShipmentPayload({ ...base, billTo: 'THIRD_PARTY', thirdPartyAccount: '  ' })).not.toHaveProperty('thirdPartyAccount')
   })
 
   it('channel: D2C line wins over fix-order channel; NDS batch threads batch id and packages', () => {

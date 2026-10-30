@@ -912,7 +912,7 @@ const FIELD_KEYS = [
   'orderRef', 'clientCode', 'billTo', 'warehouseCode',
   'recipientName', 'recipientCompany', 'recipientPhone', 'recipientEmail',
   'addressLine1', 'addressLine2', 'city', 'state', 'postalCode', 'countryCode',
-  'carrierCode', 'accountNumber', 'serviceType', 'packageType',
+  'carrierCode', 'accountNumber', 'thirdPartyPostalCode', 'thirdPartyCountry', 'serviceType', 'packageType',
   'weight', 'weightUnit', 'length', 'width', 'height', 'dimUnit', 'currency', 'incoterms', 'reference',
   'itemDescription', 'itemSku', 'itemQuantity', 'itemUnitValue',
   'hsCode', 'countryOfOrigin',
@@ -1067,6 +1067,8 @@ const PREVIEW_COLUMNS: PreviewColumn[] = [
   { key: 'countryCode', mono: true, upper: true, w: 'w-16' },
   { key: 'carrierCode', mono: true, upper: true, w: 'w-24' },
   { key: 'accountNumber', mono: true, w: 'w-32' },
+  { key: 'thirdPartyPostalCode', mono: true, w: 'w-24' },
+  { key: 'thirdPartyCountry', mono: true, upper: true, w: 'w-16' },
   { key: 'serviceType', mono: true, w: 'w-28' },
   { key: 'packageType', mono: true, w: 'w-24' },
   { key: 'weight', numeric: true, w: 'w-16' },
@@ -1116,7 +1118,7 @@ const CARD_GROUPS: { title: string; keys: string[] }[] = [
   { title: 'Order', keys: ['orderRef', 'clientCode', 'billTo', 'warehouseCode'] },
   { title: 'Recipient', keys: ['recipientName', 'recipientCompany', 'recipientPhone', 'recipientEmail'] },
   { title: 'Ship to', keys: ['addressLine1', 'addressLine2', 'city', 'state', 'postalCode', 'countryCode'] },
-  { title: 'Shipment', keys: ['carrierCode', 'accountNumber', 'serviceType', 'packageType', 'weight', 'weightUnit', 'length', 'width', 'height', 'dimUnit', 'currency', 'incoterms', 'reference'] },
+  { title: 'Shipment', keys: ['carrierCode', 'accountNumber', 'thirdPartyPostalCode', 'thirdPartyCountry', 'serviceType', 'packageType', 'weight', 'weightUnit', 'length', 'width', 'height', 'dimUnit', 'currency', 'incoterms', 'reference'] },
   { title: 'Customs', keys: ['itemDescription', 'itemSku', 'itemQuantity', 'itemUnitValue', 'hsCode', 'countryOfOrigin'] },
 ]
 

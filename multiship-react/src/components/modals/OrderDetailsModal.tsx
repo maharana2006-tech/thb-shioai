@@ -376,6 +376,9 @@ function Shipment({ order, account }: { order: OrderWithLines; account: OrderWit
         </p>
       )}
       <Rows rows={[
+        ['Billed to', order.billTo === 'THIRD_PARTY'
+          ? ['Third party', clean(order.thirdPartyAccount)].filter(Boolean).join(' · ')
+          : 'Sender (shipper account)'],
         ['Ship via', via && resolved && resolved !== via ? `${via} → ${resolved}` : via || resolved],
         ['Weight', order.weight != null ? `${order.weight} ${unit}` : null],
         ['Packages', order.packageCount && order.packageCount > 1 ? String(order.packageCount) : order.packageCount ? '1' : null],
