@@ -116,6 +116,7 @@ export default function CarriersPlatformPage() {
                 <td className="px-3 py-2">
                   <select
                     value={row.mode}
+                    aria-label={`Mode for ${row.carrierCode}`}
                     disabled={busyCode === row.carrierCode}
                     onChange={(e) => void setMode(row, e.target.value as CarrierMode)}
                     className="rounded border border-slate-300 px-2 py-1 text-[12px]"
@@ -136,6 +137,7 @@ export default function CarriersPlatformPage() {
                     type="button"
                     disabled={busyCode === row.carrierCode}
                     onClick={() => void toggleEnabled(row)}
+                    aria-label={`${row.enabled ? 'Disable' : 'Enable'} ${row.carrierCode}`}
                     className="rounded border border-slate-300 px-2 py-1 text-[12px] hover:bg-white disabled:opacity-60"
                   >
                     {row.enabled ? 'Disable' : 'Enable'}

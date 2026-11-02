@@ -194,7 +194,10 @@ class VoidServiceImplSplitTest {
 
         ApiResponse<VoidLabelResponseDTO> resp = service.voidLabel(1);
 
-        assertEquals(200, resp.getCode());
+        // R2-BUG-015 — refusal surfaces as HTTP 502 (not 200) so the caller
+        // sees the error; data body still carries voided=false so the FE
+        // can show the carrier's reason.
+        assertEquals(502, resp.getCode());
         assertEquals(false, resp.getData().isVoided());
         ArgumentCaptor<OrderTracking> captor = ArgumentCaptor.forClass(OrderTracking.class);
         verify(trackingRepo, atLeast(2)).save(captor.capture());

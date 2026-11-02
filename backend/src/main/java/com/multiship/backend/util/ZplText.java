@@ -24,4 +24,35 @@ public final class ZplText {
         if (zpl == null || zpl.isEmpty()) return zpl;
         return UNSUPPORTED.matcher(zpl).replaceAll("");
     }
+
+    private static final Pattern GFB = Pattern.compile("\\^GFB,(\\d+),(\\d+),(\\d+),");
+    private static final char[] HEX = "0123456789ABCDEF".toCharArray();
+
+    /**
+     * Recode binary graphics ({@code ^GFB}, raw bytes) as ASCII hex
+     * ({@code ^GFA}) — the same bits, printer-equivalent. Stamps ships its
+     * USPS logos and barcodes as {@code ^GFB}; raw bytes do not survive a
+     * text/plain response, a clipboard or a web form (Labelary's viewer
+     * rendered a blank label). The input is the label as ISO-8859-1 text,
+     * one char per byte; the output is pure ASCII.
+     */
+    public static String asciiSafe(String zpl) {
+        if (zpl == null || zpl.isEmpty()) return zpl;
+        var m = GFB.matcher(zpl);
+        StringBuilder out = new StringBuilder(zpl.length() * 2);
+        int pos = 0;
+        while (m.find(pos)) {
+            int bytes = Integer.parseInt(m.group(1));
+            int dataStart = m.end();
+            int dataEnd = Math.min(zpl.length(), dataStart + bytes);
+            out.append(zpl, pos, m.start())
+               .append("^GFA,").append(m.group(1)).append(',').append(m.group(2)).append(',').append(m.group(3)).append(',');
+            for (int i = dataStart; i < dataEnd; i++) {
+                int b = zpl.charAt(i) & 0xff;
+                out.append(HEX[b >>> 4]).append(HEX[b & 0xf]);
+            }
+            pos = dataEnd;
+        }
+        return out.append(zpl, pos, zpl.length()).toString();
+    }
 }

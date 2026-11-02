@@ -241,4 +241,39 @@ class AddressFormatValidatorTest {
         assertTrue(AddressFormatValidator.NO_POSTAL_CODE_COUNTRIES.contains("BS"));
         assertTrue(AddressFormatValidator.NO_POSTAL_CODE_COUNTRIES.contains("FJ"));
     }
+
+    // ===== BUG-075 — requireWellFormed, the stored-address rules =====
+
+    private static String fieldOf(Runnable r) {
+        return org.junit.jupiter.api.Assertions.assertThrows(
+                com.multiship.backend.exception.FieldValidationException.class, r::run).getField();
+    }
+
+    @Test
+    void requireWellFormed_acceptsAGoodUsAddressAndNamesTheFirstBadField() {
+        org.junit.jupiter.api.Assertions.assertDoesNotThrow(() -> AddressFormatValidator.requireWellFormed(
+                "address", "1 Warehouse Way", "Louisville", "KY", "40209", "US", "5551234567", "ops@example.com"));
+        org.junit.jupiter.api.Assertions.assertEquals("address.country", fieldOf(() -> AddressFormatValidator.requireWellFormed(
+                "address", "1 Warehouse Way", "Louisville", "KY", "40209", "XX", null, null)));
+        org.junit.jupiter.api.Assertions.assertEquals("address.line1", fieldOf(() -> AddressFormatValidator.requireWellFormed(
+                "address", " ", "Louisville", "KY", "40209", "US", null, null)));
+        org.junit.jupiter.api.Assertions.assertEquals("address.state", fieldOf(() -> AddressFormatValidator.requireWellFormed(
+                "address", "1 Warehouse Way", "Louisville", "", "40209", "US", null, null)));
+        org.junit.jupiter.api.Assertions.assertEquals("address.state", fieldOf(() -> AddressFormatValidator.requireWellFormed(
+                "address", "1 Warehouse Way", "Louisville", "ZZ", "40209", "US", null, null)));
+        org.junit.jupiter.api.Assertions.assertEquals("address.postalCode", fieldOf(() -> AddressFormatValidator.requireWellFormed(
+                "address", "1 Warehouse Way", "Louisville", "KY", "ABCDE", "US", null, null)));
+        org.junit.jupiter.api.Assertions.assertEquals("address.phone", fieldOf(() -> AddressFormatValidator.requireWellFormed(
+                "address", "1 Warehouse Way", "Louisville", "KY", "40209", "US", "12", null)));
+        org.junit.jupiter.api.Assertions.assertEquals("address.email", fieldOf(() -> AddressFormatValidator.requireWellFormed(
+                "address", "1 Warehouse Way", "Louisville", "KY", "40209", "US", null, "not-an-email")));
+    }
+
+    @Test
+    void requireWellFormed_flatPrefixAndNoPostalCountries() {
+        org.junit.jupiter.api.Assertions.assertEquals("postalCode", fieldOf(() -> AddressFormatValidator.requireWellFormed(
+                "", "1 Rue", "Paris", "", "", "FR", null, null)));
+        org.junit.jupiter.api.Assertions.assertDoesNotThrow(() -> AddressFormatValidator.requireWellFormed(
+                "", "1 Queen's Road", "Central", "", "", "HK", null, null));
+    }
 }

@@ -164,6 +164,10 @@ export interface OrderWithLines {
   orderNo: number
   orderSuffix: number | null
   orderStatus: string | null
+  /** Who paid the shipping charges: SENDER (default) or THIRD_PARTY. */
+  billTo?: string | null
+  /** The third party's carrier account, masked by the server (****1234). */
+  thirdPartyAccount?: string | null
   /** Display form of the order number (e.g. MAN-prefixed for manual orders). */
   displayOrderNo?: string | null
   custNo?: string | null
@@ -212,6 +216,12 @@ export interface OrderWithLines {
   shipFromResolved?: boolean | null
   /** 'Y'|'N' — cross-border classification recorded at label time. */
   intlYn?: string | null
+  /** BUG-034 — Returns F9 Order.return_reason, mirrored on OrderWithLines
+   *  so the Reissue-return / Fix-return prefill restores the required
+   *  Reason picklist. Null on outbound shipments. */
+  returnReason?: string | null
+  /** BUG-034 — Returns F9 Order.rma_number. See `returnReason`. */
+  rmaNumber?: string | null
   /** Sprint 29 — multi-package count column on the order (1 for legacy single-box). */
   packageCount?: number | null
   /** Sprint 29 — per-package rows (tracking / weight / dims) when this is a multi-package shipment. */
@@ -317,86 +327,6 @@ export interface LabelCustomsItem {
   sku?: string | null
 }
 
-export interface LabelDocumentPayload {
-  order: OrderWithLines
-  /** Which account the order ships with, from the three-scenario cascade. */
-  resolution?: LabelDocumentResolution | null
-  /** Legacy field from older backend builds. */
-  carrierAccount?: OrderWithLinesPayload['carrierAccount']
-  label: LabelDetails | null
-  shipper: ShipperInfo
-  /** True when this is a reverse/return label. */
-  isReturn?: boolean
-  /** International-only customs blocks resolved from the client's profile. */
-  international?: boolean
-  importer?: LabelImporter | null
-  broker?: LabelBroker | null
-  /** CARRIER_DEFAULT (carrier's included brokerage) | BROKER_SELECT (named broker). */
-  brokerage?: 'CARRIER_DEFAULT' | 'BROKER_SELECT' | null
-  customsDefaults?: LabelCustomsDefaults | null
-  /** Per-order commercial-invoice line items entered against the order (international). */
-  customs?: {
-    items?: LabelCustomsItem[] | null
-    incoterms?: string | null
-    reasonForExport?: string | null
-    currency?: string | null
-    weightUnit?: string | null
-    notes?: string | null
-  } | null
-  /** What the shipment was billed — freight for the commercial invoice.
-   *  0.00 in sandbox until a production rate is captured. */
-  charges?: {
-    freight?: number | null
-    carrierAmount?: number | null
-    billableAmount?: number | null
-    currency?: string | null
-  } | null
-  /**
-   * Structured decode of the carrier's label response (currently the FedEx
-   * MaxiCode payload from the returned ZPL). Every field is pure carrier
-   * data — no local Order/OrderCustoms augmentation. Populated when the
-   * stored artifact is parseable ZPL with a MaxiCode block; null otherwise.
-   * Rendered as an authoritative side panel on LabelDocumentPage so the
-   * operator can trust that "line 2 / EEI / commodity is exactly what the
-   * carrier confirmed" — independent of whatever the thermal-label
-   * template chose to render as visible text.
-   */
-  carrierResponseDetails?: {
-    source?: string | null
-    trackingNumber?: string | null
-    serviceCode?: string | null
-    service?: string | null
-    recipientName?: string | null
-    recipientAddressLine1?: string | null
-    recipientAddressLine2?: string | null
-    recipientCity?: string | null
-    recipientState?: string | null
-    recipientPostalCode?: string | null
-    recipientCountryCode?: string | null
-    recipientPhone?: string | null
-    referenceNumber?: string | null
-    customerPo?: string | null
-    customsCountryCode?: string | null
-    customsValue?: string | null
-    customsCurrency?: string | null
-    commodityDescription?: string | null
-    eeiStatement?: string | null
-  } | null
-  /** Service level resolved from the ERP ship-via mapping (Settings → Shipping Services). */
-  service?: { carrier: string; code: string; name: string; scope?: string } | null
-  /** The default package preset (Settings → Packages) used for type + dimensions. */
-  packagePreset?: {
-    name: string
-    kind: string
-    carrierPackageCode?: string | null
-    length?: number | null
-    width?: number | null
-    height?: number | null
-    dimUnit?: string
-    maxWeight?: number | null
-    weightUnit?: string
-  } | null
-}
 
 /** Payload of GET /orders/{orderNo}/details: the order plus the tenant's carrier account. */
 export interface OrderWithLinesPayload {
@@ -625,6 +555,13 @@ export interface ManualShipmentPayload {
   clearanceOption?: string | null
   /** Payer's carrier account when clearanceOption is THIRD_PARTY. */
   dutiesAccount?: string | null
+  /** Who pays the shipping charges. Omitted = SENDER (the shipper account). */
+  billTo?: 'SENDER' | 'THIRD_PARTY'
+  /** The third party's carrier account that pays the shipping charges. */
+  thirdPartyAccount?: string
+  /** Payer's billing postal code and country (UPS requires both for third-party billing). */
+  thirdPartyPostalCode?: string
+  thirdPartyCountry?: string
   /** Per-shipment importer/broker override (does not touch the client's saved profile). */
   importer?: Record<string, string>
   broker?: Record<string, string>
@@ -815,6 +752,30 @@ export interface TrackingChildInfo {
 /** Session-stable Idempotency-Keys, one per order (see generateLabel). */
 const generationKeys = new Map<number, string>()
 
+/** Purchase headers: the attempt key, plus the dry-run fingerprint when the form has one. */
+function purchaseHeaders(attemptKey: string, validationFingerprint?: string): Record<string, string> {
+  return validationFingerprint
+    ? { 'Idempotency-Key': attemptKey, 'X-Validation-Fingerprint': validationFingerprint }
+    : { 'Idempotency-Key': attemptKey }
+}
+
+/** One purchase attempt, as GET /shipments/attempts/{key} returns it. */
+export interface ShipmentAttempt {
+  attemptKey: string
+  state: 'PURCHASING' | 'DONE' | 'FAILED' | 'PARTIAL' | 'ABANDONED' | 'UNKNOWN'
+  orderNo: number | null
+  fingerprint: string
+  errorCode: string | null
+  errorMessage: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+/** A fresh Idempotency-Key for one purchase attempt of a manual shipment. */
+export function newAttemptKey(): string {
+  return typeof crypto?.randomUUID === 'function' ? crypto.randomUUID() : `attempt-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
 export interface OrderListParams {
   page?: number
   size?: number
@@ -855,6 +816,14 @@ export interface OrderListParams {
   carrier?: string
   /** Returns F3 — 'Y' = returns only, 'N' = shipments only, empty = all. */
   isReturn?: 'Y' | 'N' | ''
+  /** BUG-001 — intl tri-state: 'Y' = international only, 'N' = domestic only,
+   *  empty = all. Dashboard's "International pending" tile deep-links as
+   *  /orders?status=PENDING&intl=Y. Matched against label_batch.intl_yn. */
+  intl?: 'Y' | 'N' | ''
+  /** BUG-010 — opt-in bulk-export path. Server raises per-page row cap
+   *  from 100 to 1000 (EXPORT_MAX_SIZE) so the CSV loop needs ~10×
+   *  fewer requests. UI pagination must omit this. */
+  export?: boolean
 }
 
 /** Tab counts for the Labels work queue. */
@@ -865,12 +834,23 @@ export interface QueueStats {
   clientMissing: number
   failed: number
   generated: number
+  /** R2-BUG-012 UI residual — the 'VOIDED' bucket surfaced on the
+   *  backend side (OrderServiceImpl.getQueueStats:423) but the FE
+   *  type didn't declare it, so OrdersWorkspace's badge sum was 12
+   *  short of the list total. Optional so pre-existing test
+   *  fixtures that stub a stats-5 payload still typecheck. */
+  voided?: number
 }
 
 /** One row of the unified Documents table (GET /orders/documents). */
 export interface OrderDocumentRow {
   orderNo: number
-  customerReferenceId: string | null
+  /** BUG-052 — the server resolves this as `tenantId || custNo` so it
+   *  populates for both modern (tenantId-based) and legacy orders. The
+   *  wire key is `custNo` (DocumentRow record component name on the BE);
+   *  prior FE field name `customerReferenceId` didn't match the wire
+   *  shape so Billing statement showed "—". */
+  custNo: string | null
   recipientName: string | null
   city: string | null
   countryCode: string | null
@@ -953,8 +933,15 @@ export const orderService = {
   /**
    * THE order list: one server-side paginated, sorted, filtered endpoint
    * behind every order table in the app.
+   *
+   * <p>BUG-013 — the second-arg {@link RequestInit} lets the caller pass
+   * an {@code AbortSignal} so a stale filter/search change can cancel
+   * its in-flight listOrders instead of letting the late response paint
+   * the wrong list over the current one. Use
+   * {@link import('./apiClient').isAbortError} to silence the rejected
+   * promise on the caller side.
    */
-  listOrders: (params: OrderListParams = {}) => {
+  listOrders: (params: OrderListParams = {}, options?: RequestInit) => {
     const query = new URLSearchParams()
     query.set('page', String(params.page ?? 0))
     query.set('size', String(params.size ?? 20))
@@ -977,7 +964,7 @@ export const orderService = {
     if (params.carrier) query.set('carrier', params.carrier)
     if (params.isReturn) query.set('isReturn', params.isReturn)
 
-    return apiClient.get<ApiResponse<PaginatedOrderData>>(`/orders?${query.toString()}`)
+    return apiClient.get<ApiResponse<PaginatedOrderData>>(`/orders?${query.toString()}`, options)
   },
 
   /**
@@ -1056,23 +1043,10 @@ export const orderService = {
    * an operator viewing pkg 3 of 5 in the label doc UI would still
    * download pkg 1's ZPL silently.
    */
-  getLabelZpl: async (orderNo: number, pkgIndex?: number): Promise<string> => {
-    const qs = pkgIndex && pkgIndex > 1 ? `?pkg=${pkgIndex}` : ''
-    // Sprint 50 PR Q3 — cookie-mode auth.
-    const response = await fetch(`${BASE_URL}/orders/${orderNo}/label/zpl${qs}`, {
-      credentials: 'include',
-    })
-
-    if (!response.ok) {
-      throw new Error(`ZPL is unavailable (HTTP ${response.status}) — restart the backend if it was just updated.`)
-    }
-
-    return response.text()
-  },
 
   /**
    * Sprint 52 PR A — 4x6" PDF facsimile of the shipping label. Same
-   * ?pkg semantics as getLabelZpl: omitted on a multi-box shipment
+   * ?seq semantics: omitted on a multi-box shipment
    * returns all packages as one PDF with N pages. Returns a Blob so
    * the caller can trigger a download or preview inline.
    *
@@ -1089,17 +1063,20 @@ export const orderService = {
    */
   getLabelPdf: async (orderNo: number, pkgIndex?: number, opts?: { main?: boolean }): Promise<Blob> => {
     const params = new URLSearchParams()
-    if (pkgIndex && pkgIndex > 0) params.set('pkg', String(pkgIndex))
-    // main=true — page 1 of a carrier PDF cropped to the label and fitted to
-    // 4×6 (one label-sized sheet per package) instead of the carrier's full
-    // Letter-page set with copies/doc pages. What Print Label sends.
-    if (opts?.main) params.set('main', 'true')
+    if (pkgIndex && pkgIndex > 0) params.set('seq', String(pkgIndex))
+    void opts
     const qs = params.size ? `?${params.toString()}` : ''
-    const response = await fetch(`${BASE_URL}/orders/${orderNo}/label/pdf${qs}`, {
+    // Phase 3 (Shipment & Label re-architecture) — the printable comes from the
+    // /labels resource: one 4x6 page per package from the same render as the
+    // preview. Rasters are cropped to the main label on every surface now, so
+    // the old ?main= flag has no separate meaning and is accepted but ignored.
+    const response = await fetch(`${BASE_URL}/labels/${orderNo}/pdf${qs}`, {
       credentials: 'include',
     })
     if (!response.ok) {
-      throw new Error(`Label PDF is unavailable (HTTP ${response.status}) — restart the backend if it was just updated.`)
+      // BUG-049 — a 410 carries the server's reason ("Label … was voided").
+      const reason = response.status === 410 ? (await response.text().catch(() => '')).trim() : ''
+      throw new Error(reason || `Label PDF is unavailable (HTTP ${response.status}) — restart the backend if it was just updated.`)
     }
     return response.blob()
   },
@@ -1146,10 +1123,20 @@ export const orderService = {
       credentials: 'include',
     })
     if (response.status === 422) {
-      throw new Error('This order has no customs data — there is no commercial invoice to print.')
+      // BUG-028 — tag the error so LabelActions can distinguish the
+      // benign "domestic order" 422 from a real failure.
+      const err: Error & { status?: number } = new Error(
+        'This order has no customs data — there is no commercial invoice to print.',
+      )
+      err.status = 422
+      throw err
     }
     if (!response.ok) {
-      throw new Error(`Commercial invoice PDF is unavailable (HTTP ${response.status}) — restart the backend if it was just updated.`)
+      const err: Error & { status?: number } = new Error(
+        `Commercial invoice PDF is unavailable (HTTP ${response.status}) — restart the backend if it was just updated.`,
+      )
+      err.status = response.status
+      throw err
     }
     return response.blob()
   },
@@ -1188,27 +1175,6 @@ export const orderService = {
    * the actual <img> renders the same URL with a fresh GET which the
    * browser caches per Cache-Control: private, max-age=60.
    */
-  headLabelPreviewPng: async (orderNo: number, pkgIndex?: number): Promise<boolean> => {
-    try {
-      const qs = pkgIndex && pkgIndex > 0 ? `?pkg=${pkgIndex}` : ''
-      const response = await fetch(`${BASE_URL}/orders/${orderNo}/label/preview.png${qs}`, {
-        method: 'HEAD',
-        credentials: 'include',
-      })
-      return response.ok
-    } catch {
-      return false
-    }
-  },
-
-  /** PR #538 — URL builder for the <img src=> tag once the HEAD probe
-   *  above confirms the PNG endpoint is live. Kept as a helper so
-   *  LabelDocumentPage doesn't hardcode the path.
-   *  PR #544 — optional pkgIndex forwards as ?pkg=N. */
-  labelPreviewPngUrl: (orderNo: number, pkgIndex?: number): string => {
-    const qs = pkgIndex && pkgIndex > 0 ? `?pkg=${pkgIndex}` : ''
-    return `${BASE_URL}/orders/${orderNo}/label/preview.png${qs}`
-  },
 
   /**
    * Get an order with its line items plus the tenant's carrier account
@@ -1218,13 +1184,6 @@ export const orderService = {
     return apiClient.get<ApiResponse<OrderWithLinesPayload>>(`/orders/${orderNo}/details`)
   },
 
-  /**
-   * Everything needed to render the shipping label + commercial invoice:
-   * order with lines, tenant carrier account, label details, shipper address.
-   */
-  getLabelDocument: (orderNo: number) => {
-    return apiClient.get<ApiResponse<LabelDocumentPayload>>(`/orders/${orderNo}/label`)
-  },
 
   /**
    * Get dashboard statistics
@@ -1254,15 +1213,28 @@ export const orderService = {
     )
   },
 
-  /** One-shot manual shipment: create + purchase the label in a single call. */
-  generateManualLabel: (payload: ManualShipmentPayload) =>
-    apiClient.post<ApiResponse<LabelGenerationResponse>>('/orders/manual-label', payload),
+  /**
+   * One-shot manual shipment: create + purchase the label in a single call.
+   * `attemptKey` is the Idempotency-Key for this purchase attempt (see
+   * newAttemptKey): the same key replays the stored outcome instead of
+   * buying a second label, so a retry after a dropped connection is safe.
+   */
+  generateManualLabel: (payload: ManualShipmentPayload, attemptKey: string, validationFingerprint?: string) =>
+    apiClient.post<ApiResponse<LabelGenerationResponse>>('/shipments', payload, {
+      headers: purchaseHeaders(attemptKey, validationFingerprint),
+    }),
 
   /** Fix a failed order and regenerate its label in place (same order number).
    *  Same payload shape as generateManualLabel; the order flips ERROR → GENERATED
    *  on success, or stays ERROR with the new carrier message on failure. */
-  regenerateOrder: (orderNo: number, payload: ManualShipmentPayload) =>
-    apiClient.post<ApiResponse<LabelGenerationResponse>>(`/orders/${orderNo}/regenerate`, payload),
+  /** Phase 3 — the state of one purchase attempt (recovery after a lost connection). */
+  getAttempt: (attemptKey: string) =>
+    apiClient.get<ApiResponse<ShipmentAttempt>>(`/shipments/attempts/${encodeURIComponent(attemptKey)}`),
+
+  regenerateOrder: (orderNo: number, payload: ManualShipmentPayload, attemptKey: string, validationFingerprint?: string) =>
+    apiClient.post<ApiResponse<LabelGenerationResponse>>(`/shipments/${orderNo}/attempts`, payload, {
+      headers: purchaseHeaders(attemptKey, validationFingerprint),
+    }),
 
   /**
    * Live tracking for an order — status, events, estimated delivery. Backend

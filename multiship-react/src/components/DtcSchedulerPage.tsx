@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useModalDismiss } from '../hooks/useModalDismiss'
 import { formatDateTime } from '../utils/formatDateTime'
 import { useOutletContext } from 'react-router-dom'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
@@ -394,10 +395,10 @@ export default function DtcSchedulerPage() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <button type="button" className={btnCls} onClick={() => setHistoryJob(job)}>
+                <button type="button" aria-label={`History for ${job.name}`} className={btnCls} onClick={() => setHistoryJob(job)}>
                   <FiList className="h-3.5 w-3.5" /> History
                 </button>
-                <button type="button" className={btnCls} disabled={job.running} onClick={() => void runNow(job)}>
+                <button type="button" aria-label={`Run now: ${job.name}`} className={btnCls} disabled={job.running} onClick={() => void runNow(job)}>
                   <FiPlay className="h-3.5 w-3.5" /> Run now
                 </button>
               </div>
@@ -445,7 +446,7 @@ export default function DtcSchedulerPage() {
                         </div>
                       </td>
                       <td className="px-3 py-2">
-                        <select className={`${inputCls} w-36`} value={isDaily(w) ? 'daily' : 'interval'}
+                        <select aria-label={`Schedule type for ${job.name} window ${idx + 1}`} className={`${inputCls} w-36`} value={isDaily(w) ? 'daily' : 'interval'}
                                 onChange={(e) => setWindow(job.jobKey, idx, e.target.value === 'daily'
                                   ? { runAt: w.startTime ?? '21:00', startTime: null, endTime: null, intervalMinutes: null }
                                   : { runAt: null, startTime: w.runAt ?? '00:00', endTime: '23:59', intervalMinutes: 15 })}>
@@ -482,7 +483,7 @@ export default function DtcSchedulerPage() {
                         )}
                       </td>
                       <td className="px-3 py-2 text-right">
-                        <button type="button" title={`Remove "${w.label || describe(w)}"`}
+                        <button type="button" aria-label={`Remove "${w.label || describe(w)}"`} title={`Remove "${w.label || describe(w)}"`}
                                 onClick={() => setDraft(job.jobKey, { windows: draft.windows.filter((_, i) => i !== idx) })}
                                 className="rounded-lg p-1 text-rose-600 hover:bg-rose-50">
                           <FiTrash2 className="h-3.5 w-3.5" />
@@ -639,15 +640,12 @@ function RunHistory({ job, onClose }: { job: SchedulerJob; onClose: () => void }
 
   useEffect(() => { void load() }, [load])
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  const dialogRef = useRef<HTMLElement>(null)
+  const requestClose = useModalDismiss(true, dialogRef, onClose)
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/30" onClick={onClose}>
-      <aside className="flex h-full w-full max-w-2xl flex-col bg-white shadow-xl" onClick={(e) => e.stopPropagation()}
+    <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/30" onClick={() => void requestClose()}>
+      <aside ref={dialogRef} className="flex h-full w-full max-w-2xl flex-col bg-white shadow-xl" onClick={(e) => e.stopPropagation()}
              role="dialog" aria-label={`${job.name} run history`}>
         <header className="flex items-center justify-between border-b border-slate-100 p-4">
           <div>
@@ -658,7 +656,7 @@ function RunHistory({ job, onClose }: { job: SchedulerJob; onClose: () => void }
             <button type="button" className={btnCls} onClick={() => void load()}>
               <FiRefreshCw className="h-3.5 w-3.5" /> Reload
             </button>
-            <button type="button" className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100" onClick={onClose} aria-label="Close">
+            <button type="button" className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100" onClick={() => void requestClose()} aria-label="Close">
               <FiX className="h-4 w-4" />
             </button>
           </div>

@@ -13,7 +13,10 @@ export function useDismissable(open: boolean, onClose: () => void) {
       if (!ref.current.contains(e.target as Node)) onClose()
     }
     const escape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key !== 'Escape') return
+      onClose()
+      // BUG-200 — hand focus back to the button that opened the popover.
+      ref.current?.querySelector<HTMLElement>('[aria-expanded="true"]')?.focus()
     }
     document.addEventListener('mousedown', clickAway)
     document.addEventListener('keydown', escape)

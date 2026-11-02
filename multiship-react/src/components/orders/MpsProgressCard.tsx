@@ -56,12 +56,22 @@ export interface MpsProgressCardProps {
    * the card stays surface-agnostic. Omit to hide the button entirely.
    */
   onDownloadAllLabels?: () => void
+  /**
+   * BUG-038 — opt-in silent hide when the hook settles with no data.
+   * Surfaces that curate their own carrier filter (DataHistoryPage's
+   * USPS section) keep the default (false) so operators see an explicit
+   * "No MPS progress found" placeholder. Surfaces that can't pre-filter
+   * on carrier (BulkLabelModal) pass true so non-MPS orders show
+   * nothing at all.
+   */
+  hideWhenEmpty?: boolean
 }
 
 export default function MpsProgressCard({
   orderNo,
   pollIntervalMs,
   onDownloadAllLabels,
+  hideWhenEmpty = false,
 }: MpsProgressCardProps) {
   const { progress, error, loading } = useMpsProgress(orderNo, {
     pollIntervalMs,
@@ -94,9 +104,13 @@ export default function MpsProgressCard({
   }
 
   if (progress == null) {
-    // Loading before first fetch OR 404 after a fetch. Render the same
-    // placeholder either way — the polling loop backs off automatically
-    // once 3 consecutive 404s have been seen so this isn't a hot loop.
+    // BUG-038 — when the caller opts into hideWhenEmpty, a settled
+    // 404 (not loading) means "not an MPS order" and we silently
+    // return null. BulkLabelModal uses this because its single-order
+    // submission could be any carrier. DataHistoryPage keeps the
+    // default (false) so its curated USPS-only section still shows
+    // the explicit placeholder.
+    if (hideWhenEmpty && !loading) return null
     return (
       <div
         data-testid="mps-progress-card-empty"

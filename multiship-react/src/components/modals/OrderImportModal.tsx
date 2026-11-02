@@ -98,9 +98,12 @@ export interface OrderImportModalProps {
    *  the "Saved to batch #123" toast copy but must not be used to build
    *  URLs. */
   onImported?: (batchId: number | null, batchSlug: string | null) => void
+  /** BUG-058 — operator clicked "Import another file" so the host should
+   *  drop the previous "Saved to import #N" banner. */
+  onStartOver?: () => void
 }
 
-export default function OrderImportModal({ onClose, inline = false, onImported }: OrderImportModalProps) {
+export default function OrderImportModal({ onClose, inline = false, onImported, onStartOver }: OrderImportModalProps) {
   // Sprint 51 T6b — focus trap (modal only).
   const dialogRef = useRef<HTMLDivElement>(null)
   useFocusTrap(!inline, dialogRef)
@@ -337,6 +340,9 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
     setError(null)
     setDupBlocked(false)
     setResumeId(null)
+    // BUG-058 — ping the host so the "Saved to import #N" banner on
+    // BulkImportPage goes away when the operator picks another file.
+    onStartOver?.()
   }
 
   const proceedWithErrors = async () => {
@@ -445,11 +451,20 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
               file={file}
               onFileChange={(f) => {
                 // A new file clears the previous file's duplicate banner.
-                setFile(f)
-                setError(null)
                 setDupBlocked(false)
                 setResumeId(null)
                 dismissDupToast()
+                // BUG-058 — a .txt (or any non-csv/xlsx) upload used to
+                // reach the backend and come back with "no order rows",
+                // which was confusing. Reject up-front with a clearer
+                // message naming the supported formats.
+                if (f && !/\.(csv|xlsx|xlsm)$/i.test(f.name)) {
+                  setFile(null)
+                  setError(`"${f.name}" isn't a supported format — upload a CSV (.csv) or Excel file (.xlsx / .xlsm).`)
+                  return
+                }
+                setFile(f)
+                setError(null)
               }}
               onSubmit={() => void submitUpload()}
               uploading={uploading}
@@ -808,7 +823,7 @@ function UploadStep({
         <p className="mt-1 text-[11px] text-[#6b5c42]">CSV or Excel (.csv, .xlsx, .xlsm) · one row per shipment</p>
         <input
           type="file"
-          accept=".csv,.xlsx,.xlsm,.txt"
+          accept=".csv,.xlsx,.xlsm"
           onChange={(e) => {
             onFileChange(e.target.files?.[0] ?? null)
             // Reset so re-selecting the SAME file fires onChange again
@@ -897,7 +912,7 @@ const FIELD_KEYS = [
   'orderRef', 'clientCode', 'billTo', 'warehouseCode',
   'recipientName', 'recipientCompany', 'recipientPhone', 'recipientEmail',
   'addressLine1', 'addressLine2', 'city', 'state', 'postalCode', 'countryCode',
-  'carrierCode', 'accountNumber', 'serviceType', 'packageType',
+  'carrierCode', 'accountNumber', 'thirdPartyPostalCode', 'thirdPartyCountry', 'serviceType', 'packageType',
   'weight', 'weightUnit', 'length', 'width', 'height', 'dimUnit', 'currency', 'incoterms', 'reference',
   'itemDescription', 'itemSku', 'itemQuantity', 'itemUnitValue',
   'hsCode', 'countryOfOrigin',
@@ -1052,6 +1067,8 @@ const PREVIEW_COLUMNS: PreviewColumn[] = [
   { key: 'countryCode', mono: true, upper: true, w: 'w-16' },
   { key: 'carrierCode', mono: true, upper: true, w: 'w-24' },
   { key: 'accountNumber', mono: true, w: 'w-32' },
+  { key: 'thirdPartyPostalCode', mono: true, w: 'w-24' },
+  { key: 'thirdPartyCountry', mono: true, upper: true, w: 'w-16' },
   { key: 'serviceType', mono: true, w: 'w-28' },
   { key: 'packageType', mono: true, w: 'w-24' },
   { key: 'weight', numeric: true, w: 'w-16' },
@@ -1101,7 +1118,7 @@ const CARD_GROUPS: { title: string; keys: string[] }[] = [
   { title: 'Order', keys: ['orderRef', 'clientCode', 'billTo', 'warehouseCode'] },
   { title: 'Recipient', keys: ['recipientName', 'recipientCompany', 'recipientPhone', 'recipientEmail'] },
   { title: 'Ship to', keys: ['addressLine1', 'addressLine2', 'city', 'state', 'postalCode', 'countryCode'] },
-  { title: 'Shipment', keys: ['carrierCode', 'accountNumber', 'serviceType', 'packageType', 'weight', 'weightUnit', 'length', 'width', 'height', 'dimUnit', 'currency', 'incoterms', 'reference'] },
+  { title: 'Shipment', keys: ['carrierCode', 'accountNumber', 'thirdPartyPostalCode', 'thirdPartyCountry', 'serviceType', 'packageType', 'weight', 'weightUnit', 'length', 'width', 'height', 'dimUnit', 'currency', 'incoterms', 'reference'] },
   { title: 'Customs', keys: ['itemDescription', 'itemSku', 'itemQuantity', 'itemUnitValue', 'hsCode', 'countryOfOrigin'] },
 ]
 

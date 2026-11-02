@@ -18,6 +18,8 @@ import java.time.LocalDateTime;
 public class RoutingRuleDTO {
 
     private Long id;
+    /** Optimistic-lock token from the row the form loaded; echo it back on edit. */
+    private Long version;
     private String clientCode;
     private String name;
     private Integer priority;
@@ -48,7 +50,7 @@ public class RoutingRuleDTO {
 
     public static RoutingRuleDTO from(RoutingRule r) {
         return RoutingRuleDTO.builder()
-                .id(r.getId()).clientCode(r.getClientCode())
+                .id(r.getId()).version(r.getVersion()).clientCode(r.getClientCode())
                 .name(r.getName()).priority(r.getPriority()).active(r.getActive())
                 .minWeightLb(r.getMinWeightLb()).maxWeightLb(r.getMaxWeightLb())
                 .destCountries(r.getDestCountries()).destRegions(r.getDestRegions())
@@ -66,6 +68,7 @@ public class RoutingRuleDTO {
     public RoutingRule toEntity() {
         RoutingRule r = new RoutingRule();
         r.setId(id);
+        r.setVersion(version);
         r.setClientCode(clientCode);
         r.setName(name);
         r.setPriority(priority == null ? 100 : priority);

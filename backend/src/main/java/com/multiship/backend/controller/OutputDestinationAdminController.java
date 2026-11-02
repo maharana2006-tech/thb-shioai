@@ -141,7 +141,7 @@ public class OutputDestinationAdminController {
             description = "Sends a doc-type-appropriate synthetic payload (ZPL for Zebra RAW / file drops, "
                     + "1-page PDF for IPP + commercial-invoice destinations) so the operator can verify "
                     + "credentials / connectivity without generating a real shipment. Every payload embeds "
-                    + "the current UTC timestamp for visual confirmation. 502 with `OUTPUT_DELIVERY_FAILED` on driver failure.")
+                    + "the current UTC timestamp for visual confirmation. 422 with `OUTPUT_DELIVERY_FAILED` on driver failure.")
     @PostMapping("/{id}/test")
     public ResponseEntity<ApiResponse<DispatchResult>> test(@PathVariable Long id) {
         DispatchResult result;
@@ -154,10 +154,11 @@ public class OutputDestinationAdminController {
         if (result.getFailureCount() > 0) {
             String detail = result.getItems().isEmpty() ? "unknown failure"
                     : result.getItems().get(0).getFailureMessage();
-            return ResponseEntity.status(502).body(ApiResponse.<DispatchResult>builder()
-                    .status("ERROR").code(502).timestamp(LocalDateTime.now())
+            // BUG-188 — 4xx: the destination's own settings failed, not an upstream server.
+            return ResponseEntity.status(422).body(ApiResponse.<DispatchResult>builder()
+                    .status("ERROR").code(422).timestamp(LocalDateTime.now())
                     .errorCode(ErrorCode.OUTPUT_DELIVERY_FAILED.name())
-                    .message("Test dispatch failed: " + detail)
+                    .message("Test failed: " + detail)
                     .data(result).build());
         }
         return ResponseEntity.ok(ApiResponse.<DispatchResult>builder()

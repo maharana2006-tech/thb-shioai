@@ -87,7 +87,7 @@ export default function TrackingTimelineModal({
   // hook so focus traps inside the modal (Tab doesn't walk into the page
   // behind) + focus restores to the Track live button on close.
   const dialogRef = useRef<HTMLDivElement>(null)
-  useModalDismiss(true, dialogRef, onClose)
+  const requestClose = useModalDismiss(true, dialogRef, onClose)
 
   /**
    * Auto-refresh loop. Ticks every second so the countdown badge decays
@@ -154,7 +154,7 @@ export default function TrackingTimelineModal({
       aria-modal="true"
       aria-label={`Tracking for order ${orderNo}`}
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4"
-      onClick={onClose}
+      onClick={() => void requestClose()}
     >
       <div
         className="flex h-[min(720px,90vh)] w-full max-w-[560px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]"
@@ -203,7 +203,7 @@ export default function TrackingTimelineModal({
             </button>
             <button
               type="button"
-              onClick={onClose}
+              onClick={() => void requestClose()}
               aria-label="Close"
               className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50"
             >

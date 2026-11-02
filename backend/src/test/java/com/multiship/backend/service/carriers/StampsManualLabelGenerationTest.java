@@ -132,7 +132,7 @@ class StampsManualLabelGenerationTest {
     @Test
     void nullRequestReturnsRecipientRequired422() {
         ApiResponse<LabelGenerationResponse> resp =
-                service.generateManualLabel(null, operator(), null);
+                service.purchaseManualLabel(null, operator(), null);
 
         assertNotNull(resp);
         assertEquals("error", resp.getStatus());
@@ -148,7 +148,7 @@ class StampsManualLabelGenerationTest {
         req.setRecipient(null);
 
         ApiResponse<LabelGenerationResponse> resp =
-                service.generateManualLabel(req, operator(), null);
+                service.purchaseManualLabel(req, operator(), null);
 
         assertEquals("error", resp.getStatus());
         assertEquals(422, resp.getCode());
@@ -166,7 +166,7 @@ class StampsManualLabelGenerationTest {
         req.getRecipient().setName(" ");
 
         ApiResponse<LabelGenerationResponse> resp =
-                service.generateManualLabel(req, operator(), null);
+                service.purchaseManualLabel(req, operator(), null);
 
         assertEquals(422, resp.getCode());
         assertEquals(ErrorCode.VALIDATION_ERROR.name(), resp.getErrorCode());
@@ -180,7 +180,7 @@ class StampsManualLabelGenerationTest {
         req.getRecipient().setAddressLine1(null);
 
         ApiResponse<LabelGenerationResponse> resp =
-                service.generateManualLabel(req, operator(), null);
+                service.purchaseManualLabel(req, operator(), null);
 
         assertEquals(422, resp.getCode());
         assertEquals(ErrorCode.VALIDATION_ERROR.name(), resp.getErrorCode());
@@ -192,7 +192,7 @@ class StampsManualLabelGenerationTest {
         req.getRecipient().setCity("");
 
         ApiResponse<LabelGenerationResponse> resp =
-                service.generateManualLabel(req, operator(), null);
+                service.purchaseManualLabel(req, operator(), null);
 
         assertEquals(422, resp.getCode());
         assertEquals(ErrorCode.VALIDATION_ERROR.name(), resp.getErrorCode());
@@ -204,7 +204,7 @@ class StampsManualLabelGenerationTest {
         req.getRecipient().setPostalCode(null);
 
         ApiResponse<LabelGenerationResponse> resp =
-                service.generateManualLabel(req, operator(), null);
+                service.purchaseManualLabel(req, operator(), null);
 
         assertEquals(422, resp.getCode());
         assertEquals(ErrorCode.VALIDATION_ERROR.name(), resp.getErrorCode());
@@ -216,7 +216,7 @@ class StampsManualLabelGenerationTest {
         req.getRecipient().setCountryCode("");
 
         ApiResponse<LabelGenerationResponse> resp =
-                service.generateManualLabel(req, operator(), null);
+                service.purchaseManualLabel(req, operator(), null);
 
         assertEquals(422, resp.getCode());
         assertEquals(ErrorCode.VALIDATION_ERROR.name(), resp.getErrorCode());
@@ -232,7 +232,7 @@ class StampsManualLabelGenerationTest {
         req.setWeight(BigDecimal.ZERO);
 
         ApiResponse<LabelGenerationResponse> resp =
-                service.generateManualLabel(req, operator(), null);
+                service.purchaseManualLabel(req, operator(), null);
 
         assertEquals(422, resp.getCode());
         assertEquals(ErrorCode.VALIDATION_ERROR.name(), resp.getErrorCode());
@@ -246,7 +246,7 @@ class StampsManualLabelGenerationTest {
         req.setWeight(new BigDecimal("-0.1"));
 
         ApiResponse<LabelGenerationResponse> resp =
-                service.generateManualLabel(req, operator(), null);
+                service.purchaseManualLabel(req, operator(), null);
 
         assertEquals(422, resp.getCode());
         assertEquals(ErrorCode.VALIDATION_ERROR.name(), resp.getErrorCode());
@@ -258,7 +258,7 @@ class StampsManualLabelGenerationTest {
         req.setWeight(null);
 
         ApiResponse<LabelGenerationResponse> resp =
-                service.generateManualLabel(req, operator(), null);
+                service.purchaseManualLabel(req, operator(), null);
 
         assertEquals(422, resp.getCode());
         assertEquals(ErrorCode.VALIDATION_ERROR.name(), resp.getErrorCode());
@@ -274,7 +274,7 @@ class StampsManualLabelGenerationTest {
         req.setChannel("DTC"); // typo — must be D2C
 
         ApiResponse<LabelGenerationResponse> resp =
-                service.generateManualLabel(req, operator(), null);
+                service.purchaseManualLabel(req, operator(), null);
 
         assertEquals(422, resp.getCode());
         assertEquals(ErrorCode.VALIDATION_ERROR.name(), resp.getErrorCode());
@@ -293,7 +293,7 @@ class StampsManualLabelGenerationTest {
         req.setAccountId(null);
 
         ApiResponse<LabelGenerationResponse> resp =
-                service.generateManualLabel(req, operator(), null);
+                service.purchaseManualLabel(req, operator(), null);
 
         assertEquals(422, resp.getCode());
         assertEquals(ErrorCode.VALIDATION_ERROR.name(), resp.getErrorCode());
@@ -310,7 +310,7 @@ class StampsManualLabelGenerationTest {
         // The 2-arg overload is what /shipments/manual POSTs to; verifies
         // the shim passes null for existingOrderNo (new-order path).
         ApiResponse<LabelGenerationResponse> resp =
-                service.generateManualLabel(null, operator());
+                service.purchaseManualLabel(null, operator(), null);
 
         assertNotNull(resp);
         assertEquals(422, resp.getCode(),

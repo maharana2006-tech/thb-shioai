@@ -77,6 +77,37 @@ class OrderImportRetryMatchTest {
         assertNull(lead.getGeneratedStatus(), "not labelled, so it is still sent, as the same order");
     }
 
+    /** BUG-043 — voiding one of two rows with the same reference frees it: the
+     *  retried twin must not be attached to (and relabelled in place on) the
+     *  voided order, it mints its own. */
+    @Test
+    void voidedOrderIsNotAttachedSoRetryMintsAFreshOrder() {
+        OrderImportRowDTO twin = row(9, "DUP-2", "QA-DUP", "FAILED");
+        List<Object[]> hits = new ArrayList<>();
+        hits.add(new Object[]{934476, "QA-DUP", "VOIDED"});
+        when(repo.findOrdersInLabelBatchByCustomerRefIn(eq(24), anyCollection())).thenReturn(hits);
+
+        service.syncRowsWithLiveOrders(List.of(twin), 24);
+
+        assertNull(twin.getGeneratedOrderNo(), "a voided order's reference is free again");
+        assertNull(twin.getBatchId());
+        assertEquals("FAILED", twin.getGeneratedStatus(), "still to be sent by the retry");
+    }
+
+    @Test
+    void generatedOrderStillWinsOverAVoidedOneForTheSameReference() {
+        OrderImportRowDTO lead = row(1, "A-1", "PO-A-1", null);
+        List<Object[]> hits = new ArrayList<>();
+        hits.add(new Object[]{901, "PO-A-1", "VOIDED"});
+        hits.add(new Object[]{902, "PO-A-1", "GENERATED"});
+        when(repo.findOrdersInLabelBatchByCustomerRefIn(eq(7), anyCollection())).thenReturn(hits);
+
+        service.syncRowsWithLiveOrders(List.of(lead), 7);
+
+        assertEquals(Integer.valueOf(902), lead.getGeneratedOrderNo());
+        assertEquals("GENERATED", lead.getGeneratedStatus());
+    }
+
     @Test
     void noLabelBatchMeansNoLookup() {
         service.syncRowsWithLiveOrders(List.of(row(1, "A-1", "PO-A-1", null)), null);

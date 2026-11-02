@@ -51,6 +51,8 @@ const notifyErrorMock = vi.fn()
 vi.mock('../utils/notify', () => ({
   notify: {
     error: (...args: unknown[]) => notifyErrorMock(...args),
+    // notify.invalid is the titled form of error; tests treat them alike.
+    invalid: (...args: unknown[]) => notifyErrorMock(...args),
     apiError: vi.fn(),
     success: vi.fn(),
     info: vi.fn(),

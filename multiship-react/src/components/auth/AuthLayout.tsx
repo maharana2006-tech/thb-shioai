@@ -59,9 +59,6 @@ export default function AuthLayout({ eyebrow, title, description, children, foot
           </div>
           <div className="hidden items-center gap-5 text-[11px] font-semibold text-[#e1dcc9]/55 md:flex">
             <span className="inline-flex items-center gap-1.5">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Platform healthy
-            </span>
-            <span className="inline-flex items-center gap-1.5">
               <FiShield className="h-3.5 w-3.5" /> Role-scoped access
             </span>
             <span className="inline-flex items-center gap-1.5">

@@ -58,9 +58,18 @@ export interface AdminUserListParams {
   size?: number
 }
 
+/** BUG-078 — the list is paged with a total so the pager can say how many users exist. */
+export interface AdminUserPage {
+  content: AdminUser[]
+  totalElements: number
+  totalPages: number
+  pageNumber: number
+  pageSize: number
+}
+
 export const adminUserService = {
   list: (params: AdminUserListParams = {}) =>
-    apiClient.get<ApiResponse<AdminUser[]>>(`/admin/users${toQueryString(params)}`),
+    apiClient.get<ApiResponse<AdminUserPage>>(`/admin/users${toQueryString(params)}`),
 
   assignClient: (id: number, payload: AdminUserAssignClientPayload) =>
     apiClient.patch<ApiResponse<AdminUser>>(`/admin/users/${id}/client`, payload),

@@ -27,6 +27,12 @@ const ACCOUNT_RULES: Record<string, { re: RegExp; msg: string }> = {
 }
 const GENERIC_ACCOUNT = { re: /^[A-Za-z0-9._@-]{3,25}$/, msg: 'Use 3–25 letters, digits, or . _ @ -' }
 
+/** Carrier-format check for a bare account number (e.g. a third-party payer). Undefined = valid. */
+export function accountNumberFormatError(carrierCode: string, value: string): string | undefined {
+  const rule = ACCOUNT_RULES[(carrierCode || '').toUpperCase()] ?? GENERIC_ACCOUNT
+  return rule.re.test(value.trim()) ? undefined : rule.msg
+}
+
 export interface CarrierAccountValues {
   carrierCode: string
   accountType: 'platform' | 'client'

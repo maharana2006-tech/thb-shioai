@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, useRef } from 'react'
+import { useModalDismiss } from '../../hooks/useModalDismiss'
 import { FiChevronDown, FiChevronRight, FiExternalLink, FiPlus } from 'react-icons/fi'
 import { notify } from '../../utils/notify'
 import {
@@ -117,6 +118,8 @@ export function AddShipViaMappingDialog({
   onClose: () => void
   onSaved: () => void
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const requestClose = useModalDismiss(true, dialogRef, onClose)
   const [services, setServices] = useState<ShippingServiceItem[] | null>(null)
   const [serviceId, setServiceId] = useState('')
   const [scope, setScope] = useState<'client' | 'all'>(clientCode ? 'client' : 'all')
@@ -160,8 +163,8 @@ export function AddShipViaMappingDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-[#1f150c]/45 p-4" onClick={onClose}>
-      <div
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-[#1f150c]/45 p-4" onClick={() => void requestClose()}>
+      <div ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label={`Map ship via ${code}`}
@@ -226,7 +229,7 @@ export function AddShipViaMappingDialog({
         <div className="flex justify-end gap-2 border-t border-[#efe7d6] px-5 py-3">
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => void requestClose()}
             className="rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]"
           >
             Cancel

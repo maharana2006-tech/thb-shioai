@@ -1241,6 +1241,62 @@ class ShipmentValidationServiceTest {
                 any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.eq(picked), any());
     }
 
+    // ─── Phase 1 — dry-run receipt + strict shipper mode ────────────────
+
+    /** A purchase presenting a fresh dry-run receipt keeps every local rule but never calls the carrier. */
+    @Test
+    void carrierHopIsSkippedWhenTheCallerPresentsAFreshDryRunReceipt() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setAccountId(42L);
+        stubServiceAndPreset();
+        when(carrierAccountRefRepository.findById(42L)).thenReturn(Optional.of(
+                com.multiship.backend.model.CarrierAccountRef.builder().id(42L).carrierCode("FEDEX")
+                        .accountNumber("PICKED1").clientId("cid").clientSecret("sec").environment("SANDBOX").active(true).build()));
+
+        ShipmentValidationResult r = service.validate(req, false).getData();
+
+        assertEquals("PASS", r.getOverall(), "local rules still run: " + r.getLocalErrors());
+        assertTrue(r.getSkipped().stream().anyMatch(sk -> "carrier".equals(sk.getName())), r.getSkipped().toString());
+        org.mockito.Mockito.verify(carrierService, org.mockito.Mockito.never()).getCarrierConnector(any());
+        org.mockito.Mockito.verify(carrierService, org.mockito.Mockito.never()).buildManualShipmentRequestDto(
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    /** BUG-025 — strict shipper mode names the blank Ship from field in plain
+     *  words (not the tenant-settings keys), and only the fields the form
+     *  left blank; it is never a 500. */
+    @Test
+    void strictShipperModeIsALocalErrorOnTheSender() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.getSender().setPhone(null);
+        req.setAccountId(42L);
+        stubServiceAndPreset();
+        com.multiship.backend.model.CarrierAccountRef picked = com.multiship.backend.model.CarrierAccountRef.builder()
+                .id(42L).carrierCode("FEDEX").accountNumber("PICKED1").clientId("cid").clientSecret("sec")
+                .environment("SANDBOX").active(true).build();
+        when(carrierAccountRefRepository.findById(42L)).thenReturn(Optional.of(picked));
+        com.multiship.backend.service.carriers.CarrierConnector connector =
+                mock(com.multiship.backend.service.carriers.CarrierConnector.class);
+        when(carrierService.getCarrierConnector("FEDEX")).thenReturn(connector);
+        when(connector.getConfiguration()).thenReturn(mock(com.multiship.backend.service.carriers.CarrierConnector.CarrierConfiguration.class));
+        when(connector.getAccessToken("cid", "sec", "PICKED1", "SANDBOX")).thenReturn("tok");
+        when(carrierService.buildManualShipmentRequestDto(any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any()))
+                .thenThrow(new com.multiship.backend.service.carrier.ShipperDefaultsMissingException("ACME",
+                        com.multiship.backend.service.carrier.ShipperDefaultsService.REQUIRED_KEYS));
+
+        ShipmentValidationResult r = service.validate(req).getData();
+
+        assertEquals("FAIL", r.getOverall());
+        List<ShipmentValidationResult.ValidationIssue> strict = r.getLocalErrors().stream()
+                .filter(e -> "SHIPPER_DEFAULTS_MISSING".equals(e.getCode())).toList();
+        assertEquals(1, strict.size(), r.getLocalErrors().toString());
+        assertEquals("sender.phone", strict.get(0).getField());
+        assertTrue(strict.get(0).getMessage().startsWith("Ship from phone is required."), strict.get(0).getMessage());
+        assertTrue(r.getLocalErrors().stream().noneMatch(e -> e.getMessage().contains("shipper.")),
+                "no internal setting keys in the message: " + r.getLocalErrors());
+    }
+
     // ─── Checks Generate label runs before buying ───────────────────────
 
     private List<String> errorsOf(ManualShipmentRequest req) {
@@ -1451,7 +1507,10 @@ class ShipmentValidationServiceTest {
     }
 
     @Test
-    void aReferenceThatAlreadyShippedIsAWarning() {
+    void aReferenceThatAlreadyShippedIsAnError() {
+        // BUG-006 — promoted from WARN to FAIL at /validate so operators
+        // can't buy a second paid label under the same reference. Mirrors
+        // the 409 CONFLICT the /manual-label endpoint returns.
         com.multiship.backend.repository.OrderRepository orders = mock(com.multiship.backend.repository.OrderRepository.class);
         org.springframework.test.util.ReflectionTestUtils.setField(service, "orderRepository", orders);
         com.multiship.backend.model.Order shipped = new com.multiship.backend.model.Order();
@@ -1462,9 +1521,50 @@ class ShipmentValidationServiceTest {
         req.setClientCode("ACME");
         req.setReference("PO-7781");
         stubServiceAndPreset();
-        ShipmentValidationResult r = service.validate(req).getData();
-        assertTrue(r.getLocalWarnings().stream().anyMatch(w -> w.getMessage().startsWith(
-                "Reference PO-7781 already shipped on order #905958, tracking 794600000001")), r.getLocalWarnings().toString());
+        assertTrue(errorsOf(req).stream().anyMatch(m -> m.startsWith(
+                "Reference PO-7781 already shipped on order #905958")), errorsOf(req).toString());
+    }
+
+    @Test
+    void anUnknownOriginalOrderNoOnAReturnIsAnError() {
+        // BUG-040 — pre-fix, the backend silently dropped a stale typed
+        // Return of # to null so Validate + Generate "succeeded" but the
+        // return had no link. Now it's an error at /validate.
+        com.multiship.backend.repository.OrderRepository orders =
+                mock(com.multiship.backend.repository.OrderRepository.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "orderRepository", orders);
+        when(orders.findByOrderNo(999999)).thenReturn(Optional.empty());
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setIsReturn(true);
+        req.setOriginalOrderNo(999999);
+        stubServiceAndPreset();
+        assertTrue(errorsOf(req).stream().anyMatch(m -> m.contains(
+                "Return of #999999 doesn't match an order on this tenant")), errorsOf(req).toString());
+    }
+
+    @Test
+    void aValidOriginalOrderNoIsFine() {
+        com.multiship.backend.repository.OrderRepository orders =
+                mock(com.multiship.backend.repository.OrderRepository.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "orderRepository", orders);
+        com.multiship.backend.model.Order outbound = new com.multiship.backend.model.Order();
+        outbound.setOrderNo(100100);
+        when(orders.findByOrderNo(100100)).thenReturn(Optional.of(outbound));
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setIsReturn(true);
+        req.setOriginalOrderNo(100100);
+        stubServiceAndPreset();
+        assertTrue(errorsOf(req).stream().noneMatch(m -> m.contains("Return of #")), errorsOf(req).toString());
+    }
+
+    @Test
+    void aBlankOriginalOrderNoSkipsTheCheck() {
+        // No repo stub needed — the guard short-circuits on null.
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setIsReturn(true);
+        req.setOriginalOrderNo(null);
+        stubServiceAndPreset();
+        assertTrue(errorsOf(req).stream().noneMatch(m -> m.contains("Return of #")), errorsOf(req).toString());
     }
 
     @Test

@@ -33,34 +33,63 @@ public class ReportController {
 
     @Operation(summary = "Orders + labels dataset (CSV stream)")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
-    @GetMapping(value = "/orders", produces = com.multiship.backend.common.CsvMediaType.CSV_UTF8)
+    @GetMapping("/orders")
     public void orders(HttpServletResponse response, ReportFiltersQuery q) throws IOException {
-        setCsvHeaders(response, "orders");
-        reportService.streamOrdersCsv(q.toFilters(), response.getOutputStream());
+        reportService.streamOrdersCsv(q.toFilters(), new DeferredCsvOutput(response, "orders"));
     }
 
     @Operation(summary = "Tracking snapshots dataset (CSV stream)")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
-    @GetMapping(value = "/tracking", produces = com.multiship.backend.common.CsvMediaType.CSV_UTF8)
+    @GetMapping("/tracking")
     public void tracking(HttpServletResponse response, ReportFiltersQuery q) throws IOException {
-        setCsvHeaders(response, "tracking");
-        reportService.streamTrackingCsv(q.toFilters(), response.getOutputStream());
+        reportService.streamTrackingCsv(q.toFilters(), new DeferredCsvOutput(response, "tracking"));
     }
 
     @Operation(summary = "Rate-shop history dataset (CSV stream)")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
-    @GetMapping(value = "/rate-shop", produces = com.multiship.backend.common.CsvMediaType.CSV_UTF8)
+    @GetMapping("/rate-shop")
     public void rateShop(HttpServletResponse response, ReportFiltersQuery q) throws IOException {
-        setCsvHeaders(response, "rate-shop");
-        reportService.streamRateShopCsv(q.toFilters(), response.getOutputStream());
+        reportService.streamRateShopCsv(q.toFilters(), new DeferredCsvOutput(response, "rate-shop"));
     }
 
     @Operation(summary = "Client billing rollup dataset (CSV stream)")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
-    @GetMapping(value = "/billing", produces = com.multiship.backend.common.CsvMediaType.CSV_UTF8)
+    @GetMapping("/billing")
     public void billing(HttpServletResponse response, ReportFiltersQuery q) throws IOException {
-        setCsvHeaders(response, "billing");
-        reportService.streamBillingCsv(q.toFilters(), response.getOutputStream());
+        reportService.streamBillingCsv(q.toFilters(), new DeferredCsvOutput(response, "billing"));
+    }
+
+    /**
+     * BUG-166 — the CSV headers used to be written before the query ran, so
+     * a SQL failure left the client a committed 200 with an empty file and
+     * the error handler could not write JSON into a text/csv response. The
+     * headers are now set on the first byte the service writes, which the
+     * service only does once the query has returned its first row; a
+     * failure before that is an ordinary JSON error. (The mappings also no
+     * longer declare {@code produces = text/csv} for the same reason.)
+     */
+    static final class DeferredCsvOutput extends java.io.OutputStream {
+        private final HttpServletResponse response;
+        private final String dataset;
+        private java.io.OutputStream delegate;
+
+        DeferredCsvOutput(HttpServletResponse response, String dataset) {
+            this.response = response;
+            this.dataset = dataset;
+        }
+
+        private java.io.OutputStream out() throws IOException {
+            if (delegate == null) {
+                setCsvHeaders(response, dataset);
+                delegate = response.getOutputStream();
+            }
+            return delegate;
+        }
+
+        @Override public void write(int b) throws IOException { out().write(b); }
+        @Override public void write(byte[] b, int off, int len) throws IOException { out().write(b, off, len); }
+        @Override public void flush() throws IOException { if (delegate != null) delegate.flush(); }
+        @Override public void close() throws IOException { if (delegate != null) delegate.close(); }
     }
 
     private static void setCsvHeaders(HttpServletResponse response, String dataset) {
@@ -88,9 +117,15 @@ public class ReportController {
         private BigDecimal maxDeclaredValue;
 
         public ReportFilters toFilters() {
+            LocalDateTime fromTs = parseDate(from, "from");
+            LocalDateTime toTs = parseDate(to, "to");
+            if (fromTs != null && toTs != null && fromTs.isAfter(toTs)) {
+                throw new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.BAD_REQUEST, "from must be on or before to");
+            }
             return ReportFilters.builder()
-                    .from(parseDate(from))
-                    .to(parseDate(to))
+                    .from(fromTs)
+                    .to(toTs)
                     .customerNo(customerNo)
                     .carrier(carrier)
                     .service(service)
@@ -104,11 +139,17 @@ public class ReportController {
                     .build();
         }
 
-        private static LocalDateTime parseDate(String s) {
+        /** yyyy-MM-dd (start of day) or an ISO date-time; anything else is a 400 naming the box (BUG-168). */
+        private static LocalDateTime parseDate(String s, String field) {
             if (s == null || s.isBlank()) return null;
-            // Accept yyyy-MM-dd (start-of-day) or ISO datetime.
-            if (s.length() == 10) return LocalDate.parse(s).atStartOfDay();
-            return LocalDateTime.parse(s);
+            try {
+                if (s.length() == 10) return LocalDate.parse(s).atStartOfDay();
+                return LocalDateTime.parse(s);
+            } catch (java.time.format.DateTimeParseException ex) {
+                throw new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.BAD_REQUEST,
+                        field + ": use yyyy-MM-dd or an ISO date-time such as 2026-10-25T16:00");
+            }
         }
     }
 

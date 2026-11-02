@@ -110,6 +110,19 @@ public class AdminUserService {
                                    int page, int size) {
         int boundedPage = Math.max(page, 0);
         int boundedSize = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
+        return userRepository.findAll(filter(search, role, clientCode, activeOnly),
+                        PageRequest.of(boundedPage, boundedSize, Sort.by("username").ascending()))
+                .map(AdminUserService::toDTO)
+                .getContent();
+    }
+
+    /** BUG-078 — how many users match the same filter, so the pager can show a total. */
+    @Transactional(readOnly = true)
+    public long count(String search, String role, String clientCode, Boolean activeOnly) {
+        return userRepository.count(filter(search, role, clientCode, activeOnly));
+    }
+
+    private static Specification<User> filter(String search, String role, String clientCode, Boolean activeOnly) {
         String q = search == null || search.isBlank() ? null : search.trim().toLowerCase(Locale.ROOT);
         String r = role == null || role.isBlank() ? null : role.trim().toUpperCase(Locale.ROOT);
         String cc = clientCode == null || clientCode.isBlank() ? null : clientCode.trim().toUpperCase(Locale.ROOT);
@@ -138,11 +151,7 @@ public class AdminUserService {
             }
             return preds.isEmpty() ? cb.conjunction() : cb.and(preds.toArray(new Predicate[0]));
         };
-
-        return userRepository.findAll(spec,
-                        PageRequest.of(boundedPage, boundedSize, Sort.by("username").ascending()))
-                .map(AdminUserService::toDTO)
-                .getContent();
+        return spec;
     }
 
     /**

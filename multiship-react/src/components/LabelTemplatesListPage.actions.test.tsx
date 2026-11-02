@@ -40,14 +40,17 @@ vi.mock('../api/labelTemplateService', () => ({
 }))
 
 const notifyErrorMock = vi.fn()
+const notifyApiErrorMock = vi.fn()
 const notifySuccessMock = vi.fn()
 const notifyConfirmMock = vi.fn()
 vi.mock('../utils/notify', () => ({
   notify: {
     error: (...args: unknown[]) => notifyErrorMock(...args),
+    // notify.invalid is the titled form of error; tests treat them alike.
+    invalid: (...args: unknown[]) => notifyErrorMock(...args),
     success: (...args: unknown[]) => notifySuccessMock(...args),
     confirm: (...args: unknown[]) => notifyConfirmMock(...args),
-    apiError: vi.fn(),
+    apiError: (...args: unknown[]) => notifyApiErrorMock(...args),
     info: vi.fn(),
   },
 }))
@@ -101,7 +104,7 @@ beforeEach(() => {
     throw new Error('un-mocked fetch forbidden in unit tests')
   })
   ;[listTemplatesMock, removeMock, fetchPreviewMock,
-    notifyErrorMock, notifySuccessMock, notifyConfirmMock, navigateMock]
+    notifyErrorMock, notifyApiErrorMock, notifySuccessMock, notifyConfirmMock, navigateMock]
     .forEach((m) => m.mockReset())
   notifyConfirmMock.mockResolvedValue(true)
 })
@@ -269,7 +272,8 @@ describe('LabelTemplatesListPage — row Delete', () => {
       await userEvent.click(await screen.findByRole('menuitem', { name: /Delete/i }))
     })
 
-    await waitFor(() => expect(notifyErrorMock).toHaveBeenCalledWith('boom-delete'))
+    // BUG-114 — the raw message goes through notify.apiError so it is cleaned up.
+    await waitFor(() => expect(notifyApiErrorMock).toHaveBeenCalledWith(expect.objectContaining({ message: 'boom-delete' }), 'Delete failed.'))
   })
 })
 

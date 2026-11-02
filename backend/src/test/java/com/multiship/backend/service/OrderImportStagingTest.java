@@ -63,6 +63,10 @@ class OrderImportStagingTest {
             return u;
         });
         when(upRepo.findById(anyLong())).thenAnswer(inv -> Optional.ofNullable(uploads.get((Long) inv.getArgument(0))));
+        // BUG-046 — saveStaging now acquires a pessimistic lock on the
+        // staging-upload row via findByIdForUpdate before reading rows.
+        // Mock mirrors findById so the test's in-memory map answers both.
+        when(upRepo.findByIdForUpdate(anyLong())).thenAnswer(inv -> Optional.ofNullable(uploads.get((Long) inv.getArgument(0))));
         when(upRepo.findFirstByContentHashAndStatusOrderByIdDesc(any(), any())).thenAnswer(inv -> uploads.values().stream()
                 .filter(u -> java.util.Objects.equals(u.getContentHash(), inv.getArgument(0)) && inv.getArgument(1).equals(u.getStatus()))
                 .max(Comparator.comparingLong(ImportStagingUpload::getId)));
@@ -123,6 +127,47 @@ class OrderImportStagingTest {
 
     private ApiResponse<StagingUploadDTO> stage(String name, String content) {
         return service.stageUpload(name, new ByteArrayInputStream(content.getBytes(StandardCharsets.UTF_8)), false, "alice");
+    }
+
+    // BUG-044 — a 36-character recipient name is refused at upload, not after half the batch is labelled.
+    @Test
+    void aRecipientNameOver35CharactersIsFlaggedAtUpload() {
+        Map<String, String> longName = order("L-1", "10001");
+        longName.put("recipientName", "QA Repro Longname 1234567890 abcdefg"); // 36 chars
+        ApiResponse<StagingUploadDTO> staged = stage("orders.csv", csv(List.of(longName, order("OK-1", "10001"))));
+        assertEquals("success", staged.getStatus(), staged.getMessage());
+        StagingUploadDTO s = staged.getData();
+        assertEquals(1, s.getInvalidOrders());
+        String text = new String(service.stagingErrorFile(s.getId(), "csv", "alice").bytes(), StandardCharsets.UTF_8);
+        assertTrue(text.contains("Name exceeds the 35-character carrier limit (currently 36)"), text);
+    }
+
+    // BUG-045 — two shipments sharing one reference are refused at upload, not after one of them is labelled.
+    @Test
+    void twoShipmentsSharingAReferenceAreRefusedAtUpload() {
+        Map<String, String> a = order("DUP-A", "10001"); a.put("reference", "QA-REF-045");
+        Map<String, String> b = order("DUP-B", "10001"); b.put("reference", "QA-REF-045");
+        StagingUploadDTO s = stage("orders.csv", csv(List.of(a, b))).getData();
+        assertEquals(0, s.getReadyOrders());
+        assertEquals(2, s.getInvalidOrders());
+        for (OrderImportRowDTO r : s.getRows()) {
+            assertTrue(r.getErrors().stream().anyMatch(e -> e.contains("reference QA-REF-045 is used on multiple shipments in this file (rows 1, 2)")), r.getErrors().toString());
+        }
+    }
+
+    // BUG-045 — a reference already on a GENERATED label of the same client is refused at upload (the label would be refused at Generate).
+    @Test
+    void aReferenceAlreadyOnAGeneratedLabelIsRefusedAtUpload() {
+        when(batchRepo.findGeneratedOrdersByCustomerRefIn(any())).thenReturn(List.<Object[]>of(
+                new Object[] { 900077, "QA-REF-LIVE", "ACME" }, new Object[] { 900078, "QA-REF-OTHER", "OTHERCO" }));
+        Map<String, String> same = order("NEW-1", "10001"); same.put("reference", "QA-REF-LIVE");
+        Map<String, String> otherClient = order("NEW-2", "10001"); otherClient.put("reference", "QA-REF-OTHER");
+        StagingUploadDTO s = stage("orders.csv", csv(List.of(same, otherClient))).getData();
+        assertEquals(1, s.getInvalidOrders());
+        OrderImportRowDTO r1 = s.getRows().get(0), r2 = s.getRows().get(1);
+        assertTrue(r1.getErrors().stream().anyMatch(e -> e.contains("reference QA-REF-LIVE is already in use on a GENERATED label (order #900077)")), r1.getErrors().toString());
+        assertTrue(r2.getErrors().isEmpty(), r2.getErrors().toString());
+        assertTrue(r2.getWarnings().stream().anyMatch(w -> w.contains("already has a labelled order (#900078)")), r2.getWarnings().toString());
     }
 
     @Test

@@ -26,6 +26,10 @@ public class OrderWithLinesDTO {
     private String orderChannel;
     /** Ship-via code NDS resolved the order to, when it differs from shipviaCd. */
     private String ndsResolvedShipviaCd;
+    /** Who paid the shipping charges: SENDER or THIRD_PARTY. */
+    private String billTo;
+    /** Payer account, masked (****1234). */
+    private String thirdPartyAccount;
     private String shipName;
     private String shipAttn;
     private String shipAddr1;
@@ -69,6 +73,14 @@ public class OrderWithLinesDTO {
     private String intlYn;
     /** 'Y' when this is a reverse/return label. */
     private String isReturn;
+    /** BUG-034 — Returns F9 Order.return_reason surfaced on the DTO so
+     *  the Reissue-return / Fix-return prefill in the FE can restore the
+     *  required Reason picklist from a previously saved order.
+     *  Null for outbound shipments. */
+    private String returnReason;
+    /** BUG-034 — Returns F9 Order.rma_number surfaced on the DTO. See
+     *  {@link #returnReason}. */
+    private String rmaNumber;
     /** PR #543 — order source (`MANUAL | BULK | WMS | API | ERP`). Drives
      *  the PO field on the JSX label facsimile. Null on legacy rows —
      *  FE facsimile falls through to orderNo bare. */

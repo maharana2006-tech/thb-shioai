@@ -143,6 +143,15 @@ public class ShipmentValidationService {
 
     @Transactional(readOnly = true)
     public ApiResponse<ShipmentValidationResult> validate(ManualShipmentRequest req) {
+        return validate(req, true);
+    }
+
+    /**
+     * @param carrierHop false to keep every local rule but skip the carrier
+     *                   token/rates/validate round trip — used by a purchase
+     *                   that presents the fingerprint of a recent passing dry run.
+     */
+    public ApiResponse<ShipmentValidationResult> validate(ManualShipmentRequest req, boolean carrierHop) {
         if (req == null || req.getRecipient() == null) {
             return failure("Request body and recipient are required.");
         }
@@ -161,6 +170,19 @@ public class ShipmentValidationService {
         checkRecipientRequired(to, errors, warnings);
         checkSenderRequired(from, req, errors);
         checkShipmentRequired(req, errors);
+        // Third-party freight billing — same rule Generate label applies, so a
+        // bad payer fails here instead of at the carrier.
+        if (StringUtils.hasText(req.getCarrierCode())) {
+            String billToError = CarrierServiceImpl.validateThirdPartyBilling(req,
+                    blankTo(ShippingConfigService.canonicalCarrierFor(req.getCarrierCode()),
+                            req.getCarrierCode().trim().toUpperCase(Locale.ROOT)));
+            if (billToError != null) {
+                errors.add(issue(ErrorCode.VALIDATION_ERROR, billToError,
+                        billToError.startsWith("thirdPartyPostalCode") ? "thirdPartyPostalCode"
+                                : billToError.startsWith("thirdPartyCountry") ? "thirdPartyCountry"
+                                : billToError.startsWith("billTo") ? "billTo" : "thirdPartyAccount"));
+            }
+        }
         checkCarrierLengthLimits(req, errors); // BUG-004
         checkRequiredCustomFields(req, clientCode, errors); // R2-BUG-008
         checkSanctionedDestination(to, errors); // R2-BUG-011
@@ -277,6 +299,8 @@ public class ShipmentValidationService {
         labelTimeChecks(req, service, preset, warehouseId, errors, warnings, skipped);
         checkPoBoxAndMilitary(req, service, errors);
         checkDuplicateReference(req, errors); // BUG-006 — fail, not warn
+        checkOriginalOrderNoExists(req, errors); // BUG-040
+        checkUspsNameOrCompany(req, errors);  // BUG-029 (QA 2026-10-24)
         checkCutoff(req, warnings);
         checkInsuranceCost(req, service, warnings);
 
@@ -374,8 +398,24 @@ public class ShipmentValidationService {
         java.util.concurrent.atomic.AtomicReference<List<com.multiship.backend.service.carriers.CarrierConnector.RateOption>> rates =
                 new java.util.concurrent.atomic.AtomicReference<>();
         java.util.concurrent.atomic.AtomicReference<String> rateProblem = new java.util.concurrent.atomic.AtomicReference<>();
-        ShipmentValidationResult.CarrierValidationSubResult carrierResult =
-                callCarrierValidateShipment(req, adapted, pickedAccount, skipped, rates, rateProblem);
+        ShipmentValidationResult.CarrierValidationSubResult carrierResult = null;
+        if (!carrierHop) {
+            skipped.add(ValidationCheckStatus.builder().name("carrier")
+                    .reason("Skipped: this exact shipment passed a dry run within the last "
+                            + com.multiship.backend.service.shipment.ValidationReceipts.TTL.toMinutes() + " minutes.")
+                    .build());
+        } else {
+            try {
+                carrierResult = callCarrierValidateShipment(req, adapted, pickedAccount, skipped, rates, rateProblem);
+            } catch (com.multiship.backend.service.carrier.ShipperDefaultsMissingException e) {
+                // Phase 1 — strict shipper mode is a local error the operator
+                // can fix, reported on the sender block, not a 500.
+                // BUG-025 — strict mode only fires when the form's Ship from
+                // block leaves a required field blank, so name THAT field in
+                // plain words instead of the tenant-settings key list.
+                errors.addAll(shipFromGaps(req.getSender(), e, errors));
+            }
+        }
         // A login failure reads as one, whichever carrier said it and however
         // (UPS: HTTP 401 / 250002 "Invalid Authentication Information").
         // BUT — 250002 is also what UPS returns when the OAuth token was minted
@@ -1075,35 +1115,53 @@ public class ShipmentValidationService {
         return u;
     }
 
-    private void checkIntlRequiredFields(ManualShipmentRequest req,
-                                         String recipientCountry,
+    /**
+     * BUG-029 (QA 2026-10-24) — USPS SERA refuses any shipment whose
+     * {@code to_address} or {@code from_address} has neither a {@code name}
+     * nor a {@code company_name} (error 6619396 for the recipient,
+     * 4522242 for the sender). Pre-fix only USPS intl flows checked
+     * this, and only on the sender; domestic USPS and every recipient
+     * went straight to the carrier and the operator saw a cryptic
+     * carrier 400 after an ERROR order had already been saved.
+     *
+     * <p>Scope: every USPS shipment (intl + domestic), both sides.
+     * The equivalent hard guard lives at
+     * {@link com.multiship.backend.service.carriers.StampsConnector#createShipmentSera}
+     * so a direct connector caller (webhook, API consumer) can't bypass
+     * this validator and still send a nameless+companyless address.
+     */
+    private void checkUspsNameOrCompany(ManualShipmentRequest req,
                                          List<ValidationIssue> errors) {
-        // BUG-001 — USPS SERA validates sender_info.name for international
-        // shipments and rejects single-token names like "MKL" (the client's
-        // company name typed into the Full name field). Pre-flight guard
-        // so the operator sees "needs a full name" BEFORE the label hop
-        // instead of a cryptic carrier reject after order #<N> is saved
-        // as ERROR. Scoped to USPS international + where no company name
-        // supplies the entity identity.
-        if ("USPS".equalsIgnoreCase(req.getCarrierCode())
-                && req.getSender() != null) {
-            String senderName = req.getSender().getName() == null ? ""
+        if (!"USPS".equalsIgnoreCase(req.getCarrierCode())) return;
+        if (req.getSender() != null) {
+            String name = req.getSender().getName() == null ? ""
                     : req.getSender().getName().trim();
-            String senderCompany = req.getSender().getCompany() == null ? ""
+            String company = req.getSender().getCompany() == null ? ""
                     : req.getSender().getCompany().trim();
-            // USPS accepts either a SERA-valid personal name OR a company
-            // name as the sender identity. Match the exact SERA rule so
-            // pre-flight and connector agree.
-            boolean nameLooksLikeFull = com.multiship.backend.service.carriers
-                    .StampsConnector.isSeraValidFullname(senderName);
-            if (!nameLooksLikeFull && senderCompany.isBlank()) {
+            if (name.isEmpty() && company.isEmpty()) {
                 errors.add(issue(ErrorCode.VALIDATION_ERROR,
-                        "USPS international needs a sender full name (first + last) "
-                                + "or a company name. Current ship-from name '"
-                                + senderName + "' is a single token with no company set.",
+                        "USPS needs a sender name or company. Fill the "
+                                + "'Ship from' name or company before generating a label.",
                         "sender.name"));
             }
         }
+        if (req.getRecipient() != null) {
+            String name = req.getRecipient().getName() == null ? ""
+                    : req.getRecipient().getName().trim();
+            String company = req.getRecipient().getCompany() == null ? ""
+                    : req.getRecipient().getCompany().trim();
+            if (name.isEmpty() && company.isEmpty()) {
+                errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                        "USPS needs a recipient name or company. Fill the "
+                                + "'Ship to' name or company before generating a label.",
+                        "recipient.name"));
+            }
+        }
+    }
+
+    private void checkIntlRequiredFields(ManualShipmentRequest req,
+                                         String recipientCountry,
+                                         List<ValidationIssue> errors) {
         // Currency + incoterms — resolvable via precedence, else error.
         if (resolveCustomsCurrency(req) == null) {
             errors.add(issue(ErrorCode.VALIDATION_ERROR,
@@ -1576,6 +1634,23 @@ public class ShipmentValidationService {
                 // Missing markup is already reported as an error above.
             }
         }
+        // R2-BUG-020 (run-4) — append the local accessorial estimate to the
+        // operator-facing message. The carrier's Rate API in SANDBOX
+        // returns a base rate only (observed on UPS: ADULT signature not
+        // surcharged, declared-value coverage not surcharged); PROD Rate
+        // APIs honour the same fields the AM fix now threads in, but
+        // operators evaluating service options need a realistic figure
+        // either way. The estimate is additive context (never replaces
+        // picked.totalAmount()), so prod flows that already surcharge
+        // don't double-count — the carrier's number stays the number;
+        // the message just names the expected delta.
+        String accessorialNote = buildAccessorialNote(req, picked.currency());
+        String baseMsg = carrier + " quotes " + picked.currency() + " "
+                + picked.totalAmount().setScale(2, java.math.RoundingMode.HALF_UP)
+                + (picked.transitDays() != null ? ", " + picked.transitDays() + " business day"
+                        + (picked.transitDays() == 1 ? "" : "s") : "") + ".";
+        String fullMsg = accessorialNote == null ? baseMsg : baseMsg + " " + accessorialNote;
+
         return q.status("QUOTED")
                 .serviceName(blankTo(picked.serviceName(), service != null ? service.getName() : serviceCode))
                 .carrierAmount(picked.totalAmount().setScale(2, java.math.RoundingMode.HALF_UP))
@@ -1584,11 +1659,58 @@ public class ShipmentValidationService {
                 .markup(markup)
                 .transitDays(picked.transitDays())
                 .estimatedDelivery(picked.estimatedDelivery() != null ? picked.estimatedDelivery().toLocalDate().toString() : null)
-                .message(carrier + " quotes " + picked.currency() + " "
-                        + picked.totalAmount().setScale(2, java.math.RoundingMode.HALF_UP)
-                        + (picked.transitDays() != null ? ", " + picked.transitDays() + " business day"
-                                + (picked.transitDays() == 1 ? "" : "s") : "") + ".")
+                .message(fullMsg)
                 .build();
+    }
+
+    /**
+     * R2-BUG-020 (run-4) — compute the expected accessorial surcharges
+     * from the standard carrier fee tables (2024). Returns null when no
+     * surcharges apply (no signature, declared value ≤ $100 free tier).
+     *
+     * <p>Figures are conservative US-dollar carrier published rates — the
+     * carrier's own authoritative Ship-call price supersedes this at
+     * purchase time; this is a hint, not a contract. ponytail: rates
+     * drift ~yearly; if ops reports consistently-off estimates, pull from
+     * a per-carrier catalog table instead of hardcoded constants.
+     */
+    private static String buildAccessorialNote(ManualShipmentRequest req, String currency) {
+        java.util.List<String> parts = new java.util.ArrayList<>();
+        String sig = req.getSignatureOption();
+        if (sig != null) {
+            BigDecimal fee = switch (sig.trim().toUpperCase(Locale.ROOT)) {
+                case "ADULT" -> new BigDecimal("8.25");
+                case "INDIRECT" -> new BigDecimal("6.70");
+                case "DIRECT" -> new BigDecimal("5.80");
+                default -> null;
+            };
+            if (fee != null) {
+                parts.add(sig.trim().toUpperCase(Locale.ROOT) + " signature: +" + currency + " "
+                        + fee.setScale(2, java.math.RoundingMode.HALF_UP));
+            }
+        }
+        BigDecimal insured = req.getInsuredValue();
+        BigDecimal declared = req.getDeclaredValue();
+        BigDecimal effective = declared != null && insured != null
+                ? (declared.compareTo(insured) >= 0 ? declared : insured)
+                : (declared != null ? declared : insured);
+        if (effective != null && effective.compareTo(new BigDecimal("100")) > 0) {
+            // UPS / FedEx: $0.52 per $100 (or fraction) above the first
+            // $100 free tier, with a $3.60 minimum charge once over the
+            // tier. Conservative round-up (CEILING) so the operator sees
+            // an upper-bound estimate rather than a surprise charge.
+            BigDecimal taxable = effective.subtract(new BigDecimal("100"));
+            BigDecimal perHundred = taxable.divide(new BigDecimal("100"), 0, java.math.RoundingMode.CEILING);
+            BigDecimal fee = perHundred.multiply(new BigDecimal("0.52"));
+            if (fee.compareTo(new BigDecimal("3.60")) < 0) fee = new BigDecimal("3.60");
+            parts.add("Declared value coverage (" + currency + " "
+                    + effective.setScale(2, java.math.RoundingMode.HALF_UP)
+                    + "): +" + currency + " " + fee.setScale(2, java.math.RoundingMode.HALF_UP));
+        }
+        if (parts.isEmpty()) return null;
+        return "Expected surcharges at purchase — " + String.join("; ", parts)
+                + ". (Carrier Rate APIs in sandbox return base rates only; "
+                + "the Ship API applies these at label purchase.)";
     }
 
     private record Box(BigDecimal weight, BigDecimal length, BigDecimal width, BigDecimal height, String dimUnit) { }
@@ -1682,6 +1804,22 @@ public class ShipmentValidationService {
                         + (o.getCreatedDate() != null ? " (" + o.getCreatedDate() + ")" : "")
                         + (StringUtils.hasText(o.getTrack()) ? ", tracking " + o.getTrack() : "")
                         + ". Use a different reference or void the existing label first.", "reference")));
+    }
+
+    /** BUG-040 — a typed {@code originalOrderNo} that doesn't exist is a
+     *  FAIL. Pre-fix the backend silently dropped stale typed values to
+     *  null so Validate+Generate "succeeded" but the return was unlinked.
+     *  Only runs when the field was filled; blank is still fine. */
+    private void checkOriginalOrderNoExists(ManualShipmentRequest req, List<ValidationIssue> errors) {
+        if (orderRepository == null) return;
+        Integer n = req.getOriginalOrderNo();
+        if (n == null || n <= 0) return;
+        if (orderRepository.findByOrderNo(n).isEmpty()) {
+            errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                    "Return of #" + n + " doesn't match an order on this tenant. "
+                            + "Fix the number or clear the field.",
+                    "originalOrderNo"));
+        }
     }
 
     /** Past the client's daily cutoff, the label counts as the next business day's. */
@@ -2229,6 +2367,55 @@ public class ShipmentValidationService {
                     label + " exceeds the " + CARRIER_FIELD_MAX + "-character carrier limit (currently "
                             + value.length() + ").", field));
         }
+    }
+
+    /** BUG-025 — tenant-settings key → sender form field, in the operator's words. */
+    private static final java.util.Map<String, String> SHIP_FROM_LABELS = java.util.Map.of(
+            "name", "name", "phone", "phone", "addressLine1", "address line 1", "city", "city",
+            "state", "state/province", "postalCode", "postal code", "countryCode", "country");
+
+    /**
+     * BUG-025 — one issue per required Ship from field the form left blank
+     * (field {@code sender.<name>} so the form marks it). Fields the form
+     * already filled are covered by the request and need no default, so
+     * they are not reported; nor are fields another check already flagged.
+     */
+    private List<ValidationIssue> shipFromGaps(ManualShipmentRequest.Address from,
+                                               com.multiship.backend.service.carrier.ShipperDefaultsMissingException e,
+                                               List<ValidationIssue> existing) {
+        String where = " Fill it in, or save a ship-from address for client " + e.getTenantCode()
+                + " under Settings → System → Ship-from defaults.";
+        List<ValidationIssue> out = new ArrayList<>();
+        if (from == null) {
+            out.add(issue(e.getErrorCode(), "Ship from address is required." + where, "sender"));
+            return out;
+        }
+        Set<String> flagged = new java.util.HashSet<>();
+        for (ValidationIssue i : existing) if (i.getField() != null) flagged.add(i.getField());
+        for (String key : e.getMissingKeys()) {
+            String name = key.startsWith("shipper.") ? key.substring("shipper.".length()) : key;
+            String label = SHIP_FROM_LABELS.get(name);
+            String field = "sender." + name;
+            if (label == null || StringUtils.hasText(senderField(from, name)) || flagged.contains(field)) continue;
+            out.add(issue(e.getErrorCode(), "Ship from " + label + " is required." + where, field));
+        }
+        if (out.isEmpty()) {
+            out.add(issue(e.getErrorCode(), "Ship from address is incomplete." + where, "sender"));
+        }
+        return out;
+    }
+
+    private static String senderField(ManualShipmentRequest.Address a, String name) {
+        return switch (name) {
+            case "name" -> a.getName();
+            case "phone" -> a.getPhone();
+            case "addressLine1" -> a.getAddressLine1();
+            case "city" -> a.getCity();
+            case "state" -> a.getState();
+            case "postalCode" -> a.getPostalCode();
+            case "countryCode" -> a.getCountryCode();
+            default -> null;
+        };
     }
 
     private ValidationIssue issue(ErrorCode code, String message, String field) {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useOutletContext } from 'react-router-dom'
+import { useOutletContext, useSearchParams } from 'react-router-dom'
 import type { SortingState } from '@tanstack/react-table'
 import {
   FiActivity,
@@ -15,12 +15,14 @@ import {
   FiX,
 } from 'react-icons/fi'
 import { notify } from '../utils/notify'
+import { downloadCsv } from '../utils/csv'
+import { columnsToCsvMatrix, fetchAllPages } from '../utils/exportAll'
 import { warehouseService, type Warehouse } from '../api/warehouseService'
 import { countryName } from '../utils/countries'
 import AttachClientsModal from './modals/AttachClientsModal'
 import WarehouseEditorModal from './modals/WarehouseEditorModal'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
-import AdvancedDataTable, { type ColumnDef } from './workspace/AdvancedDataTable'
+import AdvancedDataTable, { PHONE_SHEET, type ColumnDef } from './workspace/AdvancedDataTable'
 import PortalMenu from './workspace/PortalMenu'
 import Select from './workspace/Select'
 import { useAppSession } from '../hooks/useAppSession'
@@ -40,8 +42,15 @@ export default function WarehousesPage() {
   const [totalElements, setTotalElements] = useState(0)
   const [totalPages, setTotalPages] = useState(1)
 
+  const [searchParams] = useSearchParams()
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
+  // BUG-179 — the top-bar search lands here with ?q=<code>.
+  useEffect(() => {
+    const q = searchParams.get('q')
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- sync from URL on navigation
+    if (q) setSearch(q)
+  }, [searchParams])
   const [ownerFilter, setOwnerFilter] = useState('')
   const [activeFilter, setActiveFilter] = useState('')
   const [showFilters, setShowFilters] = useState(false)
@@ -321,6 +330,15 @@ export default function WarehousesPage() {
             tableKey="warehouses"
             columns={columns}
             data={rows}
+            onExport={async (visibleIds) => {
+              // BUG-076 — every page with the current filters, not just the one on screen.
+              const all = await fetchAllPages<Warehouse>((page, size) => warehouseService.listWarehouses({
+                search: debouncedSearch || undefined, ownerType: ownerFilter || undefined,
+                active: activeFilter || undefined, sortBy, sortDirection, page, size,
+              }).then((r) => r.data))
+              downloadCsv(`warehouses-${new Date().toISOString().slice(0, 10)}.csv`, columnsToCsvMatrix(columns, all, visibleIds))
+              notify.success(`Exported ${all.length.toLocaleString()} warehouse(s).`)
+            }}
             manualPagination
             manualSorting
             pageIndex={pageIndex}
@@ -364,7 +382,7 @@ export default function WarehousesPage() {
                   <div
                     role="dialog"
                     aria-label="Filter warehouses"
-                    className="absolute left-0 top-full z-30 mt-1.5 w-72 rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_20px_60px_rgba(15,23,42,0.15)]"
+                    className={`absolute left-0 top-full z-30 mt-1.5 w-72 rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_20px_60px_rgba(15,23,42,0.15)]${PHONE_SHEET}`}
                   >
                     <div className="space-y-2.5">
                       <div>

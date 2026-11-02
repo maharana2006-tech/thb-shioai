@@ -160,6 +160,14 @@ public class PrinterController {
     // Printer tags (R8a)
     // ================================================================
 
+    @Operation(summary = "Tags of every visible printer, keyed by printer id (one request for the Printers page).")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping("/tags")
+    public ResponseEntity<ApiResponse<java.util.Map<Long, List<String>>>> allTags() {
+        List<Long> ids = printers.list().stream().map(Printer::getId).toList();
+        return ok("tags", tags.tagsByPrinterId(ids));
+    }
+
     @Operation(summary = "List tags on a printer")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @GetMapping("/{id}/tags")
@@ -220,7 +228,14 @@ public class PrinterController {
 
     @ExceptionHandler(PrinterService.PrinterValidationException.class)
     public ResponseEntity<ApiResponse<Void>> invalid(PrinterService.PrinterValidationException ex) {
-        return error(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR, ex.getMessage());
+        if (ex.field == null) return error(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR, ex.getMessage());
+        // BUG-194 — name the field so the Printers form marks it inline.
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(ApiResponse.<Void>builder()
+                .status("ERROR").code(422).message(ex.getMessage())
+                .errorCode(ErrorCode.VALIDATION_ERROR.name())
+                .errors(ApiResponse.ErrorDetails.builder()
+                        .field(ex.field).code(ErrorCode.VALIDATION_ERROR.name()).message(ex.getMessage()).build())
+                .build());
     }
 
     @ExceptionHandler(NoSuchElementException.class)

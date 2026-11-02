@@ -309,7 +309,7 @@ public class DtcBatchController {
             List<Integer> printed = new java.util.ArrayList<>();
             for (DtcOrder row : rows) {
                 // UPS stores its label as a GIF — wrap it into a 4x6 PDF like
-                // GET /orders/{n}/label/pdf does, or the ZIP silently drops it.
+                // GET /labels/{n}/pdf does, or the ZIP silently drops it.
                 Integer no = row.getGeneratedOrderNo();
                 Optional<byte[]> pdf = labelArtifactResolver.resolveAsBytes(no, "PDF", null)
                         .or(() -> labelArtifactResolver.resolveImage(no, null)
@@ -511,7 +511,7 @@ public class DtcBatchController {
     /** Widest bounds the summary query uses when a date input is left open. */
     private static final LocalDateTime UNBOUNDED_FROM = LocalDateTime.of(1970, 1, 1, 0, 0);
     private static final LocalDateTime UNBOUNDED_TO = LocalDateTime.of(2999, 12, 31, 23, 59, 59);
-    private static final List<String> LABEL_STATUSES = List.of("GENERATED", "PARTIAL", "PENDING");
+    private static final List<String> LABEL_STATUSES = List.of("GENERATED", "PARTIAL", "FAILED", "PENDING");
     private static final List<String> BATCH_STATUSES = List.of("COMPLETE", "OPEN");
 
     private static String trimOrEmpty(String value) {

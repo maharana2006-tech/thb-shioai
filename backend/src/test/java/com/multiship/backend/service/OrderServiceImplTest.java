@@ -74,12 +74,12 @@ class OrderServiceImplTest {
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-                anyInt(), anyInt(), anyString(), anyString()))
+                anyString(), anyInt(), anyInt(), anyString(), anyString()))
                 .thenReturn(List.of());
         when(orderRepository.countOrdersUnified(
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
                 .thenReturn(0L);
     }
 
@@ -112,11 +112,11 @@ class OrderServiceImplTest {
                 anyString(), eq("ACME"), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-                anyInt(), anyInt(), anyString(), anyString());
+                anyString(), anyInt(), anyInt(), anyString(), anyString());
         verify(orderRepository).countOrdersUnified(
                 anyString(), eq("ACME"), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
     }
 
     @Test
@@ -131,7 +131,7 @@ class OrderServiceImplTest {
                 anyString(), eq(""), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-                anyInt(), anyInt(), anyString(), anyString());
+                anyString(), anyInt(), anyInt(), anyString(), anyString());
     }
 
     /* -------- validation errors -------- */
@@ -170,15 +170,19 @@ class OrderServiceImplTest {
     /* -------- pagination clamping -------- */
 
     @Test
-    void pageSizeAbove100IsClampedTo100() {
-        service.listOrders(emptyFilters(), false, page(0, 500));
+    void pageSizeAboveExportMaxIsClampedToExportMax() {
+        // BUG-010 — the service clamp mirrors PaginationDefaults.EXPORT_MAX_SIZE
+        // (1000) as defense-in-depth; the controller clamps normal UI calls to
+        // 100 one layer up. In-process callers (export path) can request up to
+        // 1000. A size of 1500 must come back as 1000.
+        service.listOrders(emptyFilters(), false, page(0, 1500));
         ArgumentCaptor<Integer> limitCap = ArgumentCaptor.forClass(Integer.class);
         verify(orderRepository).findOrdersUnified(
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-                anyInt(), limitCap.capture(), anyString(), anyString());
-        assertEquals(100, limitCap.getValue());
+                anyString(), anyInt(), limitCap.capture(), anyString(), anyString());
+        assertEquals(com.multiship.backend.common.PaginationDefaults.EXPORT_MAX_SIZE, limitCap.getValue());
     }
 
     @Test
@@ -189,7 +193,7 @@ class OrderServiceImplTest {
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-                anyInt(), limitCap.capture(), anyString(), anyString());
+                anyString(), anyInt(), limitCap.capture(), anyString(), anyString());
         assertEquals(1, limitCap.getValue());
     }
 
@@ -201,7 +205,7 @@ class OrderServiceImplTest {
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-                offsetCap.capture(), anyInt(), anyString(), anyString());
+                anyString(), offsetCap.capture(), anyInt(), anyString(), anyString());
         assertEquals(0, offsetCap.getValue());
     }
 
@@ -216,7 +220,7 @@ class OrderServiceImplTest {
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-                anyInt(), anyInt(), sortBy.capture(), sortDir.capture());
+                anyString(), anyInt(), anyInt(), sortBy.capture(), sortDir.capture());
         assertEquals("orderNo", sortBy.getValue());
         assertEquals("ASC", sortDir.getValue());
     }
@@ -245,7 +249,7 @@ class OrderServiceImplTest {
         when(orderRepository.findDistinctBatchesUnified(
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
                 .thenReturn(List.of());
 
         ApiResponse<List<Map<String, Object>>> resp = service.listBatches(emptyFilters());
@@ -265,7 +269,7 @@ class OrderServiceImplTest {
         when(orderRepository.findDistinctBatchesUnified(
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
                 .thenReturn(List.of(
                         new Object[]{42, 17L},
                         new Object[]{14, 3L}));
@@ -301,7 +305,7 @@ class OrderServiceImplTest {
         when(orderRepository.findDistinctBatchesUnified(
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
                 .thenReturn(List.of());
 
         service.listBatches(f);
@@ -311,7 +315,7 @@ class OrderServiceImplTest {
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
                 batchCap.capture(),
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
         assertEquals("14", batchCap.getValue());
     }
 
@@ -324,7 +328,7 @@ class OrderServiceImplTest {
         when(orderRepository.findDistinctBatchesUnified(
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
                 .thenReturn(List.of());
 
         service.listBatches(f);
@@ -334,7 +338,7 @@ class OrderServiceImplTest {
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
                 batchCap.capture(),
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
         assertEquals("", batchCap.getValue());
     }
 
@@ -346,7 +350,7 @@ class OrderServiceImplTest {
         when(orderRepository.findDistinctBatchesUnified(
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
                 .thenReturn(List.of());
 
         service.listBatches(f);
@@ -354,7 +358,7 @@ class OrderServiceImplTest {
         verify(orderRepository).findDistinctBatchesUnified(
                 anyString(), eq("ACME"), anyString(), anyString(),
                 eq("BOB"), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
     }
 
     /* -------- search prefix syntax (2026-09-15) --------
@@ -377,7 +381,7 @@ class OrderServiceImplTest {
                 anyString(), anyString(), eq(""), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
                 eq("14"), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-                anyInt(), anyInt(), anyString(), anyString());
+                anyString(), anyInt(), anyInt(), anyString(), anyString());
     }
 
     @Test
@@ -392,7 +396,7 @@ class OrderServiceImplTest {
                 anyString(), anyString(), eq(""), anyString(),
                 anyString(), anyString(), eq("900044"), anyString(),
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-                anyInt(), anyInt(), anyString(), anyString());
+                anyString(), anyInt(), anyInt(), anyString(), anyString());
     }
 
     @Test
@@ -407,7 +411,7 @@ class OrderServiceImplTest {
                 anyString(), anyString(), eq(""), anyString(),
                 anyString(), anyString(), anyString(), eq("1Z9999"),
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-                anyInt(), anyInt(), anyString(), anyString());
+                anyString(), anyInt(), anyInt(), anyString(), anyString());
     }
 
     @Test
@@ -422,7 +426,7 @@ class OrderServiceImplTest {
                 anyString(), anyString(), eq(""), anyString(),
                 eq("ARHDEV"), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-                anyInt(), anyInt(), anyString(), anyString());
+                anyString(), anyInt(), anyInt(), anyString(), anyString());
     }
 
     @Test
@@ -438,7 +442,7 @@ class OrderServiceImplTest {
                 anyString(), anyString(), eq("foo:bar"), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-                anyInt(), anyInt(), anyString(), anyString());
+                anyString(), anyInt(), anyInt(), anyString(), anyString());
     }
 
     @Test
@@ -454,7 +458,7 @@ class OrderServiceImplTest {
                 anyString(), anyString(), eq("14"), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-                anyInt(), anyInt(), anyString(), anyString());
+                anyString(), anyInt(), anyInt(), anyString(), anyString());
     }
 
     @Test
@@ -471,7 +475,7 @@ class OrderServiceImplTest {
                 anyString(), anyString(), eq("batch:foo"), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
                 eq(""), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-                anyInt(), anyInt(), anyString(), anyString());
+                anyString(), anyInt(), anyInt(), anyString(), anyString());
     }
 
     @Test
@@ -489,7 +493,7 @@ class OrderServiceImplTest {
                 anyString(), anyString(), eq("batch:22"), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
                 eq("14"), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-                anyInt(), anyInt(), anyString(), anyString());
+                anyString(), anyInt(), anyInt(), anyString(), anyString());
     }
 
     @Test
@@ -503,7 +507,7 @@ class OrderServiceImplTest {
                 anyString(), anyString(), eq(""), anyString(),
                 anyString(), anyString(), anyString(), anyString(),
                 eq("14"), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-                anyInt(), anyInt(), anyString(), anyString());
+                anyString(), anyInt(), anyInt(), anyString(), anyString());
     }
 
     /**
@@ -530,4 +534,96 @@ class OrderServiceImplTest {
         assertEquals(15L, all);
     }
 
+    /* -------- BUG-012: SQL LIKE wildcard escape -------- */
+
+    /**
+     * BUG-012 (QA 2026-10-23) — a literal {@code '%'} typed into search
+     * previously matched every row (34,133 orders), and {@code 'QA_'}
+     * matched {@code 'QA-'} because the underscore acts as any-single-
+     * char. Service now escapes {@code \ % _} before binding; the SQL
+     * carries {@code ESCAPE '\\'} on every LIKE so the escape takes effect.
+     */
+    @Test
+    void searchKeywordEscapesPercentAndUnderscore() {
+        OrderListFilters f = emptyFilters();
+        f.setSearch("QA_20261020-%");
+
+        service.listOrders(f, false, page(0, 20));
+
+        ArgumentCaptor<String> keyword = ArgumentCaptor.forClass(String.class);
+        verify(orderRepository).findOrdersUnified(
+                anyString(), anyString(), keyword.capture(), anyString(),
+                anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyInt(), anyInt(), anyString(), anyString());
+        assertEquals("QA\\_20261020-\\%", keyword.getValue(),
+                "literal % and _ must be backslash-escaped before binding to :keyword");
+    }
+
+    @Test
+    void customerFilterEscapesLikeWildcards() {
+        OrderListFilters f = emptyFilters();
+        f.setCustomer("MK%L");
+
+        service.listOrders(f, false, page(0, 20));
+
+        ArgumentCaptor<String> customer = ArgumentCaptor.forClass(String.class);
+        verify(orderRepository).findOrdersUnified(
+                anyString(), anyString(), anyString(), anyString(),
+                customer.capture(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyInt(), anyInt(), anyString(), anyString());
+        assertEquals("MK\\%L", customer.getValue());
+    }
+
+    @Test
+    void existingBackslashInKeywordIsDoubled() {
+        // A legitimate backslash in a reference ("QA\\INT") must become
+        // "QA\\\\INT" on the wire so Postgres unescapes it back to the
+        // original single backslash under ESCAPE '\\'.
+        OrderListFilters f = emptyFilters();
+        f.setSearch("QA\\INT");
+
+        service.listOrders(f, false, page(0, 20));
+
+        ArgumentCaptor<String> keyword = ArgumentCaptor.forClass(String.class);
+        verify(orderRepository).findOrdersUnified(
+                anyString(), anyString(), keyword.capture(), anyString(),
+                anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyInt(), anyInt(), anyString(), anyString());
+        assertEquals("QA\\\\INT", keyword.getValue());
+    }
+
+    @Test
+    void plainKeywordLeftUntouched() {
+        OrderListFilters f = emptyFilters();
+        f.setSearch("Austin");
+
+        service.listOrders(f, false, page(0, 20));
+
+        ArgumentCaptor<String> keyword = ArgumentCaptor.forClass(String.class);
+        verify(orderRepository).findOrdersUnified(
+                anyString(), anyString(), keyword.capture(), anyString(),
+                anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyInt(), anyInt(), anyString(), anyString());
+        assertEquals("Austin", keyword.getValue());
+    }
+
+    @Test
+    void emptyKeywordPassesThroughAsEmptyString() {
+        // The service's "no filter" sentinel is "" — the SQL branches
+        // skip the LIKE when :keyword = ''. escapeLike must preserve
+        // that sentinel.
+        OrderListFilters f = emptyFilters(); // no search set
+
+        service.listOrders(f, false, page(0, 20));
+
+        verify(orderRepository).findOrdersUnified(
+                anyString(), anyString(), eq(""), anyString(),
+                anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyInt(), anyInt(), anyString(), anyString());
+    }
 }

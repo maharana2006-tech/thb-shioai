@@ -127,6 +127,9 @@ export const printerService = {
     apiClient.put<ApiResponse<PrinterTag[]>>(`/printers/${id}/tags`, { tags }),
   listDistinctPrinterTags: () =>
     apiClient.get<ApiResponse<string[]>>('/printers/tags/distinct'),
+  /** BUG-130 — every printer's tags in one request, keyed by printer id. */
+  listAllPrinterTags: () =>
+    apiClient.get<ApiResponse<Record<string, string[]>>>('/printers/tags'),
 
   // PR-Printer-R7a — per (client, carrier) commercial-invoice copies.
   // clientCode=null on upsert = tenant-wide default row for the carrier.

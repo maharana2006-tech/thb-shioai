@@ -42,6 +42,12 @@ public class MultiWarehouseLabelServiceImpl implements MultiWarehouseLabelServic
      */
     private final TenantScopeEnforcer tenantScope;
 
+    /** BUG-064 — the split dialog carries no account or service; resolve the client's defaults. Optional so hand-built tests stay constructible. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.CarrierAccountRefRepository accountRepo;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.ClientAllowedServiceRepository allowedServiceRepo;
+
     /** Perf P3 — REQUIRES_NEW programmatic tx for the legacy single-tx
      *  path and for the split path's final persist. May be null in
      *  bare-ctor tests; a null-guard falls back to direct call. */
@@ -101,6 +107,7 @@ public class MultiWarehouseLabelServiceImpl implements MultiWarehouseLabelServic
         // final persist in its own short tx. Flag=FALSE wraps the entire
         // body in a single tx — pre-P2 behaviour. Null-template falls
         // through to direct call for bare-ctor Mockito tests.
+        applyClientDefaults(request);
         boolean splitMode = phaseSplitEnabled && requiresNewTransactionTemplate != null;
         if (!splitMode && requiresNewTransactionTemplate != null) {
             return requiresNewTransactionTemplate.execute(status ->
@@ -243,6 +250,55 @@ public class MultiWarehouseLabelServiceImpl implements MultiWarehouseLabelServic
      * Build the ManualShipmentRequest for one warehouse group by overlaying
      * the shared header on the group-specific lines.
      */
+    /**
+     * BUG-064 — the split dialog has no carrier, account or service picker, so
+     * a request used to reach the resolver with none of them and die on
+     * "Enter the bill-to account number". Fill them from the client's defaults
+     * the way the New Shipment form does on a client pick: the active account
+     * flagged as the client default (for the requested carrier when one is
+     * given), else the client's only active account on that carrier; the
+     * client's default service when none was sent. Nothing to resolve is a
+     * 422 that names the field.
+     */
+    void applyClientDefaults(MultiWarehouseLabelRequest req) {
+        String client = req.getClientCode();
+        boolean needsAccount = req.getAccountId() == null
+                && (req.getAccountNumber() == null || req.getAccountNumber().isBlank());
+        if (needsAccount && accountRepo != null) {
+            String wanted = req.getCarrierCode() == null ? null : canonCarrier(req.getCarrierCode());
+            List<com.multiship.backend.model.CarrierAccountRef> candidates =
+                    accountRepo.findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc(client).stream()
+                            .filter(a -> !Boolean.FALSE.equals(a.getActive()))
+                            .filter(a -> wanted == null || wanted.equals(canonCarrier(a.getCarrierCode())))
+                            .toList();
+            com.multiship.backend.model.CarrierAccountRef pick = candidates.stream()
+                    .filter(a -> Boolean.TRUE.equals(a.getClientDefault())).findFirst()
+                    .orElse(candidates.size() == 1 ? candidates.get(0) : null);
+            if (pick == null) {
+                throw new com.multiship.backend.exception.FieldValidationException("accountNumber",
+                        "Client " + client + " has no " + (wanted == null ? "" : wanted + " ")
+                                + "carrier account to bill this split to. Add one under Settings → Carrier Accounts, "
+                                + "or mark one as the client default.");
+            }
+            req.setAccountId(pick.getId());
+            req.setAccountNumber(pick.getAccountNumber());
+            if (req.getCarrierCode() == null || req.getCarrierCode().isBlank()) {
+                req.setCarrierCode(canonCarrier(pick.getCarrierCode()));
+            }
+        }
+        if (req.getServiceId() == null && allowedServiceRepo != null) {
+            allowedServiceRepo.findByClientCodeIgnoreCaseAndIsDefaultTrue(client)
+                    .ifPresent(def -> req.setServiceId(def.getServiceId()));
+        }
+    }
+
+    /** The form's carrier vocabulary: STAMPS and USPS are one carrier. */
+    static String canonCarrier(String code) {
+        if (code == null) return null;
+        String c = code.trim().toUpperCase(java.util.Locale.ROOT);
+        return "STAMPS".equals(c) ? "USPS" : c;
+    }
+
     private ManualShipmentRequest buildChildRequest(MultiWarehouseLabelRequest req,
                                                     String warehouseCode,
                                                     List<LineItem> lines) {

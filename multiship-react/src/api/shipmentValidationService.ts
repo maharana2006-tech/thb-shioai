@@ -6,7 +6,7 @@ import type { AddressValidationResponse } from './addressValidationService'
  * Sprint 52 — server-side pre-flight for a manual shipment. Powers the
  * "Validate shipment" button on NewShipmentPage (formerly "Validate with
  * Carrier" which only sent recipient address fields). The request body
- * is the SAME shape as {@code POST /orders/manual-label} so the FE
+ * is the SAME shape as {@code POST /shipments} so the FE
  * builds one payload from form state and reuses it for both validation
  * and label generation.
  *
@@ -51,6 +51,10 @@ export interface CarrierValidationSubResult {
 }
 
 export interface ShipmentValidationResult {
+  /** Phase 1 — sha256 of the validated payload; sent as X-Validation-Fingerprint on purchase
+   *  (while validUntil is in the future) so the server skips the carrier re-check. */
+  fingerprint?: string
+  validUntil?: string
   /** Top-level UX signal:
    *    PASS — no errors, carrier (if called) is EXACT or not applicable.
    *    WARN — no local errors but carrier is CORRECTED / AMBIGUOUS or

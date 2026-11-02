@@ -121,6 +121,7 @@ public class WarehouseServiceImpl implements WarehouseService {
 
         ApiResponse<WarehouseDTO> ownerCheck = validateOwner(request);
         if (ownerCheck != null) return ownerCheck;
+        requireWellFormedAddress(request.getAddress());
 
         Warehouse w = Warehouse.builder()
                 .code(code)
@@ -160,6 +161,7 @@ public class WarehouseServiceImpl implements WarehouseService {
 
         ApiResponse<WarehouseDTO> ownerCheck = validateOwner(request);
         if (ownerCheck != null) return ownerCheck;
+        requireWellFormedAddress(request.getAddress());
 
         // Code is immutable — it's the linkage key to ClientWarehouse and
         // ClientShipviaCodeMap.warehouseId rows. The mutable surface is
@@ -296,6 +298,13 @@ public class WarehouseServiceImpl implements WarehouseService {
 
     private static boolean isClientOwned(WarehouseUpsertRequest request) {
         return Warehouse.OWNER_CLIENT.equalsIgnoreCase(request.getOwnerType());
+    }
+
+    /** BUG-075 — the form's address rules, applied to whatever reaches the API. */
+    private static void requireWellFormedAddress(AddressDTO a) {
+        if (a == null) return;
+        AddressFormatValidator.requireWellFormed("address", a.getLine1(), a.getCity(), a.getState(),
+                a.getZip(), a.getCountry(), a.getPhone(), null);
     }
 
     private Address toAddress(AddressDTO dto) {

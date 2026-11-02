@@ -85,6 +85,22 @@ class UspsLabelQueueServiceDashboardTest {
         assertNotNull(dto.getReconciliation(), "reconciliation sub-DTO must be populated");
     }
 
+    /** BUG-175 — the card shows the bucket's own refill clock, not the time of the read. */
+    @Test
+    void dashboard_quotaReplenishFieldsComeFromTheBucket() {
+        java.time.Instant lastFill = java.time.Instant.parse("2026-10-25T13:00:00Z");
+        when(processor.getRemainingHourlyQuota()).thenReturn(40);
+        when(processor.getConfiguredHourlyCap()).thenReturn(55L);
+        when(processor.getQuotaLastReplenishAt()).thenReturn(lastFill);
+        when(processor.getQuotaNextReplenishInSeconds()).thenReturn(37L);
+
+        UspsQuotaHeadroomDTO q = service.getDashboardMetrics(
+                Duration.ofHours(24), Duration.ofDays(30)).getQuota();
+
+        assertEquals(lastFill, q.getLastReplenishAt());
+        assertEquals(37L, q.getNextReplenishInSeconds());
+    }
+
     @Test
     void dashboard_populatesQuotaFromProcessor() {
         when(processor.getRemainingHourlyQuota()).thenReturn(42);

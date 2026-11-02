@@ -44,7 +44,8 @@ const base = '/admin/notification-templates'
 export const notificationTemplateService = {
   async list(): Promise<NotificationTemplate[]> {
     const res = await apiClient.get<ApiResponse<NotificationTemplate[]>>(base)
-    return res.data ?? []
+    // BUG-141 — a stable order, so a saved template keeps its place in the list.
+    return [...(res.data ?? [])].sort((a, b) => a.templateKey.localeCompare(b.templateKey))
   },
 
   async get(key: string): Promise<NotificationTemplate> {

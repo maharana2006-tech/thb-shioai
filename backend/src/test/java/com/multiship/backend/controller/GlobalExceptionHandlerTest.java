@@ -26,6 +26,17 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  */
 class GlobalExceptionHandlerTest {
 
+    /** BUG-153 — an ExternalApiException thrown outside a controller try/catch keeps its own status. */
+    @Test
+    void externalApiException_rendersItsOwnStatusAndErrorCode() {
+        GlobalExceptionHandler handler = new GlobalExceptionHandler();
+        var resp = handler.handleExternalApi(new com.multiship.backend.service.external.ExternalApiException(
+                401, com.multiship.backend.dto.ErrorCode.UNAUTHORIZED, "This endpoint requires an API key."));
+        assertEquals(401, resp.getStatusCode().value());
+        assertEquals("UNAUTHORIZED", resp.getBody().getErrorCode());
+        assertEquals("This endpoint requires an API key.", resp.getBody().getMessage());
+    }
+
     @Test
     void emptyFieldErrors_returnsGenericFallback() {
         String summary = GlobalExceptionHandler.buildFriendlyValidationSummary(List.of());
@@ -36,6 +47,20 @@ class GlobalExceptionHandlerTest {
     void nullFieldErrors_returnsGenericFallback() {
         String summary = GlobalExceptionHandler.buildFriendlyValidationSummary(null);
         assertEquals("Invalid request payload.", summary);
+    }
+
+    // BUG-114 / BUG-163 — "Order number must be a whole number." instead of
+    // "Parameter 'orderNo' must be Integer."
+    @Test
+    void typeMismatchWordingNamesTheFieldAndTheKindOfValue() {
+        assertEquals("Order number", GlobalExceptionHandler.parameterWording("orderNo"));
+        assertEquals("Client ID", GlobalExceptionHandler.parameterWording("clientId"));
+        assertEquals("a whole number", GlobalExceptionHandler.expectedValueWording(Integer.class));
+        assertEquals("a whole number", GlobalExceptionHandler.expectedValueWording(Long.class));
+        assertEquals("a number", GlobalExceptionHandler.expectedValueWording(java.math.BigDecimal.class));
+        assertEquals("true or false", GlobalExceptionHandler.expectedValueWording(Boolean.class));
+        assertEquals("a date like 2026-01-31", GlobalExceptionHandler.expectedValueWording(java.time.LocalDate.class));
+        assertEquals("a valid value", GlobalExceptionHandler.expectedValueWording(null));
     }
 
     @Test

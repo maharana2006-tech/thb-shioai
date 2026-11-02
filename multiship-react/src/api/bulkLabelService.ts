@@ -78,6 +78,14 @@ export interface BulkLabelJob {
   totalCount: number
   successfulCount: number
   failedCount: number
+  /** BUG-036 — orders the worker touched but didn't buy a new label
+   *  for (today: {@code ALREADY_LABELED}). Derived server-side from
+   *  {@link #failureDetailsJson}; no DB column. Pre-fix these were
+   *  silently added to {@code successfulCount}, so a batch of all-
+   *  already-labelled orders reported "1/1 generated" + offered an
+   *  empty 22-byte ZIP. Legacy jobs from before the server fix return
+   *  0 here (progressive enhancement). */
+  skippedCount: number
   failureMessage: string | null
   /** Bulk MED — structured per-order failure list serialised as JSON.
    *  Present on jobs that had any failure; null on all-success jobs and

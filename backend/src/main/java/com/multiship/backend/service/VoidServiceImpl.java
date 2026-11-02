@@ -285,6 +285,16 @@ public class VoidServiceImpl implements VoidService {
             com.multiship.backend.util.LabelHistory.append(tracking, "VOIDED", tracking.getTrackingNumber(), null,
                     LocalDateTime.now());
             orderTrackingRepository.save(tracking);
+            // BUG-049 — flip Order.orderStatus to VOIDED alongside the
+            // tracking row so GET /api/v1/orders/{n} and GET /api/v1/labels/{n}
+            // agree on the voided state. Pre-fix only tracking.status was
+            // flipped, so orderDetails.status still read GENERATED while
+            // labelDetails.status read VOIDED — downloads leaked and the
+            // bulk-labels counter mislabelled already-voided rows.
+            orderRepository.findByOrderNo(orderNo).ifPresent(o -> {
+                o.setOrderStatus("VOIDED");
+                orderRepository.save(o);
+            });
             // Logs page: shipment-lifecycle trail. Carry the money figures so
             // the void reads as the reversal of the LABEL_GENERATED charge —
             // both numbers, labelled, because "billable" (carrier + markup)
@@ -587,6 +597,11 @@ public class VoidServiceImpl implements VoidService {
             com.multiship.backend.util.LabelHistory.append(tracking, "VOIDED",
                     tracking.getTrackingNumber(), null, LocalDateTime.now());
             orderTrackingRepository.save(tracking);
+            // BUG-049 — see sibling path above.
+            orderRepository.findByOrderNo(r.orderNo()).ifPresent(o -> {
+                o.setOrderStatus("VOIDED");
+                orderRepository.save(o);
+            });
             if (auditService != null) {
                 String money = "";
                 if (tracking.getBillableAmount() != null || tracking.getCarrierAmount() != null) {

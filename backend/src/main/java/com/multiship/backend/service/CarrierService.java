@@ -57,6 +57,11 @@ public interface CarrierService {
     ApiResponse<LabelGenerationResponse> generateManualLabel(com.multiship.backend.dto.ManualShipmentRequest request,
             UserDetails user, Integer existingOrderNo);
 
+    /** Phase 2 — the purchase itself (resolve → carrier → record) with no attempt
+     *  bookkeeping; only {@code ManualShipmentService} should call it. */
+    ApiResponse<LabelGenerationResponse> purchaseManualLabel(com.multiship.backend.dto.ManualShipmentRequest request,
+            UserDetails user, Integer existingOrderNo);
+
     ApiResponse<List<OrderAccountResolutionDTO>> resolveOrderAccounts(List<Integer> orderNos);
 
     CarrierConnector getCarrierConnector(String carrierCode);

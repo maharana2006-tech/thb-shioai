@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { notify } from '../utils/notify'
+import { useUnsavedWorkGuard } from '../hooks/useUnsavedWorkGuard'
 import {
   FiArrowLeft,
   FiCheck,
@@ -140,6 +141,9 @@ const emptyForm = (code: string = ''): ClientUpsertPayload => ({
  * Fields render red only after they've been touched (blur) — so operators
  * aren't yelled at the moment the form opens.
  */
+const LEAVE_MESSAGE = "This client has unsaved changes. Leave and lose what you've edited?"
+const LEAVE_TITLE = 'Leave client editor?'
+
 export default function ClientEditorPage() {
   const navigate = useNavigate()
   const { clientCode: urlClientCode } = useParams<{ clientCode?: string }>()
@@ -693,13 +697,8 @@ export default function ClientEditorPage() {
     [form],
   )
 
-  // Browser-close prompt while dirty. Mirrors NewShipmentPage's pattern.
-  useEffect(() => {
-    if (!isDirty || saving) return
-    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
-    window.addEventListener('beforeunload', warn)
-    return () => window.removeEventListener('beforeunload', warn)
-  }, [isDirty, saving])
+  // BUG-073 — reload, sidebar / settings nav and browser Back all ask while dirty.
+  useUnsavedWorkGuard(isDirty && !saving, LEAVE_MESSAGE, LEAVE_TITLE)
 
   /** Audit 2.3 (#283) — re-fire the attach call that failed after save.
    *  Keeps the banner visible on error (another retry possible) or
@@ -735,8 +734,8 @@ export default function ClientEditorPage() {
     // In-app nav intercept — the browser prompt only catches tab close /
     // reload. Explicit Cancel / list-link clicks route through here.
     if (isDirty && !(await notify.confirm(
-      "This client has unsaved changes. Leave and lose what you've edited?",
-      { title: 'Leave client editor?', confirmLabel: 'Leave', cancelLabel: 'Stay' },
+      LEAVE_MESSAGE,
+      { title: LEAVE_TITLE, confirmLabel: 'Leave', cancelLabel: 'Stay' },
     ))) return
     navigate('/settings/clients')
   }
@@ -908,7 +907,7 @@ export default function ClientEditorPage() {
     touchStep('shipFrom')
     touchStep('return')
     if (!readyToCreate) {
-      notify.error('Complete every step and fix the highlighted fields before creating.')
+      notify.invalid('Complete every step and fix the highlighted fields before creating.')
       return
     }
 
@@ -1574,7 +1573,7 @@ export default function ClientEditorPage() {
         {/* Summary — final step in create mode. Every section rendered as
             a card with values + validation status; Submit fires the client
             creation cascade. */}
-        {!isEdit && activeStep === 'summary' ? (
+        {activeStep === 'summary' ? (
           <SummaryStep
             form={form}
             selectedShipFromWarehouseId={selectedShipFromWarehouseId}
@@ -1590,6 +1589,11 @@ export default function ClientEditorPage() {
             stepComplete={stepComplete}
             stepBlockers={stepBlockers}
             jumpTo={(k) => setActiveStep(k)}
+            edit={isEdit ? {
+              carrierAccounts: client?.carrierAccounts ?? [],
+              hasBillingMarkup: client?.hasBillingMarkup ?? false,
+              isDirty,
+            } : undefined}
           />
         ) : null}
       </div>
@@ -1635,9 +1639,10 @@ export default function ClientEditorPage() {
             <button
               type="button"
               onClick={() => void onClose()}
+              title="Nothing is saved from here — each step saves from its own form."
               className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-4 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15]"
             >
-              Finish
+              Finish — back to clients
               <FiCheck className="h-3.5 w-3.5" />
             </button>
           ) : (() => {
@@ -1647,6 +1652,11 @@ export default function ClientEditorPage() {
             const nextBlocked = !isEdit && !stepComplete(activeStep)
             const nextBlockers = nextBlocked ? stepBlockers(activeStep) : []
             return (
+              <>
+              {/* BUG-071 — say why Next is off; a tooltip alone was invisible. */}
+              {nextBlockers.length ? (
+                <span role="status" className="max-w-[320px] text-[11px] font-semibold text-rose-700">{nextBlockers[0]}</span>
+              ) : null}
               <button
                 type="button"
                 onClick={goNext}
@@ -1663,6 +1673,7 @@ export default function ClientEditorPage() {
                 Next
                 <FiChevronRight className="h-3.5 w-3.5" />
               </button>
+              </>
             )
           })()}
         </div>

@@ -18,20 +18,25 @@ const API_KEY_STORAGE = 'ms:externalApiKey'
 /** Pull the {param} tokens out of a path template. */
 const pathParamsOf = (path: string) => [...path.matchAll(/\{(\w+)\}/g)].map((m) => m[1])
 
-/** Base URL of the public shipping API, derived from the app's API client. */
-const EXTERNAL_BASE = `${BASE_URL}/external`
 /**
- * Swagger UI lives on the backend origin.
- *
- * Audit A3 — `new URL(BASE_URL)` crashes with TypeError when BASE_URL
- * is relative ('/api/v1' — the dev default per apiClient.ts). This
- * module is lazy-loaded so the crash surfaces as a white-screen the
- * first time an operator navigates to /settings/api-reference. Pass
- * the current window origin as the base so relative BASE_URLs resolve
- * against the SPA's origin (which is the same origin the Vite proxy
- * fronts). Absolute BASE_URLs pass through unchanged.
+ * Base URL of the public shipping API v2, derived from the app's API client
+ * (BASE_URL ends in /api/v1; the v2 controller lives at /api/v2/external).
  */
-const SWAGGER_URL = `${new URL(BASE_URL, typeof window !== 'undefined' ? window.location.origin : 'http://localhost').origin}/swagger-ui.html`
+const EXTERNAL_BASE = `${BASE_URL.replace(/\/v1\/?$/, '/v2')}/external`
+
+/** Fresh Idempotency-Key for the Try-it console. */
+const newIdempotencyKey = () =>
+  typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `try-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+/**
+ * BUG-151 — Swagger UI is served under the API prefix (springdoc
+ * `swagger-ui.path=/api/swagger-ui.html`) so the same /api route that
+ * fronts BASE_URL (dev proxy or prod reverse proxy) reaches it; the SPA
+ * origin itself only knows the app shell. Relative and absolute
+ * BASE_URLs both work since only the trailing /v1 is dropped.
+ */
+const SWAGGER_URL = `${BASE_URL.replace(/\/v1\/?$/, '')}/swagger-ui.html`
 
 const METHOD_BADGE: Record<string, string> = {
   GET: 'bg-sky-50 text-sky-700 ring-sky-200',
@@ -43,8 +48,14 @@ interface Endpoint {
   path: string
   title: string
   notes: string[]
+  /** Required API-key scope (enforced by @RequiresScope on the controller). */
+  scope: string
+  /** Accepts an Idempotency-Key header (24h replay of the first response). */
+  idempotent?: boolean
   request?: string
   response: string
+  /** [HTTP status, errorCode(s), meaning] — mirrors the controller's @ApiResponses. */
+  errors: Array<[string, string, string]>
 }
 
 const ENDPOINTS: Endpoint[] = [
@@ -52,6 +63,8 @@ const ENDPOINTS: Endpoint[] = [
     method: 'POST',
     path: '/rates',
     title: 'List available services for a route',
+    scope: 'RATES',
+    idempotent: true,
     notes: [
       'Send a shipMethod to resolve the client’s mapped service, or a carrierCode (UPS / FEDEX / USPS) to list that carrier’s services. shipFrom, shipTo and parcel are optional — shipFrom/shipTo country codes decide the domestic vs international scope.',
       'Live pricing is not enabled in this environment — options list the services; the actual cost comes back when the shipment is created.',
@@ -74,12 +87,23 @@ const ENDPOINTS: Endpoint[] = [
     "pricingAvailable": false
   }
 }`,
+    errors: [
+      ['400', 'VALIDATION_ERROR / UNIT_REQUIRED / CURRENCY_REQUIRED', 'Malformed body, or weight / currency given without its unit.'],
+      ['403', 'FORBIDDEN', 'API key lacks the RATES scope.'],
+      ['409', 'IDEMPOTENCY_IN_PROGRESS', 'A request with the same Idempotency-Key is still running.'],
+      ['422', 'SERVICE_NOT_ALLOWED / PACKAGE_NOT_ALLOWED', 'The client may not use that service or package.'],
+      ['429', 'API_KEY_RATE_LIMITED / CARRIER_RATE_LIMITED', 'Slow down and retry.'],
+      ['502', 'CARRIER_FAILURE', 'The carrier did not answer.'],
+    ],
   },
   {
     method: 'POST',
     path: '/shipments',
     title: 'Create a shipment and get the label',
+    scope: 'SHIPMENTS',
+    idempotent: true,
     notes: [
+      'Send an Idempotency-Key header (any unique string, e.g. a UUID) on every call. A retry with the same key within 24h returns the first response instead of buying a second label. If Redis is down this endpoint fails closed with 503 rather than risk a double charge.',
       'Required: shipTo (with addressLine1) and parcel.weight (> 0). For a platform-wide (WMS) key, clientCode too. Everything else is optional.',
       'Optional with fallbacks — shipFrom: client’s configured ship-from, then the warehouse default. carrierCode (UPS / FEDEX / USPS): overrides the shipMethod rule. accountNumber: overrides the client’s default bill-to account. parcel.packagingCode: a package-preset name; omit to use the custom dims.',
       'refOrderNumber: your WMS’s own order number, recorded server-side for traceability and echoed back unchanged on the response — use it to match this API call to the order in your WMS.',
@@ -124,25 +148,66 @@ const ENDPOINTS: Endpoint[] = [
   "isReturn": false
 }`,
     response: `{
-  "status": "SUCCESS", "code": 201,
+  "status": "SUCCESS",
+  "code": 201,
+  "timestamp": "2026-10-19T10:30:00",
+  "message": "Shipment #900123 created.",
   "data": {
     "shipmentId": 900123,
     "reference": "SO-12345",
     "refOrderNumber": "REF-98765",
-    "carrier": "FEDEX", "service": "FEDEX_GROUND",
+    "clientCode": "ACME",
+    "warehouseCode": "DAL01",
+    "carrier": "FEDEX",
+    "service": "FEDEX_GROUND",
+    "resolvedVia": "CARRIER_OVERRIDE+SHIPMETHOD",
+    "international": true,
+
     "trackingNumber": "794644790132",
     "trackingUrl": "https://...",
     "labelUrl": "https://...",
     "labelPdf": "<base64>",
+    "labelDocumentUrl": "/api/v1/orders/ORD-900123/label",
+
+    "status": "GENERATED",
+    "estimatedDelivery": "2026-10-23T17:00:00",
+    "dispatchNextBusinessDay": false,
+
+    "carrierAmount": 11.27,
+    "billableAmount": 12.40,
     "shippingCost": 12.40,
-    "status": "GENERATED"
+    "markupKind": "PERCENT",
+    "markupValue": 10,
+    "markupCurrency": "USD"
   }
-}`,
+}
+
+// Field guide
+// shipmentId              — use for /tracking and /void
+// labelPdf                — the label itself; decode and print
+// labelUrl                — stored copy of the label
+// labelDocumentUrl        — internal path (needs a user login, not the API key)
+// carrierAmount           — what the carrier charged
+// billableAmount          — carrierAmount + client markup (what you bill)
+// shippingCost            — same as billableAmount (kept for older clients)
+// dispatchNextBusinessDay — true = created after the client's cutoff;
+//                           label is valid, pickup moves to next business day
+// warehouseCode           — null when the request's shipFrom was used`,
+    errors: [
+      ['400', 'VALIDATION_ERROR / UNIT_REQUIRED / CURRENCY_REQUIRED / MARKUP_REQUIRED_FOR_CLIENT', 'Missing or invalid fields (shipTo, parcel.weight, clientCode…).'],
+      ['403', 'FORBIDDEN', 'API key lacks the SHIPMENTS scope, or names another client.'],
+      ['409', 'IDEMPOTENCY_IN_PROGRESS', 'A request with the same Idempotency-Key is still running.'],
+      ['422', 'SERVICE_NOT_ALLOWED / PACKAGE_NOT_ALLOWED / SHIP_TO_DENIED / CUSTOMS_REQUIRED', 'Business rule blocked the shipment.'],
+      ['429', 'API_KEY_RATE_LIMITED / TENANT_RATE_LIMITED / CARRIER_RATE_LIMITED', 'Slow down and retry with the same Idempotency-Key.'],
+      ['502', 'CARRIER_FAILURE / CLIENT_CARRIER_AUTH_FAILED', 'The carrier rejected the shipment or the client’s carrier credentials.'],
+      ['503', 'IDEMPOTENCY_UNAVAILABLE', 'Idempotency store is down — nothing was created; retry later.'],
+    ],
   },
   {
     method: 'GET',
     path: '/shipments/{shipmentId}/tracking',
     title: 'Current tracking status',
+    scope: 'TRACKING',
     notes: [
       'Does a live carrier lookup and degrades to the last-known platform status if the carrier is unreachable.',
       'Returns 404 for shipments the key’s client does not own; 409 if no tracking number exists yet.',
@@ -158,11 +223,19 @@ const ENDPOINTS: Endpoint[] = [
     "delivered": false
   }
 }`,
+    errors: [
+      ['403', 'FORBIDDEN / CROSS_TENANT_ACCESS_DENIED', 'Missing TRACKING scope, or the shipment belongs to another client.'],
+      ['404', 'ORDER_NOT_FOUND', 'Unknown shipmentId.'],
+      ['429', 'API_KEY_RATE_LIMITED / CARRIER_RATE_LIMITED', 'Slow down and retry.'],
+      ['502', 'CARRIER_FAILURE', 'Carrier lookup failed.'],
+    ],
   },
   {
     method: 'POST',
     path: '/shipments/{shipmentId}/void',
     title: 'Void a shipment',
+    scope: 'VOID',
+    idempotent: true,
     notes: [
       'Platform-level cancellation — the order and tracking are marked VOIDED. Carrier-side label cancellation is not wired; ensure the label is not used.',
       'Voiding an already-voided shipment returns 409.',
@@ -175,11 +248,22 @@ const ENDPOINTS: Endpoint[] = [
     "carrierVoided": false
   }
 }`,
+    errors: [
+      ['400', 'VALIDATION_ERROR', 'Bad shipmentId.'],
+      ['403', 'FORBIDDEN / CROSS_TENANT_ACCESS_DENIED', 'Missing VOID scope, or the shipment belongs to another client.'],
+      ['404', 'ORDER_NOT_FOUND', 'Unknown shipmentId.'],
+      ['409', 'IDEMPOTENCY_IN_PROGRESS / LABEL_ALREADY_GENERATED', 'Same Idempotency-Key still running, or the shipment cannot be voided in its state.'],
+      ['422', 'BUSINESS_RULE_VIOLATION', 'Carrier refuses (past pickup, delivered, …).'],
+      ['429', 'API_KEY_RATE_LIMITED / CARRIER_RATE_LIMITED', 'Slow down and retry.'],
+      ['502', 'CARRIER_FAILURE', 'Carrier void call failed.'],
+      ['503', 'IDEMPOTENCY_UNAVAILABLE', 'Idempotency store is down — nothing was voided; retry later.'],
+    ],
   },
   {
     method: 'POST',
     path: '/addresses/validate',
     title: 'Validate an address (structural)',
+    scope: 'ADDRESSES',
     notes: [
       'Checks required fields, 2-letter ISO country and US ZIP format, and returns a normalized copy. No carrier validation.',
     ],
@@ -195,18 +279,52 @@ const ENDPOINTS: Endpoint[] = [
     "normalized": { "state": "TX", "countryCode": "US", ... }
   }
 }`,
+    errors: [
+      ['400', 'VALIDATION_ERROR', 'Malformed body.'],
+      ['403', 'FORBIDDEN', 'API key lacks the ADDRESSES scope.'],
+      ['429', 'API_KEY_RATE_LIMITED', 'Slow down and retry.'],
+      ['502', 'CARRIER_FAILURE', 'Validation backend failed.'],
+    ],
   },
 ]
 
+/** Errors any endpoint can return, regardless of its own list. */
 const ERROR_ROWS: Array<[string, string, string]> = [
-  ['401', 'UNAUTHORIZED', 'Missing / invalid / revoked API key.'],
-  ['403', 'UNAUTHORIZED', 'A client-bound key sent a clientCode that is not its own.'],
-  ['404', 'ORDER_NOT_FOUND', 'Unknown shipment, or one owned by another client.'],
-  ['409', 'VALIDATION_ERROR', 'No tracking number yet, or the shipment is already voided.'],
-  ['422', 'VALIDATION_ERROR', 'Missing / invalid fields (shipTo, parcel.weight, clientCode…).'],
-  ['422', 'NO_DEFAULT_ACCOUNT', 'No carrier account available — add one or send accountNumber.'],
-  ['502', 'CARRIER_FAILURE', 'The carrier rejected the shipment.'],
+  ['401', 'UNAUTHORIZED', 'Missing / invalid / revoked API key or expired OAuth token.'],
+  ['403', 'FORBIDDEN', 'Key lacks the endpoint’s scope, or a client-bound key named another clientCode.'],
+  ['429', 'API_KEY_RATE_LIMITED', 'Per-key rate limit hit — back off and retry.'],
 ]
+
+const ERROR_FAILURE_ENVELOPE = `{
+  "status": "ERROR",
+  "code": 422,
+  "timestamp": "2026-10-19T10:30:00",
+  "message": "Ship-to country is not allowed for this client.",
+  "errorCode": "SHIP_TO_DENIED"
+}`
+
+/** Status / errorCode / meaning table. */
+function ErrorTable({ rows }: { rows: Array<[string, string, string]> }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-left">
+        <tbody className="divide-y divide-dashed divide-slate-100">
+          {rows.map(([status, code, desc], i) => (
+            <tr key={i}>
+              <td className="w-12 py-1.5 pr-3 align-top font-mono text-[11px] font-bold text-slate-700">{status}</td>
+              <td className="py-1.5 pr-3 align-top">
+                <span className="rounded bg-rose-50 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-rose-600 [overflow-wrap:anywhere]">
+                  {code}
+                </span>
+              </td>
+              <td className="py-1.5 align-top text-[11.5px] text-slate-500">{desc}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
 
 /** A code sample with a copy control. */
 function CodeBlock({ code }: { code: string }) {
@@ -249,6 +367,7 @@ function TryIt({ ep, apiKey }: { ep: Endpoint; apiKey: string }) {
   const params = useMemo(() => pathParamsOf(ep.path), [ep.path])
   const [pathValues, setPathValues] = useState<Record<string, string>>({})
   const [body, setBody] = useState(ep.request ?? '')
+  const [idemKey, setIdemKey] = useState(newIdempotencyKey)
   const [sending, setSending] = useState(false)
   const [result, setResult] = useState<TryResult | null>(null)
 
@@ -260,7 +379,7 @@ function TryIt({ ep, apiKey }: { ep: Endpoint; apiKey: string }) {
   const hasBody = ep.method === 'POST' && ep.request !== undefined
 
   const send = async () => {
-    if (!apiKey.trim()) return notify.error('Enter your API key at the top first.')
+    if (!apiKey.trim()) return notify.invalid('Enter your API key at the top first.')
     for (const name of params) {
       if (!pathValues[name]?.trim()) return notify.error(`Fill in "${name}".`)
     }
@@ -269,7 +388,7 @@ function TryIt({ ep, apiKey }: { ep: Endpoint; apiKey: string }) {
       try {
         JSON.parse(body || '{}')
       } catch {
-        return notify.error('Request body is not valid JSON.')
+        return notify.invalid('Request body is not valid JSON.')
       }
       payload = body
     }
@@ -281,6 +400,7 @@ function TryIt({ ep, apiKey }: { ep: Endpoint; apiKey: string }) {
         method: ep.method,
         headers: {
           'X-API-Key': apiKey.trim(),
+          ...(ep.idempotent && idemKey.trim() ? { 'Idempotency-Key': idemKey.trim() } : {}),
           ...(payload !== undefined ? { 'Content-Type': 'application/json' } : {}),
         },
         body: payload,
@@ -340,6 +460,29 @@ function TryIt({ ep, apiKey }: { ep: Endpoint; apiKey: string }) {
         </div>
       ) : null}
 
+      {ep.idempotent ? (
+        <label className="block">
+          <span className="text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-400">
+            Idempotency-Key header · same key replays the first response
+          </span>
+          <div className="mt-0.5 flex gap-2">
+            <input
+              value={idemKey}
+              onChange={(e) => setIdemKey(e.target.value)}
+              spellCheck={false}
+              className="min-w-0 flex-1 rounded-lg border border-slate-200 px-2.5 py-1.5 font-mono text-[12px] text-slate-800 outline-none focus:border-slate-400"
+            />
+            <button
+              type="button"
+              onClick={() => setIdemKey(newIdempotencyKey())}
+              className="shrink-0 rounded-lg border border-slate-200 px-2.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
+            >
+              New key
+            </button>
+          </div>
+        </label>
+      ) : null}
+
       {hasBody ? (
         <div>
           <p className="mb-1 text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-400">Request body (editable)</p>
@@ -380,7 +523,7 @@ function TryIt({ ep, apiKey }: { ep: Endpoint; apiKey: string }) {
 }
 
 /**
- * Reference card for the public shipping API (/api/v1/external) — rendered on
+ * Reference card for the public shipping API (/api/v2/external) — rendered on
  * the API Keys settings page so the docs live next to where keys are minted.
  */
 export default function ExternalApiReference() {
@@ -474,6 +617,12 @@ export default function ExternalApiReference() {
             {EXTERNAL_BASE}
           </code>
         </p>
+        {/* BUG-152 — the API Keys page names /api/v1/external; say how the two relate. */}
+        <p className="text-[11.5px] text-slate-500">
+          <span className="font-mono font-semibold text-slate-600">{EXTERNAL_BASE.replace(/\/v2\//, '/v1/')}</span> is the
+          original surface and still answers with the same key; v2 above is the current one (adds Idempotency-Key replay,
+          pickups, close-out, landed cost and webhooks) — use v2 for new integrations.
+        </p>
         <p className="rounded-xl border border-violet-100 bg-violet-50/60 px-3 py-2 text-[11.5px] text-violet-900">
           <span className="font-bold uppercase tracking-wide">Platform-wide (WMS) keys:</span> requests must name the
           client via <span className="font-mono font-semibold">clientCode</span> in the body. Client-bound keys may omit
@@ -520,7 +669,7 @@ export default function ExternalApiReference() {
                 >
                   {ep.method}
                 </span>
-                <code className="shrink-0 font-mono text-[11.5px] font-semibold text-slate-800">{ep.path}</code>
+                <code className="min-w-0 shrink truncate font-mono text-[11.5px] font-semibold text-slate-800">{ep.path}</code>
                 <span className="min-w-0 flex-1 truncate text-[11.5px] text-slate-400">{ep.title}</span>
                 <FiChevronDown
                   className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${isOpen ? 'rotate-180' : ''}`}
@@ -529,6 +678,20 @@ export default function ExternalApiReference() {
 
               {isOpen ? (
                 <div className="space-y-3 border-t border-dashed border-slate-100 bg-[#fdfcfb] px-4 py-3">
+                  <p className="flex flex-wrap items-center gap-1.5 text-[10.5px] text-slate-500">
+                    <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono font-semibold text-slate-700">
+                      {ep.method} {EXTERNAL_BASE}
+                      {ep.path}
+                    </span>
+                    <span className="rounded bg-indigo-50 px-1.5 py-0.5 font-mono font-semibold text-indigo-700">
+                      scope: {ep.scope}
+                    </span>
+                    {ep.idempotent ? (
+                      <span className="rounded bg-amber-50 px-1.5 py-0.5 font-mono font-semibold text-amber-700">
+                        Idempotency-Key supported
+                      </span>
+                    ) : null}
+                  </p>
                   <ul className="list-disc space-y-1 pl-4">
                     {ep.notes.map((n) => (
                       <li key={n} className="text-[11.5px] leading-relaxed text-slate-600">
@@ -536,14 +699,31 @@ export default function ExternalApiReference() {
                       </li>
                     ))}
                   </ul>
-                  <TryIt ep={ep} apiKey={apiKey} />
+                  <div className={`grid gap-3 ${ep.request ? 'lg:grid-cols-2' : ''}`}>
+                    {ep.request ? (
+                      <div className="min-w-0">
+                        <p className="mb-1 text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-400">Request body</p>
+                        <CodeBlock code={ep.request} />
+                      </div>
+                    ) : null}
+                    <div className="min-w-0">
+                      <p className="mb-1 text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-400">
+                        Response body · success
+                      </p>
+                      <CodeBlock code={ep.response} />
+                    </div>
+                  </div>
+                  <div>
+                    <p className="mb-1 text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-400">Errors</p>
+                    <ErrorTable rows={ep.errors} />
+                  </div>
                   <details className="group">
                     <summary className="cursor-pointer list-none text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-400 transition hover:text-slate-600">
                       <FiChevronDown className="mr-1 inline h-3.5 w-3.5 transition-transform group-open:rotate-180" />
-                      Example response
+                      Try it
                     </summary>
                     <div className="mt-1.5">
-                      <CodeBlock code={ep.response} />
+                      <TryIt ep={ep} apiKey={apiKey} />
                     </div>
                   </details>
                 </div>
@@ -555,24 +735,14 @@ export default function ExternalApiReference() {
 
       {/* error codes */}
       <div className="border-t border-dashed border-slate-200 px-4 py-3">
-        <p className="mb-2 text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-400">Error codes</p>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
-            <tbody className="divide-y divide-dashed divide-slate-100">
-              {ERROR_ROWS.map(([status, code, desc], i) => (
-                <tr key={i}>
-                  <td className="w-12 py-1.5 pr-3 font-mono text-[11px] font-bold text-slate-700">{status}</td>
-                  <td className="w-44 py-1.5 pr-3">
-                    <span className="rounded bg-rose-50 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-rose-600">
-                      {code}
-                    </span>
-                  </td>
-                  <td className="py-1.5 text-[11.5px] text-slate-500">{desc}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <p className="mb-2 text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-400">
+          Errors every endpoint can return
+        </p>
+        <ErrorTable rows={ERROR_ROWS} />
+        <p className="mb-1 mt-3 text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-400">
+          Error response body
+        </p>
+        <CodeBlock code={ERROR_FAILURE_ENVELOPE} />
       </div>
 
       {/* quick start */}
@@ -581,6 +751,7 @@ export default function ExternalApiReference() {
         <CodeBlock
           code={`curl -X POST ${EXTERNAL_BASE}/shipments \\
   -H "X-API-Key: msk_live_..." \\
+  -H "Idempotency-Key: 6f1c2e0a-order-SO-12345" \\
   -H "Content-Type: application/json" \\
   -d '{ "clientCode": "ACME", "reference": "SO-12345", "shipMethod": "F77",
         "shipTo": { "name": "Jane Smith", "addressLine1": "456 Oak Ave",

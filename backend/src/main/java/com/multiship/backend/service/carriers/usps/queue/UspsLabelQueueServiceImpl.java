@@ -580,6 +580,9 @@ public class UspsLabelQueueServiceImpl implements UspsLabelQueueService {
     private UspsQuotaHeadroomDTO buildQuotaHeadroom() {
         long cap;
         int remaining;
+        // BUG-175 — read the bucket's own refill clock instead of stamping "now".
+        Instant lastReplenishAt = processor != null ? processor.getQuotaLastReplenishAt() : null;
+        long bucketNextSec = processor != null ? processor.getQuotaNextReplenishInSeconds() : 0L;
         if (processor != null) {
             cap = processor.getConfiguredHourlyCap();
             remaining = processor.getRemainingHourlyQuota();
@@ -593,8 +596,8 @@ public class UspsLabelQueueServiceImpl implements UspsLabelQueueService {
         // mis-config leaks a non-positive cap through.
         if (cap <= 0) cap = 55L;
 
-        long nextReplenishSec = 0L;
-        if (remaining <= 0) {
+        long nextReplenishSec = bucketNextSec;
+        if (remaining <= 0 && nextReplenishSec <= 0) {
             // Rough proxy - one token per (3600 / cap) seconds. Ceils
             // to at least 1s so the FE never renders "0s" while showing
             // 100% utilisation.
@@ -614,7 +617,7 @@ public class UspsLabelQueueServiceImpl implements UspsLabelQueueService {
                 .hourlyCap(cap)
                 .remainingTokens(remaining)
                 .utilizationPercent(utilization)
-                .lastReplenishAt(Instant.now())
+                .lastReplenishAt(lastReplenishAt)
                 .nextReplenishInSeconds(nextReplenishSec)
                 .build();
     }

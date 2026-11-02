@@ -54,9 +54,10 @@ vi.mock('../utils/notify', () => ({
     error: (...args: unknown[]) => notifyErrorMock(...args),
     success: vi.fn(),
     info: vi.fn(),
-    confirm: vi.fn().mockResolvedValue(true),
+    confirm: (...args: unknown[]) => notifyConfirmMock(...args),
   },
 }))
+const notifyConfirmMock = vi.fn()
 
 let mockRole: 'ADMIN' | 'USER' | 'TENANT' = 'ADMIN'
 vi.mock('../hooks/useAppSession', () => ({
@@ -104,8 +105,9 @@ beforeEach(() => {
   vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
     throw new Error('un-mocked fetch forbidden in unit tests')
   })
-  ;[getByIdMock, listClientsMock, notifyApiErrorMock, notifyErrorMock, navigateMock]
+  ;[getByIdMock, listClientsMock, notifyApiErrorMock, notifyErrorMock, navigateMock, notifyConfirmMock]
     .forEach((m) => m.mockReset())
+  notifyConfirmMock.mockResolvedValue(true)
   listClientsMock.mockResolvedValue({ data: { content: [] } })
 })
 
@@ -167,6 +169,17 @@ describe('LabelTemplateEditorPage — EDIT mode', () => {
     )
   })
 
+  it('BUG-117: "Applies to" names the owner even when it is not an active client', async () => {
+    listClientsMock.mockResolvedValue({ data: { content: [{ clientCode: 'ACME', name: 'Acme' }] } })
+    getByIdMock.mockResolvedValue(template(15, { tenantId: 'QA-20261020-SETORG-1' }))
+    const Page = await loadPage()
+    renderAt(Page, '/settings/templates/15')
+    await waitFor(() => expect(screen.getByRole('heading', { name: /Edit template #15/i })).toBeInTheDocument())
+    const select = screen.getByRole('combobox', { name: /Applies to/i }) as HTMLSelectElement
+    await waitFor(() => expect(select.value).toBe('QA-20261020-SETORG-1'))
+    expect(select.options[select.selectedIndex].textContent).toMatch(/QA-20261020-SETORG-1 — not an active client/)
+  })
+
   it('load error → notify.apiError + navigate back to /settings/templates', async () => {
     getByIdMock.mockRejectedValue(new Error('boom-load'))
     const Page = await loadPage()
@@ -196,6 +209,27 @@ describe('LabelTemplateEditorPage — Back button', () => {
     })
 
     expect(navigateMock).toHaveBeenCalledWith('/settings/templates')
+    expect(notifyConfirmMock).not.toHaveBeenCalled()
+  })
+
+  // BUG-120 — edits ask before Back drops them; "Stay" keeps the editor.
+  it('with unsaved edits Back asks first and Stay keeps the page', async () => {
+    notifyConfirmMock.mockResolvedValueOnce(false)
+    const Page = await loadPage()
+    renderAt(Page, '/settings/templates/new')
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: /New template/i })).toBeInTheDocument(),
+    )
+    await userEvent.type(screen.getByLabelText(/Header line/i), 'Packing list')
+
+    await act(async () => {
+      await userEvent.click(screen.getByTitle(/Back to templates/i))
+    })
+    expect(notifyConfirmMock).toHaveBeenCalledWith(
+      expect.stringMatching(/unsaved changes/),
+      expect.objectContaining({ title: 'Leave template editor?' }),
+    )
+    expect(navigateMock).not.toHaveBeenCalled()
   })
 })
 

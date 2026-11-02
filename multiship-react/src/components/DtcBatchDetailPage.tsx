@@ -253,6 +253,7 @@ export default function DtcBatchDetailPage() {
         return (
           <button
             type="button"
+            aria-label={`Print order ${orderNo}`}
             title={`Send order ${orderNo} to its client's printer — pick labels or invoice`}
             onClick={() => setPrinterOrders([orderNo])}
             className="inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-50"
@@ -277,6 +278,7 @@ export default function DtcBatchDetailPage() {
         const editButton = fixable(o) ? (
           <button
             type="button"
+            aria-label={o.generatedOrderNo ? `Edit order ${o.generatedOrderNo}` : `Edit line ${o.id}`}
             title={o.generatedOrderNo
               ? `Open the manual shipment form to fix order ${o.generatedOrderNo}`
               : 'Open the manual shipment form pre-filled from this line'}
@@ -310,6 +312,7 @@ export default function DtcBatchDetailPage() {
               {!errored && o.generatedOrderNo && o.generatedStatus === 'GENERATED' && (
                 <button
                   type="button"
+                  aria-label={`Void label for order ${o.generatedOrderNo}`}
                   title={`Void label for order ${o.generatedOrderNo}`}
                   onClick={() => void voidLabel(o)}
                   className="inline-flex items-center rounded-lg border border-rose-200 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 transition hover:bg-rose-50"

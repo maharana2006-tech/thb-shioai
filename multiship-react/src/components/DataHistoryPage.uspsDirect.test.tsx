@@ -106,10 +106,10 @@ vi.mock('../hooks/useEventStream', () => ({
 // BulkLabelQueueBadge's service — depth=0 default so pill is silent.
 const getMetricsMock = vi.fn().mockResolvedValue({
   data: {
-    depth: 0,
-    processing: 0,
+    queuedDepth: 0,
+    processingCount: 0,
     estimatedWaitSeconds: 0,
-    totalPerHourCap: 55,
+    configuredHourlyCap: 55,
     tenantCode: null,
   },
 })
@@ -337,10 +337,10 @@ beforeEach(() => {
   getHistory.mockResolvedValue({ data: null })
   getMetricsMock.mockResolvedValue({
     data: {
-      depth: 0,
-      processing: 0,
+      queuedDepth: 0,
+      processingCount: 0,
       estimatedWaitSeconds: 0,
-      totalPerHourCap: 55,
+      configuredHourlyCap: 55,
       tenantCode: null,
     },
   })
@@ -378,10 +378,10 @@ describe('DataHistoryPage — BulkLabelQueueBadge mount (audit U2)', () => {
   it('renders the pill itself when metrics report non-zero depth', async () => {
     getMetricsMock.mockResolvedValue({
       data: {
-        depth: 7,
-        processing: 2,
+        queuedDepth: 7,
+        processingCount: 2,
         estimatedWaitSeconds: 300,
-        totalPerHourCap: 55,
+        configuredHourlyCap: 55,
         tenantCode: null,
       },
     })
@@ -732,5 +732,29 @@ describe('Bulk Mailer — Import history and Trash', () => {
     await act(async () => { answerApi(pageOf([batchSummary({ id: 7 })])) })
     expect(screen.getByTestId('batch-row-55')).toBeInTheDocument()
     expect(screen.queryByTestId('batch-row-7')).toBeNull()
+  })
+})
+
+// ==================================================================
+// BUG-056 — one number per import: Import # leads, label batch is a detail
+// ==================================================================
+
+describe('Import history — BUG-056 one number per import', () => {
+  it('leads with an Import # column and filters the list by import, not by label batch', async () => {
+    listBatches.mockResolvedValue(pageOf([batchSummary({ id: 34, labelBatchId: 76 })]))
+    bulkSummary.mockResolvedValue(summaryOf({ total: 1, labelBatches: [76], importIds: [34] }))
+    await loadAndRender()
+    expect(await screen.findByTestId('batch-row-34')).toBeInTheDocument()
+    const headers = screen.getByTestId('visible-headers').textContent ?? ''
+    expect(headers).toContain('Import #')
+    expect(headers).not.toContain('|Batch|')
+    const pick = screen.getByRole('combobox', { name: 'Import' })
+    expect(screen.getByRole('option', { name: 'All imports' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'Import #34' })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /Batch 76/ })).toBeNull()
+    await userEvent.selectOptions(pick, '34')
+    await waitFor(() => expect(listBatches).toHaveBeenCalledWith(expect.objectContaining({ importId: '34' })))
+    const last = listBatches.mock.calls.at(-1)?.[0] as { labelBatch?: string }
+    expect(last.labelBatch).toBeUndefined()
   })
 })

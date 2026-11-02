@@ -41,6 +41,7 @@ const OrderDetailsModal = lazyWithRetry(() => import('./modals/OrderDetailsModal
 const TrackingTimelineModal = lazyWithRetry(() => import('./tracking/TrackingTimelineModal'))
 import { hasCommercialInvoice, type LabelCounts } from '../utils/batchLabels'
 import { downloadCsv } from '../utils/csv'
+import { columnsToCsvMatrix, fetchAllPages } from '../utils/exportAll'
 import { printPdfBlob } from '../utils/printPdf'
 import { formatDuration, relativeTime } from '../utils/relativeTime'
 import { orderService, type Order } from '../api/orderService'
@@ -227,7 +228,9 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
     from: filters.dateFrom || undefined,
     to: filters.dateTo || undefined,
     createdBy: filters.createdBy || undefined,
-    labelBatch: filters.batchNo || (filters.batchPresence === 'ANY' ? undefined : filters.batchPresence),
+    labelBatch: filters.batchPresence === 'ANY' ? undefined : filters.batchPresence,
+    // BUG-056 — the dropdown picks one import, not one label batch.
+    importId: filters.batchNo || undefined,
     minSaved: filters.minSaved ? Number(filters.minSaved) : undefined,
     sort: filters.sortKey,
     dir: filters.sortDir,
@@ -695,8 +698,13 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
   const confirmThenGenerate = async (b: ImportBatchSummary, isRetry: boolean) => {
     const n = b.savedRows ?? 0
     const verb = isRetry ? 'Retry labels' : 'Generate labels'
+    // BUG-056 — pre-fix read "buys real labels … can't be undone". That
+    // misled sandbox operators (sandbox doesn't buy real postage) AND
+    // was wrong about reversibility (any generated label can be voided
+    // from the Labels tab). Env-neutral wording that names the reverse
+    // path works for both sandbox + production.
     const ok = await notify.confirm(
-      `${verb} for ${n} row${n === 1 ? '' : 's'}? This buys real labels from the carrier and can't be undone.`,
+      `${verb} for ${n} row${n === 1 ? '' : 's'}? This dispatches ${n === 1 ? 'it' : 'them'} to the carrier — if you need to reverse, void the label${n === 1 ? '' : 's'} from the Labels tab.`,
       { title: verb, confirmLabel: verb, cancelLabel: 'Not now', danger: !isRetry },
     )
     if (!ok) return
@@ -1213,6 +1221,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
                     type="button"
                     onClick={() => void restoreBatch(b.id, b.fileName)}
                     disabled={trashBusyId === b.id}
+                    aria-label={`Restore import #${b.id}`}
                     title="Restore this import from Trash"
                     className="inline-flex items-center gap-1.5 rounded-xl border border-[#412d15] bg-white px-3 py-2 text-[12px] font-semibold text-[#412d15] transition hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-50"
                   >
@@ -1262,6 +1271,7 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
                         <FiHome className="h-3.5 w-3.5 shrink-0" />
                         <span className="hidden sm:inline text-[9.5px] uppercase tracking-[0.08em] text-[#b6a684]">Bills to</span>
                         <select
+                          aria-label={`Bills to for import #${b.id}`}
                           value={platform ? 'PLATFORM' : 'AUTO'}
                           disabled={busy || st === 'IN_PROGRESS' || billingSavingId === b.id}
                           onChange={(e) => void setBilling(b.id, e.target.value as 'AUTO' | 'PLATFORM')}
@@ -1484,28 +1494,34 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
             />
           )
         },
-        meta: { headerLabel: 'Tick', exportValue: () => '' },
+        // BUG-054 — the tick column is screen-only; dropping it from CSV
+        // was previously done by exporting ''. Now excluded entirely so
+        // the operator doesn't see an empty "Tick" column at all.
+        meta: { headerLabel: 'Tick', exportable: false },
       },
       {
-        id: 'labelBatch',
-        header: 'Batch',
+        // BUG-056 — one number leads everywhere: the import #. The label
+        // batch (minted when the import is saved; its orders share it on the
+        // Orders page) is a secondary detail under it.
+        id: 'importNo',
+        header: 'Import #',
         enableSorting: true,
         size: 110,
-        accessorFn: (b) => b.labelBatchId ?? '',
+        accessorFn: (b) => b.id,
         cell: ({ row }) => {
           const b = row.original
-          return b.labelBatchId != null ? (
-            <span
-              title="Batch number — allotted when the import was saved; every label of this import is generated under it, so its orders show together on the Orders page"
-              className="inline-flex items-center gap-1 rounded-full bg-[#412d15] px-2 py-0.5 font-mono text-[10px] font-bold text-[#f4eede]"
-            >
-              <FiZap className="h-2.5 w-2.5" /> {b.labelBatchId}
+          return (
+            <span className="block">
+              <span className="inline-flex items-center gap-1 rounded-full bg-[#412d15] px-2 py-0.5 font-mono text-[10px] font-bold text-[#f4eede]" title={`Import #${b.id}`}>
+                <FiZap className="h-2.5 w-2.5" /> #{b.id}
+              </span>
+              <span className="mt-0.5 block text-[10.5px] text-[#b6a684]" title="Label batch — allotted when the import is saved; every label of this import is generated under it, so its orders show together on the Orders page">
+                {b.labelBatchId != null ? `label batch ${b.labelBatchId}` : 'no label batch yet'}
+              </span>
             </span>
-          ) : (
-            <span className="text-[10.5px] text-[#b6a684]" title="A batch number is allotted when the import is saved">No batch yet</span>
           )
         },
-        meta: { headerLabel: 'Batch', exportValue: (b: ImportBatchSummary) => b.labelBatchId == null ? '' : String(b.labelBatchId) },
+        meta: { headerLabel: 'Import #', exportValue: (b: ImportBatchSummary) => String(b.id) },
       },
       {
         id: 'file',
@@ -1535,8 +1551,6 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
                 ) : null}
               </span>
               <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-[#6b5c42]">
-                <span className="font-mono">Import #{b.id}</span>
-                <span aria-hidden="true">·</span>
                 {b.createdBy ? (
                   <span className="inline-flex items-center gap-1" title={`Imported by ${b.createdBy}`}>
                     <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-[#412d15] text-[8px] font-bold uppercase text-[#f4eede]" aria-hidden="true">
@@ -1549,7 +1563,11 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
             </span>
           )
         },
-        meta: { headerLabel: 'File' },
+        // BUG-054 — the cell shows "Import #N" as a sub-line but it was
+        // missing from the export. Prefix the filename with the import #
+        // so operators can reconcile a CSV row back to its import.
+        meta: { headerLabel: 'File', exportValue: (b: ImportBatchSummary) =>
+          `#${b.id}${b.fileName ? ' · ' + b.fileName : ''}` },
       },
       {
         id: 'created',
@@ -1574,7 +1592,14 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
             </span>
           )
         },
-        meta: { headerLabel: 'Date', exportValue: (b: ImportBatchSummary) => b.createdAt ?? '' },
+        // BUG-054 — pre-fix emitted the raw ISO (no timezone, no local
+        // formatting). Export the same locale-formatted string the UI
+        // shows so an operator in US-Central doesn't read a UTC time.
+        meta: { headerLabel: 'Date', exportValue: (b: ImportBatchSummary) => {
+          if (!b.createdAt) return ''
+          const d = new Date(b.createdAt)
+          return Number.isNaN(d.getTime()) ? b.createdAt : d.toLocaleString()
+        } },
       },
       {
         id: 'status',
@@ -1583,7 +1608,10 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
         size: 160,
         accessorFn: (b) => b.status ?? '',
         cell: ({ row }) => renderStatusCell(row.original),
-        meta: { headerLabel: 'Status' },
+        // BUG-054 — pre-fix emitted the raw enum (INITIATE / IN_PROGRESS /
+        // PARTIAL_COMPLETE / COMPLETE / …). Use the same humanized label
+        // the badge shows ("Saved · not generated", "In progress", …).
+        meta: { headerLabel: 'Status', exportValue: (b: ImportBatchSummary) => statusMeta(b.status).label },
       },
       {
         id: 'rows',
@@ -2178,7 +2206,12 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
                       ? 'Locked while labels are generating — editing opens again when the run finishes.'
                       : !canWrite
                         ? 'Read-only view.'
-                        : 'Click a field cell to edit; it saves and re-validates on blur. Columns shows every imported field.'}
+                        /* BUG-047 — the previous hint promised inline cell
+                           edit, but no editor is wired on this grid. Edits
+                           still work from the row-level drawer (BUG-016
+                           flow) and the import wizard's grid. Drop the
+                           false promise; keep the Columns pointer. */
+                        : 'Shows every imported field — use Columns to toggle the ones you need.'}
                 </p>
               }
             />
@@ -2511,17 +2544,26 @@ export default function DataHistoryPage({ apiBatches = false }: { apiBatches?: b
             tableKey={viewTrash ? 'order-intake-imports-trash-v8' : isApiTab ? 'bulk-api-batches-v6' : 'order-intake-imports-v8'}
             columns={dhColumns}
             data={batches}
-            search={{ value: filters.search, onChange: filters.setSearch, placeholder: 'Search file name, batch #, or user…' }}
+            csvFilename="import-history"
+            onExport={async (visibleIds) => {
+              // BUG-066 — every page, and the import number the rows link back to.
+              const all = await fetchAllPages<ImportBatchSummary>((page, size) =>
+                bulkService.listBatches({ view: listView, ...listQuery, page, size }).then((r) => r.data))
+              downloadCsv(`import-history-${new Date().toISOString().slice(0, 10)}.csv`, columnsToCsvMatrix(
+                dhColumns, all, visibleIds, [{ header: 'Label batch #', value: (b) => b.labelBatchId ?? '' }]))
+              notify.success(`Exported ${all.length.toLocaleString()} import(s).`)
+            }}
+            search={{ value: filters.search, onChange: filters.setSearch, placeholder: 'Search file name, import #, or user…' }}
             filterToggle={<>
               <select
-                aria-label="Batch"
-                title="Show one label batch"
+                aria-label="Import"
+                title="Show one import"
                 value={filters.batchNo}
                 onChange={(e) => filters.setBatchNo(e.target.value)}
                 className={`h-[30px] rounded-lg border bg-[#fcfaf5] px-2 text-[12.5px] outline-none focus:border-[#412d15] ${filters.batchNo ? 'border-[#412d15] font-semibold text-[#1f150c]' : 'border-[#e3d9c4] text-slate-700'}`}
               >
-                <option value="">All batches</option>
-                {(summary?.labelBatches ?? []).map((n) => <option key={n} value={String(n)}>Batch {n}</option>)}
+                <option value="">All imports</option>
+                {(summary?.importIds ?? []).map((n) => <option key={n} value={String(n)}>Import #{n}</option>)}
               </select>
               {filterMenu}
             </>}
@@ -2666,7 +2708,7 @@ const BULK_TABS: { key: BulkTab; label: string }[] = [
 ]
 
 /** Import history's sortable columns ↔ the server's sort keys (the Filters menu's Sort). */
-const COLUMN_SORT: Record<string, HistorySortKey> = { labelBatch: 'labelBatch', file: 'fileName', created: 'created', status: 'status', rows: 'savedRows' }
+const COLUMN_SORT: Record<string, HistorySortKey> = { importNo: 'id', file: 'fileName', created: 'created', status: 'status', rows: 'savedRows' }
 const SORT_COLUMN = Object.fromEntries(Object.entries(COLUMN_SORT).map(([col, key]) => [key, col])) as Record<HistorySortKey, string>
 
 /** A row's serviceType error for a ship via code with no carrier service mapped. */

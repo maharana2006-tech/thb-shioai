@@ -115,8 +115,15 @@ export default function LabelTemplateLayoutBuilder({
       const url = await previewTemplatePdfObjectUrl(layoutJson)
       const win = window.open(url, '_blank', 'noopener,noreferrer')
       if (!win) {
-        // Popup blocked — fall back to a same-tab navigation.
-        window.location.assign(url)
+        // BUG-113 — a blocked pop-up used to navigate the editor itself to
+        // the PDF and lose unsaved layout work. Download it instead.
+        const a = document.createElement('a')
+        a.href = url
+        a.download = 'template-preview.pdf'
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+        notify.info('Pop-ups are blocked, so the PDF was downloaded instead.')
       }
       // Revoke after a delay so the target tab has time to load the PDF.
       window.setTimeout(() => URL.revokeObjectURL(url), 60_000)

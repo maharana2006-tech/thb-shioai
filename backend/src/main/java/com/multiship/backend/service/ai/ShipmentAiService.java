@@ -143,20 +143,39 @@ public class ShipmentAiService {
     }
 
     // ── Shipment (top): pre-ship sanity review ──────────────────────────────────
+    // BUG-026 — the prompt previously flagged "missing importer of record"
+    // whenever an Incoterm was in the snapshot, regardless of route. The
+    // FE sticky-saved the operator's last Incoterm into localStorage and
+    // sent it on every subsequent request including domestic ones, so a
+    // US→US parcel fired a HIGH importer-missing warning. The FE now
+    // omits Incoterm when fromCountry == toCountry; this prompt wording
+    // adds a belt-and-braces "ignore customs checks for domestic
+    // shipments" instruction so a stray Incoterm doesn't trip the model
+    // when the International line clearly says "no".
     private static final String REVIEW_PROMPT = """
         You are a shipping QA reviewer. Given a shipment snapshot, list concrete
         problems that would cause a customs hold, a rejected label, or an overpay.
-        Check: weight vs. dimensions plausibility, missing HS codes on international
-        goods, missing importer of record for dutiable international shipments (any
-        Incoterm — DAP delivers duty-unpaid and DDP duty-paid, both still need an
-        importer of record), zero/blank declared values, and incoterm/route
-        mismatches. When flagging a missing importer, phrase it for the actual
-        Incoterm in the snapshot, not a hard-coded "DDP". Return ONLY JSON:
-        { "warnings": [ { "severity": "high|medium|low", "field": "short field name",
+        Check: weight vs. dimensions plausibility and zero/blank declared values.
+        %s
+        Return ONLY JSON:
+        { "warnings": [ { "severity": "high|medium|low", "field": "short field label in plain words",
           "message": "one clear sentence" } ] }
         Return an empty array if nothing is wrong. Do not invent issues; only flag
         what the data actually shows. Max 6 warnings, most important first.
         """;
+
+    /** Customs checks are only in scope for a cross-border lane. */
+    private static final String REVIEW_PROMPT_INTERNATIONAL = """
+        This shipment is international. Also check: missing HS codes on the goods,
+        missing importer of record for dutiable shipments (any Incoterm — DAP
+        delivers duty-unpaid and DDP duty-paid, both still need an importer of
+        record), and incoterm/route mismatches. When flagging a missing importer,
+        phrase it for the actual Incoterm in the snapshot, not a hard-coded "DDP".""";
+
+    /** BUG-026 — a domestic prompt never mentions customs, Incoterms or an importer. */
+    private static final String REVIEW_PROMPT_DOMESTIC = """
+        This shipment is domestic (same country both ends): no customs paperwork,
+        duties or declarations apply, so do not raise customs-related warnings.""";
 
     public Map<String, Object> reviewShipment(ReviewShipmentRequest req) {
         if (req == null) {
@@ -169,10 +188,17 @@ public class ShipmentAiService {
         sb.append("Dimensions (in) L×W×H: ").append(orQ(req.getLengthIn())).append(" × ")
                 .append(orQ(req.getWidthIn())).append(" × ").append(orQ(req.getHeightIn())).append('\n');
         sb.append("Package: ").append(orQ(req.getPackageCode())).append('\n');
-        sb.append("Incoterm: ").append(orQ(req.getIncoterm())).append('\n');
-        sb.append("Importer of record provided: ").append(Boolean.TRUE.equals(req.getImporterProvided()) ? "yes" : "no").append('\n');
         boolean intl = req.getFromCountry() != null && req.getToCountry() != null
                 && !req.getFromCountry().trim().equalsIgnoreCase(req.getToCountry().trim());
+        // BUG-026 — strip customs context from the prompt on domestic
+        // shipments so a sticky Incoterm leaking through from a prior
+        // intl shipment can't trip the importer-missing check even if
+        // the FE regresses the omit-on-domestic guard.
+        if (intl) {
+            sb.append("Incoterm: ").append(orQ(req.getIncoterm())).append('\n');
+            sb.append("Importer of record provided: ")
+                    .append(Boolean.TRUE.equals(req.getImporterProvided()) ? "yes" : "no").append('\n');
+        }
         sb.append("International: ").append(intl ? "yes" : "no").append('\n');
         sb.append("Items:\n");
         if (req.getItems() == null || req.getItems().isEmpty()) {
@@ -184,7 +210,9 @@ public class ShipmentAiService {
                         .append(" | value: ").append(orQ(it.getValue())).append('\n');
             }
         }
-        JsonNode a = openAi.completeJson(REVIEW_PROMPT, sb.toString(), "review-shipment");
+        JsonNode a = openAi.completeJson(
+                REVIEW_PROMPT.formatted(intl ? REVIEW_PROMPT_INTERNATIONAL : REVIEW_PROMPT_DOMESTIC),
+                sb.toString(), "review-shipment");
         List<Map<String, Object>> warnings = new ArrayList<>();
         for (JsonNode w : a.path("warnings")) {
             Map<String, Object> m = new LinkedHashMap<>();

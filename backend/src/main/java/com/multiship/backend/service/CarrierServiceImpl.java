@@ -107,6 +107,9 @@ public class CarrierServiceImpl implements CarrierService {
      *  hardcode/throw. Replaces the scattered fallback logic that used to
      *  live inline in buildShipmentRequest. */
     private final ShipmentDefaultsResolver shipmentDefaultsResolver;
+    // Phase 0 (Shipment & Label re-architecture) — single source of truth for
+    // the label format we request from a carrier. See LabelFormatPolicy.
+    private final com.multiship.backend.service.label.LabelFormatPolicy labelFormatPolicy;
     /** F6-D — converts every money field on the outgoing request DTO into
      *  the carrier account's billing currency (via ECB FX rates) so a EUR
      *  client shipping on a USD UPS account no longer sends EUR figures
@@ -135,6 +138,47 @@ public class CarrierServiceImpl implements CarrierService {
      *  keeps the ~30 pure-Mockito unit tests happy. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.repository.CustomFieldDefinitionRepository customFieldDefinitionRepository;
+
+    /**
+     * R4-BUG-001 — the full validator at the purchase boundary. Pre-fix,
+     * {@link ShipmentValidationService} enforced OFAC sanctions, phone/email
+     * format, 35-char field length and insured≤declared rules, but only
+     * the UI called it before Generate; direct {@code /orders/manual-label}
+     * and External API callers slipped past. Running the validator here
+     * closes that gap for every entry point in one place.
+     *
+     * <p>{@code required=false} keeps ~30 pure-Mockito unit tests compiling.
+     * {@code @Lazy} breaks the circular ref: ShipmentValidationService
+     * already depends on CarrierService (this class's interface), so a
+     * direct inject would form a cycle Spring refuses by default. Lazy
+     * resolves to a proxy at wire time; the real bean is fetched on first
+     * call — well after the ApplicationContext has settled.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private ShipmentValidationService shipmentValidationService;
+
+    /**
+     * R2-BUG-005 (run-4) — concurrent-duplicate fast-path dedup. The AM
+     * read-then-check guard loses to concurrent racers (retest: 3/3
+     * simultaneous POSTs with the same reference all bought labels). A
+     * Redis SETNX on {@code manual-label:dup:{client}:{reference}} wins
+     * atomically at the Redis server — only the first caller sees
+     * {@code setIfAbsent → true} and proceeds; the rest get 409 before
+     * any carrier call fires. ObjectProvider to degrade gracefully when
+     * Redis isn't wired (unit tests, dev-without-redis) — the DB partial-
+     * unique index (V171) is the correctness floor.
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<org.springframework.data.redis.core.StringRedisTemplate> dupGuardRedisProvider;
+    /** The attempt-tracked purchase path; @Lazy breaks the cycle with
+     *  ManualShipmentService. Hand-built tests call {@link #purchaseManualLabel}. */
+    @org.springframework.beans.factory.annotation.Autowired
+    @org.springframework.context.annotation.Lazy
+    private com.multiship.backend.service.shipment.ManualShipmentService manualShipmentService;
+    /** Phase 1 — dry-run receipts; optional so hand-built tests stay constructible. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.shipment.ValidationReceipts validationReceipts;
 
     /** G7 — decides whether the shipment's SHIP_DATE should shift to the
      *  next working day based on the (source × carrier × warehouse) cutoff
@@ -179,14 +223,6 @@ public class CarrierServiceImpl implements CarrierService {
     @org.springframework.beans.factory.annotation.Value("${carrier.tx-split-phase-c:false}")
     private boolean phaseSplitEnabled;
 
-    /** Perf P3 P4β-full sub-flag — see {@code carrier.tx-split-phase-c
-     *  .full-manual-regenerate}. Gated SEPARATELY from the main flag so
-     *  ops can enable the proven split paths (void/MW/generateLabel)
-     *  without opting into the un-fixture-tested manual-label full
-     *  split. FALSE (default) runs P4β-reservation sandwich; TRUE runs
-     *  the real three-phase A/B/C with Phase B carrier HTTP outside tx. */
-    @org.springframework.beans.factory.annotation.Value("${carrier.tx-split-phase-c.full-manual-regenerate:false}")
-    private boolean phaseSplitFullManualRegenerate;
 
     /** Sprint 48 B5 — global kill-switch for the packaging validator.
      *  Off = validator is skipped everywhere; over-packaged shipments then
@@ -523,6 +559,21 @@ public class CarrierServiceImpl implements CarrierService {
                         generateLabelInner(orderNo, userDetails, idempotencyKey, accountId, useHouseAccount));
             }
             return generateLabelInner(orderNo, userDetails, idempotencyKey, accountId, useHouseAccount);
+        } catch (org.springframework.dao.DataIntegrityViolationException ex) {
+            // R2-BUG-005 (run-5 follow-up) — V173 UNIQUE floor can fire
+            // on the order-grid Generate path too: two Orders that share
+            // (cust_no, customer_ref) landing concurrently in
+            // /orders/{N}/label would otherwise surface as a raw 500.
+            // Mirror the manual-label translator so every entry point
+            // returns one consistent 409 LABEL_ALREADY_GENERATED.
+            if (isDuplicateReferenceConstraint(ex)) {
+                log.warn("Dup-guard DB-index tripped on order {} — translating to 409 LABEL_ALREADY_GENERATED.",
+                        orderNo);
+                return failure(HttpStatus.CONFLICT, ErrorCode.LABEL_ALREADY_GENERATED,
+                        "This order's reference is already in use on a GENERATED label. "
+                                + "Use a different reference or void the existing label first.");
+            }
+            throw ex;
         }
     }
 
@@ -779,6 +830,14 @@ public class CarrierServiceImpl implements CarrierService {
 
         CarrierConnector.ShipmentResult shipmentResult = attempt.master();
 
+        // R2-BUG-014 (run-4) — persist the real sent shipper onto the
+        // order so View Label renders what was actually on the carrier
+        // label, not whatever fallback the display-time endpoint hits.
+        // The sent DTO is the authoritative source — generateManualLabel
+        // already does this (line ~3005); mirror on the auto path.
+        persistSentShipperToOrder(order, attempt.shipmentRequest());
+        orderRepository.save(order);
+
         OrderTracking tracking = orderTrackingRepository.findByOrderNo(order.getOrderNo()).orElseGet(OrderTracking::new);
         tracking.setOrderNo(order.getOrderNo());
         tracking.setOrderSuffix(order.getOrderSuffix());
@@ -970,6 +1029,10 @@ public class CarrierServiceImpl implements CarrierService {
                         // (survives URL expiry) instead of a signed URL that
                         // dies in 24-48h.
                         .labelFilePath(persistedLabel)
+                        // Phase 0 — explicit format/provenance, from the same
+                        // sniff the pre-render below already performs.
+                        .format(sniffPersistedFormat(persistedLabel))
+                        .source(com.multiship.backend.service.label.LabelFormatPolicy.sourceFor(sniffPersistedFormat(persistedLabel)))
                         // V143 (ZPL-first Stage 2) — all three serve-time
                         // formats pre-rendered so /label/{zpl,pdf,png} are
                         // zero-conversion reads. Null when the converter
@@ -1322,6 +1385,12 @@ public class CarrierServiceImpl implements CarrierService {
         AutoShipmentAttempt attempt = outcome.attempt();
         CarrierConnector.ShipmentResult shipmentResult = attempt.master();
 
+        // R2-BUG-014 (run-4) — persist the real sent shipper onto the
+        // order so View Label renders what was actually on the carrier
+        // label. Same seam the legacy auto path uses.
+        persistSentShipperToOrder(r.order(), attempt.shipmentRequest());
+        orderRepository.save(r.order());
+
         tracking.setOrderNo(r.order().getOrderNo());
         tracking.setOrderSuffix(r.order().getOrderSuffix());
         tracking.setTrackingNumber(shipmentResult.trackingNumber());
@@ -1413,228 +1482,72 @@ public class CarrierServiceImpl implements CarrierService {
     /**
      * Manual label generation. When {@code existingOrderNo} is null a fresh
      * order number is allocated (the New Shipment flow); when it is provided the
-     * existing order is UPDATED in place and re-labelled — the "fix a failed
-     * order and regenerate" flow, which corrects the shipment data and flips the
-     * order ERROR → GENERATED on the same order number.
+     * existing order is UPDATED in place and re-labelled (fix-and-regenerate).
      *
-     * <p>Perf P3 phase 4α (dispatcher): previously {@code @Transactional}; now
-     * the annotation is removed and the body is wrapped in
-     * {@code requiresNewTransactionTemplate.execute(...)} for equivalent
-     * single-tx semantics (this method is only called from controllers /
-     * import workers — no caller tx to join). When
-     * {@code carrier.tx-split-phase-c=true} is flipped, this method still
-     * runs the legacy body: the actual three-phase split for the
-     * ~1,500-line {@link #generateManualLabelLegacyBody} is scheduled as
-     * P4β-P4δ in {@code project_perf_p3_sprint.md}. The flag toggle is
-     * accepted here so ops can enable it at the control-plane boundary
-     * without a redeploy once the split lands.
+     * <p>Phase 4 — every caller (import, external API, D2C, multi-warehouse)
+     * enters the one attempt-tracked purchase path. Internal callers key the
+     * attempt by their order-anchored internalIdempotencyKey; a blank key gets
+     * a fresh one. The carrier-facing body is {@link #purchaseManualLabel}.
      */
     @Override
-    @Timed(value = "carrier.generateManualLabel", description = "Manual (ad-hoc) label generation.")
     public ApiResponse<LabelGenerationResponse> generateManualLabel(
             com.multiship.backend.dto.ManualShipmentRequest req,
             org.springframework.security.core.userdetails.UserDetails user,
             Integer existingOrderNo) {
-        if (phaseSplitEnabled && requiresNewTransactionTemplate != null) {
-            return generateManualLabelSplit(req, user, existingOrderNo);
-        }
-        if (requiresNewTransactionTemplate != null) {
-            return requiresNewTransactionTemplate.execute(status ->
-                    generateManualLabelLegacyBody(req, user, existingOrderNo));
-        }
-        return generateManualLabelLegacyBody(req, user, existingOrderNo);
+        return manualShipmentService.purchase(req,
+                req != null ? req.getInternalIdempotencyKey() : null, user, existingOrderNo);
     }
 
-    /**
-     * Perf P3 phase 4α — split-path entry stub. Delegates to the legacy
-     * body for now. P4β-P4δ will replace the delegation with a three-
-     * phase A/B/C split matching the pattern in {@link #generateLabelSplit}.
-     *
-     * <p>Why a stub ships before the real split: the flag toggle
-     * {@code carrier.tx-split-phase-c} is already covered by the void,
-     * MW, and generateLabel paths; manual-label is the odd one out. The
-     * stub lets ops flip the flag without creating a per-path exception
-     * ("this flag covers X but not Y"). Current behaviour under the flag
-     * for manual-label is byte-identical to flag OFF.
-     */
-    private ApiResponse<LabelGenerationResponse> generateManualLabelSplit(
+    @Override
+    @Timed(value = "carrier.generateManualLabel", description = "Manual (ad-hoc) label generation.")
+    public ApiResponse<LabelGenerationResponse> purchaseManualLabel(
             com.multiship.backend.dto.ManualShipmentRequest req,
             org.springframework.security.core.userdetails.UserDetails user,
             Integer existingOrderNo) {
-        // New-order path (existingOrderNo == null) has no row to lock,
-        // no existing OrderTracking to reserve — stays on the legacy
-        // single-tx body. Regenerate path gets the reservation (or
-        // full three-phase if the sub-flag is on).
-        if (existingOrderNo == null) {
-            return requiresNewTransactionTemplate.execute(status ->
-                    generateManualLabelLegacyBody(req, user, existingOrderNo));
-        }
-        if (phaseSplitFullManualRegenerate) {
-            return generateManualLabelRegenerateSplitFull(req, user, existingOrderNo);
-        }
-        return generateManualLabelRegenerateSplit(req, user, existingOrderNo);
-    }
-
-    /**
-     * Perf P3 phase 4β (regenerate reservation-only split) — wraps the
-     * legacy body in a {@code in_flight_since} reserve/clear sandwich.
-     *
-     * <p><b>What this ships:</b> the dispatch is still handled by the
-     * legacy body (one DB connection held across the carrier HTTP). What
-     * split-mode gets today for regenerate is:
-     * <ul>
-     *   <li>Phase A short tx — lock Order, check already-generated / in-
-     *       flight (409 if either), set {@code in_flight_since}, commit.
-     *       The in-flight guard blocks concurrent regenerate attempts
-     *       (double-click, scripted retries) with a clean 409 instead of
-     *       serializing on the Order row lock inside legacy.</li>
-     *   <li>Phase B — legacy body runs unchanged.</li>
-     *   <li>Phase C short tx — null {@code in_flight_since} so the
-     *       sweeper doesn't flag the row. Fires on both success and
-     *       error paths.</li>
-     * </ul>
-     *
-     * <p><b>What this does NOT ship:</b> the tx-duration split. Phase B
-     * is still @Transactional-equivalent spanning the carrier HTTP RTT.
-     * Full A/B/C tx split for generateManualLabel requires a ~550-LoC
-     * parallel implementation of the 1,500-line method body; deferred as
-     * a dedicated P4β-full sprint per docs/perf-p3-sprint.md.
-     *
-     * <p>Dark-launch readiness: with this landing, flipping
-     * {@code carrier.tx-split-phase-c=true} causes crashed regenerate
-     * dispatches to leave {@code in_flight_since != null} rows that the
-     * {@link com.multiship.backend.service.observability.InFlightTrackingSweeper}
-     * resolves (P5). Pre-P4β, generateManualLabel never wrote the column
-     * — the sweeper had nothing to find.
-     */
-    private ApiResponse<LabelGenerationResponse> generateManualLabelRegenerateSplit(
-            com.multiship.backend.dto.ManualShipmentRequest req,
-            org.springframework.security.core.userdetails.UserDetails user,
-            Integer existingOrderNo) {
-
-        // Phase A — short tx: lock Order, check short-circuits, reserve
-        // in_flight_since. Any failure here means we never ran the
-        // carrier call; return immediately without going through Phase C.
-        ApiResponse<LabelGenerationResponse> earlyReturn = requiresNewTransactionTemplate.execute(status -> {
-            Order order = orderRepository.findByOrderNoForUpdate(existingOrderNo).orElse(null);
-            if (order == null) {
-                return failure(HttpStatus.NOT_FOUND, ErrorCode.ORDER_NOT_FOUND,
-                        "Order " + existingOrderNo + " was not found.");
-            }
-            OrderTracking tracking = orderTrackingRepository.findByOrderNo(existingOrderNo).orElse(null);
-            if (tracking != null
-                    && Boolean.TRUE.equals(tracking.getIsLabelGenerated())
-                    && "GENERATED".equalsIgnoreCase(tracking.getStatus())) {
-                // Same-key retry → return existing label; different key → 409.
-                String normalizedKey = normalizeInternalIdempotencyKey(req);
-                LabelGenerationResponse already = LabelGenerationResponse.builder()
-                        .orderNo(existingOrderNo.longValue())
-                        .trackingNumber(tracking.getTrackingNumber())
-                        .trackingUrl(tracking.getTrackingUrl())
-                        .carrierAccountCode(tracking.getAccountNumber())
-                        .status("GENERATED")
-                        .message("A label for this order already exists.")
-                        .build();
-                if (StringUtils.hasText(normalizedKey)
-                        && normalizedKey.equals(tracking.getIdempotencyKey())) {
-                    return success("Label already generated by this request.", already);
-                }
-                return failure(HttpStatus.CONFLICT, ErrorCode.LABEL_ALREADY_GENERATED,
-                        "Order " + existingOrderNo + " already has a generated label ("
-                                + tracking.getTrackingNumber() + ").",
-                        already);
-            }
-            if (tracking != null && tracking.getInFlightSince() != null) {
-                return failure(HttpStatus.CONFLICT, ErrorCode.LABEL_ALREADY_GENERATED,
-                        "Order " + existingOrderNo + " already has a label dispatch in flight "
-                                + "(started " + tracking.getInFlightSince() + "). Wait for it to "
-                                + "settle or let the sweeper reconcile it.");
-            }
-            // Reserve: set in_flight_since on the (existing or new) tracking row.
-            // The legacy body will re-fetch + write this row later; we only
-            // need the sentinel visible to the sweeper + concurrent callers.
-            if (tracking == null) {
-                tracking = new OrderTracking();
-                tracking.setOrderNo(existingOrderNo);
-                tracking.setOrderSuffix(order.getOrderSuffix());
-                tracking.setStatus("PENDING");
-                tracking.setCreatedAt(LocalDateTime.now());
-            }
-            tracking.setInFlightSince(java.time.Instant.now());
-            tracking.setUpdatedAt(LocalDateTime.now());
-            orderTrackingRepository.save(tracking);
-            return null;  // no early-return — proceed to Phase B
-        });
-        if (earlyReturn != null) return earlyReturn;
-
-        // Phase B — legacy body. Still @Transactional-equivalent across
-        // the carrier HTTP; perf-duration split deferred to P4β-full.
-        ApiResponse<LabelGenerationResponse> response;
         try {
-            response = requiresNewTransactionTemplate.execute(status ->
-                    generateManualLabelLegacyBody(req, user, existingOrderNo));
-        } catch (RuntimeException ex) {
-            // Legacy body threw — Phase C still runs to clear the sentinel.
-            // Re-throw after clearing so the caller sees the original error.
-            clearInFlightSinceForOrder(existingOrderNo);
+            // Phase 2 — no transaction spans the carrier call: resolve (reads),
+            // purchase (no tx) and record (its own REQUIRES_NEW) run in sequence.
+            return runManualPurchase(req, user, existingOrderNo);
+        } catch (org.springframework.dao.DataIntegrityViolationException ex) {
+            // R2-BUG-005 (run-4) — V171 partial-unique index backstop fired.
+            // Reached only when Redis SETNX didn't block (outage, TTL miss,
+            // app crash between SETNX and the INSERT). Translate to the same
+            // 409 LABEL_ALREADY_GENERATED the SELECT guard returns so API
+            // callers see one consistent code for every dedup path.
+            String refTag = req != null && StringUtils.hasText(req.getReference())
+                    ? " for reference " + req.getReference().trim() : "";
+            if (isDuplicateReferenceConstraint(ex)) {
+                log.warn("Dup-guard DB-index tripped{} — Redis SETNX didn't block "
+                        + "(outage, TTL miss, or crash between SETNX + INSERT). "
+                        + "Translating to 409 LABEL_ALREADY_GENERATED.", refTag);
+                return failure(HttpStatus.CONFLICT, ErrorCode.LABEL_ALREADY_GENERATED,
+                        "This reference is already in use on a GENERATED label"
+                                + refTag + ". Use a different reference or void "
+                                + "the existing label first.");
+            }
+            // Not our index — some other integrity violation. Rethrow so
+            // the global handler returns the usual 400 shape.
             throw ex;
         }
-
-        // Phase C — short tx: null in_flight_since so the sweeper stops
-        // seeing this row as stuck. Legacy body has already written the
-        // final status (GENERATED / ERROR); we only touch the sentinel.
-        clearInFlightSinceForOrder(existingOrderNo);
-        return response;
     }
 
-    /**
-     * Perf P3 P4β-full — real three-phase A/B/C tx split for the
-     * manual-label regenerate path. Phase B carrier HTTP runs with NO
-     * DB connection held (the actual tx-duration win).
-     *
-     * <p><b>Status: NOT YET IMPLEMENTED.</b> Delegates to the P4β-
-     * reservation sandwich for now with a WARN. The real implementation
-     * is a ~960-LoC parallel body: Phase A replicates the legacy
-     * preamble (validation + resolve + build DTO + auto-split), Phase B
-     * runs the AuthRetry.withAuthRetry carrier loop, Phase C persists
-     * everything. See docs/perf-p3-sprint.md for the attack plan +
-     * known hazards.
-     *
-     * <p>The sub-flag {@code carrier.tx-split-phase-c.full-manual-regenerate}
-     * is wired through this stub so a future session can replace this
-     * method body without re-threading the dispatcher. Ops flipping the
-     * sub-flag today gets the SAME behaviour as leaving it off — the
-     * WARN log is the signal that no perf win is active yet.
-     */
-    private ApiResponse<LabelGenerationResponse> generateManualLabelRegenerateSplitFull(
-            com.multiship.backend.dto.ManualShipmentRequest req,
-            org.springframework.security.core.userdetails.UserDetails user,
-            Integer existingOrderNo) {
-        log.warn("P4β-full flag=TRUE but full three-phase split not yet implemented for "
-                + "generateManualLabel regenerate path (order={}). Falling through to P4β-reservation "
-                + "sandwich. See docs/perf-p3-sprint.md for the implementation plan.",
-                existingOrderNo);
-        return generateManualLabelRegenerateSplit(req, user, existingOrderNo);
-    }
-
-    private void clearInFlightSinceForOrder(Integer orderNo) {
-        try {
-            requiresNewTransactionTemplate.executeWithoutResult(status -> {
-                OrderTracking tracking = orderTrackingRepository.findByOrderNo(orderNo).orElse(null);
-                if (tracking != null && tracking.getInFlightSince() != null) {
-                    tracking.setInFlightSince(null);
-                    tracking.setUpdatedAt(LocalDateTime.now());
-                    orderTrackingRepository.save(tracking);
-                }
-            });
-        } catch (RuntimeException clearFail) {
-            // In_flight_since stuck on a row the sweeper will resolve.
-            // Don't rethrow — the caller's label result is more important
-            // than a sweeper hint.
-            log.warn("P4β: failed to null in_flight_since for order {} (sweeper will resolve): {}",
-                    orderNo, clearFail.getMessage());
+    /** Matches on V171's constraint name — Postgres surfaces it in the
+     *  underlying SQLException's message (and sometimes nested cause).
+     *  Narrow pattern-match avoids catching unrelated DIV exceptions. */
+    private static boolean isDuplicateReferenceConstraint(
+            org.springframework.dao.DataIntegrityViolationException ex) {
+        Throwable t = ex;
+        while (t != null) {
+            String m = t.getMessage();
+            if (m != null && m.contains("uniq_label_batch_client_ref_active")) return true;
+            t = t.getCause();
         }
+        return false;
     }
+
+
+
+
 
     /**
      * Perf P3 phase 4α — renamed from {@code generateManualLabel} so the
@@ -1642,50 +1555,25 @@ public class CarrierServiceImpl implements CarrierService {
      * paths. Body unchanged from pre-P4α; still the ~1,500-line monolith
      * audited as PERF-B1.
      */
-    private ApiResponse<LabelGenerationResponse> generateManualLabelLegacyBody(
+    /**
+     * Manual Shipment redesign, Phase 1 — the resolution half of a manual
+     * purchase: tenant clamp, return gate, field guards, the full validator
+     * (new orders), duplicate reference, custom fields, warehouse, carrier,
+     * account cascade, routing rules, allowlists, packaging, shipper
+     * defaults, order number, DTO build, customs defaults, limits and split.
+     * Returns the failure response, or {@code null} with {@code out.value}
+     * set. Nothing in here spends money or writes a row (the order number
+     * is a sequence read). Moved verbatim from the purchase body; the next
+     * phase lifts it into its own class.
+     */
+    private ApiResponse<LabelGenerationResponse> resolveManualShipment(
             com.multiship.backend.dto.ManualShipmentRequest req,
             org.springframework.security.core.userdetails.UserDetails user,
-            Integer existingOrderNo) {
-
-        if (req == null || req.getRecipient() == null) {
-            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR, "Recipient details are required.");
-        }
-        // PR-G5 D1 — internal callers (import path) may stamp an order-anchored
-        // idempotency key onto the request DTO; the field is @JsonIgnore so
-        // external callers can't smuggle one over the wire. Normalise once so
-        // the tracking-row write below sees a consistent shape.
-        final String normalizedIdempotencyKey = normalizeInternalIdempotencyKey(req);
-        // PR-G1 (USPS_DIRECT cross-flow routing) - on the fix-and-regenerate
-        // path (existingOrderNo != null) the order row is already persisted,
-        // so we can consult the shared routing service BEFORE the connector
-        // dispatch below. When USPS_PROVIDER=USPS_DIRECT and the order
-        // routes to USPS, the label goes on the 55/hr queue (single-piece
-        // enqueue or MPS fan-out via UspsMpsSplitterService), or gets
-        // rejected as intl-MPS with the actionable remediation.
-        //
-        // Net-new orders (existingOrderNo=null) cannot be routed here
-        // because the Order row doesn't exist yet; they proceed on the
-        // sync connector path. This is an acceptable G1 scope limit -
-        // net-new manual submissions are inherently rate-limited by human
-        // click rate. The scripted / automated paths that actually
-        // exhaust the platform 60/hr quota go through generateLabel
-        // (POST /orders/{n}/label, list-view Generate) which IS routed
-        // above. Follow-up (PR-G4 or a G1-follow-up) could pre-save the
-        // net-new order as PENDING to unlock routing on first submission
-        // too, but that's outside the PR-G1 hot-fix scope.
-        if (existingOrderNo != null) {
-            ApiResponse<LabelGenerationResponse> routed =
-                    maybeRouteUspsDirect(existingOrderNo.longValue(), user);
-            if (routed != null) {
-                return routed;
-            }
-        }
-        // Sprint 50 Tier 0.5 PR G — clamp so a scoped USER can't submit a
-        // manual shipment against a foreign clientCode. Null/blank input
-        // gets forced to the caller's own tenant; operators pass through.
-        req.setClientCode(tenantScope.clampClientCode(req.getClientCode()));
+            Integer existingOrderNo,
+            com.multiship.backend.service.shipment.ResolvedShipment.Holder out) {
         com.multiship.backend.dto.ManualShipmentRequest.Address to = req.getRecipient();
         com.multiship.backend.dto.ManualShipmentRequest.Address from = req.getSender();
+        req.setClientCode(tenantScope.clampClientCode(req.getClientCode()));
 
         // G9 (V95 refresh) — return eligibility is now driven by the carrier
         // account's `return_scope` column (DOMESTIC_ONLY / DOMESTIC_AND_INTERNATIONAL /
@@ -1728,15 +1616,10 @@ public class CarrierServiceImpl implements CarrierService {
                         .map(com.multiship.backend.model.Client::effectiveReturnAddress)
                         .filter(a -> a != null && a.hasValue())
                         .ifPresent(addr -> {
-                            if (StringUtils.hasText(addr.getName())) recipientToClamp.setName(addr.getName());
-                            if (StringUtils.hasText(addr.getLine1())) recipientToClamp.setAddressLine1(addr.getLine1());
-                            if (StringUtils.hasText(addr.getLine2())) recipientToClamp.setAddressLine2(addr.getLine2());
-                            if (StringUtils.hasText(addr.getCity())) recipientToClamp.setCity(addr.getCity());
-                            if (StringUtils.hasText(addr.getState())) recipientToClamp.setState(addr.getState());
-                            if (StringUtils.hasText(addr.getZip())) recipientToClamp.setPostalCode(addr.getZip());
-                            if (StringUtils.hasText(addr.getCountry())) recipientToClamp.setCountryCode(addr.getCountry());
-                            if (StringUtils.hasText(addr.getPhone())) recipientToClamp.setPhone(addr.getPhone());
-                            log.info("RETURN mode: recipient clamped to {}'s effective return address",
+                            // BUG-039 — the operator's typed "Return to" block wins; the
+                            // configured address only fills what was left blank.
+                            fillReturnToBlanks(recipientToClamp, addr);
+                            log.info("RETURN mode: recipient blanks filled from {}'s effective return address",
                                     clientCodeForReturn);
                         });
             }
@@ -1794,19 +1677,114 @@ public class CarrierServiceImpl implements CarrierService {
         // check is a non-atomic SELECT, so two concurrent POSTs can both
         // miss and both ship. Add pg_try_advisory_xact_lock(hashtext('ref:'
         // || client || ':' || reference)) if a happy-path race test flakes.
+        // R4-BUG-001 — fire the full validator at the purchase boundary so
+        // OFAC / contact-format / 35-char-length / insured≤declared rules
+        // (previously UI-path-only) refuse the carrier call. Rules the AM
+        // sprint already duplicated in this method (dup-reference below,
+        // carrier/account mismatch, required custom fields) stay as
+        // explicit guards too — belt-and-braces, and the dup-check below
+        // keeps its specific 409 LABEL_ALREADY_GENERATED code (versus the
+        // 422 the validator would return for the same condition).
+        if (shipmentValidationService != null && existingOrderNo == null) {
+            // Phase 1 — a purchase that presents the fingerprint of a dry run
+            // that passed within the receipt TTL keeps every local rule but
+            // skips the carrier rates/validate hop it would otherwise repeat.
+            String presented = req.getInternalValidationFingerprint();
+            boolean validatedAlready = validationReceipts != null
+                    && validationReceipts.isFresh(presented)
+                    && com.multiship.backend.service.shipment.ShipmentFingerprint.matches(presented, req);
+            if (validatedAlready) {
+                log.info("Dry-run receipt accepted for fingerprint {}…; skipping the carrier validate hop", presented.substring(0, 12));
+            }
+            ApiResponse<com.multiship.backend.dto.ShipmentValidationResult> pre =
+                    shipmentValidationService.validate(req, !validatedAlready);
+            if (pre != null && pre.getData() != null
+                    && "FAIL".equalsIgnoreCase(pre.getData().getOverall())) {
+                java.util.List<com.multiship.backend.dto.ShipmentValidationResult.ValidationIssue> errs =
+                        pre.getData().getLocalErrors();
+                com.multiship.backend.dto.ShipmentValidationResult.ValidationIssue first =
+                        errs == null ? null : errs.stream().findFirst().orElse(null);
+                ErrorCode code = ErrorCode.VALIDATION_ERROR;
+                if (first != null && first.getCode() != null) {
+                    try { code = ErrorCode.valueOf(first.getCode()); }
+                    catch (IllegalArgumentException ignored) {
+                        // Validator returned a snake_case code not in the enum.
+                        // Keep VALIDATION_ERROR; the message still carries the detail.
+                    }
+                }
+                String msg = first != null && first.getMessage() != null
+                        ? first.getMessage()
+                        : (pre.getMessage() != null ? pre.getMessage() : "Request failed validation.");
+                ApiResponse<LabelGenerationResponse> refused = failure(HttpStatus.UNPROCESSABLE_ENTITY, code, msg);
+                if (first != null && StringUtils.hasText(first.getField())) {
+                    // Phase 1 — name the field so the form can show it inline.
+                    refused.setErrors(ApiResponse.ErrorDetails.builder()
+                            .field(first.getField()).code(code.name()).message(msg).build());
+                }
+                return refused;
+            }
+        }
+
         if (existingOrderNo == null && orderRepository != null
                 && StringUtils.hasText(req.getReference())) {
             String refClient = StringUtils.hasText(req.getClientCode())
                     ? req.getClientCode().trim() : "MANUAL";
-            java.util.Optional<Order> alreadyShipped =
-                    orderRepository.findShippedByClientAndReference(refClient, req.getReference().trim());
-            if (alreadyShipped.isPresent()) {
-                Order o = alreadyShipped.get();
-                return failure(HttpStatus.CONFLICT, ErrorCode.LABEL_ALREADY_GENERATED,
-                        "Reference " + req.getReference().trim()
-                                + " already shipped on order #" + o.getOrderNo()
-                                + (StringUtils.hasText(o.getTrack()) ? " (tracking " + o.getTrack() + ")" : "")
-                                + ". Use a different reference or void the existing label first.");
+            String refKey = refClient.toUpperCase(java.util.Locale.ROOT)
+                    + ":" + req.getReference().trim().toLowerCase(java.util.Locale.ROOT);
+
+            // R2-BUG-005 (run-4) — Redis SETNX fast-path dedup. Pre-fix the
+            // SELECT below was the only guard; two POSTs arriving in the
+            // same ms both missed the SELECT and both bought labels. SETNX
+            // is atomic at the Redis server, so only one of N concurrent
+            // callers sees `claimed=true`. The claim TTL covers the carrier
+            // call + grace (120s). We DON'T release on success — the DB
+            // row + the GENERATED order_status now dedupe future calls
+            // via the SELECT and the V171 partial-unique index. We DO
+            // release on error so a transient carrier failure doesn't
+            // block a legitimate retry.
+            org.springframework.data.redis.core.StringRedisTemplate redis =
+                    dupGuardRedisProvider == null ? null : dupGuardRedisProvider.getIfAvailable();
+            boolean redisClaimed = false;
+            if (redis != null) {
+                String dupKey = "manual-label:dup:" + refKey;
+                try {
+                    Boolean claimed = redis.opsForValue().setIfAbsent(
+                            dupKey, "1", java.time.Duration.ofSeconds(120));
+                    if (Boolean.FALSE.equals(claimed)) {
+                        return failure(HttpStatus.CONFLICT, ErrorCode.LABEL_ALREADY_GENERATED,
+                                "Reference " + req.getReference().trim()
+                                        + " is already being processed for client "
+                                        + refClient + ". Wait for the first request to settle"
+                                        + " or use a different reference.");
+                    }
+                    redisClaimed = Boolean.TRUE.equals(claimed);
+                } catch (Exception ex) {
+                    // Redis outage — degrade to the SELECT + DB-index path.
+                    // Correctness still holds (V171 partial unique index
+                    // enforces at the DB) at the cost of a wasted carrier
+                    // call on the hot race.
+                    log.warn("Dup-guard Redis SETNX unavailable; falling through to DB "
+                            + "guards. refKey={}: {}", refKey, ex.getMessage());
+                }
+            }
+
+            try {
+                java.util.Optional<Order> alreadyShipped =
+                        orderRepository.findShippedByClientAndReference(refClient, req.getReference().trim());
+                if (alreadyShipped.isPresent()) {
+                    Order o = alreadyShipped.get();
+                    // Release the Redis claim so a retry after void can proceed.
+                    if (redisClaimed) releaseDupClaim(redis, refKey);
+                    return failure(HttpStatus.CONFLICT, ErrorCode.LABEL_ALREADY_GENERATED,
+                            "Reference " + req.getReference().trim()
+                                    + " already shipped on order #" + o.getOrderNo()
+                                    + (StringUtils.hasText(o.getTrack()) ? " (tracking " + o.getTrack() + ")" : "")
+                                    + ". Use a different reference or void the existing label first.");
+                }
+            } catch (RuntimeException ex) {
+                // Release on any failure before the carrier call so a retry can go.
+                if (redisClaimed) releaseDupClaim(redis, refKey);
+                throw ex;
             }
         }
 
@@ -1901,6 +1879,13 @@ public class CarrierServiceImpl implements CarrierService {
                     "carrierCode is required — pick the carrier this shipment bills to.");
         }
         String carrier = resolveCanonicalCarrierCode(rawCarrier);
+
+        // Third-party freight billing — validated before any account work so a
+        // bad payer never reaches the carrier. Normalises the request in place.
+        String billToError = validateThirdPartyBilling(req, carrier);
+        if (billToError != null) {
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR, billToError);
+        }
 
         // Credential + bill-to account: the picked account, else the typed number
         // on file for this carrier. An UNKNOWN typed number is a hard error —
@@ -2244,7 +2229,21 @@ public class CarrierServiceImpl implements CarrierService {
         // on top of the platform carrier.shipper.* defaults. When neither the
         // request sender nor the tenant have set countryCode, we still fall
         // back to the platform default (dev bootability).
-        CarrierProperties.ShipperDefaults dflt = shipperDefaults.resolveFor(req.getClientCode());
+        //
+        // BUG-025 — strict mode is for "no override AND no sender in the
+        // request"; a request that carries a complete sender block never
+        // reaches the platform-default fallback, so the strict throw there
+        // is a false positive. Skip the strict check when the operator-
+        // typed sender already covers every REQUIRED_KEYS field.
+        boolean senderCovers = com.multiship.backend.service.carrier
+                .ShipperDefaultsService.senderCoversRequiredFields(from);
+        CarrierProperties.ShipperDefaults dflt;
+        try {
+            dflt = shipperDefaults.resolveFor(req.getClientCode(), !senderCovers);
+        } catch (ShipmentResolutionException e) {
+            // Phase 1 — strict shipper mode is a 422 naming the field, not a 500.
+            return toResolutionFailure(e);
+        }
         String fromCountry = firstNonBlank(from != null ? from.getCountryCode() : null, dflt.getCountryCode());
 
         // PR #534 — DTO build extracted to buildManualShipmentRequestDto
@@ -2471,11 +2470,152 @@ public class CarrierServiceImpl implements CarrierService {
                     limit.getMaxPackages(), carrier, serviceType);
         }
 
+        // Phase 1 — the markup decision is taken HERE, before any purchase, so
+        // nothing after the carrier call can reject the shipment. The rule is a
+        // fee on the carrier rate in the client's billing currency (not the
+        // parcel's customs currency). Own REQUIRES_NEW tx so a refused rule
+        // cannot poison the ambient transaction.
+        final String markupClientCode = hasClient ? resolvedClient : "";
+        final String markupCurrency = firstNonBlank(hasClient
+                ? clientRepository.findByClientCodeIgnoreCase(resolvedClient)
+                        .map(com.multiship.backend.model.Client::getDefaultCurrency).orElse(null)
+                : null, "USD");
+        com.multiship.backend.service.resolution.MarkupRule markupRule;
+        try {
+            markupRule = requiresNewTransactionTemplate.execute(status ->
+                    resolutionService.resolveMarkup(markupClientCode, markupCurrency));
+        } catch (ShipmentResolutionException e) {
+            return toResolutionFailure(e);
+        }
+
+        out.value = new com.multiship.backend.service.shipment.ResolvedShipment(
+                from, to, resolvedClient, hasClient, resolvedWarehouseCode, resolvedWarehouseId,
+                carrier, account, billToNumber, typedNumber, connector, service, preset, serviceType, packageType,
+                length, width, height, dflt, fromCountry, allocatedOrderNo, g7ShiftedDatePre, shipmentRequest,
+                isCrossBorder, limit, splitStrategy, subRequests, totalWeightLb, markupRule);
+        return null;
+    }
+
+    private ApiResponse<LabelGenerationResponse> runManualPurchase(
+            com.multiship.backend.dto.ManualShipmentRequest req,
+            org.springframework.security.core.userdetails.UserDetails user,
+            Integer existingOrderNo) {
+
+        if (req == null || req.getRecipient() == null) {
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR, "Recipient details are required.");
+        }
+        // PR-G5 D1 — internal callers (import path) may stamp an order-anchored
+        // idempotency key onto the request DTO; the field is @JsonIgnore so
+        // external callers can't smuggle one over the wire. Normalise once so
+        // the tracking-row write below sees a consistent shape.
+        final String normalizedIdempotencyKey = normalizeInternalIdempotencyKey(req);
+        // PR-G1 (USPS_DIRECT cross-flow routing) - on the fix-and-regenerate
+        // path (existingOrderNo != null) the order row is already persisted,
+        // so we can consult the shared routing service BEFORE the connector
+        // dispatch below. When USPS_PROVIDER=USPS_DIRECT and the order
+        // routes to USPS, the label goes on the 55/hr queue (single-piece
+        // enqueue or MPS fan-out via UspsMpsSplitterService), or gets
+        // rejected as intl-MPS with the actionable remediation.
+        //
+        // Net-new orders (existingOrderNo=null) cannot be routed here
+        // because the Order row doesn't exist yet; they proceed on the
+        // sync connector path. This is an acceptable G1 scope limit -
+        // net-new manual submissions are inherently rate-limited by human
+        // click rate. The scripted / automated paths that actually
+        // exhaust the platform 60/hr quota go through generateLabel
+        // (POST /orders/{n}/label, list-view Generate) which IS routed
+        // above. Follow-up (PR-G4 or a G1-follow-up) could pre-save the
+        // net-new order as PENDING to unlock routing on first submission
+        // too, but that's outside the PR-G1 hot-fix scope.
+        if (existingOrderNo != null) {
+            ApiResponse<LabelGenerationResponse> routed =
+                    maybeRouteUspsDirect(existingOrderNo.longValue(), user);
+            if (routed != null) {
+                return routed;
+            }
+        }
+        // Sprint 50 Tier 0.5 PR G — clamp so a scoped USER can't submit a
+        // manual shipment against a foreign clientCode. Null/blank input
+        // gets forced to the caller's own tenant; operators pass through.
+        com.multiship.backend.service.shipment.ResolvedShipment.Holder resolvedHolder =
+                new com.multiship.backend.service.shipment.ResolvedShipment.Holder();
+        ApiResponse<LabelGenerationResponse> notResolved = resolveManualShipment(req, user, existingOrderNo, resolvedHolder);
+        if (notResolved != null) return notResolved;
+        final com.multiship.backend.service.shipment.ResolvedShipment resolved = resolvedHolder.value;
+
+        java.util.List<CarrierConnector.ShipmentResult> batchResults;
+        try {
+            batchResults = purchaseManualShipment(resolved);
+        } catch (CarrierRateLimitException rle) {
+            // Sprint 50 Tier 1 finding #5 — 429 on the manual-label path.
+            // No order row yet at this point; return an ApiResponse.failure so
+            // the shipper sees the Retry-After hint and doesn't hammer.
+            int retry = rle.getRetryAfterSeconds() != null ? rle.getRetryAfterSeconds() : 0;
+            log.warn("Manual shipment: carrier {} rate-limited (retry-after={}s): {}",
+                    resolved.carrier(), retry, rle.getMessage());
+            String msg = "Carrier " + resolved.carrier() + " is rate-limiting requests"
+                    + (retry > 0 ? " — retry after " + retry + "s." : ".");
+            return failure(HttpStatus.TOO_MANY_REQUESTS, ErrorCode.CARRIER_RATE_LIMITED, msg);
+        } catch (Exception ex) {
+            return recordManualFailure(req, existingOrderNo, resolved, ex);
+        }
+        // Phase 2 — tx B: the write set in its own transaction, opened only
+        // after the carrier has answered.
+        final java.util.List<CarrierConnector.ShipmentResult> boughtResults = batchResults;
+        if (requiresNewTransactionTemplate != null) {
+            return requiresNewTransactionTemplate.execute(status ->
+                    recordManualSuccess(req, existingOrderNo, resolved, boughtResults, normalizedIdempotencyKey));
+        }
+        return recordManualSuccess(req, existingOrderNo, resolved, boughtResults, normalizedIdempotencyKey);
+}
+
+    /**
+     * Phase 2 — the purchase step: carrier calls only, no transaction open.
+     * When a later sub-request fails after earlier ones were bought, the
+     * bought labels are voided (compensation) and the failure says which
+     * ones could not be — nothing paid for is ever silently lost.
+     */
+    private java.util.List<CarrierConnector.ShipmentResult> purchaseManualShipment(
+            com.multiship.backend.service.shipment.ResolvedShipment resolved) throws Exception {
+        // Rule 1 of the redesign, enforced where it matters: a carrier is never
+        // called while a database transaction is open. Fail loudly rather than
+        // let a future caller quietly wrap this in @Transactional again.
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new IllegalStateException("purchaseManualShipment must not run inside a database transaction");
+        }
+        com.multiship.backend.dto.ManualShipmentRequest.Address to = resolved.to();
+        com.multiship.backend.dto.ManualShipmentRequest.Address from = resolved.from();
+        String resolvedClient = resolved.resolvedClient();
+        boolean hasClient = resolved.hasClient();
+        String resolvedWarehouseCode = resolved.resolvedWarehouseCode();
+        Long resolvedWarehouseId = resolved.resolvedWarehouseId();
+        String carrier = resolved.carrier();
+        CarrierAccountRef account = resolved.account();
+        String billToNumber = resolved.billToNumber();
+        String typedNumber = resolved.typedNumber();
+        CarrierConnector connector = resolved.connector();
+        com.multiship.backend.model.ShippingService service = resolved.service();
+        com.multiship.backend.model.PackagePreset preset = resolved.preset();
+        String serviceType = resolved.serviceType();
+        String packageType = resolved.packageType();
+        BigDecimal length = resolved.length();
+        BigDecimal width = resolved.width();
+        BigDecimal height = resolved.height();
+        CarrierProperties.ShipperDefaults dflt = resolved.shipperDefaults();
+        String fromCountry = resolved.fromCountry();
+        int allocatedOrderNo = resolved.allocatedOrderNo();
+        java.time.LocalDate g7ShiftedDatePre = resolved.shipDateOverride();
+        ShipmentRequestDTO shipmentRequest = resolved.shipmentRequest();
+        boolean isCrossBorder = resolved.isCrossBorder();
+        com.multiship.backend.model.CarrierShippingLimit limit = resolved.limit();
+        com.multiship.backend.dto.SplitStrategy splitStrategy = resolved.splitStrategy();
+        java.util.List<ShipmentRequestDTO> subRequests = resolved.subRequests();
+        java.math.BigDecimal totalWeightLb = resolved.totalWeightLb();
+        java.util.List<CarrierConnector.ShipmentResult> batchResults = new java.util.ArrayList<>();
         // Loop the sub-requests, collect each carrier's ShipmentResult, then
         // fold them into a single master result for downstream persistence.
         // We save shipment_batch rows below (after the order row exists) so
         // that batch_id can FK back to the order.
-        java.util.List<CarrierConnector.ShipmentResult> batchResults = new java.util.ArrayList<>();
         // PR-S1 (S-B1) — push the account's SERA refresh_token onto the
         // connector's ThreadLocal so getAccessToken can use the refresh_token
         // grant. Legacy SWSIM accounts leave the token null → no-op. Any
@@ -2548,17 +2688,85 @@ public class CarrierServiceImpl implements CarrierService {
                                 fAccount.getAccountNumber(), fEnv),
                         t -> fConnector.createShipment(sub, t, fEnv)));
             }
-        } catch (CarrierRateLimitException rle) {
-            // Sprint 50 Tier 1 finding #5 — 429 on the manual-label path.
-            // No order row yet at this point; return an ApiResponse.failure so
-            // the shipper sees the Retry-After hint and doesn't hammer.
-            int retry = rle.getRetryAfterSeconds() != null ? rle.getRetryAfterSeconds() : 0;
-            log.warn("Manual shipment: carrier {} rate-limited (retry-after={}s): {}",
-                    carrier, retry, rle.getMessage());
-            String msg = "Carrier " + carrier + " is rate-limiting requests"
-                    + (retry > 0 ? " — retry after " + retry + "s." : ".");
-            return failure(HttpStatus.TOO_MANY_REQUESTS, ErrorCode.CARRIER_RATE_LIMITED, msg);
         } catch (Exception ex) {
+            if (!batchResults.isEmpty()) {
+                throw compensatePartialPurchase(resolved, batchResults, ex);
+            }
+            throw ex;
+        }
+        return batchResults;
+    }
+
+    /** Void what was bought before the failing sub-request; report what could not be voided. */
+    private Exception compensatePartialPurchase(com.multiship.backend.service.shipment.ResolvedShipment resolved,
+                                                java.util.List<CarrierConnector.ShipmentResult> bought, Exception cause) {
+        java.util.List<String> voided = new java.util.ArrayList<>();
+        java.util.List<String> unvoided = new java.util.ArrayList<>();
+        CarrierAccountRef account = resolved.account();
+        try (AutoCloseable ignored = com.multiship.backend.service.carriers.StampsSeraAuthContext.openFor(account)) {
+            String env = firstNonBlank(account.getEnvironment(), carrierProperties.getDefaultEnvironment());
+            String token = resolved.connector().getAccessToken(account.getClientId(), account.getClientSecret(),
+                    account.getAccountNumber(), env);
+            for (CarrierConnector.ShipmentResult r : bought) {
+                if (!StringUtils.hasText(r.trackingNumber())) continue;
+                try {
+                    CarrierConnector.VoidResult v = resolved.connector().voidShipment(r.trackingNumber(), token, env,
+                            account.getAccountNumber(), resolved.fromCountry());
+                    (v != null && v.voided() ? voided : unvoided).add(r.trackingNumber());
+                } catch (Exception voidEx) {
+                    log.warn("Compensating void of {} failed: {}", r.trackingNumber(), voidEx.getMessage());
+                    unvoided.add(r.trackingNumber());
+                }
+            }
+        } catch (Exception authEx) {
+            log.warn("Compensating void could not authenticate: {}", authEx.getMessage());
+            for (CarrierConnector.ShipmentResult r : bought) {
+                if (StringUtils.hasText(r.trackingNumber()) && !voided.contains(r.trackingNumber())) unvoided.add(r.trackingNumber());
+            }
+        }
+        log.warn("Partial MPS purchase on {}: {} bought before the failure; voided={} unvoided={}",
+                resolved.carrier(), bought.size(), voided, unvoided);
+        return new com.multiship.backend.service.shipment.PartialPurchaseException(cause, voided, unvoided);
+    }
+
+    /**
+     * Phase 2 — the carrier refused (or a sub-request failed): record the
+     * ERROR order and its message in a transaction of its own and answer 502.
+     * A partial multi-piece purchase whose void failed is reported as
+     * {@code status=PARTIAL} with the unvoided tracking numbers in the message.
+     */
+    private ApiResponse<LabelGenerationResponse> recordManualFailure(
+            com.multiship.backend.dto.ManualShipmentRequest req, Integer existingOrderNo,
+            com.multiship.backend.service.shipment.ResolvedShipment resolved, Exception ex) {
+        com.multiship.backend.dto.ManualShipmentRequest.Address to = resolved.to();
+        com.multiship.backend.dto.ManualShipmentRequest.Address from = resolved.from();
+        String resolvedClient = resolved.resolvedClient();
+        boolean hasClient = resolved.hasClient();
+        String resolvedWarehouseCode = resolved.resolvedWarehouseCode();
+        Long resolvedWarehouseId = resolved.resolvedWarehouseId();
+        String carrier = resolved.carrier();
+        CarrierAccountRef account = resolved.account();
+        String billToNumber = resolved.billToNumber();
+        String typedNumber = resolved.typedNumber();
+        CarrierConnector connector = resolved.connector();
+        com.multiship.backend.model.ShippingService service = resolved.service();
+        com.multiship.backend.model.PackagePreset preset = resolved.preset();
+        String serviceType = resolved.serviceType();
+        String packageType = resolved.packageType();
+        BigDecimal length = resolved.length();
+        BigDecimal width = resolved.width();
+        BigDecimal height = resolved.height();
+        CarrierProperties.ShipperDefaults dflt = resolved.shipperDefaults();
+        String fromCountry = resolved.fromCountry();
+        int allocatedOrderNo = resolved.allocatedOrderNo();
+        java.time.LocalDate g7ShiftedDatePre = resolved.shipDateOverride();
+        ShipmentRequestDTO shipmentRequest = resolved.shipmentRequest();
+        boolean isCrossBorder = resolved.isCrossBorder();
+        com.multiship.backend.model.CarrierShippingLimit limit = resolved.limit();
+        com.multiship.backend.dto.SplitStrategy splitStrategy = resolved.splitStrategy();
+        java.util.List<ShipmentRequestDTO> subRequests = resolved.subRequests();
+        java.math.BigDecimal totalWeightLb = resolved.totalWeightLb();
+
             log.warn("Manual shipment failed at carrier {}: {}", carrier, ex.getMessage(), ex);
             // Persist the failed attempt as an ERROR order so it's visible in
             // the orders list (with the carrier error) and can be retried —
@@ -2598,8 +2806,20 @@ public class CarrierServiceImpl implements CarrierService {
                     errOrder.setOrderSuffix(0);
                     errOrder.setOrderStatus("ERROR");
                     errOrder.setIsError(true);
+                    applyBillTo(errOrder, req);
                     errOrder.setIsManual("Y");
                     errOrder.setIsReturn(Boolean.TRUE.equals(req.getIsReturn()) ? "Y" : "N");
+                    // BUG-034 — persist Returns F9 Reason + RMA on the ERROR
+                    // row too, so the Reissue-return / Fix-return prefill can
+                    // restore the required Reason picklist on retry. Pre-fix
+                    // these were skipped on the error branch, so the operator
+                    // had to retype them on every Fix & regenerate.
+                    if (StringUtils.hasText(req.getReturnReason())) {
+                        errOrder.setReturnReason(req.getReturnReason());
+                    }
+                    if (StringUtils.hasText(req.getRmaNumber())) {
+                        errOrder.setRmaNumber(req.getRmaNumber());
+                    }
                     // A retried BULK/API order keeps its source (see the success path).
                     errOrder.setSource(firstNonBlank(errOrder.getSource(), req.getSource(), "MANUAL"));
                     errOrder.setOrderChannel(resolveOrderChannel(req, to));
@@ -2740,14 +2960,54 @@ public class CarrierServiceImpl implements CarrierService {
             // second order for the source row.
             LabelGenerationResponse failData = LabelGenerationResponse.builder()
                     .orderNo(failedOrderNo != null ? failedOrderNo.longValue() : null)
-                    .status("ERROR")
+                    .status(ex instanceof com.multiship.backend.service.shipment.PartialPurchaseException pp
+                            && !pp.unvoided().isEmpty() ? "PARTIAL" : "ERROR")
                     .message("The carrier rejected the shipment: " + ex.getMessage())
                     .build();
             return failure(HttpStatus.BAD_GATEWAY, ErrorCode.CARRIER_FAILURE,
                     "The carrier rejected the shipment: " + ex.getMessage()
                             + (failedOrderNo != null ? " (saved as order " + failedOrderNo + ")" : ""),
                     failData);
-        }
+        
+    }
+
+    /**
+     * Phase 2 — tx B: everything the order needs, written only after the
+     * carrier answered. Nothing in here can refuse the shipment: the markup
+     * rule and every other decision were taken in {@link #resolveManualShipment}.
+     */
+    private ApiResponse<LabelGenerationResponse> recordManualSuccess(
+            com.multiship.backend.dto.ManualShipmentRequest req, Integer existingOrderNo,
+            com.multiship.backend.service.shipment.ResolvedShipment resolved,
+            java.util.List<CarrierConnector.ShipmentResult> batchResults, String normalizedIdempotencyKey) {
+        com.multiship.backend.dto.ManualShipmentRequest.Address to = resolved.to();
+        com.multiship.backend.dto.ManualShipmentRequest.Address from = resolved.from();
+        String resolvedClient = resolved.resolvedClient();
+        boolean hasClient = resolved.hasClient();
+        String resolvedWarehouseCode = resolved.resolvedWarehouseCode();
+        Long resolvedWarehouseId = resolved.resolvedWarehouseId();
+        String carrier = resolved.carrier();
+        CarrierAccountRef account = resolved.account();
+        String billToNumber = resolved.billToNumber();
+        String typedNumber = resolved.typedNumber();
+        CarrierConnector connector = resolved.connector();
+        com.multiship.backend.model.ShippingService service = resolved.service();
+        com.multiship.backend.model.PackagePreset preset = resolved.preset();
+        String serviceType = resolved.serviceType();
+        String packageType = resolved.packageType();
+        BigDecimal length = resolved.length();
+        BigDecimal width = resolved.width();
+        BigDecimal height = resolved.height();
+        CarrierProperties.ShipperDefaults dflt = resolved.shipperDefaults();
+        String fromCountry = resolved.fromCountry();
+        int allocatedOrderNo = resolved.allocatedOrderNo();
+        java.time.LocalDate g7ShiftedDatePre = resolved.shipDateOverride();
+        ShipmentRequestDTO shipmentRequest = resolved.shipmentRequest();
+        boolean isCrossBorder = resolved.isCrossBorder();
+        com.multiship.backend.model.CarrierShippingLimit limit = resolved.limit();
+        com.multiship.backend.dto.SplitStrategy splitStrategy = resolved.splitStrategy();
+        java.util.List<ShipmentRequestDTO> subRequests = resolved.subRequests();
+        java.math.BigDecimal totalWeightLb = resolved.totalWeightLb();
         // Master result = batch 1 (order_label_tracking downstream uses its
         // trackingNumber). label_package rows come from each batch's
         // packages() with matching batch_id.
@@ -2838,6 +3098,7 @@ public class CarrierServiceImpl implements CarrierService {
         // find every sibling order in the batch. Only populated when the
         // request came from a `.Y` scan (B6 threading).
         order.setBillableBatchId(req.getNdsBatchId());
+        applyBillTo(order, req);
         order.setShipName(to.getName());
         order.setShipAttn(to.getCompany());
         order.setShipAddr1(to.getAddressLine1());
@@ -2964,14 +3225,19 @@ public class CarrierServiceImpl implements CarrierService {
                 if (!StringUtils.hasText(pieceTracking)) pieceTracking = batchResult.trackingNumber();
                 String pieceTrackingUrl = pieceMatch != null ? pieceMatch.trackingUrl() : null;
                 if (!StringUtils.hasText(pieceTrackingUrl)) pieceTrackingUrl = batchResult.trackingUrl();
+                // PR #550 — pre-fetch URL labels; survives URL expiry. Hoisted
+                // so Phase 0 can derive format/provenance from the same bytes.
+                String persistedPiece = persistLabelPath(piecelabel);
                 com.multiship.backend.model.LabelPackage row = com.multiship.backend.model.LabelPackage.builder()
                         .orderNo(orderNo)
                         .batchId(batch.getId())
                         .sequenceNumber(seq)
                         .trackingNumber(pieceTracking)
                         .trackingUrl(pieceTrackingUrl)
-                        // PR #550 — pre-fetch URL labels; survives URL expiry.
-                        .labelFilePath(persistLabelPath(piecelabel))
+                        .labelFilePath(persistedPiece)
+                        // Phase 0 — explicit format/provenance (see site ~1019).
+                        .format(sniffPersistedFormat(persistedPiece))
+                        .source(com.multiship.backend.service.label.LabelFormatPolicy.sourceFor(sniffPersistedFormat(persistedPiece)))
                         .weight(p.getWeight() != null ? p.getWeight() : req.getWeight())
                         .weightUnit(firstNonBlank(p.getWeightUnit(), req.getWeightUnit()))
                         .length(p.getLength() != null ? p.getLength() : length)
@@ -3072,41 +3338,12 @@ public class CarrierServiceImpl implements CarrierService {
             }
         }
 
-        // 3PL snapshot: applyMarkup + isPastCutoff so historical rows carry
-        // the config effective at label time (see the Phase-1 open decision).
-        // Ad-hoc shipments (empty clientCode) run through as no-ops: markup
-        // is 0% PERCENT, cutoff is false, warehouseCode is null.
-        com.multiship.backend.service.resolution.MarkupApplied markup;
-        try {
-            // Sprint 51 — markup is a fee on the CARRIER RATE, which is billed in
-            // the client's billing currency, NOT the parcel's customs/declared-
-            // value currency. Passing req.getCurrency() (the CSV `currency`
-            // column, e.g. INR for an India-bound parcel) mislabeled a USD
-            // carrier rate as INR and tripped applyMarkup's currency-match guard
-            // against the client's USD markup — failing every international row
-            // whose customs currency differed from the billing currency. Use the
-            // client billing currency (Client.defaultCurrency) → USD; the customs
-            // currency stays on the commercial invoice where it belongs.
-            //
-            // resolutionService.applyMarkup is @Transactional(readOnly=true) on
-            // a separate proxied bean — since it joins this method's own
-            // (writable) transaction, Spring's AOP marks the WHOLE ambient
-            // transaction rollback-only the instant it throws, before the
-            // exception ever reaches this catch block. Catching it here and
-            // returning normally then still blows up at commit with an opaque
-            // UnexpectedRollbackException — the order/tracking/label rows
-            // saved above (and the label already issued by the carrier) would
-            // be lost even though this method "handled" the error. Run it in
-            // its own REQUIRES_NEW transaction so a thrown
-            // ShipmentResolutionException only poisons that isolated
-            // transaction, not this one.
-            final String markupClientCode = hasClient ? resolvedClient : "";
-            final String markupCurrency = firstNonBlank(tenantDefaultCurrency, "USD");
-            markup = requiresNewTransactionTemplate.execute(status ->
-                    resolutionService.applyMarkup(markupClientCode, result.shippingCost(), markupCurrency));
-        } catch (ShipmentResolutionException e) {
-            return toResolutionFailure(e);
-        }
+        // 3PL snapshot: the markup rule was decided in resolveManualShipment,
+        // before the purchase; applying it to the carrier rate is pure
+        // arithmetic and cannot fail (Phase 1 rule 2). isPastCutoff below
+        // keeps the config effective at label time.
+        com.multiship.backend.service.resolution.MarkupApplied markup =
+                resolved.markupRule().apply(result.shippingCost());
         boolean nextBusinessDay = hasClient
                 && resolutionService.isPastCutoff(resolvedClient, java.time.Instant.now());
 
@@ -3162,6 +3399,9 @@ public class CarrierServiceImpl implements CarrierService {
         // currentActor() when the override is blank/null.
         if (auditService != null) {
             String auditNote = carrier + " label on account " + billToNumber
+                    + ("THIRD_PARTY".equals(req.getBillTo())
+                            ? " · shipping charges billed to third party " + maskAccount(req.getThirdPartyAccount())
+                            : "")
                     + (markup.billable() != null
                             ? " · billable " + markup.billable() + " " + firstNonBlank(markup.currency(), "USD")
                             : "");
@@ -3256,6 +3496,7 @@ public class CarrierServiceImpl implements CarrierService {
 
         return success("Label generated successfully.", response);
     }
+
 
     /** Human-readable carrier name for the NDS PRODUCTION.TB_MANUAL_SHIPMENT.CARRIER column
      *  (NOT NULL). Mirrors the format NDS's own UI uses. */
@@ -3662,6 +3903,19 @@ public class CarrierServiceImpl implements CarrierService {
 
     /** BUG-136 R7 sibling guard — same address on both sides of a return
      *  label. Case-insensitive on text; ZIP compared on the 5-digit base. */
+    /** BUG-039 — typed values win; the client's return address only fills blanks. */
+    static void fillReturnToBlanks(com.multiship.backend.dto.ManualShipmentRequest.Address to,
+                                   com.multiship.backend.model.Address addr) {
+        if (!StringUtils.hasText(to.getName()) && StringUtils.hasText(addr.getName())) to.setName(addr.getName());
+        if (!StringUtils.hasText(to.getAddressLine1()) && StringUtils.hasText(addr.getLine1())) to.setAddressLine1(addr.getLine1());
+        if (!StringUtils.hasText(to.getAddressLine2()) && StringUtils.hasText(addr.getLine2())) to.setAddressLine2(addr.getLine2());
+        if (!StringUtils.hasText(to.getCity()) && StringUtils.hasText(addr.getCity())) to.setCity(addr.getCity());
+        if (!StringUtils.hasText(to.getState()) && StringUtils.hasText(addr.getState())) to.setState(addr.getState());
+        if (!StringUtils.hasText(to.getPostalCode()) && StringUtils.hasText(addr.getZip())) to.setPostalCode(addr.getZip());
+        if (!StringUtils.hasText(to.getCountryCode()) && StringUtils.hasText(addr.getCountry())) to.setCountryCode(addr.getCountry());
+        if (!StringUtils.hasText(to.getPhone()) && StringUtils.hasText(addr.getPhone())) to.setPhone(addr.getPhone());
+    }
+
     private static boolean addressesSameForReturn(
             com.multiship.backend.dto.ManualShipmentRequest.Address a,
             com.multiship.backend.dto.ManualShipmentRequest.Address b) {
@@ -4168,9 +4422,59 @@ public class CarrierServiceImpl implements CarrierService {
                     .message("Carrier payload reconstructed.")
                     .timestamp(java.time.LocalDateTime.now())
                     .data(wrapped).build();
+        } catch (IllegalStateException configEx) {
+            // BUG-001 F-002: strict-mode / rule-engine throws are
+            // configuration errors, not server bugs. Surface as 422 so
+            // the FE can display the actionable guidance without
+            // triggering the generic "server error" branch.
+            log.warn("previewCarrierPayload rejected for orderNo={}: {}", orderNo, configEx.getMessage());
+            return failure(422, configEx.getMessage());
         } catch (Exception ex) {
             log.warn("previewCarrierPayload failed for orderNo={}: {}", orderNo, ex.getMessage(), ex);
             return failure(500, "Preview failed: " + ex.getMessage());
+        }
+    }
+
+    /**
+     * R2-BUG-014 (run-4) — mirror {@link #runManualPurchase}'s
+     * shipFrom persistence onto the auto path (generateLabel used by bulk
+     * + /orders/{n}/label). Pre-fix the auto path never wrote the actual
+     * sent shipper to {@code label_batch.ship_from_*}, so a bulk-imported
+     * order shipped from a correctly-resolved warehouse (Zeeland MI) but
+     * the row kept its NULL shipFrom columns. On View Label, the backend
+     * fell to {@code client.getShipFrom()} (often the misconfigured
+     * platform-default Bengaluru) or blanks — and the facsimile rendered
+     * whatever that was. Persisting the real sent shipper here keeps the
+     * stored and sent values honest.
+     *
+     * <p>Only non-blank fields overwrite — defensive against a DTO
+     * missing a sub-field returning the ORDER to NULL where it had a
+     * value from a prior write.
+     */
+    private static void persistSentShipperToOrder(Order order, ShipmentRequestDTO sent) {
+        if (order == null || sent == null) return;
+        if (StringUtils.hasText(sent.getShipperName()))        order.setShipFromName(sent.getShipperName());
+        if (StringUtils.hasText(sent.getShipperCompany()))     order.setShipFromCompany(sent.getShipperCompany());
+        if (StringUtils.hasText(sent.getShipperAddressLine1())) order.setShipFromAddr1(sent.getShipperAddressLine1());
+        if (StringUtils.hasText(sent.getShipperAddressLine2())) order.setShipFromAddr2(sent.getShipperAddressLine2());
+        if (StringUtils.hasText(sent.getShipperCity()))        order.setShipFromCity(sent.getShipperCity());
+        if (StringUtils.hasText(sent.getShipperState()))       order.setShipFromState(sent.getShipperState());
+        if (StringUtils.hasText(sent.getShipperPostalCode()))  order.setShipFromZip(sent.getShipperPostalCode());
+        if (StringUtils.hasText(sent.getShipperCountryCode())) order.setShipFromCountryCd(sent.getShipperCountryCode());
+        if (StringUtils.hasText(sent.getShipperPhone()))       order.setShipFromPhone(sent.getShipperPhone());
+    }
+
+    /** R2-BUG-005 (run-4) — release the Redis dup claim so a legitimate
+     *  retry (after a carrier error, before the TTL expires) isn't blocked.
+     *  Best-effort: a delete failure doesn't matter — the TTL will purge
+     *  the key within 120s regardless. */
+    private static void releaseDupClaim(
+            org.springframework.data.redis.core.StringRedisTemplate redis, String refKey) {
+        if (redis == null) return;
+        try {
+            redis.delete("manual-label:dup:" + refKey);
+        } catch (Exception ignored) {
+            // TTL will clean up.
         }
     }
 
@@ -4328,13 +4632,24 @@ public class CarrierServiceImpl implements CarrierService {
         return labelFormatConverter.renderAll(bytes, format);
     }
 
+    /** Phase 0 — the artifact's format, detected once at persist time from the
+     *  bytes we are about to store, so the label_package row carries it and no
+     *  reader has to sniff. UNKNOWN for a URL or undecodable label; never null
+     *  (the column is NOT NULL). Reuses the same sniff the pre-render uses. */
+    private static String sniffPersistedFormat(String persisted) {
+        if (!StringUtils.hasText(persisted)) return com.multiship.backend.service.label.LabelFormatPolicy.FORMAT_UNKNOWN;
+        byte[] bytes = decodePersistedLabel(persisted);
+        String format = (bytes == null || bytes.length == 0) ? null : sniffLabelFormat(bytes);
+        return format == null ? com.multiship.backend.service.label.LabelFormatPolicy.FORMAT_UNKNOWN : format;
+    }
+
     private static byte[] decodePersistedLabel(String persisted) {
         String trimmed = persisted.trim();
         String lower = trimmed.toLowerCase(Locale.ROOT);
         if (lower.startsWith("http://") || lower.startsWith("https://")) {
             return null;  // URL label — labelBytesPersister downloads inline for /550 paths; skip here.
         }
-        if (trimmed.startsWith("^XA")) {
+        if (trimmed.startsWith("^")) {  // raw ZPL text (^XA, or Stamps' ^FX preamble)
             return trimmed.getBytes();
         }
         try {
@@ -4347,7 +4662,10 @@ public class CarrierServiceImpl implements CarrierService {
     private static String sniffLabelFormat(byte[] bytes) {
         int i = 0;
         while (i < bytes.length && (bytes[i] == '\n' || bytes[i] == '\r' || bytes[i] == ' ' || bytes[i] == '\t')) i++;
-        if (bytes.length - i >= 3 && bytes[i] == '^' && bytes[i + 1] == 'X' && bytes[i + 2] == 'A') return "ZPL";
+        // Any leading ZPL command counts, not just ^XA: Stamps opens with a
+        // ^FX comment ("^FX  ZPL generated by V1.0.0.0 ^FS") before ^XA.
+        if (bytes.length - i >= 3 && bytes[i] == '^'
+                && Character.isLetter(bytes[i + 1]) && Character.isLetter(bytes[i + 2])) return "ZPL";
         if (bytes.length - i >= 4 && bytes[i] == '%' && bytes[i + 1] == 'P' && bytes[i + 2] == 'D' && bytes[i + 3] == 'F') return "PDF";
         if (bytes.length - i >= 4 && bytes[i] == 'G' && bytes[i + 1] == 'I' && bytes[i + 2] == 'F' && bytes[i + 3] == '8') return "GIF";
         if (bytes.length - i >= 4 && (bytes[i] & 0xff) == 0x89 && bytes[i + 1] == 'P' && bytes[i + 2] == 'N' && bytes[i + 3] == 'G') return "PNG";
@@ -4402,6 +4720,73 @@ public class CarrierServiceImpl implements CarrierService {
         return profile == null ? null : profile.getDutiesBillTo();
     }
 
+    /** Account-number formats a third-party payer must match (same rules as the carrier-account drawer). */
+    private static final Map<String, java.util.regex.Pattern> THIRD_PARTY_ACCOUNT_FORMATS = Map.of(
+            "UPS", java.util.regex.Pattern.compile("^[A-Za-z0-9]{6,10}$"),
+            "FEDEX", java.util.regex.Pattern.compile("^\\d{9}$"));
+
+    /**
+     * Normalises the third-party freight payer on the request (billTo → SENDER /
+     * THIRD_PARTY, trimmed account, upper-cased country) and returns the first
+     * validation error, or null when the request is fine. The shipper account
+     * is never replaced: the payer only drives the carrier's payment element.
+     */
+    static String validateThirdPartyBilling(com.multiship.backend.dto.ManualShipmentRequest req, String carrier) {
+        String raw = req.getBillTo() == null ? "" : req.getBillTo().trim().toUpperCase(Locale.ROOT).replace("THIRDPARTY", "THIRD_PARTY");
+        String billTo = raw.isEmpty() ? "SENDER" : raw;
+        if (!"SENDER".equals(billTo) && !"THIRD_PARTY".equals(billTo)) {
+            return "billTo '" + req.getBillTo() + "' must be SENDER or THIRD_PARTY.";
+        }
+        req.setBillTo(billTo);
+        if ("SENDER".equals(billTo)) {
+            req.setThirdPartyAccount(null);
+            req.setThirdPartyPostalCode(null);
+            req.setThirdPartyCountry(null);
+            return null;
+        }
+        if ("USPS".equals(carrier)) {
+            return "USPS postage is prepaid — third-party billing is not available. Bill the shipper account instead.";
+        }
+        java.util.regex.Pattern format = THIRD_PARTY_ACCOUNT_FORMATS.get(carrier);
+        if (format == null) {
+            return carrier + " shipments cannot be billed to a third party yet.";
+        }
+        String account = req.getThirdPartyAccount() == null ? "" : req.getThirdPartyAccount().trim();
+        if (account.isEmpty()) {
+            return "thirdPartyAccount is required when shipping charges are billed to a third party.";
+        }
+        if (!format.matcher(account).matches()) {
+            return "thirdPartyAccount '" + account + "' is not a valid " + carrier + " account number.";
+        }
+        String postal = StringUtils.hasText(req.getThirdPartyPostalCode()) ? req.getThirdPartyPostalCode().trim() : null;
+        String country = StringUtils.hasText(req.getThirdPartyCountry()) ? req.getThirdPartyCountry().trim().toUpperCase(Locale.ROOT) : null;
+        if ("UPS".equals(carrier) && (postal == null || country == null)) {
+            return "thirdPartyPostalCode and thirdPartyCountry are required for UPS third-party billing.";
+        }
+        if (country != null && !country.matches("[A-Z]{2}")) {
+            return "thirdPartyCountry '" + req.getThirdPartyCountry() + "' must be a 2-letter ISO code.";
+        }
+        req.setThirdPartyAccount(account);
+        req.setThirdPartyPostalCode(postal);
+        req.setThirdPartyCountry(country);
+        return null;
+    }
+
+    /** V183 — who paid the shipping charges (validated in resolveManualShipment); payer fields only when THIRD_PARTY. */
+    private static void applyBillTo(Order order, com.multiship.backend.dto.ManualShipmentRequest req) {
+        boolean thirdParty = "THIRD_PARTY".equals(req.getBillTo());
+        order.setBillTo(thirdParty ? "THIRD_PARTY" : "SENDER");
+        order.setThirdPartyAccount(thirdParty ? req.getThirdPartyAccount() : null);
+        order.setThirdPartyPostalCode(thirdParty ? req.getThirdPartyPostalCode() : null);
+        order.setThirdPartyCountry(thirdParty ? req.getThirdPartyCountry() : null);
+    }
+
+    /** ****1234 — enough to recognise a payer account in audit/UI without exposing it. */
+    static String maskAccount(String account) {
+        if (account == null || account.length() <= 4) return "****";
+        return "****" + account.substring(account.length() - 4);
+    }
+
     static String normalizeDutyPayer(String clearanceOption) {
         if (!StringUtils.hasText(clearanceOption)) return null;
         String v = clearanceOption.trim().toUpperCase(Locale.ROOT);
@@ -4432,13 +4817,20 @@ public class CarrierServiceImpl implements CarrierService {
         return RETURN_REASON_CODES.contains(v) ? v : null;
     }
 
-    /** Returns F12 — drop invalid outbound-order references to null:
-     *  blank, self-linkage, or no matching row. Analytics / UI treats
-     *  null as "untracked"; a stale typed value never 400s. */
+    /** Returns F12 — resolve the outbound-order reference. Blank + self-
+     *  linkage silently drop to null (never meaningful operationally).
+     *  BUG-040 — a non-existent typed order# now 400s instead of
+     *  silent-drop so a mistyped number can't produce an unlinked
+     *  return. The validator catches it first at /validate; this is
+     *  belt-and-suspenders for direct-generate callers. */
     private Integer canonOriginalOrderNo(Integer raw, Integer selfOrderNo) {
         if (raw == null || raw <= 0) return null;
         if (selfOrderNo != null && raw.equals(selfOrderNo)) return null;
-        return orderRepository.findByOrderNo(raw).isPresent() ? raw : null;
+        if (orderRepository.findByOrderNo(raw).isEmpty()) {
+            throw new IllegalArgumentException(
+                    "Return of #" + raw + " doesn't match an order on this tenant.");
+        }
+        return raw;
     }
 
     /** Shared for packages_json round-trip. Reuse instead of allocating per call. */
@@ -4560,7 +4952,14 @@ public class CarrierServiceImpl implements CarrierService {
             CarrierAccountRef account,
             Integer orderNoForPo) {
         // C1 — tenant-scoped shipper defaults (see the shipperDefaults dep).
-        CarrierProperties.ShipperDefaults dflt = shipperDefaults.resolveFor(req.getClientCode());
+        // BUG-025 — same rationale as generateManualLabel: skip strict mode
+        // when the request sender already carries every required field so
+        // the strict throw doesn't block Validate on a form that provided a
+        // complete ship-from. See ShipperDefaultsService.senderCoversRequiredFields.
+        boolean senderCovers = com.multiship.backend.service.carrier
+                .ShipperDefaultsService.senderCoversRequiredFields(from);
+        CarrierProperties.ShipperDefaults dflt = shipperDefaults.resolveFor(
+                req.getClientCode(), !senderCovers);
         // PR #543 — PO / DEPT for label printing. Manual shipments always
         // resolve here via `generateManualLabel` with req.source in
         // {null, MANUAL} → prefix MAN{orderNo}. Non-manual sources
@@ -4578,6 +4977,10 @@ public class CarrierServiceImpl implements CarrierService {
         return ShipmentRequestDTO.builder()
                 .carrierCode(carrier)
                 .accountNumber(billToNumber)
+                .billTo(req.getBillTo())
+                .thirdPartyAccount(req.getThirdPartyAccount())
+                .thirdPartyPostalCode(req.getThirdPartyPostalCode())
+                .thirdPartyCountry(req.getThirdPartyCountry())
                 .serviceType(serviceType)
                 .packageType(packageType)
                 .length(length).width(width).height(height)
@@ -4627,8 +5030,13 @@ public class CarrierServiceImpl implements CarrierService {
                 .insuredValue(req.getInsuredValue())
                 .insuredValueCurrency(req.getInsuredValueCurrency())
                 .packages(req.getPackages())
-                .labelImageFormat(firstNonBlank(req.getLabelImageFormat(),
-                        account != null ? account.getLabelImageFormat() : null))
+                // Phase 0 — request → account → carrier default (ZPL where the
+                // carrier can emit it; DHL stays PDF). Pre-fix this dropped the
+                // default, so a null format reached every connector and
+                // Stamps/UPS labels came back as rasters.
+                .labelImageFormat(labelFormatPolicy.requestedFormat(carrier,
+                        account != null ? account.getLabelImageFormat() : null,
+                        req.getLabelImageFormat()))
                 .labelImageType(firstNonBlank(req.getLabelImageType(),
                         account != null ? account.getFedexLabelImageType() : null))
                 .labelStockType(firstNonBlank(req.getLabelStockType(),
@@ -4671,7 +5079,14 @@ public class CarrierServiceImpl implements CarrierService {
         String orderClient = firstNonBlank(order.getTenantId(), order.getCustNo());
         // C1 — tenant-scoped shipper defaults keyed on the same identifier
         // resolveWarehouse uses below.
-        CarrierProperties.ShipperDefaults shipper = shipperDefaults.resolveFor(orderClient);
+        // BUG-001 F-002: skip the strict-mode throw when the order already
+        // carries a persisted sender (every shipped order does via
+        // persistSentShipperToOrder). resolveFor only runs — and only its
+        // IllegalStateException matters — when the order has NO shipFromX
+        // to fall back on, which never happens post-F-001.
+        CarrierProperties.ShipperDefaults shipper = StringUtils.hasText(order.getShipFromName())
+                ? new CarrierProperties.ShipperDefaults()
+                : shipperDefaults.resolveFor(orderClient);
         // Origin warehouse: use the client's default attachment when we can
         // find one, otherwise null (unrestricted rules still match). This is
         // what feeds client_shipvia_code_map.warehouse_id filtering — AND the
@@ -4685,15 +5100,24 @@ public class CarrierServiceImpl implements CarrierService {
                 : null;
         Long originWarehouseId = originWarehouse != null ? originWarehouse.getId() : null;
         com.multiship.backend.model.Address whAddr = originWarehouse != null ? originWarehouse.getAddress() : null;
-        String shipperName = firstNonBlank(whAddr != null ? whAddr.getName() : null, shipper.getName());
-        String shipperPhone = firstNonBlank(whAddr != null ? whAddr.getPhone() : null, shipper.getPhone());
-        String shipperLine1 = firstNonBlank(whAddr != null ? whAddr.getLine1() : null, shipper.getAddressLine1());
-        String shipperLine2 = whAddr != null && StringUtils.hasText(whAddr.getLine1())
-                ? whAddr.getLine2() : shipper.getAddressLine2();
-        String shipperCity = firstNonBlank(whAddr != null ? whAddr.getCity() : null, shipper.getCity());
-        String shipperState = firstNonBlank(whAddr != null ? whAddr.getState() : null, shipper.getState());
-        String shipperPostal = firstNonBlank(whAddr != null ? whAddr.getZip() : null, shipper.getPostalCode());
-        String shipperCountry = firstNonBlank(whAddr != null ? whAddr.getCountry() : null, shipper.getCountryCode());
+        // BUG-001 F-002 (2026-10-19) — the order's persisted shipFrom
+        // wins over every fallback. For already-shipped orders this is
+        // the exact sender the carrier received (persisted via
+        // persistSentShipperToOrder); for a fresh regen it's whatever
+        // the operator chose at ship time. Warehouse + ShipperDefaults
+        // remain the staircase for the edge case where no sender was
+        // persisted.
+        String shipperName = firstNonBlank(order.getShipFromName(), whAddr != null ? whAddr.getName() : null, shipper.getName());
+        String shipperPhone = firstNonBlank(order.getShipFromPhone(), whAddr != null ? whAddr.getPhone() : null, shipper.getPhone());
+        String shipperLine1 = firstNonBlank(order.getShipFromAddr1(), whAddr != null ? whAddr.getLine1() : null, shipper.getAddressLine1());
+        String shipperLine2 = StringUtils.hasText(order.getShipFromAddr2())
+                ? order.getShipFromAddr2()
+                : (whAddr != null && StringUtils.hasText(whAddr.getLine1())
+                        ? whAddr.getLine2() : shipper.getAddressLine2());
+        String shipperCity = firstNonBlank(order.getShipFromCity(), whAddr != null ? whAddr.getCity() : null, shipper.getCity());
+        String shipperState = firstNonBlank(order.getShipFromState(), whAddr != null ? whAddr.getState() : null, shipper.getState());
+        String shipperPostal = firstNonBlank(order.getShipFromZip(), whAddr != null ? whAddr.getZip() : null, shipper.getPostalCode());
+        String shipperCountry = firstNonBlank(order.getShipFromCountryCd(), whAddr != null ? whAddr.getCountry() : null, shipper.getCountryCode());
         boolean international = order.getShiptoCountryCd() != null && shipperCountry != null
                 && !order.getShiptoCountryCd().trim().equalsIgnoreCase(shipperCountry.trim());
         // F5-B — resolveRoute returns both the matched shipvia-map ID AND the
@@ -5575,7 +5999,13 @@ public class CarrierServiceImpl implements CarrierService {
         HttpStatus status = e.getErrorCode() == ErrorCode.WAREHOUSE_ATTACH_FORBIDDEN
                 ? HttpStatus.FORBIDDEN
                 : HttpStatus.UNPROCESSABLE_CONTENT;
-        return failure(status, e.getErrorCode(), e.getMessage());
+        ApiResponse<T> response = failure(status, e.getErrorCode(), e.getMessage());
+        if (e instanceof com.multiship.backend.service.carrier.ShipperDefaultsMissingException missing) {
+            // Phase 1 — name the field so the form can show it inline.
+            response.setErrors(ApiResponse.ErrorDetails.builder()
+                    .field("sender").code(missing.getErrorCode().name()).message(missing.getMessage()).build());
+        }
+        return response;
     }
 
     /**

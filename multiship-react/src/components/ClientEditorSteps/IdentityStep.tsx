@@ -31,7 +31,10 @@ export function IdentityStep({
   markTouched,
   set,
 }: IdentityStepProps) {
-  const err = (k: string) => (touched[`identity.${k}`] ? errors[k] || null : null)
+  // BUG-071 — a field with content shows its error at once; waiting for
+  // blur left Next disabled with no red field to explain it.
+  const err = (k: string) =>
+    (touched[`identity.${k}`] || String(form[k as keyof ClientUpsertPayload] ?? '') !== '') ? errors[k] || null : null
   const codeHint = isEdit
     ? 'Immutable after create.'
     : checkingCode

@@ -279,6 +279,7 @@ export default function ClientAllowlistTab<TAllowed, TCatalog>({
                   <button
                     type="button"
                     onClick={() => void handleSetDefault(key)}
+                    aria-label={`Make default: ${humanKey}`}
                     disabled={busy}
                     className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10.5px] font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
                   >

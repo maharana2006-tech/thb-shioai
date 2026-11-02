@@ -21,7 +21,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalTime;
 import java.time.ZoneId;
@@ -306,7 +305,12 @@ public class ShipmentResolutionServiceImpl implements ShipmentResolutionService 
     @Override
     @Transactional(readOnly = true, noRollbackFor = ShipmentResolutionException.class)
     public MarkupApplied applyMarkup(String clientCode, BigDecimal carrierRate, String carrierCurrency) {
-        BigDecimal safeRate = carrierRate != null ? carrierRate : BigDecimal.ZERO;
+        return resolveMarkup(clientCode, carrierCurrency).apply(carrierRate);
+    }
+
+    @Override
+    @Transactional(readOnly = true, noRollbackFor = ShipmentResolutionException.class)
+    public MarkupRule resolveMarkup(String clientCode, String carrierCurrency) {
         String normalizedClient = normalize(clientCode);
         Optional<ClientBillingMarkup> row = markupRepository.findByClientCodeIgnoreCase(normalizedClient);
 
@@ -322,9 +326,7 @@ public class ShipmentResolutionServiceImpl implements ShipmentResolutionService 
                                 + "An admin must set one on the Clients page before this "
                                 + "client's labels can be billed.");
             }
-            String currency = carrierCurrency != null ? carrierCurrency.toUpperCase(Locale.ROOT) : "USD";
-            return new MarkupApplied(round(safeRate), round(safeRate),
-                    ClientBillingMarkup.KIND_PERCENT, BigDecimal.ZERO, currency);
+            return MarkupRule.passThrough(carrierCurrency != null ? carrierCurrency.toUpperCase(Locale.ROOT) : "USD");
         }
         ClientBillingMarkup m = row.get();
 
@@ -335,13 +337,7 @@ public class ShipmentResolutionServiceImpl implements ShipmentResolutionService 
                     "Client " + normalize(clientCode) + " markup currency " + storedCurrency
                             + " does not match carrier rate currency " + rateCurrency + ".");
         }
-
-        BigDecimal value = m.getValue() != null ? m.getValue() : BigDecimal.ZERO;
-        BigDecimal billable = ClientBillingMarkup.KIND_FLAT.equalsIgnoreCase(m.getKind())
-                ? safeRate.add(value)
-                : safeRate.multiply(BigDecimal.ONE.add(value.divide(BigDecimal.valueOf(100), 8, RoundingMode.HALF_UP)));
-
-        return new MarkupApplied(round(safeRate), round(billable), m.getKind(), value, storedCurrency);
+        return new MarkupRule(m.getKind(), m.getValue() != null ? m.getValue() : BigDecimal.ZERO, storedCurrency);
     }
 
     // ===== Cutoff =====
@@ -375,7 +371,4 @@ public class ShipmentResolutionServiceImpl implements ShipmentResolutionService 
     }
 
     /** DECIMAL(12,4) target — round HALF_UP per shipment. */
-    private static BigDecimal round(BigDecimal amount) {
-        return amount.setScale(4, RoundingMode.HALF_UP);
-    }
 }

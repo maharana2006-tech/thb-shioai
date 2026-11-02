@@ -113,7 +113,10 @@ public class OrderDocumentSummaryService {
             }
             rows.add(DocumentRow.builder()
                     .orderNo(no)
-                    .custNo(order.getCustNo())
+                    // BUG-052 — modern orders carry tenantId; legacy orders
+                    // only carried custNo. Prefer tenantId so Billing
+                    // statement's Client row populates on both.
+                    .custNo(clientLabel(order))
                     .recipientName(order.getShipName())
                     .city(order.getShiptoCity())
                     .countryCode(order.getShiptoCountryCd())
@@ -338,7 +341,8 @@ public class OrderDocumentSummaryService {
     private static DocumentRow toRow(OrderTracking t, Order order, boolean hasInvoice) {
         return DocumentRow.builder()
                 .orderNo(t.getOrderNo())
-                .custNo(order.getCustNo())
+                // BUG-052 — same tenantId || custNo fallback as the list() path.
+                .custNo(clientLabel(order))
                 .recipientName(order.getShipName())
                 .city(order.getShiptoCity())
                 .countryCode(order.getShiptoCountryCd())
@@ -362,5 +366,18 @@ public class OrderDocumentSummaryService {
         return StringUtils.hasText(canonical)
                 ? canonical.toUpperCase(Locale.ROOT)
                 : (shipViaCd == null ? null : shipViaCd.trim().toUpperCase(Locale.ROOT));
+    }
+
+    /** BUG-052 — modern orders carry {@code tenantId}; legacy orders only
+     *  carried {@code custNo}. The Billing-statement CLIENT row prefers
+     *  tenantId so it's populated on both. Trim first — some callers set
+     *  an empty string rather than null. Package-visible for the focused
+     *  unit test; not for external callers. */
+    static String clientLabel(Order order) {
+        if (order == null) return null;
+        String tenantId = order.getTenantId();
+        if (tenantId != null && !tenantId.trim().isEmpty()) return tenantId.trim();
+        String custNo = order.getCustNo();
+        return custNo != null && !custNo.trim().isEmpty() ? custNo.trim() : null;
     }
 }

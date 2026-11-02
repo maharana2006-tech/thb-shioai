@@ -23,4 +23,7 @@ public interface OrderCustomFieldValueRepository extends JpaRepository<OrderCust
             @Param("fieldKey") String fieldKey);
 
     void deleteByOrderNo(Integer orderNo);
+
+    /** BUG-122 — does any order carry a value under this key? */
+    boolean existsByFieldKey(String fieldKey);
 }

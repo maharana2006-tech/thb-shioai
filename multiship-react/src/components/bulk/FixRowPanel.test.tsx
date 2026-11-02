@@ -8,6 +8,9 @@ vi.mock('../../api/shippingConfigService', () => ({
   shippingConfigService: { shipViaCodes: (...a: unknown[]) => shipViaCodes(...a) },
 }))
 
+const confirm = vi.fn()
+vi.mock('../../utils/notify', () => ({ notify: { confirm: (...a: unknown[]) => confirm(...a) } }))
+
 import FixRowPanel from './FixRowPanel'
 
 /** bulk-10-mixed.csv's T10-02 and T10-08, as the batch page holds them after save. */
@@ -19,6 +22,7 @@ const row = (over: Partial<OrderImportRow>): OrderImportRow => ({
 } as OrderImportRow)
 
 beforeEach(() => {
+  confirm.mockReset().mockResolvedValue(true)
   shipViaCodes.mockResolvedValue({ data: [
     { code: 'U11', clientCode: 'DES875', carrier: 'UPS', serviceCode: '03', serviceName: 'UPS Ground', enabled: true, destination: null },
     { code: 'U43', clientCode: 'DES875', carrier: 'UPS', serviceCode: '02', serviceName: 'UPS 2nd Day Air', enabled: true, destination: null },
@@ -82,5 +86,17 @@ describe('FixRowPanel', () => {
     expect(screen.getByRole('button', { name: 'Save & re-check' })).toBeDisabled()
     await userEvent.keyboard('{Escape}')
     expect(onClose).toHaveBeenCalled()
+  })
+
+  it('BUG-084 — Cancel after typing asks first and keeps the panel open on "Keep editing"', async () => {
+    const onClose = vi.fn()
+    confirm.mockResolvedValue(false)
+    render(<FixRowPanel row={row({ recipientPhone: '', errors: ['recipientPhone is required'] })}
+      saving={false} canMap onSave={() => {}} onMap={() => {}} onClose={onClose} />)
+    await userEvent.type(screen.getByLabelText('Recipient phone'), '212')
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(onClose).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog', { name: 'Fix row 2' })).toBeInTheDocument()
   })
 })

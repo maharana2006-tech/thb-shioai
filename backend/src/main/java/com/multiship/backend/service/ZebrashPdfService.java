@@ -15,7 +15,7 @@ import java.util.List;
 
 /**
  * PR #536 — Wraps zebrash-rendered PNGs into single- or multi-page PDFs
- * for the {@code /orders/{n}/label/pdf} endpoint. The Zebra thermal
+ * for the printable ({@code /labels/{n}/pdf}). The Zebra thermal
  * label ships at 4×6" at 8dpmm (812×1218 px); PDFBox draws each PNG
  * into a 4×6" (288×432 point) page so the printed PDF matches thermal
  * layout when routed to a laser/inkjet.

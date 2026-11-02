@@ -6,11 +6,11 @@ import com.multiship.backend.repository.AuditLogRepository;
 import com.multiship.backend.repository.ExternalWebhookDeliveryRepository;
 import com.multiship.backend.repository.GeneratedReportRepository;
 import com.multiship.backend.repository.ImportBatchRepository;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.util.function.IntSupplier;
@@ -42,7 +42,6 @@ import java.util.function.IntSupplier;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class BlobRetentionScheduler {
 
     private final ExternalWebhookDeliveryRepository webhookDeliveryRepo;
@@ -50,9 +49,27 @@ public class BlobRetentionScheduler {
     private final GeneratedReportRepository generatedReportRepo;
     private final ImportBatchRepository importBatchRepo;
     private final RetentionProperties props;
+    /** Explicit transaction wrapper used by {@link #phase}. @Transactional on
+     *  phase() would be a no-op because {@link #runNightlyRetention} invokes
+     *  it through a lambda on {@code this} — the AOP proxy sees no call. */
+    private final TransactionTemplate txTemplate;
     /** File imports' rows (V87). Optional for hand-built tests. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.service.ImportBatchRowStore importRows;
+
+    public BlobRetentionScheduler(ExternalWebhookDeliveryRepository webhookDeliveryRepo,
+                                   AuditLogRepository auditLogRepo,
+                                   GeneratedReportRepository generatedReportRepo,
+                                   ImportBatchRepository importBatchRepo,
+                                   RetentionProperties props,
+                                   PlatformTransactionManager txManager) {
+        this.webhookDeliveryRepo = webhookDeliveryRepo;
+        this.auditLogRepo = auditLogRepo;
+        this.generatedReportRepo = generatedReportRepo;
+        this.importBatchRepo = importBatchRepo;
+        this.props = props;
+        this.txTemplate = new TransactionTemplate(txManager);
+    }
 
     /**
      * Cron string is a Spring 6-second format: {@code sec min hour dom mon dow}.
@@ -121,10 +138,13 @@ public class BlobRetentionScheduler {
      * Wraps the actual UPDATE / DELETE in a transaction so partial
      * batches don't leak, logs the row count, and re-throws so the
      * caller's try/catch surfaces the failure.
+     *
+     * <p>Uses {@link TransactionTemplate} rather than {@code @Transactional}
+     * because the caller invokes this through a lambda on {@code this} —
+     * the Spring AOP proxy would be bypassed. See the field javadoc.
      */
-    @Transactional
-    protected int phase(String phase, String table, IntSupplier op) {
-        int count = op.getAsInt();
+    private int phase(String phase, String table, IntSupplier op) {
+        int count = txTemplate.execute(status -> op.getAsInt());
         if (count > 0) {
             log.info("BlobRetention: {} on {} reclaimed {} row(s)", phase, table, count);
         }

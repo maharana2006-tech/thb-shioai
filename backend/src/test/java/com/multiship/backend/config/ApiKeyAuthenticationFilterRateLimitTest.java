@@ -78,8 +78,11 @@ class ApiKeyAuthenticationFilterRateLimitTest {
 
         filter.doFilter(req, resp, chain);
 
-        // INVALID path falls through to the chain (Spring's entry point emits 401).
-        verify(chain).doFilter(req, resp);
+        // BUG-149 — a presented-but-wrong key is answered here, as "invalid" not "sign in again".
+        verify(chain, never()).doFilter(req, resp);
+        assertEquals(401, resp.getStatus());
+        assertTrue(resp.getContentAsString().contains("\"errorCode\":\"API_KEY_INVALID\""), resp.getContentAsString());
+        assertTrue(resp.getContentAsString().contains("Invalid API key."), resp.getContentAsString());
         // Failure recorded so subsequent attempts eventually hit the 429 shortcut.
         verify(rateLimiter).recordFailure("api-key-auth", "192.0.2.99");
     }

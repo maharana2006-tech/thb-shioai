@@ -54,10 +54,12 @@ class AdminUserControllerTest {
     void list_returns200WithFilteredData() {
         when(adminUserService.list("q", "USER", "ACME", true, 0, 50)).thenReturn(List.of(dto()));
 
-        ResponseEntity<ApiResponse<List<AdminUserDTO>>> resp = controller.list("q", "USER", "ACME", true, 0, 50);
+        when(adminUserService.count("q", "USER", "ACME", true)).thenReturn(1L);
+        ResponseEntity<ApiResponse<com.multiship.backend.dto.PageResponseDTO<AdminUserDTO>>> resp = controller.list("q", "USER", "ACME", true, 0, 50);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
-        assertEquals(1, resp.getBody().getData().size());
+        assertEquals(1, resp.getBody().getData().getContent().size());
+        assertEquals(1L, resp.getBody().getData().getTotalElements());
     }
 
     // ===== assignClient =====

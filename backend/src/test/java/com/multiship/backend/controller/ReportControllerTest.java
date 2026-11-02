@@ -47,6 +47,16 @@ class ReportControllerTest {
         when(response.getOutputStream()).thenReturn(out);
     }
 
+    /** BUG-166 — headers are set on the first byte the service writes, so the mock must write. */
+    private static org.mockito.stubbing.Answer<Void> writesALine() {
+        return inv -> {
+            java.io.OutputStream o = inv.getArgument(1);
+            o.write("a,b\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            o.flush();
+            return null;
+        };
+    }
+
     // ===== orders =====
 
     @Test
@@ -54,6 +64,7 @@ class ReportControllerTest {
         ReportController.ReportFiltersQuery q = new ReportController.ReportFiltersQuery();
         q.setFrom("2026-08-01");
         q.setTo("2026-08-13");
+        doAnswer(writesALine()).when(reportService).streamOrdersCsv(any(), any());
 
         controller.orders(response, q);
 
@@ -61,32 +72,35 @@ class ReportControllerTest {
         verify(response).setCharacterEncoding("UTF-8");
         verify(response).setHeader(eq("Content-Disposition"),
                 contains("attachment; filename=orders-" + LocalDate.now()));
-        verify(reportService).streamOrdersCsv(any(), eq(out));
+        verify(reportService).streamOrdersCsv(any(), any());
     }
 
     @Test
     void tracking_setsDatasetSpecificFilename() throws IOException {
+        doAnswer(writesALine()).when(reportService).streamTrackingCsv(any(), any());
         controller.tracking(response, new ReportController.ReportFiltersQuery());
 
         verify(response).setHeader(eq("Content-Disposition"),
                 contains("tracking-" + LocalDate.now()));
-        verify(reportService).streamTrackingCsv(any(), eq(out));
+        verify(reportService).streamTrackingCsv(any(), any());
     }
 
     @Test
     void rateShop_delegatesToRateShopStream() throws IOException {
+        doAnswer(writesALine()).when(reportService).streamRateShopCsv(any(), any());
         controller.rateShop(response, new ReportController.ReportFiltersQuery());
 
         verify(response).setHeader(eq("Content-Disposition"), contains("rate-shop-"));
-        verify(reportService).streamRateShopCsv(any(), eq(out));
+        verify(reportService).streamRateShopCsv(any(), any());
     }
 
     @Test
     void billing_delegatesToBillingStream() throws IOException {
+        doAnswer(writesALine()).when(reportService).streamBillingCsv(any(), any());
         controller.billing(response, new ReportController.ReportFiltersQuery());
 
         verify(response).setHeader(eq("Content-Disposition"), contains("billing-"));
-        verify(reportService).streamBillingCsv(any(), eq(out));
+        verify(reportService).streamBillingCsv(any(), any());
     }
 
     // ===== filter parsing =====

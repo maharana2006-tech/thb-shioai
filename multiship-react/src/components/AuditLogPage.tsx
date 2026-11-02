@@ -2,8 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { formatDateTime } from '../utils/formatDateTime'
 import { useOutletContext } from 'react-router-dom'
 import {
-  FiChevronDown,
-  FiChevronRight,
   FiDownload,
   FiFilter,
   FiUser,
@@ -40,6 +38,13 @@ const ENTITY_TYPE_LABELS: Record<string, string> = {
   IMPORT_BATCH: 'Import batch',
   LABEL: 'Label',
   USER: 'User',
+  // BUG-157 — six writes that now leave a trail.
+  API_KEY: 'API key',
+  EMAIL_TEMPLATE: 'Email template',
+  STATE_ZONE: 'State zone',
+  CARRIER_LIMIT: 'Carrier limit',
+  WEBHOOK_SUBSCRIPTION: 'Webhook subscription',
+  SCHEDULED_REPORT: 'Scheduled export',
 }
 const ACTION_LABELS: Record<string, string> = {
   LABEL_GENERATED: 'Label generated',
@@ -72,6 +77,13 @@ function humaniseAction(v: string | null | undefined): string {
  * action / entity key / date range. Row-level expand shows the
  * changes JSON pretty-printed.
  */
+/** datetime-local value (operator's zone) → ISO-8601 UTC, or undefined when blank. */
+const toUtcIso = (local: string): string | undefined => {
+  if (!local) return undefined
+  const d = new Date(local)
+  return Number.isNaN(d.getTime()) ? undefined : d.toISOString()
+}
+
 export default function AuditLogPage() {
   const { registerRefresh } = useOutletContext<SettingsOutletContext>()
   // Audit B6 (#357) — Export CSV button only renders for ADMIN; endpoint
@@ -92,6 +104,12 @@ export default function AuditLogPage() {
   const [category, setCategory] = useState('')
   /** "Everything about order N" filter. */
   const [orderNoFilter, setOrderNoFilter] = useState('')
+  // BUG-159 — keep what was typed; only a whole order number reaches the
+  // server, anything else is explained under the box (same as Alerts History).
+  const orderNoError = orderNoFilter.trim() && !/^\d{1,18}$/.test(orderNoFilter.trim())
+    ? 'Order number must be a whole number.'
+    : null
+  const orderNoParam = orderNoFilter.trim() && !orderNoError ? Number(orderNoFilter.trim()) : undefined
   /** Audit A1 — 300ms debounce so the AdvancedDataTable search box
    *  doesn't fire /audit-log per keystroke while the user is typing. */
   const [debouncedEntityKey, setDebouncedEntityKey] = useState('')
@@ -126,7 +144,6 @@ export default function AuditLogPage() {
   const [pageIndex, setPageIndex] = useState(0)
   const [pageSize, setPageSize] = useState(25)
   const [reloadToken, setReloadToken] = useState(0)
-  const [expanded, setExpanded] = useState<Set<number>>(new Set())
 
   const [sorting, setSorting] = useState<SortingState>([
     { id: 'createdAt', desc: true },
@@ -148,6 +165,7 @@ export default function AuditLogPage() {
 
   useEffect(() => {
     let cancelled = false
+    if (orderNoError) return
     // eslint-disable-next-line react-hooks/set-state-in-effect -- flip loading spinner before async audit-log fetch
     setLoading(true)
     auditLogService
@@ -157,10 +175,11 @@ export default function AuditLogPage() {
         action: action || undefined,
         entityKey: debouncedEntityKey || undefined,
         category: category || undefined,
-        orderNo: orderNoFilter.trim() !== '' && !Number.isNaN(Number(orderNoFilter))
-          ? Number(orderNoFilter) : undefined,
-        since: since || undefined,
-        until: until || undefined,
+        orderNo: orderNoParam,
+        // BUG-156 — the boxes hold the operator's local time; send it with its
+        // zone so the server compares instants instead of wall-clock strings.
+        since: toUtcIso(since),
+        until: toUtcIso(until),
         sort: sortParam,
         page: pageIndex,
         size: pageSize,
@@ -181,12 +200,12 @@ export default function AuditLogPage() {
     return () => {
       cancelled = true
     }
-  }, [actor, entityType, action, debouncedEntityKey, category, orderNoFilter, since, until, sortParam, pageIndex, pageSize, reloadToken])
+  }, [actor, entityType, action, debouncedEntityKey, category, orderNoParam, orderNoError, since, until, sortParam, pageIndex, pageSize, reloadToken])
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- reset to first page when filters change; must respond to prop-derived filter values, not derivable at render
     setPageIndex(0)
-  }, [actor, entityType, action, debouncedEntityKey, category, orderNoFilter, since, until, sortParam, pageSize])
+  }, [actor, entityType, action, debouncedEntityKey, category, orderNoParam, since, until, sortParam, pageSize])
 
   const refresh = useCallback(() => setReloadToken((t) => t + 1), [])
   useEffect(() => {
@@ -194,40 +213,14 @@ export default function AuditLogPage() {
     return () => registerRefresh(null)
   }, [registerRefresh, refresh])
 
-  const toggleExpand = (id: number) => {
-    setExpanded((cur) => {
-      const next = new Set(cur)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
-
   const columns = useMemo<ColumnDef<AuditLogEntry, unknown>[]>(
     () => [
-      {
-        id: 'expand',
-        header: '',
-        enableSorting: false,
-        cell: ({ row }) => {
-          const open = expanded.has(row.original.id)
-          return (
-            <button
-              type="button"
-              onClick={() => toggleExpand(row.original.id)}
-              aria-label={open ? 'Collapse' : 'Expand'}
-              className="inline-flex h-6 w-6 items-center justify-center rounded text-slate-500 hover:bg-slate-100"
-            >
-              {open ? <FiChevronDown className="h-3.5 w-3.5" /> : <FiChevronRight className="h-3.5 w-3.5" />}
-            </button>
-          )
-        },
-        meta: { headerLabel: '', hideable: false, exportable: false },
-      },
       {
         id: 'createdAt',
         accessorFn: (r) => r.createdAt,
         header: 'When',
+        // BUG-158 — exports carry the UTC stamp, same column as the server CSV.
+        meta: { headerLabel: 'When (UTC)', exportValue: (r: AuditLogEntry) => new Date(r.createdAt).toISOString() },
         cell: ({ row }) => (
           <span className="text-[11.5px] text-slate-600">
             {formatDateTime(row.original.createdAt)}
@@ -321,8 +314,25 @@ export default function AuditLogPage() {
           )
         },
       },
+      // BUG-158 — hidden on screen, always in the CSV, so "Export" and
+      // "Export all" produce the same 13 columns (see AuditLogController).
+      ...([
+        ['id', 'ID', (r: AuditLogEntry) => r.id],
+        ['entityId', 'Entity ID', (r: AuditLogEntry) => r.entityId ?? ''],
+        ['clientCode', 'Client', (r: AuditLogEntry) => r.clientCode ?? ''],
+        ['category', 'Category', (r: AuditLogEntry) => r.category],
+        ['severity', 'Severity', (r: AuditLogEntry) => r.severity],
+        ['changes', 'Changes', (r: AuditLogEntry) => r.changes ?? ''],
+      ] as const).map(([id, header, value]) => ({
+        id,
+        accessorFn: value,
+        header,
+        enableSorting: false,
+        meta: { exportAlways: true },
+        cell: ({ row }: { row: { original: AuditLogEntry } }) => <span className="text-[11.5px] text-slate-600">{String(value(row.original) ?? '')}</span>,
+      })),
     ],
-    [expanded],
+    [],
   )
 
   const filtersActive = !!(actor || entityType || action || entityKey || orderNoFilter || since || until)
@@ -353,14 +363,18 @@ export default function AuditLogPage() {
             </button>
           )
         })}
-        <input
-          value={orderNoFilter}
-          onChange={(e) => setOrderNoFilter(e.target.value.replace(/[^0-9]/g, ''))}
-          placeholder="Order #…"
-          inputMode="numeric"
-          className="ml-auto w-28 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[12px] outline-none focus:border-[#412d15]"
-          title="Show every log entry for one order"
-        />
+        <label className="ml-auto flex flex-col">
+          <input
+            value={orderNoFilter}
+            onChange={(e) => setOrderNoFilter(e.target.value)}
+            placeholder="Order #…"
+            inputMode="numeric"
+            aria-invalid={orderNoError ? true : undefined}
+            className={`w-28 rounded-xl border bg-white px-3 py-1.5 text-[12px] outline-none focus:border-[#412d15] ${orderNoError ? 'border-rose-400' : 'border-slate-200'}`}
+            title="Show every log entry for one order"
+          />
+          {orderNoError ? <span className="mt-1 text-[11px] text-rose-700">{orderNoError}</span> : null}
+        </label>
       </div>
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         {loading && !rows.length ? (
@@ -369,6 +383,8 @@ export default function AuditLogPage() {
           <AdvancedDataTable<AuditLogEntry>
             tableKey="audit-log"
             columns={columns}
+            initialHiddenColumns={['id', 'entityId', 'clientCode', 'category', 'severity', 'changes']}
+            renderExpanded={(r) => <ChangeDetails row={r} />}
             data={rows}
             manualPagination
             manualSorting
@@ -398,7 +414,7 @@ export default function AuditLogPage() {
                   <a
                     href={auditLogService.exportUrl({
                       actor, entityType, action, entityKey: debouncedEntityKey, category,
-                      orderNo: orderNoFilter ? Number(orderNoFilter) : undefined,
+                      orderNo: orderNoParam,
                       since, until,
                     })}
                     title={`Export EVERY filtered row as CSV (ADMIN only; capped at 100k rows). The 'Export' button beside this one saves only the current page.`}
@@ -475,6 +491,12 @@ export default function AuditLogPage() {
                           IMPORT_BATCH — add it so the filter matches
                           every entity type the backend produces. */}
                       <option value="IMPORT_BATCH">Import batch</option>
+                      <option value="API_KEY">API key</option>
+                      <option value="EMAIL_TEMPLATE">Email template</option>
+                      <option value="STATE_ZONE">State zone</option>
+                      <option value="CARRIER_LIMIT">Carrier limit</option>
+                      <option value="WEBHOOK_SUBSCRIPTION">Webhook subscription</option>
+                      <option value="SCHEDULED_REPORT">Scheduled export</option>
                     </Select>
                     <label className="mb-1 mt-3 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
                       Action
@@ -555,32 +577,80 @@ export default function AuditLogPage() {
             }
           />
         )}
-        {rows.length > 0 ? (
-          <div className="mt-3 space-y-2">
-            {rows.filter((r) => expanded.has(r.id)).map((r) => (
-              <details key={r.id} open className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                <summary className="cursor-pointer text-[11.5px] font-semibold text-slate-700">
-                  Row #{r.id} · {r.entityType} · {r.action} · {r.entityKey ?? r.entityId}
-                </summary>
-                <pre className="mt-2 max-h-72 overflow-auto rounded bg-white p-2 font-mono text-[10.5px] text-slate-800">
-                  {prettyJson(r.changes)}
-                </pre>
-              </details>
-            ))}
-          </div>
-        ) : null}
       </section>
     </div>
   )
 }
 
-function prettyJson(raw: string | null): string {
-  if (!raw) return '(no payload)'
-  try {
-    return JSON.stringify(JSON.parse(raw), null, 2)
-  } catch {
-    return raw
+/** BUG-160 — the row's changes, readable: a before/after table when the
+ *  payload has one, else key/value rows; ISO timestamps become local time. */
+function ChangeDetails({ row }: { row: AuditLogEntry }) {
+  const parsed = parseChanges(row.changes)
+  if (parsed == null) {
+    return <p className="px-3 py-2 text-[11.5px] text-slate-500">{row.changes ?? 'No details were recorded for this row.'}</p>
   }
+  const before = pick(parsed, ['before', 'old', 'previous'])
+  const after = pick(parsed, ['after', 'new', 'current'])
+  const twoColumn = before != null || after != null
+  const keys = twoColumn
+    ? Array.from(new Set([...Object.keys(before ?? {}), ...Object.keys(after ?? {})]))
+    : Object.keys(parsed)
+  return (
+    <div className="px-3 py-2">
+      <table className="w-full text-[11.5px]">
+        <thead className="text-[10.5px] uppercase tracking-wide text-slate-500">
+          <tr><th className="py-1 pr-3 text-left">Field</th>{twoColumn ? <th className="py-1 pr-3 text-left">Before</th> : null}<th className="py-1 text-left">{twoColumn ? 'After' : 'Value'}</th></tr>
+        </thead>
+        <tbody>
+          {keys.map((k) => {
+            const a = twoColumn ? after?.[k] : parsed[k]
+            const b = twoColumn ? before?.[k] : undefined
+            const changed = twoColumn && JSON.stringify(a) !== JSON.stringify(b)
+            return (
+              <tr key={k} className={changed ? 'font-semibold text-slate-900' : 'text-slate-700'}>
+                <td className="py-0.5 pr-3 font-mono">{k}</td>
+                {twoColumn ? <td className="py-0.5 pr-3">{display(b)}</td> : null}
+                <td className="py-0.5">{display(a)}</td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function parseChanges(raw: string | null): Record<string, unknown> | null {
+  if (!raw) return null
+  try {
+    const v: unknown = JSON.parse(raw)
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null
+  } catch {
+    return null
+  }
+}
+
+function pick(o: Record<string, unknown>, names: string[]): Record<string, unknown> | null {
+  for (const n of names) {
+    const v = o[n]
+    if (v && typeof v === 'object' && !Array.isArray(v)) return v as Record<string, unknown>
+  }
+  return null
+}
+
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/
+
+function display(v: unknown): string {
+  if (v == null || v === '') return '—'
+  if (typeof v === 'string') return ISO.test(v) ? formatDateTime(v) : v
+  // Jackson writes LocalDateTime as [y, m, d, h, min, s, nanos]; show it as a time.
+  if (Array.isArray(v) && v.length >= 3 && v.length <= 7 && v.every((n) => Number.isInteger(n))) {
+    const [y, m, d, h = 0, min = 0, sec = 0] = v as number[]
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return formatDateTime(`${y}-${pad(m)}-${pad(d)}T${pad(h)}:${pad(min)}:${pad(sec)}`)
+  }
+  if (typeof v === 'object') return JSON.stringify(v)
+  return String(v)
 }
 
 function ActionBadge({ action }: { action: string }) {

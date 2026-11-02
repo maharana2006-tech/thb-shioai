@@ -55,6 +55,36 @@ public class ShipperDefaultsService {
             KEY_NAME, KEY_PHONE, KEY_ADDRESS_LINE1,
             KEY_CITY, KEY_STATE, KEY_POSTAL_CODE, KEY_COUNTRY_CODE);
 
+    /**
+     * BUG-025 — true when the request's sender block already covers every
+     * {@link #REQUIRED_KEYS} field so the platform-default fallback would
+     * never fire. The strict-mode guard is meant to catch "no override
+     * AND no sender in the request"; when the sender IS complete, strict
+     * mode is a false positive. Callers pass this to
+     * {@link #resolveFor(String, boolean)} as {@code !senderCovers} so an
+     * operator who typed a full ship-from on New Shipment can validate /
+     * generate without configuring {@code /settings/system} first.
+     *
+     * <p>Package-visible rather than public — only CarrierServiceImpl +
+     * ShipmentValidationService need this; keeping it narrow forces a
+     * second pair of eyes if a new caller wants to opt out of strict mode.
+     */
+    public static boolean senderCoversRequiredFields(
+            com.multiship.backend.dto.ManualShipmentRequest.Address from) {
+        if (from == null) return false;
+        return hasText(from.getName())
+                && hasText(from.getPhone())
+                && hasText(from.getAddressLine1())
+                && hasText(from.getCity())
+                && hasText(from.getState())
+                && hasText(from.getPostalCode())
+                && hasText(from.getCountryCode());
+    }
+
+    private static boolean hasText(String s) {
+        return s != null && !s.trim().isEmpty();
+    }
+
     private final CarrierProperties carrierProperties;
     private final TenantSettingsService tenantSettings;
 
@@ -64,11 +94,21 @@ public class ShipperDefaultsService {
      * <p>When {@code carrier.shipper.strict-mode=true} AND a non-blank
      * {@code tenantCode} is given, any REQUIRED field (see
      * {@link #REQUIRED_KEYS}) that would fall through to platform default
-     * throws {@link IllegalStateException} naming the missing field(s).
+     * throws {@link ShipperDefaultsMissingException} naming the missing field(s).
      * The pre-flip caller never sees this; existing callers under the
      * default flag=false still get the silent-fallback behaviour.
      */
     public CarrierProperties.ShipperDefaults resolveFor(String tenantCode) {
+        return resolveFor(tenantCode, true);
+    }
+
+    /**
+     * Phase 3b — {@code enforceStrict=false} is the read-only variant for
+     * prefill surfaces (the form's sender block): strict mode guards the
+     * purchase, not a GET, so a tenant without shipper.* still gets the
+     * merged platform values instead of a 500.
+     */
+    public CarrierProperties.ShipperDefaults resolveFor(String tenantCode, boolean enforceStrict) {
         CarrierProperties.ShipperDefaults platform = carrierProperties.getShipper();
         if (tenantCode == null || tenantCode.isBlank()) {
             return platform;
@@ -82,7 +122,7 @@ public class ShipperDefaultsService {
         merged.setState(mergeField(tenantCode, KEY_STATE, platform.getState()));
         merged.setPostalCode(mergeField(tenantCode, KEY_POSTAL_CODE, platform.getPostalCode()));
         merged.setCountryCode(mergeField(tenantCode, KEY_COUNTRY_CODE, platform.getCountryCode()));
-        if (platform.isStrictMode()) assertStrictFor(tenantCode);
+        if (enforceStrict && platform.isStrictMode()) assertStrictFor(tenantCode);
         return merged;
     }
 
@@ -99,11 +139,9 @@ public class ShipperDefaultsService {
             if (v.isEmpty() || v.get().isBlank()) missing.add(key);
         }
         if (!missing.isEmpty()) {
-            throw new IllegalStateException(
-                    "carrier.shipper.strict-mode is on and tenant " + tenantCode
-                    + " has no override for: " + String.join(", ", missing)
-                    + ". Configure at /settings/system or set"
-                    + " carrier.shipper.strict-mode=false.");
+            // Phase 1 — a resolution failure the caller maps to 422 + field,
+            // never a 500. The tenant can fix it; the server cannot.
+            throw new ShipperDefaultsMissingException(tenantCode, missing);
         }
     }
 

@@ -66,10 +66,10 @@ describe('BulkLabelQueueBadge — pill display', () => {
   it('renders depth + wait time once metrics resolve', async () => {
     getMetricsMock.mockResolvedValue({
       data: {
-        depth: 12,
-        processing: 3,
+        queuedDepth: 12,
+        processingCount: 3,
         estimatedWaitSeconds: 45 * 60,
-        totalPerHourCap: 55,
+        configuredHourlyCap: 55,
         tenantCode: null,
       },
     })
@@ -90,10 +90,10 @@ describe('BulkLabelQueueBadge — pill display', () => {
   it('scopes copy to the tenant when tenantCode is passed', async () => {
     getMetricsMock.mockResolvedValue({
       data: {
-        depth: 3,
-        processing: 0,
+        queuedDepth: 3,
+        processingCount: 0,
         estimatedWaitSeconds: 30,
-        totalPerHourCap: 55,
+        configuredHourlyCap: 55,
         tenantCode: 'ACME',
       },
     })
@@ -117,10 +117,10 @@ describe('BulkLabelQueueBadge — hidden states', () => {
   it('renders nothing when depth is 0', async () => {
     getMetricsMock.mockResolvedValue({
       data: {
-        depth: 0,
-        processing: 0,
+        queuedDepth: 0,
+        processingCount: 0,
         estimatedWaitSeconds: 0,
-        totalPerHourCap: 55,
+        configuredHourlyCap: 55,
         tenantCode: null,
       },
     })
@@ -196,10 +196,10 @@ describe('BulkLabelQueueBadge — auto-refresh', () => {
     vi.useFakeTimers()
     getMetricsMock.mockResolvedValue({
       data: {
-        depth: 5,
-        processing: 1,
+        queuedDepth: 5,
+        processingCount: 1,
         estimatedWaitSeconds: 120,
-        totalPerHourCap: 55,
+        configuredHourlyCap: 55,
         tenantCode: null,
       },
     })
@@ -225,10 +225,10 @@ describe('BulkLabelQueueBadge — auto-refresh', () => {
   it('does not schedule a second fetch when refreshMs=0', async () => {
     getMetricsMock.mockResolvedValue({
       data: {
-        depth: 2,
-        processing: 0,
+        queuedDepth: 2,
+        processingCount: 0,
         estimatedWaitSeconds: 30,
-        totalPerHourCap: 55,
+        configuredHourlyCap: 55,
         tenantCode: null,
       },
     })

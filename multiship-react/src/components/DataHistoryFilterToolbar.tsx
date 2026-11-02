@@ -228,7 +228,26 @@ export default function DataHistoryFilterToolbar(props: DataHistoryFilterToolbar
                   <label className="block">
                     <span className="mb-1 block text-[11px] text-[#6b5c42]">Show imports with at least</span>
                     <span className="flex items-center gap-2">
-                      <input type="number" min={0} value={minSaved} onChange={(e) => setMinSaved(e.target.value)} placeholder="0" aria-label="Min rows saved" className={`${FIELD_INPUT} max-w-[8rem] tabular-nums`} />
+                      {/* BUG-055 — `min={0}` only clamps the spinner;
+                          operators could still type "-5". Clamp the
+                          stored value to ≥ 0 on change too, and drop
+                          non-digit text that <input type="number">
+                          would otherwise forward (e, +, -). */}
+                      <input
+                        type="number"
+                        min={0}
+                        step={1}
+                        inputMode="numeric"
+                        value={minSaved}
+                        onChange={(e) => {
+                          const raw = e.target.value.replace(/[^\d]/g, '')
+                          const n = Number(raw)
+                          setMinSaved(raw === '' || !Number.isFinite(n) ? '' : String(Math.max(0, n)))
+                        }}
+                        placeholder="0"
+                        aria-label="Min rows saved"
+                        className={`${FIELD_INPUT} max-w-[8rem] tabular-nums`}
+                      />
                       <span className="text-[12px] text-[#6b5c42]">saved rows</span>
                     </span>
                   </label>

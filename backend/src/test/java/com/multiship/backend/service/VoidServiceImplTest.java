@@ -167,7 +167,9 @@ class VoidServiceImplTest {
         ApiResponse<VoidLabelResponseDTO> resp = service.voidLabel(1);
 
         // NOT overall-voided when any batch failed; must attempt all three.
-        assertEquals(200, resp.getCode());
+        // R2-BUG-015 — carrier refusal now surfaces as HTTP 502 so operators
+        // see the error instead of a green "success" with a VOIDED badge.
+        assertEquals(502, resp.getCode());
         assertEquals("ERROR", resp.getData().getStatus());
         verify(connector, times(3)).voidShipment(anyString(), anyString(), anyString(), anyString(), anyString());
     }

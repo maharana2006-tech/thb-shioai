@@ -98,6 +98,9 @@ public class WebhookUrlValidator {
                             + (allowHttp ? " or http (dev)." : "."));
         }
 
+        if (uri.getRawUserInfo() != null) {
+            throw new WebhookUrlRejectedException("URL must not contain a user name or password.");
+        }
         validateHost(uri.getHost(), "URL host");
     }
 

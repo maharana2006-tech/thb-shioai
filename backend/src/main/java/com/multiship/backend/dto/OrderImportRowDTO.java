@@ -77,6 +77,10 @@ public class OrderImportRowDTO {
      *  book row that will pay for the label). Optional at import time;
      *  when absent, commit needs {@code accountId} or the default cascade. */
     private String accountNumber;
+
+    /** Payer's billing postal code and country when billTo is THIRD_PARTY (UPS requires both). */
+    private String thirdPartyPostalCode;
+    private String thirdPartyCountry;
     private String serviceType;
     /** The client's own ship via code as it arrived in the file (U11, P10, F77…)
      *  when a ship-method rule translated it — {@link #serviceType} then holds
@@ -173,7 +177,7 @@ public class OrderImportRowDTO {
     /**
      * Label URL endpoint for retrieving the generated label PDF/image.
      * Populated after successful label generation. Frontend can GET this URL.
-     * Format: /api/v1/orders/{orderNo}/label/pdf
+     * Format: /api/v1/labels/{orderNo}/pdf
      */
     private String labelUrl;
 

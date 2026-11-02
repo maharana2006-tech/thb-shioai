@@ -15,6 +15,7 @@ export type HistoryStatusKey =
 
 export type HistorySortKey =
   | 'created'
+  | 'id'
   | 'fileName'
   | 'savedRows'
   | 'status'
@@ -32,7 +33,7 @@ export function useHistoryFilters() {
   const [createdBy, setCreatedBy] = useState('')
   const [batchPresence, setBatchPresence] = useState<BatchPresenceKey>('ANY')
   const [minSaved, setMinSaved] = useState('')
-  /** One label batch number, from the Batch dropdown beside the search. */
+  /** One import number, from the Import dropdown beside the search (BUG-056). */
   const [batchNo, setBatchNo] = useState('')
 
   const dateFilterActive = dateFrom !== '' || dateTo !== ''

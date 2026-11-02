@@ -40,7 +40,7 @@ export default function AccountPickerModal({
   const dialogRef = useRef<HTMLDivElement>(null)
   useFocusTrap(true, dialogRef)
   // A11y — Escape closes (X-only dismissal failed the regression run).
-  useModalDismiss(true, dialogRef, onClose)
+  const requestClose = useModalDismiss(true, dialogRef, onClose)
 
   useEffect(() => {
     accountRefService
@@ -76,7 +76,7 @@ export default function AccountPickerModal({
       role="dialog"
       aria-modal="true"
       aria-label={`Choose a carrier account for order ${orderNo}`}
-      onClick={onClose}
+      onClick={() => void requestClose()}
     >
       <div
         ref={dialogRef}
@@ -104,7 +104,7 @@ export default function AccountPickerModal({
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => void requestClose()}
             className="rounded-lg border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50"
             aria-label="Close"
           >

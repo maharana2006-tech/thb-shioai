@@ -35,7 +35,11 @@ public class VoidController {
     // Sprint 50 Tier 0.5 PR E - scope void to the order's tenant.
     // Controller SpEL is the fast reject; VoidServiceImpl guards
     // belt-and-braces for any service-to-service caller.
-    @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
+    // R4-BUG-002 — the view-only gate let TENANT (customer-facing
+    // read-only) role void labels because TENANT can SEE own-client
+    // orders by design. Combine with hasAnyRole('ADMIN', 'USER') so the
+    // destructive write stays with the operator roles only.
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and @orderAccess.canViewOrder(authentication, #orderNo)")
     @PostMapping("/{orderNo}/void")
     public ResponseEntity<ApiResponse<VoidLabelResponseDTO>> voidLabel(@PathVariable Integer orderNo) {
         ApiResponse<VoidLabelResponseDTO> response = voidService.voidLabel(orderNo);

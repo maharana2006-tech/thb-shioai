@@ -26,6 +26,57 @@ class LabelTemplateServiceTest {
         service = new LabelTemplateServiceImpl(repo);
     }
 
+    // ===== BUG-110 / 111 / 115 / 119 — update in place, validation, uniqueness =====
+
+    private static LabelTemplate template(Long id, String tenant, String type) {
+        LabelTemplate t = new LabelTemplate();
+        t.setId(id);
+        t.setTenantId(tenant);
+        t.setTemplateType(type);
+        t.setShowItems(true);
+        return t;
+    }
+
+    @Test
+    void save_updateKeepsCreatedAtAndAppliesTheEdit() {
+        LabelTemplate existing = template(22L, "ARHDEV", "PACKING_SLIP");
+        existing.setHeaderText("old");
+        existing.setCreatedAt(java.time.LocalDateTime.of(2026, 1, 1, 0, 0));
+        when(repo.findById(22L)).thenReturn(Optional.of(existing));
+        when(repo.findByTenantAndType("ARHDEV", "PACKING_SLIP")).thenReturn(Optional.of(existing));
+        when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        LabelTemplate edit = template(22L, "ARHDEV", "PACKING_SLIP");
+        edit.setHeaderText("new");
+
+        LabelTemplate saved = service.save(edit);
+
+        assertSame(existing, saved);
+        assertEquals("new", saved.getHeaderText());
+        assertEquals(java.time.LocalDateTime.of(2026, 1, 1, 0, 0), saved.getCreatedAt(), "created_at must survive an update");
+    }
+
+    @Test
+    void save_duplicateTenantAndTypeIsA409OnTheTypeField() {
+        LabelTemplate other = template(17L, "ARHDEV", "PACKING_SLIP");
+        when(repo.findByTenantAndType("ARHDEV", "PACKING_SLIP")).thenReturn(Optional.of(other));
+        com.multiship.backend.exception.FieldValidationException ex = assertThrows(
+                com.multiship.backend.exception.FieldValidationException.class,
+                () -> service.save(template(null, "ARHDEV", "PACKING_SLIP")));
+        assertEquals("templateType", ex.getField());
+        assertEquals(409, ex.getStatus().value());
+    }
+
+    @Test
+    void save_rejectsUnknownTypeAndBadColour() {
+        assertEquals("templateType", assertThrows(com.multiship.backend.exception.FieldValidationException.class,
+                () -> service.save(template(null, "ARHDEV", "WRONG"))).getField());
+        LabelTemplate t = template(null, "ARHDEV", "PACKING_SLIP");
+        t.setPrimaryColor("zzzz");
+        assertEquals("primaryColor", assertThrows(com.multiship.backend.exception.FieldValidationException.class,
+                () -> service.save(t)).getField());
+    }
+
     @Test
     void resolve_prefersTenantScopedOverPlatform() {
         LabelTemplate tenant = new LabelTemplate();
@@ -190,6 +241,13 @@ class LabelTemplateServiceTest {
         // simulate existing createdAt on the passed entity
         java.time.LocalDateTime originalCreated = java.time.LocalDateTime.of(2026, 1, 1, 0, 0);
         t.setCreatedAt(originalCreated);
+        // BUG-110 — an update now re-reads the stored row and keeps its created_at.
+        LabelTemplate stored = new LabelTemplate();
+        stored.setId(42L);
+        stored.setTenantId("ARHDEV");
+        stored.setTemplateType("PACKING_SLIP");
+        stored.setCreatedAt(originalCreated);
+        when(repo.findById(42L)).thenReturn(Optional.of(stored));
 
         ArgumentCaptor<LabelTemplate> cap = ArgumentCaptor.forClass(LabelTemplate.class);
         when(repo.save(cap.capture())).thenAnswer(inv -> inv.getArgument(0));

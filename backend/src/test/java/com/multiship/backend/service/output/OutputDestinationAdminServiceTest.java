@@ -133,6 +133,7 @@ class OutputDestinationAdminServiceTest {
         OutputDestinationUpsertRequest req = OutputDestinationUpsertRequest.builder()
                 .clientCode("ACME").docType(DocType.LABEL)
                 .destinationType(DestinationType.SFTP)
+                .sftpKnownHostsPlain("sftp.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHtestkey")
                 // BUG-159 R7: config-shape guard now requires `username` up
                 // front; test's focus is the auth-pointer flow, so populate
                 // the field so processConfig runs through to the auth check.
@@ -159,6 +160,7 @@ class OutputDestinationAdminServiceTest {
         OutputDestinationUpsertRequest req = OutputDestinationUpsertRequest.builder()
                 .clientCode("ACME").docType(DocType.LABEL)
                 .destinationType(DestinationType.SFTP)
+                .sftpKnownHostsPlain("sftp.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHtestkey")
                 .config("{\"host\":\"127.0.0.1\",\"authType\":\"PASSWORD\","
                         + "\"username\":\"acme\"}")
                 .sftpPasswordPlain("s3cr3t")
@@ -191,6 +193,7 @@ class OutputDestinationAdminServiceTest {
         OutputDestinationUpsertRequest req = OutputDestinationUpsertRequest.builder()
                 .clientCode("ACME").docType(DocType.LABEL)
                 .destinationType(DestinationType.SFTP)
+                .sftpKnownHostsPlain("sftp.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHtestkey")
                 .config("{\"host\":\"169.254.169.254\",\"port\":22,"
                         + "\"username\":\"acme\",\"authType\":\"PASSWORD\","
                         + "\"remoteDir\":\"/upload\"}")
@@ -201,6 +204,46 @@ class OutputDestinationAdminServiceTest {
                 IllegalArgumentException.class, () -> strictAdmin.create(req, "alice"));
         assertTrue(ex.getMessage().toLowerCase().contains("metadata"),
                 "expected metadata-host rejection, got: " + ex.getMessage());
+    }
+
+    @Test
+    void createLocalFsRefusesRelativeLongAndSystemPaths() {
+        // BUG-133
+        for (String bad : new String[] {"exports/mkl246", "/etc/multiship", "/" + "x".repeat(300)}) {
+            OutputDestinationUpsertRequest req = OutputDestinationUpsertRequest.builder()
+                    .clientCode("ACME").docType(DocType.LABEL)
+                    .destinationType(DestinationType.LOCAL_FS)
+                    .config("{\"path\":\"" + bad + "\"}")
+                    .active(true).build();
+            com.multiship.backend.exception.FieldValidationException ex = org.junit.jupiter.api.Assertions.assertThrows(
+                    com.multiship.backend.exception.FieldValidationException.class, () -> admin.create(req, "alice"));
+            assertEquals("config.path", ex.getField());
+        }
+    }
+
+    @Test
+    void createStoresOneSpellingOfTheClientCode() {
+        // BUG-134 — ' mkl246 ' and 'MKL246' were two destinations.
+        OutputDestinationUpsertRequest req = OutputDestinationUpsertRequest.builder()
+                .clientCode(" acme ").docType(DocType.LABEL)
+                .destinationType(DestinationType.LOCAL_FS)
+                .config("{\"path\":\"/tmp/labels\"}")
+                .active(true).build();
+        assertEquals("ACME", admin.create(req, "alice").getClientCode());
+    }
+
+    @Test
+    void createSftpWithoutAPinnedHostKeyIsRefused() {
+        // BUG-135
+        OutputDestinationUpsertRequest req = OutputDestinationUpsertRequest.builder()
+                .clientCode("ACME").docType(DocType.LABEL)
+                .destinationType(DestinationType.SFTP)
+                .config("{\"host\":\"sftp.example.com\",\"port\":22,\"username\":\"acme\",\"authType\":\"PASSWORD\",\"remoteDir\":\"/upload\"}")
+                .active(true)
+                .sftpPasswordPlain("s3cret")
+                .build();
+        assertEquals("sftpKnownHostsPlain", org.junit.jupiter.api.Assertions.assertThrows(
+                com.multiship.backend.exception.FieldValidationException.class, () -> admin.create(req, "alice")).getField());
     }
 
     @Test
@@ -223,6 +266,7 @@ class OutputDestinationAdminServiceTest {
         OutputDestinationUpsertRequest req = OutputDestinationUpsertRequest.builder()
                 .clientCode("ACME").docType(DocType.LABEL)
                 .destinationType(DestinationType.SFTP)
+                .sftpKnownHostsPlain("sftp.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHtestkey")
                 .config("{\"host\":\"sftp.example.com\",\"port\":22,"
                         + "\"username\":\"acme\",\"authType\":\"PASSWORD\","
                         + "\"remoteDir\":\"/upload\"}")
@@ -251,6 +295,7 @@ class OutputDestinationAdminServiceTest {
         OutputDestinationDTO created = admin.create(OutputDestinationUpsertRequest.builder()
                 .clientCode("ACME").docType(DocType.LABEL)
                 .destinationType(DestinationType.SFTP)
+                .sftpKnownHostsPlain("sftp.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHtestkey")
                 .config("{\"host\":\"sftp.example.com\",\"username\":\"acme\",\"authType\":\"PASSWORD\"}")
                 .active(true).sftpPasswordPlain("s3cret").build(), "alice");
         String originalPointer = mapper.readTree(destinations.get(created.getId()).getConfig())
@@ -261,6 +306,7 @@ class OutputDestinationAdminServiceTest {
                 OutputDestinationUpsertRequest.builder()
                         .clientCode("ACME").docType(DocType.LABEL)
                         .destinationType(DestinationType.SFTP)
+                .sftpKnownHostsPlain("sftp.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHtestkey")
                         .config("{\"host\":\"new.example.com\",\"username\":\"acme\",\"authType\":\"PASSWORD\"}")
                         .active(true).build(),
                 "alice");
@@ -276,6 +322,7 @@ class OutputDestinationAdminServiceTest {
         OutputDestinationDTO created = admin.create(OutputDestinationUpsertRequest.builder()
                 .clientCode("ACME").docType(DocType.LABEL)
                 .destinationType(DestinationType.SFTP)
+                .sftpKnownHostsPlain("sftp.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHtestkey")
                 .config("{\"host\":\"h\",\"username\":\"u\",\"authType\":\"PASSWORD\"}")
                 .active(true).sftpPasswordPlain("p").build(), "alice");
         assertTrue(secrets.size() >= 1);
@@ -293,6 +340,7 @@ class OutputDestinationAdminServiceTest {
         OutputDestinationUpsertRequest req = OutputDestinationUpsertRequest.builder()
                 .clientCode("ACME").docType(DocType.LABEL)
                 .destinationType(DestinationType.SFTP)
+                .sftpKnownHostsPlain("sftp.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHtestkey")
                 .config("{\"host\":\"sftp.example.com\",\"username\":\"acme\",\"authType\":\"PASSWORD\"}")
                 .active(true)
                 .sftpPasswordPlain("s3cret")
@@ -346,6 +394,7 @@ class OutputDestinationAdminServiceTest {
         OutputDestinationDTO created = admin.create(OutputDestinationUpsertRequest.builder()
                 .clientCode("ACME").docType(DocType.LABEL)
                 .destinationType(DestinationType.SFTP)
+                .sftpKnownHostsPlain("sftp.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHtestkey")
                 .config("{\"host\":\"h\",\"username\":\"u\",\"authType\":\"PASSWORD\"}")
                 .active(true)
                 .sftpPasswordPlain("p")
@@ -366,6 +415,7 @@ class OutputDestinationAdminServiceTest {
         OutputDestinationUpsertRequest req = OutputDestinationUpsertRequest.builder()
                 .clientCode("ACME").docType(DocType.LABEL)
                 .destinationType(DestinationType.SFTP)
+                .sftpKnownHostsPlain("sftp.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHtestkey")
                 .config("{\"host\":\"h\",\"username\":\"u\",\"authType\":\"PASSWORD\"}")
                 .active(true).sftpPasswordPlain("s3cret").build();
 

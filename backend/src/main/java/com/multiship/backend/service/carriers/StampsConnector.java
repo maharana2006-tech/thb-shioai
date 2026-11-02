@@ -1008,6 +1008,24 @@ public class StampsConnector implements CarrierConnector {
                             + request.getReferenceNumber() + "). Set the "
                             + "recipient's country on the Order before generating a label.");
         }
+        // BUG-029 — SERA refuses a shipment whose to_address or from_address
+        // has neither a name nor a company (6619396 / 4522242). Fail at the
+        // boundary with the field named so the operator can fix it before
+        // the carrier hop; same shape as the recipient-country guard above.
+        if (!StringUtils.hasText(request.getRecipientName())
+                && !StringUtils.hasText(request.getRecipientCompany())) {
+            throw new IllegalArgumentException(
+                    "USPS shipment needs a recipient name or company (order "
+                            + request.getReferenceNumber() + "). Fill the "
+                            + "'Ship to' name or company before generating a label.");
+        }
+        if (!StringUtils.hasText(request.getShipperName())
+                && !StringUtils.hasText(request.getShipperCompany())) {
+            throw new IllegalArgumentException(
+                    "USPS shipment needs a sender name or company (order "
+                            + request.getReferenceNumber() + "). Fill the "
+                            + "'Ship from' name or company before generating a label.");
+        }
         String baseUrl = seraApiBaseUrl(environment);
         java.util.List<com.multiship.backend.dto.PackageDetailDTO> packages = request.effectivePackages();
         java.util.List<ShipmentResult> perPackage = new java.util.ArrayList<>();
@@ -1019,6 +1037,10 @@ public class StampsConnector implements CarrierConnector {
         for (int i = 0; i < packages.size(); i++) {
             String jsonBody = buildSeraCreateLabelBody(request, packages.get(i),
                     i + 1, packages.size(), shipDate, sandbox);
+            // DEBUG only: the wire body carries addresses. Turn on
+            // logging.level.com.multiship.backend.service.carriers=DEBUG to see
+            // exactly what SERA rejected (it names the field, not the value).
+            log.debug("SERA /labels request pkg {}/{}: {}", i + 1, packages.size(), jsonBody);
             try {
                 // Audit: SERA requires Idempotency-Key on POSTs (developer.stamps.com
                 // §Idempotency). PR-T2 — deterministic key keyed on
@@ -1251,7 +1273,7 @@ public class StampsConnector implements CarrierConnector {
                 request.getRecipientCity(), request.getRecipientState(),
                 request.getRecipientPostalCode(), request.getRecipientCountryCode(),
                 request.getRecipientPhone(), request.getRecipientEmail(),
-                Boolean.TRUE.equals(request.getRecipientResidential()) ? "residential" : null));
+                seraResidentialIndicator(request.getRecipientResidential())));
 
         // Service code — SERA speaks a snake-case vocabulary
         // (usps_priority_mail, usps_ground_advantage, ...). We map when the
@@ -1400,6 +1422,18 @@ public class StampsConnector implements CarrierConnector {
         }
     }
 
+    /**
+     * SERA's {@code residential_indicator} is a yes/no enum (its address
+     * validation answers with {@code "no"}), not a free-text label. Sending
+     * {@code "residential"} was rejected with VALIDATION 800000 "The
+     * residential_indicator specified is invalid" — after rating had passed,
+     * since the rate call doesn't carry the field. Unknown stays omitted.
+     */
+    static String seraResidentialIndicator(Boolean residential) {
+        if (residential == null) return null;
+        return residential ? "yes" : "no";
+    }
+
     /** SERA address block — snake-case field names matching the SERA
      *  v1 reference. Nulls omitted so the wire body is tight. */
     private Map<String, Object> buildSeraAddress(String name, String company,
@@ -1408,15 +1442,21 @@ public class StampsConnector implements CarrierConnector {
                                                   String country, String phone, String email,
                                                   String residentialIndicator) {
         Map<String, Object> a = new LinkedHashMap<>();
-        // BUG-001 — SERA validates "fullname" when the `name` field is
-        // provided: "If provided, fullname must contain at least 2
-        // alphabetic characters, followed by a space, followed by at
-        // least another 2 alphabetic characters." (error 6619409). A
-        // client-default sender like "MKL" (3 chars, no space) tripped
-        // this and sent order #<N> to ERROR after save. Omit the field
-        // when it doesn't match the rule, so SERA falls back to
-        // company_name as the entity identity.
-        if (StringUtils.hasText(name) && isSeraValidFullname(name)) a.put("name", name);
+        // BUG-029 (QA 2026-10-24) — send the name verbatim whenever present.
+        // Pre-fix an anchored prefix regex ([A-Za-z]{2,}\s+[A-Za-z]{2,}.*)
+        // silently dropped names like "Pat Q. Tester", "José Álvarez",
+        // "O'Brien", "Anne-Marie Smith" and single-word names (Madonna,
+        // Cher), forcing SERA to 400 with 6619396 / 4522242 whenever the
+        // company_name field was also blank. QA's 34-call Carrier API Log
+        // audit (Appendix A of the test report) proved: /sera/v1/labels
+        // accepts every variant the app currently sends through, and
+        // /sera/v1/rates was already shipping names raw with 28/28 200s —
+        // the two builders disagreed with the carrier as the referee.
+        // The hard guard against "name AND company both blank" lives in
+        // createShipmentSera's pre-flight (the same place the recipient
+        // country check lives) so an operator-visible failure fires BEFORE
+        // the carrier hop, not after.
+        if (StringUtils.hasText(name)) a.put("name", name);
         if (StringUtils.hasText(company)) a.put("company_name", company);
         if (StringUtils.hasText(line1)) a.put("address_line1", line1);
         if (StringUtils.hasText(line2)) a.put("address_line2", line2);
@@ -2482,7 +2522,13 @@ public class StampsConnector implements CarrierConnector {
         Integer orderNo = parseOrderNoFromMdc();
         java.util.Optional<com.multiship.backend.model.LabelPackage> row = (orderNo != null)
                 ? labelPackageRepository.findByOrderNoAndTrackingNumber(orderNo, trackingNumber)
-                : labelPackageRepository.findByTrackingNumber(trackingNumber);
+                // R2-BUG-003 (run-4) — the manifest/close-out path can't
+                // tag MDC per tracking (sweeps a whole day). The old
+                // findByTrackingNumber(Optional<>) threw on dupes (163
+                // results on sandbox). First-by-id tolerates ambiguity:
+                // prod trackings are 1:1 (first == only), sandbox dupes
+                // all point at the same carrier label id anyway.
+                : labelPackageRepository.findFirstByTrackingNumberOrderByIdAsc(trackingNumber);
         return row.map(com.multiship.backend.model.LabelPackage::getCarrierLabelRef)
                 .filter(StringUtils::hasText)
                 .orElse(null);
@@ -3309,11 +3355,15 @@ public class StampsConnector implements CarrierConnector {
 
     /** Field-level equality for the SERA matched_address echo. Case-
      *  insensitive + trim-tolerant on the comparable fields; nulls equal. */
-    /** BUG-001 — SERA 6619409 fullname rule: "If provided, fullname must
-     *  contain at least 2 alphabetic characters, followed by a space,
-     *  followed by at least another 2 alphabetic characters." Used by
-     *  both buildSeraAddress (wire) and ShipmentValidationService
-     *  (pre-flight) so the two agree. */
+    /** BUG-029 (QA 2026-10-24) — the SERA /labels endpoint does NOT enforce
+     *  this prefix rule (34 Carrier-API-Log calls, 10/10 variants accepted
+     *  verbatim), so {@link #buildSeraAddress} no longer gates on it.
+     *  This predicate is retained for the SERA /pickups wire only
+     *  (see {@link #padToSeraFullname}), where the fullname field IS
+     *  required and the pad-with-"Pickup" fallback keeps short names like
+     *  "MKL" valid. If you're reaching for this from a label path, use
+     *  {@code StringUtils.hasText(name)} instead and let the connector
+     *  boundary guard catch the name-AND-company-blank case. */
     public static boolean isSeraValidFullname(String name) {
         if (name == null) return false;
         return name.trim().matches("[A-Za-z]{2,}\\s+[A-Za-z]{2,}.*");
@@ -3617,9 +3667,17 @@ public class StampsConnector implements CarrierConnector {
         window.put("end_at", OffsetDateTime.of(req.pickupDate(), end, ZoneOffset.UTC)
                 .format(java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME));
         body.put("pickup_window", window);
-        if (StringUtils.hasText(req.specialInstructions())) {
-            body.put("pickup_instructions", req.specialInstructions());
-        }
+        // R2-BUG-002 (run-4) — SERA REQUIRES pickup_instructions on every
+        // pickup (error 800000 'The PickupInstructions field is required').
+        // UI treats "Notes for driver" as optional. Default to a neutral
+        // string so a blank note still ships a well-formed body; the
+        // operator's text wins when present. ponytail: the FE pickup form
+        // should probably mark the field required for USPS to keep this
+        // honest instead of hiding behind a default.
+        body.put("pickup_instructions",
+                StringUtils.hasText(req.specialInstructions())
+                        ? req.specialInstructions()
+                        : "Standard pickup — no special instructions.");
         try {
             return objectMapper.writeValueAsString(body);
         } catch (Exception ex) {
@@ -3982,7 +4040,17 @@ public class StampsConnector implements CarrierConnector {
         // still manifest (SERA sweeps every unmanifested USPS label for the
         // day at the shipper address).
         if (labelIds.size() == tracking.size() && !labelIds.isEmpty()) {
-            body.put("label_ids", labelIds);
+            // R2-BUG-003 (run-5): sandbox labels share tracking numbers,
+            // so resolveSeraLabelId returns the same label_id many times
+            // and SERA refuses "Duplicated SCAN form items are not
+            // allowed." Dedupe here, AFTER the "every tracking resolved"
+            // check — the check must still see raw-count equality so a
+            // legacy tracking missing its label_id falls through to the
+            // by-carrier+ship_date path. Production is 1:1 and the set
+            // wrap is a no-op; a legitimate retry after a partial
+            // close-out also benefits (same label_id appears twice in
+            // the retry's input).
+            body.put("label_ids", new java.util.ArrayList<>(new java.util.LinkedHashSet<>(labelIds)));
         } else {
             log.info("Stamps SERA manifest: {} of {} tracking numbers had a persisted label_id; "
                     + "falling back to by-carrier+ship_date manifest.",
@@ -4452,17 +4520,23 @@ public class StampsConnector implements CarrierConnector {
             appendCustomsInfo(xml, request);
         }
 
-        // Per-account/per-shipment label file format override (request →
-        // account → SWSIM's own default). Pre-existing behavior omitted
-        // this element entirely, so a null/blank override preserves that
-        // exact behavior instead of forcing a specific format.
-        if (StringUtils.hasText(request.getLabelImageFormat())) {
-            String raw = request.getLabelImageFormat().trim().toUpperCase(java.util.Locale.ROOT);
-            // SWSIM's ImageType enum is PascalCase (Pdf, Png, Gif, Jpg) —
-            // capitalize just the first letter of the validated uppercase value.
-            String imageType = raw.substring(0, 1) + raw.substring(1).toLowerCase(java.util.Locale.ROOT);
-            xml.append("<ImageType>").append(imageType).append("</ImageType>");
-        }
+        // Label file format: request → account → ZPL default. SWSIM's
+        // ImageType enum DOES include Zpl/AZpl/BZpl (and Epl), not just
+        // Pdf/Png/Gif/Jpg — see developer.stamps.com SWS/IM reference.
+        // Omitting the element makes SWSIM fall back to Auto, which returns
+        // a PNG/GIF/PDF raster; the carrier then has no native ZPL, so
+        // /label/zpl must rasterise the label into a giant ^GFA bitmap. We
+        // default to Zpl here to match DEFAULT_LABEL_IMAGE_FORMAT and the
+        // SERA path (normaliseSeraLabelFormat also defaults to zpl), so the
+        // stored artefact is the carrier's own thermal-label markup and the
+        // ZPL endpoint serves it verbatim.
+        String raw = StringUtils.hasText(request.getLabelImageFormat())
+                ? request.getLabelImageFormat().trim().toUpperCase(java.util.Locale.ROOT)
+                : "ZPL";
+        // SWSIM's ImageType enum is PascalCase (Pdf, Png, Gif, Jpg, Zpl, …) —
+        // capitalize just the first letter of the validated uppercase value.
+        String imageType = raw.substring(0, 1) + raw.substring(1).toLowerCase(java.util.Locale.ROOT);
+        xml.append("<ImageType>").append(imageType).append("</ImageType>");
 
         // PR #543 — SWSIM prints <CustomerID> on the label's "Reference"
         // slot. USPS has no separate PO / DEPT fields, so concat both

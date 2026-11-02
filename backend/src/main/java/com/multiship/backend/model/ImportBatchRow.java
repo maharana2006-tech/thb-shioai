@@ -56,6 +56,12 @@ public class ImportBatchRow {
     @Column(name = "order_ref", columnDefinition = "TEXT")
     private String orderRef;
 
+    @Column(name = "third_party_postal_code", columnDefinition = "TEXT")
+    private String thirdPartyPostalCode;
+
+    @Column(name = "third_party_country", columnDefinition = "TEXT")
+    private String thirdPartyCountry;
+
     @Column(name = "bill_to", columnDefinition = "TEXT")
     private String billTo;
 

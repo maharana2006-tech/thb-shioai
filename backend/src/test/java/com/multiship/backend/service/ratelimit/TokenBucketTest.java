@@ -26,6 +26,33 @@ class TokenBucketTest {
         assertThrows(IllegalArgumentException.class, () -> new TokenBucket(-1, 60));
     }
 
+    /** BUG-175 — a full bucket must not report "replenished just now" on every read. */
+    @Test
+    void lastCreditMs_staysPutWhileFull_andNextCreditIsZero() throws InterruptedException {
+        TokenBucket bucket = new TokenBucket(5, 60_000);   // 1 token per ms
+        long created = bucket.lastCreditMs();
+        Thread.sleep(20);
+        assertEquals(created, bucket.lastCreditMs(), "nothing was added to a full bucket");
+        assertEquals(0L, bucket.nextCreditInMs());
+    }
+
+    @Test
+    void lastCreditMs_advancesWhenTokensAreAdded() throws InterruptedException {
+        TokenBucket bucket = new TokenBucket(5, 60_000);   // 1 token per ms
+        long created = bucket.lastCreditMs();
+        assertTrue(bucket.tryAcquire());
+        Thread.sleep(20);
+        assertTrue(bucket.lastCreditMs() > created, "refill after a drain is a real credit");
+    }
+
+    @Test
+    void nextCreditInMs_isBoundedByOneTokenInterval() {
+        TokenBucket bucket = new TokenBucket(2, 6);        // 1 token per 10s
+        assertTrue(bucket.tryAcquire());
+        long next = bucket.nextCreditInMs();
+        assertTrue(next > 0 && next <= 10_000, "expected 0 < next <= 10000 but was " + next);
+    }
+
     @Test
     void tryAcquire_drainsToEmptyThenDenies() {
         TokenBucket bucket = new TokenBucket(3, 60);

@@ -329,27 +329,24 @@ public class CarrierProperties {
     @Setter
     public static class ShipperDefaults {
 
-        @NotBlank
+        // R2-BUG-014 (2026-10-19) — @NotBlank removed from every field.
+        // These used to guarantee a boot-time platform-default sender,
+        // but the "Multiship Warehouse / Bengaluru" literals they
+        // forced were leaking into per-tenant surfaces. The real gate
+        // is now {@link #strictMode}: when true, ShipperDefaultsService
+        // throws if a tenant hasn't overridden a required field — a
+        // tenant-aware check that @NotBlank at bind time can't express.
+        // Values are expected to be blank in application.properties;
+        // tenants populate /settings/system to override. Env-override
+        // still available via CARRIER_SHIPPER_STRICT_MODE=false if a
+        // specific environment demands pre-fix silent fallback.
         private String name;
-
-        @NotBlank
         private String phone;
-
-        @NotBlank
         private String addressLine1;
-
         private String addressLine2;
-
-        @NotBlank
         private String city;
-
-        @NotBlank
         private String state;
-
-        @NotBlank
         private String postalCode;
-
-        @NotBlank
         private String countryCode;
 
         /**

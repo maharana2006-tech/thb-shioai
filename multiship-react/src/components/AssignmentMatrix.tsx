@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useModalDismiss } from '../hooks/useModalDismiss'
 import { createPortal } from 'react-dom'
 import { FiCheck, FiPrinter, FiX } from 'react-icons/fi'
 import {
@@ -286,14 +287,20 @@ function CellPopover({
   // popover without a phantom close-and-reopen. Also treats clicks
   // on the anchor itself as "handled by the button" so toggle-close
   // keeps working.
+  // Ignored while the discard prompt is up, or the click on its buttons
+  // would open a second prompt.
+  const requestClose = useModalDismiss(true, ref, onClose)
+  const closing = useRef(false)
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
       const t = e.target as Node
-      if (ref.current && !ref.current.contains(t) && !anchor.contains(t)) onClose()
+      if (closing.current || !ref.current || ref.current.contains(t) || anchor.contains(t)) return
+      closing.current = true
+      void requestClose().finally(() => { closing.current = false })
     }
     document.addEventListener('mousedown', onClick)
     return () => document.removeEventListener('mousedown', onClick)
-  }, [onClose, anchor])
+  }, [requestClose, anchor])
 
   return createPortal(
     <div
@@ -340,7 +347,7 @@ function CellPopover({
       <div className="mt-3 flex items-center justify-end gap-1.5 border-t border-slate-100 pt-2">
         <button
           type="button"
-          onClick={onClose}
+          onClick={() => void requestClose()}
           disabled={saving}
           className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11.5px] font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
         >

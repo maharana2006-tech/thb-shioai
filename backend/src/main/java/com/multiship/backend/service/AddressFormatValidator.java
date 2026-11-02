@@ -221,6 +221,56 @@ public final class AddressFormatValidator {
         return issues;
     }
 
+    /** Countries whose addresses need a state / province code (mirrors the form). */
+    private static final Set<String> STATE_REQUIRED = Set.of("US", "CA", "AU", "IN", "BR", "MX");
+    private static final Set<String> ISO_COUNTRIES = Set.of(java.util.Locale.getISOCountries());
+    private static final Pattern EMAIL = Pattern.compile("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$");
+    private static final Pattern ANGLE_BRACKETS = Pattern.compile("[<>]");
+
+    /**
+     * BUG-075 — the rules the address forms apply in the browser, enforced
+     * on the server for every stored address (warehouses, address book).
+     * Throws a {@link com.multiship.backend.exception.FieldValidationException}
+     * naming the first offending field; {@code prefix} is the field path
+     * the form uses ("address" or "" for a flat DTO).
+     */
+    public static void requireWellFormed(String prefix, String line1, String city, String state,
+                                         String postalCode, String countryCode, String phone, String email) {
+        String p = prefix == null || prefix.isBlank() ? "" : prefix + ".";
+        String country = countryCode == null ? "" : countryCode.trim().toUpperCase(Locale.ROOT);
+        if (country.isEmpty() || !ISO_COUNTRIES.contains(country)) {
+            throw new com.multiship.backend.exception.FieldValidationException(p + "country",
+                    "Use a two-letter ISO country code such as US or CA.");
+        }
+        if (!StringUtils.hasText(line1) || ANGLE_BRACKETS.matcher(line1).find()) {
+            throw new com.multiship.backend.exception.FieldValidationException(p + "line1", "Street address is required.");
+        }
+        if (!StringUtils.hasText(city) || ANGLE_BRACKETS.matcher(city).find()) {
+            throw new com.multiship.backend.exception.FieldValidationException(p + "city", "City is required.");
+        }
+        if (STATE_REQUIRED.contains(country) && !StringUtils.hasText(state)) {
+            throw new com.multiship.backend.exception.FieldValidationException(p + "state",
+                    "State / region is required for " + country + ".");
+        }
+        if (postalCodeRequiredFor(country) && !StringUtils.hasText(postalCode)) {
+            throw new com.multiship.backend.exception.FieldValidationException(p + "postalCode", "Postal code is required.");
+        }
+        for (ValidationIssue issue : validate(country, postalCode, state, p.isEmpty() ? "" : prefix)) {
+            String field = issue.getField().startsWith(".") ? issue.getField().substring(1) : issue.getField();
+            throw new com.multiship.backend.exception.FieldValidationException(field, issue.getMessage());
+        }
+        if (StringUtils.hasText(phone)) {
+            int digits = phone.replaceAll("\\D", "").length();
+            if (digits < 7 || digits > 15) {
+                throw new com.multiship.backend.exception.FieldValidationException(p + "phone",
+                        "Enter a phone number with 7 to 15 digits.");
+            }
+        }
+        if (StringUtils.hasText(email) && !EMAIL.matcher(email.trim()).matches()) {
+            throw new com.multiship.backend.exception.FieldValidationException(p + "email", "Enter a valid email address.");
+        }
+    }
+
     private static String describeFormat(String country) {
         return switch (country) {
             case "US" -> "12345 or 12345-6789";

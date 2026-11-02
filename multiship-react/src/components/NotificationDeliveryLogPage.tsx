@@ -6,7 +6,7 @@
  * subject + body as-is (no re-render) and creates a new log row linked
  * to the original via retryOfId.
  */
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
 import { formatDateTime } from '../utils/formatDateTime'
 import { useOutletContext } from 'react-router-dom'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
@@ -32,19 +32,23 @@ export default function NotificationDeliveryLogPage() {
   const [debouncedRecipient, setDebouncedRecipient] = useState('')
   const [pageIndex, setPageIndex] = useState(0)
   const [expandedId, setExpandedId] = useState<number | null>(null)
+  const [knownKeys, setKnownKeys] = useState<string[]>([])
   const [retrying, setRetrying] = useState<number | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
       const p = await notificationDeliveryLogService.list({
-        templateKey: templateKey.trim() || undefined,
+        // BUG-164 — keys are upper-case codes; the server matches exactly.
+        templateKey: templateKey.trim().toUpperCase() || undefined,
         status: status || undefined,
         recipient: debouncedRecipient || undefined,
         page: pageIndex,
         size: PAGE_SIZE,
       })
       setPage(p)
+      // BUG-164 — remember every key seen so the pick-list survives a filter that returns no rows.
+      setKnownKeys((prev) => Array.from(new Set([...prev, ...p.items.map((r) => r.templateKey).filter((k): k is string => !!k)])).sort())
     } catch (err) {
       notify.apiError(err, 'Failed to load delivery log.')
     } finally {
@@ -84,11 +88,6 @@ export default function NotificationDeliveryLogPage() {
   const totalPages = page?.totalPages ?? 0
   const items = page?.items ?? []
 
-  const distinctTemplateKeys = useMemo(() => {
-    const set = new Set<string>()
-    items.forEach((r) => { if (r.templateKey) set.add(r.templateKey) })
-    return Array.from(set).sort()
-  }, [items])
 
   const resetFilters = () => {
     setTemplateKey('')
@@ -112,8 +111,9 @@ export default function NotificationDeliveryLogPage() {
               className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-1.5 font-mono text-[12px]"
             />
             <datalist id="ndl-template-keys">
-              {distinctTemplateKeys.map((k) => <option key={k} value={k} />)}
+              {knownKeys.map((k) => <option key={k} value={k} />)}
             </datalist>
+            <span className="mt-0.5 block text-[10.5px] font-normal text-slate-400">Whole key; pick one from the list.</span>
           </label>
           <label className="text-[12px] font-semibold text-slate-700">
             Status

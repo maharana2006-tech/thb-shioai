@@ -52,6 +52,8 @@ class TemplateRendererTest {
         Map<String, Object> vars = new HashMap<>();
         MailSendException ex = assertThrows(MailSendException.class,
                 () -> renderer.render("{{#if x}}unclosed", vars));
-        assertTrue(ex.getMessage().toLowerCase().contains("template"));
+        // BUG-138 — the operator sees where the mistake is, not "inline@2a9f:1:9".
+        assertTrue(ex.getMessage().startsWith("Line 1, column "), ex.getMessage());
+        assertTrue(!ex.getMessage().contains("inline@"), ex.getMessage());
     }
 }

@@ -23,6 +23,8 @@ public final class TokenBucket {
      *  (fractional tokens) and I want the refill math obvious. */
     private final AtomicLong lastRefillMs;
     private final AtomicLong tokens;
+    /** BUG-175 — last time at least one token was actually added (not merely checked). */
+    private final AtomicLong lastCreditMs;
 
     public TokenBucket(long capacity, long refillPerMinute) {
         if (capacity <= 0 || refillPerMinute <= 0) {
@@ -33,6 +35,21 @@ public final class TokenBucket {
         this.tokensPerMs = refillPerMinute / 60_000.0;
         this.lastRefillMs = new AtomicLong(System.currentTimeMillis());
         this.tokens = new AtomicLong(capacity);
+        this.lastCreditMs = new AtomicLong(lastRefillMs.get());
+    }
+
+    /** Epoch ms of the last time tokens were credited (bucket creation counts as the first fill). */
+    public long lastCreditMs() {
+        refill();
+        return lastCreditMs.get();
+    }
+
+    /** Ms until the next token is credited; 0 while the bucket is full. */
+    public long nextCreditInMs() {
+        refill();
+        if (tokens.get() >= capacity) return 0;
+        long perToken = (long) Math.ceil(1.0 / tokensPerMs);
+        return Math.max(0L, perToken - (System.currentTimeMillis() - lastRefillMs.get()));
     }
 
     /**
@@ -84,5 +101,6 @@ public final class TokenBucket {
         long current = tokens.get();
         long updated = Math.min(capacity, current + add);
         tokens.set(updated);
+        if (updated > current) lastCreditMs.set(now);
     }
 }

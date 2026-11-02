@@ -41,6 +41,68 @@ class RoutingRuleServiceTest {
         when(serviceRepo.existsById(anyLong())).thenReturn(true);
     }
 
+    // ===== BUG-086 / BUG-087 — update in place, range and country checks =====
+
+    @Test
+    void save_updateKeepsCreatedAtAndVersionAndAppliesTheEdit() {
+        RoutingRule existing = base();
+        existing.setId(5L);
+        existing.setVersion(3L);
+        existing.setName("old name");
+        existing.setCreatedAt(java.time.LocalDateTime.of(2026, 1, 1, 0, 0));
+        when(ruleRepo.findById(5L)).thenReturn(java.util.Optional.of(existing));
+        when(ruleRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        RoutingRule edit = base();
+        edit.setId(5L);
+        edit.setVersion(3L);
+        edit.setName("new name");
+
+        RoutingRule saved = service.save(edit);
+
+        assertSame(existing, saved, "the loaded row is what gets saved, never a detached copy");
+        assertEquals("new name", saved.getName());
+        assertEquals(3L, saved.getVersion());
+        assertEquals(java.time.LocalDateTime.of(2026, 1, 1, 0, 0), saved.getCreatedAt());
+    }
+
+    @Test
+    void save_staleVersionIsAnOptimisticLockFailure() {
+        RoutingRule existing = base();
+        existing.setId(5L);
+        existing.setVersion(4L);
+        when(ruleRepo.findById(5L)).thenReturn(java.util.Optional.of(existing));
+        RoutingRule edit = base();
+        edit.setId(5L);
+        edit.setVersion(3L);
+        assertThrows(org.springframework.orm.ObjectOptimisticLockingFailureException.class, () -> service.save(edit));
+    }
+
+    @Test
+    void save_rejectsInvertedRangesNamingTheField() {
+        RoutingRule r = base();
+        r.setMinWeightLb(new java.math.BigDecimal("10"));
+        r.setMaxWeightLb(new java.math.BigDecimal("5"));
+        com.multiship.backend.exception.FieldValidationException ex = assertThrows(
+                com.multiship.backend.exception.FieldValidationException.class, () -> service.save(r));
+        assertEquals("minWeightLb", ex.getField());
+    }
+
+    @Test
+    void save_rejectsNonIsoCountryCodesAndNormalisesGoodOnes() {
+        RoutingRule bad = base();
+        bad.setDestCountries("US, QQQ, 12");
+        com.multiship.backend.exception.FieldValidationException ex = assertThrows(
+                com.multiship.backend.exception.FieldValidationException.class, () -> service.save(bad));
+        assertEquals("destCountries", ex.getField());
+        assertTrue(ex.getMessage().contains("QQQ") && ex.getMessage().contains("12"));
+
+        RoutingRule good = base();
+        good.setDestCountries(" us, ca ");
+        when(ruleRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        assertEquals("US,CA", service.save(good).getDestCountries());
+    }
+
     // ===== save() validation =====
 
     @Test

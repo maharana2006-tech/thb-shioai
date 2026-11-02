@@ -37,6 +37,20 @@ public interface LabelPackageRepository extends JpaRepository<LabelPackage, Long
     Optional<LabelPackage> findByOrderNoAndTrackingNumber(Integer orderNo, String trackingNumber);
 
     /**
+     * R2-BUG-003 (run-4) — the SERA manifest/close-out path sweeps a
+     * whole day's labels and resolves each tracking → label_id. It
+     * can't tag MDC per tracking the way the void path does, so the
+     * {@code findByTrackingNumber(Optional&lt;&gt;)} fallback above
+     * throws {@code IncorrectResultSizeDataAccessException} on the
+     * sandbox (163 labels share the placeholder tracking) and on any
+     * prod collision. Pick the lowest-id row deterministically — on
+     * prod trackings are 1:1 so "first == only"; on sandbox any row
+     * is acceptable because they all point at the same carrier label
+     * id.
+     */
+    Optional<LabelPackage> findFirstByTrackingNumberOrderByIdAsc(String trackingNumber);
+
+    /**
      * PR-T9-X1 (audit T-MPS3) — the single "lead" piece for a shipment,
      * i.e. the row that represents the whole MPS for customer-facing
      * display. Backed by the V135 partial index

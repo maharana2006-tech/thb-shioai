@@ -60,7 +60,8 @@ public class MyShipperDefaultController {
         } else {
             tenant = me.getClientCode();
         }
-        CarrierProperties.ShipperDefaults d = shipperDefaults.resolveFor(tenant);
+        // A prefill read never refuses: strict mode is enforced at purchase time.
+        CarrierProperties.ShipperDefaults d = shipperDefaults.resolveFor(tenant, false);
         ResolvedShipper body = new ResolvedShipper(
                 tenant,
                 d.getName(),

@@ -74,18 +74,22 @@ class StampsSeraVoidTest {
 
     @Test
     void resolveSeraLabelId_returnsCarrierLabelRefFromDB() {
+        // BUG-010 — no MDC order tag in this unit test, so the resolver
+        // takes the manifest/close-out branch: findFirstByTrackingNumberOrderByIdAsc.
         LabelPackage pkg = LabelPackage.builder()
                 .trackingNumber(TRACKING)
                 .carrierLabelRef(LABEL_ID)
                 .build();
-        when(labelPackageRepository.findByTrackingNumber(TRACKING)).thenReturn(Optional.of(pkg));
+        when(labelPackageRepository.findFirstByTrackingNumberOrderByIdAsc(TRACKING))
+                .thenReturn(Optional.of(pkg));
 
         assertEquals(LABEL_ID, connector.resolveSeraLabelId(TRACKING));
     }
 
     @Test
     void resolveSeraLabelId_nullWhenNoRow() {
-        when(labelPackageRepository.findByTrackingNumber(any())).thenReturn(Optional.empty());
+        when(labelPackageRepository.findFirstByTrackingNumberOrderByIdAsc(any()))
+                .thenReturn(Optional.empty());
         assertEquals(null, connector.resolveSeraLabelId(TRACKING));
     }
 
@@ -94,7 +98,8 @@ class StampsSeraVoidTest {
         // Row exists but carrier_label_ref is null (label pre-dates PR 1's
         // V44 rollout) — connector must treat as "no label_id available".
         LabelPackage pkg = LabelPackage.builder().trackingNumber(TRACKING).build();
-        when(labelPackageRepository.findByTrackingNumber(TRACKING)).thenReturn(Optional.of(pkg));
+        when(labelPackageRepository.findFirstByTrackingNumberOrderByIdAsc(TRACKING))
+                .thenReturn(Optional.of(pkg));
         assertEquals(null, connector.resolveSeraLabelId(TRACKING));
     }
 

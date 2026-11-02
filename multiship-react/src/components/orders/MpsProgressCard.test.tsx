@@ -232,7 +232,10 @@ describe('MpsProgressCard — failure + cancel pills', () => {
 })
 
 describe('MpsProgressCard — empty + error branches', () => {
-  it('renders "No MPS progress found" when hook returns null progress', async () => {
+  it('renders "No MPS progress found" when hook returns null progress (default behaviour)', async () => {
+    // DataHistoryPage's curated USPS section keeps the explicit
+    // placeholder so operators see the card for every USPS row even
+    // when its MPS state hasn't resolved.
     useMpsProgressMock.mockReturnValue({
       progress: null,
       loading: false,
@@ -245,9 +248,25 @@ describe('MpsProgressCard — empty + error branches', () => {
 
     const empty = screen.getByTestId('mps-progress-card-empty')
     expect(empty.textContent).toContain('No MPS progress found')
-    // Includes the specific order number so operators can double-check
-    // they're looking at the right thing.
     expect(empty.textContent).toContain('98765')
+  })
+
+  it('silently hides when hideWhenEmpty is set + hook settles with no data (BUG-038)', async () => {
+    // BulkLabelModal passes hideWhenEmpty because the submitted order
+    // could be any carrier; the "No MPS progress found" box was
+    // irrelevant noise on non-USPS single-order submissions.
+    useMpsProgressMock.mockReturnValue({
+      progress: null,
+      loading: false,
+      error: null,
+      refresh: vi.fn(),
+    })
+
+    const Card = await loadCard()
+    const { container } = render(<Card orderNo={98765} hideWhenEmpty />)
+
+    expect(screen.queryByTestId('mps-progress-card-empty')).toBeNull()
+    expect(container.textContent).toBe('')
   })
 
   it('renders "Checking USPS Direct queue…" while loading before the first response', async () => {

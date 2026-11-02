@@ -255,6 +255,63 @@ class MultiWarehouseLabelServiceImplTest {
 
     // ===== helpers =====
 
+    // ===== BUG-064 — the split dialog sends no account; the client's default is resolved =====
+
+    private static com.multiship.backend.model.CarrierAccountRef account(long id, String carrier, String number, boolean clientDefault, boolean active) {
+        com.multiship.backend.model.CarrierAccountRef a = new com.multiship.backend.model.CarrierAccountRef();
+        a.setId(id);
+        a.setCarrierCode(carrier);
+        a.setAccountNumber(number);
+        a.setClientDefault(clientDefault);
+        a.setActive(active);
+        a.setCustomerNo("ACME");
+        return a;
+    }
+
+    @Test
+    void splitWithoutAccountBillsTheClientsDefaultAccountAndService() {
+        com.multiship.backend.repository.CarrierAccountRefRepository accountRepo =
+                mock(com.multiship.backend.repository.CarrierAccountRefRepository.class);
+        when(accountRepo.findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc("ACME"))
+                .thenReturn(List.of(account(7L, "UPS", "ZZ-UPS-7", true, true), account(8L, "FEDEX", "ZZ-FDX-8", false, true)));
+        com.multiship.backend.repository.ClientAllowedServiceRepository allowedRepo =
+                mock(com.multiship.backend.repository.ClientAllowedServiceRepository.class);
+        com.multiship.backend.model.ClientAllowedService def = new com.multiship.backend.model.ClientAllowedService();
+        def.setServiceId(42L);
+        when(allowedRepo.findByClientCodeIgnoreCaseAndIsDefaultTrue("ACME")).thenReturn(java.util.Optional.of(def));
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "accountRepo", accountRepo);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "allowedServiceRepo", allowedRepo);
+
+        MultiWarehouseLabelRequest req = baseRequest();
+        req.getLines().add(line("EAST", "SKU-1", 1));
+        stubLabel("EAST", "1Z-EAST-1");
+
+        service.generate(req, user);
+
+        ArgumentCaptor<ManualShipmentRequest> cap = ArgumentCaptor.forClass(ManualShipmentRequest.class);
+        verify(carrierService).generateManualLabel(cap.capture(), any());
+        assertEquals("ZZ-UPS-7", cap.getValue().getAccountNumber());
+        assertEquals(7L, cap.getValue().getAccountId());
+        assertEquals("UPS", cap.getValue().getCarrierCode());
+        assertEquals(42L, cap.getValue().getServiceId());
+    }
+
+    @Test
+    void splitWithoutAnyUsableAccountIsA422OnTheAccountField() {
+        com.multiship.backend.repository.CarrierAccountRefRepository accountRepo =
+                mock(com.multiship.backend.repository.CarrierAccountRefRepository.class);
+        when(accountRepo.findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc("ACME"))
+                .thenReturn(List.of(account(8L, "FEDEX", "ZZ-FDX-8", false, false)));
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "accountRepo", accountRepo);
+        MultiWarehouseLabelRequest req = baseRequest();
+        req.setCarrierCode("UPS");
+        req.getLines().add(line("EAST", "SKU-1", 1));
+
+        com.multiship.backend.exception.FieldValidationException ex = org.junit.jupiter.api.Assertions.assertThrows(
+                com.multiship.backend.exception.FieldValidationException.class, () -> service.generate(req, user));
+        assertEquals("accountNumber", ex.getField());
+    }
+
     private MultiWarehouseLabelRequest baseRequest() {
         MultiWarehouseLabelRequest req = new MultiWarehouseLabelRequest();
         req.setClientCode("ACME");

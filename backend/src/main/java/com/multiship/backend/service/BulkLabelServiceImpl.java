@@ -145,6 +145,19 @@ public class BulkLabelServiceImpl implements BulkLabelService {
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private OutputDestinationService outputDestinationService;
+
+    /**
+     * BUG-015 (run-4 belt-and-braces) — the AM MDC-based tagging left
+     * rows 2847/2848 with null order_no in the retest. The CarrierApiLog
+     * writer already supports a BUG-014-style post-success tagRequest
+     * that updates every row keyed by {@code requestId}. Bulk workers
+     * lack an HTTP requestId (no request scope), so we synthesise one
+     * ("bulk-{jobId}-{orderNo}") at the top of processOneOrder and
+     * backfill after generateLabel settles. {@code required=false} keeps
+     * pure-Mockito unit tests compiling without a mock.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.observability.CarrierApiLogService carrierApiLogService;
     /**
      * PR-F1 — USPS_DIRECT persistent label queue. Optional so the 4-arg
      * pure-Mockito constructor keeps compiling for the legacy tests that
@@ -679,13 +692,15 @@ public class BulkLabelServiceImpl implements BulkLabelService {
                 }
 
                 if (out.alreadyLabeled) {
-                    // Order already had a label from a prior generation —
-                    // count as success (nothing to charge for; label exists)
-                    // but note it in the summary so operators can tell
-                    // fresh-vs-skipped apart. No ZIP entry: the existing
-                    // label lives on the order row itself and is
-                    // re-downloadable via GET /orders/{n}/label/pdf.
-                    job.setSuccessfulCount(job.getSuccessfulCount() + 1);
+                    // BUG-036 — pre-fix this incremented successfulCount,
+                    // so a batch of all-already-labelled orders reported
+                    // "1/1 generated" + offered an empty 22-byte ZIP (no
+                    // new labels were written). The order carries an
+                    // existing label on its own row and is re-downloadable
+                    // via GET /labels/{n}/pdf; the bulk-labels toast now
+                    // reports these as "skipped" via the derived
+                    // skippedCount (parsed off failureDetailsJson at DTO
+                    // build time — no new DB column).
                     String tn = out.trackingNumber == null ? "unknown" : out.trackingNumber;
                     failures.append("order ").append(out.orderNo)
                             .append(": already had a label (tracking ")
@@ -880,9 +895,46 @@ public class BulkLabelServiceImpl implements BulkLabelService {
         // fallbacks, etc.) made from this worker. Tag at the top of the
         // worker so every carrier_api_log row from this iteration links
         // to the right order.
+        //
+        // run-4 belt-and-braces — the MDC path still left rows null in
+        // the retest (likely a sibling callback that detaches MDC). Set a
+        // synthetic requestId MDC key so the interceptor records a stable
+        // handle, then UPDATE every log row with the orderNo + tracking
+        // via carrierApiLogService.tagCurrentRequest after the carrier
+        // call settles. requestId prior-value is restored so a worker
+        // thread recycled onto another task doesn't inherit this one.
+        String syntheticRequestId = "bulk-" + jobId + "-" + orderNo;
+        String priorRequestId = org.slf4j.MDC.get(
+                com.multiship.backend.config.MdcCorrelationFilter.MDC_REQUEST_ID);
+        org.slf4j.MDC.put(
+                com.multiship.backend.config.MdcCorrelationFilter.MDC_REQUEST_ID,
+                syntheticRequestId);
         try (var ignored = com.multiship.backend.service.observability
                 .CarrierCallContext.forOrder(orderNo)) {
-            return processOneOrderInner(jobId, orderNo, jobUser);
+            OrderOutcome outcome = processOneOrderInner(jobId, orderNo, jobUser);
+            // Backfill any carrier_api_log rows that landed without an
+            // orderNo in this worker's request scope. Idempotent: a row
+            // that already carries the orderNo stays unchanged by the
+            // UPDATE (requestId match is the row-set key).
+            if (carrierApiLogService != null) {
+                String tracking = outcome == null ? null : outcome.trackingNumber;
+                try {
+                    carrierApiLogService.tagCurrentRequest(orderNo, tracking);
+                } catch (Exception ex) {
+                    log.warn("Bulk-label worker {}: tagCurrentRequest failed: {}",
+                            orderNo, ex.getMessage());
+                }
+            }
+            return outcome;
+        } finally {
+            if (priorRequestId == null) {
+                org.slf4j.MDC.remove(
+                        com.multiship.backend.config.MdcCorrelationFilter.MDC_REQUEST_ID);
+            } else {
+                org.slf4j.MDC.put(
+                        com.multiship.backend.config.MdcCorrelationFilter.MDC_REQUEST_ID,
+                        priorRequestId);
+            }
         }
     }
 
@@ -1426,6 +1478,7 @@ public class BulkLabelServiceImpl implements BulkLabelService {
                 .totalCount(j.getTotalCount())
                 .successfulCount(j.getSuccessfulCount())
                 .failedCount(j.getFailedCount())
+                .skippedCount(countSkipped(j.getFailureDetailsJson()))
                 .failureMessage(j.getFailureMessage())
                 .failureDetailsJson(j.getFailureDetailsJson())
                 .createdAt(j.getCreatedAt())
@@ -1433,6 +1486,26 @@ public class BulkLabelServiceImpl implements BulkLabelService {
                 .completedAt(j.getCompletedAt())
                 .downloadable(StringUtils.hasText(j.getResultZipBase64()))
                 .build();
+    }
+
+    /** BUG-036 — count ALREADY_LABELED entries in the structured failure
+     *  list so the FE can report "skipped" separately from real
+     *  failures. Returns 0 on null/malformed input (progressive
+     *  enhancement — legacy jobs without the JSON column skip silently). */
+    private static int countSkipped(String failureDetailsJson) {
+        if (!StringUtils.hasText(failureDetailsJson)) return 0;
+        try {
+            com.fasterxml.jackson.databind.JsonNode arr =
+                    new com.fasterxml.jackson.databind.ObjectMapper().readTree(failureDetailsJson);
+            if (!arr.isArray()) return 0;
+            int skipped = 0;
+            for (com.fasterxml.jackson.databind.JsonNode e : arr) {
+                if ("ALREADY_LABELED".equals(e.path("code").asText(null))) skipped++;
+            }
+            return skipped;
+        } catch (Exception ignore) {
+            return 0;
+        }
     }
 
     /** DTO conversion for the lightweight projection used by
@@ -1447,6 +1520,7 @@ public class BulkLabelServiceImpl implements BulkLabelService {
                 .totalCount(s.getTotalCount())
                 .successfulCount(s.getSuccessfulCount())
                 .failedCount(s.getFailedCount())
+                .skippedCount(countSkipped(s.getFailureDetailsJson()))
                 .failureMessage(s.getFailureMessage())
                 .failureDetailsJson(s.getFailureDetailsJson())
                 .createdAt(s.getCreatedAt())

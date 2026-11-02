@@ -82,7 +82,7 @@ public class OutputDestinationAdminService {
         validateClientExists(req);
         validateConfigShape(req);
         ClientOutputDestination entity = ClientOutputDestination.builder()
-                .clientCode(req.getClientCode().trim())
+                .clientCode(req.getClientCode().trim().toUpperCase(java.util.Locale.ROOT))
                 .docType(req.getDocType())
                 .destinationType(req.getDestinationType())
                 .config(processConfig(req, null, actor))
@@ -139,6 +139,10 @@ public class OutputDestinationAdminService {
      * Running after validateHostForSsrf so SSRF rejects claim precedence
      * on bad hosts.
      */
+    private static final java.util.List<String> SYSTEM_ROOTS = java.util.List.of(
+            "/etc", "/bin", "/sbin", "/usr", "/proc", "/sys", "/dev", "/boot", "/lib", "/lib64", "/var/run", "/root",
+            "c:/windows", "c:/program files", "c:/program files (x86)");
+
     private void validateConfigShape(OutputDestinationUpsertRequest req) {
         DestinationType type = req.getDestinationType();
         if (type == null) return;
@@ -177,6 +181,20 @@ public class OutputDestinationAdminService {
             if (path.contains("..")) {
                 throw new IllegalArgumentException(
                         "Local folder path can't contain '..' segments: " + path);
+            }
+            // BUG-133 — relative, over-long and system paths were saved verbatim.
+            String p = path.trim();
+            if (!(p.startsWith("/") || p.matches("^[A-Za-z]:[\\\\/].*"))) {
+                throw new com.multiship.backend.exception.FieldValidationException("config.path", "Use an absolute folder path such as /data/exports/mkl246.");
+            }
+            if (p.length() > 255) {
+                throw new com.multiship.backend.exception.FieldValidationException("config.path", "Keep the folder path to 255 characters.");
+            }
+            String lower = p.toLowerCase(java.util.Locale.ROOT).replace('\\', '/');
+            for (String root : SYSTEM_ROOTS) {
+                if (lower.equals(root) || lower.startsWith(root + "/")) {
+                    throw new com.multiship.backend.exception.FieldValidationException("config.path", "That folder belongs to the operating system; pick a data folder.");
+                }
             }
         }
     }
@@ -220,8 +238,15 @@ public class OutputDestinationAdminService {
                                 + "Switching auth types without providing the new material "
                                 + "leaves the destination unusable — please enter it now.");
             }
-        } catch (IllegalArgumentException iae) {
-            throw iae;
+            // BUG-135 — without a pinned host key the first connection trusts any host.
+            JsonNode tofu = cfg.get("trustOnFirstUse");
+            if (str(cfg, "knownHostsSecretId") == null && !(tofu != null && tofu.asBoolean(false))) {
+                throw new com.multiship.backend.exception.FieldValidationException("sftpKnownHostsPlain",
+                        "Paste the server's known_hosts line so the connection is pinned to that host, "
+                                + "or set trustOnFirstUse to true in the config to accept the first key seen.");
+            }
+        } catch (IllegalArgumentException | com.multiship.backend.exception.FieldValidationException refused) {
+            throw refused;
         } catch (Exception parseErr) {
             // processConfig already surfaces parse errors; don't double-wrap.
         }

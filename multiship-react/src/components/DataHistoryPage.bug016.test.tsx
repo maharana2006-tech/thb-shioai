@@ -89,7 +89,7 @@ vi.mock('../hooks/useEventStream', () => ({
 }))
 
 const getMetricsMock = vi.fn().mockResolvedValue({
-  data: { depth: 0, processing: 0, estimatedWaitSeconds: 0, totalPerHourCap: 55, tenantCode: null },
+  data: { queuedDepth: 0, processingCount: 0, estimatedWaitSeconds: 0, configuredHourlyCap: 55, tenantCode: null },
 })
 vi.mock('../api/uspsLabelQueueService', () => ({
   uspsLabelQueueService: {
@@ -231,7 +231,11 @@ describe('DataHistoryPage - Generate labels confirm (BUG-016)', () => {
     })
     const message = notifyConfirm.mock.calls[0][0] as string
     expect(message).toMatch(/1200 rows/)
-    expect(message).toMatch(/can't be undone/i)
+    // BUG-056 — pre-fix the wording said "buys real labels … can't be
+    // undone" which misled sandbox operators and was wrong about
+    // reversibility. New copy names the void path explicitly.
+    expect(message).toMatch(/void.*Labels tab/i)
+    expect(message).not.toMatch(/real labels/)
     // Operator dismissed the confirm; the dispatch must not fire.
     expect(generateLabels).not.toHaveBeenCalled()
   })

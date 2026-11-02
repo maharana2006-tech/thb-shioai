@@ -319,6 +319,23 @@ class OrderImportServiceImplTest {
     }
 
     @Test
+    void validateRowThirdPartyNeedsPayerPostcodeAndCountryForUpsAndRejectsUsps() {
+        OrderImportRowDTO.OrderImportRowDTOBuilder base = OrderImportRowDTO.builder()
+                .clientCode("ACME").recipientName("Jane").recipientPhone("5559876543")
+                .addressLine1("42 Broadway").city("NYC").state("NY").postalCode("10001").countryCode("US")
+                .weight(new BigDecimal("2")).weightUnit("LB").billTo("THIRD_PARTY").accountNumber("ABC123");
+        List<String> ups = OrderImportServiceImpl.validateRow(base.carrierCode("UPS").build());
+        assertTrue(ups.contains("thirdPartyPostalCode is required for UPS third-party billing"), ups.toString());
+        assertTrue(ups.contains("thirdPartyCountry is required for UPS third-party billing"), ups.toString());
+        assertTrue(OrderImportServiceImpl.validateRow(
+                base.carrierCode("UPS").thirdPartyPostalCode("60606").thirdPartyCountry("US").build()).isEmpty());
+        assertTrue(OrderImportServiceImpl.validateRow(base.carrierCode("UPS").thirdPartyCountry("USA").build())
+                .stream().anyMatch(e -> e.contains("2-letter ISO code")));
+        assertTrue(OrderImportServiceImpl.validateRow(base.carrierCode("USPS").accountNumber("acct1").build())
+                .stream().anyMatch(e -> e.contains("not available for USPS")));
+    }
+
+    @Test
     void validateRowFlagsAllRequiredFieldsIndividually() {
         // Required set: clientCode, recipientName, recipientPhone, addressLine1,
         // city, postalCode, countryCode, weight (>0), weightUnit = 9 errors.

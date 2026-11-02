@@ -121,7 +121,10 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
                     // the token, expired-and-replaced) are rare + won't
                     // exhaust a 100/hr budget.
                     if (rateLimiter != null) rateLimiter.recordFailure(LIMITER_TAG, clientIp);
-                    // Fall through — Spring Security's entry point issues the generic 401.
+                    // BUG-149 — a key WAS presented; say it is wrong instead of
+                    // falling through to the session entry point's "sign in again".
+                    writeError(response, "API_KEY_INVALID", "Invalid API key.");
+                    return;
                 }
             }
         }

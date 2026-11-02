@@ -34,6 +34,13 @@ class WebhookUrlValidatorTest {
     /* -------- address classification (no DNS) -------- */
 
     @Test
+    void credentialsInTheUrlAreRejected() {
+        // BUG-173 — a URL with user:password would be stored and logged in clear.
+        assertThrows(WebhookUrlValidator.WebhookUrlRejectedException.class,
+                () -> validator.validate("https://bob:hunter2@api.partner.example/hook"));
+    }
+
+    @Test
     void loopbackIsBlocked() throws Exception {
         assertTrue(validator.isBlocked(InetAddress.getByName("127.0.0.1")));
         assertTrue(validator.isBlocked(InetAddress.getByName("::1")));

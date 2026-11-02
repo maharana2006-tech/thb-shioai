@@ -174,7 +174,7 @@ function AccountCard({ profile, onUpdated }: { profile: Profile | null; onUpdate
     const file = e.target.files?.[0]
     e.target.value = '' // let the same file be re-picked later
     if (!file || avatarBusy) return
-    if (file.size > MAX_SOURCE_BYTES) { void notify.error('Pick an image under 8 MB.'); return }
+    if (file.size > MAX_SOURCE_BYTES) { void notify.invalid('Pick an image under 8 MB.'); return }
     setAvatarBusy(true)
     try {
       onUpdated(await profileService.updateAvatar(await fileToAvatarDataUrl(file)))
@@ -287,7 +287,7 @@ function PreferencesCard({ profile, onNavigate }: { profile: Profile | null; onN
   const showNotifications = profile != null && profile.role !== 'TENANT'
   return (
     <Card icon={FiTruck} title="Shipping preferences"
-      action={<button type="button" className={LINK} onClick={() => onNavigate('/settings/carrier-accounts')}>
+      action={<button type="button" className={LINK} onClick={() => onNavigate('/settings/carriers')}>
         Manage<FiExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
       </button>}>
       <div className="grid gap-5 sm:grid-cols-2">
@@ -363,6 +363,11 @@ function SecurityCard({ profile, onSignOut }: { profile: Profile | null; onSignO
     <Card icon={FiLock} title="Password">
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_260px]">
         <div className="space-y-4">
+          {/* BUG-185 — password managers pair the saved password with the
+              first text box on the page (the top-bar search) unless the
+              form carries its own username field. */}
+          <input type="text" name="username" autoComplete="username" value={profile?.username ?? ''}
+            readOnly tabIndex={-1} aria-hidden="true" className="hidden" />
           <div>
             <label className={LABEL} htmlFor="pw-old">Current password</label>
             <input id="pw-old" type="password" autoComplete="current-password" className={INPUT}

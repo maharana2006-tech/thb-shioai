@@ -79,7 +79,7 @@ export default function ClientDestinationsTab({ clientCode }: { clientCode: stri
         notify.success(`Destinations cleared — ${clientCode} can ship anywhere.`)
       } else {
         if (selected.size === 0) {
-          notify.error(`Pick at least one country, or switch to "Ship anywhere".`)
+          notify.invalid(`Pick at least one country, or switch to "Ship anywhere".`)
           return
         }
         await clientDestinationsService.replace(clientCode, {

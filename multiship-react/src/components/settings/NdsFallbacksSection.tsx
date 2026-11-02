@@ -135,8 +135,9 @@ export default function NdsFallbacksSection() {
       </header>
 
       <div className="mb-3">
-        <label className="block text-[11.5px] font-semibold uppercase tracking-wide text-slate-500">Tenant</label>
+        <label htmlFor="nds-fallbacks-tenant" className="block text-[11.5px] font-semibold uppercase tracking-wide text-slate-500">Tenant</label>
         <select
+          id="nds-fallbacks-tenant"
           value={tenantCode}
           onChange={(e) => { const v = e.target.value; setTenantCode(v); writeLastTenant(v) }}
           className="mt-1 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-1.5 text-[13px]"

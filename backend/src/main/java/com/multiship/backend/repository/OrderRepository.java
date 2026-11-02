@@ -178,7 +178,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             COUNT(CASE WHEN t.status = 'GENERATED' THEN 1 END) as generated_labels,
             COUNT(CASE WHEN t.status IN ('ERROR', 'FAILED') THEN 1 END) as failed_labels,
             COUNT(CASE WHEN t.is_label_generated = true THEN 1 END) as labels_generated,
-            COALESCE(SUM(b.weight), 0) as total_weight
+            COALESCE(SUM(b.weight), 0) as total_weight,
+            COUNT(CASE WHEN t.status = 'VOIDED' THEN 1 END) as voided_labels
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
     """, nativeQuery = true)
@@ -197,7 +198,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             COUNT(CASE WHEN t.status = 'GENERATED' THEN 1 END) as generated_labels,
             COUNT(CASE WHEN t.status IN ('ERROR', 'FAILED') THEN 1 END) as failed_labels,
             COUNT(CASE WHEN t.is_label_generated = true THEN 1 END) as labels_generated,
-            COALESCE(SUM(b.weight), 0) as total_weight
+            COALESCE(SUM(b.weight), 0) as total_weight,
+            COUNT(CASE WHEN t.status = 'VOIDED' THEN 1 END) as voided_labels
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
         WHERE UPPER(COALESCE(b.tenant_id, b.cust_no)) = UPPER(:tenantId)
@@ -352,22 +354,29 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
     /** The order's client is unregistered (or inactive) — generation prompts to add the client. */
     String RESOLUTION_CLIENT_MISSING_SQL = "(NOT " + OCD_ANY_SQL + " AND NOT " + CLIENT_OK_SQL + ")";
 
+    // BUG-012 — ESCAPE '\\' on every LIKE so a literal '%' or '_' typed
+    // into search doesn't act as a wildcard. OrderServiceImpl escapes
+    // the five LIKE-bound params (:keyword, :customer, :city,
+    // :orderNoLike, :tracking) via escapeLike() before binding; the
+    // ESCAPE clauses here are what makes those escapes take effect.
+    // Pairs with the convention established in
+    // AuditLogRepositoryCustomImpl + ClientRepository.
     String UNIFIED_FILTER_SQL = """
         WHERE (:status = '' OR COALESCE(t.status, 'PENDING') = :status OR (:status = 'ERROR' AND t.status = 'FAILED'))
           AND (:tenantId = '' OR UPPER(COALESCE(b.tenant_id, b.cust_no)) = :tenantId)
           AND (:keyword = ''
-               OR CAST(b.order_no AS TEXT) LIKE CONCAT('%', :keyword, '%')
-               OR CAST(COALESCE(b.batch_id, 0) AS TEXT) LIKE CONCAT('%', :keyword, '%')
-               OR LOWER(b.shipto_city) LIKE LOWER(CONCAT('%', :keyword, '%'))
-               OR LOWER(b.cust_no) LIKE LOWER(CONCAT('%', :keyword, '%'))
-               OR LOWER(COALESCE(t.tracking_number, '')) LIKE LOWER(CONCAT('%', :keyword, '%'))
-               OR LOWER(COALESCE(b.customer_ref, '')) LIKE LOWER(CONCAT('%', :keyword, '%')))
-          AND (:customer = '' OR LOWER(COALESCE(b.tenant_id, b.cust_no)) LIKE LOWER(CONCAT('%', :customer, '%')))
+               OR CAST(b.order_no AS TEXT) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\'
+               OR CAST(COALESCE(b.batch_id, 0) AS TEXT) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\'
+               OR LOWER(b.shipto_city) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\'
+               OR LOWER(b.cust_no) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\'
+               OR LOWER(COALESCE(t.tracking_number, '')) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\'
+               OR LOWER(COALESCE(b.customer_ref, '')) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\')
+          AND (:customer = '' OR LOWER(COALESCE(b.tenant_id, b.cust_no)) LIKE LOWER(CONCAT('%', :customer, '%')) ESCAPE '\\')
           AND (:city = ''
-               OR LOWER(b.shipto_city) LIKE LOWER(CONCAT('%', :city, '%'))
-               OR LOWER(COALESCE(b.shipto_state, '')) LIKE LOWER(CONCAT('%', :city, '%')))
-          AND (:orderNoLike = '' OR CAST(b.order_no AS TEXT) LIKE CONCAT('%', :orderNoLike, '%'))
-          AND (:tracking = '' OR LOWER(COALESCE(t.tracking_number, '')) LIKE LOWER(CONCAT('%', :tracking, '%')))
+               OR LOWER(b.shipto_city) LIKE LOWER(CONCAT('%', :city, '%')) ESCAPE '\\'
+               OR LOWER(COALESCE(b.shipto_state, '')) LIKE LOWER(CONCAT('%', :city, '%')) ESCAPE '\\')
+          AND (:orderNoLike = '' OR CAST(b.order_no AS TEXT) LIKE CONCAT('%', :orderNoLike, '%') ESCAPE '\\')
+          AND (:tracking = '' OR LOWER(COALESCE(t.tracking_number, '')) LIKE LOWER(CONCAT('%', :tracking, '%')) ESCAPE '\\')
           AND (:batchIdEq = '' OR CAST(COALESCE(b.batch_id, 0) AS TEXT) = :batchIdEq)
           AND (:createdFrom = '' OR b.created_date >= TO_DATE(NULLIF(:createdFrom, ''), 'YYYY-MM-DD'))
           AND (:createdTo = '' OR b.created_date <= TO_DATE(NULLIF(:createdTo, ''), 'YYYY-MM-DD'))
@@ -389,6 +398,14 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
                 (SELECT s2.carrier FROM shipping_service s2
                   WHERE UPPER(s2.service_code) = UPPER(b.shipvia_cd) LIMIT 1))) = :carrier)
           AND (:isReturn = '' OR UPPER(COALESCE(b.is_return, 'N')) = :isReturn)
+          -- BUG-INTL — classify by ship-to country, not the explicit
+          -- b.intl_yn flag. intl_yn is only populated on manual-ingest
+          -- rows (~1.7% of real intl shipments), so filtering by it
+          -- undercounted massively vs the Dashboard which uses the
+          -- same country rule as DashboardService.intlPending.
+          AND (:intl = ''
+               OR (:intl = 'Y' AND b.shipto_country_cd IS NOT NULL AND UPPER(b.shipto_country_cd) <> 'US')
+               OR (:intl = 'N' AND (b.shipto_country_cd IS NULL OR UPPER(b.shipto_country_cd) = 'US')))
           AND (:resolution = ''
                OR (:resolution = 'READY' AND """ + RESOLUTION_READY_SQL + """
                )
@@ -471,7 +488,12 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             CASE WHEN :sortBy = 'status' AND :sortDirection = 'ASC' THEN COALESCE(t.status, 'PENDING') END ASC,
             CASE WHEN :sortBy = 'status' AND :sortDirection = 'DESC' THEN COALESCE(t.status, 'PENDING') END DESC,
             CASE WHEN :sortBy = 'createdDate' AND :sortDirection = 'ASC' THEN b.created_date END ASC,
-            CASE WHEN :sortBy = 'createdDate' AND :sortDirection = 'DESC' THEN b.created_date END DESC
+            CASE WHEN :sortBy = 'createdDate' AND :sortDirection = 'DESC' THEN b.created_date END DESC,
+            -- BUG-008 tie-breaker: every primary sort column above except
+            -- orderNo has duplicates, so Postgres is free to shuffle rows
+            -- within a tie between fetches, which repeated / hid rows
+            -- across pages. order_no is unique → stable pagination.
+            b.order_no DESC
         OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
     """, nativeQuery = true)
     List<Object[]> findOrdersUnified(
@@ -490,6 +512,7 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("channel") String channel,
             @Param("carrier") String carrier,
             @Param("isReturn") String isReturn,
+            @Param("intl") String intl,
             @Param("offset") int offset,
             @Param("limit") int limit,
             @Param("sortBy") String sortBy,
@@ -516,7 +539,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("source") String source,
             @Param("channel") String channel,
             @Param("carrier") String carrier,
-            @Param("isReturn") String isReturn
+            @Param("isReturn") String isReturn,
+            @Param("intl") String intl
     );
 
     /**
@@ -548,7 +572,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("source") String source,
             @Param("channel") String channel,
             @Param("carrier") String carrier,
-            @Param("isReturn") String isReturn
+            @Param("isReturn") String isReturn,
+            @Param("intl") String intl
     );
 
     /**
@@ -582,7 +607,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("source") String source,
             @Param("channel") String channel,
             @Param("carrier") String carrier,
-            @Param("isReturn") String isReturn
+            @Param("isReturn") String isReturn,
+            @Param("intl") String intl
     );
 
     /** Tab counts for the Labels work queue, computed in one pass. */
@@ -597,7 +623,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             COUNT(*) FILTER (WHERE COALESCE(t.status, 'PENDING') = 'PENDING' AND """ + RESOLUTION_CLIENT_MISSING_SQL + """
             ) as client_missing,
             COUNT(*) FILTER (WHERE t.status IN ('ERROR', 'FAILED')) as failed,
-            COUNT(*) FILTER (WHERE t.status = 'GENERATED') as generated
+            COUNT(*) FILTER (WHERE t.status = 'GENERATED') as generated,
+            COUNT(*) FILTER (WHERE t.status = 'VOIDED') as voided
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
     """, nativeQuery = true)
@@ -619,7 +646,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             COUNT(*) FILTER (WHERE COALESCE(t.status, 'PENDING') = 'PENDING' AND """ + RESOLUTION_CLIENT_MISSING_SQL + """
             ) as client_missing,
             COUNT(*) FILTER (WHERE t.status IN ('ERROR', 'FAILED')) as failed,
-            COUNT(*) FILTER (WHERE t.status = 'GENERATED') as generated
+            COUNT(*) FILTER (WHERE t.status = 'GENERATED') as generated,
+            COUNT(*) FILTER (WHERE t.status = 'VOIDED') as voided
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
         WHERE UPPER(COALESCE(b.tenant_id, b.cust_no)) = UPPER(:tenantId)

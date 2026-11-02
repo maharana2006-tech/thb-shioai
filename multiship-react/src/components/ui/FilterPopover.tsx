@@ -58,6 +58,14 @@ const shortDay = (iso: string) => {
 export const rangeLabel = (from: string, to: string) =>
   from && to ? (from === to ? shortDay(from) : `${shortDay(from)} – ${shortDay(to)}`) : from ? `from ${shortDay(from)}` : `until ${shortDay(to)}`
 
+// BUG-015 — the `<input type="date">` default range accepts a 5-digit
+// year, which flows through to the backend as a bad createdFrom /
+// createdTo and gets a 400. Hard-cap both inputs to a sane 100-year
+// window; the browser then refuses the keystroke that would push the
+// year out of range.
+const DATE_MIN = '2000-01-01'
+const DATE_MAX = '2099-12-31'
+
 /** The date-range editor: quick picks, then a custom from / to. */
 export function DateRangeField({ from, to, onChange, label }: {
   from: string
@@ -67,6 +75,9 @@ export function DateRangeField({ from, to, onChange, label }: {
   label: string
 }) {
   const active = !!(from || to)
+  // BUG-055 — from > to produces an empty page with no explanation;
+  // detect it so the operator sees why.
+  const inverted = !!(from && to && from > to)
   return (
     <div className="space-y-3">
       <div>
@@ -88,13 +99,18 @@ export function DateRangeField({ from, to, onChange, label }: {
         <div className="grid grid-cols-2 gap-2">
           <label className="block">
             <span className="mb-1 block text-[11px] text-[#6b5c42]">From</span>
-            <input type="date" value={from} max={to || undefined} onChange={(e) => onChange(e.target.value, to)} aria-label={`${label} from`} className={FIELD_INPUT} />
+            <input type="date" value={from} min={DATE_MIN} max={to || DATE_MAX} onChange={(e) => onChange(e.target.value, to)} aria-label={`${label} from`} className={FIELD_INPUT} />
           </label>
           <label className="block">
             <span className="mb-1 block text-[11px] text-[#6b5c42]">To</span>
-            <input type="date" value={to} min={from || undefined} onChange={(e) => onChange(from, e.target.value)} aria-label={`${label} to`} className={FIELD_INPUT} />
+            <input type="date" value={to} min={from || DATE_MIN} max={DATE_MAX} onChange={(e) => onChange(from, e.target.value)} aria-label={`${label} to`} className={FIELD_INPUT} />
           </label>
         </div>
+        {inverted ? (
+          <p role="alert" className="mt-2 text-[11px] font-semibold text-rose-700">
+            {label}: From is after To. Swap the two dates or widen the range.
+          </p>
+        ) : null}
       </div>
     </div>
   )

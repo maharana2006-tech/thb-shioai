@@ -164,8 +164,11 @@ export const labelTemplateService = {
     return response.data ?? null
   },
 
+  /** BUG-110 — an existing template is updated in place (PUT); only a new one is POSTed. */
   save: (template: LabelTemplate) =>
-    apiClient.post<ApiResponse<LabelTemplate>>(BASE, template),
+    template.id != null
+      ? apiClient.put<ApiResponse<LabelTemplate>>(`${BASE}/${template.id}`, template)
+      : apiClient.post<ApiResponse<LabelTemplate>>(BASE, template),
 
   remove: (id: number) => apiClient.delete<ApiResponse<void>>(`${BASE}/${id}`),
 

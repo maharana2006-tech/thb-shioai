@@ -9,6 +9,7 @@ import {
 } from '../api/cutoffService'
 import { warehouseService, type Warehouse } from '../api/warehouseService'
 import { notify } from '../utils/notify'
+import { serverFieldError } from '../utils/serverFieldErrors'
 import { TimezoneCombobox } from './TimezoneCombobox'
 
 /**
@@ -77,6 +78,22 @@ export default function CutoffsPage() {
     return () => outlet.registerRefresh(null)
   }, [outlet, reload])
 
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+  const editRule = (patch: Partial<typeof newRule>) => {
+    setNewRule({ ...newRule, ...patch })
+    setFieldErrors((cur) => (Object.keys(patch).some((k) => cur[k]) ? {} : cur))
+  }
+  const editHoliday = (patch: Partial<typeof newHoliday>) => {
+    setNewHoliday({ ...newHoliday, ...patch })
+    setFieldErrors((cur) => (Object.keys(patch).some((k) => cur[k]) ? {} : cur))
+  }
+  const fieldErr = (k: string) => fieldErrors[k]
+    ? <p role="alert" className="mt-1 text-[11.5px] text-rose-700">{fieldErrors[k]}</p>
+    : null
+  const formErrRow = (cols: number) => fieldErrors._form
+    ? <tr><td colSpan={cols} className="px-3 py-2"><p role="alert" className="rounded-md bg-rose-50 px-3 py-2 text-[12px] text-rose-800">{fieldErrors._form}</p></td></tr>
+    : null
+
   const addRule = async () => {
     setAddingRule(true)
     try {
@@ -90,9 +107,12 @@ export default function CutoffsPage() {
       })
       notify.success('Rule added.')
       setNewRule({ source: '', carrierCode: '', warehouseId: '', cutoffTime: '20:00', timezone: '' })
+      setFieldErrors({})
       await reload()
     } catch (e) {
-      notify.apiError(e, 'Rule add failed.')
+      const fe = serverFieldError(e)
+      if (fe) setFieldErrors({ [fe.field in newRule ? fe.field : '_form']: fe.message })
+      else notify.apiError(e, 'Rule add failed.')
     } finally {
       setAddingRule(false)
     }
@@ -151,9 +171,12 @@ export default function CutoffsPage() {
       })
       notify.success('Holiday added.')
       setNewHoliday({ holidayDate: '', name: '' })
+      setFieldErrors({})
       await reload()
     } catch (e) {
-      notify.apiError(e, 'Holiday add failed.')
+      const fe = serverFieldError(e)
+      if (fe) setFieldErrors({ [fe.field in newHoliday ? fe.field : '_form']: fe.message })
+      else notify.apiError(e, 'Holiday add failed.')
     } finally {
       setAddingHoliday(false)
     }
@@ -258,33 +281,37 @@ export default function CutoffsPage() {
             <tr className="bg-amber-50/40">
               <td className="px-3 py-2 text-slate-400">new</td>
               <td className="px-3 py-2">
-                <select className={inputCls} value={newRule.source} onChange={(e) => setNewRule({ ...newRule, source: e.target.value })}>
+                <select aria-label="New rule source" aria-invalid={fieldErrors.source ? true : undefined} className={inputCls} value={newRule.source} onChange={(e) => editRule({ source: e.target.value })}>
                   <option value="">any</option>
                   {SOURCES.map((s) => <option key={s} value={s}>{s}</option>)}
                 </select>
+                {fieldErr('source')}
               </td>
               <td className="px-3 py-2">
-                <select className={inputCls} value={newRule.carrierCode} onChange={(e) => setNewRule({ ...newRule, carrierCode: e.target.value })}>
+                <select aria-label="New rule carrier" aria-invalid={fieldErrors.carrierCode ? true : undefined} className={inputCls} value={newRule.carrierCode} onChange={(e) => editRule({ carrierCode: e.target.value })}>
                   <option value="">any</option>
                   {CARRIERS.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
+                {fieldErr('carrierCode')}
               </td>
               <td className="px-3 py-2">
                 {/* BUG-101 — warehouse picker by code; stored as the
                     internal id the backend expects, but the operator
                     sees + picks the code they recognise. */}
-                <select className={inputCls}
+                <select aria-label="New rule warehouse" className={inputCls} aria-invalid={fieldErrors.warehouseId ? true : undefined}
                         value={newRule.warehouseId}
-                        onChange={(e) => setNewRule({ ...newRule, warehouseId: e.target.value })}>
+                        onChange={(e) => editRule({ warehouseId: e.target.value })}>
                   <option value="">any</option>
                   {warehouses.map((w) => (
                     <option key={w.id} value={w.id ?? ''}>{w.code}</option>
                   ))}
                 </select>
+                {fieldErr('warehouseId')}
               </td>
               <td className="px-3 py-2">
-                <input className={inputCls} type="time" value={newRule.cutoffTime}
-                       onChange={(e) => setNewRule({ ...newRule, cutoffTime: e.target.value })} />
+                <input className={inputCls} type="time" value={newRule.cutoffTime} aria-invalid={fieldErrors.cutoffTime ? true : undefined}
+                       onChange={(e) => editRule({ cutoffTime: e.target.value })} />
+                {fieldErr('cutoffTime')}
               </td>
               <td className="px-3 py-2">
                 {/* BUG-100 — a free-text timezone box let 'Mars/Olympus' save
@@ -292,10 +319,11 @@ export default function CutoffsPage() {
                     only canonical IANA zones can be picked. */}
                 <TimezoneCombobox
                   value={newRule.timezone}
-                  onChange={(tz) => setNewRule({ ...newRule, timezone: tz })}
+                  onChange={(tz) => editRule({ timezone: tz })}
                   placeholder="e.g. America/New_York"
                   className={inputCls}
                 />
+                {fieldErr('timezone')}
               </td>
               <td className="px-3 py-2 text-slate-400 text-[11px]">on save</td>
               <td className="px-3 py-2 text-right">
@@ -305,6 +333,7 @@ export default function CutoffsPage() {
                 </button>
               </td>
             </tr>
+            {formErrRow(8)}
           </tbody>
         </table>
       </section>
@@ -351,12 +380,14 @@ export default function CutoffsPage() {
             ) : null}
             <tr className="bg-amber-50/40">
               <td className="px-3 py-2">
-                <input className={inputCls} type="date" value={newHoliday.holidayDate}
-                       onChange={(e) => setNewHoliday({ ...newHoliday, holidayDate: e.target.value })} />
+                <input className={inputCls} type="date" value={newHoliday.holidayDate} aria-invalid={fieldErrors.holidayDate ? true : undefined}
+                       onChange={(e) => editHoliday({ holidayDate: e.target.value })} />
+                {fieldErr('holidayDate')}
               </td>
               <td className="px-3 py-2">
-                <input className={inputCls} type="text" placeholder="e.g. Independence Day"
-                       value={newHoliday.name} onChange={(e) => setNewHoliday({ ...newHoliday, name: e.target.value })} />
+                <input className={inputCls} type="text" placeholder="e.g. Independence Day" aria-invalid={fieldErrors.name ? true : undefined}
+                       value={newHoliday.name} onChange={(e) => editHoliday({ name: e.target.value })} />
+                {fieldErr('name')}
               </td>
               <td className="px-3 py-2 text-slate-400 text-[11px]">on save</td>
               <td className="px-3 py-2 text-right">
@@ -367,6 +398,7 @@ export default function CutoffsPage() {
                 </button>
               </td>
             </tr>
+            {formErrRow(4)}
           </tbody>
         </table>
       </section>

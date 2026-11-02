@@ -1,5 +1,7 @@
 package com.multiship.backend.service;
 
+import com.multiship.backend.exception.FieldValidationException;
+
 import com.multiship.backend.model.LabelTemplate;
 import com.multiship.backend.repository.LabelTemplateRepository;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -32,6 +34,8 @@ public class LabelTemplateServiceImpl implements LabelTemplateService {
     // compile without wiring a mock.
     @Autowired(required = false)
     private AuditService audit;
+    @Autowired(required = false)
+    private com.multiship.backend.repository.ClientRepository clientRepository;
 
     @Autowired
     public LabelTemplateServiceImpl(LabelTemplateRepository repo) {
@@ -94,6 +98,26 @@ public class LabelTemplateServiceImpl implements LabelTemplateService {
      *          data:image/jpeg;base64,… + JPEG SOI (FF D8 FF)
      * Blank / null is OK — logo is optional.
      */
+    static final java.util.Set<String> TEMPLATE_TYPES =
+            java.util.Set.of("PACKING_SLIP", "RETURN_COVER", "COMMERCIAL_INVOICE");
+    private static final java.util.regex.Pattern HEX_COLOUR = java.util.regex.Pattern.compile("#[0-9A-Fa-f]{6}");
+
+    /** BUG-111 / BUG-115 — the screen's fixed lists are not a contract; the API checks too. */
+    private void validateFields(LabelTemplate template) {
+        if (!TEMPLATE_TYPES.contains(template.getTemplateType())) {
+            throw new FieldValidationException("templateType",
+                    "Document type must be one of " + String.join(", ", TEMPLATE_TYPES) + ".");
+        }
+        if (template.getPrimaryColor() != null && !template.getPrimaryColor().isBlank()
+                && !HEX_COLOUR.matcher(template.getPrimaryColor().trim()).matches()) {
+            throw new FieldValidationException("primaryColor", "Colour must be a hex value such as #1F150C.");
+        }
+        if (template.getTenantId() != null && clientRepository != null
+                && !clientRepository.existsByClientCodeIgnoreCase(template.getTenantId())) {
+            throw new FieldValidationException("tenantId", "Client " + template.getTenantId() + " does not exist.");
+        }
+    }
+
     private static void validateLogoBytes(String dataUrl) {
         if (dataUrl == null || dataUrl.isBlank()) return;
         boolean png = dataUrl.startsWith("data:image/png;base64,");
@@ -136,13 +160,40 @@ public class LabelTemplateServiceImpl implements LabelTemplateService {
             template.setTenantId(null);
         }
         validateLogoBytes(template.getLogoBase64());
+        validateFields(template);
         LocalDateTime now = LocalDateTime.now();
         boolean isCreate = template.getId() == null;
+        LabelTemplate target = template;
         if (isCreate) {
             template.setCreatedAt(now);
+        } else {
+            // BUG-110 — toEntity() carries no created_at, so an update used to
+            // write NULL into a NOT NULL column (a generic 400). Load the row,
+            // apply the editable fields, keep created_at.
+            LabelTemplate existing = findById(template.getId()).orElseThrow(() ->
+                    new FieldValidationException("id", "Template " + template.getId() + " no longer exists."));
+            existing.setTenantId(template.getTenantId());
+            existing.setTemplateType(template.getTemplateType());
+            existing.setLogoBase64(template.getLogoBase64());
+            existing.setPrimaryColor(template.getPrimaryColor());
+            existing.setHeaderText(template.getHeaderText());
+            existing.setFooterText(template.getFooterText());
+            existing.setShowItems(template.getShowItems());
+            existing.setLayoutJson(template.getLayoutJson());
+            target = existing;
         }
-        template.setUpdatedAt(now);
-        LabelTemplate saved = repo.save(template);
+        // BUG-119 — one template per (tenant, type): say so on the Type field with a 409.
+        final LabelTemplate candidate = target;
+        repo.findByTenantAndType(candidate.getTenantId(), candidate.getTemplateType())
+                .filter(other -> other.getId() != null && !other.getId().equals(candidate.getId()))
+                .ifPresent(other -> {
+                    throw new FieldValidationException("templateType",
+                            "A " + candidate.getTemplateType() + " template already exists for "
+                                    + (candidate.getTenantId() == null ? "the platform" : candidate.getTenantId()) + ".",
+                            org.springframework.http.HttpStatus.CONFLICT);
+                });
+        target.setUpdatedAt(now);
+        LabelTemplate saved = repo.save(target);
         if (audit != null) {
             String key = (saved.getTenantId() == null ? "PLATFORM" : saved.getTenantId())
                     + "/" + saved.getTemplateType();

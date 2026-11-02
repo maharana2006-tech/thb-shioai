@@ -53,6 +53,8 @@ public class ImportBatchRowStore {
             text("order_ref", OrderImportRowDTO::getOrderRef, OrderImportRowDTO::setOrderRef),
             text("client_code", OrderImportRowDTO::getClientCode, OrderImportRowDTO::setClientCode),
             text("bill_to", OrderImportRowDTO::getBillTo, OrderImportRowDTO::setBillTo),
+            text("third_party_postal_code", OrderImportRowDTO::getThirdPartyPostalCode, OrderImportRowDTO::setThirdPartyPostalCode),
+            text("third_party_country", OrderImportRowDTO::getThirdPartyCountry, OrderImportRowDTO::setThirdPartyCountry),
             text("warehouse_code", OrderImportRowDTO::getWarehouseCode, OrderImportRowDTO::setWarehouseCode),
             text("recipient_name", OrderImportRowDTO::getRecipientName, OrderImportRowDTO::setRecipientName),
             text("recipient_company", OrderImportRowDTO::getRecipientCompany, OrderImportRowDTO::setRecipientCompany),

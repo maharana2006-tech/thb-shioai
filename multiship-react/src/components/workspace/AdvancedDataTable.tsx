@@ -42,6 +42,8 @@ import {
   FiChevronUp,
   FiChevronLeft,
   FiChevronRight,
+  FiChevronsLeft,
+  FiChevronsRight,
   FiColumns,
   FiDownload,
   FiRotateCcw,
@@ -303,7 +305,9 @@ function SortableHeader<T extends RowData>({
     >
       <div className="flex items-center gap-1">
         {/* Drag grip — the whole label acts as the drag handle. */}
-        <span {...attributes} {...listeners} className={`flex-1 cursor-grab active:cursor-grabbing ${
+        {/* BUG-198 — the grip is pointer-only; keyboard users sort with the
+            header button and reorder from the Columns menu. */}
+        <span {...attributes} {...listeners} tabIndex={-1} className={`flex-1 cursor-grab active:cursor-grabbing ${
           (header.column.columnDef.meta as { align?: 'right' } | undefined)?.align === 'right' ? 'text-right' : ''}`}>
           {children}
         </span>
@@ -322,6 +326,9 @@ function SortableHeader<T extends RowData>({
     </th>
   )
 }
+
+/** BUG-195 — below `sm` an anchored popover becomes a full-width sheet with its own scroll. */
+export const PHONE_SHEET = ' max-sm:fixed max-sm:inset-x-4 max-sm:top-20 max-sm:w-auto max-sm:max-h-[calc(100vh-6rem)] max-sm:overflow-y-auto'
 
 export default function AdvancedDataTable<T extends RowData>({
   tableKey,
@@ -374,6 +381,11 @@ export default function AdvancedDataTable<T extends RowData>({
   const [internalSorting, setInternalSorting] = useState<SortingState>([])
   const [internalPageIndex, setInternalPageIndex] = useState(0)
   const [internalPageSize, setInternalPageSize] = useState(initialPageSize)
+  // BUG-011 — Export used to re-fire on rapid double-clicks because the
+  // button carried no disabled state during the (potentially long)
+  // handleExport call. Track it here so the toolbar button is
+  // self-contained — every parent that passes `onExport` benefits.
+  const [exporting, setExporting] = useState(false)
   // In manual mode, the parent owns sort + pagination; in default mode we
   // keep our own state so existing pages don't have to change anything.
   const sorting = manualSorting && sortingProp ? sortingProp : internalSorting
@@ -561,23 +573,44 @@ export default function AdvancedDataTable<T extends RowData>({
   const totalRows = totalRowCount ?? table.getPreFilteredRowModel().rows.length
   const visibleColumnCount = table.getVisibleLeafColumns().length
 
-  const runExport = () => {
-    // Server-side export: the parent fetches every filtered row and downloads it.
-    if (onExport) {
-      // BUG-038 — snapshot the visible leaf columns so the server-side
-      // export call can filter the CSV to match what's on screen.
-      const visibleIds = table.getVisibleLeafColumns().map((c) => c.id)
-      void onExport(visibleIds)
-      return
+  const runExport = async () => {
+    // BUG-011 — short-circuit a double-click while the previous export
+    // is still running. Pre-fix clicking twice fired two full export
+    // loops in parallel.
+    if (exporting) return
+    setExporting(true)
+    try {
+      // Server-side export: the parent fetches every filtered row and downloads it.
+      if (onExport) {
+        // BUG-038 — snapshot the visible leaf columns so the server-side
+        // export call can filter the CSV to match what's on screen.
+        const visibleIds = table.getVisibleLeafColumns().map((c) => c.id)
+        await onExport(visibleIds)
+        return
+      }
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+      downloadCsv(`${csvFilename || tableKey}-${stamp}.csv`, exportRowValues(table))
+    } finally {
+      setExporting(false)
     }
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-    downloadCsv(`${csvFilename || tableKey}-${stamp}.csv`, exportRowValues(table))
   }
 
   const resetLayout = () => {
     clearLayout(tableKey)
     setColumnOrder(defaultOrder)
-    setColumnVisibility(defaultVisibility)
+    // BUG-009 — pre-fix Reset wrote `defaultVisibility`, which is
+    // derived from `initialHiddenColumns`. On the Orders list those
+    // auto-hide via data heuristics (e.g. "every row has null
+    // batchId → hide the Batch column"), so Reset snapped the Batch
+    // column back to false even when the operator had deliberately
+    // enabled it. Operator read it as "Reset hid my column".
+    //
+    // Reset means "undo my layout tweaks" → every column visible.
+    // The initial-hidden heuristic still applies on first mount
+    // (persisted layout null → defaultVisibility seeds state) but
+    // Reset is an explicit "show me everything" moment. The operator
+    // can re-hide via the Columns menu.
+    setColumnVisibility({})
     setColumnSizing({})
     // BUG-074 — Reset layout used to clear pinning to { start:[], end:[] }
     // which unpinned the row-actions column (meta.pinnedByDefault='end')
@@ -771,8 +804,9 @@ export default function AdvancedDataTable<T extends RowData>({
             }
 
             const hasDraft = draftColumnOrder != null
+            // BUG-195 — on a phone the anchored popover ran off the left edge; open as a sheet.
             return (
-              <div className="absolute right-0 z-20 mt-1.5 w-72 rounded-xl border border-[#e3d9c4] bg-white p-2 shadow-[0_12px_32px_rgba(31,21,12,0.12)]">
+              <div className={`absolute right-0 z-20 mt-1.5 w-72 rounded-xl border border-[#e3d9c4] bg-white p-2 shadow-[0_12px_32px_rgba(31,21,12,0.12)]${PHONE_SHEET}`}>
                 {orderedIds.map((id, idx) => {
                   const col = idToCol.get(id)
                   if (!col) return null
@@ -920,7 +954,7 @@ export default function AdvancedDataTable<T extends RowData>({
             Density
           </button>
           {openMenu === 'density' ? (
-            <div className="absolute right-0 z-20 mt-1.5 w-44 rounded-xl border border-[#e3d9c4] bg-white p-2 shadow-[0_12px_32px_rgba(31,21,12,0.12)]">
+            <div className={`absolute right-0 z-20 mt-1.5 w-44 rounded-xl border border-[#e3d9c4] bg-white p-2 shadow-[0_12px_32px_rgba(31,21,12,0.12)]${PHONE_SHEET}`}>
               {(['compact', 'comfortable'] as const).map((d) => (
                 <button
                   key={d}
@@ -943,12 +977,18 @@ export default function AdvancedDataTable<T extends RowData>({
 
         <button
           type="button"
-          onClick={runExport}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
-          title="Export the current view as CSV — visible columns, filtered rows"
+          onClick={() => { void runExport() }}
+          disabled={exporting}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-50"
+          title={exporting
+            ? 'Export running — hang on while the server collects every row'
+            : 'Export the current view as CSV — visible columns, filtered rows'}
+          aria-busy={exporting ? true : undefined}
         >
-          <FiDownload className="h-3.5 w-3.5" />
-          Export
+          {exporting
+            ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#5a4526]" />
+            : <FiDownload className="h-3.5 w-3.5" />}
+          {exporting ? 'Exporting…' : 'Export'}
         </button>
 
         {toolbarActions}
@@ -968,6 +1008,19 @@ export default function AdvancedDataTable<T extends RowData>({
             ))}
           </select>
           <div className="flex items-center gap-1">
+            {/* BUG-016 — First / Last pager alongside the existing
+                Prev / Next. On a 30-page result set the operator used
+                to click Next 29 times to reach the end; now one click. */}
+            <button
+              type="button"
+              onClick={() => table.setPageIndex(0)}
+              disabled={!table.getCanPreviousPage()}
+              aria-label="First page"
+              title="First page"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#5a4526] transition hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <FiChevronsLeft className="h-3.5 w-3.5" />
+            </button>
             <button
               type="button"
               onClick={() => table.previousPage()}
@@ -988,6 +1041,16 @@ export default function AdvancedDataTable<T extends RowData>({
               className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#5a4526] transition hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40"
             >
               <FiChevronRight className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => table.setPageIndex(Math.max(0, pageCount - 1))}
+              disabled={!table.getCanNextPage()}
+              aria-label="Last page"
+              title="Last page"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#5a4526] transition hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <FiChevronsRight className="h-3.5 w-3.5" />
             </button>
           </div>
         </div>
@@ -1034,13 +1097,17 @@ export default function AdvancedDataTable<T extends RowData>({
                     {group.headers.map((header) => {
                       const canSort = header.column.getCanSort()
                       const sortDir = header.column.getIsSorted()
+                      // BUG-198 — a sortable heading is a real button so Enter /
+                      // Space sort it; the drag grip is no longer a tab stop.
+                      const Label = canSort ? 'button' : 'span'
                       return (
                         <SortableHeader key={header.id} header={header} density={density}>
                           {header.isPlaceholder
                             ? null
                             : (
-                              <span
-                                className={`${(header.column.columnDef.meta as { align?: string } | undefined)?.align === 'right' ? 'flex w-full justify-end' : 'inline-flex'} items-center gap-1 ${canSort ? 'cursor-pointer' : ''}`}
+                              <Label
+                                type={canSort ? 'button' : undefined}
+                                className={`${(header.column.columnDef.meta as { align?: string } | undefined)?.align === 'right' ? 'flex w-full justify-end' : 'inline-flex'} items-center gap-1 ${canSort ? 'cursor-pointer font-inherit text-inherit' : ''}`}
                                 onClick={(e) => {
                                   // Sort on click but don't trip the drag listener
                                   // when the user's actually clicking to sort.
@@ -1049,6 +1116,22 @@ export default function AdvancedDataTable<T extends RowData>({
                                   header.column.getToggleSortingHandler()?.(e)
                                 }}
                                 onPointerDown={(e) => e.stopPropagation()}
+                                // The dnd-kit grip around this label treats Enter / Space
+                                // as "start dragging" and swallows the click; keep them here.
+                                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation() }}
+                                // BUG-016 — on-screen headers can be short ("Dest",
+                                // "Gen") to fit narrow columns, but the Columns menu
+                                // uses `meta.headerLabel` (the full name). Hovering
+                                // the short header now reveals the full name so
+                                // operators don't have to open the Columns menu to
+                                // decode an abbreviation.
+                                title={(() => {
+                                  const meta = header.column.columnDef.meta as { headerLabel?: string } | undefined
+                                  const label = meta?.headerLabel
+                                  const raw = header.column.columnDef.header
+                                  const short = typeof raw === 'string' ? raw : undefined
+                                  return label && short && label !== short ? label : undefined
+                                })()}
                               >
                                 {flexRender(header.column.columnDef.header, header.getContext())}
                                 {canSort ? (
@@ -1060,7 +1143,7 @@ export default function AdvancedDataTable<T extends RowData>({
                                     <FiChevronDown className="h-3 w-3 text-[#dcd4c4]" />
                                   )
                                 ) : null}
-                              </span>
+                              </Label>
                             )}
                         </SortableHeader>
                       )

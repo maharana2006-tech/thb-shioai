@@ -74,4 +74,13 @@ public class OrderListFilters {
      * {@code label_batch.is_return} (legacy 'Y'/'N' column).
      */
     private String isReturn;
+
+    /**
+     * BUG-001 — international tri-state: {@code "Y"} intl-only,
+     * {@code "N"} domestic-only, null / blank = all. Matched against
+     * {@code label_batch.intl_yn}. Dashboard's intlPending tile deep-
+     * links as {@code ?intl=Y} so the operator lands on the Pending
+     * subset that produced the tile's count.
+     */
+    private String intl;
 }

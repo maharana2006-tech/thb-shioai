@@ -83,6 +83,8 @@ vi.mock('../utils/notify', () => ({
     confirm: (...args: unknown[]) => notifyConfirmMock(...args),
     success: (...args: unknown[]) => notifySuccessMock(...args),
     error: (...args: unknown[]) => notifyErrorMock(...args),
+    // notify.invalid is the titled form of error; tests treat them alike.
+    invalid: (...args: unknown[]) => notifyErrorMock(...args),
     apiError: (...args: unknown[]) => notifyApiErrorMock(...args),
     info: vi.fn(),
   },
@@ -475,7 +477,7 @@ describe('PackagesPage — write controls gated to ADMIN', () => {
     await waitFor(() => expect(screen.getByText('Box A')).toBeInTheDocument())
     expect(screen.getByRole('button', { name: /Add Package/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Make default/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /^Edit$/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Edit / })).toBeInTheDocument()
     expect(screen.getByLabelText('Delete Box A')).toBeInTheDocument()
   })
 
@@ -492,7 +494,7 @@ describe('PackagesPage — write controls gated to ADMIN', () => {
       // …but every mutating control is gone (backend 403s these for non-admins).
       expect(screen.queryByRole('button', { name: /Add Package/i })).not.toBeInTheDocument()
       expect(screen.queryByRole('button', { name: /Make default/i })).not.toBeInTheDocument()
-      expect(screen.queryByRole('button', { name: /^Edit$/ })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /^Edit / })).not.toBeInTheDocument()
       expect(screen.queryByLabelText('Delete Box A')).not.toBeInTheDocument()
     },
   )
@@ -508,7 +510,7 @@ describe('PackagesPage — F1 kind switch clears the other-branch fields', () =>
 
     await waitFor(() => expect(screen.getByText('Small')).toBeInTheDocument())
     await act(async () => {
-      await userEvent.click(screen.getByRole('button', { name: /^Edit$/ }))
+      await userEvent.click(screen.getByRole('button', { name: /^Edit / }))
     })
 
     // Confirm CUSTOM dims prefilled with 10.
@@ -542,7 +544,7 @@ describe('PackagesPage — F3 editor unsaved-changes prompt', () => {
 
     await waitFor(() => expect(screen.getByText('Small')).toBeInTheDocument())
     await act(async () => {
-      await userEvent.click(screen.getByRole('button', { name: /^Edit$/ }))
+      await userEvent.click(screen.getByRole('button', { name: /^Edit / }))
     })
     // No edits — click Cancel.
     await act(async () => {
@@ -560,7 +562,7 @@ describe('PackagesPage — F3 editor unsaved-changes prompt', () => {
 
     await waitFor(() => expect(screen.getByText('Small')).toBeInTheDocument())
     await act(async () => {
-      await userEvent.click(screen.getByRole('button', { name: /^Edit$/ }))
+      await userEvent.click(screen.getByRole('button', { name: /^Edit / }))
     })
 
     // Dirty the name field.
@@ -585,7 +587,7 @@ describe('PackagesPage — F3 editor unsaved-changes prompt', () => {
 
     await waitFor(() => expect(screen.getByText('Small')).toBeInTheDocument())
     await act(async () => {
-      await userEvent.click(screen.getByRole('button', { name: /^Edit$/ }))
+      await userEvent.click(screen.getByRole('button', { name: /^Edit / }))
     })
 
     const nameInput = screen.getAllByRole('textbox')[0] as HTMLInputElement

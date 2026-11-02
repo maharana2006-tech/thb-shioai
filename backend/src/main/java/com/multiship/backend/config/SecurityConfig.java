@@ -188,7 +188,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/carrier-accounts/stamps-sera/callback")
                             .permitAll()
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
-                        .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
+                        // BUG-151 — springdoc lives under /api so the SPA's /api proxy can reach it.
+                        .requestMatchers("/api/v3/api-docs/**", "/api/swagger-ui/**", "/api/swagger-ui.html").permitAll()
                         // K8s liveness/readiness + external uptime probes hit these.
                         // The /actuator exposure allowlist in application.properties
                         // (management.endpoints.web.exposure.include=health,info,prometheus)
@@ -236,9 +237,16 @@ public class SecurityConfig {
                 )
                 .exceptionHandling(handling -> handling
                         // Missing/invalid token -> 401, authenticated but wrong role -> 403.
-                        .authenticationEntryPoint((request, response, ex) ->
+                        .authenticationEntryPoint((request, response, ex) -> {
+                            // BUG-149 — an API client never "signs in"; name the header it is missing.
+                            if (isExternalApiPath(request)) {
                                 writeJsonError(response, HttpServletResponse.SC_UNAUTHORIZED,
-                                        "UNAUTHORIZED", "Authentication required. Please sign in again."))
+                                        "API_KEY_REQUIRED", "Invalid or missing API key (X-API-Key header).");
+                            } else {
+                                writeJsonError(response, HttpServletResponse.SC_UNAUTHORIZED,
+                                        "UNAUTHORIZED", "Authentication required. Please sign in again.");
+                            }
+                        })
                         .accessDeniedHandler((request, response, ex) ->
                                 writeJsonError(response, HttpServletResponse.SC_FORBIDDEN,
                                         "FORBIDDEN", "You do not have permission to perform this action."))
@@ -287,6 +295,13 @@ public class SecurityConfig {
                         org.springframework.security.web.access.intercept.AuthorizationFilter.class);
 
         return http.build();
+    }
+
+    static boolean isExternalApiPath(jakarta.servlet.http.HttpServletRequest request) {
+        String path = request.getRequestURI();
+        String ctx = request.getContextPath();
+        if (ctx != null && !ctx.isEmpty() && path.startsWith(ctx)) path = path.substring(ctx.length());
+        return path.startsWith("/api/v1/external/") || path.startsWith("/api/v2/external/");
     }
 
     private static void writeJsonError(HttpServletResponse response, int status, String errorCode, String message)

@@ -128,7 +128,8 @@ export default function SystemSettingsPage() {
     if (!uspsReadiness.platformCreds.clientIdSet) parts.push('USPS platform CLIENT_ID')
     if (!uspsReadiness.platformCreds.clientSecretSet) parts.push('USPS platform CLIENT_SECRET')
     if (uspsReadiness.pendingAccounts.length) {
-      const tenants = uspsReadiness.pendingAccounts.slice(0, 3).map((r) => r.tenantCode).join(', ')
+      // BUG-154 — the platform-level account has no tenant; name it instead of leaving a blank.
+      const tenants = uspsReadiness.pendingAccounts.slice(0, 3).map((r) => r.tenantCode || 'platform account').join(', ')
       const more =
         uspsReadiness.pendingAccounts.length > 3
           ? ` (+${uspsReadiness.pendingAccounts.length - 3} more)`
@@ -143,7 +144,7 @@ export default function SystemSettingsPage() {
   const save = async (key: string) => {
     const value = (inputs[key] ?? '').trim()
     if (!value) {
-      notify.error('Enter a value to save.')
+      notify.invalid('Enter a value to save.')
       return
     }
     setSavingKey(key)

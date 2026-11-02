@@ -525,7 +525,7 @@ class ClientServiceImplTest {
                 .thenReturn(Optional.of(c));
         // No orders — delete proceeds.
         when(orderRepo.countOrdersUnified(anyString(), eq("ACME"), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
                 .thenReturn(0L);
 
         // Owned warehouse must be deleted alongside the client (Sprint 55
@@ -564,7 +564,7 @@ class ClientServiceImplTest {
         when(clientRepo.findByClientCodeIgnoreCase("ACME"))
                 .thenReturn(Optional.of(c));
         when(orderRepo.countOrdersUnified(anyString(), eq("ACME"), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
                 .thenReturn(5L);
 
         ApiResponse<Void> res = service.deleteClient("acme");
@@ -629,7 +629,7 @@ class ClientServiceImplTest {
         when(accountRepo.findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc("ACME"))
                 .thenReturn(List.of());
         when(orderRepo.countOrdersUnified(any(), any(), any(), any(), any(), any(), any(), any(),
-                any(), any(), any(), any(), any(), anyString(), any())).thenReturn(0L);
+                any(), any(), any(), any(), any(), anyString(), any(), any())).thenReturn(0L);
 
         String csv = service.exportClientsCsv(ClientListFilters.builder().build());
 
@@ -638,6 +638,30 @@ class ClientServiceImplTest {
                 lines[0]);
         assertEquals(2, lines.length, "header + one data row");
         assertTrue(lines[1].startsWith("ACME,Acme ACME,"));
+    }
+
+    /** BUG-070 — the CSV must not carry full carrier account numbers. */
+    @Test
+    void exportClientsCsv_masksCarrierAccountNumbers() {
+        CarrierAccountRef acct = sampleAccount(1L, "ACME", true);
+        acct.setAccountNumber("987654321");
+        when(clientRepo.countFiltered(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(1L);
+        when(clientRepo.filterCodes(any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), eq(0), eq(1))).thenReturn(List.of("ACME"));
+        when(clientRepo.findByClientCodeIgnoreCase("ACME"))
+                .thenReturn(Optional.of(sampleClient("ACME")));
+        when(accountRepo.findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc("ACME"))
+                .thenReturn(List.of(acct));
+        when(orderRepo.countOrdersUnified(any(), any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), anyString(), any(), any())).thenReturn(0L);
+
+        String csv = service.exportClientsCsv(ClientListFilters.builder().build());
+
+        assertTrue(csv.contains("UPS:****4321"), csv);
+        assertFalse(csv.contains("987654321"), "full account number must not be exported");
+        assertEquals("****", ClientServiceImpl.maskAccount("1234"));
+        assertEquals("", ClientServiceImpl.maskAccount(null));
     }
 
     @Test
@@ -653,7 +677,7 @@ class ClientServiceImplTest {
         when(accountRepo.findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc("ACME"))
                 .thenReturn(List.of());
         when(orderRepo.countOrdersUnified(any(), any(), any(), any(), any(), any(), any(), any(),
-                any(), any(), any(), any(), any(), anyString(), any())).thenReturn(0L);
+                any(), any(), any(), any(), any(), anyString(), any(), any())).thenReturn(0L);
 
         String csv = service.exportClientsCsv(ClientListFilters.builder().build());
 

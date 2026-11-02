@@ -1,8 +1,9 @@
 import { relativeTime } from '../utils/relativeTime'
 import { lazyWithRetry } from '../utils/lazyWithRetry'
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useModalDismiss } from '../hooks/useModalDismiss'
 import { createPortal } from 'react-dom'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import type { SortingState } from '@tanstack/react-table'
 import { notify } from '../utils/notify'
 // Espresso/cream button tokens — shared across the app (see components/ui/buttons).
@@ -48,7 +49,7 @@ import type { CarrierAccountRef, OrderAccountResolution } from '../api/accountRe
 import AccountScenarioBadge from './workspace/AccountScenarioBadge'
 // PR #555 — inline compact status dot+label supersedes OrderStatusBadge.
 // import OrderStatusBadge from './workspace/OrderStatusBadge'
-import AdvancedDataTable, { type ColumnDef } from './workspace/AdvancedDataTable'
+import AdvancedDataTable, { PHONE_SHEET, type ColumnDef } from './workspace/AdvancedDataTable'
 import SendToPrinterDialog from './workspace/SendToPrinterDialog'
 import { useAppSession } from '../hooks/useAppSession'
 import { normalizeRole } from '../utils/roles'
@@ -70,7 +71,7 @@ const BulkLabelModal = lazyWithRetry(() => import('./modals/BulkLabelModal'))
 const MultiWarehouseSplitModal = lazyWithRetry(() => import('./modals/MultiWarehouseSplitModal'))
 const OrderImportModal = lazyWithRetry(() => import('./modals/OrderImportModal'))
 
-type View = 'all' | 'ready' | 'details' | 'client' | 'choose' | 'failed' | 'generated'
+type View = 'all' | 'ready' | 'details' | 'client' | 'choose' | 'failed' | 'generated' | 'voided'
 
 /** "City, State" for the destination column — omits a blank/null state so an
  *  international address with no province doesn't render "City, null". */
@@ -86,6 +87,7 @@ const VIEW_QUERY: Record<View, { status?: string; resolution?: string; defaultDi
   choose: { status: 'PENDING', resolution: 'CHOOSE_ACCOUNT', defaultDirection: 'DESC' },
   failed: { status: 'ERROR', defaultDirection: 'DESC' },
   generated: { status: 'GENERATED', defaultDirection: 'DESC' },
+  voided: { status: 'VOIDED', defaultDirection: 'DESC' },
 }
 
 /** How many ready orders one "Generate all ready" run will pull from the server. */
@@ -116,15 +118,25 @@ export default function OrdersWorkspace() {
   const navigate = useNavigate()
   const { role: sessionRole } = useAppSession()
   const location = useLocation()
+  // BUG-014 — tab / search / sort / page sync to the URL so the back
+  // button, bookmarks and Share-this-view links all work. Keep it
+  // narrow: the five keys named by the audit, not every column filter.
+  // Each tracked key owns a short slug (v / q / sort / dir / page) and
+  // writes only when the state actually diverges from the URL.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const urlView = (() => {
+    const v = searchParams.get('v')
+    return v && v in VIEW_QUERY ? (v as View) : 'all'
+  })()
 
   const [stats, setStats] = useState<QueueStats | null>(null)
   const [rows, setRows] = useState<Order[]>([])
   const [totalPages, setTotalPages] = useState(1)
   const [loading, setLoading] = useState(true)
 
-  const [view, setView] = useState<View>('all')
-  const [query, setQuery] = useState('')
-  const [debouncedQuery, setDebouncedQuery] = useState('')
+  const [view, setView] = useState<View>(urlView)
+  const [query, setQuery] = useState(searchParams.get('q') ?? '')
+  const [debouncedQuery, setDebouncedQuery] = useState(searchParams.get('q') ?? '')
   const [clientFilter, setClientFilter] = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
@@ -134,17 +146,45 @@ export default function OrdersWorkspace() {
   const [carrierFilter, setCarrierFilter] = useState('')
   // Returns F3 — is-return tri-state: '' = all, 'Y' = returns only, 'N' = shipments only.
   const [isReturnFilter, setIsReturnFilter] = useState<'' | 'Y' | 'N'>('')
+  // BUG-001 — intl tri-state. Dashboard's "International pending"
+  // tile deep-links as /orders?status=PENDING&intl=Y so the operator
+  // lands on the Pending subset that produced the tile's count.
+  // Read-only for now — the Dashboard tile seeds this on mount; no
+  // in-page UI toggle yet, so the setter stays absent until a filter
+  // chip for intl ships. (Prefixing with _ keeps tsc's unused-local
+  // check happy without losing the state tuple shape.)
+  const [intlFilter] = useState<'' | 'Y' | 'N'>(() => {
+    const v = new URLSearchParams(window.location.search).get('intl')
+    return v === 'Y' || v === 'N' ? v : ''
+  })
   const [clientCodes, setClientCodes] = useState<string[]>([])
   // Sprint 51 migration — sort is owned by the shared AdvancedDataTable now.
   // sortBy / sortDirection remain the fetch-effect inputs (derived below).
-  const [sorting, setSorting] = useState<SortingState>([{ id: 'orderNo', desc: true }])
+  // BUG-014 — seed from ?sort=&dir= so a bookmarked sort survives reload.
+  const initialSorting: SortingState = (() => {
+    const s = searchParams.get('sort')
+    const d = searchParams.get('dir')
+    if (!s) return [{ id: 'orderNo', desc: true }]
+    return [{ id: s, desc: d !== 'ASC' }]
+  })()
+  const [sorting, setSorting] = useState<SortingState>(initialSorting)
   const sortBy = sorting[0]?.id ?? 'orderNo'
   const sortDirection: 'ASC' | 'DESC' = sorting[0]?.desc ? 'DESC' : 'ASC'
   const [showFilters, setShowFilters] = useState(false)
   const filtersRef = useRef<HTMLDivElement>(null)
   const emptyColumnFilters = { orderNo: '', customer: '', city: '', status: '', tracking: '', batch: '' }
-  const [columnFilters, setColumnFilters] = useState(emptyColumnFilters)
-  const [debouncedFilters, setDebouncedFilters] = useState(emptyColumnFilters)
+  // Dashboard tiles deep-link as /orders?status=PENDING (etc). Seed the
+  // status column filter from the URL so the first server fetch matches
+  // the tile's count. The URL-sync effect below keeps it in sync on
+  // subsequent same-route navigations. VIEW_QUERY[view].status wins
+  // when view != 'all' (see fetch params), so this only applies to the
+  // default 'all' view.
+  const initialColumnFilters = (() => {
+    const status = searchParams.get('status')
+    return status ? { ...emptyColumnFilters, status } : emptyColumnFilters
+  })()
+  const [columnFilters, setColumnFilters] = useState(initialColumnFilters)
+  const [debouncedFilters, setDebouncedFilters] = useState(initialColumnFilters)
   /**
    * Batch-picker dropdown source (2026-09-14). Fetched from
    * /orders/batches whenever the OTHER filter surface changes AND the
@@ -153,7 +193,11 @@ export default function OrdersWorkspace() {
    * opened the panel yet (lazy fetch).
    */
   const [batchesForPicker, setBatchesForPicker] = useState<Array<{ batchId: number; count: number }>>([])
-  const [page, setPage] = useState(1)
+  // BUG-014 — seed from ?page=&size=.
+  const [page, setPage] = useState(() => {
+    const p = Number(searchParams.get('page'))
+    return Number.isFinite(p) && p > 0 ? p : 1
+  })
   const [pageSize, setPageSize] = useState(10)
   const [reloadToken, setReloadToken] = useState(0)
   /**
@@ -205,21 +249,61 @@ export default function OrdersWorkspace() {
   // Sprint 40 — CSV / XLSX import modal.
   const [importOpen, setImportOpen] = useState(false)
 
-  // The header's global search lands here as /orders?q=…
+  // The header's global search lands here as /orders?q=… and the
+  // dashboard tiles deep-link via ?view=…. Fires only when the URL's
+  // value actually diverges from current state so the write-back
+  // effect below (its own setSearchParams calls) doesn't re-trigger
+  // the read-back and clear selection on every keystroke.
   useEffect(() => {
     const params = new URLSearchParams(location.search)
-    const q = params.get('q')
-    if (q) {
+    const q = params.get('q') ?? ''
+    if (q && q !== query) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- sync workspace state from URL query params on nav; user-driven navigation trigger, not derivable at render
       setQuery(q)
       setView('all')
     }
     // Dashboard deep-links land on a specific pipeline tab (?view=ready…).
-    const v = params.get('view')
-    if (v && v in VIEW_QUERY) {
+    // Accept both ?view= (legacy) and ?v= (BUG-014 short slug).
+    const v = params.get('v') ?? params.get('view')
+    if (v && v in VIEW_QUERY && v !== view) {
       setView(v as View)
     }
+    // Dashboard "Pending now" / "International pending" tiles pass
+    // ?status=PENDING so the server fetch matches the tile count. Fold
+    // it into the status column filter; the fetch effect reads
+    // debouncedFilters.status when VIEW_QUERY[view].status is unset.
+    const statusParam = params.get('status')
+    if (statusParam) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- sync workspace state from URL query params on nav; user-driven navigation trigger
+      setColumnFilters((prev) => prev.status === statusParam ? prev : { ...prev, status: statusParam })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `query`/`view` intentionally excluded; this effect reconciles from URL changes, not from state changes.
   }, [location.search])
+
+  // BUG-014 — write tab / search / sort / page to the URL whenever
+  // they change, so the back button, bookmarks and Share-this-view
+  // links round-trip. replace: true avoids one browser-history entry
+  // per keystroke (debounced query is the write source).
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams)
+    // Only persist non-default values so the URL stays tidy. If the
+    // caller returns to the default state the param is removed.
+    if (view !== 'all') next.set('v', view); else next.delete('v')
+    if (debouncedQuery) next.set('q', debouncedQuery); else next.delete('q')
+    if (sortBy !== 'orderNo' || sortDirection !== 'DESC') {
+      next.set('sort', sortBy)
+      next.set('dir', sortDirection)
+    } else {
+      next.delete('sort'); next.delete('dir')
+    }
+    if (page !== 1) next.set('page', String(page)); else next.delete('page')
+    // Only write when something actually changed — otherwise we loop
+    // (setSearchParams → location.search → setSearchParams).
+    const cur = searchParams.toString()
+    const nxt = next.toString()
+    if (cur !== nxt) setSearchParams(next, { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- searchParams excluded; it's the OUTPUT target, including it loops.
+  }, [view, debouncedQuery, sortBy, sortDirection, page])
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedQuery(query.trim()), 350)
@@ -237,16 +321,12 @@ export default function OrdersWorkspace() {
     const onDocClick = (e: MouseEvent) => {
       if (!filtersRef.current?.contains(e.target as Node)) setShowFilters(false)
     }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setShowFilters(false)
-    }
     document.addEventListener('mousedown', onDocClick)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDocClick)
-      document.removeEventListener('keydown', onKey)
-    }
+    return () => document.removeEventListener('mousedown', onDocClick)
   }, [showFilters])
+  const filtersDialogRef = useRef<HTMLDivElement>(null)
+  // Filters apply live, so closing discards nothing: no prompt.
+  const closeFilters = useModalDismiss(showFilters, filtersDialogRef, () => setShowFilters(false), { confirmDiscard: false })
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- snap paging back to 1 on filter/view change; user-input-driven, not derivable at render
@@ -286,6 +366,7 @@ export default function OrdersWorkspace() {
           channel: channelFilter || undefined,
           carrier: carrierFilter || undefined,
           isReturn: isReturnFilter || undefined,
+          intl: intlFilter || undefined,
         })
         if (!cancelled) setBatchesForPicker(res.data ?? [])
       } catch {
@@ -396,6 +477,15 @@ export default function OrdersWorkspace() {
 
   // Rows for the active view — server-side filter + search + sort + pagination.
   useEffect(() => {
+    // BUG-013 — AbortController cancels an in-flight listOrders when
+    // the next filter / search / page tick fires. Pre-fix a late
+    // response from an earlier filter state could paint the wrong
+    // list over the current one (QA observed once on an UPS filter
+    // chain), and every intermediate request (keystroke, filter chip
+    // flip) consumed server capacity for a result the user never saw.
+    // The old `cancelled` flag only skipped the state write; it never
+    // closed the TCP connection.
+    const controller = new AbortController()
     let cancelled = false
     const spec = VIEW_QUERY[view]
     // eslint-disable-next-line react-hooks/set-state-in-effect -- flip loading spinner before async paginated order-list fetch
@@ -429,6 +519,7 @@ export default function OrdersWorkspace() {
       channel: channelFilter || undefined,
       carrier: carrierFilter || undefined,
       isReturn: isReturnFilter || undefined,
+      intl: intlFilter || undefined,
       page: page - 1,
       size: pageSize,
       sortBy,
@@ -436,14 +527,14 @@ export default function OrdersWorkspace() {
       includeResolution: view !== 'generated',
     }
     orderService
-      .listOrders(params)
+      .listOrders(params, { signal: controller.signal })
       .then((response) => {
         if (cancelled) return
         setRows(response.data?.content ?? [])
         setTotalPages(Math.max(response.data?.totalPages ?? 1, 1))
       })
       .catch((error) => {
-        if (cancelled) return
+        if (cancelled || isAbortError(error)) return
         notify.apiError(error, 'Failed to load orders.')
         setRows([])
       })
@@ -453,6 +544,7 @@ export default function OrdersWorkspace() {
 
     return () => {
       cancelled = true
+      controller.abort()
     }
   }, [view, page, pageSize, debouncedQuery, clientFilter, dateFrom, dateTo, sourceFilter, channelFilter, carrierFilter, isReturnFilter, sortBy, sortDirection, debouncedFilters, reloadToken])
 
@@ -469,13 +561,8 @@ export default function OrdersWorkspace() {
    *  tracking number, irreversibility, and the refund caveat. */
   const [confirmVoid, setConfirmVoid] = useState<{ orderNo: number; trackingNumber: string; packages?: number } | null>(null)
 
-  // Escape closes the void confirmation (parity with every other modal).
-  useEffect(() => {
-    if (!confirmVoid) return
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setConfirmVoid(null) }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [confirmVoid])
+  const voidDialogRef = useRef<HTMLDivElement>(null)
+  const requestVoidClose = useModalDismiss(!!confirmVoid, voidDialogRef, () => setConfirmVoid(null))
 
   const handleVoid = async (orderNo: number, trackingNumber: string | null, packages?: number | null) => {
     if (!trackingNumber) return
@@ -507,7 +594,11 @@ export default function OrdersWorkspace() {
   const clientMissingCount = stats?.clientMissing ?? 0
   const failedCount = stats?.failed ?? 0
   const generatedCount = stats?.generated ?? 0
-  const totalCount = readyCount + detailsCount + chooseCount + clientMissingCount + failedCount + generatedCount
+  // R2-BUG-012 UI residual — include VOIDED so the 'All' badge
+  // matches the list total (backend exposed it in queue-stats;
+  // pre-fix we were 12 short of /orders.totalElements).
+  const voidedCount = stats?.voided ?? 0
+  const totalCount = readyCount + detailsCount + chooseCount + clientMissingCount + failedCount + generatedCount + voidedCount
 
   // Which tabs exist right now (exceptions vanish at zero).
   const tabs = useMemo(() => {
@@ -519,9 +610,10 @@ export default function OrdersWorkspace() {
     if (clientMissingCount) list.push({ key: 'client', label: 'No client', count: clientMissingCount, tone: 'violet' })
     if (chooseCount) list.push({ key: 'choose', label: 'Pick account', count: chooseCount, tone: 'sky' })
     if (failedCount) list.push({ key: 'failed', label: 'Failed', count: failedCount, tone: 'rose' })
+    if (voidedCount) list.push({ key: 'voided', label: 'Voided', count: voidedCount, tone: 'slate' })
     list.push({ key: 'generated', label: 'Archive', count: generatedCount, tone: 'slate' })
     return list
-  }, [totalCount, readyCount, detailsCount, chooseCount, clientMissingCount, failedCount, generatedCount])
+  }, [totalCount, readyCount, detailsCount, chooseCount, clientMissingCount, failedCount, voidedCount, generatedCount])
 
   // If the active exception tab empties out, fall back to All orders.
   useEffect(() => {
@@ -996,9 +1088,22 @@ export default function OrdersWorkspace() {
     const text = selected.join('\n')
     try {
       await navigator.clipboard.writeText(text)
-      notify.info(`${selected.length} order number(s) copied to clipboard.`)
+      // BUG-020 — real title (not the generic "Heads up"), real plural
+      // (not "number(s)"), and a thousands separator for selections
+      // bigger than four digits.
+      const n = selected.length
+      const formatted = new Intl.NumberFormat().format(n)
+      notify.info({
+        title: n === 1 ? 'Order number copied' : 'Order numbers copied',
+        body: n === 1
+          ? '1 order number copied to clipboard.'
+          : `${formatted} order numbers copied to clipboard.`,
+      })
     } catch {
-      notify.info('Clipboard access blocked — check browser permissions.')
+      notify.info({
+        title: "Can't copy",
+        body: 'Clipboard access is blocked — check browser permissions.',
+      })
     }
   }, [materialisedSelection])
 
@@ -1024,6 +1129,25 @@ export default function OrdersWorkspace() {
   const [sendToPrinterOpen, setSendToPrinterOpen] = useState(false)
   const [printMenuOpen, setPrintMenuOpen] = useState(false)
   const [printMenuAnchor, setPrintMenuAnchor] = useState<{ top: number; left: number; width: number } | null>(null)
+  const printMenuBtnRef = useRef<HTMLButtonElement>(null)
+  const printMenuRef = useRef<HTMLDivElement>(null)
+  // BUG-199 — the menu is a portal at the end of the body, so move focus into
+  // it on open and walk the items with the arrow keys; Escape hands focus back.
+  const printMenuItems = () =>
+    Array.from(printMenuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)') ?? [])
+  useEffect(() => {
+    if (!printMenuOpen) return
+    printMenuItems()[0]?.focus()
+  }, [printMenuOpen])
+  const onPrintMenuKey = (e: React.KeyboardEvent) => {
+    const items = printMenuItems()
+    if (!items.length) return
+    const i = items.indexOf(document.activeElement as HTMLElement)
+    if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length].focus() }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus() }
+    else if (e.key === 'Home') { e.preventDefault(); items[0].focus() }
+    else if (e.key === 'End') { e.preventDefault(); items[items.length - 1].focus() }
+  }
   // Printing needs labelled orders: the All orders and Archive tabs (not Ready).
   const printableView = view === 'all' || view === 'generated'
   // While the bottom action bar shows, lift the toast stack above it so a
@@ -1059,7 +1183,11 @@ export default function OrdersWorkspace() {
     if (!printMenuOpen) return
     // The menu is pinned to where the button was; close it rather than let it drift.
     const close = () => setPrintMenuOpen(false)
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close() }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      close()
+      printMenuBtnRef.current?.focus()
+    }
     window.addEventListener('resize', close)
     window.addEventListener('scroll', close, true)
     window.addEventListener('keydown', onKey)
@@ -1084,7 +1212,14 @@ export default function OrdersWorkspace() {
       const res = await orderService.printDocuments(orderNos, docType)
       printPdfBlob(res.blob)
       const what = docType === 'LABEL' ? 'label' : 'commercial invoice'
-      const why = docType === 'LABEL' ? 'no label yet' : 'no invoice — domestic or no customs data'
+      // BUG-019 — "no label yet" was misleading: pre-"label-package
+      // change" UPS orders have the label stored but with format=UNKNOWN
+      // on the label_package row so /labels/{n}/pdf 404s. The order DOES
+      // have a label; the renderer just can't produce a PDF from it.
+      // Umbrella wording covers both actually-missing and format-unknown
+      // without claiming either specifically. The sniff-and-upgrade in
+      // LabelArtifactService self-heals most of these on view.
+      const why = docType === 'LABEL' ? 'no printable label' : 'no invoice — domestic or no customs data'
       notify.success(
         `Opening ${res.included} ${what}${res.included === 1 ? '' : 's'} in the print dialog`
           + (res.skipped > 0 ? ` · ${res.skipped} skipped (${why})` : '') + '.',
@@ -1349,15 +1484,27 @@ export default function OrdersWorkspace() {
   const advInputCls =
     'w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1 text-[12px] font-medium text-[#1f150c] outline-none transition placeholder:text-[#b6a684] focus:border-[#cdbf9f] focus:ring-2 focus:ring-[#f0e9d8]'
   /** A labeled advanced-filter field: mono uppercase caption + icon, then control.
-   *  Full width so fields stack one per row in the popover. */
-  const advField = (icon: ReactNode, label: string, control: ReactNode) => (
-    <label className="block w-full">
-      <span className="mb-1 flex items-center gap-1 font-mono text-[8.5px] font-bold uppercase tracking-[0.12em] text-[#a1906d]">
-        <span className="text-[#cdbf9f]">{icon}</span>
+   *  `active` darkens the caption and adds a dot so a set filter reads at a glance. */
+  const advField = (icon: ReactNode, label: string, control: ReactNode, active = false) => (
+    <label className="block w-full min-w-0">
+      <span
+        className={`mb-1 flex items-center gap-1 font-mono text-[8.5px] font-bold uppercase tracking-[0.12em] ${
+          active ? 'text-[#1f150c]' : 'text-[#a1906d]'
+        }`}
+      >
+        <span className={active ? 'text-[#1f150c]' : 'text-[#cdbf9f]'}>{icon}</span>
         {label}
+        {active ? <span aria-hidden className="ml-0.5 h-1.5 w-1.5 rounded-full bg-emerald-500" /> : null}
       </span>
       {control}
     </label>
+  )
+  /** Section heading inside the popover — sentence case, hairline rule. */
+  const advGroup = (title: string, children: ReactNode) => (
+    <section className="flex flex-col gap-2.5">
+      <h3 className="border-b border-[#e3d9c4] pb-1 text-[11.5px] font-semibold text-[#5a4526]">{title}</h3>
+      {children}
+    </section>
   )
 
   const showStatusColumn = view === 'all'
@@ -1368,7 +1515,7 @@ export default function OrdersWorkspace() {
   // just show a "—" in the chip cell (guarded in the cell renderer). No
   // point exposing on Ready/Details/Client/Choose since those are PENDING-
   // resolution filters and no tracking exists yet.
-  const showTracking = view === 'all' || view === 'generated'
+  const showTracking = view === 'all' || view === 'generated' || view === 'voided'
 
   const formatCreated = (value?: string | null) =>
     value
@@ -1548,6 +1695,10 @@ export default function OrdersWorkspace() {
       },
       meta: {
         headerLabel: 'Order #',
+        // BUG-016 — the Order # is the row's identity; hiding it leaves
+        // every row visually equal and operators lose their place. Pin
+        // it alongside Select / Actions in the hard-visible set.
+        hideable: false,
         exportValue: (o: Order) => o.orderDetails.orderNo,
       },
     })
@@ -1987,6 +2138,11 @@ export default function OrdersWorkspace() {
           ...baseParams,
           page: pageIdx,
           size: EXPORT_PAGE_SIZE,
+          // BUG-010 — opt into the server's bulk-export per-page cap
+          // (EXPORT_MAX_SIZE=1000). Without this the server clamps to
+          // 100 and a 34k order dump = 342 serial requests. With it:
+          // ~34 requests.
+          export: true,
         })
         const batch = response.data?.content ?? []
         collected.push(...batch)
@@ -1997,6 +2153,12 @@ export default function OrdersWorkspace() {
         }
         if (last || batch.length === 0) break
         pageIdx += 1
+        // BUG-010 — periodic progress tick so the operator knows the
+        // export is live on big dumps. Every 5 pages → ~5000 rows.
+        if (pageIdx % 5 === 0) {
+          const total = response.data?.totalElements ?? collected.length
+          notify.info(`Exporting… ${collected.length.toLocaleString()} of ${total.toLocaleString()} rows`)
+        }
       }
     } catch (e) {
       notify.apiError(e, 'Failed to export orders.')
@@ -2099,6 +2261,7 @@ export default function OrdersWorkspace() {
             </button>
             <div>
               <button type="button"
+                      ref={printMenuBtnRef}
                       onClick={(e) => {
                         // The toolbar scrolls sideways (overflow), which would clip an
                         // absolutely-placed menu — anchor a fixed menu to the button instead.
@@ -2119,6 +2282,8 @@ export default function OrdersWorkspace() {
                 <>
                   <div className="fixed inset-0 z-[60]" onClick={() => setPrintMenuOpen(false)} />
                   <div role="menu"
+                    ref={printMenuRef}
+                    onKeyDown={onPrintMenuKey}
                     style={{ top: printMenuAnchor.top, left: printMenuAnchor.left, width: printMenuAnchor.width }}
                     className="fixed z-[61] overflow-hidden rounded-xl border border-[#e3d9c4] bg-white py-1 text-left shadow-[0_18px_50px_rgba(15,23,42,0.18)]">
                     {selectedCount === 0 || !printableView ? (
@@ -2425,22 +2590,41 @@ export default function OrdersWorkspace() {
                 {/* Advanced filter popover — anchored to this container. */}
                 {showFilters ? (
                   <div
+                    ref={filtersDialogRef}
                     role="dialog"
                     aria-label="Advanced filters"
-                    className="absolute right-0 top-full z-30 mt-1.5 w-64 rounded-2xl border border-[#e3d9c4] bg-[#faf7f0] p-3.5 shadow-[0_20px_60px_rgba(31,21,12,0.18)]"
+                    className={`absolute right-0 top-full z-30 mt-1.5 w-[min(36rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-[#e3d9c4] bg-[#faf7f0] shadow-[0_20px_60px_rgba(31,21,12,0.18)]${PHONE_SHEET}`}
                   >
-                    <div className="mb-2.5 flex items-center justify-between">
-                      <span className="inline-flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-[#b6a684]">
-                        <FiSliders className="h-3 w-3" /> Advanced filters
-                      </span>
-                      <button
-                        type="button"
-                        onClick={clearColumnFilters}
-                        disabled={!activeFilterCount}
-                        className="inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#6b5c42] transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[#e3d9c4] disabled:hover:bg-white disabled:hover:text-[#6b5c42]"
-                      >
-                        <FiX className="h-3.5 w-3.5" /> Clear all
-                      </button>
+                    <div className="flex items-center justify-between gap-3 border-b border-[#e3d9c4] bg-white/70 px-4 py-2.5">
+                      <div className="flex items-center gap-2">
+                        <FiSliders className="h-3.5 w-3.5 text-[#a1906d]" />
+                        <span className="text-[13px] font-semibold text-[#1f150c]">Filters</span>
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[10.5px] font-semibold tabular-nums ${
+                            activeFilterCount ? 'bg-[#1f150c] text-[#f4eede]' : 'bg-[#f0e9d8] text-[#a1906d]'
+                          }`}
+                        >
+                          {activeFilterCount ? `${activeFilterCount} active` : 'None active'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={clearColumnFilters}
+                          disabled={!activeFilterCount}
+                          className="rounded-lg px-2 py-1 text-[11.5px] font-semibold text-[#6b5c42] transition hover:bg-rose-50 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[#6b5c42]"
+                        >
+                          Clear all
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void closeFilters()}
+                          aria-label="Close filters"
+                          className="rounded-lg p-1 text-[#6b5c42] transition hover:bg-[#f0e9d8] hover:text-[#1f150c]"
+                        >
+                          <FiX className="h-4 w-4" />
+                        </button>
+                      </div>
                     </div>
                     {/* Batch-override banner (2026-09-15) — explanatory
                         counterpart to the toolbar chip. Only shown when
@@ -2448,7 +2632,7 @@ export default function OrdersWorkspace() {
                         below understand the ones they populated aren't
                         reaching the server. */}
                     {batchOverrideActive ? (
-                      <div className="mb-2.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] leading-snug text-amber-900">
+                      <div className="mx-4 mt-3 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] leading-snug text-amber-900">
                         <div className="flex items-start gap-1.5">
                           <FiInfo className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
                           <div className="flex-1">
@@ -2467,187 +2651,220 @@ export default function OrdersWorkspace() {
                         </div>
                       </div>
                     ) : null}
-                    <div className="flex flex-col gap-2.5">
-                      {advField(
-                        <FiHash className="h-3 w-3" />,
-                        'Order #',
-                        <input
-                          value={columnFilters.orderNo}
-                          onChange={(e) => setColumnFilter('orderNo')(e.target.value)}
-                          placeholder="e.g. 900044"
-                          className={advInputCls}
-                        />,
-                      )}
-                      {advField(
-                        <FiUser className="h-3 w-3" />,
-                        'Client code',
-                        <input
-                          value={columnFilters.customer}
-                          onChange={(e) => setColumnFilter('customer')(e.target.value)}
-                          placeholder="e.g. ARHDEV"
-                          className={advInputCls}
-                        />,
-                      )}
-                      {advField(
-                        <FiMapPin className="h-3 w-3" />,
-                        'Destination',
-                        <input
-                          value={columnFilters.city}
-                          onChange={(e) => setColumnFilter('city')(e.target.value)}
-                          placeholder="City or state"
-                          className={advInputCls}
-                        />,
-                      )}
-                      {advField(
-                        <FiTruck className="h-3 w-3" />,
-                        'Tracking #',
-                        <input
-                          value={columnFilters.tracking}
-                          onChange={(e) => setColumnFilter('tracking')(e.target.value)}
-                          placeholder="Carrier tracking number"
-                          className={advInputCls}
-                        />,
-                      )}
-                      {/* Batch — dropdown populated from /orders/batches
-                          using the CURRENT filter surface, plus a
-                          free-text fallback (2026-09-14). When set the
-                          batch id overrides every other filter server-
-                          side (see the batchOnly branch above), so the
-                          operator sees the whole batch regardless of
-                          the surrounding scope. */}
-                      {advField(
-                        <FiPackage className="h-3 w-3" />,
-                        'Batch',
-                        <div className="flex items-center gap-1.5">
-                          <select
-                            value={columnFilters.batch}
-                            onChange={(e) => setColumnFilter('batch')(e.target.value)}
-                            className={`${advInputCls} min-w-0 flex-1`}
-                            title="Pick from batches visible under the current filters"
-                          >
-                            <option value="">Any batch</option>
-                            {batchesForPicker.map((b) => (
-                              <option key={b.batchId} value={String(b.batchId)}>
-                                Batch #{b.batchId} — {b.count.toLocaleString()} orders
-                              </option>
-                            ))}
-                          </select>
-                          <input
-                            value={columnFilters.batch}
-                            onChange={(e) => setColumnFilter('batch')(e.target.value.replace(/[^0-9]/g, ''))}
-                            placeholder="or type #"
-                            inputMode="numeric"
-                            className={`${advInputCls} w-20`}
-                            title="Type a batch id if it's not in the dropdown"
-                          />
-                        </div>,
-                      )}
-                      {showStatusColumn
-                        ? advField(
-                            <FiTag className="h-3 w-3" />,
-                            'Status',
+                    <div className="grid gap-x-6 gap-y-4 px-4 py-3.5 sm:grid-cols-2">
+                      <div className="flex flex-col gap-4">
+                        {advGroup('Find an order', (
+                          <>
+                            {advField(
+                              <FiHash className="h-3 w-3" />,
+                              'Order #',
+                              <input
+                                value={columnFilters.orderNo}
+                                onChange={(e) => setColumnFilter('orderNo')(e.target.value)}
+                                placeholder="e.g. 900044"
+                                className={advInputCls}
+                              />,
+                              !!columnFilters.orderNo,
+                            )}
+                            {advField(
+                              <FiUser className="h-3 w-3" />,
+                              'Client code',
+                              <input
+                                value={columnFilters.customer}
+                                onChange={(e) => setColumnFilter('customer')(e.target.value)}
+                                placeholder="e.g. ARHDEV"
+                                className={advInputCls}
+                              />,
+                              !!columnFilters.customer,
+                            )}
+                            {advField(
+                              <FiTruck className="h-3 w-3" />,
+                              'Tracking #',
+                              <input
+                                value={columnFilters.tracking}
+                                onChange={(e) => setColumnFilter('tracking')(e.target.value)}
+                                placeholder="Carrier tracking number"
+                                className={advInputCls}
+                              />,
+                              !!columnFilters.tracking,
+                            )}
+                            {advField(
+                              <FiMapPin className="h-3 w-3" />,
+                              'Destination',
+                              <input
+                                value={columnFilters.city}
+                                onChange={(e) => setColumnFilter('city')(e.target.value)}
+                                placeholder="City or state"
+                                className={advInputCls}
+                              />,
+                              !!columnFilters.city,
+                            )}
+                          </>
+                        ))}
+                        {advGroup('Created', (
+                          advField(
+                            <FiCalendar className="h-3 w-3" />,
+                            'Between',
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="date"
+                                value={dateFrom}
+                                max={dateTo || undefined}
+                                onChange={(e) => setDateFrom(e.target.value)}
+                                aria-label="Created from"
+                                className={`${advInputCls} min-w-0 flex-1`}
+                              />
+                              <span className="text-[11px] text-[#b6a684]">–</span>
+                              <input
+                                type="date"
+                                value={dateTo}
+                                min={dateFrom || undefined}
+                                onChange={(e) => setDateTo(e.target.value)}
+                                aria-label="Created to"
+                                className={`${advInputCls} min-w-0 flex-1`}
+                              />
+                            </div>,
+                            !!(dateFrom || dateTo),
+                          )
+                        ))}
+                      </div>
+
+                      {advGroup('Narrow by', (
+                        <>
+                          {/* Batch — dropdown populated from /orders/batches
+                              using the CURRENT filter surface, plus a
+                              free-text fallback (2026-09-14). When set the
+                              batch id overrides every other filter server-
+                              side (see the batchOnly branch above), so the
+                              operator sees the whole batch regardless of
+                              the surrounding scope. */}
+                          {advField(
+                            <FiPackage className="h-3 w-3" />,
+                            'Batch',
+                            <div className="flex items-center gap-1.5">
+                              <select
+                                value={columnFilters.batch}
+                                onChange={(e) => setColumnFilter('batch')(e.target.value)}
+                                className={`${advInputCls} min-w-0 flex-1`}
+                                title="Pick from batches visible under the current filters"
+                              >
+                                <option value="">Any batch</option>
+                                {batchesForPicker.map((b) => (
+                                  <option key={b.batchId} value={String(b.batchId)}>
+                                    Batch #{b.batchId} — {b.count.toLocaleString()} orders
+                                  </option>
+                                ))}
+                              </select>
+                              <input
+                                value={columnFilters.batch}
+                                onChange={(e) => setColumnFilter('batch')(e.target.value.replace(/[^0-9]/g, ''))}
+                                placeholder="or #"
+                                inputMode="numeric"
+                                aria-label="Batch number"
+                                className={`${advInputCls} max-w-16 shrink-0`}
+                                title="Type a batch id if it's not in the dropdown"
+                              />
+                            </div>,
+                            batchOverrideActive,
+                          )}
+                          {showStatusColumn
+                            ? advField(
+                                <FiTag className="h-3 w-3" />,
+                                'Status',
+                                <select
+                                  value={columnFilters.status}
+                                  onChange={(e) => setColumnFilter('status')(e.target.value)}
+                                  className={advInputCls}
+                                >
+                                  <option value="">Any status</option>
+                                  <option value="PENDING">Pending</option>
+                                  <option value="GENERATED">Generated</option>
+                                  <option value="ERROR">Error</option>
+                                </select>,
+                                !!columnFilters.status,
+                              )
+                            : null}
+                          {advField(
+                            <FiTruck className="h-3 w-3" />,
+                            'Carrier',
                             <select
-                              value={columnFilters.status}
-                              onChange={(e) => setColumnFilter('status')(e.target.value)}
+                              value={carrierFilter}
+                              onChange={(e) => setCarrierFilter(e.target.value)}
                               className={advInputCls}
                             >
-                              <option value="">Any status</option>
-                              <option value="PENDING">Pending</option>
-                              <option value="GENERATED">Generated</option>
-                              <option value="ERROR">Error</option>
+                              <option value="">Any carrier</option>
+                              <option value="UPS">UPS</option>
+                              <option value="FEDEX">FedEx</option>
+                              <option value="USPS">USPS</option>
+                              <option value="DHL">DHL</option>
                             </select>,
-                          )
-                        : null}
-                      {advField(
-                        <FiCalendar className="h-3 w-3" />,
-                        'Created from',
-                        <input
-                          type="date"
-                          value={dateFrom}
-                          max={dateTo || undefined}
-                          onChange={(e) => setDateFrom(e.target.value)}
-                          className={advInputCls}
-                        />,
-                      )}
-                      {advField(
-                        <FiCalendar className="h-3 w-3" />,
-                        'Created to',
-                        <input
-                          type="date"
-                          value={dateTo}
-                          min={dateFrom || undefined}
-                          onChange={(e) => setDateTo(e.target.value)}
-                          className={advInputCls}
-                        />,
-                      )}
-                      {advField(
-                        <FiDatabase className="h-3 w-3" />,
-                        'Source',
-                        <select
-                          value={sourceFilter}
-                          onChange={(e) => {
-                            setSourceFilter(e.target.value)
-                            // D2C / B2B is an API-only classification (client request).
-                            if (e.target.value !== 'API') setChannelFilter('')
-                          }}
-                          className={advInputCls}
-                        >
-                          <option value="">Any source</option>
-                          <option value="MANUAL">Manual</option>
-                          <option value="BULK">Bulk (CSV/Excel)</option>
-                          <option value="API">API</option>
-                        </select>,
-                      )}
-                      {sourceFilter === 'API' && advField(
-                        <FiDatabase className="h-3 w-3" />,
-                        'Channel',
-                        <select
-                          value={channelFilter}
-                          onChange={(e) => setChannelFilter(e.target.value)}
-                          className={advInputCls}
-                        >
-                          <option value="">Any channel</option>
-                          <option value="D2C">D2C (consumer)</option>
-                          <option value="B2B">B2B (business)</option>
-                        </select>,
-                      )}
-                      {advField(
-                        <FiTruck className="h-3 w-3" />,
-                        'Carrier',
-                        <select
-                          value={carrierFilter}
-                          onChange={(e) => setCarrierFilter(e.target.value)}
-                          className={advInputCls}
-                        >
-                          <option value="">Any carrier</option>
-                          <option value="UPS">UPS</option>
-                          <option value="FEDEX">FedEx</option>
-                          <option value="USPS">USPS</option>
-                          <option value="DHL">DHL</option>
-                        </select>,
-                      )}
-                      {/* Returns F3 — surface the hidden return rows that today only
-                          live inside a batch. Tri-state so operators can pivot either way. */}
-                      {advField(
-                        <FiRotateCcw className="h-3 w-3" />,
-                        'Shipment vs return',
-                        <select
-                          value={isReturnFilter}
-                          onChange={(e) => setIsReturnFilter(e.target.value as '' | 'Y' | 'N')}
-                          className={advInputCls}
-                        >
-                          <option value="">Any</option>
-                          <option value="N">Shipments only</option>
-                          <option value="Y">Returns only</option>
-                        </select>,
-                      )}
+                            !!carrierFilter,
+                          )}
+                          <div className="grid grid-cols-2 gap-2">
+                            {advField(
+                              <FiDatabase className="h-3 w-3" />,
+                              'Source',
+                              <select
+                                value={sourceFilter}
+                                onChange={(e) => {
+                                  setSourceFilter(e.target.value)
+                                  // D2C / B2B is an API-only classification (client request).
+                                  if (e.target.value !== 'API') setChannelFilter('')
+                                }}
+                                className={advInputCls}
+                              >
+                                <option value="">Any source</option>
+                                <option value="MANUAL">Manual</option>
+                                <option value="BULK">Bulk (CSV/Excel)</option>
+                                <option value="API">API</option>
+                              </select>,
+                              !!sourceFilter,
+                            )}
+                            {advField(
+                              <FiDatabase className="h-3 w-3" />,
+                              'Channel',
+                              <select
+                                value={channelFilter}
+                                onChange={(e) => setChannelFilter(e.target.value)}
+                                disabled={sourceFilter !== 'API'}
+                                title={sourceFilter !== 'API' ? 'Only API orders have a channel' : undefined}
+                                className={`${advInputCls} disabled:cursor-not-allowed disabled:opacity-50`}
+                              >
+                                <option value="">Any channel</option>
+                                <option value="D2C">D2C (consumer)</option>
+                                <option value="B2B">B2B (business)</option>
+                              </select>,
+                              !!channelFilter,
+                            )}
+                          </div>
+                          {/* Returns F3 — surface the hidden return rows that today only
+                              live inside a batch. Tri-state so operators can pivot either way. */}
+                          {advField(
+                            <FiRotateCcw className="h-3 w-3" />,
+                            'Shipment vs return',
+                            <select
+                              value={isReturnFilter}
+                              onChange={(e) => setIsReturnFilter(e.target.value as '' | 'Y' | 'N')}
+                              className={advInputCls}
+                            >
+                              <option value="">Any</option>
+                              <option value="N">Shipments only</option>
+                              <option value="Y">Returns only</option>
+                            </select>,
+                            !!isReturnFilter,
+                          )}
+                        </>
+                      ))}
                     </div>
 
-                    <div className="mt-3 flex items-center justify-end gap-2 border-t border-dashed border-[#e3d9c4] pt-2.5">
+                    <div className="flex items-center justify-between gap-2 border-t border-[#e3d9c4] bg-white/70 px-4 py-2.5">
+                      <span className="text-[11px] text-[#a1906d]">
+                        Filters apply as you type · <kbd className="rounded border border-[#e3d9c4] bg-white px-1 font-mono text-[10px]">Esc</kbd> closes
+                      </span>
                       <button
                         type="button"
-                        onClick={() => setShowFilters(false)}
-                        className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[11.5px] font-semibold text-[#f4eede] transition hover:bg-[#412d15]"
+                        onClick={() => void closeFilters()}
+                        className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-3.5 py-1.5 text-[11.5px] font-semibold text-[#f4eede] transition hover:bg-[#412d15]"
                       >
                         Done
                       </button>
@@ -2688,6 +2905,8 @@ export default function OrdersWorkspace() {
                 </span>
               ) : view === 'generated' ? (
                 'No labels have been generated yet.'
+              ) : view === 'voided' ? (
+                'No voided labels.'
               ) : (
                 'No orders yet.'
               )
@@ -2860,11 +3079,12 @@ export default function OrdersWorkspace() {
         {/* Void confirmation — in-app modal (see handleVoid). */}
         {confirmVoid ? (
           <div
+            ref={voidDialogRef}
             role="dialog"
             aria-modal="true"
             aria-label={`Void order ${confirmVoid.orderNo}`}
             className="fixed inset-0 z-50 flex items-center justify-center bg-[#1f150c]/45 p-4 backdrop-blur-[1px]"
-            onClick={() => setConfirmVoid(null)}
+            onClick={() => void requestVoidClose()}
           >
             <div
               className="w-full max-w-[430px] overflow-hidden rounded-2xl border border-rose-200 bg-white shadow-2xl"
@@ -2900,7 +3120,7 @@ export default function OrdersWorkspace() {
               <div className="flex items-center justify-end gap-2 border-t border-[#eee6d6] bg-[#faf7f0] px-5 py-3">
                 <button
                   type="button"
-                  onClick={() => setConfirmVoid(null)}
+                  onClick={() => void requestVoidClose()}
                   className="rounded-xl border border-[#e3d9c4] bg-white px-3.5 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
                 >
                   Keep the label
@@ -2923,7 +3143,15 @@ export default function OrdersWorkspace() {
         ) : null}
 
         {pickupOpen ? (
-          <SchedulePickupModal onClose={() => setPickupOpen(false)} />
+          <SchedulePickupModal
+            onClose={() => setPickupOpen(false)}
+            // BUG-097 — when every selected order belongs to one client, book on that client's account.
+            defaults={(() => {
+              const codes = new Set(rows.filter((r) => selectedOrderNos.includes(r.orderDetails.orderNo))
+                .map((r) => r.orderDetails.customerCode).filter((c): c is string => !!c))
+              return codes.size === 1 ? { customerNo: [...codes][0] } : undefined
+            })()}
+          />
         ) : null}
 
         {closeOutOpen ? (
@@ -2954,6 +3182,7 @@ export default function OrdersWorkspace() {
           <BulkLabelModal
             onClose={() => setBulkLabelOpen(false)}
             orderNumbers={rows.map((o) => o.orderDetails.orderNo)}
+            carrierCode={rows.length === 1 ? normalizeCarrierCode(rows[0].shippingDetails.shipVia) : null}
           />
         ) : null}
 

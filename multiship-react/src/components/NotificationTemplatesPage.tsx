@@ -9,6 +9,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useOutletContext, useSearchParams } from 'react-router-dom'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import { notify } from '../utils/notify'
+import { serverFieldError } from '../utils/serverFieldErrors'
+import { useUnsavedWorkGuard } from '../hooks/useUnsavedWorkGuard'
+import { canLeaveUnsavedWork } from '../utils/unsavedWorkGuard'
 import {
   notificationTemplateService,
   type NotificationTemplate,
@@ -46,6 +49,7 @@ export default function NotificationTemplatesPage() {
   const [preview, setPreview] = useState<NotificationTemplatePreviewResponse | null>(null)
   const [saving, setSaving] = useState(false)
   const [previewing, setPreviewing] = useState(false)
+  const [previewError, setPreviewError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -94,6 +98,24 @@ export default function NotificationTemplatesPage() {
     setPreview(null)
   }, [selectedKey, templates])
 
+  // BUG-140 — typed edits are guarded: picking another template, leaving
+  // the page and the browser Back button all ask first.
+  const isDirty = useMemo(() => {
+    if (!draft) return false
+    const saved = templates.find((t) => t.templateKey === draft.templateKey)
+    return !saved || JSON.stringify(saved) !== JSON.stringify(draft)
+  }, [draft, templates])
+  useUnsavedWorkGuard(
+    isDirty && !saving,
+    "This template has unsaved changes. Leave and lose what you've edited?",
+    'Leave template?',
+  )
+  const selectTemplate = async (key: string) => {
+    if (key === selectedKey) return
+    if (!(await canLeaveUnsavedWork())) return
+    setSelectedKey(key)
+  }
+
   const parsedVars = useMemo(() => {
     try {
       return JSON.parse(varsJson || '{}')
@@ -102,10 +124,20 @@ export default function NotificationTemplatesPage() {
     }
   }, [varsJson])
 
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+  const edit = (patch: Partial<NotificationTemplate>) => {
+    if (!draft) return
+    setDraft({ ...draft, ...patch })
+    setFieldErrors((cur) => (Object.keys(patch).some((k) => cur[k]) ? {} : cur))
+  }
+  const fieldErr = (k: string) => fieldErrors[k]
+    ? <p role="alert" className="mt-1 text-[11.5px] font-normal text-rose-700">{fieldErrors[k]}</p>
+    : null
+
   const save = async () => {
     if (!draft) return
     if (!draft.subjectTemplate.trim() || !draft.bodyTemplate.trim()) {
-      notify.error('Subject and body are required.')
+      notify.invalid('Subject and body are required.')
       return
     }
     setSaving(true)
@@ -124,8 +156,11 @@ export default function NotificationTemplatesPage() {
           : [...prev, saved],
       )
       setDraft(saved)
+      setFieldErrors({})
     } catch (err) {
-      notify.apiError(err, 'Save failed.')
+      const fe = serverFieldError(err)
+      if (fe) setFieldErrors({ [['description', 'subjectTemplate', 'bodyTemplate', 'optOutAllowed'].includes(fe.field) ? fe.field : '_form']: fe.message })
+      else notify.apiError(err, 'Save failed.')
     } finally {
       setSaving(false)
     }
@@ -134,7 +169,7 @@ export default function NotificationTemplatesPage() {
   const runPreview = async () => {
     if (!draft) return
     if (parsedVars === null) {
-      notify.error('Vars must be valid JSON.')
+      notify.invalid('Vars must be valid JSON.')
       return
     }
     setPreviewing(true)
@@ -145,8 +180,12 @@ export default function NotificationTemplatesPage() {
         vars: parsedVars as Record<string, unknown>,
       })
       setPreview(res)
+      setPreviewError(null)
     } catch (err) {
-      notify.apiError(err, 'Preview failed.')
+      // BUG-138 — keep the message in the preview panel so the operator can
+      // fix the template while reading it.
+      const msg = (err as { message?: string | null })?.message?.trim()
+      setPreviewError(msg || 'The template could not be rendered.')
       setPreview(null)
     } finally {
       setPreviewing(false)
@@ -160,7 +199,7 @@ export default function NotificationTemplatesPage() {
   const confirmNewKey = () => {
     const normalized = newKeyInput.trim().toUpperCase()
     if (!normalized) {
-      notify.error('Template key is required.')
+      notify.invalid('Template key is required.')
       return
     }
     if (!/^[A-Z0-9._]+$/.test(normalized)) {
@@ -224,7 +263,7 @@ export default function NotificationTemplatesPage() {
               <li key={t.templateKey}>
                 <button
                   type="button"
-                  onClick={() => setSelectedKey(t.templateKey)}
+                  onClick={() => void selectTemplate(t.templateKey)}
                   className={`block w-full rounded px-2 py-1.5 text-left text-[12px] font-mono ${
                     selectedKey === t.templateKey
                       ? 'bg-slate-900 text-white'
@@ -257,22 +296,26 @@ export default function NotificationTemplatesPage() {
                 )}
               </div>
 
+              {fieldErr('_form')}
               <label className="block text-[12px] font-semibold text-slate-700">
                 Description
                 <input
                   value={draft.description ?? ''}
-                  onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+                  onChange={(e) => edit({ description: e.target.value })}
+                  aria-invalid={fieldErrors.description ? true : undefined}
                   className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-1.5 text-[13px]"
                 />
+                {fieldErr('description')}
               </label>
 
               <label className="mt-3 flex items-start gap-2 text-[12px] font-semibold text-slate-700">
                 <input
                   type="checkbox"
                   checked={draft.optOutAllowed}
-                  onChange={(e) => setDraft({ ...draft, optOutAllowed: e.target.checked })}
+                  onChange={(e) => edit({ optOutAllowed: e.target.checked })}
                   className="mt-0.5 h-4 w-4 rounded border-slate-400"
                 />
+                {fieldErr('optOutAllowed')}
                 <span>
                   Users can opt out
                   <span className="ml-1 font-normal text-slate-500">
@@ -286,19 +329,23 @@ export default function NotificationTemplatesPage() {
                 Subject template (Handlebars)
                 <input
                   value={draft.subjectTemplate}
-                  onChange={(e) => setDraft({ ...draft, subjectTemplate: e.target.value })}
+                  onChange={(e) => edit({ subjectTemplate: e.target.value })}
+                  aria-invalid={fieldErrors.subjectTemplate ? true : undefined}
                   className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-1.5 font-mono text-[12px]"
                 />
+                {fieldErr('subjectTemplate')}
               </label>
 
               <label className="mt-3 block text-[12px] font-semibold text-slate-700">
                 Body template (Handlebars)
                 <textarea
                   value={draft.bodyTemplate}
-                  onChange={(e) => setDraft({ ...draft, bodyTemplate: e.target.value })}
+                  onChange={(e) => edit({ bodyTemplate: e.target.value })}
                   rows={10}
+                  aria-invalid={fieldErrors.bodyTemplate ? true : undefined}
                   className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-[12px]"
                 />
+                {fieldErr('bodyTemplate')}
               </label>
 
               <div className="mt-3 flex justify-end gap-2">
@@ -347,6 +394,12 @@ export default function NotificationTemplatesPage() {
                 />
               </label>
 
+              {previewError && !preview ? (
+                <div role="alert" className="mt-3 rounded border border-rose-200 bg-rose-50 p-3 text-[13px] text-rose-800">
+                  <div className="font-semibold">The template has a mistake</div>
+                  <div className="mt-1 whitespace-pre-wrap">{previewError}</div>
+                </div>
+              ) : null}
               {preview && (
                 <div className="mt-3 rounded border border-slate-200 bg-slate-50 p-3">
                   <div className="text-[11px] uppercase tracking-wide text-slate-500">Subject</div>

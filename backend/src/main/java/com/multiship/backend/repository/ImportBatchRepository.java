@@ -94,7 +94,7 @@ public interface ImportBatchRepository extends JpaRepository<ImportBatch, Long>,
      * and is rejected for native / read-only selects.
      */
     @org.springframework.data.jpa.repository.Query(value = """
-        SELECT b.order_no, b.customer_ref
+        SELECT b.order_no, b.customer_ref, b.cust_no
         FROM label_batch b
         WHERE UPPER(b.customer_ref) IN (:refs)
           AND UPPER(b.order_status) = 'GENERATED'

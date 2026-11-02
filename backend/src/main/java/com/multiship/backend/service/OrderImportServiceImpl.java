@@ -663,6 +663,8 @@ public class OrderImportServiceImpl implements OrderImportService {
         dto.setCarrierCode(row.getCarrierCode());
         dto.setServiceType(row.getServiceType());
         dto.setAccountNumber(row.getAccountNumber());
+        dto.setThirdPartyPostalCode(row.getThirdPartyPostalCode());
+        dto.setThirdPartyCountry(row.getThirdPartyCountry());
         dto.setPackageType(row.getPackageType());
         dto.setWeight(row.getWeight());
         dto.setWeightUnit(row.getWeightUnit());
@@ -1017,7 +1019,7 @@ public class OrderImportServiceImpl implements OrderImportService {
             "recipientName", "recipientCompany", "recipientPhone", "recipientEmail",
             "addressLine1", "addressLine2",
             "city", "state", "postalCode", "countryCode",
-            "carrierCode", "accountNumber", "serviceType", "packageType",
+            "carrierCode", "accountNumber", "thirdPartyPostalCode", "thirdPartyCountry", "serviceType", "packageType",
             "weight", "weightUnit", "length", "width", "height", "dimUnit",
             "currency", "incoterms",
             "reference",
@@ -1972,6 +1974,104 @@ public class OrderImportServiceImpl implements OrderImportService {
         }
     }
 
+    /**
+     * BUG-044 (QA 2026-10-23) — pre-fix, a 36-character recipient name
+     * passed Upload &amp; validate and Validate-all, then failed at
+     * Generate with "Name exceeds the 35-character carrier limit".
+     * The 35-char ceiling is the lower bound across UPS / FedEx / DHL
+     * (UPS caps at 35 → carrier error 120201; FedEx and DHL are 35-45);
+     * {@link ShipmentValidationService#checkCarrierLengthLimits}
+     * enforces it on the per-shipment Validate path for manual
+     * shipments. Mirror the same checks on the bulk-import row so
+     * the operator sees "fix this cell" at Validate-all time instead
+     * of after half the batch has been labelled.
+     *
+     * <p>Fields checked: {@code recipientName}, {@code recipientCompany},
+     * {@code addressLine1}, {@code addressLine2}, {@code reference}.
+     * Sender fields are owned by the warehouse / client defaults, not
+     * the row, so they're covered by the manual-shipment path's own
+     * validator.
+     *
+     * <p>Reproduces the same message shape ShipmentValidationService
+     * emits so a reviewer tracing a complaint sees the identical text
+     * whichever flow surfaced it.
+     */
+    private void flagRowFieldLengths(List<OrderImportRowDTO> rows) {
+        if (rows == null) return;
+        for (OrderImportRowDTO r : rows) {
+            if ("GENERATED".equalsIgnoreCase(r.getGeneratedStatus())) continue;
+            flagLength(r, r.getRecipientName(), "Name");
+            flagLength(r, r.getRecipientCompany(), "Company");
+            flagLength(r, r.getAddressLine1(), "Address line 1");
+            flagLength(r, r.getAddressLine2(), "Address line 2");
+            flagLength(r, r.getReference(), "Reference");
+        }
+    }
+
+    /** BUG-044 — one-field length check; mirrors ShipmentValidationService.CARRIER_FIELD_MAX. */
+    private static final int BULK_ROW_FIELD_MAX = 35;
+
+    private static void flagLength(OrderImportRowDTO row, String value, String label) {
+        if (value == null) return;
+        if (value.length() > BULK_ROW_FIELD_MAX) {
+            addError(row, label + " exceeds the " + BULK_ROW_FIELD_MAX
+                    + "-character carrier limit (currently " + value.length() + ").");
+        }
+    }
+
+    /**
+     * BUG-045 (QA 2026-10-23) — pre-fix, two rows sharing one customer
+     * reference (the file's {@code reference} column, aka {@code GROUP_ID}
+     * on the client-layout CSV) passed Upload &amp; validate and
+     * Validate-all, then one row failed at Generate with
+     * "This reference is already in use on a GENERATED label" after the
+     * other row had already purchased a label. The DB unique-reference
+     * constraint fires per-shipment, so two different shipments collide
+     * at label time; the operator discovers the clash with only one
+     * fixable path (edit the file + re-upload) and the Bulk Mailer
+     * silently reports the batch as partially generated.
+     *
+     * <p>Rule (operator decision 2026-10-24): a non-blank
+     * {@code reference} may only appear on rows of ONE shipment group.
+     * If two distinct order groups ({@link #groupKeyOf}, i.e. orderRef)
+     * share one reference, both groups are errored — the operator must
+     * fix the file before Save. Rows sharing orderRef AND reference stay
+     * valid (they're line items of one shipment, which the existing
+     * validateBusinessRules enforces).
+     *
+     * <p>Rows with blank {@code reference} are ignored here: each falls
+     * back to its own {@code orderRef} downstream (one shipment, one
+     * reference, no clash). Already-generated rows are also ignored —
+     * a re-validate of a saved batch mustn't error on its own history.
+     */
+    private void flagWithinImportDuplicateReferences(List<OrderImportRowDTO> rows) {
+        if (rows == null || rows.size() < 2) return;
+        Map<String, java.util.Set<String>> groupsByRef = new LinkedHashMap<>();
+        Map<String, List<OrderImportRowDTO>> rowsByRef = new LinkedHashMap<>();
+        for (OrderImportRowDTO r : rows) {
+            if (!StringUtils.hasText(r.getReference())) continue;
+            if ("GENERATED".equalsIgnoreCase(r.getGeneratedStatus())) continue;
+            String refKey = r.getReference().trim().toUpperCase(Locale.ROOT);
+            String groupKey = groupKeyOf(r);
+            groupsByRef.computeIfAbsent(refKey, k -> new java.util.LinkedHashSet<>()).add(groupKey);
+            rowsByRef.computeIfAbsent(refKey, k -> new ArrayList<>()).add(r);
+        }
+        for (var entry : groupsByRef.entrySet()) {
+            if (entry.getValue().size() < 2) continue;
+            String ref = rowsByRef.get(entry.getKey()).get(0).getReference().trim();
+            String rowNos = rowsByRef.get(entry.getKey()).stream()
+                    .map(OrderImportRowDTO::getRowNumber)
+                    .filter(java.util.Objects::nonNull)
+                    .sorted()
+                    .map(String::valueOf)
+                    .collect(java.util.stream.Collectors.joining(", "));
+            String msg = "reference " + ref + " is used on multiple shipments in this file (rows "
+                    + rowNos + ") — only one shipment can own a reference. "
+                    + "Edit the file so each shipment uses a unique reference.";
+            for (OrderImportRowDTO r : rowsByRef.get(entry.getKey())) addError(r, msg);
+        }
+    }
+
     public void flagOrderRefsAlreadyGenerated(List<OrderImportRowDTO> rows) {
         if (importBatchRepository == null || rows == null || rows.isEmpty()) return;
         Map<String, List<OrderImportRowDTO>> byRef = new LinkedHashMap<>();
@@ -2019,8 +2119,10 @@ public class OrderImportServiceImpl implements OrderImportService {
         try {
             Map<String, List<OrderImportRowDTO>> byKey = new LinkedHashMap<>();
             for (OrderImportRowDTO r : rows) {
-                if (!StringUtils.hasText(r.getOrderRef())) continue;
-                String key = StringUtils.hasText(r.getReference()) ? r.getReference().trim() : r.getOrderRef().trim();
+                // BUG-045 — a row with a reference but no orderRef is a shipment too.
+                String key = StringUtils.hasText(r.getReference()) ? r.getReference().trim()
+                        : StringUtils.hasText(r.getOrderRef()) ? r.getOrderRef().trim() : null;
+                if (key == null) continue;
                 byKey.computeIfAbsent(key.toUpperCase(Locale.ROOT), k -> new ArrayList<>()).add(r);
             }
             if (byKey.isEmpty()) return;
@@ -2029,8 +2131,9 @@ public class OrderImportServiceImpl implements OrderImportService {
             for (Object[] hit : hits) {
                 Object orderNo = hit[0];
                 String ref = hit[1] == null ? null : String.valueOf(hit[1]);
+                String custNo = hit.length > 2 && hit[2] != null ? String.valueOf(hit[2]) : null;
                 if (!StringUtils.hasText(ref)) continue;
-                List<OrderImportRowDTO> mine = byKey.remove(ref.trim().toUpperCase(Locale.ROOT));
+                List<OrderImportRowDTO> mine = byKey.get(ref.trim().toUpperCase(Locale.ROOT));
                 if (mine == null) continue;
                 // The rows' own order is not a duplicate of itself: a labelled row
                 // re-validated (an edit, Validate all) matched its own live order.
@@ -2039,6 +2142,16 @@ public class OrderImportServiceImpl implements OrderImportService {
                 String msg = "reference " + ref.trim() + " already has a labelled order (#" + orderNo
                         + ") — generating again creates a duplicate shipment";
                 for (OrderImportRowDTO m : mine) {
+                    // BUG-045 — the file's reference becomes the order's customer_ref,
+                    // UNIQUE per client across GENERATED labels (V175): the carrier call
+                    // would be refused at Generate, so refuse the row now, before Save.
+                    if (StringUtils.hasText(m.getReference())
+                            && (custNo == null || custNo.equalsIgnoreCase(String.valueOf(m.getClientCode()).trim()))) {
+                        String err = "reference " + ref.trim() + " is already in use on a GENERATED label (order #" + orderNo
+                                + ") — use a different reference or void that label first.";
+                        if (m.getErrors() == null || !m.getErrors().contains(err)) addError(m, err);
+                        continue;
+                    }
                     boolean already = m.getWarnings() != null && m.getWarnings().stream().anyMatch(w -> w.contains("already generated as order") || w.contains("already has a labelled order"));
                     if (!already) addWarning(m, msg);
                 }
@@ -2094,8 +2207,12 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (byRef.isEmpty()) return;
         try {
             // One order per reference: a GENERATED one wins, else the latest.
+            // BUG-043 — a VOIDED order is never a candidate: its reference is
+            // free again, so the row must mint a fresh order rather than be
+            // attached to (and regenerated in place on) its voided twin.
             Map<String, Object[]> best = new LinkedHashMap<>();
             for (Object[] o : importBatchRepository.findOrdersInLabelBatchByCustomerRefIn(labelBatchId, byRef.keySet())) {
+                if ("VOIDED".equalsIgnoreCase(String.valueOf(o[2]))) continue;
                 String ref = String.valueOf(o[1]).trim().toUpperCase(Locale.ROOT);
                 Object[] cur = best.get(ref);
                 boolean gen = "GENERATED".equalsIgnoreCase(String.valueOf(o[2]));
@@ -2195,6 +2312,30 @@ public class OrderImportServiceImpl implements OrderImportService {
         return null;
     }
 
+    /**
+     * R5-BUG-001 (2026-10-20) — auto-pick a package preset for the
+     * request's (service, weight) when the row carries no explicit
+     * dimensions AND no preset. Mirrors the run-4 behaviour where
+     * the connector picked internally; R4-BUG-001 moved the strict
+     * dim-check in front of the carrier call, so this needs to run
+     * BEFORE {@link ShipmentValidationService#validate}.
+     *
+     * <p>No-op when (a) a preset is already set (the operator /
+     * CSV picked one), (b) explicit length is already set (dim
+     * check will validate against it), (c) no service is resolved
+     * (nothing to pick against), or (d) no preset candidate fits
+     * the carrier's service × weight constraints — in that last
+     * case the strict dim check still fires and the operator gets
+     * the actionable "Missing: length, width, height" message.
+     */
+    private void applyDefaultPackagePreset(com.multiship.backend.dto.ManualShipmentRequest req) {
+        if (req == null || req.getPackagePresetId() != null) return;
+        if (req.getLength() != null && req.getLength().signum() > 0) return;
+        if (req.getServiceId() == null || shippingConfigService == null) return;
+        shippingConfigService.pickPackage(req.getServiceId(), req.getWeight())
+                .ifPresent(pp -> req.setPackagePresetId(pp.preset().getId()));
+    }
+
     private static void addError(OrderImportRowDTO row, String message) {
         List<String> errs = new ArrayList<>(row.getErrors() == null ? List.of() : row.getErrors());
         if (!errs.contains(message)) errs.add(message);
@@ -2232,6 +2373,10 @@ public class OrderImportServiceImpl implements OrderImportService {
      */
     void validateBusinessRules(List<OrderImportRowDTO> rows) {
         flagOrderRefsAlreadyGenerated(rows);
+        // BUG-045 — here, not only in validate(): the staging upload and
+        // Validate-all pipelines skipped the within-file check, so two
+        // shipments sharing a reference stayed "Ready" until Generate.
+        flagWithinImportDuplicateReferences(rows);
         if (rows.isEmpty() || shippingServiceRepository == null) return;
 
         // --- snapshot the rule tables once ---
@@ -2518,6 +2663,8 @@ public class OrderImportServiceImpl implements OrderImportService {
             validateReferences(rows);
             // Tier 3 — rules from the shipping catalog + limit tables.
             validateBusinessRules(rows);
+            // BUG-044 — the 35-character carrier limits are flagged at upload time too, not only at Validate-all.
+            flagRowFieldLengths(rows);
             validateCustomFields(rows);
             // Sprint 48 — international shipments must carry customs
             // commodity data on at least one row in the group.
@@ -2587,6 +2734,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         validateBusinessRules(rows);
         validateCustomFields(rows);
         validateInternationalItems(rows);
+        flagRowFieldLengths(rows);
         return success(buildPreview(rows), rows.size() + " row(s) validated.");
     }
 
@@ -3478,7 +3626,7 @@ public class OrderImportServiceImpl implements OrderImportService {
             if (!hasErrors.test(r)) r.setOrderBlockedBy(brokenBy.get(groupKeyOf(r)));
             if (r.getGeneratedOrderNo() != null && "GENERATED".equalsIgnoreCase(r.getGeneratedStatus())
                     && !StringUtils.hasText(r.getLabelUrl())) {
-                r.setLabelUrl("/api/v1/orders/" + r.getGeneratedOrderNo() + "/label/pdf");
+                r.setLabelUrl("/api/v1/labels/" + r.getGeneratedOrderNo() + "/pdf");
             }
         }
         return com.multiship.backend.dto.ImportBatchRowsPageDTO.builder()
@@ -3515,7 +3663,7 @@ public class OrderImportServiceImpl implements OrderImportService {
             if (clean.test(r) && StringUtils.hasText(r.getOrderRef())) r.setOrderBlockedBy(brokenBy.get(r.getOrderRef().trim()));
             if (r.getGeneratedOrderNo() != null && "GENERATED".equalsIgnoreCase(r.getGeneratedStatus())
                     && !StringUtils.hasText(r.getLabelUrl())) {
-                r.setLabelUrl("/api/v1/orders/" + r.getGeneratedOrderNo() + "/label/pdf");
+                r.setLabelUrl("/api/v1/labels/" + r.getGeneratedOrderNo() + "/pdf");
             }
         }
         return com.multiship.backend.dto.ImportBatchRowsPageDTO.builder()
@@ -4896,6 +5044,8 @@ public class OrderImportServiceImpl implements OrderImportService {
                     dbRow.setCarrierCode(editedRow.getCarrierCode());
                     dbRow.setServiceType(editedRow.getServiceType());
                     dbRow.setAccountNumber(editedRow.getAccountNumber());
+                    dbRow.setThirdPartyPostalCode(editedRow.getThirdPartyPostalCode());
+                    dbRow.setThirdPartyCountry(editedRow.getThirdPartyCountry());
                     dbRow.setPackageType(editedRow.getPackageType());
                     dbRow.setWeight(editedRow.getWeight());
                     dbRow.setWeightUnit(editedRow.getWeightUnit());
@@ -5028,7 +5178,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         for (OrderImportRowDTO r : rows) {
             if (r.getGeneratedOrderNo() != null && "GENERATED".equalsIgnoreCase(r.getGeneratedStatus())) {
                 if (!StringUtils.hasText(r.getLabelUrl())) {
-                    r.setLabelUrl("/api/v1/orders/" + r.getGeneratedOrderNo() + "/label/pdf");
+                    r.setLabelUrl("/api/v1/labels/" + r.getGeneratedOrderNo() + "/pdf");
                 }
             }
         }
@@ -5106,7 +5256,18 @@ public class OrderImportServiceImpl implements OrderImportService {
         req.setRecipient(recipient);
 
         req.setCarrierCode(leader.getCarrierCode());
-        req.setAccountNumber(leader.getAccountNumber());
+        if ("THIRD_PARTY".equalsIgnoreCase(leader.getBillTo() == null ? "" : leader.getBillTo().trim())) {
+            // The row's account is the PAYER, not the shipper account: it only
+            // feeds the carrier's payment element. The shipper account stays
+            // blank here so the client-default cascade below picks it, the same
+            // as a row with no account at all.
+            req.setBillTo("THIRD_PARTY");
+            req.setThirdPartyAccount(leader.getAccountNumber());
+            req.setThirdPartyPostalCode(leader.getThirdPartyPostalCode());
+            req.setThirdPartyCountry(leader.getThirdPartyCountry());
+        } else {
+            req.setAccountNumber(leader.getAccountNumber());
+        }
         // Sprint 51 fix #2 — carry the row's warehouse so the manual path
         // resolves that warehouse's address as ship-from (and thus the
         // origin country that drives the international/customs decision).
@@ -5437,28 +5598,29 @@ public class OrderImportServiceImpl implements OrderImportService {
      * "<client ship-via code>" placeholder; carrierCode is left blank
      * because the mapping rule picks it.
      */
+    // BUG-058 — sample rows are marked EXAMPLE in the name and references so they are not imported by mistake.
     static List<Map<String, String>> sampleRows(String clientCode, String shipViaCode) {
         String svc = shipViaCode == null || shipViaCode.isBlank() ? "<client ship-via code>" : shipViaCode;
         return List.of(
-                sampleRow("orderRef", "SAMPLE-1001", "clientCode", clientCode, "billTo", "SENDER",
-                        "recipientName", "Jordan Lee", "recipientPhone", "2125550101",
+                sampleRow("orderRef", "EXAMPLE-1001", "clientCode", clientCode, "billTo", "SENDER",
+                        "recipientName", "EXAMPLE ROW - Jordan Lee", "recipientPhone", "2125550101",
                         "recipientEmail", "jordan.lee@example.com",
                         "addressLine1", "1600 Amphitheatre Pkwy", "city", "Mountain View", "state", "CA",
                         "postalCode", "94043", "countryCode", "US",
                         "serviceType", svc,
                         "weight", "2.5", "weightUnit", "LB", "length", "12", "width", "10", "height", "8", "dimUnit", "IN",
-                        "currency", "USD", "reference", "SAMPLE-1001"),
-                sampleRow("orderRef", "SAMPLE-1002", "clientCode", clientCode, "billTo", "SENDER",
-                        "recipientName", "Ava Chen", "recipientCompany", "Chen & Co Ltd",
+                        "currency", "USD", "reference", "EXAMPLE-1001"),
+                sampleRow("orderRef", "EXAMPLE-1002", "clientCode", clientCode, "billTo", "SENDER",
+                        "recipientName", "EXAMPLE ROW - Ava Chen", "recipientCompany", "Chen & Co Ltd",
                         "recipientPhone", "442071234567", "recipientEmail", "ava.chen@example.co.uk",
                         "addressLine1", "221B Baker Street", "city", "London",
                         "postalCode", "NW1 6XE", "countryCode", "GB",
                         "serviceType", svc,
                         "weight", "3.2", "weightUnit", "LB", "length", "14", "width", "12", "height", "10", "dimUnit", "IN",
-                        "currency", "USD", "incoterms", "DAP", "reference", "SAMPLE-1002",
+                        "currency", "USD", "incoterms", "DAP", "reference", "EXAMPLE-1002",
                         "itemDescription", "Silk lining natural", "itemSku", "SKU-100", "itemQuantity", "2",
                         "itemUnitValue", "45.00", "hsCode", "5007.20.00", "countryOfOrigin", "IT"),
-                sampleRow("orderRef", "SAMPLE-1002",
+                sampleRow("orderRef", "EXAMPLE-1002",
                         "itemDescription", "Cotton scarf", "itemSku", "SKU-101", "itemQuantity", "3",
                         "itemUnitValue", "12.00", "hsCode", "6214.90.00", "countryOfOrigin", "IN"));
     }
@@ -5640,6 +5802,8 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (!StringUtils.hasText(row.getCountryCode())) row.setCountryCode(leader.getCountryCode());
         if (!StringUtils.hasText(row.getCarrierCode())) row.setCarrierCode(leader.getCarrierCode());
         if (!StringUtils.hasText(row.getAccountNumber())) row.setAccountNumber(leader.getAccountNumber());
+        if (!StringUtils.hasText(row.getThirdPartyPostalCode())) row.setThirdPartyPostalCode(leader.getThirdPartyPostalCode());
+        if (!StringUtils.hasText(row.getThirdPartyCountry())) row.setThirdPartyCountry(leader.getThirdPartyCountry());
         if (!StringUtils.hasText(row.getServiceType())) row.setServiceType(leader.getServiceType());
         if (!StringUtils.hasText(row.getPackageType())) row.setPackageType(leader.getPackageType());
         if (row.getWeight() == null) { row.setWeight(leader.getWeight()); row.setWeightInherited(true); }
@@ -5776,6 +5940,8 @@ public class OrderImportServiceImpl implements OrderImportService {
         out.setCountryCode(upper(s.read("countryCode")));
         out.setCarrierCode(upper(s.read("carrierCode")));
         out.setAccountNumber(s.read("accountNumber"));
+        out.setThirdPartyPostalCode(s.read("thirdPartyPostalCode"));
+        out.setThirdPartyCountry(upper(s.read("thirdPartyCountry")));
         out.setServiceType(s.read("serviceType"));
         out.setPackageType(s.read("packageType"));
         // Capture the raw numeric strings so an unparseable value ("2 lbs",
@@ -5833,7 +5999,15 @@ public class OrderImportServiceImpl implements OrderImportService {
         for (int i = 0; i < s.length(); i++) {
             char c = s.charAt(i);
             if (c <= 0x1F || c == 0x7F) continue;
-            if (c == '<' || c == '>' || c == '\\' || c == '|' || c == '`') continue;
+            // BUG-053 — preserve `<` and `>`. The previous strip was defensive
+            // XSS prevention, but React auto-escapes on render and JPA /
+            // Jackson store these as plain text safely; stripping them on
+            // import silently corrupted names like "Smith <Jr.>" with no
+            // operator feedback. Carriers that reject the chars will surface
+            // their own error at label time where the operator can act.
+            // `\`, `|`, `` ` `` stay stripped — they're less-common on real
+            // names and more likely to be stray export artefacts.
+            if (c == '\\' || c == '|' || c == '`') continue;
             sb.append(c);
         }
         String out = sb.toString().trim();
@@ -6139,6 +6313,19 @@ public class OrderImportServiceImpl implements OrderImportService {
                 errors.add("accountNumber '" + row.getAccountNumber() + "' is not a valid " + cc
                         + " account (" + ACCOUNT_FORMAT_HINT.getOrDefault(cc, "check the format") + ")");
             }
+            if ("USPS".equals(cc)) {
+                errors.add("billTo=THIRD_PARTY is not available for USPS (postage is prepaid) — use SENDER");
+            }
+            if ("UPS".equals(cc) && !StringUtils.hasText(row.getThirdPartyPostalCode())) {
+                errors.add("thirdPartyPostalCode is required for UPS third-party billing");
+            }
+            if ("UPS".equals(cc) && !StringUtils.hasText(row.getThirdPartyCountry())) {
+                errors.add("thirdPartyCountry is required for UPS third-party billing");
+            }
+        }
+        if (StringUtils.hasText(row.getThirdPartyCountry())
+                && !row.getThirdPartyCountry().trim().matches("[A-Za-z]{2}")) {
+            errors.add("thirdPartyCountry '" + row.getThirdPartyCountry() + "' must be a 2-letter ISO code");
         }
         // Length caps so oversized free-text can't slip through the import.
         if (row.getCity() != null && row.getCity().length() > MAX_TEXT_LEN)
@@ -6508,6 +6695,18 @@ public class OrderImportServiceImpl implements OrderImportService {
                 }
                 return new GroupOutcome(0, group.size(), 0);
             }
+            // R5-BUG-001 (2026-10-20) — the shipped CSV layout has no
+            // LENGTH/WIDTH/HEIGHT columns. R4-BUG-001 moved the
+            // ShipmentValidationService dim check IN FRONT of the
+            // carrier call, so the auto-pick that used to happen
+            // inside the connector now fires too late and bulk rows
+            // 422 with "Pick a package preset OR fill in custom
+            // dimensions". Resolve the preset for (service, weight)
+            // here, before the validate() gate — mirrors the run-4
+            // auto-pick behaviour. Explicit CSV dims still win: the
+            // check is "no preset AND no length" so a row that
+            // DID carry dimensions gets validated against them.
+            applyDefaultPackagePreset(req);
 
             // Sprint 51 fix #1 — when the CSV leaves the bill-to account blank,
             // resolve it the way the operator-facing flow would instead of
@@ -6689,8 +6888,22 @@ public class OrderImportServiceImpl implements OrderImportService {
             // audit consumers can join back to import_batch.
             Long auditAnchor = batchId != null ? batchId.longValue() : null;
             req.setInternalAuditActor(buildImportAuditActor(isBackgroundContext, auditAnchor));
-            ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> resp =
-                    carrierService.generateManualLabel(req, null, existingOrderNo);
+            // BUG-060 — the worker thread has no HTTP request id, so the
+            // carrier log rows of a bulk purchase could never be tagged with
+            // the order and tracking (tagCurrentRequest keys on MDC.requestId).
+            // Give each row its own correlation scope, like BulkLabelServiceImpl.
+            String priorRequestId = org.slf4j.MDC.get(com.multiship.backend.config.MdcCorrelationFilter.MDC_REQUEST_ID);
+            org.slf4j.MDC.put(com.multiship.backend.config.MdcCorrelationFilter.MDC_REQUEST_ID,
+                    "import-" + (batchId == null ? "x" : batchId) + "-" + (existingOrderNo == null ? "new" : existingOrderNo)
+                            + "-" + java.util.UUID.randomUUID().toString().substring(0, 8));
+            ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> resp;
+            try (var ignored = existingOrderNo == null ? null
+                    : com.multiship.backend.service.observability.CarrierCallContext.forOrder(existingOrderNo.longValue())) {
+                resp = carrierService.generateManualLabel(req, null, existingOrderNo);
+            } finally {
+                if (priorRequestId == null) org.slf4j.MDC.remove(com.multiship.backend.config.MdcCorrelationFilter.MDC_REQUEST_ID);
+                else org.slf4j.MDC.put(com.multiship.backend.config.MdcCorrelationFilter.MDC_REQUEST_ID, priorRequestId);
+            }
             com.multiship.backend.dto.LabelGenerationResponse data =
                     resp == null ? null : resp.getData();
             if (resp != null && "success".equalsIgnoreCase(resp.getStatus()) && data != null
@@ -6704,7 +6917,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                     gr.setBatchId(batchId);
                     // Set label and tracking URLs for frontend to display
                     if (orderNo != null) {
-                        gr.setLabelUrl("/api/v1/orders/" + orderNo + "/label/pdf");
+                        gr.setLabelUrl("/api/v1/labels/" + orderNo + "/pdf");
                         gr.setTrackingUrl(data.getTrackingUrl());
                     }
                 }
@@ -7280,10 +7493,25 @@ public class OrderImportServiceImpl implements OrderImportService {
     }
 
     @Override
+    @org.springframework.transaction.annotation.Transactional
     public ApiResponse<StagingUploadDTO> saveStaging(Long id, String requestedBy, boolean includeErrors,
                                                      boolean allowDuplicate) {
-        ImportStagingUpload up = findStaging(id, requestedBy);
+        // BUG-046 — pessimistic lock on the staging-upload row so concurrent
+        // POST /staging/{id}/save requests serialise. Three simultaneous
+        // calls previously minted three ImportBatch rows (one per call) and
+        // the extras couldn't be generated. The lock holds until this
+        // @Transactional commits; the loser then re-reads via
+        // {@code findByUploadIdOrderByRowNoAsc} below and trips the
+        // existing "Everything in this upload is already saved" guard at
+        // line ~7351 with a 422 instead of inserting a duplicate.
+        if (stagingUploadRepository == null || id == null) {
+            return stagingFailure(HttpStatus.NOT_FOUND, "Upload not found — it may have expired or been discarded.");
+        }
+        ImportStagingUpload up = stagingUploadRepository.findByIdForUpdate(id).orElse(null);
         if (up == null) return stagingFailure(HttpStatus.NOT_FOUND, "Upload not found — it may have expired or been discarded.");
+        if (!canAccessStaging(up, requestedBy)) {
+            throw new org.springframework.security.access.AccessDeniedException("This upload belongs to another user.");
+        }
         List<ImportStagingRow> ents = stagingRowRepository.findByUploadIdOrderByRowNoAsc(up.getId());
         List<OrderImportRowDTO> rows = readStagingRows(ents);
         requireMatch(firstClientCode(rows));
@@ -7643,6 +7871,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         validateBusinessRules(rows);
         validateCustomFields(rows);
         validateInternationalItems(rows);
+        flagRowFieldLengths(rows);
         flagAlreadyInImportHistory(rows, saved);
     }
 
@@ -7706,6 +7935,8 @@ public class OrderImportServiceImpl implements OrderImportService {
             case "countryCode" -> r.getCountryCode();
             case "carrierCode" -> r.getCarrierCode();
             case "accountNumber" -> r.getAccountNumber();
+            case "thirdPartyPostalCode" -> r.getThirdPartyPostalCode();
+            case "thirdPartyCountry" -> r.getThirdPartyCountry();
             // BUG-014 - round-trip the operator's own ship-via code when the
             // mapping rule rewrote serviceType to a carrier wire code at parse
             // time. Fixing + re-uploading the errors file must keep the same

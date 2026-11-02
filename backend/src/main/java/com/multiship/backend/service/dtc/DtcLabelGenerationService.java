@@ -249,8 +249,19 @@ public class DtcLabelGenerationService {
 
             // Committed on its own before the carrier is asked — see STATUS_IN_FLIGHT.
             stamp(row, STATUS_IN_FLIGHT, null, null, existingOrderNo, null);
-            ApiResponse<LabelGenerationResponse> resp =
-                    carrierService.generateManualLabel(req, null, existingOrderNo);
+            // BUG-060 — same correlation scope as the bulk workers, so the
+            // carrier log can be filtered by the order this line bought.
+            String priorRequestId = org.slf4j.MDC.get(com.multiship.backend.config.MdcCorrelationFilter.MDC_REQUEST_ID);
+            org.slf4j.MDC.put(com.multiship.backend.config.MdcCorrelationFilter.MDC_REQUEST_ID,
+                    "dtc-" + job.getId() + "-" + row.getId());
+            ApiResponse<LabelGenerationResponse> resp;
+            try (var ignored = existingOrderNo == null ? null
+                    : com.multiship.backend.service.observability.CarrierCallContext.forOrder(existingOrderNo.longValue())) {
+                resp = carrierService.generateManualLabel(req, null, existingOrderNo);
+            } finally {
+                if (priorRequestId == null) org.slf4j.MDC.remove(com.multiship.backend.config.MdcCorrelationFilter.MDC_REQUEST_ID);
+                else org.slf4j.MDC.put(com.multiship.backend.config.MdcCorrelationFilter.MDC_REQUEST_ID, priorRequestId);
+            }
             LabelGenerationResponse data = resp == null ? null : resp.getData();
 
             if (resp != null && "success".equalsIgnoreCase(resp.getStatus()) && data != null

@@ -56,4 +56,16 @@ describe('OrdersWorkspace', () => {
       ?? screen.queryByRole('button')
     expect(somethingRendered).toBeTruthy()
   })
+
+  // BUG-014 — mount at /orders?q=hello seeds the search input, so
+  // the back button / bookmarks / Share-this-view links round-trip.
+  it('seeds search from URL ?q=', async () => {
+    window.history.replaceState({}, '', '/orders?q=hello')
+    const { default: OrdersWorkspace } = await import('./OrdersWorkspace')
+    renderWithProviders(<OrdersWorkspace />)
+    const search = screen.getByPlaceholderText(/search|filter|order/i) as HTMLInputElement
+    expect(search.value).toBe('hello')
+    // Reset the URL for subsequent tests in the same worker.
+    window.history.replaceState({}, '', '/')
+  })
 })

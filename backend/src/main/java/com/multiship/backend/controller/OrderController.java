@@ -34,12 +34,6 @@ public class OrderController {
     @Autowired
     private CarrierService carrierService;
 
-    @Autowired
-    private com.multiship.backend.service.ZplLabelService zplLabelService;
-
-    @Autowired
-    private com.multiship.backend.service.PdfLabelService pdfLabelService;
-
     // Sprint 52 PR B — passthrough for carrier's real label bytes when
     // the stored artifact matches the requested format. See
     // LabelArtifactResolver javadoc.
@@ -47,26 +41,15 @@ public class OrderController {
     private com.multiship.backend.service.LabelArtifactResolver labelArtifactResolver;
 
     // PR #536 — carrier ZPL → PNG/PDF via bundled zebrash-cli. Feature-
-    // flagged; when off, falls back to the pre-existing facsimile
-    // renderers (ZplLabelService + PdfLabelService).
+    // flagged by label.render-carrier-zpl.
     @Autowired
     private com.multiship.backend.service.ZebrashRenderer zebrashRenderer;
+    // Phase 3 (Shipment & Label re-architecture) — the printable label for the
+    // print and document-bundle flows comes from the same pipeline as the
+    // /api/v1/labels resource: stored ZPL → one renderer. The old in-controller
+    // /label/{zpl,pdf,preview.png} endpoints and their helpers are gone.
     @Autowired
-    private com.multiship.backend.service.ZebrashPdfService zebrashPdfService;
-    @Autowired
-    private com.multiship.backend.service.ZebrashCompositor zebrashCompositor;
-    /** Raster (GIF/PNG) carrier labels → 4×6 PDF pages; UPS returns GIF by default. */
-    @org.springframework.beans.factory.annotation.Autowired
-    private com.multiship.backend.service.LabelImagePdfService labelImagePdfService;
-    /** Raster carrier labels → ^GFA ZPL, so Copy ZPL is the carrier's real label. */
-    @org.springframework.beans.factory.annotation.Autowired
-    private com.multiship.backend.service.LabelImageZplService labelImageZplService;
-    /** /label/pdf?main=true — page 1 of a carrier PDF, cropped to the label
-     *  and fitted to 4×6, so Print Label spools one label-sized sheet instead
-     *  of FedEx's 3–4 Letter pages. zebrash/facsimile output is already one
-     *  4×6 page per package and passes through untouched. */
-    @org.springframework.beans.factory.annotation.Autowired
-    private com.multiship.backend.service.LabelMainPageCropper labelMainPageCropper;
+    private com.multiship.backend.service.label.LabelPrintableService labelPrintable;
 
     // PR #552 — concat carrier per-piece PDFs into one multi-page file
     // when the operator asks for the "all pkgs" PDF and the carrier
@@ -74,8 +57,6 @@ public class OrderController {
     @Autowired
     private com.multiship.backend.service.PdfMerger pdfMerger;
 
-    @org.springframework.beans.factory.annotation.Value("${label.render-carrier-zpl:false}")
-    private boolean renderCarrierZplEnabled;
 
     @Autowired
     private com.multiship.backend.repository.OrderTrackingRepository orderTrackingRepository;
@@ -254,7 +235,7 @@ public class OrderController {
             @RequestParam(defaultValue = com.multiship.backend.common.PaginationDefaults.DEFAULT_SIZE_STR) int size,
             @Parameter(description = "orderNo | city | weight | status | createdDate") @RequestParam(defaultValue = "orderNo") String sortBy,
             @RequestParam(defaultValue = "ASC") String sortDirection,
-            @Parameter(description = "PENDING | GENERATED | ERROR") @RequestParam(required = false) String status,
+            @Parameter(description = "PENDING | GENERATED | ERROR | VOIDED") @RequestParam(required = false) String status,
             @Parameter(description = "Scope to one tenant (required for TENANT role)") @RequestParam(required = false) String tenantId,
             @Parameter(description = "Matches order #, batch #, city, customer code, customer_ref, or tracking number as substrings. "
                     + "Prefix syntax (2026-09-15) narrows to one field: batch:14 (exact), order:900044, tracking:1Z, client:ARHDEV. "
@@ -272,20 +253,51 @@ public class OrderController {
             @Parameter(description = "Carrier: UPS | FEDEX | USPS | DHL") @RequestParam(required = false) String carrier,
             @Parameter(description = "Returns F3 — Y = returns only, N = shipments only, blank = all")
             @RequestParam(required = false) String isReturn,
-            @Parameter(description = "Attach the cascade's account pick (accountResolution) to each row") @RequestParam(defaultValue = "false") boolean includeResolution) {
+            @Parameter(description = "BUG-001 — intl tri-state: Y = international only, N = domestic only, blank = all")
+            @RequestParam(required = false) String intl,
+            @Parameter(description = "Attach the cascade's account pick (accountResolution) to each row") @RequestParam(defaultValue = "false") boolean includeResolution,
+            @Parameter(description = "BUG-010 — opt-in bulk-export path. Raises the per-page row cap from "
+                    + com.multiship.backend.common.PaginationDefaults.MAX_SIZE + " to "
+                    + com.multiship.backend.common.PaginationDefaults.EXPORT_MAX_SIZE
+                    + " for a single operator-triggered CSV dump. Normal UI calls omit this flag.")
+            @RequestParam(defaultValue = "false") boolean export) {
 
+        // BUG-016 — pre-fix the API silently rewrote any unknown
+        // {@code sortBy} to "orderNo" and any unknown direction to
+        // "ASC", so integrators who sent a typo got a confusing
+        // different sort than they asked for. 400 them instead with
+        // the valid set in the message. Internal UI only sends
+        // column ids that match this allowlist.
         if (!isValidSortBy(sortBy)) {
-            sortBy = "orderNo";
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST,
+                    "Unknown sortBy '" + sortBy + "'. Valid: orderNo, customer, "
+                            + "generatedAt, tracking, city, weight, status, createdDate.");
         }
         if (!isValidSortDirection(sortDirection)) {
-            sortDirection = "ASC";
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST,
+                    "Unknown sortDirection '" + sortDirection + "'. Valid: ASC, DESC.");
+        }
+        // BUG-016 — same deal for the batch filter: pre-fix the
+        // service's digits-only sanitiser silently stripped letters
+        // and still filtered on whatever digits remained. Reject
+        // non-numeric input up-front with a clear error.
+        if (batch != null && !batch.isBlank() && !batch.matches("\\d+")) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST,
+                    "Unknown batch '" + batch + "'. Expected a positive integer id.");
         }
 
         PaginationRequestDTO paginationRequest = PaginationRequestDTO.builder()
                 .page(page)
                 // Sprint 51 AC-L1 — cap at PaginationDefaults.MAX_SIZE so a
                 // pathological ?size=100000 can't nuke the query.
-                .size(com.multiship.backend.common.PaginationDefaults.clamp(size))
+                // BUG-010 — export=true raises the ceiling to EXPORT_MAX_SIZE
+                // (1000) so the CSV loop doesn't need ~340 serial requests.
+                .size(export
+                        ? com.multiship.backend.common.PaginationDefaults.clampExport(size)
+                        : com.multiship.backend.common.PaginationDefaults.clamp(size))
                 .sortBy(sortBy)
                 .sortDirection(sortDirection)
                 .build();
@@ -306,6 +318,7 @@ public class OrderController {
                 .channel(channel)
                 .carrier(carrier)
                 .isReturn(isReturn)
+                .intl(intl)
                 .build();
 
         ApiResponse<PageResponseDTO<OrderResponseDTO>> response =
@@ -541,903 +554,6 @@ public class OrderController {
         return ResponseEntity.status(response.getCode()).body(response);
     }
 
-    /**
-     * Everything needed to render a shipping label and commercial invoice for
-     * an order: order + line items, tenant carrier account, label/tracking
-     * details, and the configured shipper (ship-from) address.
-     */
-    @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
-    @GetMapping("/{orderNo}/label")
-    public ResponseEntity<ApiResponse<Map<String, Object>>> getLabelDocument(@PathVariable Integer orderNo) {
-        ApiResponse<OrderWithLinesDTO> orderResponse = orderService.getOrderWithLines(orderNo);
-        if (!"SUCCESS".equalsIgnoreCase(orderResponse.getStatus()) || orderResponse.getData() == null) {
-            return ResponseEntity.status(orderResponse.getCode()).body(ApiResponse.<Map<String, Object>>builder()
-                    .status(orderResponse.getStatus())
-                    .code(orderResponse.getCode())
-                    .message(orderResponse.getMessage())
-                    .timestamp(orderResponse.getTimestamp())
-                    .errors(orderResponse.getErrors())
-                    .build());
-        }
-
-        OrderWithLinesDTO order = orderResponse.getData();
-
-        // The account shown on the documents comes from the same three-scenario
-        // cascade that label generation uses (order details -> book -> default).
-        // Generated labels are branded by the account actually used; only
-        // ungenerated previews fall back to the live cascade resolution.
-        Object resolution = asShippedResolution(orderNo);
-        if (resolution == null) {
-            ApiResponse<List<OrderAccountResolutionDTO>> resolutionResponse =
-                    carrierService.resolveOrderAccounts(List.of(orderNo));
-            resolution = resolutionResponse.getData() != null && !resolutionResponse.getData().isEmpty()
-                    ? resolutionResponse.getData().get(0)
-                    : null;
-        }
-
-        ApiResponse<OrderResponseDTO> trackingResponse = orderService.getOrderWithTracking(orderNo);
-        OrderResponseDTO.LabelDetails labelDetails = trackingResponse.getData() != null ? trackingResponse.getData().getLabelDetails() : null;
-        if (labelDetails != null) {
-            final OrderResponseDTO.LabelDetails ld = labelDetails;
-            orderTrackingRepository.findByOrderNo(orderNo).ifPresent(t ->
-                    ld.setHistory(com.multiship.backend.util.LabelHistory.parse(t.getLabelHistory())));
-        }
-
-        // FROM block: the order's client ship-from when it has one, else the
-        // company warehouse. Return block: the client's effective return address.
-        String clientCode = order.getTenantId() != null && !order.getTenantId().isBlank()
-                ? order.getTenantId() : order.getCustNo();
-        com.multiship.backend.model.Client client = clientCode != null
-                ? clientRepository.findByClientCodeIgnoreCase(clientCode.trim().toUpperCase()).orElse(null)
-                : null;
-
-        Map<String, Object> shipper;
-        Map<String, Object> returnTo;
-        if (order.getShipFromCountryCd() != null && !order.getShipFromCountryCd().isBlank()) {
-            // Manual shipment carried its own ship-from — the authoritative
-            // origin the operator entered. Use it verbatim so a domestic
-            // shipment is not re-classified international against the platform
-            // warehouse default (which lives in a different country).
-            shipper = new LinkedHashMap<>();
-            shipper.put("name", org.springframework.util.StringUtils.hasText(order.getShipFromName())
-                    ? order.getShipFromName() : order.getShipFromCompany());
-            shipper.put("company", order.getShipFromCompany());
-            shipper.put("phone", order.getShipFromPhone());
-            shipper.put("addressLine1", order.getShipFromAddr1());
-            shipper.put("addressLine2", order.getShipFromAddr2());
-            shipper.put("city", order.getShipFromCity());
-            shipper.put("state", order.getShipFromState());
-            shipper.put("postalCode", order.getShipFromZip());
-            shipper.put("countryCode", order.getShipFromCountryCd());
-            returnTo = shipper;
-        } else if (client != null && client.getShipFrom() != null && client.getShipFrom().hasValue()) {
-            shipper = addressMap(client.getShipFrom(), client.getName());
-            returnTo = addressMap(client.effectiveReturnAddress(), client.getName());
-        } else {
-            // BUG-137 R7 — removed the platform-default fallback. It printed
-            // "Multiship Warehouse, Bengaluru" on the preview whenever the
-            // order's ship_from_* was blank + the client had no ship-from
-            // configured, which lied about what's on the label the carrier
-            // already has. Return the order's columns as-is (likely blank);
-            // the FE renders dashes and the operator knows the data is
-            // missing instead of trusting a fake address.
-            shipper = new LinkedHashMap<>();
-            shipper.put("name", org.springframework.util.StringUtils.hasText(order.getShipFromName())
-                    ? order.getShipFromName() : order.getShipFromCompany());
-            shipper.put("company", order.getShipFromCompany());
-            shipper.put("phone", order.getShipFromPhone());
-            shipper.put("addressLine1", order.getShipFromAddr1());
-            shipper.put("addressLine2", order.getShipFromAddr2());
-            shipper.put("city", order.getShipFromCity());
-            shipper.put("state", order.getShipFromState());
-            shipper.put("postalCode", order.getShipFromZip());
-            shipper.put("countryCode", order.getShipFromCountryCd());
-            returnTo = shipper;
-        }
-
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("order", order);
-        payload.put("resolution", resolution);
-        payload.put("label", labelDetails);
-        payload.put("shipper", shipper);
-        payload.put("returnTo", returnTo);
-        payload.put("isReturn", order.getIsReturn() != null && "Y".equalsIgnoreCase(order.getIsReturn()));
-
-        // ===== customs (international shipments only) =====
-        // International when the destination country differs from the origin.
-        String shipperCountry = String.valueOf(shipper.getOrDefault("countryCode", "")).trim();
-        String shipToCountry = order.getShiptoCountryCd() != null ? order.getShiptoCountryCd().trim() : "";
-        // Same customs territory (e.g. intra-EU) = no customs border = the
-        // document carries no importer/broker blocks, like a domestic parcel.
-        boolean international = !shipToCountry.isEmpty() && !shipperCountry.isEmpty()
-                && !com.multiship.backend.util.CustomsTerritories.sameTerritory(shipperCountry, shipToCountry);
-        payload.put("international", international);
-
-        // ===== how it ships: FULL service resolution (rules first, then the
-        // carrier's scope fallback — so the document always shows the service
-        // that would actually be used, even when a mapped service is disabled).
-        // Service scope uses COUNTRY inequality, not customs territory.
-        boolean serviceIntl = !shipToCountry.isEmpty() && !shipperCountry.isEmpty()
-                && !shipToCountry.equalsIgnoreCase(shipperCountry);
-        // Prefer the EXACT service the order shipped on (its ship_via_cd is a
-        // real service code for manual/catalog shipments) so the label prints
-        // the purchased service — e.g. "FedEx 2Day", not the lane's default
-        // "FedEx Ground". Only legacy ERP codes (P80/F77/L01) or unknown codes
-        // fall through to the rule/scope re-resolution.
-        String svcCarrier = com.multiship.backend.service.ShippingConfigService
-                .canonicalCarrierFor(order.getShipviaCd());
-        com.multiship.backend.model.ShippingService ruledService = shippingConfigService
-                .serviceByCode(svcCarrier, order.getShipviaCd(), shipperCountry)
-                .orElseGet(() -> shippingConfigService
-                        .resolveService(svcCarrier, clientCode, order.getShipviaCd(),
-                                shipToCountry, serviceIntl, shipperCountry)
-                        .orElse(null));
-        if (ruledService != null) {
-            Map<String, Object> serviceMap = new LinkedHashMap<>();
-            serviceMap.put("carrier", ruledService.getCarrier());
-            serviceMap.put("code", ruledService.getServiceCode());
-            serviceMap.put("name", ruledService.getName());
-            serviceMap.put("scope", ruledService.getScope());
-            payload.put("service", serviceMap);
-        }
-        // Package auto-picked for that service by the order's weight (falls
-        // back to the global default preset inside pickPackage).
-        shippingConfigService
-                .pickPackage(ruledService != null ? ruledService.getId() : null, order.getWeight())
-                .ifPresent(pick -> {
-                    com.multiship.backend.model.PackagePreset p = pick.preset();
-                    Map<String, Object> pkg = new LinkedHashMap<>();
-                    pkg.put("name", p.getName());
-                    pkg.put("kind", p.getKind());
-                    pkg.put("carrierPackageCode", p.getCarrierPackageCode());
-                    pkg.put("length", p.getLength());
-                    pkg.put("width", p.getWidth());
-                    pkg.put("height", p.getHeight());
-                    pkg.put("dimUnit", p.getDimUnit());
-                    pkg.put("maxWeight", p.getMaxWeight());
-                    pkg.put("weightUnit", p.getWeightUnit());
-                    // carrier billing math (what this box actually costs to ship)
-                    pkg.put("dimWeight", com.multiship.backend.util.PackageMath.dimWeight(p));
-                    pkg.put("billableWeight",
-                            com.multiship.backend.util.PackageMath.billableWeight(p, order.getWeight()));
-                    pkg.put("lengthPlusGirth", com.multiship.backend.util.PackageMath.lengthPlusGirthInches(p));
-                    pkg.put("oversizeStatus", com.multiship.backend.util.PackageMath.oversizeStatus(p).name());
-                    pkg.put("boxCost", p.getBoxCost());
-                    pkg.put("flatRate", p.getFlatRate());
-                    payload.put("packagePreset", pkg);
-                });
-
-        // Importer + broker: a PER-SHIPMENT override on the order wins (it never
-        // touches the client's saved profile); otherwise resolve from the client's
-        // profile for this destination country.
-        String importerBrokerOverride = order.getImporterBrokerOverride();
-        if (international && importerBrokerOverride != null && !importerBrokerOverride.isBlank()) {
-            try {
-                Map<String, Object> ov = new com.fasterxml.jackson.databind.ObjectMapper()
-                        .readValue(importerBrokerOverride,
-                                new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
-                Object imp = ov.get("importer");
-                Object brk = ov.get("broker");
-                if (imp != null) {
-                    payload.put("importer", imp);
-                }
-                boolean namedBroker = brk instanceof Map
-                        && org.springframework.util.StringUtils.hasText(String.valueOf(((Map<?, ?>) brk).get("name")));
-                payload.put("brokerage", namedBroker ? "BROKER_SELECT" : "CARRIER_DEFAULT");
-                if (namedBroker) {
-                    payload.put("broker", brk);
-                }
-            } catch (Exception ignore) {
-                // malformed override → fall through to no importer/broker (rare)
-            }
-        } else if (international && clientCode != null && !shipToCountry.isEmpty()) {
-            clientCustomsProfileRepository
-                    .findByClientAndCountry(clientCode.trim().toUpperCase(), shipToCountry.toUpperCase())
-                    .ifPresent(p -> {
-                        boolean receiverIsImporter = "RECEIVER".equalsIgnoreCase(p.getImporterType());
-                        Map<String, Object> importer = new LinkedHashMap<>();
-                        if (receiverIsImporter) {
-                            // DAP: the order's consignee IS the Importer of
-                            // Record — the carrier collects their KYC at
-                            // destination. Stamp the consignee, not a company.
-                            importer.put("type", "RECEIVER");
-                            importer.put("name", order.getShipName());
-                            importer.put("contact", order.getShipAttn());
-                            importer.put("countryCode", order.getShiptoCountryCd());
-                            importer.put("addressLine1", order.getShipAddr1());
-                            importer.put("city", order.getShiptoCity());
-                            importer.put("state", order.getShiptoState());
-                            importer.put("postalCode", order.getShiptoZip());
-                        } else {
-                            importer.put("type", "BUSINESS");
-                            importer.put("name", p.getImporterName());
-                            importer.put("contact", p.getImporterContact());
-                            importer.put("countryCode", p.getImporterCountry());
-                            importer.put("addressLine1", p.getImporterAddress1());
-                            importer.put("addressLine2", p.getImporterAddress2());
-                            importer.put("phone", p.getImporterPhone());
-                            importer.put("city", p.getImporterCity());
-                            importer.put("state", p.getImporterState());
-                            importer.put("postalCode", p.getImporterPostcode());
-                            importer.put("taxId", p.getImporterTaxId());
-                            importer.put("taxIdType", p.getImporterTaxIdType());
-                            importer.put("eori", p.getImporterEori());
-                            importer.put("ioss", p.getImporterIoss());
-                            importer.put("companyReg", p.getImporterCompanyReg());
-                            importer.put("iec", p.getImporterIec());
-                            importer.put("gstin", p.getImporterGstin());
-                        }
-                        payload.put("importer", importer);
-
-                        // No named broker = the carrier's own brokerage clears
-                        // the shipment (broker-inclusive default); a named one
-                        // means Broker Select at the destination border.
-                        // Presence = name OR company (legacy rows may carry
-                        // only a company) — kept in sync with the modal.
-                        boolean ownBroker = org.springframework.util.StringUtils.hasText(p.getBrokerName())
-                                || org.springframework.util.StringUtils.hasText(p.getBrokerCompany());
-                        payload.put("brokerage", ownBroker ? "BROKER_SELECT" : "CARRIER_DEFAULT");
-                        if (ownBroker) {
-                            Map<String, Object> broker = new LinkedHashMap<>();
-                            broker.put("name", p.getBrokerName());
-                            broker.put("company", p.getBrokerCompany());
-                            broker.put("countryCode", p.getBrokerCountry());
-                            broker.put("addressLine1", p.getBrokerAddress1());
-                            broker.put("addressLine2", p.getBrokerAddress2());
-                            broker.put("phone", p.getBrokerPhone());
-                            broker.put("city", p.getBrokerCity());
-                            broker.put("state", p.getBrokerState());
-                            broker.put("postalCode", p.getBrokerPostcode());
-                            broker.put("brokerId", p.getBrokerId());
-                            broker.put("license", p.getBrokerLicense());
-                            payload.put("broker", broker);
-                        }
-
-                        // Shipment defaults carried by the profile.
-                        Map<String, Object> defaults = new LinkedHashMap<>();
-                        defaults.put("incoterms", p.getIncoterms());
-                        defaults.put("dutiesBillTo", p.getDutiesBillTo());
-                        defaults.put("dutiesAccount", p.getDutiesAccount());
-                        defaults.put("reasonForExport", p.getReasonForExport());
-                        defaults.put("currency", p.getCurrency());
-                        payload.put("customsDefaults", defaults);
-
-                        if (p.getAccountCarrier() != null || p.getAccountNo() != null) {
-                            Map<String, Object> acct = new LinkedHashMap<>();
-                            acct.put("carrier", p.getAccountCarrier());
-                            acct.put("accountNo", p.getAccountNo());
-                            payload.put("customsAccount", acct);
-                        }
-                    });
-        }
-
-        // Per-order goods (customs line items) still ride along when present.
-        orderCustomsRepository.findByOrderNoIgnoreCase(String.valueOf(orderNo)).ifPresent(c -> {
-            Map<String, Object> customs = new LinkedHashMap<>();
-            if (c.getImporterAddress() != null) {
-                Map<String, Object> importer = addressMap(c.getImporterAddress(), c.getImporterCompany());
-                importer.put("company", c.getImporterCompany());
-                importer.put("taxId", c.getImporterTaxId());
-                importer.put("vat", c.getImporterVat());
-                importer.put("eori", c.getImporterEori());
-                customs.put("importer", importer);
-            }
-            customs.put("incoterms", c.getIncoterms());
-            customs.put("reasonForExport", c.getReasonForExport());
-            customs.put("currency", c.getCurrency());
-            customs.put("weightUnit", c.getWeightUnit());
-            customs.put("notes", c.getNotes());
-            customs.put("items", c.getItems().stream().map(i -> {
-                Map<String, Object> m = new LinkedHashMap<>();
-                m.put("description", i.getDescription());
-                m.put("hsCode", i.getHsCode());
-                m.put("countryOfOrigin", i.getCountryOfOrigin());
-                m.put("quantity", i.getQuantity());
-                m.put("unitValue", i.getUnitValue());
-                m.put("weight", i.getWeight());
-                m.put("sku", i.getSku());
-                return m;
-            }).toList());
-            payload.put("customs", customs);
-        });
-
-        // ===== charges (what the shipment was billed) =====
-        // Freight on the commercial invoice = the carrier's charge for this
-        // shipment (billable = carrier + markup; falls back to the raw carrier
-        // amount). Currency mirrors the markup currency. Sandbox rates come
-        // back as 0.00, so the invoice shows a real freight figure only once a
-        // production rate has been captured.
-        orderTrackingRepository.findByOrderNo(orderNo).ifPresent(t -> {
-            Map<String, Object> charges = new LinkedHashMap<>();
-            java.math.BigDecimal freight = t.getBillableAmount() != null
-                    ? t.getBillableAmount() : t.getCarrierAmount();
-            charges.put("freight", freight);
-            charges.put("carrierAmount", t.getCarrierAmount());
-            charges.put("billableAmount", t.getBillableAmount());
-            charges.put("currency", t.getMarkupCurrency());
-            payload.put("charges", charges);
-        });
-
-        // ===== carrier response details (decoded from carrier's own label bytes) =====
-        // Parse the FedEx MaxiCode payload embedded in the returned ZPL so
-        // the UI can surface fields FedEx accepted but doesn't render as
-        // visible text (recipient line 2, phone, EEI, commodity). Pure
-        // decode of what the carrier sent back — no local augmentation.
-        // Silent no-op when the stored artifact isn't ZPL (URL/PDF), when
-        // the ZPL is malformed, or when the operator's carrier isn't FedEx.
-        try {
-            java.util.Optional<byte[]> zplBytes = labelArtifactResolver
-                    .resolveAsBytes(orderNo, "ZPL", null);
-            if (zplBytes.isPresent()) {
-                String zpl = new String(zplBytes.get(), java.nio.charset.StandardCharsets.ISO_8859_1);
-                com.multiship.backend.service.carriers.parse.FedExMaxiCodeParser.Details d =
-                        fedExMaxiCodeParser.parse(zpl);
-                if (d.isPresent()) {
-                    Map<String, Object> details = new LinkedHashMap<>();
-                    details.put("source", d.getSource());
-                    details.put("trackingNumber", d.getTrackingNumber());
-                    details.put("serviceCode", d.getServiceCode());
-                    details.put("service", d.getService());
-                    details.put("recipientName", d.getRecipientName());
-                    details.put("recipientAddressLine1", d.getRecipientAddressLine1());
-                    details.put("recipientAddressLine2", d.getRecipientAddressLine2());
-                    details.put("recipientCity", d.getRecipientCity());
-                    details.put("recipientState", d.getRecipientState());
-                    details.put("recipientPostalCode", d.getRecipientPostalCode());
-                    details.put("recipientCountryCode", d.getRecipientCountryCode());
-                    details.put("recipientPhone", d.getRecipientPhone());
-                    details.put("referenceNumber", d.getReferenceNumber());
-                    details.put("customerPo", d.getCustomerPo());
-                    details.put("customsCountryCode", d.getCustomsCountryCode());
-                    details.put("customsValue", d.getCustomsValue());
-                    details.put("customsCurrency", d.getCustomsCurrency());
-                    details.put("commodityDescription", d.getCommodityDescription());
-                    details.put("eeiStatement", d.getEeiStatement());
-                    payload.put("carrierResponseDetails", details);
-                }
-            }
-        } catch (Exception ignored) {
-            // Best-effort — a parser failure never breaks the label page.
-        }
-
-        ApiResponse<Map<String, Object>> response = ApiResponse.<Map<String, Object>>builder()
-                .status("SUCCESS")
-                .code(200)
-                .message("Label document retrieved successfully")
-                .timestamp(java.time.LocalDateTime.now())
-                .data(payload)
-                .build();
-
-        return ResponseEntity.status(response.getCode()).body(response);
-    }
-
-    /**
-     * Raw ZPL for the order's 4x6 thermal label — what a Zebra printer consumes.
-     * In production this returns the carrier-provided artifact; in sandbox it is
-     * built locally from the same data as the on-screen label document.
-     */
-    @Operation(summary = "Raw ZPL for the 4x6 thermal label (text/plain)")
-    @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
-    @GetMapping(value = "/{orderNo}/label/zpl", produces = org.springframework.http.MediaType.TEXT_PLAIN_VALUE)
-    public ResponseEntity<String> getLabelZpl(@PathVariable Integer orderNo,
-            @org.springframework.web.bind.annotation.RequestParam(name = "pkg", required = false) Integer pkgIndex) {
-        // Sprint 52 PR B — carrier passthrough. When order_label_tracking.
-        // label_file_path holds the carrier's real ZPL bytes (raw ^XA...^XZ
-        // or base64-encoded), return them verbatim. On mismatch (stored
-        // artifact is PDF/GIF/URL-with-non-ZPL) fall through to the
-        // facsimile below.
-        //
-        // PR #544 — pkgIndex now threaded to the resolver. Multi-package
-        // orders persist per-package label URLs in label_package; passing
-        // pkgIndex reads from there. Pre-#544, this branch always
-        // returned pkg 1's label for multi-package orders (pkg 2..N were
-        // unreachable via passthrough).
-        //   - ?pkg=N → single package
-        //   - ?pkg omitted + multi-pkg order → concatenate all packages'
-        //     ZPL blocks (thermal printers spool sequentially)
-        //   - ?pkg omitted + single-pkg order → shipment-level (back-compat)
-        if (pkgIndex != null && pkgIndex > 0) {
-            java.util.Optional<byte[]> single = labelArtifactResolver
-                    .resolveAsBytes(orderNo, "ZPL", pkgIndex);
-            if (single.isPresent()) {
-                return ResponseEntity.ok()
-                        .header("Content-Disposition", "attachment; filename=label-"
-                                + orderNo + "-pkg" + pkgIndex + ".zpl")
-                        .body(com.multiship.backend.util.ZplText.stripUnsupportedCommands(new String(single.get())));
-            }
-        } else {
-            // Peek at package count so a multi-pkg order concatenates. Uses
-            // effectivePkgCount() rather than raw getPackageCount() so a
-            // stale package_count doesn't drop pkg 2..N when label_package
-            // rows exist for them.
-            ApiResponse<OrderWithLinesDTO> peek = orderService.getOrderWithLines(orderNo);
-            int totalPkgs = effectivePkgCount(peek.getData());
-            if (totalPkgs > 1) {
-                StringBuilder allZpl = new StringBuilder();
-                boolean any = false;
-                for (int i = 1; i <= totalPkgs; i++) {
-                    java.util.Optional<byte[]> pz = labelArtifactResolver
-                            .resolveAsBytes(orderNo, "ZPL", i);
-                    if (pz.isEmpty()) continue;
-                    if (any) allZpl.append('\n');
-                    allZpl.append(com.multiship.backend.util.ZplText.stripUnsupportedCommands(new String(pz.get())));
-                    any = true;
-                }
-                if (any) {
-                    return ResponseEntity.ok()
-                            .header("Content-Disposition", "attachment; filename=label-"
-                                    + orderNo + "-all" + totalPkgs + ".zpl")
-                            .body(allZpl.toString());
-                }
-            } else {
-                java.util.Optional<byte[]> passthrough = labelArtifactResolver
-                        .resolveAsBytes(orderNo, "ZPL", null);
-                if (passthrough.isPresent()) {
-                    return ResponseEntity.ok()
-                            .header("Content-Disposition", "attachment; filename=label-" + orderNo + ".zpl")
-                            .body(com.multiship.backend.util.ZplText.stripUnsupportedCommands(new String(passthrough.get())));
-                }
-            }
-        }
-
-        // Raster carrier labels (UPS's default GIF): convert the stored image
-        // into ^GFA ZPL rather than falling through to the platform
-        // facsimile — Copy ZPL / Download .zpl must be the carrier's label.
-        {
-            java.util.List<String> imageZpls = new java.util.ArrayList<>();
-            if (pkgIndex != null && pkgIndex > 0) {
-                labelArtifactResolver.resolveImage(orderNo, pkgIndex)
-                        .ifPresent(a -> imageZpls.add(labelImageZplService.imageToZpl(a.bytes())));
-            } else {
-                ApiResponse<OrderWithLinesDTO> peekImg = orderService.getOrderWithLines(orderNo);
-                int totalForImg = effectivePkgCount(peekImg.getData());
-                if (totalForImg > 1) {
-                    for (int i = 1; i <= totalForImg; i++) {
-                        labelArtifactResolver.resolveImage(orderNo, i)
-                                .ifPresent(a -> imageZpls.add(labelImageZplService.imageToZpl(a.bytes())));
-                    }
-                }
-                if (imageZpls.isEmpty()) {
-                    labelArtifactResolver.resolveImage(orderNo, null)
-                            .ifPresent(a -> imageZpls.add(labelImageZplService.imageToZpl(a.bytes())));
-                }
-            }
-            if (!imageZpls.isEmpty()) {
-                String suffix = pkgIndex != null && pkgIndex > 0
-                        ? "-pkg" + pkgIndex
-                        : (imageZpls.size() > 1 ? "-all" + imageZpls.size() : "");
-                return ResponseEntity.ok()
-                        .header("Content-Disposition", "attachment; filename=label-" + orderNo + suffix + ".zpl")
-                        .body(String.join("\n", imageZpls));
-            }
-        }
-
-        ApiResponse<OrderWithLinesDTO> orderResponse = orderService.getOrderWithLines(orderNo);
-        if (!"SUCCESS".equalsIgnoreCase(orderResponse.getStatus()) || orderResponse.getData() == null) {
-            return ResponseEntity.status(orderResponse.getCode()).body("Order " + orderNo + " was not found.");
-        }
-
-        OrderAccountResolutionDTO resolution = asShippedResolution(orderNo);
-        if (resolution == null) {
-            ApiResponse<List<OrderAccountResolutionDTO>> resolutionResponse =
-                    carrierService.resolveOrderAccounts(List.of(orderNo));
-            resolution = resolutionResponse.getData() != null && !resolutionResponse.getData().isEmpty()
-                    ? resolutionResponse.getData().get(0)
-                    : null;
-        }
-
-        ApiResponse<OrderResponseDTO> trackingResponse = orderService.getOrderWithTracking(orderNo);
-        OrderResponseDTO.LabelDetails labelDetails = trackingResponse.getData() != null
-                ? trackingResponse.getData().getLabelDetails()
-                : null;
-        if (labelDetails != null) {
-            final OrderResponseDTO.LabelDetails ld = labelDetails;
-            orderTrackingRepository.findByOrderNo(orderNo).ifPresent(t ->
-                    ld.setHistory(com.multiship.backend.util.LabelHistory.parse(t.getLabelHistory())));
-        }
-
-        // Incoterms ride on order_customs, not the order row — thread them onto
-        // the DTO so the ZPL prints the shipment's actual term (the facsimile
-        // used to hardcode DAP while the CI/PDF said DDP).
-        orderCustomsRepository.findByOrderNoIgnoreCase(String.valueOf(orderNo))
-                .ifPresent(c -> orderResponse.getData().setIncoterms(c.getIncoterms()));
-
-        int totalPkgs = effectivePkgCount(orderResponse.getData());
-        java.util.List<com.multiship.backend.dto.LabelPackageDTO> allPackages =
-                orderResponse.getData().getPackages() == null
-                        ? java.util.List.of()
-                        : orderResponse.getData().getPackages();
-
-        // When ?pkg is omitted on a multi-box shipment, stream ALL labels in
-        // one file (thermal printers spool multi-label ZPL sequentially via
-        // consecutive ^XA…^XZ blocks). When ?pkg=N is given, return only that
-        // box's label — same as before.
-        boolean allPkgs = (pkgIndex == null) && totalPkgs > 1;
-        StringBuilder zplOut = new StringBuilder();
-        int firstPkg = allPkgs ? 1 : (pkgIndex == null || pkgIndex < 1 ? 1 : Math.min(pkgIndex, totalPkgs));
-        int lastPkg = allPkgs ? totalPkgs : firstPkg;
-        for (int p = firstPkg; p <= lastPkg; p++) {
-            final int currentPkg = p;
-            com.multiship.backend.dto.LabelPackageDTO perPkg = allPackages.stream()
-                    .filter(x -> x.getSequenceNumber() != null && x.getSequenceNumber() == currentPkg)
-                    .findFirst().orElse(null);
-            zplOut.append(zplLabelService.buildLabel(orderResponse.getData(), resolution, labelDetails,
-                    currentPkg, totalPkgs, perPkg));
-        }
-
-        String filenameSuffix;
-        if (totalPkgs <= 1) {
-            filenameSuffix = "";
-        } else if (allPkgs) {
-            filenameSuffix = "-all" + totalPkgs;
-        } else {
-            filenameSuffix = "-pkg" + firstPkg;
-        }
-        return ResponseEntity.ok()
-                .header("Content-Disposition", "attachment; filename=label-" + orderNo
-                        + filenameSuffix + ".zpl")
-                .body(zplOut.toString());
-    }
-
-    /**
-     * Sprint 52 PR A — 4x6" PDF facsimile of the shipping label, sibling
-     * of the ZPL endpoint above. Same {@code ?pkg} semantics: omitted on a
-     * multi-box shipment returns all boxes as one PDF with N pages;
-     * {@code ?pkg=N} returns only that box.
-     *
-     * <p>PR B will layer in carrier-artifact passthrough — return the
-     * carrier's real PDF bytes when they exist for this order in PDF
-     * format, and only fall back to this facsimile otherwise.
-     */
-    @Operation(summary = "PDF facsimile of the 4x6\" shipping label (application/pdf)",
-            description = "Sprint 52 PR A — sibling of /label/zpl. Renders a 4x6\" PDF from the "
-                    + "same order data as the ZPL endpoint. This is a FACSIMILE for preview / "
-                    + "review — not the carrier's canonical label. Carrier-artifact passthrough "
-                    + "ships in a follow-up PR.")
-    @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
-    @GetMapping(value = "/{orderNo}/label/pdf",
-            produces = org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
-    public ResponseEntity<byte[]> getLabelPdf(@PathVariable Integer orderNo,
-            @org.springframework.web.bind.annotation.RequestParam(name = "pkg", required = false) Integer pkgIndex,
-            @org.springframework.web.bind.annotation.RequestParam(name = "main", required = false,
-                    defaultValue = "false") boolean mainOnly) {
-        // Sprint 52 PR B — carrier passthrough. When the stored
-        // label_file_path is a real carrier PDF, return those bytes
-        // verbatim. Mirror of the /label/zpl passthrough block above.
-        // PR #544 — per-package pkgIndex threading (see /label/zpl above).
-        if (pkgIndex != null && pkgIndex > 0) {
-            java.util.Optional<byte[]> single = labelArtifactResolver
-                    .resolveAsBytes(orderNo, "PDF", pkgIndex);
-            if (single.isPresent()) {
-                return ResponseEntity.ok()
-                        .header("Content-Disposition", "attachment; filename=label-"
-                                + orderNo + "-pkg" + pkgIndex + ".pdf")
-                        .header("Content-Type", org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
-                        .body(mainOnly ? labelMainPageCropper.mainLabelOnly(single.get()) : single.get());
-            }
-        } else {
-            // pkg omitted → operator wants ALL packages in one file.
-            // PR #552 — when multi-pkg + carrier stored per-piece PDFs,
-            // merge them via PdfMerger into a single N-page file instead
-            // of just returning the master (which was pre-#552 behaviour
-            // — pkg 2..N labels were unreachable via the PDF endpoint).
-            ApiResponse<OrderWithLinesDTO> peek = orderService.getOrderWithLines(orderNo);
-            int totalPkgsForPdf = effectivePkgCount(peek.getData());
-            if (totalPkgsForPdf > 1) {
-                java.util.List<byte[]> perPiecePdfs = new java.util.ArrayList<>(totalPkgsForPdf);
-                for (int i = 1; i <= totalPkgsForPdf; i++) {
-                    labelArtifactResolver.resolveAsBytes(orderNo, "PDF", i)
-                            .ifPresent(perPiecePdfs::add);
-                }
-                if (!perPiecePdfs.isEmpty()) {
-                    byte[] merged = pdfMerger.mergeToOne(
-                            mainOnly ? labelMainPageCropper.mainLabelOnlyEach(perPiecePdfs) : perPiecePdfs);
-                    String suffix = perPiecePdfs.size() > 1
-                            ? "-all" + perPiecePdfs.size()
-                            : "-pkg1";
-                    return ResponseEntity.ok()
-                            .header("Content-Disposition", "attachment; filename=label-"
-                                    + orderNo + suffix + ".pdf")
-                            .header("Content-Type", org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
-                            .body(merged);
-                }
-            }
-            // Single-pkg or no per-piece PDFs — fall back to shipment-level
-            // master PDF (pre-#552 behaviour).
-            java.util.Optional<byte[]> passthrough = labelArtifactResolver
-                    .resolveAsBytes(orderNo, "PDF", null);
-            if (passthrough.isPresent()) {
-                return ResponseEntity.ok()
-                        .header("Content-Disposition", "attachment; filename=label-" + orderNo + ".pdf")
-                        .header("Content-Type", org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
-                        .body(mainOnly ? labelMainPageCropper.mainLabelOnly(passthrough.get()) : passthrough.get());
-            }
-        }
-
-        // Raster carrier labels. UPS returns its label as a GIF (default
-        // LabelImageFormat) and the sniffer only knew ZPL/PDF, so the real
-        // label sat in the row while every surface fell through to the
-        // facsimile. Wrap image artifacts into 4×6 pages — one per package.
-        {
-            java.util.List<byte[]> images = new java.util.ArrayList<>();
-            if (pkgIndex != null && pkgIndex > 0) {
-                labelArtifactResolver.resolveImage(orderNo, pkgIndex)
-                        .ifPresent(a -> images.add(a.bytes()));
-            } else {
-                ApiResponse<OrderWithLinesDTO> peekImg = orderService.getOrderWithLines(orderNo);
-                int totalForImg = effectivePkgCount(peekImg.getData());
-                if (totalForImg > 1) {
-                    for (int i = 1; i <= totalForImg; i++) {
-                        labelArtifactResolver.resolveImage(orderNo, i).ifPresent(a -> images.add(a.bytes()));
-                    }
-                }
-                if (images.isEmpty()) {
-                    labelArtifactResolver.resolveImage(orderNo, null).ifPresent(a -> images.add(a.bytes()));
-                }
-            }
-            if (!images.isEmpty()) {
-                byte[] pdf = labelImagePdfService.imagesToPdf(images);
-                String suffix = pkgIndex != null && pkgIndex > 0
-                        ? "-pkg" + pkgIndex
-                        : (images.size() > 1 ? "-all" + images.size() : "");
-                return ResponseEntity.ok()
-                        .header("Content-Disposition", "attachment; filename=label-" + orderNo + suffix + ".pdf")
-                        .header("Content-Type", org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
-                        .body(pdf);
-            }
-        }
-
-        // PR #536 — when the flag is on AND the carrier stored ZPL bytes
-        // (not a PDF), render those bytes to PNG via bundled zebrash and
-        // wrap into a single-page PDF. Preferred over the JSX-facsimile
-        // path below because the ZPL is the carrier's canonical label —
-        // eliminates the "preview looks nothing like the printed label"
-        // gap documented in project_label_preview_audit.md. Fall back to
-        // the facsimile if the renderer isn't ready or the ZPL fails to
-        // parse (e.g. carrier stored a URL that returned unexpected
-        // bytes).
-        // PR #544 — per-package pkgIndex support: single page for ?pkg=N,
-        // multi-page for pkg omitted on a multi-pkg order.
-        if (renderCarrierZplEnabled) {
-            try {
-                java.util.List<byte[]> zpls = new java.util.ArrayList<>();
-                if (pkgIndex != null && pkgIndex > 0) {
-                    labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", pkgIndex)
-                            .ifPresent(zpls::add);
-                } else {
-                    ApiResponse<OrderWithLinesDTO> peek = orderService.getOrderWithLines(orderNo);
-                    int totalPkgs = effectivePkgCount(peek.getData());
-                    if (totalPkgs > 1) {
-                        for (int i = 1; i <= totalPkgs; i++) {
-                            labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", i)
-                                    .ifPresent(zpls::add);
-                        }
-                    } else {
-                        labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", null)
-                                .ifPresent(zpls::add);
-                    }
-                }
-                if (!zpls.isEmpty()) {
-                    byte[] pdf = zebrashPdfService.renderZplsToPdf(zpls);
-                    String suffix = pkgIndex != null && pkgIndex > 0
-                            ? "-pkg" + pkgIndex
-                            : (zpls.size() > 1 ? "-all" + zpls.size() : "");
-                    return ResponseEntity.ok()
-                            .header("Content-Disposition", "attachment; filename=label-" + orderNo + suffix + ".pdf")
-                            .header("Content-Type", org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
-                            .body(pdf);
-                }
-            } catch (RuntimeException ex) {
-                // ZebrashRenderer.RendererUnavailableException,
-                // ZplParseException, ZplRenderException — all recoverable
-                // via the facsimile path below. Warn-log for observability
-                // but don't 500.
-                org.slf4j.LoggerFactory.getLogger(OrderController.class)
-                        .warn("zebrash PDF render failed for order {} pkg={}, falling back to facsimile: {}",
-                                orderNo, pkgIndex, ex.getMessage());
-            }
-        }
-
-        ApiResponse<OrderWithLinesDTO> orderResponse = orderService.getOrderWithLines(orderNo);
-        if (!"SUCCESS".equalsIgnoreCase(orderResponse.getStatus()) || orderResponse.getData() == null) {
-            return ResponseEntity.status(orderResponse.getCode()).build();
-        }
-
-        OrderAccountResolutionDTO resolution = asShippedResolution(orderNo);
-        if (resolution == null) {
-            ApiResponse<List<OrderAccountResolutionDTO>> resolutionResponse =
-                    carrierService.resolveOrderAccounts(List.of(orderNo));
-            resolution = resolutionResponse.getData() != null && !resolutionResponse.getData().isEmpty()
-                    ? resolutionResponse.getData().get(0)
-                    : null;
-        }
-
-        ApiResponse<OrderResponseDTO> trackingResponse = orderService.getOrderWithTracking(orderNo);
-        OrderResponseDTO.LabelDetails labelDetails = trackingResponse.getData() != null
-                ? trackingResponse.getData().getLabelDetails()
-                : null;
-        if (labelDetails != null) {
-            final OrderResponseDTO.LabelDetails ld = labelDetails;
-            orderTrackingRepository.findByOrderNo(orderNo).ifPresent(t ->
-                    ld.setHistory(com.multiship.backend.util.LabelHistory.parse(t.getLabelHistory())));
-        }
-
-        int totalPkgs = effectivePkgCount(orderResponse.getData());
-        java.util.List<com.multiship.backend.dto.LabelPackageDTO> allPackages =
-                orderResponse.getData().getPackages() == null
-                        ? java.util.List.of()
-                        : orderResponse.getData().getPackages();
-
-        boolean allPkgs = (pkgIndex == null) && totalPkgs > 1;
-        int firstPkg = allPkgs ? 1 : (pkgIndex == null || pkgIndex < 1 ? 1 : Math.min(pkgIndex, totalPkgs));
-        int lastPkg = allPkgs ? totalPkgs : firstPkg;
-
-        // No carrier artifact — the printable is OUR ZPL. Render the exact
-        // ZPL the /label/zpl endpoint serves through zebrash so "Print
-        // Label" puts on paper what a Zebra would print from Copy ZPL; the
-        // PDFBox drawing below is a separate renderer and drifts from the
-        // ZPL (it is only the fallback when the native renderer is absent
-        // for this platform or the ZPL fails to parse).
-        byte[] pdf = null;
-        if (renderCarrierZplEnabled) {
-            try {
-                // Same incoterms threading as /label/zpl — keeps the two
-                // byte-identical.
-                orderCustomsRepository.findByOrderNoIgnoreCase(String.valueOf(orderNo))
-                        .ifPresent(c -> orderResponse.getData().setIncoterms(c.getIncoterms()));
-                java.util.List<byte[]> facsimileZpls = new java.util.ArrayList<>(lastPkg - firstPkg + 1);
-                for (int p = firstPkg; p <= lastPkg; p++) {
-                    final int currentPkg = p;
-                    com.multiship.backend.dto.LabelPackageDTO perPkg = allPackages.stream()
-                            .filter(x -> x.getSequenceNumber() != null && x.getSequenceNumber() == currentPkg)
-                            .findFirst().orElse(null);
-                    facsimileZpls.add(zplLabelService.buildLabel(orderResponse.getData(), resolution,
-                            labelDetails, currentPkg, totalPkgs, perPkg)
-                            .getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                }
-                pdf = zebrashPdfService.renderZplsToPdf(facsimileZpls);
-            } catch (RuntimeException ex) {
-                org.slf4j.LoggerFactory.getLogger(OrderController.class)
-                        .warn("zebrash render of the facsimile ZPL failed for order {} pkg={}, "
-                                + "falling back to the PDFBox drawing: {}", orderNo, pkgIndex, ex.getMessage());
-            }
-        }
-        if (pdf == null) {
-            pdf = pdfLabelService.buildMultiPagePdf(
-                    orderResponse.getData(), resolution, labelDetails,
-                    firstPkg, lastPkg, totalPkgs, allPackages);
-        }
-
-        String filenameSuffix;
-        if (totalPkgs <= 1) {
-            filenameSuffix = "";
-        } else if (allPkgs) {
-            filenameSuffix = "-all" + totalPkgs;
-        } else {
-            filenameSuffix = "-pkg" + firstPkg;
-        }
-        return ResponseEntity.ok()
-                .header("Content-Disposition", "attachment; filename=label-" + orderNo
-                        + filenameSuffix + ".pdf")
-                .header("Content-Type", org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
-                .body(pdf);
-    }
-
-    /**
-     * PR #536 — PNG preview of the shipping label. Renders the
-     * carrier's actual ZPL bytes via bundled zebrash (Go binary)
-     * when {@code label.render-carrier-zpl=true}; otherwise 404
-     * (FE falls back to the JSX facsimile that already renders on
-     * {@code /label/{orderNo}}).
-     *
-     * <p>Serves as the {@code <img src=…>} source when the FE swaps
-     * its facsimile div for a canonical PNG view. Only fires when
-     * ZPL passthrough succeeds — carrier stored URL/PDF/other
-     * formats return 404 so the FE keeps the facsimile visible.
-     */
-    @Operation(summary = "PNG rendering of the carrier's ZPL label",
-            description = "PR #536 — carrier-canonical PNG via bundled zebrash. "
-                    + "PR #544 — accepts optional ?pkg=N for multi-package orders; "
-                    + "omitting pkg on a multi-package order returns a vertically-"
-                    + "stacked composite of all packages. Returns 404 when the "
-                    + "feature flag is off or the carrier artifact isn't ZPL; FE "
-                    + "falls back to its JSX facsimile.")
-    @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
-    // BUG-015 — also serve HEAD so the FE's existence-probe doesn't get
-    // 503 from the dispatcher. Spring maps HEAD to GET automatically for
-    // explicitly-named methods; this entry declares both so Spring Security
-    // + the method-matcher short-circuit for HEAD stop at a cheap 200/404.
-    @org.springframework.web.bind.annotation.RequestMapping(
-            value = "/{orderNo}/label/preview.png",
-            method = { org.springframework.web.bind.annotation.RequestMethod.GET,
-                       org.springframework.web.bind.annotation.RequestMethod.HEAD },
-            produces = org.springframework.http.MediaType.IMAGE_PNG_VALUE)
-    public ResponseEntity<byte[]> getLabelPreviewPng(@PathVariable Integer orderNo,
-            @org.springframework.web.bind.annotation.RequestParam(name = "pkg", required = false) Integer pkgIndex,
-            jakarta.servlet.http.HttpServletRequest httpReq) {
-        if (!renderCarrierZplEnabled) {
-            return ResponseEntity.status(404).build();
-        }
-        // BUG-015 — HEAD is a cheap existence probe (the FE calls it to
-        // decide between the carrier PNG and the local facsimile). If
-        // zebrash isn't installed, the render path throws and we 502;
-        // the FE then re-reads it as "503" and the page shows a slow
-        // fallback. Short-circuit on HEAD: return 200 if the ZPL bytes
-        // resolve, 404 otherwise, with no render involved.
-        if ("HEAD".equalsIgnoreCase(httpReq.getMethod())) {
-            Integer probePkg = (pkgIndex != null && pkgIndex > 0) ? pkgIndex : null;
-            java.util.Optional<byte[]> zpl =
-                    labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", probePkg);
-            return zpl.isPresent()
-                    ? ResponseEntity.ok().header("Content-Type",
-                            org.springframework.http.MediaType.IMAGE_PNG_VALUE).build()
-                    : ResponseEntity.status(404).build();
-        }
-        try {
-            byte[] png;
-            // Fetch the order shape ONCE so both the single-pkg and multi-
-            // pkg branches can derive badges from the same label_package
-            // list. Cheap — the DTO is already cached / joined.
-            ApiResponse<OrderWithLinesDTO> orderResp = orderService.getOrderWithLines(orderNo);
-            int totalPkgs = effectivePkgCount(orderResp.getData());
-            java.util.List<com.multiship.backend.dto.LabelPackageDTO> pkgList =
-                    orderResp.getData() != null && orderResp.getData().getPackages() != null
-                            ? orderResp.getData().getPackages()
-                            : java.util.List.of();
-
-            if (pkgIndex != null && pkgIndex > 0) {
-                // Explicit pkg → single-panel render for that package's
-                // stored ZPL. Overlay a badge so the operator knows which
-                // box this label goes on even when the picker isn't
-                // visible (e.g. printing directly).
-                java.util.Optional<byte[]> zpl =
-                        labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", pkgIndex);
-                if (zpl.isEmpty()) return ResponseEntity.status(404).build();
-                byte[] rendered = zebrashRenderer.renderPng(zpl.get());
-                String badge = badgeFor(pkgIndex, totalPkgs, pkgList);
-                png = badge == null
-                        ? rendered
-                        : zebrashCompositor.stackVerticallyWithBadges(
-                                java.util.List.of(rendered), java.util.List.of(badge));
-            } else if (totalPkgs <= 1) {
-                // Single-pkg order — keep the pre-PR-#544 behavior
-                // (shipment-level fetch, no badge — there's nothing to
-                // annotate against).
-                java.util.Optional<byte[]> zpl =
-                        labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", null);
-                if (zpl.isEmpty()) return ResponseEntity.status(404).build();
-                png = zebrashRenderer.renderPng(zpl.get());
-            } else {
-                // Multi-pkg composite — one panel per package, each with a
-                // "PKG N OF M" + tracking badge overlaid before stacking.
-                // The badges list runs parallel to the panels list; panels
-                // skipped due to unresolvable bytes have their badge index
-                // skipped too so numbering stays correct.
-                java.util.List<byte[]> panels = new java.util.ArrayList<>(totalPkgs);
-                java.util.List<String> badges = new java.util.ArrayList<>(totalPkgs);
-                for (int i = 1; i <= totalPkgs; i++) {
-                    java.util.Optional<byte[]> zpl =
-                            labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", i);
-                    if (zpl.isEmpty()) continue; // skip missing panels rather than 404 the whole request
-                    panels.add(zebrashRenderer.renderPng(zpl.get()));
-                    String b = badgeFor(i, totalPkgs, pkgList);
-                    badges.add(b == null ? "" : b);
-                }
-                if (panels.isEmpty()) return ResponseEntity.status(404).build();
-                png = zebrashCompositor.stackVerticallyWithBadges(panels, badges);
-            }
-            return ResponseEntity.ok()
-                    .header("Cache-Control", "private, max-age=60")
-                    .header("Content-Type", org.springframework.http.MediaType.IMAGE_PNG_VALUE)
-                    .body(png);
-        } catch (RuntimeException ex) {
-            org.slf4j.LoggerFactory.getLogger(OrderController.class)
-                    .warn("zebrash PNG render failed for order {} pkg={}: {}",
-                            orderNo, pkgIndex, ex.getMessage());
-            return ResponseEntity.status(502).build();
-        }
-    }
-
     @Operation(
             summary = "Branded packing slip PDF for the order",
             description = "Sprint 42 — renders a tenant-branded packing slip PDF " +
@@ -1507,13 +623,15 @@ public class OrderController {
             ApiResponse<OrderWithLinesDTO> peek = orderService.getOrderWithLines(orderNo);
             pkgs = effectivePkgCount(peek.getData());
             // Only a GENERATED label belongs in the document set — the
-            // facsimile for an unlabelled order prints "LABEL NOT GENERATED".
+            // an unlabelled order contributes no page (there is no synthetic label).
             boolean labelled = orderTrackingRepository.findByOrderNo(orderNo)
                     .map(t -> Boolean.TRUE.equals(t.getIsLabelGenerated())
                             && t.getTrackingNumber() != null && !t.getTrackingNumber().isBlank())
                     .orElse(false);
             if (labelled) {
-                ResponseEntity<byte[]> labels = getLabelPdf(orderNo, null, true);
+                ResponseEntity<byte[]> labels = labelPrintable.pdf(orderNo, null)
+                        .map(ResponseEntity::ok)
+                        .orElseGet(() -> ResponseEntity.notFound().build());
                 if (labels.getStatusCode().is2xxSuccessful() && labels.getBody() != null && labels.getBody().length > 0) {
                     parts.add(labels.getBody());
                 }
@@ -1587,7 +705,11 @@ public class OrderController {
                             .map(t -> Boolean.TRUE.equals(t.getIsLabelGenerated())
                                     && t.getTrackingNumber() != null && !t.getTrackingNumber().isBlank())
                             .orElse(false);
-                    ResponseEntity<byte[]> pdf = labelled ? getLabelPdf(orderNo, null, true) : null;
+                    ResponseEntity<byte[]> pdf = labelled
+                            ? labelPrintable.pdf(orderNo, null)
+                                    .map(ResponseEntity::ok)
+                                    .orElseGet(() -> ResponseEntity.notFound().build())
+                            : null;
                     if (pdf != null && pdf.getStatusCode().is2xxSuccessful() && pdf.getBody() != null && pdf.getBody().length > 0) {
                         parts.add(pdf.getBody());
                         included.add(orderNo);
@@ -1739,11 +861,11 @@ public class OrderController {
                         pdf = commercialInvoiceService.render(orderNo);
                     } else if (isLabelled(orderNo)) {
                         if (zpl) {
-                            ResponseEntity<String> z = getLabelZpl(orderNo, null);
-                            zplText = z.getStatusCode().is2xxSuccessful() ? z.getBody() : null;
+                            // Verbatim stored ZPL, every package, spooled in order.
+                            zplText = labelPrintable.zpl(orderNo).orElse(null);
                         } else {
-                            ResponseEntity<byte[]> l = getLabelPdf(orderNo, null, true);
-                            pdf = l.getStatusCode().is2xxSuccessful() ? l.getBody() : null;
+                            // Same render as the preview and the download.
+                            pdf = labelPrintable.pdf(orderNo, null).orElse(null);
                         }
                     }
                 } catch (IllegalArgumentException | IllegalStateException notPrintable) {
@@ -1958,80 +1080,11 @@ public class OrderController {
         return ResponseEntity.status(response.getCode()).body(response);
     }
 
-    /** One-shot manual shipment: operator enters everything and the label is purchased immediately. */
-    @Operation(summary = "Create a manual shipment and generate its label in one step",
-            description = "The operator supplies ship-from, ship-to, package + weight and picks the carrier account / "
-                    + "service / packaging explicitly. The label is purchased immediately and recorded as a manual "
-                    + "order (is_manual = 'Y') that appears in the queue/archive.")
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Label generated — tracking + label URL in data")
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422", description = "errorCode VALIDATION_ERROR — missing/invalid recipient, weight or account")
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502", description = "errorCode CARRIER_FAILURE — the carrier rejected the shipment")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
-    @PostMapping("/manual-label")
-    public ResponseEntity<ApiResponse<com.multiship.backend.dto.LabelGenerationResponse>> generateManualLabel(
-            @jakarta.validation.Valid @org.springframework.web.bind.annotation.RequestBody com.multiship.backend.dto.ManualShipmentRequest request,
-            @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails,
-            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
-        // Sprint 51 R2 (audit finding #2) — money-touching. A double-click,
-        // browser retry, or 502-then-retry used to purchase N labels; now
-        // the same Idempotency-Key replays the first response. Fail-closed
-        // on Redis outage: without the dedup guarantee we could double-charge.
-        // Namespaced by "user:" + username so this can never collide with
-        // the API-key path's numeric namespace (see IdempotencyService).
-        String callerId = userDetails != null ? "user:" + userDetails.getUsername() : null;
-        return idempotency.executeOrReplay(callerId, idempotencyKey,
-                new com.fasterxml.jackson.core.type.TypeReference<ApiResponse<com.multiship.backend.dto.LabelGenerationResponse>>() {},
-                () -> {
-                    ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> response =
-                            carrierService.generateManualLabel(request, userDetails);
-                    return ResponseEntity.status(response.getCode()).body(response);
-                }, true);
-    }
-
-    /** Fix-and-regenerate a failed order in place: apply the operator's corrected
-     *  input to the existing order and re-purchase its label, keeping the same
-     *  order number and flipping ERROR → GENERATED on success. */
-    @Operation(summary = "Fix a failed order and regenerate its label in place",
-            description = "Applies corrected ship-from/ship-to/package/service/customs input to an existing "
-                    + "order and re-purchases the label on the SAME order number. Rejected (409) when the order "
-                    + "already has a generated label — regenerate never silently re-bills a shipped order.")
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Label generated — order flipped to GENERATED")
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "Order already has a generated label")
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502", description = "errorCode CARRIER_FAILURE — the carrier rejected the corrected shipment")
-    @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
-    @PostMapping("/{orderNo}/regenerate")
-    public ResponseEntity<ApiResponse<com.multiship.backend.dto.LabelGenerationResponse>> regenerateOrder(
-            @PathVariable Integer orderNo,
-            @jakarta.validation.Valid @org.springframework.web.bind.annotation.RequestBody com.multiship.backend.dto.ManualShipmentRequest request,
-            @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails,
-            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
-        // Guard: never regenerate (re-bill) an order that already shipped.
-        com.multiship.backend.dto.OrderResponseDTO.LabelDetails existing =
-                orderService.getOrderWithTracking(orderNo).getData() != null
-                        ? orderService.getOrderWithTracking(orderNo).getData().getLabelDetails() : null;
-        if (existing != null && Boolean.TRUE.equals(existing.getIsGenerated())
-                && "GENERATED".equalsIgnoreCase(existing.getStatus())) {
-            return ResponseEntity.status(409).body(ApiResponse.<com.multiship.backend.dto.LabelGenerationResponse>builder()
-                    .status("error").code(409).message("Order " + orderNo + " already has a generated label; "
-                            + "regenerate is only for failed/pending orders.")
-                    .errorCode(com.multiship.backend.dto.ErrorCode.LABEL_ALREADY_GENERATED.name())
-                    .timestamp(java.time.LocalDateTime.now()).build());
-        }
-        String callerId = userDetails != null ? "user:" + userDetails.getUsername() : null;
-        return idempotency.executeOrReplay(callerId, idempotencyKey,
-                new com.fasterxml.jackson.core.type.TypeReference<ApiResponse<com.multiship.backend.dto.LabelGenerationResponse>>() {},
-                () -> {
-                    ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> response =
-                            carrierService.generateManualLabel(request, userDetails, orderNo);
-                    return ResponseEntity.status(response.getCode()).body(response);
-                }, true);
-    }
-
     @Operation(summary = "Generate labels for a shipment split across warehouses (Sprint 47)",
             description = "Groups the input `lines` by `warehouseCode`, calls the single-shipment " +
                     "label generator once per group, and returns a `ShipmentGroup` id plus one " +
                     "`ChildShipment` per warehouse. Fail-all rollback: any child failure aborts " +
-                    "the whole batch — no partial persistence. Existing `/manual-label` endpoint " +
+                    "the whole batch — no partial persistence. `POST /shipments` " +
                     "still handles single-warehouse cases; this endpoint is opt-in.")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Group + child shipments created")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Validation error — missing clientCode / lines / per-line warehouseCode")
@@ -2048,7 +1101,7 @@ public class OrderController {
         // Sprint 51 R2 (audit finding #2) — money-touching. Multi-warehouse
         // fans out to N carrier calls per request; a retry mid-fanout used
         // to double-generate every warehouse. Same fail-closed policy as
-        // /manual-label above. SplitAbortException must be handled INSIDE
+        // POST /shipments (ManualShipmentService). SplitAbortException must be handled INSIDE
         // the wrapped supplier so the mapped 422 response is what gets
         // cached (not thrown past IdempotencyService).
         String callerId = userDetails != null ? "user:" + userDetails.getUsername() : null;

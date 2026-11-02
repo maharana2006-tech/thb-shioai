@@ -94,7 +94,7 @@ export default function BulkLabelQueueBadge({
 
   // Nothing to show: pre-first-fetch, error state, or empty queue.
   if (metrics == null) return null
-  if (metrics.depth <= 0) return null
+  if (metrics.queuedDepth <= 0) return null
 
   const label = tenantCode ? `in your USPS queue` : `in USPS queue`
   const waitText = formatQueueDuration(metrics.estimatedWaitSeconds)
@@ -108,7 +108,7 @@ export default function BulkLabelQueueBadge({
     >
       <FiClock className="h-3 w-3" aria-hidden="true" />
       <span>
-        {metrics.depth} {label}
+        {metrics.queuedDepth} {label}
       </span>
       <span className="text-amber-600" aria-hidden="true">
         ·

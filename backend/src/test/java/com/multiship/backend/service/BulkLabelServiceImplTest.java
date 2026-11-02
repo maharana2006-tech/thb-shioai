@@ -622,14 +622,21 @@ class BulkLabelServiceImplTest {
     /* -------------------------- Already-labeled pre-check -------------------------- */
 
     /**
-     * Orders that already carry a generated label (either from manual or
-     * from a prior bulk with a different idempotency key) MUST be counted
-     * as SUCCESS with a note, not as failure. Without this pre-check,
-     * CarrierServiceImpl.generateLabel returns 409 LABEL_ALREADY_GENERATED
-     * and the pre-check-less bulk pipeline counted each as a failure.
+     * BUG-036 (QA 2026-10-23) — orders that already carry a generated
+     * label (manual or prior bulk under a different idempotency key)
+     * MUST NOT be counted as either success OR failure: a batch of
+     * all-already-labelled orders previously reported "1/1 generated"
+     * and offered an empty 22-byte ZIP. The new rule classifies them as
+     * SKIPPED (a third bucket, derived server-side at DTO-build time
+     * from {@code failureDetailsJson}; no new DB column).
+     *
+     * <p>Pre-fix this test pinned the old "count as success" behaviour
+     * explicitly (its original name was
+     * "alreadyLabeledOrdersAreCountedAsSuccessNotFailure"); updated to
+     * reflect the operator-visible contract.
      */
     @Test
-    void alreadyLabeledOrdersAreCountedAsSuccessNotFailure() {
+    void alreadyLabeledOrdersAreCountedAsSkippedNotSuccessOrFailure() {
         // Wire OrderTrackingRepository via reflection since the test's
         // 4-arg constructor doesn't include it (field-injected @Autowired).
         var trackingRepo = org.mockito.Mockito.mock(
@@ -661,8 +668,8 @@ class BulkLabelServiceImplTest {
 
         BulkLabelJob terminal = saved.get(100L);
         assertEquals("COMPLETED", terminal.getStatus());
-        assertEquals(2, terminal.getSuccessfulCount(),
-                "Already-labeled order MUST be counted as success (not failure)");
+        assertEquals(1, terminal.getSuccessfulCount(),
+                "Only the fresh label on order 43 counts as success");
         assertEquals(0, terminal.getFailedCount(),
                 "Already-labeled order MUST NOT be counted as failure");
         assertNotNull(terminal.getFailureMessage(),
@@ -673,10 +680,63 @@ class BulkLabelServiceImplTest {
                 "Skip note should explain why we didn't re-generate");
         assertTrue(terminal.getFailureMessage().contains("TN-EXISTING-42"),
                 "The existing tracking number should appear so operators can locate the label");
+        // BUG-036 — structured list carries the ALREADY_LABELED code so
+        // the DTO-side countSkipped() can expose it as skippedCount.
+        assertNotNull(terminal.getFailureDetailsJson(),
+                "Structured failures must carry the skip entry for DTO-side counting");
+        assertTrue(terminal.getFailureDetailsJson().contains("ALREADY_LABELED"),
+                "Skip entries must use the ALREADY_LABELED code so skippedCount can derive it");
 
         // Verify the carrier was NEVER called for the skipped order.
         org.mockito.Mockito.verify(carrierService, org.mockito.Mockito.never())
                 .generateLabel(eq(42L), any(), anyString(), any());
+    }
+
+    /**
+     * BUG-036 — the DTO's {@code skippedCount} field is derived from
+     * {@code failureDetailsJson} at response time (not a stored column),
+     * so a legacy job that completed before the server fix still
+     * returns 0 cleanly and a job with ALREADY_LABELED entries exposes
+     * the count directly.
+     */
+    @Test
+    void dtoSkippedCountDerivedFromFailureDetailsJson() {
+        BulkLabelJob job = new BulkLabelJob();
+        job.setId(777L);
+        job.setStatus("COMPLETED");
+        job.setTotalCount(3);
+        job.setSuccessfulCount(1);
+        job.setFailedCount(0);
+        job.setFailureDetailsJson(
+                "[{\"orderNo\":10,\"code\":\"ALREADY_LABELED\",\"message\":\"x\",\"at\":\"2026-01-01T00:00:00Z\"},"
+                        + "{\"orderNo\":11,\"code\":\"ALREADY_LABELED\",\"message\":\"y\",\"at\":\"2026-01-01T00:00:00Z\"}]");
+
+        BulkLabelJobDTO dto = BulkLabelServiceImpl.toDto(job);
+        assertEquals(2, dto.getSkippedCount(), "two ALREADY_LABELED entries → skippedCount=2");
+        assertEquals(1, dto.getSuccessfulCount(), "successfulCount passes through");
+    }
+
+    @Test
+    void dtoSkippedCountZeroOnLegacyJobsWithoutStructuredFailures() {
+        BulkLabelJob job = new BulkLabelJob();
+        job.setId(778L);
+        job.setStatus("COMPLETED");
+        job.setFailureDetailsJson(null);
+
+        assertEquals(0, BulkLabelServiceImpl.toDto(job).getSkippedCount());
+    }
+
+    @Test
+    void dtoSkippedCountIgnoresNonSkipFailureCodes() {
+        BulkLabelJob job = new BulkLabelJob();
+        job.setId(779L);
+        job.setStatus("COMPLETED");
+        job.setFailureDetailsJson(
+                "[{\"orderNo\":1,\"code\":\"CARRIER_FAILURE\",\"message\":\"x\",\"at\":\"2026-01-01T00:00:00Z\"},"
+                        + "{\"orderNo\":2,\"code\":\"USPS_QUEUED\",\"message\":\"y\",\"at\":\"2026-01-01T00:00:00Z\"}]");
+
+        assertEquals(0, BulkLabelServiceImpl.toDto(job).getSkippedCount(),
+                "only ALREADY_LABELED entries contribute to skippedCount");
     }
 
     /* -------------------------- Cancellation -------------------------- */

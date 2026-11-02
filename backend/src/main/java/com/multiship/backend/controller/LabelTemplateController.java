@@ -158,6 +158,19 @@ public class LabelTemplateController {
     @PreAuthorize("(hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #body.tenantId)) or @orderAccess.canViewTenant(authentication, #body.tenantId)")
     @PostMapping
     public ResponseEntity<ApiResponse<LabelTemplateDTO>> save(@RequestBody LabelTemplateDTO body) {
+        return upsert(body);
+    }
+
+    /** BUG-110 — the update route the editor now uses; the id in the path wins over the body. */
+    @Operation(summary = "Update a label template")
+    @PreAuthorize("(hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #body.tenantId)) or @orderAccess.canViewTenant(authentication, #body.tenantId)")
+    @PutMapping("/{id}")
+    public ResponseEntity<ApiResponse<LabelTemplateDTO>> update(@PathVariable Long id, @RequestBody LabelTemplateDTO body) {
+        body.setId(id);
+        return upsert(body);
+    }
+
+    private ResponseEntity<ApiResponse<LabelTemplateDTO>> upsert(LabelTemplateDTO body) {
         LabelTemplate saved = labelTemplateService.save(body.toEntity());
         HttpStatus code = body.getId() == null ? HttpStatus.CREATED : HttpStatus.OK;
         return ResponseEntity.status(code).body(ApiResponse.<LabelTemplateDTO>builder()

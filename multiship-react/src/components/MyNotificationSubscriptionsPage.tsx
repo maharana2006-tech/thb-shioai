@@ -15,6 +15,18 @@ import {
   type MyNotificationSubscription,
 } from '../api/mySubscriptionsService'
 
+/** BUG-143 — 'STAMPS.LOW_FUNDS_ALERT' → 'Stamps · Low funds alert'. */
+// eslint-disable-next-line react-refresh/only-export-components -- page copy helper, tested directly
+export const alertTitle = (key: string): string =>
+  key.split('.').map((p) => {
+    const w = p.replace(/_/g, ' ').toLowerCase()
+    return w.charAt(0).toUpperCase() + w.slice(1)
+  }).join(' · ')
+
+/** BUG-143 — drop the template author's 'Vars: …' note from end-user copy. */
+// eslint-disable-next-line react-refresh/only-export-components -- page copy helper, tested directly
+export const alertDescription = (d: string): string => d.replace(/\s*Vars:.*$/is, '').trim()
+
 export default function MyNotificationSubscriptionsPage() {
   const outlet = useOutletContext<SettingsOutletContext>()
 
@@ -84,10 +96,11 @@ export default function MyNotificationSubscriptionsPage() {
             {rows.map((row) => (
               <li key={row.templateKey} className="flex items-start justify-between gap-4 px-4 py-3">
                 <div className="min-w-0">
-                  <div className="font-mono text-[12px] font-semibold text-slate-800">{row.templateKey}</div>
+                  <div className="text-[13px] font-semibold text-slate-800">{alertTitle(row.templateKey)}</div>
                   {row.description && (
-                    <div className="mt-0.5 text-[12px] text-slate-500">{row.description}</div>
+                    <div className="mt-0.5 text-[12px] text-slate-500">{alertDescription(row.description)}</div>
                   )}
+                  <div className="mt-0.5 font-mono text-[10.5px] text-slate-400">{row.templateKey}</div>
                 </div>
                 <label className="flex shrink-0 items-center gap-2 text-[12px] font-semibold">
                   <span className={row.subscribed ? 'text-emerald-700' : 'text-slate-500'}>

@@ -78,7 +78,11 @@ public class OrderServiceImpl implements OrderService {
     @Autowired
     private TenantScopeEnforcer tenantScope;
 
-    private static final Set<String> VALID_STATUSES = Set.of("PENDING", "GENERATED", "ERROR");
+    // R2-BUG-012 (run-4) — VOIDED added so External API voids and
+    // internal voids both have a working filter + bucket. Pre-fix,
+    // status=VOIDED answered 400 'Unknown status filter' and the 9 orders
+    // in that state had no tab or badge (bucket sum != list total).
+    private static final Set<String> VALID_STATUSES = Set.of("PENDING", "GENERATED", "ERROR", "VOIDED");
     private static final Set<String> VALID_RESOLUTIONS = Set.of("READY", "NEEDS_DETAILS", "CHOOSE_ACCOUNT", "CLIENT_MISSING");
 
     /**
@@ -177,6 +181,9 @@ public class OrderServiceImpl implements OrderService {
         String carrierFilter = trimmed(filters.getCarrier()).toUpperCase(java.util.Locale.ROOT);
         // Returns F3 — 'Y' / 'N' / '' = all. Matches label_batch.is_return.
         String isReturnFilter = trimmed(filters.getIsReturn()).toUpperCase(java.util.Locale.ROOT);
+        // BUG-001 — 'Y' = international only, 'N' = domestic only, '' = all.
+        // Matches label_batch.intl_yn, same shape as isReturn above.
+        String intlFilter = trimmed(filters.getIntl()).toUpperCase(java.util.Locale.ROOT);
 
         if (!isValidDateFilter(createdFrom) || !isValidDateFilter(createdTo)) {
             return ApiResponse.<PageResponseDTO<OrderResponseDTO>>builder()
@@ -193,7 +200,7 @@ public class OrderServiceImpl implements OrderService {
                     .status("ERROR")
                     .code(400)
                     .errorCode(ErrorCode.VALIDATION_ERROR.name())
-                    .message("Unknown status filter '" + status + "'. Valid: PENDING, GENERATED, ERROR.")
+                    .message("Unknown status filter '" + status + "'. Valid: PENDING, GENERATED, ERROR, VOIDED.")
                     .timestamp(LocalDateTime.now())
                     .build();
         }
@@ -209,21 +216,36 @@ public class OrderServiceImpl implements OrderService {
         }
 
         int page = Math.max(paginationRequest.getPage(), 0);
-        int size = Math.min(Math.max(paginationRequest.getSize(), 1), 100);
+        // BUG-010 — defense-in-depth: the controller already clamps via
+        // PaginationDefaults.clamp()/clampExport(); mirror those bounds
+        // here so an in-process caller can't bypass. 1000 matches the
+        // export ceiling; normal UI calls stay inside the 100 bound at
+        // the controller.
+        int size = Math.min(Math.max(paginationRequest.getSize(), 1),
+                com.multiship.backend.common.PaginationDefaults.EXPORT_MAX_SIZE);
         String sortBy = paginationRequest.getSortBy() != null ? paginationRequest.getSortBy() : "orderNo";
         String sortDirection = paginationRequest.getSortDirection() != null ? paginationRequest.getSortDirection() : "ASC";
+
+        // BUG-012 — escape %, _, \ so a literal '%' typed into search
+        // doesn't match every row. Applied right before the repo call
+        // so the routed-prefix branch above sees the un-escaped text.
+        keywordFilter = escapeLike(keywordFilter);
+        customerFilter = escapeLike(customerFilter);
+        cityFilter = escapeLike(cityFilter);
+        orderNoFilter = escapeLike(orderNoFilter);
+        trackingFilter = escapeLike(trackingFilter);
 
         List<Object[]> results = orderRepository.findOrdersUnified(
                 statusFilter, tenantFilter, keywordFilter, resolutionFilter,
                 customerFilter, cityFilter, orderNoFilter, trackingFilter,
                 batchIdFilter,
-                createdFrom, createdTo, sourceFilter, channelFilter, carrierFilter, isReturnFilter,
+                createdFrom, createdTo, sourceFilter, channelFilter, carrierFilter, isReturnFilter, intlFilter,
                 page * size, size, sortBy, sortDirection);
         long totalRecords = orderRepository.countOrdersUnified(
                 statusFilter, tenantFilter, keywordFilter, resolutionFilter,
                 customerFilter, cityFilter, orderNoFilter, trackingFilter,
                 batchIdFilter,
-                createdFrom, createdTo, sourceFilter, channelFilter, carrierFilter, isReturnFilter);
+                createdFrom, createdTo, sourceFilter, channelFilter, carrierFilter, isReturnFilter, intlFilter);
 
         List<OrderResponseDTO> orders = results.stream()
                 .map(this::mapToOrderResponseDTO)
@@ -285,6 +307,9 @@ public class OrderServiceImpl implements OrderService {
         String carrierFilter = trimmed(filters.getCarrier()).toUpperCase(java.util.Locale.ROOT);
         // Returns F3 — 'Y' / 'N' / '' = all. Matches label_batch.is_return.
         String isReturnFilter = trimmed(filters.getIsReturn()).toUpperCase(java.util.Locale.ROOT);
+        // BUG-001 — 'Y' = international only, 'N' = domestic only, '' = all.
+        // Matches label_batch.intl_yn, same shape as isReturn above.
+        String intlFilter = trimmed(filters.getIntl()).toUpperCase(java.util.Locale.ROOT);
 
         if (!isValidDateFilter(createdFrom) || !isValidDateFilter(createdTo)) {
             return ApiResponse.<java.util.List<Integer>>builder()
@@ -298,7 +323,7 @@ public class OrderServiceImpl implements OrderService {
             return ApiResponse.<java.util.List<Integer>>builder()
                     .status("ERROR").code(400)
                     .errorCode(ErrorCode.VALIDATION_ERROR.name())
-                    .message("Unknown status filter '" + filters.getStatus() + "'. Valid: PENDING, GENERATED, ERROR.")
+                    .message("Unknown status filter '" + filters.getStatus() + "'. Valid: PENDING, GENERATED, ERROR, VOIDED.")
                     .timestamp(LocalDateTime.now())
                     .build();
         }
@@ -311,11 +336,18 @@ public class OrderServiceImpl implements OrderService {
                     .build();
         }
 
+        // BUG-012 — escape SQL LIKE wildcards; see listOrders.
+        keywordFilter = escapeLike(keywordFilter);
+        customerFilter = escapeLike(customerFilter);
+        cityFilter = escapeLike(cityFilter);
+        orderNoFilter = escapeLike(orderNoFilter);
+        trackingFilter = escapeLike(trackingFilter);
+
         java.util.List<Integer> ids = orderRepository.findOrderNosUnified(
                 statusFilter, tenantFilter, keywordFilter, resolutionFilter,
                 customerFilter, cityFilter, orderNoFilter, trackingFilter,
                 batchIdFilter,
-                createdFrom, createdTo, sourceFilter, channelFilter, carrierFilter, isReturnFilter);
+                createdFrom, createdTo, sourceFilter, channelFilter, carrierFilter, isReturnFilter, intlFilter);
 
         return ApiResponse.<java.util.List<Integer>>builder()
                 .status("SUCCESS").code(200)
@@ -362,6 +394,9 @@ public class OrderServiceImpl implements OrderService {
         String carrierFilter = trimmed(filters.getCarrier()).toUpperCase(java.util.Locale.ROOT);
         // Returns F3 — 'Y' / 'N' / '' = all. Matches label_batch.is_return.
         String isReturnFilter = trimmed(filters.getIsReturn()).toUpperCase(java.util.Locale.ROOT);
+        // BUG-001 — 'Y' = international only, 'N' = domestic only, '' = all.
+        // Matches label_batch.intl_yn, same shape as isReturn above.
+        String intlFilter = trimmed(filters.getIntl()).toUpperCase(java.util.Locale.ROOT);
 
         if (!isValidDateFilter(createdFrom) || !isValidDateFilter(createdTo)) {
             return ApiResponse.<java.util.List<java.util.Map<String, Object>>>builder()
@@ -372,11 +407,18 @@ public class OrderServiceImpl implements OrderService {
                     .build();
         }
 
+        // BUG-012 — escape SQL LIKE wildcards; see listOrders.
+        keywordFilter = escapeLike(keywordFilter);
+        customerFilter = escapeLike(customerFilter);
+        cityFilter = escapeLike(cityFilter);
+        orderNoFilter = escapeLike(orderNoFilter);
+        trackingFilter = escapeLike(trackingFilter);
+
         List<Object[]> rows = orderRepository.findDistinctBatchesUnified(
                 statusFilter, tenantFilter, keywordFilter, resolutionFilter,
                 customerFilter, cityFilter, orderNoFilter, trackingFilter,
                 batchIdFilter,
-                createdFrom, createdTo, sourceFilter, channelFilter, carrierFilter, isReturnFilter);
+                createdFrom, createdTo, sourceFilter, channelFilter, carrierFilter, isReturnFilter, intlFilter);
 
         java.util.List<java.util.Map<String, Object>> out = rows.stream()
                 .map(r -> {
@@ -413,6 +455,10 @@ public class OrderServiceImpl implements OrderService {
         stats.put("clientMissing", toLong(row[3]));
         stats.put("failed", toLong(row[4]));
         stats.put("generated", toLong(row[5]));
+        // R2-BUG-012 (run-4) — VOIDED exposed so UI badge counts match the
+        // list total. Pre-fix the 9 VOIDED orders had no bucket, so bucket
+        // sum (34,039) != list total (34,048).
+        stats.put("voided", row.length > 6 ? toLong(row[6]) : 0L);
 
         return ApiResponse.<Map<String, Long>>builder()
                 .status("SUCCESS")
@@ -545,6 +591,20 @@ public class OrderServiceImpl implements OrderService {
 
     private String normalizeFilter(String value) {
         return value != null ? value.trim().toUpperCase(Locale.ROOT) : "";
+    }
+
+    /**
+     * BUG-012 — escape SQL LIKE wildcards (`\`, `%`, `_`) in filter
+     * strings so a literal '%' or '_' typed in search doesn't match
+     * every row. Pairs with {@code ESCAPE '\\'} on each LIKE in
+     * {@code UNIFIED_FILTER_SQL}. Same shape as the existing helper
+     * in {@code AuditLogRepositoryCustomImpl} / {@code ClientServiceImpl}.
+     */
+    private static String escapeLike(String value) {
+        if (value == null || value.isEmpty()) return value == null ? "" : value;
+        return value.replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_");
     }
 
     private long toLong(Object value) {
@@ -719,6 +779,8 @@ public class OrderServiceImpl implements OrderService {
                 .customerRef(entity.getCustomerRef())
                 .orderChannel(entity.getOrderChannel())
                 .ndsResolvedShipviaCd(entity.getNdsResolvedShipviaCd())
+                .billTo(entity.getBillTo())
+                .thirdPartyAccount(entity.getThirdPartyAccount() == null ? null : CarrierServiceImpl.maskAccount(entity.getThirdPartyAccount()))
                 .shipName(entity.getShipName())
                 .shipAttn(entity.getShipAttn())
                 .shipAddr1(entity.getShipAddr1())
@@ -751,6 +813,12 @@ public class OrderServiceImpl implements OrderService {
                 .shipFromResolved(shipFrom.resolved())
                 .intlYn(entity.getIntlYn())
                 .isReturn(entity.getIsReturn())
+                // BUG-034 — surface the stored Reason + RMA so the Reissue-
+                // return / Fix-return prefill in the FE can rehydrate the
+                // required Reason picklist (otherwise the operator has to
+                // retype them on every retry).
+                .returnReason(entity.getReturnReason())
+                .rmaNumber(entity.getRmaNumber())
                 // PR #543 — expose source + wmsExternalId so the FE label
                 // facsimile can derive PO (MAN{n} for manual/bulk,
                 // wmsExternalId for WMS, else orderNo bare).
@@ -823,12 +891,18 @@ public class OrderServiceImpl implements OrderService {
                 })
                 .collect(Collectors.toList());
 
+        // R2-BUG-012 (run-4) — surface the voided bucket so UI tabs cover
+        // every row. The new 7th column is appended; guard length so a
+        // stale harness without the migration still returns zero rather
+        // than crashing on an ArrayIndexOutOfBounds.
+        long voidedOrders = row.length > 6 && row[6] != null ? ((Number) row[6]).longValue() : 0L;
         Map<String, Object> stats = new LinkedHashMap<>();
         stats.put("orderStats", Map.of(
                 "totalOrders", row[0] != null ? ((Number) row[0]).longValue() : 0L,
                 "pendingOrders", row[1] != null ? ((Number) row[1]).longValue() : 0L,
                 "generatedOrders", row[2] != null ? ((Number) row[2]).longValue() : 0L,
-                "failedOrders", row[3] != null ? ((Number) row[3]).longValue() : 0L
+                "failedOrders", row[3] != null ? ((Number) row[3]).longValue() : 0L,
+                "voidedOrders", voidedOrders
         ));
 
         stats.put("weightStats", Map.of(
@@ -845,6 +919,7 @@ public class OrderServiceImpl implements OrderService {
                 "labelGenerated", generatedLabels,
                 "pendingLabels", row[1] != null ? ((Number) row[1]).longValue() : 0L,
                 "errorLabels", row[3] != null ? ((Number) row[3]).longValue() : 0L,
+                "voidedLabels", voidedOrders,
                 "completionRate", totalOrders > 0
                         ? String.format("%.1f%%", (generatedLabels * 100.0) / totalOrders)
                         : "0%"

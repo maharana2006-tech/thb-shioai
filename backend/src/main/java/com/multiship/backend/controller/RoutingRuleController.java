@@ -47,6 +47,22 @@ public class RoutingRuleController {
     public ResponseEntity<ApiResponse<RoutingRuleDTO>> save(
             @PathVariable String clientCode,
             @RequestBody RoutingRuleDTO body) {
+        return upsert(clientCode, body);
+    }
+
+    /** BUG-086 — the update route the page now uses; the id in the path wins over the body. */
+    @Operation(summary = "Update a routing rule")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #clientCode)")
+    @PutMapping("/{ruleId}")
+    public ResponseEntity<ApiResponse<RoutingRuleDTO>> update(
+            @PathVariable String clientCode,
+            @PathVariable Long ruleId,
+            @RequestBody RoutingRuleDTO body) {
+        body.setId(ruleId);
+        return upsert(clientCode, body);
+    }
+
+    private ResponseEntity<ApiResponse<RoutingRuleDTO>> upsert(String clientCode, RoutingRuleDTO body) {
         try {
             body.setClientCode(clientCode);
             RoutingRule saved = service.save(body.toEntity());

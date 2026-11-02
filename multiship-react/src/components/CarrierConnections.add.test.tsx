@@ -80,6 +80,8 @@ vi.mock('../utils/notify', () => ({
   notify: {
     success: (...a: unknown[]) => notifySuccess(...a),
     error: (...a: unknown[]) => notifyError(...a),
+    // notify.invalid is the titled form of error; tests treat them alike.
+    invalid: (...a: unknown[]) => notifyError(...a),
     apiError: (...a: unknown[]) => notifyApiError(...a),
     info: (...a: unknown[]) => notifyInfo(...a),
     confirm: (...a: unknown[]) => notifyConfirm(...a),

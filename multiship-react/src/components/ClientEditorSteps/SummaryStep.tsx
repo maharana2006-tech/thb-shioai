@@ -7,6 +7,7 @@
 import type { ReactNode } from 'react'
 import { FiChevronRight } from 'react-icons/fi'
 import type { ClientUpsertPayload } from '../../api/clientService'
+import type { CarrierAccountRef } from '../../api/accountRefService'
 import type { ShippingServiceItem } from '../../api/shippingConfigService'
 import { formatCarrierName } from '../../utils/carrierUtils'
 import type {
@@ -28,6 +29,8 @@ export interface SummaryStepProps {
   stepComplete: (k: StepKey) => boolean
   stepBlockers: (k: StepKey) => string[]
   jumpTo: (k: StepKey) => void
+  /** BUG-074 — edit mode: what the persisted client has. Finish saves nothing. */
+  edit?: { carrierAccounts: CarrierAccountRef[]; hasBillingMarkup: boolean; isDirty: boolean }
 }
 
 export function SummaryStep({
@@ -41,6 +44,7 @@ export function SummaryStep({
   stepComplete,
   stepBlockers,
   jumpTo,
+  edit,
 }: SummaryStepProps) {
   const identityBody = (
     <ul className="space-y-0.5 text-[11.5px] leading-4 text-slate-700">
@@ -137,6 +141,61 @@ export function SummaryStep({
     <p className="text-[11.5px] italic text-slate-500">skipped — add profiles later from Settings → Importer/Broker</p>
   )
 
+  if (edit) {
+    const accounts = edit.carrierAccounts
+    return (
+      <div className="px-4 py-3 space-y-3">
+        <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-3">
+          <p className="text-[12.5px] font-semibold text-slate-950">Review</p>
+          <p className="mt-0.5 text-[11px] leading-4 text-slate-500">
+            What this client has. Identity, addresses and defaults save with “Save changes” on their steps; carrier accounts, mappings, markup and importer/broker save from their own forms. Finish only returns to the client list.
+          </p>
+          {edit.isDirty ? (
+            <p className="mt-1.5 text-[11px] font-semibold text-amber-700">
+              You have unsaved identity / address changes — go back to that step and click “Save changes” before you finish.
+            </p>
+          ) : null}
+        </div>
+        <SummaryCard title="Identity" stepKey="identity" status="saved" blockers={[]} jumpTo={jumpTo}>{identityBody}</SummaryCard>
+        <SummaryCard title="Ship From" stepKey="shipFrom" status="saved" blockers={[]} jumpTo={jumpTo}>{shipFromBody}</SummaryCard>
+        <SummaryCard title="Return address" stepKey="return" status="saved" blockers={[]} jumpTo={jumpTo}>{returnBody}</SummaryCard>
+        <SummaryCard
+          title={`Carrier accounts (${accounts.length})`}
+          stepKey="carriers"
+          status={accounts.length ? 'saved' : 'warn'}
+          blockers={[]}
+          jumpTo={jumpTo}
+        >
+          {accounts.length ? (
+            <ul className="space-y-0.5 text-[11.5px] leading-4 text-slate-700">
+              {accounts.slice(0, 5).map((a) => (
+                <li key={a.id}>
+                  {formatCarrierName(a.carrierCode)} · {a.accountNumber}
+                  {a.environment ? <span className="ml-1 text-[10px] uppercase tracking-wide text-slate-500">{a.environment}</span> : null}
+                  {a.clientDefault ? <span className="ml-1 text-[10px] font-semibold text-[#412d15]">(default)</span> : null}
+                </li>
+              ))}
+              {accounts.length > 5 ? <li className="italic text-slate-500">+ {accounts.length - 5} more…</li> : null}
+            </ul>
+          ) : (
+            <p className="text-[11.5px] italic text-slate-500">no carrier accounts attached</p>
+          )}
+        </SummaryCard>
+        <SummaryCard title="Shipping mappings" stepKey="mapping" status="saved" blockers={[]} jumpTo={jumpTo}>
+          <p className="text-[11.5px] text-slate-700">Managed on the Mapping step.</p>
+        </SummaryCard>
+        <SummaryCard title="Billing markup" stepKey="markup" status={edit.hasBillingMarkup ? 'saved' : 'warn'} blockers={[]} jumpTo={jumpTo}>
+          <p className="text-[11.5px] text-slate-700">
+            {edit.hasBillingMarkup ? 'A billing markup is saved.' : 'No billing markup saved — label calls for this client are rejected until one is set.'}
+          </p>
+        </SummaryCard>
+        <SummaryCard title="Importer / Broker" stepKey="importerBroker" status="saved" blockers={[]} jumpTo={jumpTo}>
+          <p className="text-[11.5px] text-slate-700">Customs profiles are managed on the Importer / Broker step.</p>
+        </SummaryCard>
+      </div>
+    )
+  }
+
   return (
     <div className="px-4 py-3 space-y-3">
       <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-3">
@@ -216,7 +275,7 @@ export function SummaryStep({
 export interface SummaryCardProps {
   title: string
   stepKey: StepKey
-  status: 'ok' | 'warn' | 'block'
+  status: 'ok' | 'warn' | 'block' | 'saved'
   blockers: string[]
   jumpTo: (k: StepKey) => void
   children: ReactNode
@@ -235,7 +294,9 @@ export function SummaryCard({
       ? { bar: 'border-emerald-200 bg-emerald-50/40', pill: 'bg-emerald-100 text-emerald-800', label: 'READY' }
       : status === 'warn'
         ? { bar: 'border-amber-200 bg-amber-50/40', pill: 'bg-amber-100 text-amber-800', label: 'SKIPPED' }
-        : { bar: 'border-rose-300 bg-rose-50/40', pill: 'bg-rose-100 text-rose-800', label: 'NEEDS FIX' }
+        : status === 'saved'
+          ? { bar: 'border-slate-200 bg-white', pill: 'bg-slate-100 text-slate-700', label: 'SAVED' }
+          : { bar: 'border-rose-300 bg-rose-50/40', pill: 'bg-rose-100 text-rose-800', label: 'NEEDS FIX' }
 
   return (
     <div className={`rounded-2xl border ${tone.bar} p-3`}>

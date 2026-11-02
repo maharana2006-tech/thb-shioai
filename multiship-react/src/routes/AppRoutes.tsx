@@ -1,6 +1,6 @@
 import { Suspense } from 'react'
 import { lazyWithRetry as lazy } from '../utils/lazyWithRetry'
-import { Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom'
+import { Link, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom'
 
 /** Redirect the legacy `/settings/label-templates/:id` URL to the new
  *  `/settings/templates/:id`, preserving the id. Standalone helper because
@@ -29,7 +29,7 @@ function LegacyTemplateRedirect() {
 // async import; the fallback is a simple centered spinner so a
 // slow network doesn't blank the screen.
 //
-// LabelDocumentPage was previously eager on the argument that print is
+// ShipmentLabelPage was previously eager on the argument that print is
 // a "frequent" flow — but the file is 924 LoC and contributed 51 KB
 // rendered / 10 KB gzipped to the main chunk (bundle audit #434). Moved
 // to lazy in the bundle-audit follow-up; the trade-off is a single extra
@@ -74,11 +74,13 @@ const AddressBookPage = lazy(() => import('../components/AddressBookPage'))
 const WarehousesPage = lazy(() => import('../components/WarehousesPage'))
 const CodeMapsPage = lazy(() => import('../components/CodeMapsPage'))
 const AuditLogPage = lazy(() => import('../components/AuditLogPage'))
-// Bundle audit #434 follow-up: LabelDocumentPage moved from eager
+// Bundle audit #434 follow-up: ShipmentLabelPage moved from eager
 // (was justified as "frequent print flow") to lazy — 51 KB rendered /
 // 10 KB gz off the main chunk. One extra RTT the first time an
 // operator opens /label/:orderNo.
-const LabelDocumentPage = lazy(() => import('../components/LabelDocumentPage'))
+// Shipment & Label re-architecture — one preview rendered from the exact ZPL
+// the operator copies and prints. The old document page and its flag are gone.
+const ShipmentLabelPage = lazy(() => import('../components/ShipmentLabelPage'))
 // Lazy — admin-only pages (small user set, loaded on demand).
 const ApiKeysPage = lazy(() => import('../components/ApiKeysPage'))
 const ApiReferencePage = lazy(() => import('../components/ApiReferencePage'))
@@ -116,6 +118,9 @@ const RolesPage = lazy(() => import('../components/RolesPage'))
 const CountriesPage = lazy(() => import('../components/CountriesPage'))
 // V117 — read-only reason-for-export registry.
 const ReasonsForExportPage = lazy(() => import('../components/ReasonsForExportPage'))
+// G2 — DB-driven country+state → IANA zone map. Drives DST-aware
+// offsets on FedEx readyDateTimestamp and (future) UPS/DHL slots.
+const StateZonesPage = lazy(() => import('../components/StateZonesPage'))
 // V117 — read-only ISO 4217 currency catalog.
 const CurrenciesPage = lazy(() => import('../components/CurrenciesPage'))
 // V118 — read-only carrier-error-message rules.
@@ -249,6 +254,7 @@ export default function AppRoutes() {
                   <Route path="roles" element={<RolesPage />} />
                   <Route path="countries" element={<CountriesPage />} />
                   <Route path="reasons-for-export" element={<ReasonsForExportPage />} />
+                  <Route path="state-zones" element={<StateZonesPage />} />
                   <Route path="currencies" element={<CurrenciesPage />} />
                   <Route path="carrier-error-messages" element={<CarrierErrorMessagesPage />} />
                   <Route path="carrier-dropdowns" element={<CarrierDropdownsPage />} />
@@ -271,28 +277,39 @@ export default function AppRoutes() {
             </Route>
 
             <Route path={workspacePaths.orders} element={<OrdersPage />} />
-            <Route path="/orders/new" element={<NewShipmentPage />} />
-            {/* Returns F4 — same component; pathname check inside pre-selects mode=RETURN. */}
-            <Route path="/orders/new/return" element={<NewShipmentPage />} />
-            {/* Bulk Mailer — opens on Import history; the tab is in the URL. */}
-            <Route path={workspacePaths.bulk} element={<Navigate to={bulkPaths.imports} replace />} />
-            <Route path={bulkPaths.importFile} element={<BulkImportPage />} />
-            <Route path="/bulk/batches/:batchId" element={<DataHistoryPage />} />
-            {/* API batches left Bulk Mailer for their own page under Orders. */}
-            <Route path="/bulk/api" element={<Navigate to={apiBatchesPath} replace />} />
-            <Route path={apiBatchesPath} element={<DataHistoryPage apiBatches />} />
-            <Route path={`${apiBatchesPath}/:batchId`} element={<DataHistoryPage apiBatches />} />
-            {/* D2C History — Dtcal-style batch summary + HstDetails-style shipment history. */}
-            <Route path={workspacePaths.d2c} element={<DtcOrdersPage />} />
-            <Route path={`${workspacePaths.d2c}/:batchId`} element={<DtcBatchDetailPage />} />
-            {/* Labels & Invoices — its own page, opened from Bulk Mailer (was the Documents tab). */}
-            <Route path={bulkPaths.labels} element={<LabelsInvoicesPage />} />
-            <Route path="/bulk/documents" element={<Navigate to={bulkPaths.labels} replace />} />
-            <Route path="/bulk/:tab" element={<DataHistoryPage />} />
-            {/* Old "Order History" address — bookmarks and links keep working. */}
-            <Route path="/orders/history" element={<Navigate to={bulkPaths.imports} replace />} />
+            {/* R2-BUG run-5 §8 — pre-fix TENANT could navigate to
+                /orders/new and /bulk/imports even though the APIs 403
+                the write-side requests. Backend @PreAuthorize on the
+                /shipments and /bulk/* endpoints already
+                blocks TENANT; the route gate here matches so the role
+                doesn't land on a page that then errors. TENANT redirect
+                target comes from getHomePathForRole() (→ /orders, the
+                "Your orders" page per R4-BUG-003). */}
+            <Route element={<RequireRole roles={['ADMIN', 'USER']} />}>
+              <Route path="/orders/new" element={<NewShipmentPage />} />
+              {/* Returns F4 — same component; pathname check inside pre-selects mode=RETURN. */}
+              <Route path="/orders/new/return" element={<NewShipmentPage />} />
+              {/* Bulk Mailer — opens on Import history; the tab is in the URL. */}
+              <Route path={workspacePaths.bulk} element={<Navigate to={bulkPaths.imports} replace />} />
+              <Route path={bulkPaths.importFile} element={<BulkImportPage />} />
+              <Route path="/bulk/batches/:batchId" element={<DataHistoryPage />} />
+              {/* API batches left Bulk Mailer for their own page under Orders. */}
+              <Route path="/bulk/api" element={<Navigate to={apiBatchesPath} replace />} />
+              <Route path={apiBatchesPath} element={<DataHistoryPage apiBatches />} />
+              <Route path={`${apiBatchesPath}/:batchId`} element={<DataHistoryPage apiBatches />} />
+              {/* D2C History — Dtcal-style batch summary + HstDetails-style shipment history. */}
+              <Route path="/d2c" element={<Navigate to={workspacePaths.d2c} replace />} />
+              <Route path={workspacePaths.d2c} element={<DtcOrdersPage />} />
+              <Route path={`${workspacePaths.d2c}/:batchId`} element={<DtcBatchDetailPage />} />
+              {/* Labels & Invoices — its own page, opened from Bulk Mailer (was the Documents tab). */}
+              <Route path={bulkPaths.labels} element={<LabelsInvoicesPage />} />
+              <Route path="/bulk/documents" element={<Navigate to={bulkPaths.labels} replace />} />
+              <Route path="/bulk/:tab" element={<DataHistoryPage />} />
+              {/* Old "Order History" address — bookmarks and links keep working. */}
+              <Route path="/orders/history" element={<Navigate to={bulkPaths.imports} replace />} />
+            </Route>
 
-            <Route path="/label/:orderNo" element={<LabelDocumentPage />} />
+            <Route path="/label/:orderNo" element={<ShipmentLabelPage />} />
             {/* /orders/900213 is what people type; the order's page lives at /label/:orderNo. */}
             <Route path="/orders/:orderNo" element={<OrderNoRedirect />} />
 
@@ -338,10 +355,10 @@ function NotFoundPage() {
               on this card and the label becomes invisible on the dark
               navy button. Pin the color with the Tailwind !important
               prefix so the anchor overrides inherit. */}
-          <a href={workspacePaths.dashboard}
+          <Link to={workspacePaths.dashboard}
              className="rounded-lg bg-slate-900 px-3 py-1.5 text-[12.5px] font-semibold !text-white hover:bg-slate-800">
             Go to Dashboard
-          </a>
+          </Link>
           <button type="button" onClick={() => history.back()}
              className="rounded-lg border border-slate-300 px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:bg-slate-50">
             Back

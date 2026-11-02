@@ -189,7 +189,10 @@ class StampsSeraReprintTest {
         // Full round-trip: DB returns the id, connector fires HTTP against
         // localhost:1 (refuses), returns ERROR with the underlying reason.
         // Proves that label_id resolution feeds into the URL construction.
-        when(labelPackageRepository.findByTrackingNumber(TRACKING)).thenReturn(
+        // BUG-010 — resolver branch for untagged (manifest/close-out) MDC;
+        // in-unit tests have no CarrierCallContext, so this is the branch
+        // the resolver takes.
+        when(labelPackageRepository.findFirstByTrackingNumberOrderByIdAsc(TRACKING)).thenReturn(
                 Optional.of(LabelPackage.builder().trackingNumber(TRACKING)
                         .carrierLabelRef(LABEL_ID).build()));
         LabelReprintResult r = connector.reprintLabelSera(TRACKING, "4x6", "pdf",

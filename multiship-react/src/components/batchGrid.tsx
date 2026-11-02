@@ -99,7 +99,7 @@ export const EDIT_FIELD_KEYS = [
   'orderRef', 'clientCode', 'billTo', 'warehouseCode',
   'recipientName', 'recipientCompany', 'recipientPhone', 'recipientEmail',
   'addressLine1', 'addressLine2', 'city', 'state', 'postalCode', 'countryCode',
-  'carrierCode', 'accountNumber', 'serviceType', 'packageType',
+  'carrierCode', 'accountNumber', 'thirdPartyPostalCode', 'thirdPartyCountry', 'serviceType', 'packageType',
   'weight', 'weightUnit', 'currency', 'reference',
   'itemDescription', 'itemSku', 'itemQuantity', 'itemUnitValue',
   'hsCode', 'countryOfOrigin',
@@ -166,7 +166,7 @@ export function messageUnder(field: string, msg: string): string {
 }
 
 /** A stored code shown to people ("YOUR_PACKAGING" → "Your packaging"); editing keeps the code. */
-const SHOWN_VALUES: Record<string, string> = { YOUR_PACKAGING: 'Your packaging' }
+const SHOWN_VALUES: Record<string, string> = { YOUR_PACKAGING: 'Your packaging', THIRD_PARTY: 'Third party' }
 export function shownValue(value: string): string {
   return SHOWN_VALUES[value.trim().toUpperCase()] ?? value
 }
@@ -181,7 +181,7 @@ export const DH_KEY_COLUMN_KEYS: ReadonlySet<string> = new Set([
 export const DH_COLUMNS: DhColumn[] = [
   { key: 'orderRef', label: 'Order ref', mono: true, w: 'w-24' },
   { key: 'clientCode', label: 'Customer', mono: true, upper: true, w: 'w-24' },
-  { key: 'billTo', mono: true, upper: true, w: 'w-24' },
+  { key: 'billTo', label: 'Bill to', mono: true, upper: true, w: 'w-24' },
   { key: 'warehouseCode', mono: true, upper: true, w: 'w-24' },
   { key: 'recipientName', label: 'Recipient', w: 'w-36' },
   { key: 'recipientCompany', w: 'w-40' },
@@ -195,6 +195,8 @@ export const DH_COLUMNS: DhColumn[] = [
   { key: 'countryCode', label: 'Country', mono: true, upper: true, w: 'w-16' },
   { key: 'carrierCode', label: 'Carrier', mono: true, upper: true, w: 'w-24' },
   { key: 'accountNumber', label: 'Account', mono: true, w: 'w-24' },
+  { key: 'thirdPartyPostalCode', label: 'Payer postal code', mono: true, w: 'w-24' },
+  { key: 'thirdPartyCountry', label: 'Payer country', mono: true, upper: true, w: 'w-16' },
   { key: 'serviceType', label: 'Service', mono: true, w: 'w-28' },
   { key: 'packageType', mono: true, w: 'w-24' },
   { key: 'weight', label: 'Weight', numeric: true, w: 'w-16' },

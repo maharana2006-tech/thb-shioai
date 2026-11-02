@@ -83,6 +83,22 @@ function renderPage(Page: ComponentType) {
 
 // ===================== Fresh-open defaults =====================
 
+describe('ApiKeysPage — BUG-146 revoked expiry', () => {
+  it('a revoked key shows "revoked", not days left', async () => {
+    const key = (id: number, active: boolean) => ({
+      id, name: `k${id}`, clientCode: 'ACME', environment: 'test', scopes: 'rates', active, masked: 'msk_…',
+      token: null, createdAt: '2026-10-01T00:00:00Z', lastUsedAt: null, revokedAt: active ? null : '2026-10-20T00:00:00Z',
+      expiresAt: new Date(Date.now() + 85 * 86_400_000).toISOString(),
+    })
+    listMock.mockResolvedValue({ data: [key(1, true), key(2, false)] })
+    const Page = await loadPage()
+    renderPage(Page)
+    await waitFor(() => expect(screen.getByText('k2')).toBeInTheDocument())
+    expect(screen.getByText('85d left')).toBeInTheDocument()
+    expect(screen.getByText('revoked')).toBeInTheDocument()
+  })
+})
+
 describe('ApiKeysPage — Issue dialog least-privilege defaults (R2-BUG-019)', () => {
   it('on fresh open: Issue button disabled, env=TEST, zero scopes checked, no client scope pre-picked', async () => {
     const user = userEvent.setup()

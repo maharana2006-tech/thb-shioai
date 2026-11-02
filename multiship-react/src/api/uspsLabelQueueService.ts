@@ -30,35 +30,42 @@ import type { ApiResponse } from './orderService'
 /**
  * Platform-wide (or tenant-scoped when {@link #tenantCode} is set)
  * snapshot returned by {@code GET /admin/usps-direct/queue/metrics}.
- * The {@code totalPerHourCap} is authoritative (backend reads USPS's
+ * The {@code configuredHourlyCap} is authoritative (backend reads USPS's
  * 60/hr platform limit and applies a 55/hr safety margin) — the FE
  * surfaces the number verbatim in the warning banner so operators
  * don't guess.
  *
- * <p>PR-F4 adds an optional {@code perTenantDepth} map so the
- * dashboard's queue panel can rank tenants by depth. Backend leaves the
- * field unset on the tenant-scoped view; on the platform-wide view it
- * populates it with {@code tenantCode → depth}. The FE guards against
- * both missing map and empty map.
+ * <p>PR-F4 adds an optional {@code perTenantDepth} list so the
+ * dashboard's queue panel can rank tenants by depth. Backend leaves
+ * the field unset on the tenant-scoped view; on the platform-wide
+ * view it populates it with {@link UspsLabelQueueTenantDepth} entries
+ * sorted desc by depth. The FE guards against both missing and empty.
+ *
+ * <p>Field names mirror the backend DTO ({@code UspsLabelQueueMetricsDTO}).
  */
+export interface UspsLabelQueueTenantDepth {
+  tenantCode: string
+  queuedDepth: number
+}
+
 export interface UspsLabelQueueMetrics {
-  /** PENDING queue rows (waiting to be picked up). */
-  depth: number
-  /** RUNNING queue rows (actively hitting USPS right now). */
-  processing: number
+  /** QUEUED rows (waiting to be picked up). */
+  queuedDepth: number
+  /** PROCESSING rows (actively hitting USPS right now). */
+  processingCount: number
   /** Projected wait for the tail of the queue at the current rate,
    *  in seconds. */
   estimatedWaitSeconds: number
   /** Platform-wide per-hour cap (55 by default; the FE surfaces this
    *  verbatim in the warning banner so the number stays authoritative
    *  on the backend). Null on tenant-scoped metrics. */
-  totalPerHourCap?: number | null
+  configuredHourlyCap?: number | null
   /** Tenant scope, or {@code null} for the platform-wide view. */
   tenantCode?: string | null
   /** PR-F4 — per-tenant PENDING depth on the platform-wide view.
    *  Absent (undefined) or empty on tenant-scoped metrics + on very
    *  early boots before the backend has any tenant activity. */
-  perTenantDepth?: Record<string, number> | null
+  perTenantDepth?: UspsLabelQueueTenantDepth[] | null
 }
 
 /**

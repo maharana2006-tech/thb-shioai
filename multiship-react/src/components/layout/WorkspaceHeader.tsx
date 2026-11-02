@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useLocation } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { FiAlertCircle, FiCheckCircle, FiChevronRight, FiMenu } from 'react-icons/fi'
 import { useAppSession } from '../../hooks/useAppSession'
 import { accountRefService } from '../../api/accountRefService'
@@ -125,24 +125,24 @@ export default function WorkspaceHeader({ onOpenMobileNav }: WorkspaceHeaderProp
         {/* carrier status — every connected carrier, from live account data */}
         {normalizedRole !== 'TENANT' && carriers !== null ? (
           carriers.length > 0 ? (
-            <a
-              href={settingsPaths.carriers}
+            <Link
+              to={settingsPaths.carriers}
               title={`Connected carriers: ${carriers.join(', ')}`}
               className="hidden shrink-0 items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 ring-1 ring-emerald-200 transition hover:bg-emerald-100 sm:inline-flex"
             >
               <FiCheckCircle className="h-3 w-3" />
               {carriers.slice(0, 3).join(' · ')}
               {carriers.length > 3 ? ` +${carriers.length - 3}` : ''}
-            </a>
+            </Link>
           ) : (
-            <a
-              href={settingsPaths.carriers}
+            <Link
+              to={settingsPaths.carriers}
               title="No verified carrier account yet — connect one to generate labels."
               className="hidden shrink-0 items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700 ring-1 ring-amber-200 transition hover:bg-amber-100 sm:inline-flex"
             >
               <FiAlertCircle className="h-3 w-3" />
               No carrier
-            </a>
+            </Link>
           )
         ) : null}
 

@@ -20,6 +20,7 @@ export interface AuditLogEntry {
   /** INFO | WARN | ERROR (legacy rows normalize to INFO). */
   severity: string
   orderNo: number | null
+  clientCode?: string | null
 }
 
 export interface AuditLogListParams {

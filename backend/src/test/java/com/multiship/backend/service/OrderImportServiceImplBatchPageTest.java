@@ -184,7 +184,7 @@ class OrderImportServiceImplBatchPageTest {
         assertEquals(2, all.getAttention(), "the broken row and the failed label");
         assertEquals(4, all.getPending(), "everything but the live label");
         assertEquals(List.of("ACME"), all.getClientCodes());
-        assertEquals("/api/v1/orders/906976/label/pdf", all.getRows().get(0).getLabelUrl());
+        assertEquals("/api/v1/labels/906976/pdf", all.getRows().get(0).getLabelUrl());
 
         var page2 = service.historyRows(121L, "all", null, null, 1, 2);
         assertEquals(List.of(3, 4), page2.getRows().stream().map(OrderImportRowDTO::getRowNumber).toList());

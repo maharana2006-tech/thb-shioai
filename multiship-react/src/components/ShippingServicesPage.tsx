@@ -99,7 +99,7 @@ export default function ShippingServicesPage({ active = true, origin: originProp
   const [pkgService, setPkgService] = useState<ShippingServiceItem | null>(null)
   // BUG-123 R7 — add Escape/focus-trap to the Allowed packages modal.
   const pkgDialogRef = useRef<HTMLDivElement>(null)
-  useModalDismiss(pkgService !== null, pkgDialogRef, () => setPkgService(null))
+  const requestClose = useModalDismiss(pkgService !== null, pkgDialogRef, () => setPkgService(null))
   const [pkgDraft, setPkgDraft] = useState<Set<number>>(new Set())
   // Sprint 52 PR X — modal-local editable copy of pkgService.brandedPackaging
   // Allowed. Flipping OFF filters the preset list to CUSTOM-only + the save
@@ -324,7 +324,8 @@ export default function ShippingServicesPage({ active = true, origin: originProp
       <section className="grid grid-cols-2 gap-3">
         {[
           { label: `Services from ${origin}`, value: `${enabledCount}/${visibleServices.length}`, unit: 'services', icon: FiSend, tone: 'border-[#412d15]/25 bg-[#412d15]/[0.06] text-[#412d15]' },
-          { label: 'Package links', value: links.length, unit: 'links', icon: FiBox, tone: 'border-emerald-200 bg-emerald-50 text-emerald-600' },
+          // BUG-083 — only the links of this origin's services.
+          { label: 'Package links', value: links.filter((l) => visibleServices.some((s) => s.id === l.serviceId)).length, unit: 'links', icon: FiBox, tone: 'border-emerald-200 bg-emerald-50 text-emerald-600' },
         ].map((c, idx) => (
           <div key={c.label} className="rounded-2xl border border-slate-200 bg-white shadow-sm">
             <div className="flex items-start justify-between gap-2 px-4 pt-3.5">
@@ -499,6 +500,7 @@ export default function ShippingServicesPage({ active = true, origin: originProp
                           type="button"
                           role="switch"
                           aria-checked={s.enabled}
+                          aria-label={`${s.enabled ? 'Disable' : 'Enable'} ${s.name}`}
                           disabled={!canManage}
                           onClick={() => canManage && void toggle(s)}
                           className={`relative h-5 w-9 shrink-0 rounded-full transition disabled:cursor-not-allowed ${s.enabled ? 'bg-[#1f150c]' : 'bg-slate-200'}`}
@@ -572,7 +574,7 @@ export default function ShippingServicesPage({ active = true, origin: originProp
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm"
           role="dialog"
           aria-modal="true"
-          onClick={() => setPkgService(null)}
+          onClick={() => void requestClose()}
         >
           <div
             ref={pkgDialogRef}
@@ -586,7 +588,7 @@ export default function ShippingServicesPage({ active = true, origin: originProp
               </h3>
               <button
                 type="button"
-                onClick={() => setPkgService(null)}
+                onClick={() => void requestClose()}
                 className="rounded-xl border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50"
                 aria-label="Close"
               >
@@ -719,7 +721,7 @@ export default function ShippingServicesPage({ active = true, origin: originProp
             <div className="mt-4 flex items-center justify-end gap-2 border-t border-slate-100 pt-4">
               <button
                 type="button"
-                onClick={() => setPkgService(null)}
+                onClick={() => void requestClose()}
                 className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-[13px] font-semibold text-slate-600 transition hover:bg-slate-50"
               >
                 Cancel

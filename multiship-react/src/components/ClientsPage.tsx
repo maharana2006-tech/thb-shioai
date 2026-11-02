@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useOutletContext } from 'react-router-dom'
+import { useModalDismiss } from '../hooks/useModalDismiss'
+import { useNavigate, useOutletContext, useSearchParams } from 'react-router-dom'
 import { notify } from '../utils/notify'
 import {
   FiActivity,
@@ -22,7 +23,7 @@ import { countryName } from '../utils/countries'
 import PortalMenu from './workspace/PortalMenu'
 import CustomsProfileModal from './modals/CustomsProfileModal'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
-import AdvancedDataTable, { type ColumnDef } from './workspace/AdvancedDataTable'
+import AdvancedDataTable, { PHONE_SHEET, type ColumnDef } from './workspace/AdvancedDataTable'
 import Select from './workspace/Select'
 import { useAppSession } from '../hooks/useAppSession'
 import { normalizeRole } from '../utils/roles'
@@ -42,7 +43,9 @@ export default function ClientsPage() {
   const [totalElements, setTotalElements] = useState(0)
   const [totalPages, setTotalPages] = useState(1)
 
-  const [search, setSearch] = useState('')
+  // BUG-179 — a global-search hit lands here with ?q=<code>.
+  const [searchParams] = useSearchParams()
+  const [search, setSearch] = useState(() => searchParams.get('q') ?? '')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [carrierFilter, setCarrierFilter] = useState('')
@@ -82,16 +85,12 @@ export default function ClientsPage() {
     const onDocClick = (e: MouseEvent) => {
       if (!filtersRef.current?.contains(e.target as Node)) setShowFilters(false)
     }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setShowFilters(false)
-    }
     document.addEventListener('mousedown', onDocClick)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDocClick)
-      document.removeEventListener('keydown', onKey)
-    }
+    return () => document.removeEventListener('mousedown', onDocClick)
   }, [showFilters])
+  const filtersDialogRef = useRef<HTMLDivElement>(null)
+  // Filters apply live, so closing discards nothing: no prompt.
+  const closeFilters = useModalDismiss(showFilters, filtersDialogRef, () => setShowFilters(false), { confirmDiscard: false })
 
   // Server params derived from state: sort → sortBy + sortDirection.
   const sortBy = sorting[0]?.id ?? 'code'
@@ -515,10 +514,11 @@ export default function ClientsPage() {
                 </button>
                 {showFilters ? (
                   <div
+                    ref={filtersDialogRef}
                     role="dialog"
                     aria-modal="true"
                     aria-label="Filter clients"
-                    className="absolute left-0 top-full z-30 mt-1.5 w-72 rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_20px_60px_rgba(15,23,42,0.15)]"
+                    className={`absolute left-0 top-full z-30 mt-1.5 w-72 rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_20px_60px_rgba(15,23,42,0.15)]${PHONE_SHEET}`}
                   >
                     <div className="space-y-2.5">
                       <div>
@@ -591,7 +591,7 @@ export default function ClientsPage() {
                       ) : null}
                       <button
                         type="button"
-                        onClick={() => setShowFilters(false)}
+                        onClick={() => void closeFilters()}
                         className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[11.5px] font-semibold text-white transition hover:bg-[#412d15]"
                       >
                         Done

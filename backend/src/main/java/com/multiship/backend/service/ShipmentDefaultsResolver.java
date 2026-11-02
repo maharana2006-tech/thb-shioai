@@ -84,6 +84,7 @@ public class ShipmentDefaultsResolver {
      *  ZPLII in FedExConnector. Operator can still override via the FE. */
     static final String DEFAULT_LABEL_IMAGE_TYPE = "ZPLII";
     static final String DEFAULT_LABEL_STOCK_TYPE = "PAPER_4X6";
+    static final String DEFAULT_THERMAL_LABEL_STOCK_TYPE = "STOCK_4X6";
 
     /**
      * Resolves defaults for a single shipment. Every {@code inputs} field is
@@ -269,7 +270,8 @@ public class ShipmentDefaultsResolver {
 
     /**
      * FDX-H3 — labelStockType precedence: request → account → hardcoded
-     * PAPER_4X6 fallback. Only FedEx consumes this; other connectors ignore.
+     * 4x6 fallback matched to the resolved imageType (FedEx rejects
+     * PAPER_4X6 with ZPLII). Only FedEx consumes this; other connectors ignore.
      */
     private String resolveLabelStockType(ResolveInputs inputs) {
         String candidate = trimUpper(inputs.requestLabelStockType());
@@ -278,7 +280,9 @@ public class ShipmentDefaultsResolver {
             candidate = trimUpper(inputs.account().getFedexLabelStockType());
             if (candidate != null) return candidate;
         }
-        return DEFAULT_LABEL_STOCK_TYPE;
+        String imageType = resolveLabelImageType(inputs);
+        return "PDF".equals(imageType) || "PNG".equals(imageType)
+                ? DEFAULT_LABEL_STOCK_TYPE : DEFAULT_THERMAL_LABEL_STOCK_TYPE;
     }
 
     // ===== helpers =====

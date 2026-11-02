@@ -203,7 +203,9 @@ export default function RegionCountryPicker({
               until xl (1280px) + add a 4-col variant for ultra-wide
               operators (≥1536px). Each cell has room to show "GB United
               Kingdom" fully at every breakpoint now. */}
-          <div className="ml-3 grid max-h-[190px] grid-cols-1 gap-x-2 overflow-y-auto border-l border-slate-100 pl-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+          {/* BUG-102 — the picker can sit in a 265px panel at a 1466px window,
+              so size columns by the panel's width, not the viewport's. */}
+          <div className="ml-3 grid max-h-[190px] grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-x-2 overflow-y-auto border-l border-slate-100 pl-3">
             {countriesInRegion(activeRegion).map((c) => {
               const reason = blockReason(c.code)
               const on = selected.has(c.code)

@@ -51,6 +51,22 @@ class PrinterServiceTest {
     }
 
     @Test
+    void impossibleHostsPortsInHostsAndDuplicateNamesAreRefused() {
+        // BUG-127 / 129
+        when(printers.findAllByOrderByNameAscIdAsc()).thenReturn(java.util.List.of());
+        assertThrows(PrinterService.PrinterValidationException.class,
+                () -> service.create(input("RAW_9100", "999.999.999.999", 9100, "ZPL", "4x6")));
+        assertThrows(PrinterService.PrinterValidationException.class,
+                () -> service.create(input("RAW_9100", "192.0.2.30:9100", 9100, "ZPL", "4x6")));
+        Printer existing = new Printer();
+        existing.setId(1L);
+        existing.setName("Dock 1");
+        when(printers.findAllByOrderByNameAscIdAsc()).thenReturn(java.util.List.of(existing));
+        assertThrows(PrinterService.PrinterValidationException.class,
+                () -> service.create(input("RAW_9100", "192.0.2.30", 9100, "ZPL", "4x6")));
+    }
+
+    @Test
     void validationKeepsPrinterConfigurationsThatCanActuallyPrint() {
         String m;
         m = assertThrows(PrinterService.PrinterValidationException.class,

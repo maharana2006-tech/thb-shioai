@@ -55,8 +55,12 @@ class OrderAccessEvaluatorTest {
                 "TENANT sees own tenant (lower-cased request)");
         assertFalse(evaluator.canViewTenant(authn, "COMPETITOR"),
                 "TENANT must NOT see another tenant");
-        assertFalse(evaluator.canViewTenant(authn, null),
-                "TENANT can't sneak in via null tenant to read platform-default");
+        // R3-BUG-001 — null/blank tenantId is treated as "implicitly asking for
+        // my own tenant"; TenantScopeEnforcer.clampClientCode fills in the caller's
+        // code at the service layer and refuses foreign ones. canAccessTenant
+        // therefore returns true here (defense-in-depth, not a sneak path).
+        assertTrue(evaluator.canViewTenant(authn, null),
+                "null tenantId is clamped to caller's own tenant by TenantScopeEnforcer");
     }
 
     @Test

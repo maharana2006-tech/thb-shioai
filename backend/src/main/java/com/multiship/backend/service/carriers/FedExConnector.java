@@ -1577,6 +1577,13 @@ public class FedExConnector implements CarrierConnector {
         return out;
     }
 
+    /** 4x6 labelStockType compatible with the given imageType: PAPER_4X6 for
+     *  PDF/PNG (laser), STOCK_4X6 for ZPLII/EPL2/DPL (thermal). */
+    static String defaultLabelStockType(String imageType) {
+        String t = imageType == null ? "" : imageType.trim().toUpperCase(Locale.ROOT);
+        return "PDF".equals(t) || "PNG".equals(t) ? "PAPER_4X6" : "STOCK_4X6";
+    }
+
     /** Normalise the DTO's freeform signatureOption to the FedEx enum
      *  values. Blank / unknown / NONE → null (carrier default). */
     private static String normaliseSignatureOption(String raw) {
@@ -1821,10 +1828,20 @@ public class FedExConnector implements CarrierConnector {
         } catch (org.springframework.web.client.RestClientResponseException ex) {
             log.warn("FedEx pickup rejected (HTTP {}): {}",
                     ex.getStatusCode().value(), ex.getResponseBodyAsString());
+            // BUG-022 — surface the carrier's reason via the existing
+            // firstFedExErrorMessage helper (same as the ship-call path at
+            // ~line 937). Pre-fix the toast read "FedEx pickup rejected:
+            // HTTP 400" with the actual GROUND.SERVICES.UNAVAILABLE /
+            // UNABLE.TO.PICKUP code+message trapped only in the Carrier
+            // API Log row's response body.
+            String reason = firstFedExErrorMessage(ex.getResponseBodyAsString());
+            String message = StringUtils.hasText(reason)
+                    ? "FedEx pickup rejected (HTTP " + ex.getStatusCode().value() + "): " + reason
+                    : "FedEx pickup rejected: HTTP " + ex.getStatusCode().value();
             return new PickupResult("FEDEX", null, request.pickupDate(),
                     request.pickupWindowStart(), request.pickupWindowEnd(),
                     "ERROR",
-                    "FedEx pickup rejected: HTTP " + ex.getStatusCode().value(),
+                    message,
                     ex.getResponseBodyAsString());
         } catch (Exception ex) {
             log.warn("FedEx pickup call failed: {}", ex.getMessage());
@@ -1879,12 +1896,12 @@ public class FedExConnector implements CarrierConnector {
         // SAME_DAY was hardcoded — FedEx rejects future-dated SAME_DAY
         // pickups outright.
         originDetail.put("pickupDateType", isSameDayPickup(req) ? "SAME_DAY" : "FUTURE_DAY");
-        // R2-BUG-002 — FedEx requires packageLocation on every pickup request;
-        // omitting it fails with PACKAGELOCATION.INVALID. Valid values per the
-        // FedEx Create Pickup spec are NONE | FRONT | REAR | SIDE. ponytail:
-        // hardcoded FRONT until the pickup form adds a dropdown; the operator
-        // can still override via specialInstructions in the meantime.
-        body.put("packageLocation", "FRONT");
+        // R2-BUG-002 (run-4) — packageLocation BELONGS INSIDE originDetail,
+        // not at the request body root. The AM pass put it at the root and
+        // FedEx still answered PICKUPCREATE.PACKAGELOCATION.INVALID. Valid
+        // values per the FedEx Create Pickup spec: NONE | FRONT | REAR | SIDE.
+        // ponytail: hardcoded FRONT until the pickup form adds a dropdown.
+        originDetail.put("packageLocation", "FRONT");
         body.put("originDetail", originDetail);
 
         // FDX-F — carrierCode selects the driver fleet. FDXE = FedEx
@@ -1927,13 +1944,30 @@ public class FedExConnector implements CarrierConnector {
         java.time.LocalTime time = req.pickupWindowStart() != null
                 ? req.pickupWindowStart() : java.time.LocalTime.of(9, 0);
         // BUG-007 — FedEx rejects a timestamp without seconds (LocalTime.toString()
-        // drops ':00' → 400 INCORRECT.READYTIMESTAMP.FORMAT). It reads pickup times
-        // as local to the pickup location (as it does the cutoff), so send the
-        // operator's wall-clock time as typed, in FedEx's documented shape
-        // (2020-07-03T11:00:00Z) — never converted through the server's zone,
-        // which moved a 09:00 Michigan pickup to 05:00 on a UTC server.
-        return java.time.LocalDateTime.of(date, time)
-                .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")) + "Z";
+        // drops ':00' → 400 INCORRECT.READYTIMESTAMP.FORMAT).
+        //
+        // R2-BUG-002 Option A (run-5, 289d9baf): dropped the 'Z' UTC
+        // marker that the BUG-007 fix tacked on; FedEx was converting
+        // through UTC and collapsing the pickup window relative to
+        // naive-local customerCloseTime at :1875-1876.
+        //
+        // R2-BUG-002 Option B (G2): when the shipper's address
+        // resolves to a (country, state) → IANA zone in state_zone,
+        // append the DST-aware offset (yyyy-MM-dd'T'HH:mm:ss±hh:mm)
+        // — the shape FedEx's current docs show on their ISO 8601
+        // examples. StateZoneHolder is DB-driven (V176 + reloadable
+        // via the admin service), so adding CA provinces / AU states
+        // / split-zone ZIP overrides is a data-only change. Falls
+        // through to naive-local when the lookup misses (non-US
+        // shipper, unmapped state, holder not yet loaded).
+        java.time.LocalDateTime local = java.time.LocalDateTime.of(date, time);
+        String naive = local.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"));
+        AddressToValidate addr = req.address();
+        if (addr == null) return naive;
+        return com.multiship.backend.service.carrier.StateZoneHolder
+                .offsetFor(addr.countryCode(), addr.state(), local)
+                .map(o -> naive + o.getId())
+                .orElse(naive);
     }
 
     /**
@@ -2039,7 +2073,10 @@ public class FedExConnector implements CarrierConnector {
 
             String response = HttpClients.newBuilder().baseUrl(getBaseUrl(environment)).build()
                     .post()
-                    .uri("/ship/v1/shipments/endofday")
+                    // R2-BUG-003 (run-4) — FedEx spec is /ship/v1/endofday
+                    // (closeout is a top-level /ship resource, NOT nested
+                    // under /shipments). Pre-fix path 404'd NOT.FOUND.ERROR.
+                    .uri("/ship/v1/endofday")
                     .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.APPLICATION_JSON)
                     .header("Authorization", "Bearer " + accessToken)
@@ -2282,11 +2319,15 @@ public class FedExConnector implements CarrierConnector {
         // REQUESTEDSHIPMENT.LABELSPECIFICATION.REQUIRED. FDX-H3 — resolved
         // per-account (account default → hardcoded PDF/PAPER_4X6, which
         // matches the thermal 4x6 format the other carriers default to).
+        // FedEx rejects PAPER_* stock with thermal image types (and vice
+        // versa) with INVALID.STOCK.TYPE, so the stock fallback follows the
+        // image type.
+        String labelImageType = StringUtils.hasText(request.getLabelImageType())
+                ? request.getLabelImageType() : "ZPLII";
         requestedShipment.put("labelSpecification", Map.of(
-                "imageType", StringUtils.hasText(request.getLabelImageType())
-                        ? request.getLabelImageType() : "ZPLII",
+                "imageType", labelImageType,
                 "labelStockType", StringUtils.hasText(request.getLabelStockType())
-                        ? request.getLabelStockType() : "PAPER_4X6"));
+                        ? request.getLabelStockType() : defaultLabelStockType(labelImageType)));
 
         Map<String, Object> shipper = buildParty(
                 request.getShipperName(),
@@ -2347,12 +2388,10 @@ public class FedExConnector implements CarrierConnector {
         }
         requestedShipment.put("recipients", new Object[]{recipientParty});
 
-        // Freight billed to the shipper account by default. Customs / duty
-        // billing is a separate paymentType on customsClearanceDetail below.
-        requestedShipment.put("shippingChargesPayment", Map.of(
-                "paymentType", "SENDER",
-                "payor", Map.of("responsibleParty", Map.of(
-                        "accountNumber", Map.of("value", firstNonBlank(request.getAccountNumber(), ""))))));
+        // Freight billed to the shipper account unless the request bills a
+        // third party. Customs / duty billing is a separate paymentType on
+        // customsClearanceDetail below.
+        requestedShipment.put("shippingChargesPayment", buildShippingChargesPayment(request));
 
         // Sprint 28 — multi-package. FedEx wants requestedPackageLineItems[]
         // with one entry per box AND totalPackageCount at the parent.
@@ -2761,6 +2800,24 @@ public class FedExConnector implements CarrierConnector {
      * leaves it blank we infer from incoterms: DDP → SENDER (seller pays);
      * anything else → RECIPIENT (DAP/DDU default: consignee pays).
      */
+    /** shippingChargesPayment — SENDER on the shipper account, or THIRD_PARTY on the payer's account. */
+    Map<String, Object> buildShippingChargesPayment(ShipmentRequestDTO request) {
+        boolean thirdParty = "THIRD_PARTY".equalsIgnoreCase(request.getBillTo())
+                && StringUtils.hasText(request.getThirdPartyAccount());
+        Map<String, Object> party = new LinkedHashMap<>();
+        party.put("accountNumber", Map.of("value",
+                thirdParty ? request.getThirdPartyAccount().trim() : firstNonBlank(request.getAccountNumber(), "")));
+        if (thirdParty && (StringUtils.hasText(request.getThirdPartyPostalCode()) || StringUtils.hasText(request.getThirdPartyCountry()))) {
+            Map<String, Object> address = new LinkedHashMap<>();
+            if (StringUtils.hasText(request.getThirdPartyPostalCode())) address.put("postalCode", request.getThirdPartyPostalCode().trim());
+            if (StringUtils.hasText(request.getThirdPartyCountry())) address.put("countryCode", request.getThirdPartyCountry().trim());
+            party.put("address", address);
+        }
+        return Map.of(
+                "paymentType", thirdParty ? "THIRD_PARTY" : "SENDER",
+                "payor", Map.of("responsibleParty", party));
+    }
+
     private Map<String, Object> buildDutiesPayment(com.multiship.backend.dto.IntlShipmentBlockDTO intl,
                                                     ShipmentRequestDTO request) {
         // F6-C — clearanceOption (per-account, resolved by

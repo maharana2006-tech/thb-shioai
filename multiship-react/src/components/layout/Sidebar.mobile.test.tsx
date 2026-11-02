@@ -83,6 +83,16 @@ describe('Sidebar — FE-M5 mobile drawer', () => {
     expect(nav).not.toHaveAttribute('aria-modal')
   })
 
+  it('BUG-177: the collapsed rail hides the Log out button so it cannot take the avatar click', () => {
+    renderSidebar({ pinned: false, mobileOpen: false })
+    expect(screen.getByRole('button', { name: /log out/i }).className).toMatch(/\binvisible\b/)
+  })
+
+  it('BUG-177: the pinned rail shows the Log out button', () => {
+    renderSidebar({ pinned: true, mobileOpen: false })
+    expect(screen.getByRole('button', { name: /log out/i }).className).not.toMatch(/\binvisible\b/)
+  })
+
   it('flips data-mobile-open + translate-x-0 when the drawer opens', () => {
     renderSidebar({ mobileOpen: true })
     // When open the nav takes on role="dialog" — query by that instead.

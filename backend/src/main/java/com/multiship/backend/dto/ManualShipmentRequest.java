@@ -57,6 +57,14 @@ public class ManualShipmentRequest {
      *  carrier account, or the carrier's platform account when the number isn't on file. */
     private String accountNumber;
 
+    /** Who pays the shipping charges: SENDER (default — the shipper account above) or THIRD_PARTY. */
+    private String billTo;
+    /** The third party's carrier account that pays the shipping charges when billTo is THIRD_PARTY. */
+    private String thirdPartyAccount;
+    /** Payer's billing postal code and ISO-2 country. UPS requires both for third-party billing. */
+    private String thirdPartyPostalCode;
+    private String thirdPartyCountry;
+
     /** shipping_service id (the chosen service level). Optional — falls back to the carrier default. */
     private Long serviceId;
 
@@ -281,6 +289,11 @@ public class ManualShipmentRequest {
      */
     @JsonIgnore
     private String internalIdempotencyKey;
+
+    /** Phase 1 — the X-Validation-Fingerprint the caller presented; set by
+     *  ManualShipmentService from the header, never from the body. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private String internalValidationFingerprint;
 
     /**
      * PR-S3 (audit finding S-B5) — internal-only audit actor override.

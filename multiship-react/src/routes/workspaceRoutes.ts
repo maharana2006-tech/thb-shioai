@@ -67,6 +67,7 @@ export const settingsPaths = {
   routingRules: '/settings/routing-rules',
   reports: '/settings/reports',
   webhookSubs: '/settings/webhook-subscriptions',
+  uspsDirect: '/settings/usps-direct/dashboard',
   codeMaps: '/settings/code-maps',
   apiKeys: '/settings/api-keys',
   apiReference: '/settings/api-reference',
@@ -134,6 +135,8 @@ export const settingsPaths = {
   countries: '/settings/countries',
   /** V117 — reason-for-export registry (read-only). */
   reasonsForExport: '/settings/reasons-for-export',
+  /** V176 — country+state → IANA zone (drives DST-aware carrier timestamps). */
+  stateZones: '/settings/state-zones',
   /** V117 — ISO 4217 currency catalog (read-only). */
   currencies: '/settings/currencies',
   /** V118 — carrier-error-message pattern → humanized rules (read-only). */
@@ -259,6 +262,9 @@ export const settingsNavItems: Array<{
   { key: 'reasons-for-export', label: 'Reasons for Export', to: settingsPaths.reasonsForExport, iconKey: 'customs',
     description: 'Reason-for-export codes used on commercial invoices (Sale / Gift / Sample / …). Read-only.',
     roles: ['ADMIN'] },
+  { key: 'state-zones', label: 'State Zones', to: settingsPaths.stateZones, iconKey: 'mapping',
+    description: 'Country + state → IANA zone map. Drives DST-aware offsets on carrier timestamps (FedEx pickup, future UPS/DHL slots).',
+    roles: ['ADMIN'] },
   { key: 'currencies', label: 'Currencies', to: settingsPaths.currencies, iconKey: 'apiDocs',
     description: 'ISO 4217 currency catalog. Read-only.',
     roles: ['ADMIN'] },
@@ -271,16 +277,26 @@ export const settingsNavItems: Array<{
   { key: 'code-maps', label: 'Code Maps', to: settingsPaths.codeMaps, iconKey: 'mapping',
     description: 'Per-client ERP ship-via / service / country / package aliases. Maps external codes (P80, F77, L01, …) to the platform catalog.',
     roles: ['ADMIN'] },
-  // ===== Hidden from the Settings menu =====
-  // Routes below still resolve so direct URLs and any hard-coded links keep
-  // working — only the nav-menu entries are removed. Re-add an object to the
-  // array (matching the shape above) to bring one back.
-  //
-  // { key: 'routing-rules',        label: 'Routing Rules',      to: settingsPaths.routingRules,          iconKey: 'mapping', description: '…', roles: ['ADMIN', 'USER'] },
-  // { key: 'reports',              label: 'Reports',            to: settingsPaths.reports,               iconKey: 'apiDocs', description: '…', roles: ['ADMIN', 'USER'] },
-  // { key: 'webhook-subscriptions',label: 'Webhooks',           to: settingsPaths.webhookSubs,           iconKey: 'apiKey',  description: '…', roles: ['ADMIN', 'USER'] },
-  // { key: 'api-keys',             label: 'API Keys',           to: settingsPaths.apiKeys,               iconKey: 'apiKey',  description: '…', roles: ['ADMIN']         },
-  // { key: 'api-reference',        label: 'API Reference',      to: settingsPaths.apiReference,          iconKey: 'apiDocs', description: '…', roles: ['ADMIN']         },
+  { key: 'api-keys', label: 'API Keys', to: settingsPaths.apiKeys, iconKey: 'apiKey',
+    description: 'Issue, rotate and revoke msk_ keys that outside systems use to call the External API.',
+    roles: ['ADMIN'] },
+  { key: 'api-reference', label: 'API Reference', to: settingsPaths.apiReference, iconKey: 'apiDocs',
+    description: 'External Shipping API v2 — endpoints with request / response bodies, error codes and a live Try-it console.',
+    roles: ['ADMIN'] },
+  // BUG-174 — these four used to be reachable only by URL; the menu, the hub,
+  // the settings search and the page title all come from this list.
+  { key: 'routing-rules', label: 'Routing Rules', to: settingsPaths.routingRules, iconKey: 'mapping',
+    description: 'Pick a carrier and service automatically from weight, value and destination.',
+    roles: ['ADMIN', 'USER'] },
+  { key: 'reports', label: 'Reports', to: settingsPaths.reports, iconKey: 'apiDocs',
+    description: 'Download orders, tracking, billing and rate-shop history as CSV, or schedule them.',
+    roles: ['ADMIN', 'USER'] },
+  { key: 'webhook-subscriptions', label: 'Webhooks', to: settingsPaths.webhookSubs, iconKey: 'apiKey',
+    description: 'Notify external systems when labels are created, voided or delivered.',
+    roles: ['ADMIN', 'USER'] },
+  { key: 'usps-direct', label: 'USPS Direct', to: settingsPaths.uspsDirect, iconKey: 'carrier',
+    description: 'Queue depth, quota headroom, retries and void reconciliation for USPS Direct.',
+    roles: ['ADMIN'] },
 ]
 
 /** How the Settings menu groups its pages, in menu order. A settings item not
@@ -289,19 +305,19 @@ export const settingsGroups: Array<{ key: string; label: string; blurb: string; 
   { key: 'org', label: 'Organization', blurb: 'Who you ship for, from where, and who can sign in.',
     items: ['clients', 'warehouses', 'address-book', 'users', 'roles'] },
   { key: 'carriers', label: 'Carriers & services', blurb: 'Accounts, services and the rules that pick them.',
-    items: ['carriers', 'carriers-platform', 'shipping-catalog', 'code-maps', 'carrier-limits', 'carrier-dropdowns', 'cutoffs', 'pickups-eod'] },
+    items: ['carriers', 'carriers-platform', 'shipping-catalog', 'code-maps', 'routing-rules', 'carrier-limits', 'carrier-dropdowns', 'cutoffs', 'pickups-eod', 'usps-direct'] },
   { key: 'intl', label: 'International', blurb: 'What customs paperwork needs.',
-    items: ['importer-broker', 'countries', 'reasons-for-export', 'currencies'] },
+    items: ['importer-broker', 'countries', 'reasons-for-export', 'state-zones', 'currencies'] },
   { key: 'docs', label: 'Labels & documents', blurb: 'What gets printed, and where it goes.',
     items: ['templates', 'custom-fields', 'printers', 'output-destinations'] },
   { key: 'email', label: 'Email & alerts', blurb: 'Who hears about what, and how it reads.',
     items: ['mail', 'notification-templates', 'my-subscriptions'] },
   { key: 'integrations', label: 'Integrations', blurb: 'Systems Multiship reads from and writes back to.',
-    items: ['external-systems', 'dtc-scheduler'] },
+    items: ['external-systems', 'dtc-scheduler', 'api-keys', 'webhook-subscriptions', 'api-reference'] },
   { key: 'system', label: 'System', blurb: 'Workspace-wide defaults and wording.',
     items: ['system', 'carrier-error-messages'] },
   { key: 'activity', label: 'Activity & logs', blurb: 'History to look things up in, not settings to change.',
-    items: ['audit-log', 'carrier-api-log', 'notification-delivery-log', 'writeback-journal', 'alerts-history', 'returns-analytics'] },
+    items: ['audit-log', 'carrier-api-log', 'notification-delivery-log', 'writeback-journal', 'alerts-history', 'returns-analytics', 'reports'] },
 ]
 
 type SettingsNavItem = (typeof settingsNavItems)[number]
@@ -334,7 +350,7 @@ export const resolveWorkspaceRouteKey = (pathname: string): WorkspaceRouteKey | 
     return 'dashboard'
   }
 
-  if (pathname === workspacePaths.orders || pathname === '/track-orders' || pathname.startsWith(apiBatchesPath)) {
+  if (pathname === workspacePaths.orders || pathname === '/track-orders' || pathname.startsWith(apiBatchesPath) || pathname.startsWith('/orders/new')) {
     return 'orders'
   }
 
@@ -376,19 +392,19 @@ export const resolveBreadcrumb = (
     return { section: 'Operations', label: 'New Shipment', iconKey: 'orders' }
   }
   if (pathname === workspacePaths.orders || pathname === '/track-orders' || pathname.startsWith('/label/')) {
-    return { section: 'Operations', label: 'Shipment & Label', iconKey: 'orders' }
+    return { section: 'Operations', label: 'Orders', iconKey: 'orders' }
   }
   if (pathname === bulkPaths.labels) {
-    return { section: 'Bulk Mailer', label: 'Labels & Invoices', iconKey: 'bulk' }
+    return { section: 'Operations', label: 'Labels & Invoices', iconKey: 'bulk' }
   }
   if (pathname === bulkPaths.importFile) {
-    return { section: 'Bulk Mailer', label: 'Import CSV / Excel', iconKey: 'bulk' }
+    return { section: 'Operations', label: 'Import CSV / Excel', iconKey: 'bulk' }
   }
   if (pathname === workspacePaths.bulk || pathname.startsWith('/bulk/')) {
     return { section: 'Operations', label: 'Bulk Mailer', iconKey: 'bulk' }
   }
   if (pathname === workspacePaths.d2c || pathname.startsWith('/d2c/')) {
-    return { section: 'Operations', label: 'Automatic Label', iconKey: 'd2c' }
+    return { section: 'Operations', label: 'D2C', iconKey: 'd2c' }
   }
   if (pathname.startsWith('/settings') || pathname === '/clients' || pathname === '/carrier') {
     // BUG-039 — sub-routes like /settings/clients/new or

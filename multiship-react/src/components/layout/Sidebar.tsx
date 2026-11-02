@@ -6,6 +6,7 @@ import { authService } from '../../api/authService'
 import { clearAuthSession, useAppSession } from '../../hooks/useAppSession'
 import { getNavItemsForRole, resolveWorkspaceRouteKey } from '../../routes/workspaceRoutes'
 import { normalizeRole } from '../../utils/roles'
+import { canLeaveUnsavedWork } from '../../utils/unsavedWorkGuard'
 import { navIcons } from './navIcons'
 import { useFocusTrap } from '../../hooks/useFocusTrap'
 
@@ -65,6 +66,16 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
   // behaviour is completely untouched.
   const drawerRef = useRef<HTMLElement>(null)
   useFocusTrap(mobileOpen, drawerRef)
+  // BUG-197 — below md the closed drawer is off-screen; `inert` keeps Tab
+  // from walking through its nine invisible controls.
+  const [narrow, setNarrow] = useState(() => window.matchMedia?.('(max-width: 767px)').matches ?? false)
+  useEffect(() => {
+    const mq = window.matchMedia?.('(max-width: 767px)')
+    if (!mq) return
+    const onChange = () => setNarrow(mq.matches)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
 
   useEffect(() => {
     if (!mobileOpen) return
@@ -97,8 +108,18 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
     .map((part) => part[0]?.toUpperCase() ?? '')
     .join('')
 
+  // BUG-030 — sidebar nav bypasses react-router's beforeunload / in-page
+  // leaveForm guard. Route every navigate() through this gate so an
+  // unsaved New shipment form prompts before destroying work.
+  const navSafe = async (to: string) => {
+    if (!(await canLeaveUnsavedWork())) return
+    navigate(to)
+  }
+
   const handleLogout = async () => {
     if (loggingOut) return
+    // Logout is just as destructive as nav — check the unsaved guard too.
+    if (!(await canLeaveUnsavedWork())) return
     setLoggingOut(true)
     try {
       await authService.logout()
@@ -157,6 +178,7 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
       aria-labelledby={mobileOpen ? MOBILE_DRAWER_TITLE_ID : undefined}
       className={`group fixed inset-y-0 left-0 z-40 flex w-56 flex-col overflow-hidden bg-[#1f150c] transition-transform duration-200 ease-out print:hidden ${mobileTranslate} md:transition-[width] md:duration-200 ${desktopWidth} md:translate-x-0`}
       data-mobile-open={mobileOpen ? 'true' : 'false'}
+      inert={narrow && !mobileOpen}
     >
       {/* Sprint 52 a11y — sr-only heading that aria-labelledby resolves
           to when the drawer opens as a dialog. Visible design is
@@ -173,7 +195,7 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
       {/* brand — the depot at the top of the route */}
       <button
         type="button"
-        onClick={() => navigate(normalizedRole === 'TENANT' ? '/orders' : '/dashboard')}
+        onClick={() => { void navSafe(normalizedRole === 'TENANT' ? '/orders' : '/dashboard') }}
         className="flex h-16 shrink-0 items-center gap-3 pl-3.5 pr-3"
       >
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#e1dcc9] shadow-[0_8px_20px_rgba(0,0,0,0.35)]">
@@ -215,7 +237,7 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
               <button
                 key={item.key}
                 type="button"
-                onClick={() => navigate(item.to)}
+                onClick={() => { void navSafe(item.to) }}
                 aria-current={active ? 'page' : undefined}
                 title={item.label}
                 className="relative flex w-full items-center gap-3 rounded-lg px-1 py-1 text-left transition hover:bg-white/[0.05]"
@@ -297,7 +319,7 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
         <div className="flex items-center gap-3 rounded-lg px-1.5 py-1.5">
           <button
             type="button"
-            onClick={() => navigate('/profile')}
+            onClick={() => { void navSafe('/profile') }}
             title="My profile"
             aria-label="My profile"
             className="flex min-w-0 flex-1 items-center gap-3 rounded-lg text-left transition hover:bg-white/5"
@@ -322,7 +344,11 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
             title="Log out"
             className={`shrink-0 rounded-lg p-2 transition hover:bg-rose-600 hover:text-white disabled:opacity-50 ${
               loggingOut ? 'bg-rose-600 text-white' : 'text-slate-400'
-            } ${labelClass}`}
+            } ${labelClass} ${
+              // BUG-177 — on the collapsed rail the faded button overlapped
+              // the avatar and still took clicks; hide it until hover.
+              pinned || mobileOpen ? '' : 'invisible group-hover:visible'
+            }`}
           >
             <FiLogOut className="h-4 w-4" />
           </button>

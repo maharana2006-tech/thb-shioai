@@ -20,8 +20,10 @@ import {
   FiZap,
 } from 'react-icons/fi'
 import { dashboardService, type DashboardData } from '../api/dashboardService'
+import { notify } from '../utils/notify'
 import { isAbortError } from '../api/apiClient'
 import { useAppSession } from '../hooks/useAppSession'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { canManageCarriers, normalizeRole } from '../utils/roles'
 import { countryName } from '../utils/countries'
 import { settingsPaths } from '../routes/workspaceRoutes'
@@ -87,8 +89,13 @@ const initials = (name?: string | null) =>
     .map((p) => p[0]?.toUpperCase() ?? '')
     .join('') || '?'
 
-/** Tiny inline area sparkline — no chart library, stays in the design system. */
-function Sparkline({ points }: { points: number[] }) {
+/** Tiny inline area sparkline — no chart library, stays in the design system.
+ *
+ *  BUG-006 — each point now carries a native `<title>` for a hover
+ *  tooltip ("Mon Nov 3 · 42 labels") so operators can read the trend
+ *  without a popover. SVG `<title>` is the native-platform tooltip; a
+ *  JS popover would be overkill. */
+function Sparkline({ points, labels }: { points: number[]; labels?: string[] }) {
   const w = 260
   const h = 64
   const max = Math.max(1, ...points)
@@ -106,6 +113,11 @@ function Sparkline({ points }: { points: number[] }) {
       </defs>
       <path d={area} fill="url(#sparkFill)" />
       <path d={line} fill="none" stroke="#412d15" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      {xy.map(([x, y], i) => (
+        <circle key={i} cx={x} cy={y} r={6} fill="transparent" style={{ pointerEvents: 'all' }}>
+          <title>{labels?.[i] ? `${labels[i]} · ${points[i]} label${points[i] === 1 ? '' : 's'}` : `${points[i]}`}</title>
+        </circle>
+      ))}
       {xy.length ? (
         <circle cx={xy[xy.length - 1][0]} cy={xy[xy.length - 1][1]} r="3.5" fill="#1f150c" stroke="#fff" strokeWidth="1.5" />
       ) : null}
@@ -119,6 +131,10 @@ function Sparkline({ points }: { points: number[] }) {
  * (ADMIN) · Row 4 activity. Self-refreshes — it's a queue board.
  */
 export default function Dashboard() {
+  // BUG-007 — set the browser tab title + announce a landmark heading
+  // for screen readers. Pre-fix the tab read "multiship-react" (Vite
+  // boilerplate) and the page had no <h1>.
+  useDocumentTitle('Dashboard')
   const navigate = useNavigate()
   const { username, role } = useAppSession()
   // Fix F3 — use the shared role helper so a future role rename or
@@ -231,15 +247,19 @@ export default function Dashboard() {
       load()
       if (!timer.current) timer.current = window.setInterval(load, POLL_MS)
     }
+    // BUG-002 — the window gets a `focus` event right after a hard page
+    // load, which aborted the mount request and sent a second one. A
+    // focus is only a reason to refresh when nothing is already loading.
+    const onFocus = () => { if (!inFlightRef.current) load() }
     document.addEventListener('visibilitychange', onVisibility)
-    window.addEventListener('focus', load)
+    window.addEventListener('focus', onFocus)
 
     return () => {
       mountedRef.current = false
       if (timer.current) window.clearInterval(timer.current)
       if (staleTicker.current) window.clearInterval(staleTicker.current)
       document.removeEventListener('visibilitychange', onVisibility)
-      window.removeEventListener('focus', load)
+      window.removeEventListener('focus', onFocus)
       currentAbortRef.current?.abort()  // don't leak a pending fetch on unmount
     }
   }, [load])
@@ -252,7 +272,9 @@ export default function Dashboard() {
   const today = data?.today
   const exceptions = today?.exceptionsNow ?? 0
   const ready = queue?.ready ?? 0
-  const delta = (today?.labelsToday ?? 0) - (today?.labelsYesterday ?? 0)
+  // Keep delta null while `today` is loading so Card 1's subtext doesn't
+  // say "level with yesterday" during initial paint (0 - 0 = 0).
+  const delta = today ? today.labelsToday - today.labelsYesterday : null
 
   const pipelineTotal = useMemo(
     () => PIPELINE.reduce((s, p) => s + ((queue?.[p.key as keyof QueueShape] as number) ?? 0), 0),
@@ -267,10 +289,17 @@ export default function Dashboard() {
         ok: health.customsGapLanes.length === 0,
         okText: 'Every international lane has a customs profile',
         warnText: `${health.customsGapLanes.length} lane${health.customsGapLanes.length === 1 ? '' : 's'} missing customs profiles`,
-        detail: health.customsGapLanes
-          .slice(0, 3)
-          .map((l) => `${l.client} → ${countryName(l.country)}`)
-          .join(' · '),
+        detail: (() => {
+          // BUG-006 — "+N more" suffix when there are extra lanes
+          // beyond the three the detail string previews. Prior UX
+          // silently hid them, so operators thought they'd fixed
+          // everything after addressing the visible three.
+          const shown = health.customsGapLanes.slice(0, 3)
+                .map((l) => `${l.client} → ${countryName(l.country)}`)
+                .join(' · ')
+          const extra = Math.max(0, health.customsGapLanes.length - 3)
+          return extra > 0 ? `${shown} · +${extra} more` : shown
+        })(),
         // Fix #309 — reference the settingsPaths registry so a route
         // rename lands here automatically. Prior hardcoded strings would
         // silently break if e.g. shipping-catalog split back into two
@@ -358,7 +387,9 @@ export default function Dashboard() {
       label: 'Labels today',
       value: today?.labelsToday ?? '—',
       unit: 'labels',
-      sub: (
+      sub: delta == null ? (
+        <span className="text-slate-400">—</span>
+      ) : (
         <span className={`inline-flex items-center gap-0.5 ${delta > 0 ? 'text-emerald-600' : delta < 0 ? 'text-rose-500' : 'text-slate-400'}`}>
           {delta > 0 ? <FiArrowUpRight className="h-3 w-3" /> : delta < 0 ? <FiArrowDownRight className="h-3 w-3" /> : null}
           {delta === 0 ? 'level with yesterday' : `${delta > 0 ? '+' : ''}${delta} vs yesterday`}
@@ -366,7 +397,12 @@ export default function Dashboard() {
       ),
       icon: <FiTag className="h-4 w-4" />,
       tone: 'border-[#412d15]/25 bg-[#412d15]/[0.06] text-[#412d15]',
-      to: '/orders?view=generated',
+      // The count is scoped to `label_generated_at >= CURRENT_DATE` but
+      // the Orders list has no labelGeneratedAt date filter — only
+      // createdFrom/createdTo. Scroll to Row 4 (activity) where the
+      // 7-day sparkline + Recent labels + carrier split answer "what
+      // got generated today" without a count/filter mismatch.
+      to: '#activity',
     },
     {
       label: 'Pending now',
@@ -375,7 +411,8 @@ export default function Dashboard() {
       sub: `${ready} ready to generate`,
       icon: <FiClock className="h-4 w-4" />,
       tone: 'border-sky-200 bg-sky-50 text-sky-700',
-      to: '/orders?view=all',
+      // BUG-001 — the tile counts PENDING orders, so open exactly that set.
+      to: '/orders?status=PENDING',
     },
     {
       label: 'Exceptions',
@@ -384,7 +421,11 @@ export default function Dashboard() {
       sub: exceptions === 0 ? 'nothing blocked' : 'need attention',
       icon: <FiAlertTriangle className="h-4 w-4" />,
       tone: exceptions === 0 ? 'border-emerald-200 bg-emerald-50 text-emerald-600' : 'border-amber-300 bg-amber-50 text-amber-600',
-      to: '/orders?view=details',
+      // The count sums 4 pipeline buckets (needsDetails + chooseAccount +
+      // clientMissing + failed). /orders only shows one view at a time, so
+      // routing to view=details lost 3 of the 4 buckets. Scroll to the
+      // pipeline card below where all 4 are broken out + clickable.
+      to: '#label-pipeline',
     },
     {
       label: 'International pending',
@@ -393,12 +434,21 @@ export default function Dashboard() {
       sub: 'customs auto-resolved',
       icon: <FiGlobe className="h-4 w-4" />,
       tone: 'border-violet-200 bg-violet-50 text-violet-600',
-      to: '/orders?view=all',
+      // BUG-001 — intlPending now filters the existing Pending set
+      // instead of dumping on view=all with no filter. intl=Y maps to
+      // label_batch.intl_yn='Y' server-side. status=PENDING scopes
+      // the queue; Orders list reads both params on mount.
+      to: '/orders?status=PENDING&intl=Y',
     },
   ]
 
   return (
     <div className="space-y-4 pb-16">
+      {/* BUG-007 — screen-reader landmark. The visible greeting below
+          is design-styled as an <h2>; a dedicated <h1> gives assistive
+          tech an unambiguous "you are on the Dashboard" cue without
+          disturbing the visual composition. */}
+      <h1 className="sr-only">Dashboard</h1>
       {/* ===== greeting header ===== */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
@@ -480,7 +530,13 @@ export default function Dashboard() {
           <button
             key={c.label}
             type="button"
-            onClick={() => navigate(c.to)}
+            onClick={() => {
+              if (c.to.startsWith('#')) {
+                document.getElementById(c.to.slice(1))?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+              } else {
+                navigate(c.to)
+              }
+            }}
             className={`${CARD} group text-left transition hover:-translate-y-0.5 hover:border-[#412d15]/30 hover:shadow-md`}
           >
             <div className="flex items-start justify-between gap-2 px-4 pt-3.5">
@@ -515,7 +571,7 @@ export default function Dashboard() {
       </section>
 
       {/* ===== row 2 · the pipeline ===== */}
-      <section className={`${CARD} p-5`}>
+      <section id="label-pipeline" className={`${CARD} scroll-mt-4 p-5`}>
         <div className="mb-3 flex items-center justify-between">
           <h3 className="inline-flex items-center gap-2 text-[13.5px] font-semibold text-slate-950">
             <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-[#412d15]/10 text-[#412d15]">
@@ -720,7 +776,7 @@ export default function Dashboard() {
       ) : null}
 
       {/* ===== row 4 · activity ===== */}
-      <section className="grid gap-3 lg:grid-cols-3">
+      <section id="activity" className="scroll-mt-4 grid gap-3 lg:grid-cols-3">
         {/* 7-day trend */}
         <div className={`${CARD} p-5`}>
           <h3 className="inline-flex items-center gap-2 text-[13.5px] font-semibold text-slate-950">
@@ -730,7 +786,12 @@ export default function Dashboard() {
             Labels · last 7 days
           </h3>
           <div className="mt-3">
-            <Sparkline points={(data?.trend ?? []).map((t) => t.count)} />
+            <Sparkline
+              points={(data?.trend ?? []).map((t) => t.count)}
+              labels={(data?.trend ?? []).map((t) =>
+                new Date(t.date + 'T00:00:00').toLocaleDateString('en-US',
+                  { weekday: 'short', month: 'short', day: 'numeric' }))}
+            />
           </div>
           <div className="mt-1 flex justify-between text-[10px] font-semibold uppercase tracking-wide text-slate-400">
             {(data?.trend ?? []).map((t) => (
@@ -751,7 +812,12 @@ export default function Dashboard() {
             {splitEntries.length ? (
               splitEntries.map(([carrier, count]) => {
                 const av = CARRIER_AVATAR[carrier] ?? { bg: 'bg-slate-600', mono: carrier.slice(0, 3) }
-                const pct = splitTotal ? Math.round((count / splitTotal) * 100) : 0
+                const rawPct = splitTotal ? (count / splitTotal) * 100 : 0
+                const pct = Math.round(rawPct)
+                // BUG-006 — a nonzero carrier that rounds to 0 would
+                // display "0%" and look identical to a dormant one.
+                // Signal "very small but present" with "<1%".
+                const pctDisplay = count > 0 && pct === 0 ? '<1%' : `${pct}%`
                 return (
                   <li key={carrier} className="flex items-center gap-2.5">
                     <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${av.bg} text-[9px] font-black tracking-wide text-white shadow-sm`}>
@@ -761,7 +827,7 @@ export default function Dashboard() {
                       <div className="flex items-baseline justify-between">
                         <span className="text-[12px] font-semibold text-slate-800">{carrier}</span>
                         <span className="text-[11.5px] tabular-nums text-slate-500">
-                          {count} · {pct}%
+                          {count} · {pctDisplay}
                         </span>
                       </div>
                       <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100">
@@ -838,6 +904,13 @@ export default function Dashboard() {
                         // number to the clipboard without navigation.
                         e.stopPropagation()
                         void navigator.clipboard.writeText(l.trackingNumber!)
+                          // BUG-006 — silent copy left operators
+                          // unsure whether the click did anything.
+                          .then(() => notify.success(`Copied ${l.trackingNumber}`))
+                          .catch(() => notify.info({
+                            title: "Can't copy",
+                            body: 'Clipboard access is blocked — check browser permissions.',
+                          }))
                       }}
                       aria-label={`Copy tracking number ${l.trackingNumber}`}
                       title="Copy tracking number"

@@ -1,5 +1,6 @@
 import { relativeTime } from '../utils/relativeTime'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useModalDismiss } from '../hooks/useModalDismiss'
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import { FiCheckSquare, FiPrinter, FiRefreshCw, FiSquare, FiX } from 'react-icons/fi'
 import {
   printerService,
@@ -37,6 +38,8 @@ export default function DiscoveredPickerModal({
   onClose: () => void
   onImported: () => void | Promise<void>
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const requestClose = useModalDismiss(true, dialogRef, onClose)
   const [rows, setRows] = useState<PrinterDiscovered[]>([])
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState<Set<number>>(new Set())
@@ -128,7 +131,7 @@ export default function DiscoveredPickerModal({
   }
 
   return (
-    <div
+    <div ref={dialogRef}
       role="dialog"
       aria-modal="true"
       aria-labelledby="printer-picker-heading"
@@ -161,7 +164,7 @@ export default function DiscoveredPickerModal({
           </button>
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => void requestClose()}
             aria-label="Close"
             className="rounded-md p-1 text-slate-500 hover:bg-slate-100"
           >
@@ -269,7 +272,7 @@ export default function DiscoveredPickerModal({
           <span className="flex items-center gap-2">
             <button
               type="button"
-              onClick={onClose}
+              onClick={() => void requestClose()}
               disabled={importing}
               className="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-1.5 text-[13px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
             >

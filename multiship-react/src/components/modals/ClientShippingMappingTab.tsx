@@ -313,7 +313,7 @@ export default function ClientShippingMappingTab({ clientCode }: { clientCode: s
 
   const saveDraft = async () => {
     if (!draft.shipviaCd.trim() || !effectiveServiceId) {
-      notify.error('Enter the order ship-via code and pick a carrier service.')
+      notify.invalid('Enter the order ship-via code and pick a carrier service.')
       return
     }
     try {
@@ -767,6 +767,7 @@ export default function ClientShippingMappingTab({ clientCode }: { clientCode: s
                       type="button"
                       onClick={() => openZone(rule)}
                       className="inline-flex items-center gap-1 rounded-lg border border-transparent px-1 py-0.5 hover:border-slate-200 hover:bg-slate-50"
+                      aria-label="Edit destination zone"
                       title="Edit destination zone"
                     >
                       <ZoneChips codes={ruleCodes(rule)} />

@@ -47,8 +47,24 @@ public class TemplateRenderer {
         try {
             Template compiled = handlebars.compileInline(source);
             return compiled.apply(vars == null ? Map.of() : vars);
-        } catch (IOException | HandlebarsException ex) {
+        } catch (HandlebarsException ex) {
+            throw new MailSendException(describe(ex), ex);
+        } catch (IOException ex) {
             throw new MailSendException("Template render failed: " + ex.getMessage(), ex);
         }
+    }
+
+    /**
+     * BUG-138 — "inline@29816619:1:21: found '}}', expected '{{/if}}'" becomes
+     * "Line 1, column 21: found '}}', expected '{{/if}}'", so the editor can
+     * point at the mistake instead of echoing the engine's internals.
+     */
+    static String describe(HandlebarsException ex) {
+        var err = ex.getError();
+        if (err != null && err.reason != null && !err.reason.isBlank()) {
+            return "Line " + err.line + ", column " + err.column + ": " + err.reason.trim();
+        }
+        String msg = ex.getMessage() == null ? "" : ex.getMessage();
+        return "Template render failed: " + msg.replaceFirst("^inline@[0-9a-f]+:(\\d+):(\\d+):\\s*", "line $1, column $2: ");
     }
 }

@@ -37,6 +37,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class ShipmentValidationController {
 
     private final ShipmentValidationService shipmentValidationService;
+    private final com.multiship.backend.service.shipment.ValidationReceipts validationReceipts;
 
     @Operation(
             summary = "Validate a shipment payload before generating the label",
@@ -49,7 +50,17 @@ public class ShipmentValidationController {
     @PostMapping("/validate")
     public ResponseEntity<ApiResponse<ShipmentValidationResult>> validate(
             @RequestBody ManualShipmentRequest request) {
+        // Phase 1 — hash the payload BEFORE validate() clamps/normalises it,
+        // so the fingerprint matches what the form will send back on purchase.
+        String fingerprint = request != null ? com.multiship.backend.service.shipment.ShipmentFingerprint.of(request) : null;
         ApiResponse<ShipmentValidationResult> response = shipmentValidationService.validate(request);
+        ShipmentValidationResult data = response.getData();
+        if (data != null && fingerprint != null) {
+            data.setFingerprint(fingerprint);
+            if (!"FAIL".equalsIgnoreCase(data.getOverall())) {
+                data.setValidUntil(validationReceipts.remember(fingerprint));
+            }
+        }
         return ResponseEntity.status(response.getCode()).body(response);
     }
 }

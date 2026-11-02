@@ -26,6 +26,7 @@ import {
   validateZip,
 } from '../../utils/clientValidation'
 import { intersectionAddressCaps } from '../../utils/carrierFieldLimits'
+import { serverFieldError } from '../../utils/serverFieldErrors'
 import { CountrySelect } from '../NewShipmentComponents/CountrySelect'
 
 // BUG-040 — warehouse address is ship-from for EVERY carrier on the account.
@@ -216,6 +217,7 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
     () => Object.values(errors).every((e) => !e),
     [errors],
   )
+  const [serverError, setServerError] = useState<{ key: string; message: string; at: string } | null>(null)
 
   /** Force every field's error to show — used when Save is pressed while some
    *  fields are still untouched, so the red errors surface instead of a
@@ -272,7 +274,13 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
       } else if (error instanceof ApiError && error.errorCode === 'CLIENT_NOT_FOUND') {
         notify.error(`Client ${ownerClientCode.trim().toUpperCase()} was not found.`)
       } else {
-        notify.apiError(error, 'Failed to save the warehouse.')
+        const fe = serverFieldError(error)
+        if (fe) {
+          const key = fe.field.replace(/^address\./, '')
+          setServerError({ key: key in errors ? key : '_form', message: fe.message, at: currentSnapshot })
+        } else {
+          notify.apiError(error, 'Failed to save the warehouse.')
+        }
       }
     } finally {
       setSaving(false)
@@ -308,6 +316,8 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
     code, name, line1, line2, city, state, zip, country, phone, ownerType, ownerClientCode, active,
   })
   const isDirty = currentSnapshot !== initialSnapshot
+  const serverErrors: Record<string, string> =
+    serverError && serverError.at === currentSnapshot ? { [serverError.key]: serverError.message } : {}
 
   /**
    * Wraps onClose with an unsaved-changes confirm. Fires from the X, backdrop,
@@ -327,10 +337,10 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
   const closeAction = created ? () => onSaved(created) : closeWithGuard
   // A11y audit — focus trap + Escape-to-close + focus restoration.
   const dialogRef = useRef<HTMLElement>(null)
-  useModalDismiss(true, dialogRef, closeAction)
+  useModalDismiss(true, dialogRef, closeAction, { confirmDiscard: false })
 
   /** Error for a field, but only after it's been touched. */
-  const err = (k: keyof typeof errors): string | null => (touched[k] ? errors[k] : null)
+  const err = (k: keyof typeof errors): string | null => serverErrors[k] ?? (touched[k] ? errors[k] : null)
   /** Input class with an error ring when the (touched) field is invalid. */
   const inputCls = (k: keyof typeof errors, extra = '') =>
     `w-full rounded-xl border bg-white px-3 py-2 text-[13px] text-[#1f150c] outline-none transition ${
@@ -389,6 +399,9 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
         ) : (
         <>
         <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
+          {serverErrors._form ? (
+            <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50/60 px-3 py-2 text-[11.5px] text-rose-800">{serverErrors._form}</p>
+          ) : null}
           {/* Identity */}
           <section className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Field label="Code" required hint="Uppercase; immutable after create." error={isEdit ? null : err('code')}>
