@@ -663,6 +663,8 @@ public class OrderImportServiceImpl implements OrderImportService {
         dto.setCarrierCode(row.getCarrierCode());
         dto.setServiceType(row.getServiceType());
         dto.setAccountNumber(row.getAccountNumber());
+        dto.setThirdPartyPostalCode(row.getThirdPartyPostalCode());
+        dto.setThirdPartyCountry(row.getThirdPartyCountry());
         dto.setPackageType(row.getPackageType());
         dto.setWeight(row.getWeight());
         dto.setWeightUnit(row.getWeightUnit());
@@ -1017,7 +1019,7 @@ public class OrderImportServiceImpl implements OrderImportService {
             "recipientName", "recipientCompany", "recipientPhone", "recipientEmail",
             "addressLine1", "addressLine2",
             "city", "state", "postalCode", "countryCode",
-            "carrierCode", "accountNumber", "serviceType", "packageType",
+            "carrierCode", "accountNumber", "thirdPartyPostalCode", "thirdPartyCountry", "serviceType", "packageType",
             "weight", "weightUnit", "length", "width", "height", "dimUnit",
             "currency", "incoterms",
             "reference",
@@ -5042,6 +5044,8 @@ public class OrderImportServiceImpl implements OrderImportService {
                     dbRow.setCarrierCode(editedRow.getCarrierCode());
                     dbRow.setServiceType(editedRow.getServiceType());
                     dbRow.setAccountNumber(editedRow.getAccountNumber());
+                    dbRow.setThirdPartyPostalCode(editedRow.getThirdPartyPostalCode());
+                    dbRow.setThirdPartyCountry(editedRow.getThirdPartyCountry());
                     dbRow.setPackageType(editedRow.getPackageType());
                     dbRow.setWeight(editedRow.getWeight());
                     dbRow.setWeightUnit(editedRow.getWeightUnit());
@@ -5252,7 +5256,18 @@ public class OrderImportServiceImpl implements OrderImportService {
         req.setRecipient(recipient);
 
         req.setCarrierCode(leader.getCarrierCode());
-        req.setAccountNumber(leader.getAccountNumber());
+        if ("THIRD_PARTY".equalsIgnoreCase(leader.getBillTo() == null ? "" : leader.getBillTo().trim())) {
+            // The row's account is the PAYER, not the shipper account: it only
+            // feeds the carrier's payment element. The shipper account stays
+            // blank here so the client-default cascade below picks it, the same
+            // as a row with no account at all.
+            req.setBillTo("THIRD_PARTY");
+            req.setThirdPartyAccount(leader.getAccountNumber());
+            req.setThirdPartyPostalCode(leader.getThirdPartyPostalCode());
+            req.setThirdPartyCountry(leader.getThirdPartyCountry());
+        } else {
+            req.setAccountNumber(leader.getAccountNumber());
+        }
         // Sprint 51 fix #2 — carry the row's warehouse so the manual path
         // resolves that warehouse's address as ship-from (and thus the
         // origin country that drives the international/customs decision).
@@ -5787,6 +5802,8 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (!StringUtils.hasText(row.getCountryCode())) row.setCountryCode(leader.getCountryCode());
         if (!StringUtils.hasText(row.getCarrierCode())) row.setCarrierCode(leader.getCarrierCode());
         if (!StringUtils.hasText(row.getAccountNumber())) row.setAccountNumber(leader.getAccountNumber());
+        if (!StringUtils.hasText(row.getThirdPartyPostalCode())) row.setThirdPartyPostalCode(leader.getThirdPartyPostalCode());
+        if (!StringUtils.hasText(row.getThirdPartyCountry())) row.setThirdPartyCountry(leader.getThirdPartyCountry());
         if (!StringUtils.hasText(row.getServiceType())) row.setServiceType(leader.getServiceType());
         if (!StringUtils.hasText(row.getPackageType())) row.setPackageType(leader.getPackageType());
         if (row.getWeight() == null) { row.setWeight(leader.getWeight()); row.setWeightInherited(true); }
@@ -5923,6 +5940,8 @@ public class OrderImportServiceImpl implements OrderImportService {
         out.setCountryCode(upper(s.read("countryCode")));
         out.setCarrierCode(upper(s.read("carrierCode")));
         out.setAccountNumber(s.read("accountNumber"));
+        out.setThirdPartyPostalCode(s.read("thirdPartyPostalCode"));
+        out.setThirdPartyCountry(upper(s.read("thirdPartyCountry")));
         out.setServiceType(s.read("serviceType"));
         out.setPackageType(s.read("packageType"));
         // Capture the raw numeric strings so an unparseable value ("2 lbs",
@@ -6294,6 +6313,19 @@ public class OrderImportServiceImpl implements OrderImportService {
                 errors.add("accountNumber '" + row.getAccountNumber() + "' is not a valid " + cc
                         + " account (" + ACCOUNT_FORMAT_HINT.getOrDefault(cc, "check the format") + ")");
             }
+            if ("USPS".equals(cc)) {
+                errors.add("billTo=THIRD_PARTY is not available for USPS (postage is prepaid) — use SENDER");
+            }
+            if ("UPS".equals(cc) && !StringUtils.hasText(row.getThirdPartyPostalCode())) {
+                errors.add("thirdPartyPostalCode is required for UPS third-party billing");
+            }
+            if ("UPS".equals(cc) && !StringUtils.hasText(row.getThirdPartyCountry())) {
+                errors.add("thirdPartyCountry is required for UPS third-party billing");
+            }
+        }
+        if (StringUtils.hasText(row.getThirdPartyCountry())
+                && !row.getThirdPartyCountry().trim().matches("[A-Za-z]{2}")) {
+            errors.add("thirdPartyCountry '" + row.getThirdPartyCountry() + "' must be a 2-letter ISO code");
         }
         // Length caps so oversized free-text can't slip through the import.
         if (row.getCity() != null && row.getCity().length() > MAX_TEXT_LEN)
@@ -7903,6 +7935,8 @@ public class OrderImportServiceImpl implements OrderImportService {
             case "countryCode" -> r.getCountryCode();
             case "carrierCode" -> r.getCarrierCode();
             case "accountNumber" -> r.getAccountNumber();
+            case "thirdPartyPostalCode" -> r.getThirdPartyPostalCode();
+            case "thirdPartyCountry" -> r.getThirdPartyCountry();
             // BUG-014 - round-trip the operator's own ship-via code when the
             // mapping rule rewrote serviceType to a carrier wire code at parse
             // time. Fixing + re-uploading the errors file must keep the same

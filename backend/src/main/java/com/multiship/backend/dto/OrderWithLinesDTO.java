@@ -26,6 +26,10 @@ public class OrderWithLinesDTO {
     private String orderChannel;
     /** Ship-via code NDS resolved the order to, when it differs from shipviaCd. */
     private String ndsResolvedShipviaCd;
+    /** Who paid the shipping charges: SENDER or THIRD_PARTY. */
+    private String billTo;
+    /** Payer account, masked (****1234). */
+    private String thirdPartyAccount;
     private String shipName;
     private String shipAttn;
     private String shipAddr1;

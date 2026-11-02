@@ -170,6 +170,19 @@ public class ShipmentValidationService {
         checkRecipientRequired(to, errors, warnings);
         checkSenderRequired(from, req, errors);
         checkShipmentRequired(req, errors);
+        // Third-party freight billing — same rule Generate label applies, so a
+        // bad payer fails here instead of at the carrier.
+        if (StringUtils.hasText(req.getCarrierCode())) {
+            String billToError = CarrierServiceImpl.validateThirdPartyBilling(req,
+                    blankTo(ShippingConfigService.canonicalCarrierFor(req.getCarrierCode()),
+                            req.getCarrierCode().trim().toUpperCase(Locale.ROOT)));
+            if (billToError != null) {
+                errors.add(issue(ErrorCode.VALIDATION_ERROR, billToError,
+                        billToError.startsWith("thirdPartyPostalCode") ? "thirdPartyPostalCode"
+                                : billToError.startsWith("thirdPartyCountry") ? "thirdPartyCountry"
+                                : billToError.startsWith("billTo") ? "billTo" : "thirdPartyAccount"));
+            }
+        }
         checkCarrierLengthLimits(req, errors); // BUG-004
         checkRequiredCustomFields(req, clientCode, errors); // R2-BUG-008
         checkSanctionedDestination(to, errors); // R2-BUG-011

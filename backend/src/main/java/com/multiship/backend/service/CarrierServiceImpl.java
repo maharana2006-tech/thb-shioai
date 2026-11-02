@@ -1880,6 +1880,13 @@ public class CarrierServiceImpl implements CarrierService {
         }
         String carrier = resolveCanonicalCarrierCode(rawCarrier);
 
+        // Third-party freight billing — validated before any account work so a
+        // bad payer never reaches the carrier. Normalises the request in place.
+        String billToError = validateThirdPartyBilling(req, carrier);
+        if (billToError != null) {
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR, billToError);
+        }
+
         // Credential + bill-to account: the picked account, else the typed number
         // on file for this carrier. An UNKNOWN typed number is a hard error —
         // the old behaviour silently fell back to platform credentials while
@@ -2799,6 +2806,7 @@ public class CarrierServiceImpl implements CarrierService {
                     errOrder.setOrderSuffix(0);
                     errOrder.setOrderStatus("ERROR");
                     errOrder.setIsError(true);
+                    applyBillTo(errOrder, req);
                     errOrder.setIsManual("Y");
                     errOrder.setIsReturn(Boolean.TRUE.equals(req.getIsReturn()) ? "Y" : "N");
                     // BUG-034 — persist Returns F9 Reason + RMA on the ERROR
@@ -3090,6 +3098,7 @@ public class CarrierServiceImpl implements CarrierService {
         // find every sibling order in the batch. Only populated when the
         // request came from a `.Y` scan (B6 threading).
         order.setBillableBatchId(req.getNdsBatchId());
+        applyBillTo(order, req);
         order.setShipName(to.getName());
         order.setShipAttn(to.getCompany());
         order.setShipAddr1(to.getAddressLine1());
@@ -3390,6 +3399,9 @@ public class CarrierServiceImpl implements CarrierService {
         // currentActor() when the override is blank/null.
         if (auditService != null) {
             String auditNote = carrier + " label on account " + billToNumber
+                    + ("THIRD_PARTY".equals(req.getBillTo())
+                            ? " · shipping charges billed to third party " + maskAccount(req.getThirdPartyAccount())
+                            : "")
                     + (markup.billable() != null
                             ? " · billable " + markup.billable() + " " + firstNonBlank(markup.currency(), "USD")
                             : "");
@@ -4708,6 +4720,73 @@ public class CarrierServiceImpl implements CarrierService {
         return profile == null ? null : profile.getDutiesBillTo();
     }
 
+    /** Account-number formats a third-party payer must match (same rules as the carrier-account drawer). */
+    private static final Map<String, java.util.regex.Pattern> THIRD_PARTY_ACCOUNT_FORMATS = Map.of(
+            "UPS", java.util.regex.Pattern.compile("^[A-Za-z0-9]{6,10}$"),
+            "FEDEX", java.util.regex.Pattern.compile("^\\d{9}$"));
+
+    /**
+     * Normalises the third-party freight payer on the request (billTo → SENDER /
+     * THIRD_PARTY, trimmed account, upper-cased country) and returns the first
+     * validation error, or null when the request is fine. The shipper account
+     * is never replaced: the payer only drives the carrier's payment element.
+     */
+    static String validateThirdPartyBilling(com.multiship.backend.dto.ManualShipmentRequest req, String carrier) {
+        String raw = req.getBillTo() == null ? "" : req.getBillTo().trim().toUpperCase(Locale.ROOT).replace("THIRDPARTY", "THIRD_PARTY");
+        String billTo = raw.isEmpty() ? "SENDER" : raw;
+        if (!"SENDER".equals(billTo) && !"THIRD_PARTY".equals(billTo)) {
+            return "billTo '" + req.getBillTo() + "' must be SENDER or THIRD_PARTY.";
+        }
+        req.setBillTo(billTo);
+        if ("SENDER".equals(billTo)) {
+            req.setThirdPartyAccount(null);
+            req.setThirdPartyPostalCode(null);
+            req.setThirdPartyCountry(null);
+            return null;
+        }
+        if ("USPS".equals(carrier)) {
+            return "USPS postage is prepaid — third-party billing is not available. Bill the shipper account instead.";
+        }
+        java.util.regex.Pattern format = THIRD_PARTY_ACCOUNT_FORMATS.get(carrier);
+        if (format == null) {
+            return carrier + " shipments cannot be billed to a third party yet.";
+        }
+        String account = req.getThirdPartyAccount() == null ? "" : req.getThirdPartyAccount().trim();
+        if (account.isEmpty()) {
+            return "thirdPartyAccount is required when shipping charges are billed to a third party.";
+        }
+        if (!format.matcher(account).matches()) {
+            return "thirdPartyAccount '" + account + "' is not a valid " + carrier + " account number.";
+        }
+        String postal = StringUtils.hasText(req.getThirdPartyPostalCode()) ? req.getThirdPartyPostalCode().trim() : null;
+        String country = StringUtils.hasText(req.getThirdPartyCountry()) ? req.getThirdPartyCountry().trim().toUpperCase(Locale.ROOT) : null;
+        if ("UPS".equals(carrier) && (postal == null || country == null)) {
+            return "thirdPartyPostalCode and thirdPartyCountry are required for UPS third-party billing.";
+        }
+        if (country != null && !country.matches("[A-Z]{2}")) {
+            return "thirdPartyCountry '" + req.getThirdPartyCountry() + "' must be a 2-letter ISO code.";
+        }
+        req.setThirdPartyAccount(account);
+        req.setThirdPartyPostalCode(postal);
+        req.setThirdPartyCountry(country);
+        return null;
+    }
+
+    /** V183 — who paid the shipping charges (validated in resolveManualShipment); payer fields only when THIRD_PARTY. */
+    private static void applyBillTo(Order order, com.multiship.backend.dto.ManualShipmentRequest req) {
+        boolean thirdParty = "THIRD_PARTY".equals(req.getBillTo());
+        order.setBillTo(thirdParty ? "THIRD_PARTY" : "SENDER");
+        order.setThirdPartyAccount(thirdParty ? req.getThirdPartyAccount() : null);
+        order.setThirdPartyPostalCode(thirdParty ? req.getThirdPartyPostalCode() : null);
+        order.setThirdPartyCountry(thirdParty ? req.getThirdPartyCountry() : null);
+    }
+
+    /** ****1234 — enough to recognise a payer account in audit/UI without exposing it. */
+    static String maskAccount(String account) {
+        if (account == null || account.length() <= 4) return "****";
+        return "****" + account.substring(account.length() - 4);
+    }
+
     static String normalizeDutyPayer(String clearanceOption) {
         if (!StringUtils.hasText(clearanceOption)) return null;
         String v = clearanceOption.trim().toUpperCase(Locale.ROOT);
@@ -4898,6 +4977,10 @@ public class CarrierServiceImpl implements CarrierService {
         return ShipmentRequestDTO.builder()
                 .carrierCode(carrier)
                 .accountNumber(billToNumber)
+                .billTo(req.getBillTo())
+                .thirdPartyAccount(req.getThirdPartyAccount())
+                .thirdPartyPostalCode(req.getThirdPartyPostalCode())
+                .thirdPartyCountry(req.getThirdPartyCountry())
                 .serviceType(serviceType)
                 .packageType(packageType)
                 .length(length).width(width).height(height)

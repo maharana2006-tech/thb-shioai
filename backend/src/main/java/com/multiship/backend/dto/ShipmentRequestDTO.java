@@ -21,6 +21,14 @@ public class ShipmentRequestDTO {
 
     private String accountNumber;
 
+    /** Who pays the shipping charges: SENDER (default — the shipper account above) or THIRD_PARTY. */
+    private String billTo;
+    /** The third party's carrier account that pays the shipping charges when billTo is THIRD_PARTY. */
+    private String thirdPartyAccount;
+    /** Payer's billing postal code and ISO-2 country. UPS requires both for third-party billing. */
+    private String thirdPartyPostalCode;
+    private String thirdPartyCountry;
+
     private String serviceType;
 
     @NotBlank

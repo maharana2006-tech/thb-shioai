@@ -38,6 +38,8 @@ public final class ImportColumnAliases {
             Map.entry("weight", "weight"),
             Map.entry("shipvia_cd", "serviceType"),
             Map.entry("third_party_acc", "accountNumber"),
+            Map.entry("third_party_zip", "thirdPartyPostalCode"),
+            Map.entry("third_party_country", "thirdPartyCountry"),
             // Rows sharing a GROUP_ID go to different stores: it's a reference, not one shipment.
             Map.entry("group_id", "reference"),
             Map.entry("item_numbers", "itemDescription"),

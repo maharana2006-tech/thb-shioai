@@ -779,6 +779,8 @@ public class OrderServiceImpl implements OrderService {
                 .customerRef(entity.getCustomerRef())
                 .orderChannel(entity.getOrderChannel())
                 .ndsResolvedShipviaCd(entity.getNdsResolvedShipviaCd())
+                .billTo(entity.getBillTo())
+                .thirdPartyAccount(entity.getThirdPartyAccount() == null ? null : CarrierServiceImpl.maskAccount(entity.getThirdPartyAccount()))
                 .shipName(entity.getShipName())
                 .shipAttn(entity.getShipAttn())
                 .shipAddr1(entity.getShipAddr1())

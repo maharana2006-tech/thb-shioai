@@ -2388,12 +2388,10 @@ public class FedExConnector implements CarrierConnector {
         }
         requestedShipment.put("recipients", new Object[]{recipientParty});
 
-        // Freight billed to the shipper account by default. Customs / duty
-        // billing is a separate paymentType on customsClearanceDetail below.
-        requestedShipment.put("shippingChargesPayment", Map.of(
-                "paymentType", "SENDER",
-                "payor", Map.of("responsibleParty", Map.of(
-                        "accountNumber", Map.of("value", firstNonBlank(request.getAccountNumber(), ""))))));
+        // Freight billed to the shipper account unless the request bills a
+        // third party. Customs / duty billing is a separate paymentType on
+        // customsClearanceDetail below.
+        requestedShipment.put("shippingChargesPayment", buildShippingChargesPayment(request));
 
         // Sprint 28 — multi-package. FedEx wants requestedPackageLineItems[]
         // with one entry per box AND totalPackageCount at the parent.
@@ -2802,6 +2800,24 @@ public class FedExConnector implements CarrierConnector {
      * leaves it blank we infer from incoterms: DDP → SENDER (seller pays);
      * anything else → RECIPIENT (DAP/DDU default: consignee pays).
      */
+    /** shippingChargesPayment — SENDER on the shipper account, or THIRD_PARTY on the payer's account. */
+    Map<String, Object> buildShippingChargesPayment(ShipmentRequestDTO request) {
+        boolean thirdParty = "THIRD_PARTY".equalsIgnoreCase(request.getBillTo())
+                && StringUtils.hasText(request.getThirdPartyAccount());
+        Map<String, Object> party = new LinkedHashMap<>();
+        party.put("accountNumber", Map.of("value",
+                thirdParty ? request.getThirdPartyAccount().trim() : firstNonBlank(request.getAccountNumber(), "")));
+        if (thirdParty && (StringUtils.hasText(request.getThirdPartyPostalCode()) || StringUtils.hasText(request.getThirdPartyCountry()))) {
+            Map<String, Object> address = new LinkedHashMap<>();
+            if (StringUtils.hasText(request.getThirdPartyPostalCode())) address.put("postalCode", request.getThirdPartyPostalCode().trim());
+            if (StringUtils.hasText(request.getThirdPartyCountry())) address.put("countryCode", request.getThirdPartyCountry().trim());
+            party.put("address", address);
+        }
+        return Map.of(
+                "paymentType", thirdParty ? "THIRD_PARTY" : "SENDER",
+                "payor", Map.of("responsibleParty", party));
+    }
+
     private Map<String, Object> buildDutiesPayment(com.multiship.backend.dto.IntlShipmentBlockDTO intl,
                                                     ShipmentRequestDTO request) {
         // F6-C — clearanceOption (per-account, resolved by

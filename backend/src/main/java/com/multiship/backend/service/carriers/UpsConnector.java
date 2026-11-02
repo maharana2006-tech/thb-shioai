@@ -2797,10 +2797,21 @@ public class UpsConnector implements CarrierConnector {
     private Map<String, Object> buildPaymentInformation(ShipmentRequestDTO request) {
         String shipperAccount = firstNonBlank(request.getAccountNumber(), "");
         java.util.List<Map<String, Object>> charges = new java.util.ArrayList<>();
-        // Freight always billed to shipper account.
-        charges.add(Map.of(
-                "Type", "01",
-                "BillShipper", Map.of("AccountNumber", shipperAccount)));
+        // Freight (Type 01): the shipper account unless the request bills a
+        // third party, whose account + billing postcode/country UPS verifies.
+        if ("THIRD_PARTY".equalsIgnoreCase(request.getBillTo()) && StringUtils.hasText(request.getThirdPartyAccount())) {
+            charges.add(Map.of(
+                    "Type", "01",
+                    "BillThirdParty", Map.of(
+                            "AccountNumber", request.getThirdPartyAccount().trim(),
+                            "Address", Map.of(
+                                    "PostalCode", firstNonBlank(request.getThirdPartyPostalCode(), ""),
+                                    "CountryCode", firstNonBlank(request.getThirdPartyCountry(), "US")))));
+        } else {
+            charges.add(Map.of(
+                    "Type", "01",
+                    "BillShipper", Map.of("AccountNumber", shipperAccount)));
+        }
 
         if (request.getIntl() != null && request.getIntl().isReadyForCarrier()) {
             // F6-C — clearanceOption (per-account, resolved by

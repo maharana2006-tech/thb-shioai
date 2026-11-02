@@ -53,6 +53,19 @@ public class Order {
     @Column(name = "billable_batch_id", length = 50)
     private String billableBatchId;
 
+    /** Who paid the shipping charges: SENDER or THIRD_PARTY (V183). */
+    @Column(name = "bill_to", length = 16)
+    private String billTo = "SENDER";
+
+    @Column(name = "third_party_account", length = 100)
+    private String thirdPartyAccount;
+
+    @Column(name = "third_party_postal_code", length = 20)
+    private String thirdPartyPostalCode;
+
+    @Column(name = "third_party_country", length = 2)
+    private String thirdPartyCountry;
+
     @Column(name = "ship_addr1")
     private String shipAddr1;
 
