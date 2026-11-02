@@ -108,6 +108,11 @@ public class ExternalApiService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.service.VoidService voidService;
 
+    /** Stored per-package ZPL, returned inline on create so a WMS can print
+     *  without a second call. Optional so Mockito tests still construct. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.label.LabelArtifactService labelArtifactService;
+
     public ExternalApiService(ShippingConfigService shippingConfigService,
                               ShippingServiceRepository serviceRepository,
                               CarrierAccountRefRepository carrierAccountRefRepository,
@@ -447,6 +452,8 @@ public class ExternalApiService {
                 .labelUrl(label.getLabelUrl())
                 .labelPdf(label.getLabelPdf())
                 .labelDocumentUrl("/api/v1/orders/" + label.getOrderNo() + "/label")
+                .labelZpl(zplFor(label.getOrderNo()))
+                .labelZplUrl("/api/v1/labels/" + label.getOrderNo() + "/zpl")
                 .shippingCost(label.getShippingCost())
                 .carrierAmount(label.getCarrierAmount())
                 .billableAmount(label.getBillableAmount())
@@ -923,5 +930,19 @@ public class ExternalApiService {
     private static String firstNonBlank(String... vals) {
         for (String v : vals) if (StringUtils.hasText(v)) return v.trim();
         return null;
+    }
+
+    /** All packages' ZPL concatenated, or null when none is stored (PDF-only
+     *  carrier label) — a ZPL lookup failure never fails a booked shipment. */
+    private String zplFor(Long orderNo) {
+        if (labelArtifactService == null || orderNo == null) return null;
+        try {
+            return labelArtifactService.zplAll(Math.toIntExact(orderNo))
+                    .map(b -> new String(b, java.nio.charset.StandardCharsets.ISO_8859_1))
+                    .orElse(null);
+        } catch (RuntimeException ex) {
+            log.warn("ZPL lookup failed for order {}: {}", orderNo, ex.getMessage());
+            return null;
+        }
     }
 }

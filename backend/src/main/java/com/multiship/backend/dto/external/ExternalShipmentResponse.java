@@ -24,6 +24,10 @@ public class ExternalShipmentResponse {
     private String labelUrl;
     private String labelPdf;
     private String labelDocumentUrl;
+    /** Every package's ZPL concatenated (^XA…^XZ blocks); null when no ZPL is stored. */
+    private String labelZpl;
+    /** Re-download path for {@link #labelZpl}. */
+    private String labelZplUrl;
     /** Kept for back-compat — same value as {@link #billableAmount}. */
     private BigDecimal shippingCost;
     private LocalDateTime estimatedDelivery;
