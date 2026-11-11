@@ -87,6 +87,8 @@ public class OrderResponseDTO {
          * domestic orders 422 on /orders/{n}/commercial-invoice.
          */
         private String intlYn;
+        /** Who pays the shipping charges: SENDER or THIRD_PARTY. */
+        private String billTo;
     }
 
     @Data

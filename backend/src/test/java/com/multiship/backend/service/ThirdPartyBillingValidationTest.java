@@ -73,4 +73,11 @@ class ThirdPartyBillingValidationTest {
         assertEquals("****", CarrierServiceImpl.maskAccount("123"));
         assertEquals("****", CarrierServiceImpl.maskAccount(null));
     }
+
+    @Test
+    void dhlPayerAccountIsNineToTwelveDigits() {
+        assertNull(CarrierServiceImpl.validateThirdPartyBilling(thirdParty("123456789", null, null), "DHL"));
+        assertTrue(CarrierServiceImpl.validateThirdPartyBilling(thirdParty("12", null, null), "DHL")
+                .contains("thirdPartyAccount"));
+    }
 }

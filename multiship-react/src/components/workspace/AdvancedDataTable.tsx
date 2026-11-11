@@ -397,6 +397,11 @@ export default function AdvancedDataTable<T extends RowData>({
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(
     () => persisted?.columnVisibility ?? defaultVisibility,
   )
+  // Auto-hide defaults are computed from the page's rows, which are empty at
+  // mount, so keep following them until the operator touches the Columns
+  // menu. A persisted layout means they already chose.
+  const [visibilityTouched, setVisibilityTouched] = useState(!!persisted?.columnVisibility)
+  const baseVisibility = visibilityTouched ? columnVisibility : defaultVisibility
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>(
     () => persisted?.columnSizing ?? {},
   )
@@ -441,8 +446,8 @@ export default function AdvancedDataTable<T extends RowData>({
 
   // Persist any layout change back to localStorage.
   useEffect(() => {
-    saveLayout(tableKey, { columnOrder, columnVisibility, columnSizing, columnPinning, density })
-  }, [tableKey, columnOrder, columnVisibility, columnSizing, columnPinning, density])
+    saveLayout(tableKey, { columnOrder, columnVisibility: baseVisibility, columnSizing, columnPinning, density })
+  }, [tableKey, columnOrder, baseVisibility, columnSizing, columnPinning, density])
 
   // If the column set changes (definitions added/removed), fold new columns
   // into the order so they still render.
@@ -501,8 +506,8 @@ export default function AdvancedDataTable<T extends RowData>({
 
   const forcedKey = forceVisibleColumns?.join('|') ?? ''
   const effectiveVisibility = useMemo<VisibilityState>(
-    () => (forcedKey ? { ...columnVisibility, ...Object.fromEntries(forcedKey.split('|').map((id) => [id, true])) } : columnVisibility),
-    [columnVisibility, forcedKey],
+    () => (forcedKey ? { ...baseVisibility, ...Object.fromEntries(forcedKey.split('|').map((id) => [id, true])) } : baseVisibility),
+    [baseVisibility, forcedKey],
   )
 
   const table = useReactTable<T>({
@@ -539,7 +544,10 @@ export default function AdvancedDataTable<T extends RowData>({
         setInternalPageSize(next.pageSize)
       }
     },
-    onColumnVisibilityChange: setColumnVisibility,
+    onColumnVisibilityChange: (updater) => {
+      setVisibilityTouched(true)
+      setColumnVisibility(typeof updater === 'function' ? updater(baseVisibility) : updater)
+    },
     onColumnOrderChange: setColumnOrder,
     onColumnSizingChange: setColumnSizing,
     onColumnPinningChange: setColumnPinning,
@@ -611,6 +619,8 @@ export default function AdvancedDataTable<T extends RowData>({
     // Reset is an explicit "show me everything" moment. The operator
     // can re-hide via the Columns menu.
     setColumnVisibility({})
+    // Reset means every column visible (BUG-009), so stop following the auto-hide defaults.
+    setVisibilityTouched(true)
     setColumnSizing({})
     // BUG-074 — Reset layout used to clear pinning to { start:[], end:[] }
     // which unpinned the row-actions column (meta.pinnedByDefault='end')

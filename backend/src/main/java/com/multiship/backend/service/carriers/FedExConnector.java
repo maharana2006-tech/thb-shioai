@@ -987,6 +987,8 @@ public class FedExConnector implements CarrierConnector {
                 "countryCode", firstNonBlank(request.getRecipientCountryCode(), "US"))));
         requestedShipment.put("pickupType", "USE_SCHEDULED_PICKUP");
         requestedShipment.put("rateRequestType", java.util.List.of("ACCOUNT", "LIST"));
+        // Quote on the payer's tariff when freight is billed to a third party.
+        requestedShipment.put("shippingChargesPayment", buildShippingChargesPayment(request));
 
         // One entry per box; effectivePackages() returns a synthetic
         // 1-element list when packages[] wasn't supplied.

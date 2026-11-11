@@ -22,7 +22,7 @@ class OrderImportClientLayoutTest {
             "CLIENT_ID,ATTENTION,COMPANY_NAME,PHONE,EMAIL,ADDRESS1,ADDRESS2,CITY,STATE_CODE,ZIP,COUNTRY_CODE,WEIGHT,ONE_RATE,SHIPVIA_CD,THIRD_PARTY_ACC,GROUP_ID,ITEM_NUMBERS,QUANTITY,SHIP_DATE,HTSCode,THP_ADDRESS,THP_CITY,THP_STATE,THP_POSTAL,THP_COUNTRY",
             "POB250,3,WS Columbus Circle,6167723513,,10 Columbus Circle,Suite 114,New York,NY,10019,US,7,,U11,,A-WSH2609F,,,,,,,,,",
             "POB250,712,WS Sherway Grdns CAN,6167723513,,25 The West Mall,Space #1394,Toronto,ON,M9C1B8,CA,1,,U54,,B-WSH2609F,MARKETING MATERIAL,1,,4911.1,,,,,",
-            "POB250,B2B Team ,Sales,6167723513,,77 Grandview Drive ,,Ridgefield,CT,06877,US,1,,U11,A12345,D-WSH2609F,,,2026-10-01,,,,,,");
+            "POB250,B2B Team ,Sales,6167723513,,77 Grandview Drive ,,Ridgefield,CT,06877,US,1,,U11,A12345,D-WSH2609F,,,2026-10-01,,,,,06877,US");
 
     private static OrderImportPreviewDTO preview(String csv) {
         return new OrderImportServiceImpl().preview("WSH2609F.csv",
@@ -57,6 +57,8 @@ class OrderImportClientLayoutTest {
         OrderImportRowDTO thirdParty = rows.get(2);
         assertEquals("A12345", thirdParty.getAccountNumber());
         assertEquals("THIRD_PARTY", thirdParty.getBillTo());
+        assertEquals("06877", thirdParty.getThirdPartyPostalCode(), "THP_POSTAL is the payer's billing postcode");
+        assertEquals("US", thirdParty.getThirdPartyCountry(), "THP_COUNTRY is the payer's country");
 
         assertEquals("CLIENT_ID", p.getFileColumns().get(0));
         assertEquals(25, p.getFileColumns().size());

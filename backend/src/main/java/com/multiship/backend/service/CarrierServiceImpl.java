@@ -4723,7 +4723,8 @@ public class CarrierServiceImpl implements CarrierService {
     /** Account-number formats a third-party payer must match (same rules as the carrier-account drawer). */
     private static final Map<String, java.util.regex.Pattern> THIRD_PARTY_ACCOUNT_FORMATS = Map.of(
             "UPS", java.util.regex.Pattern.compile("^[A-Za-z0-9]{6,10}$"),
-            "FEDEX", java.util.regex.Pattern.compile("^\\d{9}$"));
+            "FEDEX", java.util.regex.Pattern.compile("^\\d{9}$"),
+            "DHL", java.util.regex.Pattern.compile("^\\d{9,12}$"));
 
     /**
      * Normalises the third-party freight payer on the request (billTo → SENDER /

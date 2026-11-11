@@ -60,6 +60,11 @@ export interface RateShopResponse {
 export interface RateShopShipment {
   carrierCode?: string
   accountNumber?: string
+  /** Third-party freight billing — quotes come back on the payer's tariff. */
+  billTo?: 'SENDER' | 'THIRD_PARTY'
+  thirdPartyAccount?: string
+  thirdPartyPostalCode?: string
+  thirdPartyCountry?: string
   serviceType?: string
   packageType?: string
   weight: number

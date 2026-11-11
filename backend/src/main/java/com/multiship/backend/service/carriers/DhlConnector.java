@@ -1258,6 +1258,16 @@ public class DhlConnector implements CarrierConnector {
      * {@code customerDetails} holds shipper/receiver and {@code accounts}
      * holds the billing party.
      */
+    /** DHL accounts[]: the shipper always, plus a payer entry when freight is billed to a third party. */
+    static List<Map<String, Object>> buildAccounts(ShipmentRequestDTO request) {
+        List<Map<String, Object>> accounts = new ArrayList<>();
+        accounts.add(Map.of("typeCode", "shipper", "number", firstNonBlank(request.getAccountNumber(), "")));
+        if ("THIRD_PARTY".equalsIgnoreCase(request.getBillTo()) && StringUtils.hasText(request.getThirdPartyAccount())) {
+            accounts.add(Map.of("typeCode", "payer", "number", request.getThirdPartyAccount().trim()));
+        }
+        return accounts;
+    }
+
     Map<String, Object> buildShipmentPayload(ShipmentRequestDTO request) {
         boolean isReturn = Boolean.TRUE.equals(request.getIsReturn());
         Map<String, Object> payload = new LinkedHashMap<>();
@@ -1288,9 +1298,7 @@ public class DhlConnector implements CarrierConnector {
                 "imageOptions", List.of(Map.of(
                         "typeCode", "label",
                         "templateName", zpl ? "ECOM26_84_001" : "ECOM26_84_A4_001"))));
-        payload.put("accounts", List.of(Map.of(
-                "typeCode", "shipper",
-                "number", firstNonBlank(request.getAccountNumber(), ""))));
+        payload.put("accounts", buildAccounts(request));
 
         payload.put("customerDetails", Map.of(
                 "shipperDetails", buildParty(
@@ -1894,9 +1902,7 @@ public class DhlConnector implements CarrierConnector {
                         request.getRecipientCity(), request.getRecipientState(),
                         request.getRecipientPostalCode(), request.getRecipientCountryCode(),
                         request.getRecipientResidential())));
-        payload.put("accounts", List.of(Map.of(
-                "typeCode", "shipper",
-                "number", firstNonBlank(request.getAccountNumber(), ""))));
+        payload.put("accounts", buildAccounts(request));
         payload.put("plannedShippingDateAndTime", plannedShipDate(request.getShipperTimezone()));
         payload.put("unitOfMeasurement",
                 "KG".equalsIgnoreCase(request.getWeightUnit()) ? "metric" : "imperial");
