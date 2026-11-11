@@ -48,6 +48,8 @@ export interface ShippingDetails {
   shipViaDescription: string | null
   /** 'Y' on international shipments — drives the commercial-invoice icon. */
   intlYn?: string | null
+  /** Who paid the shipping charges: SENDER (default) or THIRD_PARTY. */
+  billTo?: string | null
 }
 
 export interface LabelDetails {
@@ -166,8 +168,10 @@ export interface OrderWithLines {
   orderStatus: string | null
   /** Who paid the shipping charges: SENDER (default) or THIRD_PARTY. */
   billTo?: string | null
-  /** The third party's carrier account, masked by the server (****1234). */
+  /** The third party's carrier account (full; mask it for display). */
   thirdPartyAccount?: string | null
+  thirdPartyPostalCode?: string | null
+  thirdPartyCountry?: string | null
   /** Display form of the order number (e.g. MAN-prefixed for manual orders). */
   displayOrderNo?: string | null
   custNo?: string | null

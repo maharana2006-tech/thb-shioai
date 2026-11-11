@@ -870,7 +870,7 @@ function UploadStep({
             <FiDownload className="h-3.5 w-3.5" /> Template
           </p>
           <p className="mt-1.5 text-[11.5px] text-[#6b5c42]">
-            One row per shipment: CLIENT_ID, ATTENTION, COMPANY_NAME, … SHIPVIA_CD, GROUP_ID. The Excel template has dropdowns for the client and its ship via codes.
+            One row per shipment: CLIENT_ID, ATTENTION, COMPANY_NAME, … SHIPVIA_CD, GROUP_ID. To bill shipping charges to a third party fill THIRD_PARTY_ACC, plus THP_POSTAL and THP_COUNTRY for UPS. The Excel template has dropdowns for the client and its ship via codes.
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <button type="button" onClick={onDownloadXlsx} disabled={downloadingXlsx} className={GHOST_BTN}>

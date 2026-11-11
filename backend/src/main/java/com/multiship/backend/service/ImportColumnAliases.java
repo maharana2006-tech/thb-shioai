@@ -40,6 +40,10 @@ public final class ImportColumnAliases {
             Map.entry("third_party_acc", "accountNumber"),
             Map.entry("third_party_zip", "thirdPartyPostalCode"),
             Map.entry("third_party_country", "thirdPartyCountry"),
+            // The payer's billing postcode + country: UPS verifies them on a
+            // third-party label, so the client layout's THP_* address carries them.
+            Map.entry("thp_postal", "thirdPartyPostalCode"),
+            Map.entry("thp_country", "thirdPartyCountry"),
             // Rows sharing a GROUP_ID go to different stores: it's a reference, not one shipment.
             Map.entry("group_id", "reference"),
             Map.entry("item_numbers", "itemDescription"),
@@ -52,9 +56,7 @@ public final class ImportColumnAliases {
             "ship_date", "SHIP_DATE isn't used yet — labels are dated the day they're generated",
             "thp_address", "THP_ADDRESS (third-party billing address) isn't used yet",
             "thp_city", "THP_CITY (third-party billing address) isn't used yet",
-            "thp_state", "THP_STATE (third-party billing address) isn't used yet",
-            "thp_postal", "THP_POSTAL (third-party billing address) isn't used yet",
-            "thp_country", "THP_COUNTRY (third-party billing address) isn't used yet");
+            "thp_state", "THP_STATE (third-party billing address) isn't used yet");
 
     /** Our field for a column header in either layout; null when it's neither (a custom field). */
     public static String fieldOf(String header) {

@@ -780,7 +780,9 @@ public class OrderServiceImpl implements OrderService {
                 .orderChannel(entity.getOrderChannel())
                 .ndsResolvedShipviaCd(entity.getNdsResolvedShipviaCd())
                 .billTo(entity.getBillTo())
-                .thirdPartyAccount(entity.getThirdPartyAccount() == null ? null : CarrierServiceImpl.maskAccount(entity.getThirdPartyAccount()))
+                .thirdPartyAccount(entity.getThirdPartyAccount())
+                .thirdPartyPostalCode(entity.getThirdPartyPostalCode())
+                .thirdPartyCountry(entity.getThirdPartyCountry())
                 .shipName(entity.getShipName())
                 .shipAttn(entity.getShipAttn())
                 .shipAddr1(entity.getShipAddr1())
@@ -980,6 +982,7 @@ public class OrderServiceImpl implements OrderService {
                         // icon; blank on rows saved before this column
                         // was added, which is safe (icon just hides).
                         .intlYn(row.length > 24 ? (String) row[24] : null)
+                        .billTo(row.length > 28 ? (String) row[28] : null)
                         .build())
                 .labelDetails(OrderResponseDTO.LabelDetails.builder()
                         .status(row[11] != null ? (String) row[11] : "PENDING")
