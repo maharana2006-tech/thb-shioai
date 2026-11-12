@@ -62,7 +62,7 @@ class ExternalV2FailureInjectionTest {
         idempotency = mock(IdempotencyService.class);
         controller = new ExternalV2Controller(
                 externalApiService, rateShopService, pickupService, manifestService,
-                landedCostService, idempotency);
+                landedCostService, idempotency, mock(jakarta.validation.Validator.class));
     }
 
     @Test

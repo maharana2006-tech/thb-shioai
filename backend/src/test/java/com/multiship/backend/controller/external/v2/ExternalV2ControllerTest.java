@@ -64,7 +64,7 @@ class ExternalV2ControllerTest {
         controller = new ExternalV2Controller(
                 mock(ExternalApiService.class),
                 rateShopService, pickupService, manifestService, landedCostService,
-                idempotency);
+                idempotency, mock(jakarta.validation.Validator.class));
     }
 
     @Test

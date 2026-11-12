@@ -53,6 +53,7 @@ import java.util.Map;
 @RequestMapping("/api/v2/external")
 // Sprint 49 Tier 1: @CrossOrigin("*") removed — SecurityConfig applies restrictive CORS globally.
 @RequiredArgsConstructor
+@lombok.extern.slf4j.Slf4j
 @PreAuthorize("hasAnyRole('API', 'ADMIN')")
 public class ExternalV2Controller {
 
@@ -68,6 +69,8 @@ public class ExternalV2Controller {
      * creating twice. Degrades gracefully when Redis is absent.
      */
     private final IdempotencyService idempotency;
+    /** Per-item validation for /shipments/batch so one bad item fails only itself. */
+    private final jakarta.validation.Validator validator;
 
     // ================================================================
     // Core parcel ops (mirrors v1 with idempotency-key echo)
@@ -141,6 +144,75 @@ public class ExternalV2Controller {
                         return this.<ExternalShipmentResponse>error(e);
                     }
                 }, true);
+    }
+
+    @Operation(summary = "Create up to 50 shipments in one call (synchronous, per-item results)",
+            description = "Each item is the same body as POST /shipments and is processed in order. "
+                    + "A failed item never fails the batch — check results[i].status. "
+                    + "Idempotency-Key covers the whole batch.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Batch processed — see per-item status"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "VALIDATION_ERROR — empty batch or more than 50 items"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "UNAUTHORIZED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "FORBIDDEN — API key lacks the SHIPMENTS scope"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "IDEMPOTENCY_IN_PROGRESS"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "429", description = "API_KEY_RATE_LIMITED / TENANT_RATE_LIMITED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503", description = "IDEMPOTENCY_UNAVAILABLE")
+    })
+    @PostMapping("/shipments/batch")
+    @RequiresScope(ApiKeyScope.SHIPMENTS)
+    public ResponseEntity<ApiResponse<ExternalBatchShipmentResponse>> createBatch(
+            @jakarta.validation.Valid @RequestBody ExternalBatchShipmentRequest req,
+            @AuthenticationPrincipal ApiKeyPrincipal caller,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
+        ApiKeyPrincipal api = requireApi(caller);
+        // Money-touching like the single create: fail closed on a Redis outage
+        // so a retried batch can't book every label twice.
+        return idempotency.executeOrReplay(api.getApiKeyId(), idempotencyKey,
+                new TypeReference<ApiResponse<ExternalBatchShipmentResponse>>() {},
+                () -> {
+                    java.util.List<ExternalShipmentRequest> items = req.getShipments();
+                    java.util.List<ExternalBatchShipmentResponse.Item> results = new java.util.ArrayList<>(items.size());
+                    int ok = 0;
+                    for (int i = 0; i < items.size(); i++) {
+                        ExternalBatchShipmentResponse.Item item = createBatchItem(api, i, items.get(i));
+                        if ("SUCCESS".equals(item.getStatus())) ok++;
+                        results.add(item);
+                    }
+                    ExternalBatchShipmentResponse body = ExternalBatchShipmentResponse.builder()
+                            .total(items.size()).succeeded(ok).failed(items.size() - ok)
+                            .results(results).build();
+                    return ok("Batch processed: " + ok + " of " + items.size() + " shipments created.", body);
+                }, true);
+    }
+
+    /** One batch item, isolated — validation, carrier and unexpected errors land on the item. */
+    private ExternalBatchShipmentResponse.Item createBatchItem(ApiKeyPrincipal api, int index, ExternalShipmentRequest item) {
+        ExternalBatchShipmentResponse.Item.ItemBuilder out = ExternalBatchShipmentResponse.Item.builder()
+                .index(index).reference(item == null ? null : item.getReference());
+        if (item == null) {
+            return out.status("ERROR").code(400).errorCode(ErrorCode.VALIDATION_ERROR.name())
+                    .message("Shipment item is null.").build();
+        }
+        java.util.Set<jakarta.validation.ConstraintViolation<ExternalShipmentRequest>> violations = validator.validate(item);
+        if (!violations.isEmpty()) {
+            String msg = violations.stream()
+                    .map(v -> v.getPropertyPath() + " " + v.getMessage())
+                    .sorted().collect(java.util.stream.Collectors.joining("; "));
+            return out.status("ERROR").code(400).errorCode(ErrorCode.VALIDATION_ERROR.name()).message(msg).build();
+        }
+        try {
+            ExternalShipmentResponse res = externalApiService.createShipment(api, item);
+            return out.status("SUCCESS").code(201)
+                    .message("Shipment #" + res.getShipmentId() + " created.").shipment(res).build();
+        } catch (ExternalApiException e) {
+            return out.status("ERROR").code(e.getStatus()).errorCode(e.getErrorCode().name())
+                    .message(e.getMessage()).build();
+        } catch (RuntimeException e) {
+            log.error("Batch item {} failed unexpectedly", index, e);
+            return out.status("ERROR").code(500).errorCode(ErrorCode.INTERNAL_ERROR.name())
+                    .message("Unexpected error creating this shipment.").build();
+        }
     }
 
     @Operation(summary = "Get tracking for a shipment")
