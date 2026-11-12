@@ -5632,7 +5632,18 @@ public class OrderImportServiceImpl implements OrderImportService {
                         "itemUnitValue", "45.00", "hsCode", "5007.20.00", "countryOfOrigin", "IT"),
                 sampleRow("orderRef", "EXAMPLE-1002",
                         "itemDescription", "Cotton scarf", "itemSku", "SKU-101", "itemQuantity", "3",
-                        "itemUnitValue", "12.00", "hsCode", "6214.90.00", "countryOfOrigin", "IN"));
+                        "itemUnitValue", "12.00", "hsCode", "6214.90.00", "countryOfOrigin", "IN"),
+                // Freight billed to a third party: the payer's account goes in the account
+                // column (THIRD_PARTY_ACC in the client layout); UPS also needs the payer's
+                // postcode and country. Fails on a USPS ship-via by design.
+                sampleRow("orderRef", "EXAMPLE-1003", "clientCode", clientCode, "billTo", "THIRD_PARTY",
+                        "recipientName", "EXAMPLE ROW - Sam Patel", "recipientPhone", "3125550199",
+                        "addressLine1", "233 S Wacker Dr", "city", "Chicago", "state", "IL",
+                        "postalCode", "60606", "countryCode", "US",
+                        "serviceType", svc, "accountNumber", "ABC123",
+                        "thirdPartyPostalCode", "60606", "thirdPartyCountry", "US",
+                        "weight", "1.5", "weightUnit", "LB", "length", "10", "width", "8", "height", "6", "dimUnit", "IN",
+                        "currency", "USD", "reference", "EXAMPLE-1003"));
     }
 
     /**

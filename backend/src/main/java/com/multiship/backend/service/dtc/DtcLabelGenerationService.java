@@ -302,6 +302,21 @@ public class DtcLabelGenerationService {
     }
 
     /**
+     * Oracle THIRD_PARTY_ACC → bill freight to that account. UPS also needs the
+     * payer's postcode/country, which Oracle does not carry: fall back to the
+     * third-party address stored on the client's carrier account. When that is
+     * blank too, the row fails UPS validation with the usual message and the
+     * operator fills it on the Fix page.
+     */
+    static void applyThirdPartyBilling(ManualShipmentRequest req, DtcOrder row, CarrierAccountRef account) {
+        if (!StringUtils.hasText(row.getThirdPartyAccount())) return;
+        req.setBillTo("THIRD_PARTY");
+        req.setThirdPartyAccount(row.getThirdPartyAccount().trim());
+        req.setThirdPartyPostalCode(account.getThirdPartyPostcode());
+        req.setThirdPartyCountry(account.getThirdPartyCountry());
+    }
+
+    /**
      * Row → request. Throws {@link IllegalArgumentException} with an
      * operator-actionable message when the row can't be honoured — the
      * caller stamps FAILED with that message.
@@ -328,6 +343,7 @@ public class DtcLabelGenerationService {
         // lookup in CarrierServiceImpl picks the first matching row regardless
         // of owner, failing the ownership gate with "belongs to client X".
         req.setAccountId(account.getId());
+        applyThirdPartyBilling(req, row, account);
         req.setIsReturn(false);
         req.setWeight(row.getWeight() != null && row.getWeight().signum() > 0
                 ? row.getWeight() : DEFAULT_WEIGHT_LB);
