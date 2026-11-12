@@ -3476,7 +3476,9 @@ public class CarrierServiceImpl implements CarrierService {
                                 .note(req.getNote())
                                 .carrierDisplay(toNdsCarrier(carrier))
                                 .serviceDescription(service != null ? service.getName() : null)
-                                .thirdPartyAccount(req.getDutiesAccount())
+                                // NDS THIRD_PARTY: freight payer when billed to a third party, else the duties account.
+                                .thirdPartyAccount("THIRD_PARTY".equals(req.getBillTo()) && StringUtils.hasText(req.getThirdPartyAccount())
+                                        ? req.getThirdPartyAccount() : req.getDutiesAccount())
                                 .shipTo(shipTo)
                                 .batchId(req.getNdsBatchId())
                                 .packages(ndsPkgs)

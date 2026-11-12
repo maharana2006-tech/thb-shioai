@@ -76,6 +76,8 @@ class OrderImportClientLayoutTest {
     void theClientLayoutTemplatesUseTheClientsColumnNamesInItsOrder() throws Exception {
         String csv = new String(new OrderImportServiceImpl().clientLayoutCsvTemplate(), StandardCharsets.UTF_8);
         assertEquals(String.join(",", ImportColumnAliases.CLIENT_LAYOUT), csv.lines().findFirst().orElse(""));
+        assertTrue(csv.lines().anyMatch(l -> l.contains("ABC123") && l.contains("60606,US")),
+                "a sample row shows third-party billing: THIRD_PARTY_ACC plus THP_POSTAL/THP_COUNTRY");
 
         byte[] xlsx = OrderImportTemplateBuilder.build(ImportColumnAliases.clientLayoutKeys(),
                 ImportColumnAliases.clientHeaderNames(), List.of(), List.of(), Map.of(), List.of(), List.of(), Map.of());
