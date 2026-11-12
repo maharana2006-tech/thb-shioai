@@ -1536,6 +1536,7 @@ export default function OrdersWorkspace() {
     if (!rows.length) return hidden
     if (rows.every((r) => !r.orderDetails.refOrderNumber)) hidden.push('refOrderNumber')
     if (rows.every((r) => r.orderDetails.batchId == null)) hidden.push('batchId')
+    if (rows.every((r) => r.shippingDetails.billTo !== 'THIRD_PARTY')) hidden.push('billTo')
     return hidden
   }, [rows])
 
@@ -1977,6 +1978,23 @@ export default function OrdersWorkspace() {
         },
       })
     }
+
+    defs.push({
+      id: 'billTo',
+      accessorFn: (o) => o.shippingDetails.billTo ?? 'SENDER',
+      header: 'Billed to',
+      enableSorting: false,
+      size: 110,
+      cell: ({ row }) => (
+        <span className="text-[13.5px] text-[#3f3527]">
+          {row.original.shippingDetails.billTo === 'THIRD_PARTY' ? 'Third party' : 'Sender'}
+        </span>
+      ),
+      meta: {
+        headerLabel: 'Billed to',
+        exportValue: (o: Order) => (o.shippingDetails.billTo === 'THIRD_PARTY' ? 'Third party' : 'Sender'),
+      },
+    })
 
     // PR #555 — dedicated Failure-reason column removed. On ERROR rows the
     // Status column already renders an IssuesInfoIcon that shows the

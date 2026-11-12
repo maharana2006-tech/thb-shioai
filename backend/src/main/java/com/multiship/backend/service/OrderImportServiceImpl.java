@@ -1256,6 +1256,16 @@ public class OrderImportServiceImpl implements OrderImportService {
         // carrier + service it means. Runs before the catalog lookups below so
         // a mapped row arrives there already carrying the carrier's wire code.
         applyShipViaMappings(rows);
+        // The rule just filled carrierCode on rows whose file left it blank;
+        // callers that ran validateRow before this point missed the
+        // carrier-dependent third-party checks, so run them again here.
+        for (OrderImportRowDTO row : rows) {
+            List<String> late = thirdPartyBillingErrors(row);
+            if (late.isEmpty()) continue;
+            List<String> errors = new ArrayList<>(row.getErrors() == null ? List.of() : row.getErrors());
+            for (String e : late) if (!errors.contains(e)) errors.add(e);
+            row.setErrors(errors);
+        }
         if (shippingServiceRepository == null || rows.isEmpty()) return;
         List<com.multiship.backend.model.ShippingService> services =
                 shippingServiceRepository.findAllByOrderByCarrierAscSortOrderAsc();
@@ -5622,7 +5632,18 @@ public class OrderImportServiceImpl implements OrderImportService {
                         "itemUnitValue", "45.00", "hsCode", "5007.20.00", "countryOfOrigin", "IT"),
                 sampleRow("orderRef", "EXAMPLE-1002",
                         "itemDescription", "Cotton scarf", "itemSku", "SKU-101", "itemQuantity", "3",
-                        "itemUnitValue", "12.00", "hsCode", "6214.90.00", "countryOfOrigin", "IN"));
+                        "itemUnitValue", "12.00", "hsCode", "6214.90.00", "countryOfOrigin", "IN"),
+                // Freight billed to a third party: the payer's account goes in the account
+                // column (THIRD_PARTY_ACC in the client layout); UPS also needs the payer's
+                // postcode and country. Fails on a USPS ship-via by design.
+                sampleRow("orderRef", "EXAMPLE-1003", "clientCode", clientCode, "billTo", "THIRD_PARTY",
+                        "recipientName", "EXAMPLE ROW - Sam Patel", "recipientPhone", "3125550199",
+                        "addressLine1", "233 S Wacker Dr", "city", "Chicago", "state", "IL",
+                        "postalCode", "60606", "countryCode", "US",
+                        "serviceType", svc, "accountNumber", "ABC123",
+                        "thirdPartyPostalCode", "60606", "thirdPartyCountry", "US",
+                        "weight", "1.5", "weightUnit", "LB", "length", "10", "width", "8", "height", "6", "dimUnit", "IN",
+                        "currency", "USD", "reference", "EXAMPLE-1003"));
     }
 
     /**
@@ -6175,6 +6196,40 @@ public class OrderImportServiceImpl implements OrderImportService {
     static final java.util.regex.Pattern PO_BOX = java.util.regex.Pattern.compile(
             "\\bp\\.?\\s*o\\.?\\s*box\\b|\\bpost\\s+office\\s+box\\b", java.util.regex.Pattern.CASE_INSENSITIVE);
 
+    /**
+     * Carrier-dependent third-party billing checks. Called from
+     * {@link #validateRow} and again from validateReferences once the ship-via
+     * rule has filled {@code carrierCode} on rows whose file left it blank.
+     */
+    static List<String> thirdPartyBillingErrors(OrderImportRowDTO row) {
+        List<String> errors = new ArrayList<>();
+        String billTo = row.getBillTo() == null ? "" : row.getBillTo().trim();
+        if ("THIRD_PARTY".equalsIgnoreCase(billTo)
+                && StringUtils.hasText(row.getAccountNumber())
+                && StringUtils.hasText(row.getCarrierCode())) {
+            String cc = row.getCarrierCode().trim().toUpperCase(Locale.ROOT);
+            java.util.regex.Pattern fmt = ACCOUNT_FORMATS.get(cc);
+            if (fmt != null && !fmt.matcher(row.getAccountNumber().trim()).matches()) {
+                errors.add("accountNumber '" + row.getAccountNumber() + "' is not a valid " + cc
+                        + " account (" + ACCOUNT_FORMAT_HINT.getOrDefault(cc, "check the format") + ")");
+            }
+            if ("USPS".equals(cc)) {
+                errors.add("billTo=THIRD_PARTY is not available for USPS (postage is prepaid) — use SENDER");
+            }
+            if ("UPS".equals(cc) && !StringUtils.hasText(row.getThirdPartyPostalCode())) {
+                errors.add("thirdPartyPostalCode is required for UPS third-party billing");
+            }
+            if ("UPS".equals(cc) && !StringUtils.hasText(row.getThirdPartyCountry())) {
+                errors.add("thirdPartyCountry is required for UPS third-party billing");
+            }
+        }
+        if (StringUtils.hasText(row.getThirdPartyCountry())
+                && !row.getThirdPartyCountry().trim().matches("[A-Za-z]{2}")) {
+            errors.add("thirdPartyCountry '" + row.getThirdPartyCountry() + "' must be a 2-letter ISO code");
+        }
+        return errors;
+    }
+
     public static List<String> validateRow(OrderImportRowDTO row) {
         List<String> errors = new ArrayList<>();
         // Sprint 51 — clientCode is the owning-client identifier; a blank one
@@ -6303,30 +6358,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (StringUtils.hasText(row.getReference()) && !REFERENCE_RE.matcher(row.getReference().trim()).matches()) {
             errors.add("reference '" + row.getReference() + "' has invalid characters");
         }
-        // THIRD_PARTY account numbers must match the carrier's account format.
-        if ("THIRD_PARTY".equalsIgnoreCase(billTo == null ? "" : billTo.trim())
-                && StringUtils.hasText(row.getAccountNumber())
-                && StringUtils.hasText(row.getCarrierCode())) {
-            String cc = row.getCarrierCode().trim().toUpperCase(Locale.ROOT);
-            java.util.regex.Pattern fmt = ACCOUNT_FORMATS.get(cc);
-            if (fmt != null && !fmt.matcher(row.getAccountNumber().trim()).matches()) {
-                errors.add("accountNumber '" + row.getAccountNumber() + "' is not a valid " + cc
-                        + " account (" + ACCOUNT_FORMAT_HINT.getOrDefault(cc, "check the format") + ")");
-            }
-            if ("USPS".equals(cc)) {
-                errors.add("billTo=THIRD_PARTY is not available for USPS (postage is prepaid) — use SENDER");
-            }
-            if ("UPS".equals(cc) && !StringUtils.hasText(row.getThirdPartyPostalCode())) {
-                errors.add("thirdPartyPostalCode is required for UPS third-party billing");
-            }
-            if ("UPS".equals(cc) && !StringUtils.hasText(row.getThirdPartyCountry())) {
-                errors.add("thirdPartyCountry is required for UPS third-party billing");
-            }
-        }
-        if (StringUtils.hasText(row.getThirdPartyCountry())
-                && !row.getThirdPartyCountry().trim().matches("[A-Za-z]{2}")) {
-            errors.add("thirdPartyCountry '" + row.getThirdPartyCountry() + "' must be a 2-letter ISO code");
-        }
+        errors.addAll(thirdPartyBillingErrors(row));
         // Length caps so oversized free-text can't slip through the import.
         if (row.getCity() != null && row.getCity().length() > MAX_TEXT_LEN)
             errors.add("city must be " + MAX_TEXT_LEN + " characters or fewer");

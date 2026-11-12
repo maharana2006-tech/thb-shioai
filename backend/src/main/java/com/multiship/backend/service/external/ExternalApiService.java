@@ -299,6 +299,10 @@ public class ExternalApiService {
         manual.setServiceId(serviceId);
         manual.setAccountId(accountId);
         manual.setAccountNumber(accountNumber);
+        manual.setBillTo(req.getBillTo());
+        manual.setThirdPartyAccount(req.getThirdPartyAccount());
+        manual.setThirdPartyPostalCode(req.getThirdPartyPostalCode());
+        manual.setThirdPartyCountry(req.getThirdPartyCountry());
         manual.setClientCode(clientCode);
         manual.setSource("API");
         // D2C/B2B channel: reject anything that isn't one of the two values

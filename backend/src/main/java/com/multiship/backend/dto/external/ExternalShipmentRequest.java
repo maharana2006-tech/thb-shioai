@@ -38,8 +38,17 @@ public class ExternalShipmentRequest {
     /** Optional explicit carrier (UPS/FEDEX/USPS) — overrides shipMethod resolution. */
     private String carrierCode;
 
-    /** Optional bill-to account override; defaults to the client's account for the carrier. */
+    /** Optional shipper account override; defaults to the client's account for the carrier. */
     private String accountNumber;
+
+    /** SENDER (default) or THIRD_PARTY: who pays the shipping charges. */
+    private String billTo;
+    /** Payer's carrier account when billTo=THIRD_PARTY (UPS, FedEx or DHL; not USPS). */
+    private String thirdPartyAccount;
+    /** Payer billing postcode; required for UPS third-party billing. */
+    private String thirdPartyPostalCode;
+    /** Payer ISO-2 country; required for UPS third-party billing. */
+    private String thirdPartyCountry;
 
     /**
      * Explicit ship-from warehouse code (must be attached to the client).

@@ -821,6 +821,16 @@ export function useNewShipmentModel() {
     shipment: {
       carrierCode: carrier || undefined,
       accountNumber: accountNumber || undefined,
+      // Third-party freight billing: rate on the payer's account so the
+      // quote matches what they will be charged.
+      ...(billTo === 'THIRD_PARTY' && thirdPartyAccount.trim()
+        ? {
+            billTo,
+            thirdPartyAccount: thirdPartyAccount.trim(),
+            thirdPartyPostalCode: thirdPartyPostalCode.trim() || undefined,
+            thirdPartyCountry: thirdPartyCountry || undefined,
+          }
+        : {}),
       // Sprint 51 rate-shop gap-fill — pre-fix the operator picked a
       // service level but rate-shop still fanned out across every service
       // in the account. Sending serviceType filters the fan-out so the
@@ -861,7 +871,8 @@ export function useNewShipmentModel() {
     // carrier so the picker can compare across the tenant's full inventory.
   }), [carrier, accountNumber, serviceId, services, packageChoice, weight, weightUnit,
         length, width, height, dimUnit, sender, recipient, declaredValue, currency,
-        signatureOption, insuredValue, dgBlock, isReturn, clientCode])
+        signatureOption, insuredValue, dgBlock, isReturn, clientCode,
+        billTo, thirdPartyAccount, thirdPartyPostalCode, thirdPartyCountry])
 
 
   /**
@@ -1141,6 +1152,14 @@ export function useNewShipmentModel() {
         // a required field and risked losing the RMA on a second save.
         if (o.returnReason) setReturnReason(o.returnReason)
         if (o.rmaNumber) setRmaNumber(o.rmaNumber)
+        // Keep the third-party payer on a reissue; without this the fixed
+        // label silently fell back to the shipper account.
+        if (o.billTo === 'THIRD_PARTY' && o.thirdPartyAccount) {
+          setBillTo('THIRD_PARTY')
+          setThirdPartyAccount(o.thirdPartyAccount)
+          setThirdPartyPostalCode(o.thirdPartyPostalCode ?? '')
+          setThirdPartyCountry(o.thirdPartyCountry ?? '')
+        }
         pendingFixRef.current = {
           serviceCode: o.shipviaCd,
           accountNumber: details.data.carrierAccount?.accountNumber ?? null,
@@ -1172,7 +1191,7 @@ export function useNewShipmentModel() {
       }
     })()
     return () => { cancelled = true }
-  }, [urlFixOrderNo, setAesCitation, setCarrier, setClientCode, setCurrency, setCustomFieldValues, setDeclaredValue, setDimUnit, setExportDeclarationReference, setFixChannel, setFtrExemption, setHeight, setIncoterms, setItems, setLength, setReasonForExport, setRecipient, setReference, setReturnReason, setRmaNumber, setSender, setWeight, setWeightUnit, setWidth])
+  }, [urlFixOrderNo, setAesCitation, setBillTo, setCarrier, setClientCode, setCurrency, setCustomFieldValues, setDeclaredValue, setDimUnit, setExportDeclarationReference, setFixChannel, setFtrExemption, setHeight, setIncoterms, setItems, setLength, setReasonForExport, setRecipient, setReference, setReturnReason, setRmaNumber, setSender, setThirdPartyAccount, setThirdPartyCountry, setThirdPartyPostalCode, setWeight, setWeightUnit, setWidth])
 
   // Apply the stashed service/account once the carrier's catalog is loaded.
   useEffect(() => {

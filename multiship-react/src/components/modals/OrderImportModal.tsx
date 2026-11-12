@@ -870,7 +870,7 @@ function UploadStep({
             <FiDownload className="h-3.5 w-3.5" /> Template
           </p>
           <p className="mt-1.5 text-[11.5px] text-[#6b5c42]">
-            One row per shipment: CLIENT_ID, ATTENTION, COMPANY_NAME, … SHIPVIA_CD, GROUP_ID. The Excel template has dropdowns for the client and its ship via codes.
+            One row per shipment: CLIENT_ID, ATTENTION, COMPANY_NAME, … SHIPVIA_CD, GROUP_ID. To bill shipping charges to a third party fill THIRD_PARTY_ACC, plus THP_POSTAL and THP_COUNTRY for UPS. The Excel template has dropdowns for the client and its ship via codes.
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <button type="button" onClick={onDownloadXlsx} disabled={downloadingXlsx} className={GHOST_BTN}>
@@ -957,11 +957,14 @@ function EditCell({
   readOnly = false,
   hint,
   field,
+  options,
 }: {
   value: string
   onCommit: (v: string) => void
   bad?: boolean
   mono?: boolean
+  /** Fixed choices — edits as a dropdown that commits on change. */
+  options?: string[]
   /** Hover text when the cell is fine — e.g. what a ship via code resolved to. */
   hint?: string | null
   /** Saved to Import history — shown as plain text, not editable here. */
@@ -1003,6 +1006,20 @@ function EditCell({
       >
         {shownValue(value) || <span className="text-[#cdbf9f]">—</span>}
       </span>
+    )
+  }
+  if (editing && options) {
+    return (
+      <select
+        autoFocus
+        value={options.includes(value) ? value : ''}
+        onChange={(e) => { setEditing(false); if (e.target.value !== value) onCommit(e.target.value) }}
+        onBlur={cancel}
+        className={`w-full rounded-[5px] border border-[#412d15] bg-white px-1 py-0.5 text-[11px] text-[#1f150c] outline-none ring-1 ring-[#412d15] ${mono ? 'font-mono' : ''}`}
+      >
+        {!options.includes(value) ? <option value="">—</option> : null}
+        {options.map((o) => <option key={o} value={o}>{o}</option>)}
+      </select>
     )
   }
   if (editing) {
@@ -1049,11 +1066,13 @@ type PreviewColumn = {
   upper?: boolean
   numeric?: boolean
   w?: string
+  /** Fixed choices: the cell edits as a dropdown instead of free text. */
+  options?: string[]
 }
 const PREVIEW_COLUMNS: PreviewColumn[] = [
   { key: 'orderRef', mono: true, w: 'w-24' },
   { key: 'clientCode', mono: true, upper: true, w: 'w-24' },
-  { key: 'billTo', mono: true, upper: true, w: 'w-24' },
+  { key: 'billTo', mono: true, upper: true, w: 'w-24', options: ['SENDER', 'THIRD_PARTY'] },
   { key: 'warehouseCode', mono: true, upper: true, w: 'w-24' },
   { key: 'recipientName', w: 'w-40' },
   { key: 'recipientCompany', w: 'w-40' },
@@ -1122,6 +1141,12 @@ const CARD_GROUPS: { title: string; keys: string[] }[] = [
   { title: 'Customs', keys: ['itemDescription', 'itemSku', 'itemQuantity', 'itemUnitValue', 'hsCode', 'countryOfOrigin'] },
 ]
 
+/** Payer address fields: only meaningful when Bill to is THIRD_PARTY, so the
+ *  detail card hides them otherwise (unless one carries an error to show). */
+const PAYER_KEYS = new Set(['thirdPartyPostalCode', 'thirdPartyCountry'])
+/** Bill-to fields copied by "Apply to all rows". */
+const BILL_TO_KEYS = ['billTo', 'accountNumber', 'thirdPartyPostalCode', 'thirdPartyCountry'] as const
+
 /** The error the importer raises for a ship via code no rule covers. */
 const UNMAPPED_SHIP_VIA = /serviceType '([^']+)' is (?:not mapped|mapped, but not)/
 
@@ -1162,6 +1187,10 @@ function PreviewStep({
   // list on the left, the selected order's editable fields on the right).
   const [view, setView] = useState<'table' | 'detail'>('table')
   const [selectedRowNo, setSelectedRowNo] = useState<number | null>(null)
+  // Opening the detail view pins the auto-picked row (first with errors):
+  // otherwise fixing that row's last error silently jumps the editor to the
+  // next broken row, and "Apply Bill to to all rows" would copy from the wrong one.
+  const autoPick = preview.rows.find((r) => (r.errors?.length ?? 0) > 0) ?? preview.rows[0]
   // A 1,000-order file is 2,484 rows: let the reviewer narrow to what needs a look.
   const [rowFilter, setRowFilter] = useState<'all' | 'errors' | 'warnings'>('all')
   const errorRowCount = preview.rows.filter((r) => (r.errors?.length ?? 0) > 0).length
@@ -1194,6 +1223,7 @@ function PreviewStep({
         mono={col.mono}
         errors={errs}
         field={col.key}
+        options={col.options}
         hint={showShipVia ? (shipViaHint(r.shipViaNote) ?? undefined) : undefined}
         readOnly={savedSet.has(r.rowNumber)}
       />
@@ -1224,7 +1254,7 @@ function PreviewStep({
             <button
               key={v}
               type="button"
-              onClick={() => setView(v)}
+              onClick={() => { setView(v); if (v === 'detail' && selectedRowNo == null && autoPick) setSelectedRowNo(autoPick.rowNumber) }}
               className={`px-2.5 py-1 text-[10.5px] font-semibold capitalize transition ${
                 view === v ? 'bg-[#1f150c] text-[#f4eede]' : 'bg-white text-[#5a4526] hover:bg-[#faf7f0]'
               }`}
@@ -1432,6 +1462,22 @@ function PreviewStep({
                     {selected.clientCode ? (
                       <span className="rounded bg-[#faf7f0] px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[#5a4526]">{selected.clientCode}</span>
                     ) : null}
+                    {!savedSet.has(selected.rowNumber) && preview.rows.some((r) => r.rowNumber !== selected.rowNumber && !savedSet.has(r.rowNumber)) ? (
+                      <button
+                        type="button"
+                        title="Copy this row's Bill to, account, payer postcode and country to every other unsaved row"
+                        onClick={() => {
+                          // ponytail: one PUT per row (each re-validates the upload); a bulk endpoint if files grow past a few hundred rows.
+                          const patch = Object.fromEntries(BILL_TO_KEYS.map((k) => [k, selected[k] ?? null])) as Partial<OrderImportRow>
+                          preview.rows
+                            .filter((r) => r.rowNumber !== selected.rowNumber && !savedSet.has(r.rowNumber))
+                            .forEach((r) => onEdit(r.rowNumber, patch))
+                        }}
+                        className="rounded-md border border-[#e6dcc6] bg-white px-2 py-0.5 text-[10px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]"
+                      >
+                        Apply Bill to to all rows
+                      </button>
+                    ) : null}
                     <span className="ml-auto">
                       {savedSet.has(selected.rowNumber) ? (
                         <SavedChip />
@@ -1469,6 +1515,7 @@ function PreviewStep({
                             const col = COL_BY_KEY[k]
                             if (!col) return null
                             const fe = byField[k]
+                            if (PAYER_KEYS.has(k) && selected.billTo !== 'THIRD_PARTY' && !fe?.length) return null
                             return (
                               <div key={k} className="grid grid-cols-[120px_minmax(0,1fr)] items-start gap-2">
                                 <span className="pt-1 text-[9.5px] uppercase tracking-[0.04em] text-[#a1906d]">{labelOfField(k)}</span>

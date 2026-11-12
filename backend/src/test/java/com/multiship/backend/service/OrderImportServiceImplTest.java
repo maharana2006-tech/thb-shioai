@@ -336,6 +336,17 @@ class OrderImportServiceImplTest {
     }
 
     @Test
+    void thirdPartyBillingErrorsNeedTheCarrier_soTheyRerunAfterShipViaMapping() {
+        OrderImportRowDTO.OrderImportRowDTOBuilder base = OrderImportRowDTO.builder()
+                .billTo("THIRD_PARTY").accountNumber("ABC123");
+        assertTrue(OrderImportServiceImpl.thirdPartyBillingErrors(base.build()).isEmpty(),
+                "no carrier yet (file left carrierCode blank): nothing to check");
+        assertTrue(OrderImportServiceImpl.thirdPartyBillingErrors(base.carrierCode("USPS").build())
+                .stream().anyMatch(e -> e.contains("not available for USPS")));
+        assertEquals(2, OrderImportServiceImpl.thirdPartyBillingErrors(base.carrierCode("UPS").build()).size());
+    }
+
+    @Test
     void validateRowFlagsAllRequiredFieldsIndividually() {
         // Required set: clientCode, recipientName, recipientPhone, addressLine1,
         // city, postalCode, countryCode, weight (>0), weightUnit = 9 errors.

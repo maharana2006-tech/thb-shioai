@@ -3476,7 +3476,9 @@ public class CarrierServiceImpl implements CarrierService {
                                 .note(req.getNote())
                                 .carrierDisplay(toNdsCarrier(carrier))
                                 .serviceDescription(service != null ? service.getName() : null)
-                                .thirdPartyAccount(req.getDutiesAccount())
+                                // NDS THIRD_PARTY: freight payer when billed to a third party, else the duties account.
+                                .thirdPartyAccount("THIRD_PARTY".equals(req.getBillTo()) && StringUtils.hasText(req.getThirdPartyAccount())
+                                        ? req.getThirdPartyAccount() : req.getDutiesAccount())
                                 .shipTo(shipTo)
                                 .batchId(req.getNdsBatchId())
                                 .packages(ndsPkgs)
@@ -4723,7 +4725,8 @@ public class CarrierServiceImpl implements CarrierService {
     /** Account-number formats a third-party payer must match (same rules as the carrier-account drawer). */
     private static final Map<String, java.util.regex.Pattern> THIRD_PARTY_ACCOUNT_FORMATS = Map.of(
             "UPS", java.util.regex.Pattern.compile("^[A-Za-z0-9]{6,10}$"),
-            "FEDEX", java.util.regex.Pattern.compile("^\\d{9}$"));
+            "FEDEX", java.util.regex.Pattern.compile("^\\d{9}$"),
+            "DHL", java.util.regex.Pattern.compile("^\\d{9,12}$"));
 
     /**
      * Normalises the third-party freight payer on the request (billTo → SENDER /

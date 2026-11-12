@@ -28,8 +28,10 @@ public class OrderWithLinesDTO {
     private String ndsResolvedShipviaCd;
     /** Who paid the shipping charges: SENDER or THIRD_PARTY. */
     private String billTo;
-    /** Payer account, masked (****1234). */
+    /** Payer's carrier account, full (like carrierAccount.accountNumber); the UI masks it for display. */
     private String thirdPartyAccount;
+    private String thirdPartyPostalCode;
+    private String thirdPartyCountry;
     private String shipName;
     private String shipAttn;
     private String shipAddr1;
