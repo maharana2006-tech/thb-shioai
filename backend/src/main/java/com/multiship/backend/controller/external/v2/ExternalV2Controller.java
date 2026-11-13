@@ -71,6 +71,9 @@ public class ExternalV2Controller {
     private final IdempotencyService idempotency;
     /** Per-item validation for /shipments/batch so one bad item fails only itself. */
     private final jakarta.validation.Validator validator;
+    /** Advisory rule + AI pre-label validation. Optional so slice tests still wire. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.external.ShipmentAiValidator aiValidator;
 
     // ================================================================
     // Core parcel ops (mirrors v1 with idempotency-key echo)
@@ -134,7 +137,10 @@ public class ExternalV2Controller {
                 new TypeReference<ApiResponse<ExternalShipmentResponse>>() {},
                 () -> {
                     try {
+                        java.util.List<java.util.Map<String, Object>> warnings =
+                                aiValidator == null ? java.util.List.of() : aiValidator.validate(req);
                         ExternalShipmentResponse res = externalApiService.createShipment(api, req);
+                        if (!warnings.isEmpty()) res.setValidationWarnings(warnings);
                         return ResponseEntity.status(201).body(
                                 ApiResponse.<ExternalShipmentResponse>builder()
                                         .status("SUCCESS").code(201).timestamp(LocalDateTime.now())
@@ -174,8 +180,15 @@ public class ExternalV2Controller {
                     java.util.List<ExternalShipmentRequest> items = req.getShipments();
                     java.util.List<ExternalBatchShipmentResponse.Item> results = new java.util.ArrayList<>(items.size());
                     int ok = 0;
+                    // Advisory validation runs for all items in parallel up
+                    // front; labels are still booked in order below.
+                    java.util.List<java.util.List<java.util.Map<String, Object>>> warnings =
+                            aiValidator == null ? null : aiValidator.validateAll(items);
                     for (int i = 0; i < items.size(); i++) {
                         ExternalBatchShipmentResponse.Item item = createBatchItem(api, i, items.get(i));
+                        if (warnings != null && !warnings.get(i).isEmpty()) {
+                            item.setValidationWarnings(warnings.get(i));
+                        }
                         if ("SUCCESS".equals(item.getStatus())) ok++;
                         results.add(item);
                     }

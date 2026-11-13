@@ -41,6 +41,9 @@ public class ExternalShipmentController {
      * partners and remained unprotected. See audit finding #3.
      */
     private final IdempotencyService idempotency;
+    /** Advisory rule + AI pre-label validation. Optional so slice tests still wire. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.external.ShipmentAiValidator aiValidator;
 
     @Operation(summary = "List available services (and pricing when enabled) for a route")
     @PostMapping("/rates")
@@ -71,7 +74,10 @@ public class ExternalShipmentController {
                     new TypeReference<ApiResponse<ExternalShipmentResponse>>() {},
                     () -> {
                         try {
+                            java.util.List<java.util.Map<String, Object>> warnings =
+                                    aiValidator == null ? java.util.List.of() : aiValidator.validate(req);
                             ExternalShipmentResponse res = externalApiService.createShipment(api, req);
+                            if (!warnings.isEmpty()) res.setValidationWarnings(warnings);
                             return ResponseEntity.status(201).body(ApiResponse.<ExternalShipmentResponse>builder()
                                     .status("SUCCESS").code(201).timestamp(LocalDateTime.now())
                                     .message("Shipment #" + res.getShipmentId() + " created.")

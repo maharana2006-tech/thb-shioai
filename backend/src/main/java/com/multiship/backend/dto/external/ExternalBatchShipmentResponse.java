@@ -28,5 +28,7 @@ public class ExternalBatchShipmentResponse {
         private String message;
         /** Same shape as the single-create response (incl. labelZpl); null on error. */
         private ExternalShipmentResponse shipment;
+        /** Advisory pre-label validation warnings (rule + AI); present on success and error. */
+        private java.util.List<java.util.Map<String, Object>> validationWarnings;
     }
 }

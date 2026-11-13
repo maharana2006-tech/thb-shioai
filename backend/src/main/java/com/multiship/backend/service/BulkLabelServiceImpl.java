@@ -203,6 +203,37 @@ public class BulkLabelServiceImpl implements BulkLabelService {
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private UspsDirectRoutingService uspsDirectRoutingService;
+
+    /**
+     * Advisory rule + AI pre-label validation. Warnings land in
+     * failureDetailsJson as {@code AI_VALIDATION_WARNING} info rows and
+     * never block or fail the order. Optional for pure-Mockito tests.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.external.ShipmentAiValidator aiValidator;
+
+    /** Per-job advisory warnings collected by workers, drained by the aggregator. */
+    private final java.util.Map<Long, java.util.List<java.util.Map<String, Object>>> validationWarningsByJob =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** Runs advisory validation for one order and records warnings against the job. Never throws. */
+    private void recordValidationWarnings(long jobId, long orderNo) {
+        if (aiValidator == null || !aiValidator.isEnabled() || orderRepository == null) return;
+        try {
+            var order = orderRepository.findOrderWithLines((int) orderNo).orElse(null);
+            if (order == null) return;
+            for (java.util.Map<String, Object> w : aiValidator.validate(order)) {
+                Object field = w.get("field");
+                String msg = "[" + w.get("source") + "/" + w.get("severity") + "] "
+                        + (field == null ? "" : field + ": ") + w.get("message");
+                validationWarningsByJob
+                        .computeIfAbsent(jobId, k -> java.util.Collections.synchronizedList(new java.util.ArrayList<>()))
+                        .add(buildFailureDetail(orderNo, "AI_VALIDATION_WARNING", msg));
+            }
+        } catch (RuntimeException e) {
+            log.warn("Bulk-label validation for order {} skipped: {}", orderNo, e.getMessage());
+        }
+    }
     /**
      * Sprint 50 Tier 0.5 PR E - guard so a scoped USER cannot enqueue a
      * bulk job containing an order from a foreign tenant. We check every
@@ -790,6 +821,8 @@ public class BulkLabelServiceImpl implements BulkLabelService {
             structuredFailures.add(buildFailureDetail(
                     0L, "GLOBAL_FAILURE", "global: " + ex.getMessage()));
         } finally {
+            var advisory = validationWarningsByJob.remove(jobId);
+            if (advisory != null) structuredFailures.addAll(advisory);
             if (failures.length() > 0) job.setFailureMessage(failures.toString());
             // Bulk MED — serialise the structured failure list into the
             // parallel JSON column. Wrapped in try/catch so a Jackson
@@ -987,6 +1020,7 @@ public class BulkLabelServiceImpl implements BulkLabelService {
             }
             return OrderOutcome.queued(orderNo, d.singleQueueItemId());
         }
+        recordValidationWarnings(jobId, orderNo);
         try {
             LabelGenerationResponse label = generateSingle(jobId, orderNo, jobUser);
             if (label == null) {

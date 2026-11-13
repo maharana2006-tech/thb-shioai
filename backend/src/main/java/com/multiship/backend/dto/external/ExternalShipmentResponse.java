@@ -60,4 +60,7 @@ public class ExternalShipmentResponse {
 
     /** Warehouse the shipment ships from — null when the client has no attached warehouses and the legacy shipFrom was used. */
     private String warehouseCode;
+
+    /** Advisory pre-label validation warnings (rule + AI); never blocks the label. */
+    private java.util.List<java.util.Map<String, Object>> validationWarnings;
 }
