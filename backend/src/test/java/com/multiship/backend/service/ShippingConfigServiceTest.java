@@ -212,6 +212,34 @@ class ShippingConfigServiceTest {
         verify(fedexMock, never()).listServices(any(), any(), any());
     }
 
+    /** The saved source says where the list came from, not just that the account verified. */
+    @Test
+    void syncFromCarrier_tagsSourceByWhetherTheCarrierApiAnswered() {
+        CarrierAccountRef acct = CarrierAccountRef.builder()
+                .id(1L).carrierCode("UPS")
+                .clientId("cid").clientSecret("csecret").accountNumber("ACCT-1")
+                .environment("SANDBOX").active(true).build();
+        when(carrierAccountRefRepository.findPlatformAccountsByCarrier("UPS")).thenReturn(List.of(acct));
+        when(upsMock.getAccessToken("cid", "csecret", "ACCT-1", "SANDBOX")).thenReturn("live-token");
+        when(serviceRepository.findByCarrierIgnoreCaseAndServiceCodeIgnoreCaseAndOriginCountryIgnoreCase(
+                "UPS", "GROUND", "US")).thenReturn(Optional.empty());
+        List<CarrierConnector.ServiceOffering> offers =
+                List.of(new CarrierConnector.ServiceOffering("GROUND", "UPS Ground", "DOMESTIC"));
+        org.mockito.ArgumentCaptor<com.multiship.backend.model.ShippingService> saved =
+                org.mockito.ArgumentCaptor.forClass(com.multiship.backend.model.ShippingService.class);
+        when(serviceRepository.save(saved.capture())).thenAnswer(inv -> inv.getArgument(0));
+
+        when(upsMock.listServices("US", "live-token", "SANDBOX")).thenReturn(
+                new CarrierConnector.ServiceAvailability(offers, true, "verified UPS account · published service catalog"));
+        assertEquals(false, service.syncFromCarrier("UPS", "US").getData().get("fromCarrierApi"));
+        assertEquals("CARRIER_SYNC", saved.getValue().getSource());
+
+        when(upsMock.listServices("US", "live-token", "SANDBOX")).thenReturn(
+                new CarrierConnector.ServiceAvailability(offers, true, "UPS Rating API (Shop)", true));
+        assertEquals(true, service.syncFromCarrier("UPS", "US").getData().get("fromCarrierApi"));
+        assertEquals("CARRIER_API", saved.getValue().getSource());
+    }
+
     @Test
     void syncFromCarrier_live_addsNewServices_andPublishesEvent() {
         // Seed a platform account so token resolution returns a real token.

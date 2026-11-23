@@ -1,4 +1,4 @@
-export type SupportedCarrierId = 'fedex' | 'ups' | 'usps' | 'dhl'
+export type SupportedCarrierId = 'fedex' | 'ups' | 'usps' | 'dhl' | 'royal_mail' | 'dpd'
 
 const carrierRegistry: Record<
   SupportedCarrierId,
@@ -22,6 +22,14 @@ const carrierRegistry: Record<
   dhl: {
     displayName: 'DHL',
     aliases: ['dhl'],
+  },
+  royal_mail: {
+    displayName: 'Royal Mail',
+    aliases: ['royal_mail', 'royalmail', 'royal mail'],
+  },
+  dpd: {
+    displayName: 'DPD',
+    aliases: ['dpd', 'dpdlocal', 'dpd local'],
   },
 }
 

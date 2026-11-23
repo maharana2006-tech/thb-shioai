@@ -24,6 +24,8 @@ const ACCOUNT_RULES: Record<string, { re: RegExp; msg: string }> = {
   FEDEX: { re: /^\d{9}$/, msg: 'FedEx account number is exactly 9 digits' },
   DHL: { re: /^\d{9,12}$/, msg: 'DHL Express account number is 9–12 digits' },
   USPS: { re: /^[A-Za-z0-9._@-]{3,50}$/, msg: 'USPS account number is 3–50 letters, digits, or . _ @ -' },
+  ROYAL_MAIL: { re: /^[A-Za-z0-9]{4,20}$/, msg: 'Royal Mail OBA account number is 4–20 letters or digits' },
+  DPD: { re: /^[A-Za-z0-9]{4,20}$/, msg: 'DPD account number is 4–20 letters or digits' },
 }
 const GENERIC_ACCOUNT = { re: /^[A-Za-z0-9._@-]{3,25}$/, msg: 'Use 3–25 letters, digits, or . _ @ -' }
 
@@ -61,7 +63,10 @@ export function validateCarrierAccount(
 ): CarrierAccountErrors {
   const e: CarrierAccountErrors = {}
   const carrier = (v.carrierCode || '').toUpperCase()
-  const isUsps = carrier === 'USPS'
+  // USPS and DPD secrets are real passwords (spaces allowed); every other carrier's is an opaque token.
+  const isUsps = carrier === 'USPS' || carrier === 'DPD'
+  // Click & Drop authenticates with the API key alone; the ID slot is an optional shipping-account name.
+  const isRoyalMail = carrier === 'ROYAL_MAIL'
   const credsRequired = !ctx.isEdit || ctx.rotating
   const { accountNumberLabel, idLabel, secretLabel } = ctx.labels
 
@@ -90,8 +95,8 @@ export function validateCarrierAccount(
   // whitespace, length sanity. (USPS secret is a real password, so spaces ok.)
   if (credsRequired) {
     const idT = v.clientId.trim()
-    if (!idT) e.clientId = `${idLabel} is required`
-    else if (idT.length < 6) e.clientId = `That ${idLabel} looks too short — double-check it`
+    if (!idT) { if (!isRoyalMail) e.clientId = `${idLabel} is required` }
+    else if (idT.length < 6 && !isRoyalMail) e.clientId = `That ${idLabel} looks too short — double-check it`
     else if (idT.length > 120) e.clientId = 'Too long — did you paste extra text?'
     else if (/\s/.test(idT)) e.clientId = 'Remove spaces — paste the key exactly as issued'
     else if (!NO_ANGLE.test(idT)) e.clientId = NO_ANGLE_MSG

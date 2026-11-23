@@ -42,6 +42,20 @@ class ThirdPartyBillingValidationTest {
     }
 
     @Test
+    void royalMailCannotBillAThirdParty() {
+        String error = CarrierServiceImpl.validateThirdPartyBilling(thirdParty("ABC123", "SW1A 1AA", "GB"), "ROYAL_MAIL");
+        assertTrue(error.contains("Royal Mail"), error);
+        assertTrue(error.contains("third-party billing is not available"), error);
+    }
+
+    @Test
+    void dpdCannotBillAThirdParty() {
+        String error = CarrierServiceImpl.validateThirdPartyBilling(thirdParty("1234567", "B1 1AA", "GB"), "DPD");
+        assertTrue(error.contains("DPD"), error);
+        assertTrue(error.contains("third-party billing is not available"), error);
+    }
+
+    @Test
     void upsNeedsAccountPostalCodeAndCountry() {
         assertTrue(CarrierServiceImpl.validateThirdPartyBilling(thirdParty(" ", "10001", "US"), "UPS")
                 .contains("thirdPartyAccount is required"));

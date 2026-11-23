@@ -123,7 +123,7 @@ public class FedExConnector implements CarrierConnector {
         try {
             List<ServiceOffering> live = fetchLiveServices(originCountry, accessToken, environment);
             if (!live.isEmpty()) {
-                return new ServiceAvailability(live, true, "FedEx Service Availability API");
+                return new ServiceAvailability(live, true, "FedEx Service Availability API", true);
             }
         } catch (Exception ex) {
             log.warn("FedEx availability lookup unavailable; using verified published catalog. Reason: {}", ex.getMessage());
@@ -132,32 +132,61 @@ public class FedExConnector implements CarrierConnector {
     }
 
     /**
-     * LIVE FedEx availability via the Service Availability API. Real endpoint +
-     * auth; the request (origin/destination postal) and output→service mapping
-     * must be finalised against a FedEx sandbox (see CUSTOMS_CARRIER_MAPPING.md).
-     * Throws/returns empty when unreachable so the caller uses the built-in model.
+     * LIVE FedEx availability via the Service Availability API ("retrieve services
+     * and packaging options"). Asks one domestic and one export lane from a
+     * representative address in the origin country. Empty when there is no probe
+     * address for the origin; throws when FedEx rejects a lane — either way the
+     * caller falls back to the built-in list and labels it as such.
      */
     private List<ServiceOffering> fetchLiveServices(String originCountry, String accessToken, String environment) throws Exception {
-        String url = getBaseUrl(environment) + "/availability/v1/service/availability";
-        String response = HttpClients.newBuilder().baseUrl(url).build()
-                .post()
-                .contentType(MediaType.APPLICATION_JSON)
-                .accept(MediaType.APPLICATION_JSON)
-                .header("Authorization", "Bearer " + accessToken)
-                .body(Map.of("requestedShipment", Map.of("shipper",
-                        Map.of("address", Map.of("countryCode",
-                                originCountry == null ? "US" : originCountry.trim().toUpperCase(Locale.ROOT))))))
-                .retrieve()
-                .body(String.class);
-        List<ServiceOffering> out = new java.util.ArrayList<>();
-        for (JsonNode opt : objectMapper.readTree(Optional.ofNullable(response).orElse("{}"))
-                .path("output").path("serviceOptions")) {
-            String code = opt.path("serviceType").asText(null);
-            if (StringUtils.hasText(code)) {
-                out.add(new ServiceOffering(code, opt.path("serviceName").asText(code), "BOTH"));
+        CatalogueProbe.Addr from = CatalogueProbe.origin(originCountry);
+        if (from == null) {
+            return List.of();
+        }
+        Map<String, ServiceOffering> byCode = new LinkedHashMap<>();
+        for (CatalogueProbe.Lane lane : CatalogueProbe.lanes(from)) {
+            String response = HttpClients.newBuilder().baseUrl(getBaseUrl(environment)).build()
+                    .post()
+                    .uri("/availability/v1/packageandserviceoptions")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .header("X-locale", "en_US")
+                    .body(availabilityProbeBody(from, lane.to()))
+                    .retrieve()
+                    .body(String.class);
+            for (ServiceOffering o : parseServiceOptions(response, lane.scope())) {
+                CatalogueProbe.merge(byCode, o);
             }
         }
-        return out;
+        return List.copyOf(byCode.values());
+    }
+
+    Map<String, Object> availabilityProbeBody(CatalogueProbe.Addr from, CatalogueProbe.Addr to) {
+        return Map.of("requestedShipment", Map.of(
+                "shipper", Map.of("address", from.toMap("city", "stateOrProvinceCode", "postalCode", "countryCode")),
+                "recipients", List.of(Map.of("address",
+                        to.toMap("city", "stateOrProvinceCode", "postalCode", "countryCode")))));
+    }
+
+    /**
+     * Services in an availability response. FedEx lists one {@code output.packageOptions}
+     * entry per service and packaging pair, so the distinct {@code serviceType} values are
+     * the services. Freight services are skipped — this catalogue is for parcels.
+     */
+    List<ServiceOffering> parseServiceOptions(String response, String scope) throws Exception {
+        Map<String, ServiceOffering> byCode = new LinkedHashMap<>();
+        for (JsonNode opt : objectMapper.readTree(Optional.ofNullable(response).orElse("{}"))
+                .path("output").path("packageOptions")) {
+            String code = opt.path("serviceType").path("key").asText("");
+            if (!StringUtils.hasText(code) || "freight".equalsIgnoreCase(opt.path("serviceCategory").asText(""))) {
+                continue;
+            }
+            // FedEx decorates names with trademark symbols; the catalogue keeps them plain.
+            String name = opt.path("serviceType").path("displayText").asText("").replaceAll("[®™℠]", "").trim();
+            byCode.putIfAbsent(code, new ServiceOffering(code, StringUtils.hasText(name) ? name : code, scope));
+        }
+        return List.copyOf(byCode.values());
     }
 
     @Override

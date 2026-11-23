@@ -849,7 +849,7 @@ describe('CarrierDraftStep — cross-cutting', () => {
     expect(screen.getByText(/UPS · ABC123/)).toBeTruthy()
   })
 
-  it('carrierOptions renders all four expected carriers (UPS/FedEx/USPS/DHL)', async () => {
+  it('carrierOptions renders all six expected carriers (UPS/FedEx/USPS/DHL/Royal Mail/DPD)', async () => {
     seedCarriersDraft()
     const user = userEvent.setup()
     const Page = await loadPage()
@@ -866,6 +866,8 @@ describe('CarrierDraftStep — cross-cutting', () => {
     expect(values).toContain('FEDEX')
     expect(values).toContain('USPS')
     expect(values).toContain('DHL')
+    expect(values).toContain('ROYAL_MAIL')
+    expect(values).toContain('DPD')
   })
 
   it('DHL rule swaps the account-number maxLength on carrier change', async () => {

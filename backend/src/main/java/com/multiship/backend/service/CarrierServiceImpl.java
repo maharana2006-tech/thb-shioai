@@ -4750,6 +4750,12 @@ public class CarrierServiceImpl implements CarrierService {
         if ("USPS".equals(carrier)) {
             return "USPS postage is prepaid — third-party billing is not available. Bill the shipper account instead.";
         }
+        if ("ROYAL_MAIL".equals(carrier)) {
+            return "Royal Mail postage is charged to the Click & Drop account — third-party billing is not available. Bill the shipper account instead.";
+        }
+        if ("DPD".equals(carrier)) {
+            return "DPD charges the shipper's own DPD account — third-party billing is not available. Bill the shipper account instead.";
+        }
         java.util.regex.Pattern format = THIRD_PARTY_ACCOUNT_FORMATS.get(carrier);
         if (format == null) {
             return carrier + " shipments cannot be billed to a third party yet.";

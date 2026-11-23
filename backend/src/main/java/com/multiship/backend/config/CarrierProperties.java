@@ -47,6 +47,14 @@ public class CarrierProperties {
 
     @Valid
     @NestedConfigurationProperty
+    private final RoyalMail royalMail = new RoyalMail();
+
+    @Valid
+    @NestedConfigurationProperty
+    private final Dpd dpd = new Dpd();
+
+    @Valid
+    @NestedConfigurationProperty
     private final ShipperDefaults shipper = new ShipperDefaults();
 
     @Getter
@@ -323,6 +331,70 @@ public class CarrierProperties {
 
         @NotBlank
         private String labelResponseOption;
+    }
+
+    /**
+     * Royal Mail Click &amp; Drop. One host (no sandbox), API-key auth, so
+     * only the base URL and the operator-facing strings are configurable.
+     */
+    @Getter
+    @Setter
+    public static class RoyalMail {
+
+        @NotBlank
+        private String apiBaseUrl;
+
+        /** Royal Mail Tracking API v2 (developer.royalmail.net) — separate host and credentials from Click &amp; Drop. */
+        @NotBlank
+        private String trackingBaseUrl;
+
+        @NotBlank
+        private String logoUrl;
+
+        @NotBlank
+        private String documentationUrl;
+
+        @NotBlank
+        private String connectionGuide;
+
+        @NotBlank
+        private String defaultServiceType;
+
+        @NotBlank
+        private String defaultPackageType;
+    }
+
+    /** DPD UK MyDPD API (api.dpd.co.uk; DPD Local is the same API on api.dpdlocal.co.uk). */
+    @Getter
+    @Setter
+    public static class Dpd {
+
+        @NotBlank
+        private String apiBaseUrl;
+
+        /**
+         * Where SANDBOX accounts go. DPD has no real sandbox, so this points at the
+         * local mock ({@code scripts/dpd-mock}) by default; blank sends SANDBOX
+         * accounts to the live host with a warning.
+         */
+        private String sandboxBaseUrl;
+
+        /** Network used when the request names no service, e.g. {@code 1^12} = Next Day. */
+        @NotBlank
+        private String defaultNetworkCode;
+
+        /** Accept header for label/manifest downloads: application/pdf, text/html, text/vnd.citizen-clp, text/vnd.eltron-epl. */
+        @NotBlank
+        private String labelAccept;
+
+        @NotBlank
+        private String logoUrl;
+
+        @NotBlank
+        private String documentationUrl;
+
+        @NotBlank
+        private String connectionGuide;
     }
 
     @Getter

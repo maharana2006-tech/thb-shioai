@@ -96,6 +96,20 @@ public class SystemSettingsController {
                     UspsProviderReadinessService.USPS_PLATFORM_CLIENT_SECRET_KEY,
                     "USPS OAuth 2.0 Consumer Secret.",
                     SystemSettingDTO.Kind.SECRET,
+                    null, null),
+            // Royal Mail Tracking API v2 (developer.royalmail.net). Platform-wide:
+            // one Client ID / Secret pair tracks every Royal Mail item regardless
+            // of which Click & Drop account bought the label.
+            new SettingSpec(
+                    com.multiship.backend.service.carriers.RoyalMailConnector.TRACKING_CLIENT_ID_KEY,
+                    "Royal Mail Tracking API Client ID from developer.royalmail.net. "
+                            + "Gives live tracking events for Royal Mail items; labels still need a Click & Drop account.",
+                    SystemSettingDTO.Kind.SECRET,
+                    null, null),
+            new SettingSpec(
+                    com.multiship.backend.service.carriers.RoyalMailConnector.TRACKING_CLIENT_SECRET_KEY,
+                    "Royal Mail Tracking API Client Secret.",
+                    SystemSettingDTO.Kind.SECRET,
                     null, null)
     );
 

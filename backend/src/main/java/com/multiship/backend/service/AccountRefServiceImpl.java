@@ -362,9 +362,13 @@ public class AccountRefServiceImpl implements AccountRefService {
         String rawClientSecret = request.getClientSecret();
         boolean clientIdProvided = StringUtils.hasText(rawClientId);
         boolean clientSecretProvided = StringUtils.hasText(rawClientSecret);
-        if (isNewAccount && (!clientIdProvided || !clientSecretProvided)) {
+        // Royal Mail (Click & Drop) authenticates with the API key alone — the id slot is optional.
+        boolean clientIdRequired = !"ROYAL_MAIL".equalsIgnoreCase(carrierCode);
+        if (isNewAccount && ((clientIdRequired && !clientIdProvided) || !clientSecretProvided)) {
             return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
-                    "Client ID and Client Secret are required when creating a new carrier account.");
+                    clientIdRequired
+                            ? "Client ID and Client Secret are required when creating a new carrier account."
+                            : "The Click & Drop API key is required when creating a new Royal Mail account.");
         }
         // A Stamps.com SERA refresh token belongs to one client ID/secret in one
         // environment: a real change to any of them needs a fresh authorization.

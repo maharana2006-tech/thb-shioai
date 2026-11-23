@@ -454,18 +454,19 @@ describe('CarrierConnections · toolbar + drawer tiles', () => {
     await screen.findByText('UPS12345')
 
     // Drawer is closed by default.
-    expect(screen.queryByRole('dialog', { name: /Add carrier account/i })).toBeNull()
+    expect(screen.queryByRole('region', { name: /Add carrier account/i })).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: /Add Account/i }))
 
     // Drawer opens; the Carrier picker is a radiogroup with four tiles.
-    const drawer = await screen.findByRole('dialog', { name: /Add carrier account/i })
+    const drawer = await screen.findByRole('region', { name: /Add carrier account/i })
     const carrierGroup = within(drawer).getByRole('radiogroup', { name: /^Carrier$/i })
     const radios = within(carrierGroup).getAllByRole('radio')
-    // The picker renders exactly the four carrierOptions entries.
-    expect(radios).toHaveLength(4)
-    const labels = radios.map((r) => r.textContent?.trim())
-    expect(labels).toEqual(expect.arrayContaining(['UPS', 'FedEx', 'USPS', 'DHL Express']))
+    // The picker renders exactly the six carrierOptions entries.
+    expect(radios).toHaveLength(6)
+    // The carrier name is the tile's accessible name.
+    const labels = radios.map((r) => r.getAttribute('aria-label'))
+    expect(labels).toEqual(expect.arrayContaining(['UPS', 'FedEx', 'USPS', 'DHL Express', 'Royal Mail', 'DPD']))
   }, 20000)
 
   it('caption reads "Showing N of N accounts" and reflects the count', async () => {

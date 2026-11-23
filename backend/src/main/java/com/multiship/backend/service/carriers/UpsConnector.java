@@ -176,7 +176,7 @@ public class UpsConnector implements CarrierConnector {
         try {
             List<ServiceOffering> live = fetchLiveServices(originCountry, accessToken, environment);
             if (!live.isEmpty()) {
-                return new ServiceAvailability(live, true, "UPS Rating API (Shop)");
+                return new ServiceAvailability(live, true, "UPS Rating API (Shop)", true);
             }
         } catch (Exception ex) {
             log.warn("UPS availability lookup unavailable; using verified published catalog. Reason: {}", ex.getMessage());
@@ -185,36 +185,80 @@ public class UpsConnector implements CarrierConnector {
     }
 
     /**
-     * LIVE UPS availability via the Rating API "Shop" request (returns every
-     * rated service for a lane). Real endpoint + auth; the request body and
-     * RatedShipment→service mapping must be finalised against a UPS sandbox
-     * (see backend/docs/CUSTOMS_CARRIER_MAPPING.md). Throws/returns empty when
-     * unreachable so the caller falls back to the built-in model.
+     * LIVE UPS availability via the Rating API "Shop" request, which returns every
+     * service UPS will rate on a lane. Asks one domestic and one export lane from a
+     * representative address in the origin country. Empty when there is no probe
+     * address for the origin; throws when UPS rejects a lane — either way the caller
+     * falls back to the built-in list and labels it as such.
      */
     private List<ServiceOffering> fetchLiveServices(String originCountry, String accessToken, String environment) throws Exception {
+        CatalogueProbe.Addr from = CatalogueProbe.origin(originCountry);
+        if (from == null) {
+            return List.of();
+        }
         String baseUrl = isSandbox(environment)
                 ? carrierProperties.getUps().getSandboxUrl()
                 : carrierProperties.getUps().getApiBaseUrl();
-        String url = baseUrl + "/api/rating/"
-                + carrierProperties.getUps().getApiVersion() + "/Shop";
-        String response = HttpClients.newBuilder().baseUrl(url).build()
-                .post()
-                .contentType(MediaType.APPLICATION_JSON)
-                .accept(MediaType.APPLICATION_JSON)
-                .header("Authorization", "Bearer " + accessToken)
-                .body(Map.of("RateRequest", Map.of("Shipment",
-                        Map.of("ShipFrom", Map.of("Address", Map.of("CountryCode",
-                                originCountry == null ? "US" : originCountry.trim().toUpperCase(Locale.ROOT)))))))
-                .retrieve()
-                .body(String.class);
-        List<ServiceOffering> out = new java.util.ArrayList<>();
+        Map<String, ServiceOffering> byCode = new LinkedHashMap<>();
+        for (CatalogueProbe.Lane lane : CatalogueProbe.lanes(from)) {
+            String response;
+            try {
+                response = HttpClients.newBuilder().baseUrl(baseUrl).build()
+                        .post()
+                        .uri("/api/rating/" + carrierProperties.getUps().getApiVersion() + "/Shop")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .accept(MediaType.APPLICATION_JSON)
+                        .header("Authorization", "Bearer " + accessToken)
+                        .header("transId", java.util.UUID.randomUUID().toString())
+                        .header("transactionSrc", "multiship")
+                        .body(shopProbeBody(from, lane.to()))
+                        .retrieve()
+                        .body(String.class);
+            } catch (org.springframework.web.client.RestClientResponseException ex) {
+                throw new IllegalStateException("HTTP " + ex.getStatusCode().value() + " "
+                        + firstUpsErrorMessage(ex.getResponseBodyAsString()), ex);
+            }
+            for (ServiceOffering o : parseShopServices(response, lane.scope(), originCountry)) {
+                CatalogueProbe.merge(byCode, o);
+            }
+        }
+        return List.copyOf(byCode.values());
+    }
+
+    /** Smallest Shop request UPS rates: both addresses and one 1-unit customer package. */
+    Map<String, Object> shopProbeBody(CatalogueProbe.Addr from, CatalogueProbe.Addr to) {
+        Map<String, Object> origin = Map.of("Address",
+                from.toMap("City", "StateProvinceCode", "PostalCode", "CountryCode"));
+        Map<String, Object> shipment = new LinkedHashMap<>();
+        shipment.put("Shipper", origin);
+        shipment.put("ShipFrom", origin);
+        shipment.put("ShipTo", Map.of("Address", to.toMap("City", "StateProvinceCode", "PostalCode", "CountryCode")));
+        // UPS rejects pounds outside the US and kilograms inside it.
+        String unit = "US".equals(from.country()) ? "LBS" : "KGS";
+        shipment.put("Package", List.of(Map.of(
+                "PackagingType", Map.of("Code", "02"),
+                "PackageWeight", Map.of("UnitOfMeasurement", Map.of("Code", unit), "Weight", "1"))));
+        return Map.of("RateRequest", Map.of("Request", Map.of("SubVersion", "2205"), "Shipment", shipment));
+    }
+
+    /** Services in a Shop response. UPS usually leaves Description blank, so names come from our own list. */
+    List<ServiceOffering> parseShopServices(String response, String scope, String originCountry) throws Exception {
+        Map<String, String> names = new LinkedHashMap<>();
+        for (ServiceOffering s : serviceMatrix(originCountry)) {
+            names.put(s.serviceCode(), s.name());
+        }
         JsonNode rated = objectMapper.readTree(Optional.ofNullable(response).orElse("{}"))
                 .path("RateResponse").path("RatedShipment");
-        for (JsonNode r : rated.isArray() ? rated : objectMapper.createArrayNode().add(rated)) {
-            String code = r.path("Service").path("Code").asText(null);
-            if (StringUtils.hasText(code)) {
-                out.add(new ServiceOffering(code, r.path("Service").path("Description").asText("UPS " + code), "BOTH"));
+        Iterable<JsonNode> entries = rated.isArray() ? rated : List.of(rated);
+        List<ServiceOffering> out = new java.util.ArrayList<>();
+        for (JsonNode r : entries) {
+            String code = r.path("Service").path("Code").asText("");
+            if (!StringUtils.hasText(code)) {
+                continue;
             }
+            String name = r.path("Service").path("Description").asText("");
+            out.add(new ServiceOffering(code,
+                    StringUtils.hasText(name) ? name : names.getOrDefault(code, upsServiceName(code)), scope));
         }
         return out;
     }
@@ -3883,7 +3927,10 @@ public class UpsConnector implements CarrierConnector {
             case "08" -> "UPS Worldwide Expedited";
             case "11" -> "UPS Standard";
             case "12" -> "UPS 3 Day Select";
+            case "13" -> "UPS Next Day Air Saver";
+            case "14" -> "UPS Next Day Air Early";
             case "54" -> "UPS Worldwide Express Plus";
+            case "59" -> "UPS 2nd Day Air A.M.";
             case "65" -> "UPS Worldwide Saver";
             default -> "UPS " + code;
         };

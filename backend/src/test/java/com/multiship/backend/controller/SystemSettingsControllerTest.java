@@ -62,7 +62,7 @@ class SystemSettingsControllerTest {
     private static final String KNOWN_KEY = "openai.api-key";
     private static final String FLAVOR_KEY = "carrier.stamps.api-flavor";
     /** Registry size — grow this in lockstep with SystemSettingsController.KNOWN_SETTINGS. */
-    private static final int REGISTRY_SIZE = 5;
+    private static final int REGISTRY_SIZE = 7;
 
     @BeforeEach
     void setUp() {
@@ -94,7 +94,7 @@ class SystemSettingsControllerTest {
         assertEquals(HttpStatus.OK, re.getStatusCode());
         assertEquals(REGISTRY_SIZE, re.getBody().size(),
                 "Registry currently exposes " + REGISTRY_SIZE
-                        + " settings (openai.api-key + carrier.stamps.api-flavor + USPS_PROVIDER + USPS_PLATFORM_CLIENT_ID + USPS_PLATFORM_CLIENT_SECRET).");
+                        + " settings (openai.api-key + carrier.stamps.api-flavor + USPS_PROVIDER + USPS_PLATFORM_CLIENT_ID + USPS_PLATFORM_CLIENT_SECRET + royalmail.tracking.client-id + royalmail.tracking.client-secret).");
         SystemSettingDTO dto = re.getBody().stream()
                 .filter(d -> KNOWN_KEY.equals(d.getKey()))
                 .findFirst().orElseThrow();

@@ -60,6 +60,28 @@ public class CarrierController {
                 .build());
     }
 
+    @Operation(summary = "Diagnostic: track one number through the carrier's credential-free path (ADMIN)",
+            description = "Calls the connector's 1-arg trackShipment. For most carriers that is the public tracking URL; "
+                    + "for Royal Mail it exercises the platform Tracking API credentials from Settings → System, "
+                    + "so an admin can confirm a new key works without creating an order. "
+                    + "rawResponse carries the carrier's reply, or the reason live tracking did not happen.")
+    @PreAuthorize("hasRole('ADMIN')")
+    @GetMapping("/{carrierCode}/track-check")
+    public ResponseEntity<ApiResponse<com.multiship.backend.service.carriers.CarrierConnector.TrackingResult>> trackCheck(
+            @PathVariable String carrierCode,
+            @org.springframework.web.bind.annotation.RequestParam("number") String number) {
+        com.multiship.backend.service.carriers.CarrierConnector.TrackingResult result =
+                carrierService.getCarrierConnector(carrierCode).trackShipment(number);
+        boolean live = result.events() != null && !result.events().isEmpty();
+        return ResponseEntity.ok(ApiResponse.<com.multiship.backend.service.carriers.CarrierConnector.TrackingResult>builder()
+                .status("SUCCESS").code(200)
+                .message(live ? "Live tracking returned " + result.events().size() + " event(s)."
+                        : "No live events — " + (result.rawResponse() == null ? "URL-only result." : result.rawResponse()))
+                .data(result)
+                .timestamp(java.time.LocalDateTime.now())
+                .build());
+    }
+
     @Operation(summary = "Connect a carrier account (ADMIN)",
             description = "Accepts canonical carrier codes UPS / FEDEX / USPS (legacy P80/F77/L01 tolerated). Optional tenantId assigns the account to a tenant.")
     @PreAuthorize("hasRole('ADMIN')")

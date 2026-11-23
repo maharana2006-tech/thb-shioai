@@ -261,8 +261,10 @@ export interface SyncResult {
   added: number
   updated: number
   total: number
-  /** True only when the LIVE carrier API answered (not the built-in availability model). */
+  /** True when the account authenticated live; the list itself may still be the built-in one. */
   live: boolean
+  /** Services sync only: true when the carrier's API returned the list, false for the built-in list. */
+  fromCarrierApi?: boolean
   /** Human-readable source, e.g. "UPS Rating API" or "built-in availability — no live UPS credentials". */
   via: string
 }

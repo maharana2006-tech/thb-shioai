@@ -5,9 +5,11 @@ import { notify } from '../utils/notify'
 import { useModalDismiss } from '../hooks/useModalDismiss'
 import {
   FiBox,
+  FiChevronDown,
   FiDownloadCloud,
   FiGlobe,
   FiHome,
+  FiSearch,
   FiSend,
   FiUsers,
   FiX,
@@ -32,13 +34,29 @@ const CARRIER_BADGE: Record<string, { bg: string; mono: string }> = {
   UPS: { bg: 'bg-[#351c15]', mono: 'UPS' },
   FEDEX: { bg: 'bg-[#4d148c]', mono: 'FDX' },
   USPS: { bg: 'bg-[#1f5aa6]', mono: 'USP' },
+  DHL: { bg: 'bg-[#d40511]', mono: 'DHL' },
+  ROYAL_MAIL: { bg: 'bg-[#da202a]', mono: 'RM' },
+  DPD: { bg: 'bg-[#dc0032]', mono: 'DPD' },
 }
 
 /** The carriers a manifest is always shown for (so an un-synced origin can still be synced). */
-const CARRIERS = ['UPS', 'FEDEX', 'USPS'] as const
+const CARRIERS = ['UPS', 'FEDEX', 'USPS', 'DHL', 'ROYAL_MAIL', 'DPD'] as const
 
 /** Common ship-from origins offered in the picker (merged with whatever's already synced). */
 const COMMON_ORIGINS = ['US', 'GB', 'DE', 'FR', 'NL', 'IT', 'ES', 'IN', 'CN', 'JP', 'AU', 'CA', 'MX', 'BR', 'SG']
+
+type QuickFilter = 'on' | 'needs' | 'intl'
+const QUICK_FILTERS: ReadonlyArray<{ key: QuickFilter; label: string }> = [
+  { key: 'on', label: 'On only' },
+  { key: 'needs', label: 'Needs packages' },
+  { key: 'intl', label: 'International' },
+]
+
+const toggleIn = <T,>(set: ReadonlySet<T>, value: T): ReadonlySet<T> => {
+  const next = new Set(set)
+  if (!next.delete(value)) next.add(value)
+  return next
+}
 
 /**
  * Provenance of a carrier's service group:
@@ -118,6 +136,10 @@ export default function ShippingServicesPage({ active = true, origin: originProp
 
   const [rules, setRules] = useState<ShipMethodRule[]>([])
 
+  const [query, setQuery] = useState('')
+  const [filters, setFilters] = useState<ReadonlySet<QuickFilter>>(new Set())
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
+
   // Catalog writes (enable/disable, branded-packaging flag, package links) are
   // ADMIN-only at the backend; hide the controls so operators don't click into
   // a 403. Reads/list stay visible to USER.
@@ -165,9 +187,12 @@ export default function ShippingServicesPage({ active = true, origin: originProp
     () => services.filter((s) => (s.originCountry ?? 'US').toUpperCase() === origin.toUpperCase()),
     [services, origin],
   )
-  // Always render the three carriers so an un-synced origin still shows a Sync button.
+  // Always render every carrier so an un-synced origin still shows a Sync button.
   const byCarrier = useMemo(
-    () => CARRIERS.map((c) => [c, visibleServices.filter((s) => s.carrier === c)] as const),
+    () =>
+      CARRIERS.map((c) => [c, visibleServices.filter((s) => s.carrier === c)] as const)
+        // Carriers with services first: each is a full-width section, the un-synced ones tile below.
+        .sort((a, b) => Number(b[1].length > 0) - Number(a[1].length > 0)),
     [visibleServices],
   )
   // Origin picker: a curated set of common origins merged with any already in the catalog.
@@ -181,6 +206,20 @@ export default function ShippingServicesPage({ active = true, origin: originProp
     links.forEach((l) => m.set(l.serviceId, [...(m.get(l.serviceId) ?? []), l]))
     return m
   }, [links])
+
+  // Enabled with zero linked packages: manual labels fail with
+  // SERVICE_HAS_NO_LINKED_PACKAGES. CUSTOM-only services (brandedPackagingAllowed
+  // = false) have an empty pool by design, so they never count.
+  const needsPackagesFor = (s: ShippingServiceItem) =>
+    s.enabled && s.brandedPackagingAllowed !== false && (linksByService.get(s.id) ?? []).length === 0
+  const q = query.trim().toLowerCase()
+  const filtering = q !== '' || filters.size > 0
+  const matches = (s: ShippingServiceItem) =>
+    (!q || s.name.toLowerCase().includes(q) || s.serviceCode.toLowerCase().includes(q))
+    && (!filters.has('on') || s.enabled)
+    && (!filters.has('needs') || needsPackagesFor(s))
+    && (!filters.has('intl') || s.scope !== 'DOMESTIC')
+  const shownCount = filtering ? visibleServices.filter(matches).length : visibleServices.length
   /** service id -> allowlist rows (each = one client using the service). */
   const assignmentsByService = useMemo(() => {
     const m = new Map<number, ClientAllowedService[]>()
@@ -203,7 +242,7 @@ export default function ShippingServicesPage({ active = true, origin: originProp
         const msg = `${head} — ${d.via}.`
         // A live carrier response gets a success check; a built-in/fallback
         // result is reported neutrally so it's never mistaken for live data.
-        if (d.live) notify.success(msg)
+        if (d.fromCarrierApi ?? d.live) notify.success(msg)
         else notify.info(msg)
       }
       await load()
@@ -318,6 +357,37 @@ export default function ShippingServicesPage({ active = true, origin: originProp
             ))}
           </select>
         </label>
+        <label className="flex min-w-[220px] flex-1 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 focus-within:border-[#412d15] sm:max-w-xs">
+          <FiSearch className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search services by name or code"
+            aria-label="Search services"
+            className="w-full bg-transparent py-1 text-[12.5px] text-[#1f150c] outline-none placeholder:text-slate-400"
+          />
+        </label>
+        {QUICK_FILTERS.map((f) => (
+          <button
+            key={f.key}
+            type="button"
+            aria-pressed={filters.has(f.key)}
+            onClick={() => setFilters((prev) => toggleIn(prev, f.key))}
+            className={`rounded-xl border px-3 py-2 text-[11.5px] font-semibold transition ${
+              filters.has(f.key)
+                ? 'border-[#1f150c] bg-[#1f150c] text-white'
+                : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            {f.label}
+          </button>
+        ))}
+        {filtering ? (
+          <span className="text-[11.5px] tabular-nums text-slate-500" aria-live="polite">
+            {shownCount} of {visibleServices.length} services
+          </span>
+        ) : null}
       </div>
 
       {/* health strip — tally tickets */}
@@ -369,11 +439,16 @@ export default function ShippingServicesPage({ active = true, origin: originProp
       ) : null}
 
       {/* service catalog, grouped by carrier */}
-      <section className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
+      <section className="grid items-start gap-4 lg:grid-cols-2 2xl:grid-cols-3">
         {loading && !services.length ? (
-          <p className="col-span-3 py-10 text-center text-sm text-slate-500">Loading catalog…</p>
+          <p className="col-span-full py-10 text-center text-sm text-slate-500">Loading catalog…</p>
         ) : (
           byCarrier.map(([carrier, list]) => {
+            const shown = filtering ? list.filter(matches) : list
+            // While searching or filtering, only carriers with a match are listed.
+            if (filtering && !shown.length) return null
+            // A search opens every section so a match is never hidden in a collapsed one.
+            const isCollapsed = !filtering && collapsed.has(carrier)
             const badge = CARRIER_BADGE[carrier] ?? { bg: 'bg-slate-700', mono: carrier.slice(0, 3) }
             const on = list.filter((s) => s.enabled).length
             // Sprint 52 PR 3 — aggregate the "enabled but zero linked
@@ -386,25 +461,35 @@ export default function ShippingServicesPage({ active = true, origin: originProp
             // NOT a "needs packages" state. Excluded from the aggregate
             // count so ground-family services don't inflate the warning
             // chip on the carrier header.
-            const needsPackagesCount = list.filter(
-              (s) => s.enabled
-                  && s.brandedPackagingAllowed !== false
-                  && (linksByService.get(s.id) ?? []).length === 0,
-            ).length
+            const needsPackagesCount = list.filter(needsPackagesFor).length
             const prov = groupProvenance(list)
             const isSyncing = syncing === carrier
             return (
-              <div key={carrier} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                {/* document band: carrier plate + manifest title + origin + sync */}
-                <div className="flex items-center justify-between gap-2 bg-[#1f150c] px-4 py-2.5">
-                  <p className="flex min-w-0 items-center gap-2.5">
+              <div
+                key={carrier}
+                className={`@container rounded-2xl border border-slate-200 bg-white shadow-sm ${list.length ? 'col-span-full' : ''}`}
+              >
+                {/* document band: carrier plate + manifest title + origin + sync.
+                    Sticks under the app header (h-14) while its section scrolls. */}
+                <div className={`sticky top-14 z-10 flex items-center justify-between gap-2 rounded-t-[15px] bg-[#1f150c] px-4 py-2.5 ${isCollapsed ? 'rounded-b-[15px]' : ''}`}>
+                  <button
+                    type="button"
+                    disabled={!list.length || filtering}
+                    aria-expanded={!isCollapsed}
+                    aria-label={`${isCollapsed ? 'Expand' : 'Collapse'} ${carrier} services`}
+                    onClick={() => setCollapsed((prev) => toggleIn(prev, carrier))}
+                    className="flex min-w-0 items-center gap-2.5 text-left disabled:cursor-default"
+                  >
+                    <FiChevronDown
+                      className={`h-3.5 w-3.5 shrink-0 text-[#e1dcc9]/70 transition-transform ${isCollapsed ? '-rotate-90' : ''} ${list.length ? '' : 'hidden'}`}
+                    />
                     <span className={`flex h-6 w-9 shrink-0 items-center justify-center rounded ${badge.bg} font-mono text-[9px] font-black tracking-wider text-white`}>
                       {badge.mono}
                     </span>
                     <span className="truncate text-[10px] font-black uppercase tracking-[0.2em] text-[#e1dcc9]" title={`${carrier} · from ${origin}`}>
                       {carrier} · from {origin}
                     </span>
-                  </p>
+                  </button>
                   <div className="flex shrink-0 items-center gap-1.5">
                     {list.length ? (
                       <span className="rounded bg-[#e1dcc9]/15 px-2 py-0.5 font-mono text-[10px] font-bold tabular-nums text-[#e1dcc9]">
@@ -432,7 +517,7 @@ export default function ShippingServicesPage({ active = true, origin: originProp
                     </button>
                   </div>
                 </div>
-                {prov ? (
+                {prov && !isCollapsed ? (
                   <div className="flex items-center gap-1.5 border-b border-dashed border-slate-200 bg-[#faf9f7] px-4 py-1.5">
                     <span
                       className={`h-1.5 w-1.5 rounded-full ${
@@ -450,7 +535,7 @@ export default function ShippingServicesPage({ active = true, origin: originProp
                   </div>
                 ) : null}
                 {!list.length ? (
-                  <div className="px-4 py-8 text-center">
+                  <div className="px-4 py-5 text-center">
                     <p className="text-[12.5px] font-medium text-slate-500">
                       No {carrier} services from {countryName(origin)} yet.
                     </p>
@@ -465,8 +550,8 @@ export default function ShippingServicesPage({ active = true, origin: originProp
                     </button>
                   </div>
                 ) : null}
-                <ul className="divide-y divide-dashed divide-slate-200">
-                  {list.map((s, i) => {
+                <ul hidden={isCollapsed} className="-mb-px gap-0 [column-rule:1px_dashed_#e2e8f0] @[800px]:columns-2 @[1500px]:columns-3">
+                  {shown.map((s, i) => {
                     const pkgCount = (linksByService.get(s.id) ?? []).length
                     // Sprint 52 PR X — CUSTOM-only services (Ground-family)
                     // have brandedPackagingAllowed=false. Empty pool is
@@ -492,7 +577,7 @@ export default function ShippingServicesPage({ active = true, origin: originProp
                       ? `Allowlisted for: ${clientRows.map((r) => `${r.clientCode}${r.isDefault ? ' ★' : ''}`).join(', ')}`
                       : 'All clients (no per-tenant restriction).'
                     return (
-                      <li key={s.id} className="flex items-center gap-2.5 px-4 py-2.5">
+                      <li key={s.id} className="flex break-inside-avoid items-center gap-2.5 border-b border-dashed border-slate-200 px-4 py-2.5">
                         <span className="w-5 shrink-0 font-mono text-[9px] font-bold tracking-widest text-slate-300">
                           {String(i + 1).padStart(2, '0')}
                         </span>
@@ -509,8 +594,8 @@ export default function ShippingServicesPage({ active = true, origin: originProp
                           <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${s.enabled ? 'left-[18px]' : 'left-0.5'}`} />
                         </button>
                         <div className="min-w-0 flex-1">
-                          <p className={`truncate text-[12.5px] font-semibold ${s.enabled ? 'text-slate-900' : 'text-slate-400'}`} title={s.name}>{s.name}</p>
-                          <p className="truncate font-mono text-[10.5px] text-slate-400" title={s.serviceCode}>{s.serviceCode}</p>
+                          <p className={`break-words text-[12.5px] font-semibold leading-snug ${s.enabled ? 'text-slate-900' : 'text-slate-400'}`}>{s.name}</p>
+                          <p className="break-all font-mono text-[10.5px] text-slate-400">{s.serviceCode}</p>
                         </div>
                         <button
                           type="button"
@@ -566,6 +651,18 @@ export default function ShippingServicesPage({ active = true, origin: originProp
             )
           })
         )}
+        {filtering && shownCount === 0 ? (
+          <p className="col-span-full py-10 text-center text-sm text-slate-500">
+            No services match.{' '}
+            <button
+              type="button"
+              onClick={() => { setQuery(''); setFilters(new Set()) }}
+              className="font-semibold text-[#412d15] underline underline-offset-2"
+            >
+              Clear search and filters
+            </button>
+          </p>
+        ) : null}
       </section>
 
       {/* allowed-packages modal */}
