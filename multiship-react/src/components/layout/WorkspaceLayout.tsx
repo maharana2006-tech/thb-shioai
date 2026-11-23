@@ -1,11 +1,15 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
 import Sidebar from './Sidebar'
 import WorkspaceHeader from './WorkspaceHeader'
 import BrandBackdrop from './BrandBackdrop'
 import RouteErrorBoundary from '../errors/RouteErrorBoundary'
+import ShipmatePanel, { SHIPMATE_DEFAULT_WIDTH } from '../shipmate/ShipmatePanel'
+import { useAppSession } from '../../hooks/useAppSession'
+import { normalizeRole } from '../../utils/roles'
 
 const PIN_KEY = 'multiship_nav_pinned'
+const SHIPMATE_WIDTH_KEY = 'multiship_shipmate_width'
 
 /**
  * App frame: full-height navy sidebar on the left (collapsible, pin state
@@ -32,6 +36,27 @@ export default function WorkspaceLayout() {
 
   const togglePin = () => setPinned((cur) => !cur)
 
+  // The AI endpoints are ADMIN/USER only, so client (TENANT) logins get no Shipmate.
+  const canUseShipmate = normalizeRole(useAppSession().role) !== 'TENANT'
+  const [shipmateOpen, setShipmateOpen] = useState(false)
+  const [shipmateWidth, setShipmateWidth] = useState(
+    () => Number(localStorage.getItem(SHIPMATE_WIDTH_KEY)) || SHIPMATE_DEFAULT_WIDTH,
+  )
+  useEffect(() => {
+    localStorage.setItem(SHIPMATE_WIDTH_KEY, String(shipmateWidth))
+  }, [shipmateWidth])
+  useEffect(() => {
+    if (!canUseShipmate) return
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'j') {
+        event.preventDefault()
+        setShipmateOpen((cur) => !cur)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [canUseShipmate])
+
   // Settings brings its own menu beside the sidebar, so there the sidebar
   // starts as the icon rail (hover still peeks it open). Pinning it there
   // lasts for the visit and leaves the operator's saved choice alone.
@@ -41,7 +66,10 @@ export default function WorkspaceLayout() {
   const toggleRail = onSettings ? () => setSettingsPinned((cur) => !cur) : togglePin
 
   return (
-    <div className="relative min-h-screen overflow-x-clip bg-[var(--color-background)] text-[var(--color-text)]">
+    <div
+      style={{ '--shipmate-w': `${shipmateWidth}px` } as CSSProperties}
+      className="relative min-h-screen overflow-x-clip bg-[var(--color-background)] text-[var(--color-text)]"
+    >
       {/* whisper-subtle signature texture behind every page (hidden in print) */}
       <div className="fixed inset-0 print:hidden">
         <BrandBackdrop variant="light" />
@@ -55,8 +83,14 @@ export default function WorkspaceLayout() {
       {/* Sprint 51 FE-M5 — content column starts full-bleed on <md (drawer
           is an overlay, not a permanent rail) and re-inherits the 56/64
           margin on md+. */}
-      <div className={`relative transition-[margin] duration-200 ease-out print:ml-0 ml-0 ${railPinned ? 'md:ml-56' : 'md:ml-16'}`}>
-        <WorkspaceHeader onOpenMobileNav={() => setMobileNavOpen(true)} />
+      {/* Only the sidebar side animates: the right margin has to follow a resize drag without lag.
+          The page gives way to Shipmate until it would drop under ~760px; past that the panel lies over it. */}
+      <div className={`relative transition-[margin-left] duration-200 ease-out print:ml-0 print:mr-0 ml-0 ${railPinned ? 'md:ml-56' : 'md:ml-16'} ${shipmateOpen ? 'min-[1440px]:mr-[min(var(--shipmate-w),calc(100vw-984px))]' : ''}`}>
+        <WorkspaceHeader
+          onOpenMobileNav={() => setMobileNavOpen(true)}
+          shipmateOpen={shipmateOpen}
+          onToggleShipmate={canUseShipmate ? () => setShipmateOpen((cur) => !cur) : undefined}
+        />
         <main className="px-4 py-5 sm:px-6 lg:px-8">
           {/* Sprint 49 Tier 4 Fix 1 — route-scoped boundary so a broken
               /orders (or any route) doesn't kill the sidebar + topbar
@@ -65,6 +99,15 @@ export default function WorkspaceLayout() {
           <RouteScopedBoundary />
         </main>
       </div>
+      {/* Docks beside the page from 1440px; on narrower screens it lies over the right edge. */}
+      {canUseShipmate ? (
+        <ShipmatePanel
+          open={shipmateOpen}
+          onClose={() => setShipmateOpen(false)}
+          width={shipmateWidth}
+          onWidthChange={setShipmateWidth}
+        />
+      ) : null}
     </div>
   )
 }

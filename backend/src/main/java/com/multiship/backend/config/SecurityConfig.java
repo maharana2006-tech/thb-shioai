@@ -1,5 +1,6 @@
 package com.multiship.backend.config;
 
+import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -165,6 +166,14 @@ public class SecurityConfig {
                         .sessionAuthenticationStrategy(
                                 new org.springframework.security.web.authentication.session.NullAuthenticatedSessionStrategy()))
                 .authorizeHttpRequests(auth -> auth
+                        // A streamed reply (SseEmitter: /ai/chat, /events/stream) ends with the
+                        // container re-dispatching the same request as ASYNC. JwtAuthenticationFilter
+                        // skips that dispatch (OncePerRequestFilter default), so it arrives with no
+                        // user and anyRequest().authenticated() rejects it after the response is
+                        // already sent: an "Access Denied" stack trace per reply. A client cannot
+                        // start an ASYNC dispatch; it only continues a request that was authorised
+                        // when it came in.
+                        .dispatcherTypeMatchers(DispatcherType.ASYNC).permitAll()
                         // Open endpoints
                         .requestMatchers("/api/v1/auth/**").permitAll()
                         // The container's internal forward to /error when a controller

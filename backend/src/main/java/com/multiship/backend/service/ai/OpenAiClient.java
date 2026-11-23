@@ -4,30 +4,40 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.multiship.backend.service.SystemSettingService;
 import com.multiship.backend.service.TenantScopeEnforcer;
-import com.multiship.backend.service.carriers.HttpClients;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.metadata.Usage;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.openai.OpenAiChatModel;
+import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
-import org.springframework.web.client.RestClient;
 import org.springframework.web.server.ResponseStatusException;
+import reactor.core.publisher.Flux;
 
+import java.time.Duration;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Thin wrapper over OpenAI Chat Completions in JSON mode. Every AI-assist
- * feature (address parse, HS suggest, packaging, service, review) funnels
- * through {@link #completeJson} so the key handling, error mapping and JSON
- * unwrapping live in one place.
+ * The one place that knows which AI provider Multiship talks to. Calls go
+ * through Spring AI's {@link ChatClient}, so moving to another provider means
+ * changing how {@link #chatClient()} builds its model and nothing else.
+ *
+ * <p>Every AI-assist feature (address parse, HS suggest, packaging, service,
+ * review) funnels through {@link #completeJson}; the Shipmate chat streams
+ * through {@link #streamText}. Key handling, error mapping and metering are
+ * shared by both.
  *
  * <p>Sprint 49 Tier 0 — key resolution order:
  * <ol>
@@ -78,14 +88,16 @@ public class OpenAiClient {
     private final String baseUrl;
 
     /**
-     * Sprint 51 T4 finding #9 — shared {@link RestClient} built ONCE
-     * in the constructor with 5s connect / 30s read via
-     * {@link HttpClients#newBuilder()}. Pre-T4 the client was rebuilt
-     * per call inside {@link #completeJson} with no timeout config,
-     * so an OpenAI stall (30-120s hangs are routine) drained Tomcat
-     * threads and there was needless handshake cost per request.
+     * A whole call, streamed replies included, may take this long. An OpenAI
+     * stall (30-120s hangs are routine) must not hold a request forever.
      */
-    private final RestClient sharedRestClient;
+    private static final Duration CALL_TIMEOUT = Duration.ofSeconds(60);
+    /** One automatic retry on a rate-limit, 5xx or dropped connection, then the caller is told. */
+    private static final int MAX_RETRIES = 1;
+
+    /** The client is built once per key and shared, so connections are reused. */
+    private record Built(String apiKey, ChatClient client) { }
+    private volatile Built built;
 
     public static final String SETTING_KEY = "openai.api-key";
 
@@ -104,7 +116,6 @@ public class OpenAiClient {
         this.envApiKey = envApiKey;
         this.model = model;
         this.baseUrl = baseUrl;
-        this.sharedRestClient = HttpClients.newBuilder().baseUrl(baseUrl).build();
     }
 
     private String resolveApiKey() {
@@ -115,6 +126,35 @@ public class OpenAiClient {
 
     public boolean isConfigured() {
         return StringUtils.hasText(resolveApiKey());
+    }
+
+    /**
+     * The chat client for the key in force right now. The key lives in
+     * system_settings and an admin can rotate it while the app runs, so the
+     * client is rebuilt whenever the resolved key differs from the one it was
+     * built with.
+     *
+     * @throws ResponseStatusException 503 when no key is configured
+     */
+    private ChatClient chatClient() {
+        String apiKey = resolveApiKey();
+        if (!StringUtils.hasText(apiKey)) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "AI assist is not configured. Set OPENAI_API_KEY or store the key via the admin Settings page.");
+        }
+        Built current = built;
+        if (current == null || !current.apiKey().equals(apiKey)) {
+            OpenAiChatOptions options = OpenAiChatOptions.builder()
+                    .apiKey(apiKey)
+                    .baseUrl(baseUrl)
+                    .model(model)
+                    .timeout(CALL_TIMEOUT)
+                    .maxRetries(MAX_RETRIES)
+                    .build();
+            current = new Built(apiKey, ChatClient.create(OpenAiChatModel.builder().options(options).build()));
+            built = current;
+        }
+        return current.client();
     }
 
     /**
@@ -135,39 +175,24 @@ public class OpenAiClient {
      *                 (e.g. {@code parse-address}, {@code suggest-hs}).
      */
     public JsonNode completeJson(String systemPrompt, String userContent, String endpoint) {
-        String apiKey = resolveApiKey();
-        if (!StringUtils.hasText(apiKey)) {
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
-                    "AI assist is not configured. Set OPENAI_API_KEY or store the key via the admin Settings page.");
-        }
+        ChatClient client = chatClient();
         if (!StringUtils.hasText(userContent)) {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_CONTENT, "Nothing to send to the AI service.");
         }
 
-        Map<String, Object> body = Map.of(
-                "model", model,
-                "temperature", 0,
-                "response_format", Map.of("type", "json_object"),
-                "messages", List.of(
-                        Map.of("role", "system", "content", systemPrompt),
-                        Map.of("role", "user", "content", userContent)
-                )
-        );
-
         String tenant = resolveTenantTag();
         String endpointTag = StringUtils.hasText(endpoint) ? endpoint : ENDPOINT_UNKNOWN;
         long startNanos = System.nanoTime();
-        String raw;
+        ChatResponse response;
         try {
-            raw = sharedRestClient
-                    .post()
-                    .uri("/chat/completions")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .accept(MediaType.APPLICATION_JSON)
-                    .header("Authorization", "Bearer " + apiKey)
-                    .body(body)
-                    .retrieve()
-                    .body(String.class);
+            response = client.prompt()
+                    .system(systemPrompt)
+                    .user(userContent)
+                    .options(OpenAiChatOptions.builder()
+                            .temperature(0.0)
+                            .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build()))
+                    .call()
+                    .chatResponse();
         } catch (Exception ex) {
             recordRequest(tenant, endpointTag, "error", startNanos);
             log.warn("OpenAI request failed: {}", ex.getMessage());
@@ -176,9 +201,8 @@ public class OpenAiClient {
         }
 
         try {
-            JsonNode root = objectMapper.readTree(raw == null ? "{}" : raw);
-            recordTokens(tenant, endpointTag, root.path("usage"));
-            String content = root.path("choices").path(0).path("message").path("content").asText("");
+            recordTokens(tenant, endpointTag, response == null ? null : response.getMetadata().getUsage());
+            String content = textOf(response);
             if (!StringUtils.hasText(content)) {
                 recordRequest(tenant, endpointTag, "error", startNanos);
                 throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "The AI service returned an empty result.");
@@ -194,6 +218,51 @@ public class OpenAiClient {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
                     "The AI service returned an unexpected result.");
         }
+    }
+
+    /**
+     * Stream a plain-text reply piece by piece, for the Shipmate chat. Nothing
+     * is sent to the provider until the returned stream is subscribed to, and
+     * cancelling the subscription stops the provider call.
+     *
+     * @param messages the conversation so far, ending with the user's new message
+     * @param endpoint feature name for the {@code endpoint} metric tag
+     * @throws ResponseStatusException 503 when no key is configured (thrown here, before any stream exists)
+     */
+    public Flux<String> streamText(String systemPrompt, List<Message> messages, String endpoint) {
+        ChatClient client = chatClient();
+        // Resolved here on the request thread: the stream itself runs on the HTTP client's threads,
+        // where there is no security context to read the tenant from.
+        String tenant = resolveTenantTag();
+        String endpointTag = StringUtils.hasText(endpoint) ? endpoint : ENDPOINT_UNKNOWN;
+        AtomicReference<Usage> lastUsage = new AtomicReference<>();
+        long[] startNanos = new long[1];
+        return client.prompt()
+                .system(systemPrompt)
+                .messages(messages)
+                // Usage arrives on the final chunk only when asked for.
+                .options(OpenAiChatOptions.builder().streamUsage(true))
+                .stream()
+                .chatResponse()
+                .doOnSubscribe(sub -> startNanos[0] = System.nanoTime())
+                .doOnNext(chunk -> {
+                    Usage usage = chunk.getMetadata().getUsage();
+                    if (usage != null) lastUsage.set(usage);
+                })
+                .doOnComplete(() -> {
+                    recordTokens(tenant, endpointTag, lastUsage.get());
+                    recordRequest(tenant, endpointTag, "success", startNanos[0]);
+                })
+                .doOnError(ex -> {
+                    recordRequest(tenant, endpointTag, "error", startNanos[0]);
+                    log.warn("OpenAI stream failed: {}", ex.getMessage());
+                })
+                .mapNotNull(OpenAiClient::textOf)
+                .filter(StringUtils::hasLength);
+    }
+
+    private static String textOf(ChatResponse response) {
+        return response == null || response.getResult() == null ? null : response.getResult().getOutput().getText();
     }
 
     // ── Micrometer wiring (Sprint 51 BS-M2) ─────────────────────────────────
@@ -224,17 +293,17 @@ public class OpenAiClient {
     }
 
     /**
-     * Emit the three token counters from an OpenAI {@code usage} block.
-     * The block is optional (some error responses omit it); missing or
+     * Emit the three token counters from the provider's usage report.
+     * The report is optional (some error responses omit it); missing or
      * zero counts are simply skipped rather than emitting a zero-value
      * increment.
      */
-    private void recordTokens(String tenant, String endpoint, JsonNode usage) {
+    private void recordTokens(String tenant, String endpoint, Usage usage) {
         MeterRegistry reg = registry();
-        if (reg == null || usage == null || usage.isMissingNode() || usage.isNull()) return;
-        long prompt = usage.path("prompt_tokens").asLong(0L);
-        long completion = usage.path("completion_tokens").asLong(0L);
-        long total = usage.path("total_tokens").asLong(0L);
+        if (reg == null || usage == null) return;
+        long prompt = count(usage.getPromptTokens());
+        long completion = count(usage.getCompletionTokens());
+        long total = count(usage.getTotalTokens());
         if (prompt > 0) {
             Counter.builder("openai.prompt_tokens")
                     .description("OpenAI prompt (input) tokens billed per tenant + AI endpoint.")
@@ -259,6 +328,10 @@ public class OpenAiClient {
                     .register(reg)
                     .increment(total);
         }
+    }
+
+    private static long count(Integer tokens) {
+        return tokens == null ? 0L : tokens;
     }
 
     /**
