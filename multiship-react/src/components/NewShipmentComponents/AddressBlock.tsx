@@ -6,10 +6,11 @@
  * modal) lives in one place instead of inline in a 4.8K-LoC page.
  */
 import { useState, type ReactNode } from 'react'
-import { FiZap } from 'react-icons/fi'
+import { FiClipboard, FiZap } from 'react-icons/fi'
 import type { ManualShipmentAddress } from '../../api/orderService'
 import { aiService } from '../../api/aiService'
 import { notify } from '../../utils/notify'
+import { normalizeParsedAddress } from './parsedAddress'
 import {
   dialCodeFor,
   phoneHintFor,
@@ -45,39 +46,39 @@ export function AddressBlock({
   const [pasteText, setPasteText] = useState('')
   const [parsing, setParsing] = useState(false)
 
+  const closePaste = () => { setPasteOpen(false); setPasteText('') }
+
   const runParse = async () => {
-    if (!pasteText.trim()) return
+    if (!pasteText.trim() || parsing) return
     setParsing(true)
     try {
       const parsed = await aiService.parseAddress(pasteText)
-      // Only apply the fields the model actually found — never clobber with blanks.
-      const patch: Partial<ManualShipmentAddress> = {}
-      const keys: (keyof ManualShipmentAddress)[] = [
-        'name', 'company', 'phone', 'email', 'addressLine1', 'addressLine2',
-        'city', 'state', 'postalCode', 'countryCode',
-      ]
-      let filled = 0
-      for (const k of keys) {
-        const v = (parsed as Record<string, unknown>)[k]
-        if (typeof v === 'string' && v.trim()) {
-          // Every key in `keys` is a string-valued field, but TS widens patch[k]
-          // to the full value union — assign through a string-keyed view.
-          ;(patch as Record<string, string>)[k] = v.trim()
-          filled += 1
-        }
-      }
+      const { patch, filled, replaced } = normalizeParsedAddress(parsed, value)
       if (!filled) {
         notify.error('Could not find an address in that text.')
         return
       }
+      if (replaced && !(await notify.confirm(
+        `${replaced} field${replaced === 1 ? '' : 's'} already filled in will be replaced.`,
+        { title: 'Replace existing values?', confirmLabel: 'Replace' },
+      ))) return
       onChange(patch)
       notify.success(`Autofilled ${filled} field${filled === 1 ? '' : 's'} — please review.`)
-      setPasteOpen(false)
-      setPasteText('')
+      closePaste()
     } catch (err) {
       notify.apiError(err, 'AI autofill failed. Enter the address manually.')
     } finally {
       setParsing(false)
+    }
+  }
+
+  const pasteFromClipboard = async () => {
+    try {
+      const text = await navigator.clipboard.readText()
+      if (text.trim()) setPasteText(text)
+      else notify.info('Clipboard is empty.')
+    } catch {
+      notify.error('Clipboard access was blocked — paste into the box instead.')
     }
   }
 
@@ -90,26 +91,43 @@ export function AddressBlock({
               className={`${inputCls} min-h-[64px] resize-y`}
               value={pasteText}
               onChange={(e) => setPasteText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') closePaste()
+                else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void runParse() }
+              }}
               placeholder="Paste an address, email signature, or order text — e.g. “Jane Doe, Acme Inc, 123 Market St Suite 400, Buffalo NY 14201, +1 212 555 0100”"
               autoFocus
             />
-            <div className="mt-2 flex items-center gap-2">
+            <div className="mt-2 flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={() => void runParse()}
                 disabled={parsing || !pasteText.trim()}
+                title="⌘/Ctrl + Enter"
                 className="inline-flex items-center gap-1.5 rounded-lg bg-[#412d15] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#1f150c] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <FiZap className="h-3.5 w-3.5" />
                 {parsing ? 'Reading…' : 'Autofill fields'}
               </button>
+              {typeof navigator.clipboard?.readText === 'function' ? (
+                <button
+                  type="button"
+                  onClick={() => void pasteFromClipboard()}
+                  disabled={parsing}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0] disabled:opacity-50"
+                >
+                  <FiClipboard className="h-3.5 w-3.5" />
+                  Paste from clipboard
+                </button>
+              ) : null}
               <button
                 type="button"
-                onClick={() => { setPasteOpen(false); setPasteText('') }}
+                onClick={closePaste}
                 className="rounded-lg border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
               >
                 Cancel
               </button>
+              <span className="text-[11px] text-[#8a7a5c]">Country, state and phone are converted to the form's codes.</span>
             </div>
           </div>
         ) : (
