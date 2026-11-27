@@ -58,7 +58,7 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    restart: unless-stopped
+    #restart: unless-stopped
     # Replaces the Dockerfile HEALTHCHECK, which Jib can't set. The base image
     # has no curl, so the probe speaks HTTP over bash's /dev/tcp.
     healthcheck:
