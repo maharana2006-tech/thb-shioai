@@ -62,6 +62,7 @@ public class TenantRateLimitFilter extends OncePerRequestFilter {
             "/api/v1/order-import/commit",
             "/api/v1/rate-shop",
             "/api/v2/external/shipments",
+            "/api/v2/external/shipments/batch",
             "/api/v2/external/shipments/*/void",
             "/api/v2/external/rates",
             "/api/v1/external/**");

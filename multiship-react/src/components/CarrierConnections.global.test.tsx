@@ -271,7 +271,7 @@ describe('CarrierConnections · Global · positive', () => {
 
     // Drawer opens as a dialog with the "Add carrier account" aria-label.
     await waitFor(() => {
-      expect(screen.getByRole('dialog', { name: /Add carrier account/i })).toBeTruthy()
+      expect(screen.getByRole('region', { name: /Add carrier account/i })).toBeTruthy()
     })
   })
 

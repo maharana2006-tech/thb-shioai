@@ -52,6 +52,8 @@ const carrierOptions = [
   { code: 'FEDEX', label: 'FedEx' },
   { code: 'USPS', label: 'USPS' },
   { code: 'DHL', label: 'DHL Express' },
+  { code: 'ROYAL_MAIL', label: 'Royal Mail' },
+  { code: 'DPD', label: 'DPD' },
 ]
 
 export interface CarrierDraftStepProps {

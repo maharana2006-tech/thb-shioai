@@ -33,5 +33,44 @@ services:
       timeout: 3s
       retries: 5
 
+  # Backend image built by Jib (no Dockerfile build here). Build it first:
+  #   cd backend && ./mvnw compile jib:dockerBuild -Dzebrash.skip=false
+  # Opt-in profile so `docker compose up` still starts only Redis:
+  #   docker compose --profile backend up -d
+  # Postgres is expected on the host (not in this file), reached via
+  # host.docker.internal. Override any DB_* / JWT_* values from a .env file.
+  backend:
+    image: thb-shioai-backend:latest
+    container_name: thb-shioai-backend
+    profiles: ["backend"]
+    ports:
+      - "8080:8080"
+    environment:
+      DB_URL: ${DB_URL:-jdbc:postgresql://host.docker.internal:5432/multiship_db}
+      DB_USERNAME: ${DB_USERNAME:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-Pgsql@2026}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      # Empty list turns Redis auto-config back on (it's excluded by default).
+      REDIS_AUTOCONFIGURE_EXCLUDE: ""
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    # Replaces the Dockerfile HEALTHCHECK, which Jib can't set. The base image
+    # has no curl, so the probe speaks HTTP over bash's /dev/tcp.
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - 'exec 3<>/dev/tcp/localhost/8080 && printf "GET /actuator/health/liveness HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3 && grep -q "\"UP\"" <&3'
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+
 volumes:
   redis-data:

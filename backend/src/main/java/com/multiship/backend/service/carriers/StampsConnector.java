@@ -217,7 +217,7 @@ public class StampsConnector implements CarrierConnector {
         try {
             List<ServiceOffering> live = fetchLiveServices(originCountry, accessToken, environment);
             if (!live.isEmpty()) {
-                return new ServiceAvailability(live, true, "USPS Shipping Options API");
+                return new ServiceAvailability(live, true, "USPS Shipping Options API", true);
             }
         } catch (Exception ex) {
             log.warn("USPS availability lookup unavailable; using verified published catalog. Reason: {}", ex.getMessage());

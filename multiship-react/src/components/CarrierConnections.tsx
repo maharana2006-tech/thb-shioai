@@ -1,5 +1,5 @@
 import { relativeTime } from '../utils/relativeTime'
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useModalDismiss } from '../hooks/useModalDismiss'
 import { useNavigate, useOutletContext, useSearchParams } from 'react-router-dom'
 import { settingsPaths } from '../routes/workspaceRoutes'
@@ -7,7 +7,9 @@ import { notify } from '../utils/notify'
 import {
   FiActivity,
   FiAlertTriangle,
+  FiArrowLeft,
   FiBox,
+  FiCheck,
   FiCheckCircle,
   FiEdit2,
   FiKey,
@@ -17,6 +19,7 @@ import {
   FiServer,
   FiStar,
   FiFilter,
+  FiInfo,
   FiShield,
   FiTrash2,
   FiTruck,
@@ -72,6 +75,8 @@ const carrierOptions = [
   { code: 'FEDEX', id: 'fedex', label: 'FedEx' },
   { code: 'USPS', id: 'usps', label: 'USPS' },
   { code: 'DHL', id: 'dhl', label: 'DHL Express' },
+  { code: 'ROYAL_MAIL', id: 'royal_mail', label: 'Royal Mail' },
+  { code: 'DPD', id: 'dpd', label: 'DPD' },
 ]
 
 /**
@@ -126,6 +131,30 @@ const credentialLabelsFor = (carrierCode: string) => {
       secretShort: 'API Secret',
       helper:
         'Get these on developer.dhl.com under your MyDHL API application. DHL uses HTTP Basic Auth on every call — no OAuth token exchange.',
+    }
+  }
+  if (normalized === 'ROYAL_MAIL') {
+    return {
+      accountNumberLabel: 'OBA account number',
+      accountNumberPlaceholder: 'Your Royal Mail Online Business Account number',
+      idLong: 'Shipping account name (optional)',
+      secretLong: 'Click & Drop API key',
+      idShort: 'shipping account name',
+      secretShort: 'API key',
+      helper:
+        'Click & Drop → Settings → Integrations → API: create a key and paste it here. Only the key is required. Royal Mail has no sandbox, so a label from a SANDBOX account is real until the order is deleted before manifesting.',
+    }
+  }
+  if (normalized === 'DPD') {
+    return {
+      accountNumberLabel: 'DPD account number',
+      accountNumberPlaceholder: 'Your DPD UK account number',
+      idLong: 'MyDPD username',
+      secretLong: 'MyDPD password',
+      idShort: 'MyDPD username',
+      secretShort: 'MyDPD password',
+      helper:
+        'DPD UK issues API access on your MyDPD account — ask your DPD account manager to enable it. DPD has no sandbox: a label is a real consignment until it is voided, but unscanned labels are not charged.',
     }
   }
   return {
@@ -299,9 +328,19 @@ export default function CarrierConnections({
   // Filters apply live, so closing discards nothing: no prompt.
   const closeFilters = useModalDismiss(showFilters, filtersDialogRef, () => setShowFilters(false), { confirmDiscard: false })
 
-  const [drawerOpen, setDrawerOpen] = useState(false)
+  // The add/edit form is a page, not a drawer. In page mode (default) its open
+  // state IS the URL — ?account=new|<id> — so Back, Forward and refresh land on
+  // the same form. Embedded mode (client editor tab) owns no URL and keeps local state.
+  const [drawerOpenState, setDrawerOpenState] = useState(false)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const urlAccount = embedded ? null : searchParams.get('account')
+  const drawerOpen = embedded ? drawerOpenState : urlAccount !== null
+  const closeForm = () => {
+    if (embedded) setDrawerOpenState(false)
+    else setSearchParams((p) => { p.delete('account'); return p })
+  }
   const drawerDialogRef = useRef<HTMLElement>(null)
-  const requestDrawerClose = useModalDismiss(drawerOpen, drawerDialogRef, () => setDrawerOpen(false))
+  const requestDrawerClose = useModalDismiss(drawerOpen, drawerDialogRef, closeForm)
   const [drawer, setDrawer] = useState<DrawerState>(emptyDrawer)
   // One-shot signal: which drawer input to focus when the drawer opens next.
   // Ref (not state) so setting it doesn't cascade a re-render, and reading it
@@ -377,7 +416,6 @@ export default function CarrierConnections({
   }, [loadAccounts])
 
   // Back from Stamps.com (?seraCallback=ok|error&detail=…): say how it went, then tidy the address.
-  const [searchParams, setSearchParams] = useSearchParams()
   const seraShown = useRef(false)
   useEffect(() => {
     const sera = searchParams.get('seraCallback')
@@ -589,7 +627,8 @@ export default function CarrierConnections({
     }
   }
 
-  const openDrawer = (account?: CarrierAccountRef, focus: DrawerFocusField = null) => {
+  /** Load an account (or a blank draft) into the form without touching the URL. */
+  const fillForm = (account?: CarrierAccountRef, focus: DrawerFocusField = null) => {
     setDrawerCheck({ state: 'idle' })
     if (account) {
       // Preserve the stored carrier code even if we don't recognize it — the
@@ -649,8 +688,26 @@ export default function CarrierConnections({
       setRotatingCredentials(true)
     }
     drawerFocusRef.current = focus
-    setDrawerOpen(true)
   }
+
+  const openDrawer = (account?: CarrierAccountRef, focus: DrawerFocusField = null) => {
+    fillForm(account, focus)
+    if (embedded) setDrawerOpenState(true)
+    else setSearchParams((p) => { p.set('account', account ? String(account.id) : 'new'); return p })
+  }
+
+  // Deep link / refresh on ?account=<id>: the URL says "edit" but the form is
+  // still blank, so load that row once the account book has arrived. A blank
+  // draft already matches ?account=new, and an unknown id falls back to the list.
+  useEffect(() => {
+    if (embedded || !urlAccount || urlAccount === 'new') return
+    if (String(drawer.editingId) === urlAccount) return
+    const account = accounts.find((a) => String(a.id) === urlAccount)
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- URL is the source of truth; the form must be loaded from the fetched account book, not derivable at render
+    if (account) fillForm(account)
+    else if (!loading) closeForm()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fillForm/closeForm are plain closures; re-run only when the URL or the account book changes
+  }, [embedded, urlAccount, accounts, loading, drawer.editingId])
 
   // Prefill focus on the specific field when the drawer opens via a cell click.
   useEffect(() => {
@@ -717,8 +774,11 @@ export default function CarrierConnections({
 
   const runDrawerCheck = async () => {
     const credentialTerms = credentialLabelsFor(drawer.carrierCode)
-    if (!drawer.clientId.trim() || !drawer.clientSecret.trim()) {
-      notify.invalid(`Enter the ${credentialTerms.idShort} and ${credentialTerms.secretShort} first.`)
+    const idRequired = drawer.carrierCode !== 'ROYAL_MAIL' // Click & Drop: API key alone
+    if ((idRequired && !drawer.clientId.trim()) || !drawer.clientSecret.trim()) {
+      notify.invalid(idRequired
+        ? `Enter the ${credentialTerms.idShort} and ${credentialTerms.secretShort} first.`
+        : `Enter the ${credentialTerms.secretShort} first.`)
       return
     }
     setDrawerCheck({ state: 'checking' })
@@ -935,7 +995,7 @@ export default function CarrierConnections({
         }
       }
       notify.success(`Account ${payload.accountNumber} saved to the account book.`)
-      setDrawerOpen(false)
+      closeForm()
       await loadAccounts()
     } catch (error) {
       notify.apiError(error, 'Failed to save the account.')
@@ -1238,6 +1298,7 @@ export default function CarrierConnections({
 
   return (
     <div className="space-y-4">
+      {drawerOpen ? null : (<>
       {/* ===== health strip — hidden in embedded mode so the tab doesn't duplicate totals from the outer page ===== */}
       {!embedded ? (
         <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -1433,16 +1494,14 @@ export default function CarrierConnections({
         )}
       </section>
 
-      {/* ===== add / edit drawer ===== */}
+      </>)}
+
+      {/* ===== add / edit form — replaces the list while open (see drawerOpen / ?account=) ===== */}
       {drawerOpen ? (
-        <>
-          <div className="fixed inset-0 z-40 bg-slate-950/45" onClick={() => void requestDrawerClose()} aria-hidden="true" />
-          <aside
+          <section
             ref={drawerDialogRef}
-            role="dialog"
-            aria-modal="true"
             aria-label={drawer.editingId ? 'Update carrier account' : 'Add carrier account'}
-            className="fixed inset-y-0 right-0 z-50 flex w-full max-w-[420px] flex-col border-l border-slate-200 bg-white shadow-[-18px_0_50px_rgba(8,14,26,0.18)]"
+            className="flex w-full flex-col rounded-2xl border border-slate-200 bg-white shadow-sm"
           >
             <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
               <div>
@@ -1454,16 +1513,16 @@ export default function CarrierConnections({
               <button
                 type="button"
                 onClick={() => void requestDrawerClose()}
-                aria-label="Close"
-                className="rounded-xl border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12px] font-semibold text-slate-600 transition hover:bg-slate-50"
               >
-                <FiX className="h-4 w-4" />
+                <FiArrowLeft className="h-3.5 w-3.5" /> Back to accounts
               </button>
             </div>
 
-            <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+            {/* Two columns on desktop: the short steps (1, 2, 4) stack on the left, the long Credentials step fills the right. */}
+            <div className="grid gap-4 px-5 py-4 lg:grid-cols-5 lg:grid-rows-[auto_auto_1fr] lg:items-start">
               {/* Account type toggle */}
-              <DrawerStep n="1" title={drawer.editingId ? 'Account type (locked)' : 'Account type'}>
+              <DrawerStep n="1" title={drawer.editingId ? 'Account type (locked)' : 'Account type'} className="lg:col-span-2">
                 <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Account type">
                   {(['platform', 'client'] as const).map((t) => {
                     const selected = drawer.accountType === t
@@ -1536,8 +1595,11 @@ export default function CarrierConnections({
                 )}
               </DrawerStep>
 
-              <DrawerStep n="2" title={drawer.editingId ? 'Carrier (locked)' : 'Carrier'}>
-                <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Carrier">
+              <DrawerStep n="2" title={drawer.editingId ? 'Carrier (locked)' : 'Carrier'} className="lg:col-span-2">
+                {/* Payment-picker pattern: one row of equal tiles, white ground so each
+                    brand mark reads on its own, ~28px logo inside a 56px touch target,
+                    selection = brand-brown border + ring + check badge (never colour alone). */}
+                <div className="grid grid-cols-5 gap-2" role="radiogroup" aria-label="Carrier">
                   {carrierOptions.map((option) => {
                     const selected = drawer.carrierCode === option.code
                     const locked = drawer.editingId !== null
@@ -1557,29 +1619,38 @@ export default function CarrierConnections({
                         }}
                         disabled={locked}
                         aria-disabled={locked}
+                        aria-label={option.label}
                         title={
                           locked
                             ? selected
-                              ? 'Carrier is locked once the account is saved.'
-                              : "Can't change carrier on an existing account — delete and recreate to switch."
-                            : undefined
+                              ? `${option.label} — carrier is locked once the account is saved.`
+                              : `${option.label} — can't change carrier on an existing account; delete and recreate to switch.`
+                            : option.label
                         }
-                        className={`grid justify-items-center gap-1.5 rounded-2xl border px-2 py-2.5 text-[10.5px] font-bold transition ${
+                        className={`relative flex h-[68px] flex-col items-center justify-center gap-1.5 rounded-xl border bg-white px-1.5 text-[10px] font-semibold transition ${
                           selected
                             ? locked
-                              ? 'cursor-not-allowed border-slate-300 bg-slate-100 text-slate-700'
-                              : 'border-slate-950 bg-white text-slate-950'
+                              ? 'cursor-not-allowed border-slate-300 bg-slate-50 text-slate-600'
+                              : 'border-[#412d15] text-slate-950 shadow-sm ring-4 ring-[#412d15]/10'
                             : locked
-                              ? 'cursor-not-allowed border-slate-100 bg-slate-50 text-slate-300 opacity-60'
-                              : 'border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100'
+                              ? 'cursor-not-allowed border-slate-100 text-slate-400 opacity-50'
+                              : 'border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50'
                         }`}
                       >
                         <CarrierLogo
                           carrierId={option.id}
-                          size={18}
-                          className={`rounded-sm ${!selected && drawer.editingId ? 'opacity-50 grayscale' : ''}`}
+                          size={26}
+                          className={`max-w-[85%] ${!selected && drawer.editingId ? 'grayscale' : ''}`}
                         />
-                        {option.label}
+                        <span className="truncate leading-none">{option.label}</span>
+                        {selected && !locked ? (
+                          <span
+                            aria-hidden="true"
+                            className="absolute -right-1.5 -top-1.5 grid h-4 w-4 place-items-center rounded-full bg-[#412d15] text-white shadow"
+                          >
+                            <FiCheck className="h-2.5 w-2.5" strokeWidth={3} />
+                          </span>
+                        ) : null}
                       </button>
                     )
                   })}
@@ -1600,7 +1671,14 @@ export default function CarrierConnections({
                 ) : null}
               </DrawerStep>
 
-              <DrawerStep n="3" title="Credentials">
+              {/* Credentials flow into two newspaper columns on desktop so the optional
+                  defaults box sits beside the key fields instead of below them. */}
+              <DrawerStep
+                n="3"
+                title="Credentials"
+                className="lg:col-span-3 lg:col-start-3 lg:row-span-3 lg:row-start-1"
+                bodyClassName="lg:columns-2 lg:gap-x-5 [&>*]:break-inside-avoid"
+              >
                 <Field label="Account name" error={drawerErrors.accountName}>
                   <input
                     ref={accountNameRef}
@@ -1852,7 +1930,10 @@ export default function CarrierConnections({
                       any lane; DISABLED = returns rejected outright on this
                       account. Default DOMESTIC_ONLY on every existing row. */}
                   <div className="mt-2">
-                    <Field label="Return-label scope">
+                    <Field
+                      label="Return-label scope"
+                      hint="Which lanes this carrier account supports return labels on. Set to Domestic and international only when the carrier account actually supports international returns."
+                    >
                       <Select
                         value={drawer.returnScope || 'DOMESTIC_ONLY'}
                         onChange={(e) => setDrawer((c) => ({ ...c, returnScope: e.target.value }))}
@@ -1862,11 +1943,6 @@ export default function CarrierConnections({
                         <option value="DISABLED">Disabled — no returns</option>
                       </Select>
                     </Field>
-                    <p className="-mt-1 mb-2 text-[10.5px] leading-4 text-slate-400">
-                      Which lanes this carrier account supports return labels on. Set to
-                      Domestic and international only when the carrier account actually
-                      supports international returns.
-                    </p>
                   </div>
 
                   {/* F6-B2 — per-account billing currency override. Blank means
@@ -1876,7 +1952,10 @@ export default function CarrierConnections({
                       money-shaped request fields to this currency via
                       FxRateService if they arrive in a different currency. */}
                   <div className="mt-2">
-                    <Field label="Billing currency (per-account override)">
+                    <Field
+                      label="Billing currency (per-account override)"
+                      hint={`ISO 4217 3-letter code. Leave blank to use the carrier's home currency (${drawer.carrierCode === 'DHL' ? 'EUR' : 'USD'}). Only override when this account bills in a different currency than the carrier's default.`}
+                    >
                       <input
                         type="text"
                         value={drawer.currency}
@@ -1892,12 +1971,6 @@ export default function CarrierConnections({
                         spellCheck={false}
                       />
                     </Field>
-                    <p className="-mt-1 mb-2 text-[10.5px] leading-4 text-slate-400">
-                      ISO 4217 3-letter code. Leave blank to use the carrier's home
-                      currency ({drawer.carrierCode === 'DHL' ? 'EUR' : 'USD'}).
-                      Only override when this account bills in a different currency
-                      than the carrier's default.
-                    </p>
                   </div>
 
                   {/* FDX-H1 — per-account default pickupType. Only FedEx
@@ -1909,7 +1982,10 @@ export default function CarrierConnections({
                       hardcode) so existing rows read exactly as before. */}
                   {drawer.carrierCode === 'FEDEX' ? (
                     <div className="mt-2">
-                      <Field label="Default pickup type (FedEx only)">
+                      <Field
+                        label="Default pickup type (FedEx only)"
+                        hint="Which FedEx driver / fleet picks up labels from this account. Blank = USE_SCHEDULED_PICKUP (assumes a standing daily pickup). Return labels bypass this setting and always use CONTACT_FEDEX_TO_SCHEDULE."
+                      >
                         <select
                           value={drawer.pickupType ?? ''}
                           onChange={(e) => setDrawer((c) => ({ ...c, pickupType: e.target.value || null }))}
@@ -1924,12 +2000,6 @@ export default function CarrierConnections({
                           <option value="USE_SCHEDULED_PICKUP">Use scheduled pickup (explicit)</option>
                         </select>
                       </Field>
-                      <p className="-mt-1 mb-2 text-[10.5px] leading-4 text-slate-400">
-                        Which FedEx driver / fleet picks up labels from this
-                        account. Blank = USE_SCHEDULED_PICKUP (assumes a
-                        standing daily pickup). Return labels bypass this
-                        setting and always use CONTACT_FEDEX_TO_SCHEDULE.
-                      </p>
                     </div>
                   ) : null}
 
@@ -1957,7 +2027,10 @@ export default function CarrierConnections({
                           ))}
                         </select>
                       </Field>
-                      <Field label="Label stock type (FedEx only)">
+                      <Field
+                        label="Label stock type (FedEx only)"
+                        hint="File format + physical stock size FedEx returns the label as. Blank = PDF / PAPER_4X6 (thermal 4x6 label, matches the other carriers' default). FedEx rejects label requests entirely if this is misconfigured for your printer's actual stock."
+                      >
                         <select
                           value={drawer.labelStockType ?? ''}
                           onChange={(e) => setDrawer((c) => ({ ...c, labelStockType: e.target.value || null }))}
@@ -1976,13 +2049,6 @@ export default function CarrierConnections({
                           <option value="STOCK_4X9_LEADING_DOC_TAB">Thermal stock 4x9 (doc tab)</option>
                         </select>
                       </Field>
-                      <p className="-mt-1 mb-2 text-[10.5px] leading-4 text-slate-400">
-                        File format + physical stock size FedEx returns the label
-                        as. Blank = PDF / PAPER_4X6 (thermal 4x6 label, matches
-                        the other carriers' default). FedEx rejects label
-                        requests entirely if this is misconfigured for your
-                        printer's actual stock.
-                      </p>
                     </div>
                   ) : null}
 
@@ -1993,7 +2059,10 @@ export default function CarrierConnections({
                       so existing rows read exactly as before. */}
                   {drawer.carrierCode === 'UPS' ? (
                     <div className="mt-2">
-                      <Field label="Label image format (UPS only)">
+                      <Field
+                        label="Label image format (UPS only)"
+                        hint="Format UPS returns the label in. Blank = GIF (default; smallest wire size, fuzzy on ZPL printers). Pick PDF for high-quality office printers, ZPL/EPL for label printers that decode the format natively."
+                      >
                         <select
                           value={drawer.labelImageFormat ?? ''}
                           onChange={(e) => setDrawer((c) => ({ ...c, labelImageFormat: e.target.value || null }))}
@@ -2006,18 +2075,15 @@ export default function CarrierConnections({
                           ))}
                         </select>
                       </Field>
-                      <p className="-mt-1 mb-2 text-[10.5px] leading-4 text-slate-400">
-                        Format UPS returns the label in. Blank = GIF (default;
-                        smallest wire size, fuzzy on ZPL printers). Pick PDF
-                        for high-quality office printers, ZPL/EPL for label
-                        printers that decode the format natively.
-                      </p>
                     </div>
                   ) : null}
 
                   {drawer.carrierCode === 'DHL' ? (
                     <div className="mt-2">
-                      <Field label="Label format (DHL only)">
+                      <Field
+                        label="Label format (DHL only)"
+                        hint="Blank = PDF (label + A4 shipping-doc page). ZPL returns a thermal label-only file for label printers."
+                      >
                         <select
                           value={drawer.labelImageFormat ?? ''}
                           onChange={(e) => setDrawer((c) => ({ ...c, labelImageFormat: e.target.value || null }))}
@@ -2030,16 +2096,15 @@ export default function CarrierConnections({
                           ))}
                         </select>
                       </Field>
-                      <p className="-mt-1 mb-2 text-[10.5px] leading-4 text-slate-400">
-                        Blank = PDF (label + A4 shipping-doc page). ZPL returns
-                        a thermal label-only file for label printers.
-                      </p>
                     </div>
                   ) : null}
 
                   {drawer.carrierCode === 'USPS' ? (
                     <div className="mt-2">
-                      <Field label="Label image format (USPS only)">
+                      <Field
+                        label="Label image format (USPS only)"
+                        hint="File format USPS/Stamps returns the label in. Blank leaves this to the carrier's own default."
+                      >
                         <select
                           value={drawer.labelImageFormat ?? ''}
                           onChange={(e) => setDrawer((c) => ({ ...c, labelImageFormat: e.target.value || null }))}
@@ -2052,10 +2117,6 @@ export default function CarrierConnections({
                           ))}
                         </select>
                       </Field>
-                      <p className="-mt-1 mb-2 text-[10.5px] leading-4 text-slate-400">
-                        File format USPS/Stamps returns the label in. Blank
-                        leaves this to the carrier's own default.
-                      </p>
                     </div>
                   ) : null}
 
@@ -2068,7 +2129,10 @@ export default function CarrierConnections({
                       custom sizes need the backend Height/Width fields
                       set directly. */}
                   <div className="mt-2">
-                    <Field label="Label stock size">
+                    <Field
+                      label="Label stock size"
+                      hint="Physical label paper size (inches, width × height). UPS requires this on every shipment (Ship API v1 error 9120244 when absent). FedEx/DHL/USPS map to their own enums. Blank uses the 4x6 default matching standard thermal shipping labels."
+                    >
                       <select
                         value={
                           drawer.labelStockHeight && drawer.labelStockWidth
@@ -2094,13 +2158,6 @@ export default function CarrierConnections({
                         <option value="8x4">8x4 landscape</option>
                       </select>
                     </Field>
-                    <p className="-mt-1 mb-2 text-[10.5px] leading-4 text-slate-400">
-                      Physical label paper size (inches, width × height). UPS
-                      requires this on every shipment (Ship API v1 error
-                      9120244 when absent). FedEx/DHL/USPS map to their own
-                      enums. Blank uses the 4x6 default matching standard
-                      thermal shipping labels.
-                    </p>
                   </div>
 
                   {/* Third-party billing sub-panel — only shown when the
@@ -2188,12 +2245,13 @@ export default function CarrierConnections({
                 </div>
               </DrawerStep>
 
-              <DrawerStep n="4" title="Verify & save">
+              <DrawerStep n="4" title="Verify & save" className="lg:col-span-2">
                 {(() => {
                   const verifyTerms = credentialLabelsFor(drawer.carrierCode)
                   const missing: string[] = []
                   if (!drawer.accountNumber.trim()) missing.push(verifyTerms.accountNumberLabel)
-                  if (!drawer.clientId.trim()) missing.push(verifyTerms.idLong)
+                  // Royal Mail (Click & Drop) authenticates with the API key alone; the ID slot is optional.
+                  if (!drawer.clientId.trim() && drawer.carrierCode !== 'ROYAL_MAIL') missing.push(verifyTerms.idLong)
                   if (!drawer.clientSecret.trim()) missing.push(verifyTerms.secretLong)
                   const checking = drawerCheck.state === 'checking'
                   // Sprint 51 FE role-gating — POST /verify-credentials is
@@ -2310,11 +2368,11 @@ export default function CarrierConnections({
               </DrawerStep>
             </div>
 
-            <div className="flex gap-2 border-t border-slate-100 px-5 py-4">
+            <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-4">
               <button
                 type="button"
                 onClick={() => void requestDrawerClose()}
-                className="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-[13px] font-semibold text-slate-600 transition hover:bg-slate-50"
+                className="min-w-[120px] rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-[13px] font-semibold text-slate-600 transition hover:bg-slate-50"
               >
                 Cancel
               </button>
@@ -2322,13 +2380,12 @@ export default function CarrierConnections({
                 type="button"
                 onClick={() => void handleSave()}
                 disabled={saving}
-                className="flex-1 rounded-xl bg-[#1f150c] px-3 py-2.5 text-[13px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-slate-300"
+                className="min-w-[200px] rounded-xl bg-[#1f150c] px-4 py-2.5 text-[13px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-slate-300"
               >
                 {saving ? 'Saving…' : 'Save to Account Book'}
               </button>
             </div>
-          </aside>
-        </>
+          </section>
       ) : null}
     </div>
   )
@@ -2525,28 +2582,60 @@ function RowActionsMenu({
   )
 }
 
-function DrawerStep({ n, title, children }: { n: string; title: string; children: ReactNode }) {
+function DrawerStep({ n, title, className = '', bodyClassName = '', children }: {
+  n: string; title: string; className?: string; bodyClassName?: string; children: ReactNode
+}) {
   return (
-    <div className="rounded-2xl border border-slate-200 p-3.5">
+    <div className={`rounded-2xl border border-slate-200 p-3.5 ${className}`.trim()}>
       <div className="mb-3 flex items-center gap-2 text-[12.5px] font-semibold text-slate-950">
         <span className="grid h-5 w-5 place-items-center rounded-lg border border-slate-200 bg-slate-50 text-[10.5px] text-slate-500">
           {n}
         </span>
         {title}
       </div>
-      {children}
+      <div className={bodyClassName}>{children}</div>
     </div>
   )
 }
 
-function Field({ label, error, children }: { label: string; error?: string; children: ReactNode }) {
+/**
+ * Label with an optional ⓘ that reveals `hint` on hover / keyboard focus.
+ * The trigger is a focusable span, not a <button>: a button is a labelable
+ * element and would steal the <label>'s association from the real input.
+ */
+function Field({ label, hint, error, children }: { label: string; hint?: string; error?: string; children: ReactNode }) {
+  const tipId = useId()
   return (
-    <label className="mb-2.5 block">
-      <span className="mb-1 block text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-400">{label}</span>
-      {children}
-      {error ? (
-        <span className="mt-1 block text-[10.5px] font-semibold normal-case tracking-normal text-rose-600">{error}</span>
+    <div className="relative mb-2.5">
+      <label className="block">
+        <span className="mb-1 block text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-400">{label}</span>
+        {children}
+        {error ? (
+          <span className="mt-1 block text-[10.5px] font-semibold normal-case tracking-normal text-rose-600">{error}</span>
+        ) : null}
+      </label>
+      {/* The ⓘ sits OUTSIDE the <label> on purpose: inside it, its name would be
+          appended to the input's accessible name ("Label stock size About Label stock size"). */}
+      {hint ? (
+        <span className="group absolute -top-0.5 right-0 inline-flex">
+          <span
+            role="button"
+            tabIndex={0}
+            aria-label={`About ${label}`}
+            aria-describedby={tipId}
+            className="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full text-slate-400 transition hover:text-[#412d15] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#412d15]/30"
+          >
+            <FiInfo className="h-3 w-3" />
+          </span>
+          <span
+            id={tipId}
+            role="tooltip"
+            className="pointer-events-none invisible absolute right-0 top-full z-20 mt-1 w-64 rounded-xl border border-slate-200 bg-white p-2.5 text-[11px] font-medium normal-case leading-4 tracking-normal text-slate-600 opacity-0 shadow-lg transition group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100"
+          >
+            {hint}
+          </span>
+        </span>
       ) : null}
-    </label>
+    </div>
   )
 }

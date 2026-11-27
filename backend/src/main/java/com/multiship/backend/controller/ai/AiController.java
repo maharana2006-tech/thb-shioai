@@ -1,5 +1,6 @@
 package com.multiship.backend.controller.ai;
 
+import com.multiship.backend.dto.ai.ChatRequest;
 import com.multiship.backend.dto.ai.HsSuggestRequest;
 import com.multiship.backend.dto.ai.PackagingSuggestRequest;
 import com.multiship.backend.dto.ai.ParseAddressRequest;
@@ -7,16 +8,24 @@ import com.multiship.backend.dto.ai.ReviewShipmentRequest;
 import com.multiship.backend.dto.ai.ServiceRecommendRequest;
 import com.multiship.backend.dto.external.ExternalAddress;
 import com.multiship.backend.service.ai.AddressAiService;
+import com.multiship.backend.service.ai.ShipmateChatService;
 import com.multiship.backend.service.ai.ShipmentAiService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import reactor.core.Disposable;
+import reactor.core.publisher.Flux;
 
+import java.io.IOException;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * AI-assist endpoints for the manual-shipment operator UI. Every endpoint is
@@ -47,6 +56,10 @@ public class AiController {
 
     private final AddressAiService addressAiService;
     private final ShipmentAiService shipmentAiService;
+    private final ShipmateChatService shipmateChatService;
+
+    /** Longest a single chat reply may stay open. */
+    private static final long CHAT_TIMEOUT_MS = 120_000L;
 
     /** Ship from / Ship to — parse a free-text blob into a structured address. */
     @PostMapping("/parse-address")
@@ -76,5 +89,46 @@ public class AiController {
     @PostMapping("/review-shipment")
     public ResponseEntity<Map<String, Object>> reviewShipment(@RequestBody ReviewShipmentRequest req) {
         return ResponseEntity.ok(shipmentAiService.reviewShipment(req));
+    }
+
+    /**
+     * Shipmate chat. The reply is streamed as server-sent events, each a JSON
+     * object: {@code {"type":"text","delta":"..."}} for the next piece of the
+     * answer, or {@code {"type":"error"}} if the AI fails part-way. A failure
+     * before the first piece is a normal error response instead (503 when the
+     * AI is not configured, 429 from the tenant rate limit).
+     */
+    @PostMapping(path = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter chat(@Valid @RequestBody ChatRequest req) {
+        Flux<String> reply = shipmateChatService.reply(req);
+        SseEmitter emitter = new SseEmitter(CHAT_TIMEOUT_MS);
+        AtomicReference<Disposable> subscription = new AtomicReference<>();
+        // The browser going away (Stop, closed tab) must also stop the provider call and its token spend.
+        Runnable stop = () -> {
+            Disposable active = subscription.get();
+            if (active != null) active.dispose();
+        };
+        emitter.onCompletion(stop);
+        emitter.onTimeout(stop);
+        emitter.onError(ex -> stop.run());
+        subscription.set(reply.subscribe(
+                delta -> {
+                    if (!send(emitter, Map.of("type", "text", "delta", delta))) stop.run();
+                },
+                ex -> {
+                    send(emitter, Map.of("type", "error"));
+                    emitter.complete();
+                },
+                emitter::complete));
+        return emitter;
+    }
+
+    private static boolean send(SseEmitter emitter, Map<String, String> event) {
+        try {
+            emitter.send(SseEmitter.event().data(event, MediaType.APPLICATION_JSON));
+            return true;
+        } catch (IOException | IllegalStateException ex) {
+            return false;
+        }
     }
 }

@@ -18,6 +18,8 @@ export const canon = (c?: string | null) => {
   if (v.startsWith('UPS') || v.includes('WORLDWIDE') || v.includes('NEXT_DAY_AIR')) return 'UPS'
   if (v.startsWith('USPS')) return 'USPS'
   if (v.startsWith('DHL')) return 'DHL'
+  if (v.startsWith('ROYAL')) return 'ROYAL_MAIL'
+  if (v.startsWith('DPD')) return 'DPD'
   // UPS's catalog stores numeric service codes (03 Ground, 08 Worldwide
   // Expedited …) — the only carrier that does.
   if (/^\d{2}$/.test(v)) return 'UPS'

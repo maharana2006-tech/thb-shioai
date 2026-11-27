@@ -174,7 +174,7 @@ afterEach(() => {
 async function openUspsDrawer(user: ReturnType<typeof userEvent.setup>) {
   const addBtn = await screen.findByRole('button', { name: /add account/i })
   await user.click(addBtn)
-  const dialog = await screen.findByRole('dialog', { name: /add carrier account/i })
+  const dialog = await screen.findByRole('region', { name: /add carrier account/i })
   const carrierGroup = within(dialog).getByRole('radiogroup', { name: /^carrier$/i })
   await user.click(within(carrierGroup).getByRole('radio', { name: /usps/i }))
   return dialog
@@ -335,7 +335,7 @@ describe('CarrierConnections · USPS drawer · payload shape', () => {
 
     const addBtn = await screen.findByRole('button', { name: /add account/i })
     await user.click(addBtn)
-    const dialog = await screen.findByRole('dialog', { name: /add carrier account/i })
+    const dialog = await screen.findByRole('region', { name: /add carrier account/i })
 
     const labelInput = (text: string) => {
       const labels = Array.from(dialog.querySelectorAll('label'))

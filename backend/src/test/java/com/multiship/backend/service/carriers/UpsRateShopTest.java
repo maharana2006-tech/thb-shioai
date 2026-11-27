@@ -268,4 +268,38 @@ class UpsRateShopTest {
                 }""";
         assertEquals(null, connector.parseUpsRateResponse(canned).get(0).transitDays());
     }
+
+    /* -------------------------- Catalogue sync probe -------------------------- */
+
+    @Test
+    void shopProbeSendsARealLaneAndReadsEveryRatedService() throws Exception {
+        CatalogueProbe.Addr us = CatalogueProbe.origin("US");
+        CatalogueProbe.Lane export = CatalogueProbe.lanes(us).get(1);
+        String body = new ObjectMapper().writeValueAsString(connector.shopProbeBody(us, export.to()));
+        assertTrue(body.contains("\"ShipFrom\":{\"Address\":{\"City\":\"New York\",\"StateProvinceCode\":\"NY\""), body);
+        assertTrue(body.contains("\"ShipTo\":{\"Address\":{\"City\":\"London\",\"PostalCode\":\"SW1A 1AA\",\"CountryCode\":\"GB\""), body);
+        assertTrue(body.contains("\"Code\":\"LBS\""), body);
+        assertEquals("INTERNATIONAL", export.scope());
+
+        // UPS leaves Description blank; a single RatedShipment arrives as an object, not an array.
+        List<CarrierConnector.ServiceOffering> many = connector.parseShopServices("""
+                {"RateResponse":{"RatedShipment":[
+                  {"Service":{"Code":"03","Description":""}},
+                  {"Service":{"Code":"13","Description":""}}]}}""", "DOMESTIC", "US");
+        assertEquals(List.of(
+                new CarrierConnector.ServiceOffering("03", "UPS Ground", "DOMESTIC"),
+                new CarrierConnector.ServiceOffering("13", "UPS Next Day Air Saver", "DOMESTIC")), many);
+        assertEquals(1, connector.parseShopServices(
+                "{\"RateResponse\":{\"RatedShipment\":{\"Service\":{\"Code\":\"65\"}}}}", "INTERNATIONAL", "US").size());
+        assertTrue(connector.parseShopServices("{}", "DOMESTIC", "US").isEmpty());
+    }
+
+    @Test
+    void probeWithoutAnAddressForTheOriginIsSkipped_andBothLanesMergeToBoth() {
+        assertNull(CatalogueProbe.origin("ZZ"));
+        java.util.Map<String, CarrierConnector.ServiceOffering> byCode = new java.util.LinkedHashMap<>();
+        CatalogueProbe.merge(byCode, new CarrierConnector.ServiceOffering("11", "UPS Standard", "DOMESTIC"));
+        CatalogueProbe.merge(byCode, new CarrierConnector.ServiceOffering("11", "UPS Standard", "INTERNATIONAL"));
+        assertEquals("BOTH", byCode.get("11").scope());
+    }
 }

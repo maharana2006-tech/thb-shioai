@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, Outlet } from 'react-router-dom'
 import type { ComponentType } from 'react'
@@ -283,6 +283,48 @@ describe('ShippingServicesPage — health strip', () => {
 
 // ===================== Origin filter =====================
 
+describe('ShippingServicesPage — search, quick filters, collapse', () => {
+  it('narrows the list by search and filter, and collapses a carrier section', async () => {
+    catalogMock.mockResolvedValue({
+      services: [
+        svc(1, 'UPS', '03', { name: 'UPS Ground' }),
+        svc(2, 'UPS', '65', { name: 'UPS Worldwide Saver', scope: 'INTERNATIONAL', enabled: false }),
+        svc(3, 'FEDEX', 'FEDEX_GROUND', { name: 'FedEx Ground' }),
+      ],
+      links: [], rules: [], rulePackages: [], ruleWarehouses: [], originCountries: ['US'],
+    })
+    listPresetsMock.mockResolvedValue([])
+    const Page = await loadPage()
+    renderPage(Page)
+    await screen.findByText('UPS Ground')
+
+    // Search matches name or code, across carriers; carriers with no match drop out.
+    fireEvent.change(screen.getByRole('searchbox', { name: /Search services/i }), { target: { value: 'worldwide' } })
+    expect(screen.getByText('UPS Worldwide Saver')).toBeInTheDocument()
+    expect(screen.queryByText('UPS Ground')).not.toBeInTheDocument()
+    expect(screen.queryByText(/FEDEX · from US/i)).not.toBeInTheDocument()
+    expect(screen.getByText('1 of 3 services')).toBeInTheDocument()
+
+    // Filters stack on the search: the only match is switched off.
+    fireEvent.click(screen.getByRole('button', { name: 'On only' }))
+    expect(screen.getByText(/No services match/i)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Clear search and filters/i }))
+    expect(screen.getByText('FedEx Ground')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'International' }))
+    expect(screen.getByText('UPS Worldwide Saver')).toBeInTheDocument()
+    expect(screen.queryByText('FedEx Ground')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'International' }))
+
+    // Collapsing hides the rows but keeps the carrier header and its tally.
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse UPS services' }))
+    expect(screen.getByText('UPS Ground')).not.toBeVisible()
+    expect(screen.getByText('FedEx Ground')).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Expand UPS services' }))
+    expect(screen.getByText('UPS Ground')).toBeVisible()
+  })
+})
+
 describe('ShippingServicesPage — origin filter', () => {
   it('changing origin narrows visible services (client-side, no re-fetch)', async () => {
     const usSvc = svc(1, 'UPS', 'GROUND', { originCountry: 'US', name: 'UPS Ground (US)' })
@@ -333,7 +375,7 @@ describe('ShippingServicesPage — origin filter', () => {
     })
     // "Sync from carrier" CTAs — one per empty tile.
     const syncCtas = screen.getAllByRole('button', { name: /^Sync from carrier$/i })
-    expect(syncCtas.length).toBe(3)
+    expect(syncCtas.length).toBe(6) // UPS, FedEx, USPS, DHL, Royal Mail, DPD
   })
 })
 

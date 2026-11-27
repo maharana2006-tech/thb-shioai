@@ -46,6 +46,9 @@ class OpenAiClientMetricsTest {
     private int port;
     private final AtomicReference<String> nextBody = new AtomicReference<>();
     private final AtomicInteger nextStatus = new AtomicInteger(200);
+    private final AtomicReference<String> nextContentType = new AtomicReference<>("application/json");
+    private final AtomicReference<String> lastRequestBody = new AtomicReference<>();
+    private final AtomicReference<String> lastAuthorization = new AtomicReference<>();
     private SystemSettingService systemSettings;
     private TenantScopeEnforcer tenantScope;
     private SimpleMeterRegistry registry;
@@ -79,10 +82,10 @@ class OpenAiClientMetricsTest {
     }
 
     private void handle(HttpExchange ex) throws IOException {
-        // Drain the request body so keep-alive stays healthy.
-        ex.getRequestBody().readAllBytes();
+        lastRequestBody.set(new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+        lastAuthorization.set(ex.getRequestHeaders().getFirst("Authorization"));
         byte[] body = nextBody.get().getBytes(StandardCharsets.UTF_8);
-        ex.getResponseHeaders().add("Content-Type", "application/json");
+        ex.getResponseHeaders().add("Content-Type", nextContentType.get());
         ex.sendResponseHeaders(nextStatus.get(), body.length);
         ex.getResponseBody().write(body);
         ex.close();
@@ -107,7 +110,9 @@ class OpenAiClientMetricsTest {
         nextStatus.set(200);
         nextBody.set("""
                 {
-                  "choices": [ { "message": { "content": "{\\"ok\\":true}" } } ],
+                  "id": "chatcmpl-test", "object": "chat.completion", "created": 1, "model": "gpt-4o-mini",
+                  "choices": [ { "index": 0, "finish_reason": "stop",
+                                 "message": { "role": "assistant", "content": "{\\"ok\\":true}" } } ],
                   "usage": { "prompt_tokens": 42, "completion_tokens": 17, "total_tokens": 59 }
                 }
                 """);
@@ -137,7 +142,7 @@ class OpenAiClientMetricsTest {
 
     @Test
     void httpFailureRecordsErrorOutcomeAndNoTokenCounters() {
-        // Upstream 500 — RestClient throws, client wraps to 502. We
+        // Upstream 500 — the provider call throws, client wraps to 502. We
         // must still increment the request counter with outcome=error
         // and MUST NOT record token counters (no usage block available).
         nextStatus.set(500);
@@ -173,7 +178,9 @@ class OpenAiClientMetricsTest {
         nextStatus.set(200);
         nextBody.set("""
                 {
-                  "choices": [ { "message": { "content": "{\\"ok\\":true}" } } ],
+                  "id": "chatcmpl-test", "object": "chat.completion", "created": 1, "model": "gpt-4o-mini",
+                  "choices": [ { "index": 0, "finish_reason": "stop",
+                                 "message": { "role": "assistant", "content": "{\\"ok\\":true}" } } ],
                   "usage": { "prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4 }
                 }
                 """);
@@ -193,7 +200,9 @@ class OpenAiClientMetricsTest {
         nextStatus.set(200);
         nextBody.set("""
                 {
-                  "choices": [ { "message": { "content": "{\\"ok\\":true}" } } ],
+                  "id": "chatcmpl-test", "object": "chat.completion", "created": 1, "model": "gpt-4o-mini",
+                  "choices": [ { "index": 0, "finish_reason": "stop",
+                                 "message": { "role": "assistant", "content": "{\\"ok\\":true}" } } ],
                   "usage": { "prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7 }
                 }
                 """);
@@ -217,7 +226,9 @@ class OpenAiClientMetricsTest {
         nextStatus.set(200);
         nextBody.set("""
                 {
-                  "choices": [ { "message": { "content": "{\\"ok\\":true}" } } ],
+                  "id": "chatcmpl-test", "object": "chat.completion", "created": 1, "model": "gpt-4o-mini",
+                  "choices": [ { "index": 0, "finish_reason": "stop",
+                                 "message": { "role": "assistant", "content": "{\\"ok\\":true}" } } ],
                   "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
                 }
                 """);
@@ -229,5 +240,100 @@ class OpenAiClientMetricsTest {
         assertTrue(registry.getMeters().stream()
                 .map(Meter::getId).map(io.micrometer.core.instrument.Meter.Id::getName)
                 .anyMatch("openai.request.duration"::equals));
+    }
+
+    // ── Spring AI transport ─────────────────────────────────────────────────
+
+    private static final String OK_COMPLETION = """
+            {
+              "id": "chatcmpl-test", "object": "chat.completion", "created": 1, "model": "gpt-4o-mini",
+              "choices": [ { "index": 0, "finish_reason": "stop",
+                             "message": { "role": "assistant", "content": "{\\"ok\\":true}" } } ],
+              "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
+            }
+            """;
+
+    @Test
+    void jsonCallKeepsTheSameRequestTheHandWrittenClientSent() throws Exception {
+        nextBody.set(OK_COMPLETION);
+
+        assertTrue(newClient().completeJson("be terse", "parse this", "parse-address").path("ok").asBoolean());
+
+        com.fasterxml.jackson.databind.JsonNode sent = new ObjectMapper().readTree(lastRequestBody.get());
+        assertEquals("gpt-4o-mini", sent.path("model").asText());
+        assertEquals(0.0d, sent.path("temperature").asDouble(-1), 0.0001);
+        assertEquals("json_object", sent.path("response_format").path("type").asText());
+        assertEquals("system", sent.path("messages").path(0).path("role").asText());
+        assertEquals("be terse", sent.path("messages").path(0).path("content").asText());
+        assertEquals("user", sent.path("messages").path(1).path("role").asText());
+        assertEquals("parse this", sent.path("messages").path(1).path("content").asText());
+        assertEquals("Bearer test-api-key", lastAuthorization.get());
+    }
+
+    @Test
+    void aKeyRotatedInSettingsIsUsedOnTheNextCall() {
+        nextBody.set(OK_COMPLETION);
+        OpenAiClient client = newClient();
+
+        when(systemSettings.getDecrypted(anyString())).thenReturn(Optional.of("first-key"));
+        client.completeJson("system", "user", "suggest-hs");
+        assertEquals("Bearer first-key", lastAuthorization.get());
+
+        when(systemSettings.getDecrypted(anyString())).thenReturn(Optional.of("rotated-key"));
+        client.completeJson("system", "user", "suggest-hs");
+        assertEquals("Bearer rotated-key", lastAuthorization.get());
+    }
+
+    @Test
+    void noKeyAnywhereIsA503BeforeAnyCallIsMade() {
+        OpenAiClient client = new OpenAiClient(new ObjectMapper(), systemSettings, tenantScope, registryProvider,
+                "", "gpt-4o-mini", "http://127.0.0.1:" + port);
+
+        assertEquals(503, assertThrows(ResponseStatusException.class,
+                () -> client.completeJson("system", "user", "suggest-hs")).getStatusCode().value());
+        assertEquals(503, assertThrows(ResponseStatusException.class,
+                () -> client.streamText("system", java.util.List.of(), "chat")).getStatusCode().value());
+        assertEquals(null, lastRequestBody.get());
+    }
+
+    private static String chunk(String delta, String finishReason) {
+        return "data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1,"
+                + "\"model\":\"gpt-4o-mini\",\"choices\":[{\"index\":0,\"delta\":" + delta
+                + ",\"finish_reason\":" + finishReason + "}]}\n\n";
+    }
+
+    @Test
+    void streamedReplyArrivesInPiecesAndIsMeteredOnce() throws Exception {
+        nextContentType.set("text/event-stream");
+        nextBody.set(chunk("{\"role\":\"assistant\",\"content\":\"Hello \"}", "null")
+                + chunk("{\"content\":\"there\"}", "null")
+                + chunk("{}", "\"stop\"")
+                + "data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1,"
+                + "\"model\":\"gpt-4o-mini\",\"choices\":[],"
+                + "\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":2,\"total_tokens\":11}}\n\n"
+                + "data: [DONE]\n\n");
+
+        java.util.List<String> pieces = newClient()
+                .streamText("be Shipmate", java.util.List.of(
+                        new org.springframework.ai.chat.messages.UserMessage("earlier question"),
+                        new org.springframework.ai.chat.messages.AssistantMessage("earlier answer"),
+                        new org.springframework.ai.chat.messages.UserMessage("hi")), "chat")
+                .collectList()
+                .block(java.time.Duration.ofSeconds(20));
+
+        assertEquals(java.util.List.of("Hello ", "there"), pieces);
+
+        com.fasterxml.jackson.databind.JsonNode sent = new ObjectMapper().readTree(lastRequestBody.get());
+        assertTrue(sent.path("stream").asBoolean());
+        assertTrue(sent.path("stream_options").path("include_usage").asBoolean());
+        assertEquals(4, sent.path("messages").size());
+        assertEquals("be Shipmate", sent.path("messages").path(0).path("content").asText());
+        assertEquals("assistant", sent.path("messages").path(2).path("role").asText());
+        assertEquals("hi", sent.path("messages").path(3).path("content").asText());
+
+        assertEquals(11.0d, registry.get("openai.total_tokens")
+                .tag("tenant", "acme").tag("endpoint", "chat").counter().count(), 0.0001);
+        assertEquals(1.0d, registry.get("openai.requests")
+                .tag("tenant", "acme").tag("endpoint", "chat").tag("outcome", "success").counter().count(), 0.0001);
     }
 }

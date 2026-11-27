@@ -144,13 +144,15 @@ public class TrackingServiceImpl implements TrackingService {
         CarrierAccountRef account = resolveAccount(canonicalCarrier, tracking.getAccountNumber());
         if (account == null || !StringUtils.hasText(account.getClientId())
                 || !StringUtils.hasText(account.getClientSecret())) {
-            // No credentials available — hand back the URL-only stub from
-            // the 1-arg trackShipment. The UI can still show the tracking
-            // link even without live events.
+            // No per-account credentials — ask the 1-arg trackShipment. For most
+            // carriers that is the URL-only stub; Royal Mail can still answer with
+            // live events here because its Tracking API is platform-scoped.
             CarrierConnector.TrackingResult stub = connector.trackShipment(trackingNumber);
-            TrackingResponseDTO dto = withMpsTopology(toDto(stub, canonicalCarrier, "STUB"), orderNo);
-            return success(dto, "No live credentials for " + canonicalCarrier
-                    + " — returning the URL-only stub.");
+            boolean live = stub.events() != null && !stub.events().isEmpty();
+            TrackingResponseDTO dto = withMpsTopology(toDto(stub, canonicalCarrier, live ? "LIVE" : "STUB"), orderNo);
+            return success(dto, live
+                    ? "Live tracking via platform credentials for " + canonicalCarrier + "."
+                    : "No live credentials for " + canonicalCarrier + " — returning the URL-only stub.");
         }
 
         final boolean sandbox = "SANDBOX".equalsIgnoreCase(account.getEnvironment());

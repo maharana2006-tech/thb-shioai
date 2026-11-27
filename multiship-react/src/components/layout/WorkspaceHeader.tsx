@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { FiAlertCircle, FiCheckCircle, FiChevronRight, FiMenu } from 'react-icons/fi'
+import { FiAlertCircle, FiCheckCircle, FiChevronRight, FiMenu, FiZap } from 'react-icons/fi'
 import { useAppSession } from '../../hooks/useAppSession'
 import { accountRefService } from '../../api/accountRefService'
 import { resolveBreadcrumb, settingsPaths } from '../../routes/workspaceRoutes'
@@ -21,9 +21,12 @@ import UniversalSearch from './UniversalSearch'
 interface WorkspaceHeaderProps {
   /** Sprint 51 FE-M5 — open the mobile nav drawer (rendered by Sidebar). */
   onOpenMobileNav?: () => void
+  /** Shows the Shipmate button; left out for logins that cannot use the assistant. */
+  onToggleShipmate?: () => void
+  shipmateOpen?: boolean
 }
 
-export default function WorkspaceHeader({ onOpenMobileNav }: WorkspaceHeaderProps = {}) {
+export default function WorkspaceHeader({ onOpenMobileNav, onToggleShipmate, shipmateOpen }: WorkspaceHeaderProps = {}) {
   const location = useLocation()
   const { username, role } = useAppSession()
   const [now, setNow] = useState(() => new Date())
@@ -63,6 +66,9 @@ export default function WorkspaceHeader({ onOpenMobileNav }: WorkspaceHeaderProp
   }, [normalizedRole, location.pathname])
 
   const initials = (username || 'MS').slice(0, 2).toUpperCase()
+  // With Shipmate docked the bar is 380px narrower: the section lead-in, clock and
+  // ID badge step aside so the page name and search keep their room.
+  const crumbLead = shipmateOpen ? '' : 'sm:flex'
 
   return (
     <header className="sticky top-0 z-30 border-b border-dashed border-slate-300 bg-white/85 backdrop-blur-xl print:hidden">
@@ -85,13 +91,13 @@ export default function WorkspaceHeader({ onOpenMobileNav }: WorkspaceHeaderProp
         <div className="flex min-w-0 items-center gap-2.5">
           {crumb ? (
             <>
-              <span className="hidden items-center gap-1.5 sm:flex">
+              <span className={`hidden items-center gap-1.5 ${crumbLead}`}>
                 <span className="h-2 w-2 shrink-0 rounded-full border-[1.5px] border-slate-400" />
                 <span className="whitespace-nowrap text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400">
                   {crumb.section}
                 </span>
               </span>
-              <span className="hidden items-center sm:flex" aria-hidden="true">
+              <span className={`hidden items-center ${crumbLead}`} aria-hidden="true">
                 <span className="w-9 border-t-2 border-dashed border-slate-300" />
                 <FiChevronRight className="-ml-1 h-3 w-3 text-slate-300" />
               </span>
@@ -112,7 +118,7 @@ export default function WorkspaceHeader({ onOpenMobileNav }: WorkspaceHeaderProp
         <span className="ml-auto" />
 
         {/* live ops clock */}
-        <span className="hidden shrink-0 items-baseline gap-1.5 xl:flex">
+        <span className={`hidden shrink-0 items-baseline gap-1.5 ${shipmateOpen ? '' : 'xl:flex'}`}>
           <span className="font-mono text-[11.5px] font-semibold tabular-nums text-slate-600">
             {now.toLocaleTimeString('en-GB', { hour12: false })}
           </span>
@@ -146,8 +152,25 @@ export default function WorkspaceHeader({ onOpenMobileNav }: WorkspaceHeaderProp
           )
         ) : null}
 
+        {onToggleShipmate ? (
+          <button
+            type="button"
+            onClick={onToggleShipmate}
+            aria-pressed={shipmateOpen}
+            title="Shipmate (⌘J or Ctrl+J)"
+            className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[12px] font-semibold transition ${
+              shipmateOpen
+                ? 'border-[#5b3fd1] bg-[#f3f0ff] text-[#5b3fd1]'
+                : 'border-slate-200 bg-white/70 text-[#1f150c] hover:border-[#5b3fd1] hover:text-[#5b3fd1]'
+            }`}
+          >
+            <FiZap className="h-3.5 w-3.5 text-[#5b3fd1]" aria-hidden="true" />
+            Shipmate
+          </button>
+        ) : null}
+
         {/* user as ID badge */}
-        <span className="hidden shrink-0 items-center gap-2 rounded-lg border border-slate-200 bg-white/70 py-1 pl-1 pr-2.5 sm:flex">
+        <span className={`hidden shrink-0 items-center gap-2 rounded-lg border border-slate-200 bg-white/70 py-1 pl-1 pr-2.5 ${shipmateOpen ? '' : 'sm:flex'}`}>
           <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[#1f150c] font-mono text-[10px] font-black text-[#e1dcc9]">
             {initials}
           </span>

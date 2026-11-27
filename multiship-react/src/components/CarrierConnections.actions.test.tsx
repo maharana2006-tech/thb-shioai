@@ -222,7 +222,7 @@ describe('Per-account actions — positive', () => {
     await user.click(menu.getByRole('menuitem', { name: /^Edit$/ }))
 
     // Drawer opens with the "Update A1" header + Save button visible.
-    const dialog = await screen.findByRole('dialog', { name: /Update carrier account/i })
+    const dialog = await screen.findByRole('region', { name: /Update carrier account/i })
     expect(within(dialog).getByText(/Update A1/i)).toBeInTheDocument()
 
     // Account-name input is pre-filled with the stored value.
@@ -247,7 +247,7 @@ describe('Per-account actions — positive', () => {
 
     const menu = await openRowActions()
     await user.click(menu.getByRole('menuitem', { name: /^Edit$/ }))
-    const dialog = await screen.findByRole('dialog', { name: /Update carrier account/i })
+    const dialog = await screen.findByRole('region', { name: /Update carrier account/i })
 
     // Change the account name so the save payload has a distinct signal.
     const nameInput = within(dialog).getByPlaceholderText(/Shown across the app/i) as HTMLInputElement

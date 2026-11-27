@@ -95,6 +95,16 @@ public interface CarrierConnector {
         return List.of();
     }
 
+    /**
+     * True for contract carriers with no rate endpoint at all (DPD UK, Royal Mail
+     * Click &amp; Drop), so the shipment check reports "charged per contract"
+     * instead of treating an empty rate list as a hard "no rates for this lane"
+     * rejection. Default false = the carrier can be asked for a price.
+     */
+    default boolean lacksRateApi() {
+        return false;
+    }
+
     boolean validateCredentials(String clientId, String clientSecret);
 
     /**
@@ -819,10 +829,14 @@ public interface CarrierConnector {
     /**
      * The result of a service-availability lookup.
      * @param offerings the services available for the lane
-     * @param live      true only when the LIVE carrier API answered (not the built-in model)
+     * @param live      true when the account authenticated live (the list itself may still be the built-in one)
      * @param via       human-readable source ("UPS Rating API" / "built-in availability — no live UPS credentials")
+     * @param fromCarrierApi true only when the offerings were returned by the carrier's API, not the built-in list
      */
-    record ServiceAvailability(List<ServiceOffering> offerings, boolean live, String via) {
+    record ServiceAvailability(List<ServiceOffering> offerings, boolean live, String via, boolean fromCarrierApi) {
+        public ServiceAvailability(List<ServiceOffering> offerings, boolean live, String via) {
+            this(offerings, live, via, false);
+        }
     }
 
     /**

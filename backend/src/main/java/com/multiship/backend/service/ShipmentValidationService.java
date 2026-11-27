@@ -695,13 +695,20 @@ public class ShipmentValidationService {
 
             // The price and transit time — the same rate call the rate picker
             // makes, on the same request and account the label will use.
-            try {
-                List<com.multiship.backend.service.carriers.CarrierConnector.RateOption> quoted =
-                        connector.getRates(adaptedRequest, accessToken, account.getEnvironment());
-                ratesOut.set(quoted == null ? List.of() : quoted);
-            } catch (Exception ex) {
-                log.warn("Shipment validation — {} rate call failed: {}", carrier, ex.getMessage());
-                rateProblemOut.set("No price: " + carrier + " rate call failed — " + ex.getMessage());
+            if (connector.lacksRateApi()) {
+                // Leave rates null → WEIGHT_ONLY (informational), not UNAVAILABLE (hard reject).
+                rateProblemOut.set("No price: " + carrierName(carrier)
+                        + " does not quote prices through its API — the shipment is charged under your "
+                        + carrierName(carrier) + " contract.");
+            } else {
+                try {
+                    List<com.multiship.backend.service.carriers.CarrierConnector.RateOption> quoted =
+                            connector.getRates(adaptedRequest, accessToken, account.getEnvironment());
+                    ratesOut.set(quoted == null ? List.of() : quoted);
+                } catch (Exception ex) {
+                    log.warn("Shipment validation — {} rate call failed: {}", carrier, ex.getMessage());
+                    rateProblemOut.set("No price: " + carrier + " rate call failed — " + ex.getMessage());
+                }
             }
 
             return validateShipmentInContext(connector, carrier, account, accessToken, adaptedRequest);

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, within } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, Outlet } from 'react-router-dom'
 import type { ComponentType } from 'react'
@@ -163,7 +163,7 @@ afterEach(() => {
 async function openAddDrawer(user: ReturnType<typeof userEvent.setup>) {
   const addBtn = await screen.findByRole('button', { name: /add account/i })
   await user.click(addBtn)
-  return await screen.findByRole('dialog', { name: /add carrier account/i })
+  return await screen.findByRole('region', { name: /add carrier account/i })
 }
 
 /** Field lookup inside a drawer — walks the <label> elements (Field-wrapper
@@ -279,7 +279,8 @@ describe('CarrierConnections · add flow · positive', () => {
 
     await user.click(within(dialog).getByRole('button', { name: /^cancel$/i }))
 
-    expect(screen.queryByRole('dialog', { name: /add carrier account/i })).toBeNull()
+    // Closing is a navigation (?account= is dropped from the URL), so it lands a tick later.
+    await waitFor(() => expect(screen.queryByRole('region', { name: /add carrier account/i })).toBeNull())
     expect(upsertAccount).not.toHaveBeenCalled()
   })
 
@@ -402,7 +403,7 @@ describe('CarrierConnections · add flow · negative / validation', () => {
     expect(upsertAccount).toHaveBeenCalledTimes(1)
     expect(notifyApiError).toHaveBeenCalled()
     // Drawer stays open on failure so the operator can retry.
-    expect(screen.queryByRole('dialog', { name: /add carrier account/i })).not.toBeNull()
+    expect(screen.queryByRole('region', { name: /add carrier account/i })).not.toBeNull()
   })
 })
 

@@ -24,6 +24,10 @@ public class ExternalShipmentResponse {
     private String labelUrl;
     private String labelPdf;
     private String labelDocumentUrl;
+    /** Every package's ZPL concatenated (^XA…^XZ blocks); null when no ZPL is stored. */
+    private String labelZpl;
+    /** Re-download path for {@link #labelZpl}. */
+    private String labelZplUrl;
     /** Kept for back-compat — same value as {@link #billableAmount}. */
     private BigDecimal shippingCost;
     private LocalDateTime estimatedDelivery;
@@ -56,4 +60,7 @@ public class ExternalShipmentResponse {
 
     /** Warehouse the shipment ships from — null when the client has no attached warehouses and the legacy shipFrom was used. */
     private String warehouseCode;
+
+    /** Advisory pre-label validation warnings (rule + AI); never blocks the label. */
+    private java.util.List<java.util.Map<String, Object>> validationWarnings;
 }

@@ -43,6 +43,8 @@ const CARRIERS = [
   { code: 'FEDEX', name: 'FedEx', method: 'Ground CloseShipment' },
   { code: 'USPS', name: 'USPS', method: 'SCAN Form' },
   { code: 'DHL', name: 'DHL', method: 'manifest is implicit via the pickup — no separate close call' },
+  { code: 'ROYAL_MAIL', name: 'Royal Mail', method: 'Click & Drop manifest (OBA accounts)' },
+  { code: 'DPD', name: 'DPD', method: 'End of Day manifest' },
 ] as const
 
 const inputCls =

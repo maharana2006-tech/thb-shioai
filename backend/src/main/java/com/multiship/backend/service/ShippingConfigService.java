@@ -239,6 +239,8 @@ public class ShippingConfigService {
         if (s.startsWith("UPS_") || s.startsWith("UPS ")) return "UPS";
         if (s.startsWith("USPS_") || s.startsWith("USPS ")) return "USPS";
         if (s.startsWith("DHL_") || s.startsWith("DHL ")) return "DHL";
+        if (s.startsWith("ROYAL_MAIL") || s.startsWith("ROYALMAIL")) return "ROYAL_MAIL";
+        if (s.startsWith("DPD")) return "DPD";
         // Carrier-specific service names without a prefix.
         if (s.equals("GROUND_HOME_DELIVERY") || s.equals("SMART_POST")
                 || s.contains("INTERNATIONAL_ECONOMY") || s.contains("INTERNATIONAL_FIRST")
@@ -341,7 +343,9 @@ public class ShippingConfigService {
         }
 
         List<CarrierConnector.ServiceOffering> offerings = availability.offerings();
-        String source = "CARRIER_API";
+        // CARRIER_API only when the carrier itself returned the list; a verified
+        // account that got the built-in list is CARRIER_SYNC, so the page badge is honest.
+        String source = availability.fromCarrierApi() ? "CARRIER_API" : "CARRIER_SYNC";
 
         LocalDateTime now = LocalDateTime.now();
         int added = 0, updated = 0, sort = 0;
@@ -390,6 +394,7 @@ public class ShippingConfigService {
         data.put("updated", updated);
         data.put("total", offerings.size());
         data.put("live", availability.live());
+        data.put("fromCarrierApi", availability.fromCarrierApi());
         data.put("via", availability.via());
         String outcome = offerings.isEmpty()
                 ? canonical + " offers no services from " + origin

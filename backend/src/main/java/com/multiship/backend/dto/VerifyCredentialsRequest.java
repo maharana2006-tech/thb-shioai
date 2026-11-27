@@ -16,7 +16,8 @@ public class VerifyCredentialsRequest {
     @NotBlank
     private String carrierCode;
 
-    @NotBlank
+    /** Optional for carriers that authenticate with a single key (Royal Mail Click &amp; Drop);
+     *  every other connector's {@code validateCredentials} still rejects a blank id. */
     private String clientId;
 
     @NotBlank

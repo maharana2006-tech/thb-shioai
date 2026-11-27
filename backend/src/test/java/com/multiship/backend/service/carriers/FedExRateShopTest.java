@@ -331,4 +331,27 @@ class FedExRateShopTest {
         assertEquals("FEDEX_GROUND", opt.serviceCode());
         assertEquals(Integer.valueOf(2), opt.transitDays());
     }
+
+    /* -------------------------- Catalogue sync probe -------------------------- */
+
+    /** Shape taken from a FedEx sandbox reply: services sit inside packageOptions, one per packaging. */
+    @Test
+    void availabilityReplyYieldsDistinctParcelServices() throws Exception {
+        java.util.List<CarrierConnector.ServiceOffering> out = connector.parseServiceOptions("""
+                {"output":{"packageOptions":[
+                  {"serviceType":{"key":"FEDEX_2_DAY","displayText":"FedEx 2Day®"},"packageType":{"key":"FEDEX_ENVELOPE"},"serviceCategory":"parcel"},
+                  {"serviceType":{"key":"FEDEX_2_DAY","displayText":"FedEx 2Day®"},"packageType":{"key":"FEDEX_PAK"},"serviceCategory":"parcel"},
+                  {"serviceType":{"key":"FEDEX_GROUND","displayText":"FedEx Ground"},"packageType":{"key":"YOUR_PACKAGING"}},
+                  {"serviceType":{"key":"FEDEX_1_DAY_FREIGHT","displayText":"FedEx 1Day Freight"},"serviceCategory":"freight"}]}}""",
+                "DOMESTIC");
+        assertEquals(java.util.List.of(
+                new CarrierConnector.ServiceOffering("FEDEX_2_DAY", "FedEx 2Day", "DOMESTIC"),
+                new CarrierConnector.ServiceOffering("FEDEX_GROUND", "FedEx Ground", "DOMESTIC")), out);
+        assertTrue(connector.parseServiceOptions("{}", "DOMESTIC").isEmpty());
+
+        String body = new ObjectMapper().writeValueAsString(connector.availabilityProbeBody(
+                CatalogueProbe.origin("US"), CatalogueProbe.origin("GB")));
+        assertTrue(body.contains("\"recipients\":[{\"address\":{\"city\":\"London\""), body);
+        assertTrue(body.contains("\"stateOrProvinceCode\":\"NY\""), body);
+    }
 }

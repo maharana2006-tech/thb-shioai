@@ -62,7 +62,7 @@ public class ShippingService {
     @Builder.Default
     private String originCountry = "US";
 
-    /** SEEDED (starter catalog) | CARRIER_SYNC (pulled from the carrier's availability API). */
+    /** SEEDED (starter catalog) | CARRIER_SYNC (built-in list for a verified account) | CARRIER_API (returned by the carrier's API). */
     @Column(length = 20)
     @Builder.Default
     private String source = "SEEDED";

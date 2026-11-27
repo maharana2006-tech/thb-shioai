@@ -36,7 +36,7 @@ RUN apk add --no-cache curl
 # unnamed so K8s SecurityContext runAsNonRoot passes without a lookup.
 RUN addgroup -S -g 65532 app && adduser -S -u 65532 -G app app
 
-WORKDIR /app
+WORKDIR /appcal
 COPY --from=build --chown=65532:65532 /workspace/backend/target/app.jar /app/app.jar
 
 USER 65532:65532
