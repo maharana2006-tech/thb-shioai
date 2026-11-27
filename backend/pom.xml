@@ -512,6 +512,36 @@
 					</execution>
 				</executions>
 			</plugin>
+			<!-- Jib — daemonless, layered container image build (no Dockerfile).
+			     Local daemon:  ./mvnw compile jib:dockerBuild -Dzebrash.skip=false
+			     Push registry: ./mvnw compile jib:build -Djib.to.image=<registry>/thb-shioai-backend -Dzebrash.skip=false
+			     Jib can't express HEALTHCHECK; define the liveness probe
+			     (/actuator/health/liveness) in compose / Kubernetes instead. -->
+			<plugin>
+				<groupId>com.google.cloud.tools</groupId>
+				<artifactId>jib-maven-plugin</artifactId>
+				<version>3.4.4</version>
+				<configuration>
+					<from>
+						<!-- Defaults to linux/amd64. Multi-arch is only valid with jib:build:
+						     -Djib.from.platforms=linux/amd64,linux/arm64 -->
+						<image>eclipse-temurin:21-jre</image>
+					</from>
+					<to>
+						<image>thb-shioai-backend</image>
+						<tags>
+							<tag>${project.version}</tag>
+							<tag>latest</tag>
+						</tags>
+					</to>
+					<container>
+						<user>65532:65532</user>
+						<ports><port>8080</port></ports>
+						<jvmFlags><jvmFlag>-XX:MaxRAMPercentage=75</jvmFlag></jvmFlags>
+						<creationTime>USE_CURRENT_TIMESTAMP</creationTime>
+					</container>
+				</configuration>
+			</plugin>
 		</plugins>
 	</build>
 
