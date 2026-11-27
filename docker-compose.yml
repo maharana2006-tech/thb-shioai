@@ -48,7 +48,7 @@ services:
     environment:
       DB_URL: ${DB_URL:-jdbc:postgresql://host.docker.internal:5432/multiship_db}
       DB_USERNAME: ${DB_USERNAME:-postgres}
-      DB_PASSWORD: ${DB_PASSWORD:-root}
+      DB_PASSWORD: ${DB_PASSWORD:-Pgsql@2026}
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       # Empty list turns Redis auto-config back on (it's excluded by default).
